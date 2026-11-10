@@ -111,6 +111,198 @@ module function lspBlocksDeclaring(blocks LspDocumentBlockArray, typeName String
 	return declaring
 end 'lspBlocksDeclaring'
 
+function lspExtensionBlocks(blocks LspDocumentBlockArray) returns LspDocumentBlockArray
+	var extensions = LspDocumentBlockArray.create(0)
+
+	for block in blocks 'eachBlock'
+		if block.kind == LspBlockKind.extensionBody 'anExtension'
+			extensions.push(block)
+		end 'anExtension'
+	end 'eachBlock'
+
+	return extensions
+end 'lspExtensionBlocks'
+
+// An `extension` body adds members to a type declared elsewhere, so a buffer holding only extensions of
+// a type does not hold the type's own members.
+module function lspBlocksDeclareTheType(declaring LspDocumentBlockArray) returns bool
+	for block in declaring 'eachBody'
+		if block.kind != LspBlockKind.extensionBody 'theDeclaration'
+			return true
+		end 'theDeclaration'
+	end 'eachBody'
+
+	return false
+end 'lspBlocksDeclareTheType'
+
+module enum LspMemberForm
+	method
+	field
+	enumCase
+end 'LspMemberForm'
+
+// A member declaration line of a body: a field (`var`/`let`) or a method (`function`), each possibly
+// behind a tier keyword, or a case name in an `enum` or `union` body.
+module type LspMember
+	module let form as LspMemberForm
+	module let keywordIndex as ElementIndex
+	module let nameIndex as ElementIndex
+	module let isStatic as bool
+	module let tier as Visibility
+	module let bodyName as immutable ByteArray
+
+	module static function create(form LspMemberForm, keywordIndex ElementIndex, nameIndex ElementIndex, isStatic bool, tier Visibility, bodyName ByteArray) returns LspMember
+		return Self{form: form, keywordIndex: keywordIndex, nameIndex: nameIndex, isStatic: isStatic, tier: tier, bodyName: bodyName}
+	end 'create'
+end 'LspMember'
+
+module typealias LspMemberArray = Array with LspMember
+
+module function lspBodyMembers(tokens TokenArray, blocks LspDocumentBlockArray, body LspDocumentBlock, tokenLines LspTokenLineArray) returns LspMemberArray
+	var members = LspMemberArray.create(0)
+
+	for tokenLine in tokenLines 'eachLine'
+		let member = try lspMemberOnLine(tokens, tokenLine: tokenLine, body: body) otherwise continue
+
+		if lspBlockDirectlyHoldsLine(blocks, block: body, line: lspLineOf(tokenLine.line)) 'itsOwnMemberLine'
+			members.push(member)
+		end 'itsOwnMemberLine'
+	end 'eachLine'
+
+	return members
+end 'lspBodyMembers'
+
+module function lspMemberDeclaredBy(tokens TokenArray, blocks LspDocumentBlockArray, owner String, member ByteArray) returns LspMember throws AbsentError
+	return try lspMemberNamedIn(tokens, blocks: blocks, bodies: lspBlocksDeclaring(blocks, typeName: owner), member: member)
+end 'lspMemberDeclaredBy'
+
+// An `extension` over an interface publishes its methods onto each conformer, so the index files such a
+// member under the conformer while the declaring body is named for the interface.
+module function lspMemberDeclaredOrPublished(tokens TokenArray, blocks LspDocumentBlockArray, owner String, member ByteArray) returns LspMember throws AbsentError
+	return try lspMemberDeclaredBy(tokens, blocks: blocks, owner: owner, member: member) otherwise try lspMemberNamedIn(tokens, blocks: blocks, bodies: lspExtensionBlocks(blocks), member: member)
+end 'lspMemberDeclaredOrPublished'
+
+function lspMemberNamedIn(tokens TokenArray, blocks LspDocumentBlockArray, bodies LspDocumentBlockArray, member ByteArray) returns LspMember throws AbsentError
+	let tokenLines = lspTokenLines(tokens)
+
+	for body in bodies 'eachBody'
+		for found in lspBodyMembers(tokens, blocks: blocks, body: body, tokenLines: tokenLines) 'eachMember'
+			if lspTokenAt(tokens, index: found.nameIndex).value.equals(member) 'thisMember'
+				return found
+			end 'thisMember'
+		end 'eachMember'
+	end 'eachBody'
+
+	throw AbsentError.absent
+end 'lspMemberNamedIn'
+
+// Only a terminated body counts: an unterminated one runs to the end of the buffer and would make
+// every function written below a half-typed `type` a method of it.
+module function lspLineIsAMemberLine(blocks LspDocumentBlockArray, line LspLineNumber) returns bool
+	for block in blocks 'eachBlock'
+		if lspBlockDeclaresMembers(block.kind) and lspBlockIsTerminated(block) and lspBlockDirectlyHoldsLine(blocks, block: block, line: line) 'aMember'
+			return true
+		end 'aMember'
+	end 'eachBlock'
+
+	return false
+end 'lspLineIsAMemberLine'
+
+function lspMemberOnLine(tokens TokenArray, tokenLine LspTokenLine, body LspDocumentBlock) returns LspMember throws AbsentError
+	return try lspDeclaredMemberOnLine(tokens, tokenLine: tokenLine, body: body) otherwise try lspCaseOnLine(tokens, tokenLine: tokenLine, body: body)
+end 'lspMemberOnLine'
+
+function lspCaseOnLine(tokens TokenArray, tokenLine LspTokenLine, body LspDocumentBlock) returns LspMember throws AbsentError
+	if body.kind != LspBlockKind.enumBody and body.kind != LspBlockKind.unionBody 'notACaseList'
+		throw AbsentError.absent
+	end 'notACaseList'
+
+	if not tokenCanBeAName(lspTokenAt(tokens, index: tokenLine.firstIndex)) 'notACaseName'
+		throw AbsentError.absent
+	end 'notACaseName'
+
+	return LspMember.create(LspMemberForm.enumCase, keywordIndex: tokenLine.firstIndex, nameIndex: tokenLine.firstIndex, isStatic: true, tier: Visibility.public, bodyName: body.name)
+end 'lspCaseOnLine'
+
+function lspDeclaredMemberOnLine(tokens TokenArray, tokenLine LspTokenLine, body LspDocumentBlock) returns LspMember throws AbsentError
+	var index = tokenLine.firstIndex
+	var isStatic = false
+	var tier = Visibility.file
+
+	while index <= tokenLine.lastIndex 'skipModifiers'
+		let token = lspTokenAt(tokens, index: index)
+
+		if token.kind == TokenKind.static 'staticMember'
+			isStatic = true
+		end 'staticMember'
+
+		tier = lspTierSpelledBy(token, current: tier)
+
+		if not lspIsDeclarationModifier(token) 'theDeclarationKeyword'
+			break
+		end 'theDeclarationKeyword'
+
+		index = index + 1
+	end 'skipModifiers'
+
+	if index >= tokenLine.lastIndex 'nothingNamed'
+		throw AbsentError.absent
+	end 'nothingNamed'
+
+	let keyword = lspTokenAt(tokens, index: index)
+
+	if keyword.kind != TokenKind.function and keyword.kind != TokenKind.var and keyword.kind != TokenKind.let 'notAMember'
+		throw AbsentError.absent
+	end 'notAMember'
+
+	var nameIndex = index + 1
+
+	if keyword.kind == TokenKind.function 'aMethod'
+		nameIndex = try lspFunctionNameIndex(tokens, at: index)
+	end 'aMethod'
+
+	if nameIndex > tokenLine.lastIndex or not tokenCanBeAName(lspTokenAt(tokens, index: nameIndex)) 'unnamed'
+		throw AbsentError.absent
+	end 'unnamed'
+
+	let form = LspMemberForm.method if keyword.kind == TokenKind.function else LspMemberForm.field
+
+	return LspMember.create(form, keywordIndex: index, nameIndex: nameIndex, isStatic: isStatic, tier: tier, bodyName: body.name)
+end 'lspDeclaredMemberOnLine'
+
+// `function Printable.print()` declares `print`; the name before the dot is the interface's, and it is
+// declared where the interface is.
+module function lspFunctionNameIndex(tokens TokenArray, at ElementIndex) returns ElementIndex throws AbsentError
+	let afterTheFirstName = try tokens.get(at + 2) otherwise throw AbsentError.absent
+	return at + 3 if afterTheFirstName.kind == TokenKind.dot else at + 1
+end 'lspFunctionNameIndex'
+
+function lspTierSpelledBy(token Token, current Visibility) returns Visibility
+	if token.kind == TokenKind.export 'exported'
+		return Visibility.global
+	end 'exported'
+
+	if token.kind == TokenKind.public 'published'
+		return Visibility.public
+	end 'published'
+
+	if spellsModuleModifier(token.kind, value: token.value) 'moduleScoped'
+		return Visibility.module
+	end 'moduleScoped'
+
+	return current
+end 'lspTierSpelledBy'
+
+// Every body asked about here is in the open buffer, so the reader shares the declaring file: a method
+// is always reachable, and `moduleTierVisible` is true for a field.
+module function lspMemberReachable(member LspMember, site MemberReaderSite) returns bool
+	if member.form != LspMemberForm.field 'neverTiered'
+		return true
+	end 'neverTiered'
+
+	return memberTierReachable(member.tier, site: site, moduleTierVisible: true)
+end 'lspMemberReachable'
+
 // Is `line` a direct member line of `block` — inside it, and inside nothing that is itself inside it?
 module function lspBlockDirectlyHoldsLine(blocks LspDocumentBlockArray, block LspDocumentBlock, line LspLineNumber) returns bool
 	if not lspBlockHoldsLine(block, line: line) 'outsideTheBody'

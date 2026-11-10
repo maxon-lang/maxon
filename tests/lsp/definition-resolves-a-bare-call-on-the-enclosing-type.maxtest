@@ -1,0 +1,54 @@
+let BareMethodLine = 14
+let BareMethodCharacter = 17
+let BareFreeFromMethodCharacter = 27
+let BareFreeFunctionLine = 29
+let BareFreeFunctionCharacter = 13
+let BareMethodDeclarationLine = 9
+let BareScaleDeclarationLine = 4
+let BareHelperDeclarationLine = 24
+
+test 'definition resolves a bare call to a sibling method on the enclosing type'
+	expectDefinitionAt(bareCallFixture(), line: BareMethodLine, character: BareMethodCharacter, startLine: BareMethodDeclarationLine, note: "the bare call `width()` inside `Shelf` did not resolve to the `width` that `Shelf` declares. A free function of the same name is declared first in the document, and the compiler binds a bare call inside a type to the type's own method.")
+end 'definition resolves a bare call to a sibling method on the enclosing type'
+
+test 'definition resolves a bare call inside a type to a free function when the type has no such method'
+	expectDefinitionAt(bareCallFixture(), line: BareMethodLine, character: BareFreeFromMethodCharacter, startLine: BareScaleDeclarationLine, note: "the bare call `scale()` inside `Shelf` did not resolve to the free function `scale`, which `Shelf` has no method to shadow.")
+end 'definition resolves a bare call inside a type to a free function when the type has no such method'
+
+test 'definition resolves a bare call in a free function to the free function'
+	expectDefinitionAt(bareCallFixture(), line: BareFreeFunctionLine, character: BareFreeFunctionCharacter, startLine: BareHelperDeclarationLine, note: "the bare call `helper()` in a free function did not resolve to the free function `helper`. `Other` declares a method `helper` earlier in the document, and a method is not reachable by a bare name outside its type.")
+end 'definition resolves a bare call in a free function to the free function'
+
+function bareCallFixture() returns String
+	return String.from(b"function width() returns ExitCode
+    return 2
+end 'width'
+
+function scale() returns ExitCode
+    return 3
+end 'scale'
+
+type Shelf
+    function width() returns ExitCode
+        return 1
+    end 'width'
+
+    function area() returns ExitCode
+        return width() + scale()
+    end 'area'
+end 'Shelf'
+
+type Other
+    function helper() returns ExitCode
+        return 5
+    end 'helper'
+end 'Other'
+
+function helper() returns ExitCode
+    return 6
+end 'helper'
+
+function run() returns ExitCode
+    return helper()
+end 'run'")
+end 'bareCallFixture'

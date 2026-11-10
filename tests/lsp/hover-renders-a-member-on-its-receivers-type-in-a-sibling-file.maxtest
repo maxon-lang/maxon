@@ -1,0 +1,46 @@
+let HoverOwnerRootName = "temp/lsp/hover-renders-a-member-on-its-receivers-type-in-a-sibling-file"
+let HoverOwnerShelfFileName = "shelf.maxon"
+let HoverOwnerMainFileName = "main.maxon"
+let HoverOwnerCallLine = 2
+let HoverOwnerCallCharacter = 18
+
+test 'hover renders a member on the type of its receiver in a sibling file'
+	let root = stagedCorpusDirectory(HoverOwnerRootName)
+	writeCorpusFile(root, fileName: HoverOwnerShelfFileName, content: hoverOwnerShelfSource())
+	writeCorpusFile(root, fileName: HoverOwnerMainFileName, content: hoverOwnerMainSource())
+
+	let rendering = hoverRenderingAtUri(fileUriOf(root.join(HoverOwnerMainFileName)), source: hoverOwnerMainSource(), line: HoverOwnerCallLine, character: HoverOwnerCallCharacter)
+
+	Expect.contains(rendering, needle: "size(scale ExitCode)", message: "`bin.size(2)` did not hover as the `size` that `Bin` declares. `Crate` declares a `size` first in the same sibling file, and a method belongs to the type of its receiver.")
+end 'hover renders a member on the type of its receiver in a sibling file'
+
+function hoverOwnerShelfSource() returns String
+	return String.from(b"export type Crate
+    export function size() returns ExitCode
+        return 1
+    end 'size'
+
+    export static function make() returns Crate
+        return Crate{}
+    end 'make'
+end 'Crate'
+
+export type Bin
+    export function size(scale ExitCode) returns ExitCode
+        return scale
+    end 'size'
+
+    export static function make() returns Bin
+        return Bin{}
+    end 'make'
+end 'Bin'
+")
+end 'hoverOwnerShelfSource'
+
+function hoverOwnerMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    let bin = Bin.make()
+    return bin.size(2)
+end 'main'
+")
+end 'hoverOwnerMainSource'

@@ -1,0 +1,67 @@
+let PublishedRootName = "temp/lsp/hover-and-definition-resolve-a-method-an-interface-extension-publishes"
+let PublishedShelfFileName = "shelf.maxon"
+let PublishedMainFileName = "main.maxon"
+let PublishedShelfTail = "hover-and-definition-resolve-a-method-an-interface-extension-publishes/shelf.maxon"
+let PublishedCallLine = 2
+let PublishedCallCharacter = 17
+let PublishedDeclarationLine = 25
+
+test 'hover renders a method an interface extension publishes onto its receiver in a sibling file'
+	let root = stagedCorpusDirectory(PublishedRootName)
+	writeCorpusFile(root, fileName: PublishedShelfFileName, content: publishedShelfSource())
+	writeCorpusFile(root, fileName: PublishedMainFileName, content: publishedMainSource())
+
+	let rendering = hoverRenderingAtUri(fileUriOf(root.join(PublishedMainFileName)), source: publishedMainSource(), line: PublishedCallLine, character: PublishedCallCharacter)
+
+	Expect.contains(rendering, needle: "describe() returns ExitCode", message: "`bin.describe()` did not hover as the `describe` that `extension Weighed` publishes onto `Bin`. `Crate` declares a `describe` first in the same sibling file, and a method belongs to the type of its receiver.")
+end 'hover renders a method an interface extension publishes onto its receiver in a sibling file'
+
+test 'definition resolves a method an interface extension publishes onto its receiver in a sibling file'
+	let root = stagedCorpusDirectory(PublishedRootName)
+	writeCorpusFile(root, fileName: PublishedShelfFileName, content: publishedShelfSource())
+
+	let probe = probeCorpusDefinition(root, fileName: PublishedMainFileName, content: publishedMainSource(), line: PublishedCallLine, character: PublishedCallCharacter)
+
+	expectDefinitionInFile(probe, fileTail: PublishedShelfTail, startLine: PublishedDeclarationLine, note: "`bin.describe()` did not resolve to the `describe` that `extension Weighed` publishes onto `Bin`. `Crate` declares a `describe` first in the same sibling file, and a method belongs to the type of its receiver.")
+end 'definition resolves a method an interface extension publishes onto its receiver in a sibling file'
+
+function publishedShelfSource() returns String
+	return String.from(b"export interface Weighed
+    function weight() returns ExitCode
+end 'Weighed'
+
+export type Crate
+    export function describe(label ExitCode) returns ExitCode
+        return label
+    end 'describe'
+
+    export static function make() returns Crate
+        return Crate{}
+    end 'make'
+end 'Crate'
+
+export type Bin implements Weighed
+    export function weight() returns ExitCode
+        return 2
+    end 'weight'
+
+    export static function make() returns Bin
+        return Bin{}
+    end 'make'
+end 'Bin'
+
+export extension Weighed
+    export function describe() returns ExitCode
+        return self.weight()
+    end 'describe'
+end 'Weighed'
+")
+end 'publishedShelfSource'
+
+function publishedMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    let bin = Bin.make()
+    return bin.describe()
+end 'main'
+")
+end 'publishedMainSource'

@@ -26,10 +26,24 @@ end 'LspVisibleField'
 // fallbacks — only the first may reach a lookup by filename — so a reader that collapses them renders a
 // member the compiler refuses to let this file name.
 module union LspMemberDeclaration
-	declaredIn(path FilePath)
+	declaredIn(path FilePath, owner String)
 	hiddenHere
 	nothingDeclaresIt
 end 'LspMemberDeclaration'
+
+// `owner` is the type the index files the member under (a service, for a handle's message), which is
+// the name of the body that declares it.
+module union LspDeclaringSite
+	ofAMember(path FilePath, owner String)
+	ofAName(path FilePath)
+end 'LspDeclaringSite'
+
+module function lspDeclaringSitePath(site LspDeclaringSite) returns FilePath
+	return match site 'site'
+		ofAMember(path, _) gives path
+		ofAName(path) gives path
+	end 'site'
+end 'lspDeclaringSitePath'
 
 module union LspHandleSurface
 	messages(serviceName immutable ByteArray, request immutable EnumLayout)
@@ -58,45 +72,50 @@ module function lspCursorNamesAMember(tokens TokenArray, cursor ElementIndex) re
 	return before.kind == TokenKind.dot
 end 'lspCursorNamesAMember'
 
-module function lspDeclaringFileOfTheCursor(corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex) returns FilePath throws LspDeclarationLookupError
+module function lspDeclaringSiteOfTheCursor(corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex) returns LspDeclaringSite throws LspDeclarationLookupError
 	match corpus 'held'
-		loaded(_, signatures, readerPath) then return try declaringFileOfACursorName(signatures, corpus: corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor, readerPath: readerPath)
+		loaded(_, signatures, readerPath) then return try declaringSiteOfACursorName(signatures, corpus: corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor, readerPath: readerPath)
 		unavailable then throw LspDeclarationLookupError.nothingThere
 	end 'held'
-end 'lspDeclaringFileOfTheCursor'
+end 'lspDeclaringSiteOfTheCursor'
 
-function declaringFileOfACursorName(signatures ProgramSignatures, corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
+function declaringSiteOfACursorName(signatures ProgramSignatures, corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex, readerPath FilePath) returns LspDeclaringSite throws LspDeclarationLookupError
 	let name = lspTokenAt(tokens, index: cursor).value
 
 	if lspCursorNamesAMember(tokens, cursor: cursor) 'aMember'
 		if let qualified = try nameableQualifiedTypeEndingAt(tokens, index: cursor, signatures: signatures, readerFilePath: readerPath) 'aQualifiedType'
-			return qualified.declFilePath
+			return LspDeclaringSite.ofAName(qualified.declFilePath)
 		end 'aQualifiedType'
 
-		return try declaringFileOfTheCursorsMember(signatures, corpus: corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor, member: name, readerPath: readerPath)
+		return try declaringSiteOfTheCursorsMember(signatures, corpus: corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor, member: name, readerPath: readerPath)
 	end 'aMember'
 
-	return try declaringFileOfABareName(signatures, name: name, readerPath: readerPath)
-end 'declaringFileOfACursorName'
+	return LspDeclaringSite.ofAName(try declaringFileOfABareName(signatures, name: name, readerPath: readerPath))
+end 'declaringSiteOfACursorName'
 
-function declaringFileOfTheCursorsMember(signatures ProgramSignatures, corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex, member ByteArray, readerPath FilePath) returns FilePath throws LspDeclarationLookupError
+module function lspMemberOwnerOfTheCursor(corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex) returns String throws LspDeclarationLookupError
 	if cursor < TokensBetweenAReceiverAndItsMember 'nothingBeforeTheDot'
 		throw LspDeclarationLookupError.nothingThere
 	end 'nothingBeforeTheDot'
 
 	let subject = lspSubjectOfReceiver(text, tokens: tokens, keywords: keywords, receiver: cursor - TokensBetweenAReceiverAndItsMember, corpus: corpus)
-	let typeName = try lspSubjectTypeName(subject) otherwise throw LspDeclarationLookupError.nothingThere
 
-	return try lspDeclaringFileOfAMember(signatures, owner: typeName.toByteArray(), member: member, readerPath: readerPath, enclosing: lspEnclosingTypeAtToken(tokens, index: cursor))
-end 'declaringFileOfTheCursorsMember'
+	return try lspSubjectTypeName(subject) otherwise throw LspDeclarationLookupError.nothingThere
+end 'lspMemberOwnerOfTheCursor'
 
-function lspDeclaringFileOfAMember(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns FilePath throws LspDeclarationLookupError
+function declaringSiteOfTheCursorsMember(signatures ProgramSignatures, corpus LspCorpus, text String, tokens TokenArray, keywords KeywordTable, cursor ElementIndex, member ByteArray, readerPath FilePath) returns LspDeclaringSite throws LspDeclarationLookupError
+	let typeName = try lspMemberOwnerOfTheCursor(corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor)
+
+	return try lspDeclaringSiteOfAMember(signatures, owner: typeName.toByteArray(), member: member, readerPath: readerPath, enclosing: lspEnclosingTypeAtToken(tokens, index: cursor))
+end 'declaringSiteOfTheCursorsMember'
+
+function lspDeclaringSiteOfAMember(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspDeclaringSite throws LspDeclarationLookupError
 	match lspMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing) 'declared'
-		declaredIn(path) then return path
+		declaredIn(path, declaringOwner) then return LspDeclaringSite.ofAMember(path, owner: declaringOwner)
 		hiddenHere or
 		nothingDeclaresIt then throw LspDeclarationLookupError.nothingThere
 	end 'declared'
-end 'lspDeclaringFileOfAMember'
+end 'lspDeclaringSiteOfAMember'
 
 module function lspMemberDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspMemberDeclaration
 	match lspHandleSurfaceOf(signatures, typeName: owner) 'aHandle'
@@ -111,7 +130,7 @@ function messageDeclarationOf(signatures ProgramSignatures, serviceName ByteArra
 		return LspMemberDeclaration.nothingDeclaresIt
 	end 'theCompilerRefusesIt'
 
-	return calleeDeclarationOf(signatures, qualified: qualifiedMethodName(serviceName, methodName: member), readerPath: readerPath)
+	return calleeDeclarationOf(signatures, qualified: qualifiedMethodName(serviceName, methodName: member), owner: serviceName, readerPath: readerPath)
 end 'messageDeclarationOf'
 
 function declaredMemberDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspMemberDeclaration
@@ -119,7 +138,7 @@ function declaredMemberDeclarationOf(signatures ProgramSignatures, owner ByteArr
 		return LspMemberDeclaration.hiddenHere
 	end 'typeHiddenHere'
 
-	let asMethod = calleeDeclarationOf(signatures, qualified: qualifiedMethodName(owner, methodName: member), readerPath: readerPath)
+	let asMethod = calleeDeclarationOf(signatures, qualified: qualifiedMethodName(owner, methodName: member), owner: owner, readerPath: readerPath)
 
 	match asMethod 'aMethod'
 		declaredIn or
@@ -138,20 +157,20 @@ function fieldOrCaseDeclarationOf(signatures ProgramSignatures, owner ByteArray,
 	end 'aField'
 end 'fieldOrCaseDeclarationOf'
 
-function calleeDeclarationOf(signatures ProgramSignatures, qualified ByteArray, readerPath FilePath) returns LspMemberDeclaration
+function calleeDeclarationOf(signatures ProgramSignatures, qualified ByteArray, owner ByteArray, readerPath FilePath) returns LspMemberDeclaration
 	if not signatures.declaresCallee(qualified) 'nothingDeclaresIt'
 		return LspMemberDeclaration.nothingDeclaresIt
 	end 'nothingDeclaresIt'
 
 	match signatures.calleeVisibilityFrom(qualified, readerFilePath: readerPath) 'tier'
-		visible then return LspMemberDeclaration.declaredIn(signatures.declaringFileOf(qualified))
+		visible then return LspMemberDeclaration.declaredIn(signatures.declaringFileOf(qualified), owner: String.from(owner))
 		hidden then return LspMemberDeclaration.hiddenHere
 	end 'tier'
 end 'calleeDeclarationOf'
 
 function fieldDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns LspMemberDeclaration
 	match lspVisibleFieldOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing) 'aField'
-		declared(layout, _) then return LspMemberDeclaration.declaredIn(layout.declFilePath)
+		declared(layout, _) then return LspMemberDeclaration.declaredIn(layout.declFilePath, owner: String.from(owner))
 		hidden then return LspMemberDeclaration.hiddenHere
 		none then return LspMemberDeclaration.nothingDeclaresIt
 	end 'aField'
@@ -159,15 +178,15 @@ end 'fieldDeclarationOf'
 
 function enumCaseDeclarationOf(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath) returns LspMemberDeclaration
 	match signatures.enumFor(owner, readerFilePath: readerPath) 'anEnum'
-		declared(layout) then return enumCaseDeclarationIn(layout, member: member)
+		declared(layout) then return enumCaseDeclarationIn(layout, owner: owner, member: member)
 		undeclared then return LspMemberDeclaration.nothingDeclaresIt
 	end 'anEnum'
 end 'enumCaseDeclarationOf'
 
-function enumCaseDeclarationIn(layout EnumLayout, member ByteArray) returns LspMemberDeclaration
+function enumCaseDeclarationIn(layout EnumLayout, owner ByteArray, member ByteArray) returns LspMemberDeclaration
 	for caseName in layout.caseNames 'eachCase'
 		if caseName.equals(member) 'thisCase'
-			return LspMemberDeclaration.declaredIn(layout.declFilePath)
+			return LspMemberDeclaration.declaredIn(layout.declFilePath, owner: String.from(owner))
 		end 'thisCase'
 	end 'eachCase'
 

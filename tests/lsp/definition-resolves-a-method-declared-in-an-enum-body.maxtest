@@ -1,0 +1,34 @@
+let EnumMethodCallLine = 14
+let EnumMethodCallCharacter = 15
+let EnumStaticCallCharacter = 33
+let EnumMethodDeclarationLine = 4
+let EnumStaticDeclarationLine = 8
+let EnumMethodNameLine = 4
+let EnumMethodNameCharacter = 15
+
+test 'definition resolves a method declared in an enum body'
+	expectDefinitionAt(enumMethodFixture(), line: EnumMethodCallLine, character: EnumMethodCallCharacter, startLine: EnumMethodDeclarationLine, note: "`c.describe()` did not resolve to the `describe` that `Color` declares in its body.")
+
+	expectDefinitionAt(enumMethodFixture(), line: EnumMethodCallLine, character: EnumStaticCallCharacter, startLine: EnumStaticDeclarationLine, note: "`Color.make()` did not resolve to the `static function make` that `Color` declares in its body.")
+
+	expectDefinitionAt(enumMethodFixture(), line: EnumMethodNameLine, character: EnumMethodNameCharacter, startLine: EnumMethodDeclarationLine, note: "the name in `function describe()` inside an enum body did not resolve to its own declaration.")
+end 'definition resolves a method declared in an enum body'
+
+function enumMethodFixture() returns String
+	return String.from(b"enum Color
+    red
+    green
+
+    function describe() returns ExitCode
+        return 1
+    end 'describe'
+
+    static function make() returns Color
+        return Color.red
+    end 'make'
+end 'Color'
+
+function use(c Color) returns ExitCode
+    return c.describe() + Color.make().describe()
+end 'use'")
+end 'enumMethodFixture'

@@ -1,0 +1,66 @@
+let ExtendedSiblingRootName = "temp/lsp/completion-in-an-extension-offers-the-extended-types-members"
+let ExtendedSiblingRosterFileName = "roster.maxon"
+let ExtendedSiblingMainFileName = "main.maxon"
+let ExtendedSiblingSelfLine = 2
+let ExtendedSiblingSelfCharacter = 20
+let ExtendedBufferSelfLine = 10
+let ExtendedBufferSelfCharacter = 20
+
+test 'completion in an extension of a sibling type offers that types members'
+	let root = stagedCorpusDirectory(ExtendedSiblingRootName)
+	writeCorpusFile(root, fileName: ExtendedSiblingRosterFileName, content: extendedSiblingRosterSource())
+	writeCorpusFile(root, fileName: ExtendedSiblingMainFileName, content: extendedSiblingMainSource())
+
+	let labels = completionLabelsForAtUri(fileUriOf(root.join(ExtendedSiblingMainFileName)), source: extendedSiblingMainSource(), line: ExtendedSiblingSelfLine, character: ExtendedSiblingSelfCharacter, after: "`self.`, inside `extension Roster`, where `Roster` is `export`ed by a sibling file")
+
+	assertCompletionOffersEach(labels, wanted: ["tally", "isVacant", "names"], after: "`self.`, inside `extension Roster`, where `Roster` is `export`ed by a sibling file")
+
+	Expect.isFalse(completionOffersLabel(labels, label: "secret"), message: "completion after `self.` inside `extension Roster` offered `secret`, which `Roster` declares with no visibility modifier in another file: the compiler refuses the read from an extension (E3014).")
+end 'completion in an extension of a sibling type offers that types members'
+
+test 'completion in an extension of a type in the buffer offers that types members'
+	let labels = completionLabelsFor(extendedBufferSource(), line: ExtendedBufferSelfLine, character: ExtendedBufferSelfCharacter, after: "`self.`, inside `extension Tray`, where `Tray` is declared in the same buffer")
+
+	assertCompletionOffersEach(labels, wanted: ["peek", "count", "items"], after: "`self.`, inside `extension Tray`, where `Tray` is declared in the same buffer")
+end 'completion in an extension of a type in the buffer offers that types members'
+
+function extendedSiblingRosterSource() returns String
+	return String.from(b"export type Roster
+    export var names as StringArray
+    var secret as ExitCode
+
+    export function isVacant() returns bool
+        return self.names.isEmpty()
+    end 'isVacant'
+
+    export static function create() returns Roster
+        return Roster{names: StringArray.create(0), secret: 0}
+    end 'create'
+end 'Roster'
+")
+end 'extendedSiblingRosterSource'
+
+function extendedSiblingMainSource() returns String
+	return String.from(b"extension Roster
+    export function tally() returns ExitCode
+        return self.isVacant()
+    end 'tally'
+end 'Roster'
+")
+end 'extendedSiblingMainSource'
+
+function extendedBufferSource() returns String
+	return String.from(b"type Tray
+    export var items as ExitCode
+
+    function count() returns ExitCode
+        return 0
+    end 'count'
+end 'Tray'
+
+extension Tray
+    function peek() returns ExitCode
+        return self.count()
+    end 'peek'
+end 'Tray'")
+end 'extendedBufferSource'

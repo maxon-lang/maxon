@@ -258,9 +258,9 @@ module function lspDocumentBlocks(tokens TokenArray) returns LspDocumentBlockArr
 			continue
 		end 'closesABlock'
 
-		// Nothing inside an `enum` or `union` body opens a block: every line there is a case name, and a
-		// case may be spelled with a word this language uses as a keyword everywhere else.
-		if innermostKindIs(open, kind: LspBlockKind.enumBody) or innermostKindIs(open, kind: LspBlockKind.unionBody) 'caseList'
+		// Nothing inside an `enum` or `union` body opens a block but a method: every other line there is a
+		// case name, and a case may be spelled with a word this language uses as a keyword everywhere else.
+		if (innermostKindIs(open, kind: LspBlockKind.enumBody) or innermostKindIs(open, kind: LspBlockKind.unionBody)) and not lineOpensAMethod(open, tokens: tokens, tokenLine: tokenLine) 'caseList'
 			continue
 		end 'caseList'
 
@@ -290,7 +290,7 @@ function lineOpensNoBody(open OpenBlockArray, tokens TokenArray, keyword Token, 
 end 'lineOpensNoBody'
 
 // The opener on a line that is not an `end` line: a declaration keyword, or a trailing label.
-function openDeclarationOrLabelledBlock(open OpenBlockArray, tokens TokenArray, tokenLine LspTokenLine)
+function declarationKeywordIndex(tokens TokenArray, tokenLine LspTokenLine) returns ElementIndex
 	var keywordIndex = pastVisibilityModifiers(tokens, index: tokenLine.firstIndex)
 
 	if lspTokenAt(tokens, index: keywordIndex).kind == TokenKind.static 'aStaticMember'
@@ -301,6 +301,18 @@ function openDeclarationOrLabelledBlock(open OpenBlockArray, tokens TokenArray, 
 		keywordIndex = tokenLine.lastIndex
 	end 'pastTheLine'
 
+	return keywordIndex
+end 'declarationKeywordIndex'
+
+function lineOpensAMethod(open OpenBlockArray, tokens TokenArray, tokenLine LspTokenLine) returns bool
+	let keywordIndex = declarationKeywordIndex(tokens, tokenLine: tokenLine)
+	let keyword = lspTokenAt(tokens, index: keywordIndex)
+
+	return keyword.kind == TokenKind.function and not lineOpensNoBody(open, tokens: tokens, keyword: keyword, keywordIndex: keywordIndex)
+end 'lineOpensAMethod'
+
+function openDeclarationOrLabelledBlock(open OpenBlockArray, tokens TokenArray, tokenLine LspTokenLine)
+	let keywordIndex = declarationKeywordIndex(tokens, tokenLine: tokenLine)
 	let keyword = lspTokenAt(tokens, index: keywordIndex)
 
 	if kindOpensADeclarationBlock(keyword.kind) 'declaration'

@@ -487,19 +487,53 @@ module type HoverDocument
 	// --- Resolving a name ---------------------------------------------------------------------
 
 	function nameRendering(index ElementIndex) returns HoverRendering
-		return renderingOfDeclaration(declarationOf(tokenAt(index).value, near: index, scope: HoverDeclarationScope.everyDeclaration))
+		let declared = declarationOf(tokenAt(index).value, near: index, scope: HoverDeclarationScope.everyDeclaration)
+
+		match declared 'declared'
+			routine then return renderingOfDeclaration(self.preferringTheEnclosingTypesMember(declared, near: index))
+			binding or
+			parameter or
+			typeName or
+			none then return renderingOfDeclaration(declared)
+		end 'declared'
 	end 'nameRendering'
 
-	function declarationInTheCorpus(cursor ElementIndex) returns HoverRendering
-		let declFile = try lspDeclaringFileOfTheCursor(corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor) otherwise return HoverRendering.absent
+	// A bare call inside a type binds to the type's own method before a free function of that name. Any
+	// other declaration keeps the nearest-name answer: a local or parameter of that name shadows the method.
+	function preferringTheEnclosingTypesMember(declared HoverDeclaration, near ElementIndex) returns HoverDeclaration
+		match lspEnclosingTypeAtToken(tokens, index: near) 'enclosing'
+			inside(typeName) then return self.memberOfTheEnclosingType(typeName, name: tokenAt(near).value, fallback: declared)
+			atFileScope then return declared
+		end 'enclosing'
+	end 'preferringTheEnclosingTypesMember'
 
-		var declaringDocument = documentOfCorpusFile(declFile)
+	function memberOfTheEnclosingType(typeName ByteArray, name ByteArray, fallback HoverDeclaration) returns HoverDeclaration
+		let own = self.memberDeclaredHere(typeName, member: name)
+
+		if declarationWasFound(own) 'theTypesOwn'
+			return own
+		end 'theTypesOwn'
+
+		return fallback
+	end 'memberOfTheEnclosingType'
+
+	function declarationInTheCorpus(cursor ElementIndex) returns HoverRendering
+		let site = try lspDeclaringSiteOfTheCursor(corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor) otherwise return HoverRendering.absent
+
+		var declaringDocument = documentOfCorpusFile(lspDeclaringSitePath(site))
 
 		match declaringDocument 'declaring'
-			at(declaring) then return declaring.crossFileRendering(tokenAt(cursor).value)
+			at(declaring) then return declaring.renderingAtSite(site, name: tokenAt(cursor).value)
 			none then return HoverRendering.absent
 		end 'declaring'
 	end 'declarationInTheCorpus'
+
+	function renderingAtSite(site LspDeclaringSite, name ByteArray) returns HoverRendering
+		match site 'site'
+			ofAMember(_, owner) then return declaredMethodRendering(freeze owner.toByteArray(), method: name)
+			ofAName then return crossFileRendering(name)
+		end 'site'
+	end 'renderingAtSite'
 
 	function documentOfCorpusFile(path FilePath) returns HoverDeclaringDocument
 		var heldCorpus = self.corpus
@@ -1639,7 +1673,7 @@ module type HoverDocument
 	end 'declaredMemberRendering'
 
 	function declaredMethodRendering(owner ByteArray, method ByteArray) returns HoverRendering
-		return renderingOfDeclaration(memberDeclaredHere(owner, member: method))
+		return renderingOfDeclaration(memberDeclaredOrPublishedHere(owner, member: method))
 	end 'declaredMethodRendering'
 
 	// A service handle's members are its service's. The mapping is applied HERE, at the member lookup, and
@@ -1674,60 +1708,25 @@ module type HoverDocument
 	end 'declarationWasFound'
 
 	function memberDeclaredHere(owner ByteArray, member ByteArray) returns HoverDeclaration
-		let blocks = lspDocumentBlocks(tokens)
-		let declaring = lspBlocksDeclaring(blocks, typeName: String.from(self.spelledInThisDocument(owner)))
+		let found = try lspMemberDeclaredBy(tokens, blocks: lspDocumentBlocks(tokens), owner: String.from(self.spelledInThisDocument(owner)), member: member) otherwise return HoverDeclaration.none
 
-		if declaring.isEmpty() 'noBodyOfThatName'
-			return HoverDeclaration.none
-		end 'noBodyOfThatName'
-
-		let tokenLines = lspTokenLines(tokens)
-
-		// A name can open more than one body — a `type` and an `extension` over it — so a body that does
-		// not declare the member is stepped over rather than ending the walk.
-		for block in declaring 'eachBody'
-			let found = memberNamedIn(member, blocks: blocks, block: block, tokenLines: tokenLines)
-
-			if declarationWasFound(found) 'thisBodyDeclaresIt'
-				return found
-			end 'thisBodyDeclaresIt'
-		end 'eachBody'
-
-		return HoverDeclaration.none
+		return hoverDeclarationOfMember(found)
 	end 'memberDeclaredHere'
 
-	function memberNamedIn(member ByteArray, blocks LspDocumentBlockArray, block LspDocumentBlock, tokenLines LspTokenLineArray) returns HoverDeclaration
-		for tokenLine in tokenLines 'eachLine'
-			let line = lspLineOf(tokenLine.line)
-			let found = memberDeclaredOnLine(member, tokenLine: tokenLine)
+	// For the document the index names as declaring the member; see `lspMemberDeclaredOrPublished`.
+	function memberDeclaredOrPublishedHere(owner ByteArray, member ByteArray) returns HoverDeclaration
+		let found = try lspMemberDeclaredOrPublished(tokens, blocks: lspDocumentBlocks(tokens), owner: String.from(self.spelledInThisDocument(owner)), member: member) otherwise return HoverDeclaration.none
 
-			if declarationWasFound(found) and lspBlockDirectlyHoldsLine(blocks, block: block, line: line) 'aMemberOfThisBody'
-				return found
-			end 'aMemberOfThisBody'
-		end 'eachLine'
+		return hoverDeclarationOfMember(found)
+	end 'memberDeclaredOrPublishedHere'
 
-		return HoverDeclaration.none
-	end 'memberNamedIn'
-
-	function memberDeclaredOnLine(member ByteArray, tokenLine LspTokenLine) returns HoverDeclaration
-		var index = tokenLine.firstIndex
-
-		while index <= tokenLine.lastIndex 'eachToken'
-			let kind = tokenAt(index).kind
-
-			if kind == TokenKind.function and signatureDeclares(index, name: member) 'aDeclarationOfIt'
-				return HoverDeclaration.routine(index)
-			end 'aDeclarationOfIt'
-
-			if (kind == TokenKind.let or kind == TokenKind.var) and namesFollowing(index, name: member) 'aField'
-				return HoverDeclaration.binding(index)
-			end 'aField'
-
-			index = index + 1
-		end 'eachToken'
-
-		return HoverDeclaration.none
-	end 'memberDeclaredOnLine'
+	function hoverDeclarationOfMember(found LspMember) returns HoverDeclaration
+		return match found.form 'form'
+			method gives HoverDeclaration.routine(found.keywordIndex)
+			field gives HoverDeclaration.binding(found.keywordIndex)
+			enumCase gives HoverDeclaration.none
+		end 'form'
+	end 'hoverDeclarationOfMember'
 
 	// The declared return type of `receiver`'s `method`, resolved through the same owner and the same
 	// declaring document its rendering is. Splitting the two lookups gives an editor a signature from one
@@ -1751,7 +1750,7 @@ module type HoverDocument
 	end 'declaredMemberReturnType'
 
 	function declaredMethodReturnType(owner ByteArray, method ByteArray) returns HoverMemberType
-		return memberTypeOrParameter(returnTypeOfDeclaration(memberDeclaredHere(owner, member: method)), owner: owner)
+		return memberTypeOrParameter(returnTypeOfDeclaration(memberDeclaredOrPublishedHere(owner, member: method)), owner: owner)
 	end 'declaredMethodReturnType'
 
 	function returnTypeOfDeclaration(declared HoverDeclaration) returns HoverType
@@ -1774,7 +1773,7 @@ module type HoverDocument
 	// and the corpus pass asks again.
 	function declaringDocumentOfAMember(signatures ProgramSignatures, owner ByteArray, member ByteArray, readerPath FilePath, enclosing LspEnclosingType) returns HoverDeclaringDocument
 		match lspMemberDeclarationOf(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: enclosing) 'declared'
-			declaredIn(path) then return documentOfCorpusFile(path)
+			declaredIn(path, _) then return documentOfCorpusFile(path)
 			hiddenHere then return HoverDeclaringDocument.none
 			nothingDeclaresIt then return stdlibDocumentFor(owner)
 		end 'declared'

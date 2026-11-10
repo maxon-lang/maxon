@@ -1,0 +1,61 @@
+let OwnerBoxSizeLine = 24
+let OwnerBoxSizeCharacter = 16
+let OwnerBoxWeightLine = 24
+let OwnerBoxWeightCharacter = 29
+let OwnerCrateSizeLine = 28
+let OwnerCrateSizeCharacter = 18
+let OwnerCrateWeightLine = 28
+let OwnerCrateWeightCharacter = 33
+let OwnerCrateSecretLine = 19
+let OwnerCrateSecretCharacter = 22
+let OwnerBoxWeightDeclarationLine = 1
+let OwnerBoxSizeDeclarationLine = 3
+let OwnerCrateWeightDeclarationLine = 9
+let OwnerCrateSizeDeclarationLine = 12
+
+test 'definition resolves a member on the type of its receiver'
+	expectDefinitionAt(ownerFixture(), line: OwnerBoxSizeLine, character: OwnerBoxSizeCharacter, startLine: OwnerBoxSizeDeclarationLine, note: "`box.size()` did not resolve to the `size` that `Box` declares.")
+
+	expectDefinitionAt(ownerFixture(), line: OwnerCrateSizeLine, character: OwnerCrateSizeCharacter, startLine: OwnerCrateSizeDeclarationLine, note: "`crate.size()` did not resolve to the `size` that `Crate` declares. `Box` declares a `size` first in the same document, and a method belongs to the type of its receiver.")
+
+	expectDefinitionAt(ownerFixture(), line: OwnerBoxWeightLine, character: OwnerBoxWeightCharacter, startLine: OwnerBoxWeightDeclarationLine, note: "`box.weight` did not resolve to the `weight` that `Box` declares.")
+
+	expectDefinitionAt(ownerFixture(), line: OwnerCrateWeightLine, character: OwnerCrateWeightCharacter, startLine: OwnerCrateWeightDeclarationLine, note: "`crate.weight` did not resolve to the `weight` that `Crate` declares. `Box` declares a `weight` first in the same document, and a field belongs to the type of its receiver.")
+end 'definition resolves a member on the type of its receiver'
+
+test 'definition refuses a field another type in the buffer does not export'
+	expectNoDefinitionAt(ownerFixture(), line: OwnerCrateSecretLine, character: OwnerCrateSecretCharacter)
+end 'definition refuses a field another type in the buffer does not export'
+
+function ownerFixture() returns String
+	return String.from(b"type Box
+    export var weight as ExitCode
+
+    function size() returns ExitCode
+        return 1
+    end 'size'
+end 'Box'
+
+type Crate
+    export var weight as ExitCode
+    var secret as ExitCode
+
+    function size() returns ExitCode
+        return 2
+    end 'size'
+end 'Crate'
+
+type Visitor
+    function look(crate Crate) returns ExitCode
+        return crate.secret
+    end 'look'
+end 'Visitor'
+
+function measureBox(box Box) returns ExitCode
+    return box.size() + box.weight
+end 'measureBox'
+
+function measureCrate(crate Crate) returns ExitCode
+    return crate.size() + crate.weight
+end 'measureCrate'")
+end 'ownerFixture'

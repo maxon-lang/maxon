@@ -111,10 +111,8 @@ function offersAt(text String, tokens TokenArray, keywords KeywordTable, blocks 
 	let inTheBuffer = lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: LspCorpus.unavailable)
 
 	if let bufferTypeName = try lspSubjectTypeName(inTheBuffer) 'aNamedSubject'
-		let declaredHere = lspBlocksDeclaring(blocks, typeName: bufferTypeName)
-
-		if not declaredHere.isEmpty() 'aTypeThisBufferDeclares'
-			return bufferOffers(inTheBuffer, tokens: tokens, blocks: blocks, declaring: declaredHere, enclosing: enclosing)
+		if lspBlocksDeclareTheType(lspBlocksDeclaring(blocks, typeName: bufferTypeName)) 'aTypeThisBufferDeclares'
+			return offersFor(inTheBuffer, tokens: tokens, blocks: blocks, corpus: LspCorpus.unavailable, enclosing: enclosing)
 		end 'aTypeThisBufferDeclares'
 	end 'aNamedSubject'
 
@@ -129,19 +127,6 @@ function offersFor(subject LspSubject, tokens TokenArray, blocks LspDocumentBloc
 	let typeName = try lspSubjectTypeName(subject) otherwise return CompletionOfferArray.create(0)
 
 	let declaring = lspBlocksDeclaring(blocks, typeName: typeName)
-
-	if not declaring.isEmpty() 'aTypeThisBufferDeclares'
-		return bufferOffers(subject, tokens: tokens, blocks: blocks, declaring: declaring, enclosing: enclosing)
-	end 'aTypeThisBufferDeclares'
-
-	var offers = CompletionOfferArray.create(0)
-	var offered = OfferedLabelSet.create()
-	addCorpusMembers(offers, offered: offered, typeName: typeName, corpus: corpus, subject: subject, enclosing: enclosing)
-
-	return offers
-end 'offersFor'
-
-function bufferOffers(subject LspSubject, tokens TokenArray, blocks LspDocumentBlockArray, declaring LspDocumentBlockArray, enclosing LspEnclosingType) returns CompletionOfferArray
 	var offers = CompletionOfferArray.create(0)
 	var offered = OfferedLabelSet.create()
 
@@ -149,8 +134,14 @@ function bufferOffers(subject LspSubject, tokens TokenArray, blocks LspDocumentB
 		addBufferMembers(offers, offered: offered, tokens: tokens, blocks: blocks, block: block, subject: subject, site: lspReaderSite(enclosing, typeName: block.name, sharesTheTypesFile: true))
 	end 'eachDeclaringBody'
 
+	if lspBlocksDeclareTheType(declaring) 'theBufferHoldsTheType'
+		return offers
+	end 'theBufferHoldsTheType'
+
+	addCorpusMembers(offers, offered: offered, typeName: typeName, corpus: corpus, subject: subject, enclosing: enclosing)
+
 	return offers
-end 'bufferOffers'
+end 'offersFor'
 
 // --- Members of a type the BUFFER declares ----------------------------------------------------
 
@@ -159,94 +150,28 @@ end 'bufferOffers'
 // type's completion list would carry every temporary its methods declare.
 function addBufferMembers(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, blocks LspDocumentBlockArray, block LspDocumentBlock, subject LspSubject, site MemberReaderSite)
 	let wantsStatics = lspSubjectIsStatic(subject)
-	let caseList = block.kind == LspBlockKind.enumBody or block.kind == LspBlockKind.unionBody
 
-	for tokenLine in lspTokenLines(tokens) 'eachLine'
-		let line = lspLineOf(tokenLine.line)
-
-		if not lspBlockDirectlyHoldsLine(blocks, block: block, line: line) 'notAMemberLine'
-			continue
-		end 'notAMemberLine'
-
-		if caseList 'aCaseName'
-			// A case is reached through the TYPE (`Color.red`), never through a value of it.
-			if wantsStatics 'staticAccess'
-				addOffer(offers, offered: offered, label: String.from(lspTokenAt(tokens, index: tokenLine.firstIndex).value), kind: EnumMemberCompletionKind)
-			end 'staticAccess'
-
-			continue
-		end 'aCaseName'
-
-		addMemberOnLine(offers, offered: offered, tokens: tokens, tokenLine: tokenLine, wantsStatics: wantsStatics, site: site)
-	end 'eachLine'
+	for member in lspBodyMembers(tokens, blocks: blocks, body: block, tokenLines: lspTokenLines(tokens)) 'eachMember'
+		addBodyMember(offers, offered: offered, tokens: tokens, member: member, wantsStatics: wantsStatics, site: site)
+	end 'eachMember'
 end 'addBufferMembers'
 
-// A member declaration line of a `type`: a field (`var`/`let`) or a method (`function`), each possibly
-// behind a tier keyword. A STATIC method is reached through the type and an instance one through a value,
-// which decides whether a method line belongs in this list; a field line also needs its spelled tier to
-// reach `site`. Every body here is in the open buffer, so the reader shares the declaring file and
-// `moduleTierVisible` is true.
-function addMemberOnLine(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, tokenLine LspTokenLine, wantsStatics bool, site MemberReaderSite)
-	var index = tokenLine.firstIndex
-	var isStatic = false
-	var tier = Visibility.file
-
-	while index <= tokenLine.lastIndex 'skipModifiers'
-		let token = lspTokenAt(tokens, index: index)
-
-		if token.kind == TokenKind.static 'staticMember'
-			isStatic = true
-		end 'staticMember'
-
-		tier = tierSpelledBy(token, current: tier)
-
-		if not lspIsDeclarationModifier(token) 'theDeclarationKeyword'
-			break
-		end 'theDeclarationKeyword'
-
-		index = index + 1
-	end 'skipModifiers'
-
-	if isStatic != wantsStatics 'wrongAccessForm'
+// A STATIC member is reached through the type and an instance one through a value, which decides
+// whether a member belongs in this list; a field also needs its spelled tier to reach `site`. A case
+// is static, so it is reached through the TYPE (`Color.red`), never through a value of it.
+function addBodyMember(offers CompletionOfferArray, offered OfferedLabelSet, tokens TokenArray, member LspMember, wantsStatics bool, site MemberReaderSite)
+	if member.isStatic != wantsStatics or not lspMemberReachable(member, site: site) 'notOffered'
 		return
-	end 'wrongAccessForm'
+	end 'notOffered'
 
-	if index >= tokenLine.lastIndex 'nothingNamed'
-		return
-	end 'nothingNamed'
+	let label = String.from(lspTokenAt(tokens, index: member.nameIndex).value)
 
-	let keyword = lspTokenAt(tokens, index: index)
-	let name = lspTokenAt(tokens, index: index + 1)
-
-	if name.kind != TokenKind.identifier 'unnamed'
-		return
-	end 'unnamed'
-
-	if keyword.kind == TokenKind.function 'aMethod'
-		addOffer(offers, offered: offered, label: String.from(name.value), kind: StaticFunctionCompletionKind if isStatic else MethodCompletionKind)
-		return
-	end 'aMethod'
-
-	if (keyword.kind == TokenKind.var or keyword.kind == TokenKind.let) and memberTierReachable(tier, site: site, moduleTierVisible: true) 'aReachableField'
-		addOffer(offers, offered: offered, label: String.from(name.value), kind: FieldCompletionKind)
-	end 'aReachableField'
-end 'addMemberOnLine'
-
-function tierSpelledBy(token Token, current Visibility) returns Visibility
-	if token.kind == TokenKind.export 'exported'
-		return Visibility.global
-	end 'exported'
-
-	if token.kind == TokenKind.public 'published'
-		return Visibility.public
-	end 'published'
-
-	if spellsModuleModifier(token.kind, value: token.value) 'moduleScoped'
-		return Visibility.module
-	end 'moduleScoped'
-
-	return current
-end 'tierSpelledBy'
+	match member.form 'form'
+		method then addOffer(offers, offered: offered, label: label, kind: StaticFunctionCompletionKind if member.isStatic else MethodCompletionKind)
+		field then addOffer(offers, offered: offered, label: label, kind: FieldCompletionKind)
+		enumCase then addOffer(offers, offered: offered, label: label, kind: EnumMemberCompletionKind)
+	end 'form'
+end 'addBodyMember'
 
 // --- Members of a type the CORPUS declares ----------------------------------------------------
 

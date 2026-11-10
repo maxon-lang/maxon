@@ -1,0 +1,47 @@
+let SiblingOwnerRootName = "temp/lsp/definition-resolves-a-member-on-its-receivers-type-in-a-sibling-file"
+let SiblingOwnerShelfFileName = "shelf.maxon"
+let SiblingOwnerMainFileName = "main.maxon"
+let SiblingOwnerShelfTail = "definition-resolves-a-member-on-its-receivers-type-in-a-sibling-file/shelf.maxon"
+let SiblingOwnerBinSizeLine = 2
+let SiblingOwnerBinSizeCharacter = 18
+let SiblingOwnerBinSizeDeclarationLine = 11
+
+test 'definition resolves a member on the type of its receiver in a sibling file'
+	let root = stagedCorpusDirectory(SiblingOwnerRootName)
+	writeCorpusFile(root, fileName: SiblingOwnerShelfFileName, content: siblingOwnerShelfSource())
+
+	let probe = probeCorpusDefinition(root, fileName: SiblingOwnerMainFileName, content: siblingOwnerMainSource(), line: SiblingOwnerBinSizeLine, character: SiblingOwnerBinSizeCharacter)
+
+	expectDefinitionInFile(probe, fileTail: SiblingOwnerShelfTail, startLine: SiblingOwnerBinSizeDeclarationLine, note: "`bin.size()` did not resolve to the `size` that `Bin` declares. `Crate` declares a `size` first in the same sibling file, and a method belongs to the type of its receiver.")
+end 'definition resolves a member on the type of its receiver in a sibling file'
+
+function siblingOwnerShelfSource() returns String
+	return String.from(b"export type Crate
+    export function size() returns ExitCode
+        return 1
+    end 'size'
+
+    export static function make() returns Crate
+        return Crate{}
+    end 'make'
+end 'Crate'
+
+export type Bin
+    export function size() returns ExitCode
+        return 2
+    end 'size'
+
+    export static function make() returns Bin
+        return Bin{}
+    end 'make'
+end 'Bin'
+")
+end 'siblingOwnerShelfSource'
+
+function siblingOwnerMainSource() returns String
+	return String.from(b"function main() returns ExitCode
+    let bin = Bin.make()
+    return bin.size()
+end 'main'
+")
+end 'siblingOwnerMainSource'

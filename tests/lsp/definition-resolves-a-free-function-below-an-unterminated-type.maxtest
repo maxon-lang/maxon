@@ -1,0 +1,20 @@
+let UnterminatedCallLine = 1
+let UnterminatedCallCharacter = 13
+let UnterminatedDeclarationLine = 7
+
+test 'definition resolves a free function declared below an unterminated type'
+	expectDefinitionAt(unterminatedTypeFixture(), line: UnterminatedCallLine, character: UnterminatedCallCharacter, startLine: UnterminatedDeclarationLine, note: "the call `helper()` above a half-typed `type Foo` did not resolve to the free function `helper` declared below it. The unterminated type runs to the end of the buffer, and a function after it is still the function the call names.")
+end 'definition resolves a free function declared below an unterminated type'
+
+function unterminatedTypeFixture() returns String
+	return String.from(b"function run() returns ExitCode
+    return helper()
+end 'run'
+
+type Foo
+    var x as ExitCode
+
+function helper() returns ExitCode
+    return 1
+end 'helper'")
+end 'unterminatedTypeFixture'

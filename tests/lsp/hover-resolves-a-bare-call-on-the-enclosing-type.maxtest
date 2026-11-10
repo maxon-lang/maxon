@@ -1,0 +1,24 @@
+let BareHoverLine = 6
+let BareHoverCharacter = 17
+
+test 'hover renders a bare call inside a type as the type own method'
+	let rendering = hoverRendering(bareHoverFixture(), line: BareHoverLine, character: BareHoverCharacter)
+
+	Expect.contains(rendering, needle: "width() returns ExitCode", message: "the bare call `width()` inside `Shelf` did not hover as the `width` that `Shelf` declares. A free function of the same name is declared above it in the document, and the compiler binds a bare call inside a type to the type's own method.")
+end 'hover renders a bare call inside a type as the type own method'
+
+function bareHoverFixture() returns String
+	return String.from(b"function width(scale ExitCode) returns ExitCode
+    return scale
+end 'width'
+
+type Shelf
+    function area() returns ExitCode
+        return width()
+    end 'area'
+
+    function width() returns ExitCode
+        return 1
+    end 'width'
+end 'Shelf'")
+end 'bareHoverFixture'

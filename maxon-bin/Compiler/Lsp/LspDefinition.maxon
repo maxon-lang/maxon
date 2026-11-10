@@ -33,13 +33,13 @@ module function definitionAnswer(request LspRequest) returns LspAnswer throws Ls
 	// ⚠ The in-buffer walk answers FIRST and the corpus is only its miss path. A local must shadow
 	// every declaration the project holds, and the buffer is the only thing that can answer at all for
 	// a name the author is in the middle of typing.
-	let target = try definitionTarget(tokens, at: offset) otherwise return definitionAcrossFiles(request, tokens: tokens, offset: offset)
+	let target = try definitionTarget(request.text, keywords: request.keywords, tokens: tokens, at: offset) otherwise return definitionAcrossFiles(request, tokens: tokens, offset: offset)
 
 	return definitionLocationAnswer(request.uri, source: request.text, lines: lines, name: target)
 end 'definitionAnswer'
 
 // The token that DECLARES whatever the cursor is on.
-function definitionTarget(tokens TokenArray, at ByteOffset) returns Token throws LspDeclarationLookupError
+function definitionTarget(text String, keywords KeywordTable, tokens TokenArray, at ByteOffset) returns Token throws LspDeclarationLookupError
 	// Which token the cursor is on is `lspTokenAtCursor`'s answer and not one taken here: `textDocument/hover`
 	// renders the same one, and an editor that jumped to a name that hover described as something else would
 	// be reading two different rules.
@@ -60,13 +60,24 @@ function definitionTarget(tokens TokenArray, at ByteOffset) returns Token throws
 	// `p.x` names a MEMBER: the enclosing function's locals are the wrong place to look, and a local of
 	// the same name would be a confident wrong line rather than a miss.
 	if lspCursorNamesAMember(tokens, cursor: cursor) 'aMember'
-		return try definitionDeclarationOf(tokens, name: name)
+		return try definitionMemberOfTheReceiver(text, keywords: keywords, tokens: tokens, cursor: cursor)
 	end 'aMember'
 
 	// A binding in scope shadows any declaration of the same name elsewhere in the document, so the
 	// local walk answers first and the whole-document search is what it falls through to.
-	return try definitionLocalBinding(tokens, before: cursor, name: name) otherwise try definitionDeclarationOf(tokens, name: name)
+	return try definitionLocalBinding(tokens, before: cursor, name: name) otherwise try definitionBareNameDeclaration(tokens, cursor: cursor, name: name)
 end 'definitionTarget'
+
+// A bare name inside a type's body binds to the type's own member before any free declaration of that
+// name, as a bare call does in the compiler.
+function definitionBareNameDeclaration(tokens TokenArray, cursor ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
+	let enclosing = lspEnclosingTypeAtToken(tokens, index: cursor)
+
+	match enclosing 'enclosing'
+		inside(typeName) then return try definitionMemberOfOwner(tokens, owner: String.from(typeName), member: name, enclosing: enclosing) otherwise try definitionDeclarationOf(tokens, name: name)
+		atFileScope then return try definitionDeclarationOf(tokens, name: name)
+	end 'enclosing'
+end 'definitionBareNameDeclaration'
 
 module function definitionBindsLocally(tokens TokenArray, before ElementIndex, name ByteArray) returns bool
 	return (try definitionLocalBinding(tokens, before: before, name: name) otherwise return false).value.equals(name)
@@ -319,15 +330,50 @@ function definitionIdentifierNamed(tokens TokenArray, at ElementIndex, name Byte
 	return token
 end 'definitionIdentifierNamed'
 
-// Where the document declares `name`, in the order the file states it.
+// Where the document declares `name`, in the order the file states it. A bare name only: a member name
+// is declared by every type that has one, so a member is located on its owner's body by
+// `lspMemberDeclaredBy`. A `function` a terminated body holds is a method and is skipped likewise.
 function definitionDeclarationOf(tokens TokenArray, name ByteArray) returns Token throws LspDeclarationLookupError
+	let blocks = lspDocumentBlocks(tokens)
+
 	for (iter, keyword) in tokens.withIterator() 'eachToken'
 		let declared = try definitionDeclaredName(tokens, keyword: keyword, at: iter.index(), name: name) otherwise continue
+
+		if keyword.kind == TokenKind.function and lspLineIsAMemberLine(blocks, line: lspLineOf(keyword.line)) 'aMethod'
+			continue
+		end 'aMethod'
+
 		return declared
 	end 'eachToken'
 
 	throw LspDeclarationLookupError.nothingThere
 end 'definitionDeclarationOf'
+
+// Only a type the buffer declares answers here; any other receiver type throws and the project's index
+// takes the request.
+function definitionMemberOfTheReceiver(text String, keywords KeywordTable, tokens TokenArray, cursor ElementIndex) returns Token throws LspDeclarationLookupError
+	let owner = try lspMemberOwnerOfTheCursor(LspCorpus.unavailable, text: text, tokens: tokens, keywords: keywords, cursor: cursor)
+
+	return try definitionMemberOfOwner(tokens, owner: owner, member: lspTokenAt(tokens, index: cursor).value, enclosing: lspEnclosingTypeAtToken(tokens, index: cursor))
+end 'definitionMemberOfTheReceiver'
+
+function definitionMemberOfOwner(tokens TokenArray, owner String, member ByteArray, enclosing LspEnclosingType) returns Token throws LspDeclarationLookupError
+	let found = try lspMemberDeclaredBy(tokens, blocks: lspDocumentBlocks(tokens), owner: owner, member: member) otherwise throw LspDeclarationLookupError.nothingThere
+
+	if not lspMemberReachable(found, site: lspReaderSite(enclosing, typeName: found.bodyName, sharesTheTypesFile: true)) 'hiddenHere'
+		throw LspDeclarationLookupError.nothingThere
+	end 'hiddenHere'
+
+	return lspTokenAt(tokens, index: found.nameIndex)
+end 'definitionMemberOfOwner'
+
+// No tier test: the project's index has already filtered the declaring file for this reader, and its
+// bodies are the project's copy, not the open buffer.
+function definitionPublishedMember(tokens TokenArray, owner String, member ByteArray) returns Token throws LspDeclarationLookupError
+	let found = try lspMemberDeclaredOrPublished(tokens, blocks: lspDocumentBlocks(tokens), owner: owner, member: member) otherwise throw LspDeclarationLookupError.nothingThere
+
+	return lspTokenAt(tokens, index: found.nameIndex)
+end 'definitionPublishedMember'
 
 function definitionDeclaredName(tokens TokenArray, keyword Token, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
 	if definitionDeclaresAType(keyword.kind) 'aType'
@@ -335,7 +381,7 @@ function definitionDeclaredName(tokens TokenArray, keyword Token, at ElementInde
 	end 'aType'
 
 	if keyword.kind == TokenKind.function 'aFunction'
-		return try definitionIdentifierNamed(tokens, at: try definitionFunctionNameIndex(tokens, at: at), name: name)
+		return try definitionIdentifierNamed(tokens, at: try lspFunctionNameIndex(tokens, at: at) otherwise throw LspDeclarationLookupError.nothingThere, name: name)
 	end 'aFunction'
 
 	if keyword.kind == TokenKind.let or keyword.kind == TokenKind.var 'aBinding'
@@ -350,17 +396,10 @@ function definitionDeclaresAType(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface or kind == TokenKind.typealias
 end 'definitionDeclaresAType'
 
-// `function Printable.print()` declares `print`; the name before the dot is the interface's, and it is
-// declared where the interface is.
-function definitionFunctionNameIndex(tokens TokenArray, at ElementIndex) returns ElementIndex throws LspDeclarationLookupError
-	let afterTheFirstName = try tokens.get(at + 2) otherwise throw LspDeclarationLookupError.nothingThere
-	return at + 3 if afterTheFirstName.kind == TokenKind.dot else at + 1
-end 'definitionFunctionNameIndex'
-
-// ⭐ **A `var`/`let` reaches the whole-document search only as a type's MEMBER, and the LANGUAGE tells a
-// member from a local: a local binding never carries a type (E2010), so a name followed by anything
-// other than `=` is a field.** Without that rule `p.x` resolves to an unrelated function's `var x = …` —
-// a confident wrong line where nothing is the honest answer. A field carrying a declaration DEFAULT
+// ⭐ **A `var`/`let` reaches the bare-name search only as a FIELD, and the LANGUAGE tells a field from a
+// local: a local binding never carries a type (E2010), so a name followed by anything other than `=` is
+// a field.** Without that rule a bare name resolves to an unrelated function's `var x = …` — a
+// confident wrong line where nothing is the honest answer. A field carrying a declaration DEFAULT
 // (`var value = 0`) falls on the far side of it and resolves to nothing; the reference server draws the
 // same boundary, from indentation rather than from the annotation.
 function definitionFieldNamed(tokens TokenArray, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
@@ -373,6 +412,13 @@ function definitionFieldNamed(tokens TokenArray, at ElementIndex, name ByteArray
 
 	return named
 end 'definitionFieldNamed'
+
+function definitionDeclarationAt(tokens TokenArray, site LspDeclaringSite, name ByteArray) returns Token throws LspDeclarationLookupError
+	match site 'site'
+		ofAMember(_, owner) then return try definitionPublishedMember(tokens, owner: owner, member: name)
+		ofAName then return try definitionDeclarationOf(tokens, name: name)
+	end 'site'
+end 'definitionDeclarationAt'
 
 function definitionLocationAnswer(uri String, source String, lines LspLineIndex, name Token) returns LspAnswer
 	var doc = JsonDoc.create()
@@ -407,20 +453,21 @@ extension Project
 	// but the split holds even where a record does carry one, for two reasons:
 	//
 	// Running the same walk for both halves is what keeps an in-buffer answer and a cross-file answer
-	// from drifting — the rule that a `var` is a field only when it carries no `=` lives in
-	// `definitionFieldNamed` and nowhere else.
+	// from drifting — a member is located through `lspMemberDeclaredBy` in both.
 	//
 	// ⚠ And an index position is not in the unit an answer is spelled in. `lspSpanRangeNode` converts a
 	// byte span to LSP's UTF-16 coordinates, while the index holds 1-based compiler coordinates; a second
 	// converter here is the defect `tests/lsp/position-characters.maxtest` exists to catch.
 	module function definitionInTheCorpus(corpus LspCorpus, text String, tokens TokenArray, cursor ElementIndex) returns LspAnswer
-		let declFile = try lspDeclaringFileOfTheCursor(corpus, text: text, tokens: tokens, keywords: self.keywords, cursor: cursor) otherwise return LspAnswer.nothing()
-		return self.definitionInAnotherFile(declFile, name: lspTokenAt(tokens, index: cursor).value)
+		let site = try lspDeclaringSiteOfTheCursor(corpus, text: text, tokens: tokens, keywords: self.keywords, cursor: cursor) otherwise return LspAnswer.nothing()
+		return self.definitionInAnotherFile(site, name: lspTokenAt(tokens, index: cursor).value)
 	end 'definitionInTheCorpus'
 
-	function definitionInAnotherFile(declFile FilePath, name ByteArray) returns LspAnswer
+	function definitionInAnotherFile(site LspDeclaringSite, name ByteArray) returns LspAnswer
+		let declFile = lspDeclaringSitePath(site)
+
 		view declTokens = try queryActiveTokens(self, path: declFile) otherwise return LspAnswer.nothing()
-		let declared = try definitionDeclarationOf(declTokens, name: name) otherwise return LspAnswer.nothing()
+		let declared = try definitionDeclarationAt(declTokens, site: site, name: name) otherwise return LspAnswer.nothing()
 		view entry = try sourceEntryOf(self, path: declFile) otherwise return LspAnswer.nothing()
 		let text = entry.content
 
