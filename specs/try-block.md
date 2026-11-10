@@ -3442,16 +3442,6 @@ function run(m Measure) returns Tally
 	return m()
 end 'run'
 
-function pick(a Tally, b BoxErr) returns Tally
-	return a + textLength(b)
-end 'pick'
-
-function textLength(b BoxErr) returns Tally
-	return match b 'k'
-		boxed(text) gives text.byteLength() as Tally
-	end 'k'
-end 'textLength'
-
 function inArm(n Tally) returns Tally
 	var total = 0 as Tally
 
@@ -3522,16 +3512,6 @@ end 'fb'
 function run(m Measure) returns Tally
 	return m()
 end 'run'
-
-function pick(a Tally, b BoxErr) returns Tally
-	return a + textLength(b)
-end 'pick'
-
-function textLength(b BoxErr) returns Tally
-	return match b 'k'
-		boxed(text) gives text.byteLength() as Tally
-	end 'k'
-end 'textLength'
 
 function inArm(n Tally) returns Tally
 	var total = 0 as Tally

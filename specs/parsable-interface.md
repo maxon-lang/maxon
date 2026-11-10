@@ -86,11 +86,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Type can implement Parsable with throwing static method
-enum ParseError implements Error
+public enum ParseError implements Error
 	Invalid = 1
 end 'ParseError'
 
-type Value implements Parsable
+public type Value implements Parsable
 	var n as Integer
 
 	static function fromString(input String) returns Self throws ParseError

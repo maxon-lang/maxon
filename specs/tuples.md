@@ -1804,6 +1804,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
+	let _ = sizeof(Holder)
 	var b = StringBox.create("alpha")
 	b.replace("beta")
 	return 0

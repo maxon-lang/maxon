@@ -167,16 +167,16 @@ typealias AuditedFileMap = Map with (String, AuditedFile)
 // The LIBRARY's source files, keyed by the `FilePath.toString()` spelling. A SET and not a second walk,
 // because `isStdlibSourceFile` is a memo probe on a `FilePath` key — which clones and lower-cases the path —
 // while this is asked of every reader and every declaration, and a String key hashes in place.
-typealias LibrarySourcePathSet = Set with String
+module typealias LibrarySourcePathSet = Set with String
 
-typealias EntryPointNameSet = Set with ByteArray
+module typealias EntryPointNameSet = Set with ByteArray
 
 // The author's files, the library's, and the unaudited tiers' (runtime and scriptlib), told apart in ONE
 // walk over `project.db.sourcePaths`. All three come from the same answers per path, so the populations
 // cannot come to disagree about a file the way independently-filtered walks could. `unauditedFiles` is a
 // SUBSET of `libraryFiles`: a runtime or scriptlib file is the library's for `noteRead`'s rule and
 // additionally exempt from emission.
-type SourcePathSplit
+module type SourcePathSplit
 	export let userFiles as FilePathArray
 	export let stdlibFiles as FilePathArray
 	export let libraryFiles as LibrarySourcePathSet
@@ -333,7 +333,7 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 	emitDiagnostics(project, tracked: tracked, unauditedFiles: sources.unauditedFiles, demanded: reachedSignatureDemands(project, tracked: tracked))
 end 'checkUnusedExports'
 
-function splitSourcePaths(project Project) returns SourcePathSplit
+module function splitSourcePaths(project Project) returns SourcePathSplit
 	var paths = FilePathArray.create(0)
 	var stdlibPaths = FilePathArray.create(0)
 	var libraryFiles = LibrarySourcePathSet.create()
@@ -429,7 +429,7 @@ end 'namesWithinAUnionCasesCompanion'
 // this build enters at: the driver compiles the file with one of them as the entry and reaches the
 // others by name. They are read through the driver's own `taskNamesIn`, so the two cannot disagree
 // on what one is.
-function entryPointNamesOf(project Project, userFiles FilePathArray) returns EntryPointNameSet throws CompileError
+module function entryPointNamesOf(project Project, userFiles FilePathArray) returns EntryPointNameSet throws CompileError
 	var names = EntryPointNameSet.create()
 	names.insert(project.entryFunctionName)
 

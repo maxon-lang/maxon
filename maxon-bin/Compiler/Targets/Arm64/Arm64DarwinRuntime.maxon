@@ -761,8 +761,8 @@ function buildArm64DarwinWaitOneChunk(globalData GlobalDataTable) returns Functi
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: PosixWaitOffSignal)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x1, label: takeSignal)
 
-	// A ZERO timeout is a POLL: the caller wants the state, not a wait (`WaitPollTimeout`, which
-	// the collect drain's exit test uses). Answer the default `WAIT_TIMEOUT` without touching the condvar.
+	// A ZERO timeout is a POLL: the caller wants the state, not a wait (the collect drain's exit test
+	// passes one). Answer the default `WAIT_TIMEOUT` without touching the condvar.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTimeout)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x1, label: unlock)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: WaitInfinite)

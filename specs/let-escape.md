@@ -36,34 +36,6 @@ type Box
 	end 'create'
 end 'Box'
 
-type Reg
-	export var items as Boxes
-
-	static function create() returns Self
-		return Self{items: Boxes.create(0)}
-	end 'create'
-end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
-
 function register(b Box, registry mutable Boxes)
 	registry.push(b)
 end 'register'
@@ -101,34 +73,6 @@ type Box
 		return Self{n: n}
 	end 'create'
 end 'Box'
-
-type Reg
-	export var items as Boxes
-
-	static function create() returns Self
-		return Self{items: Boxes.create(0)}
-	end 'create'
-end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
 
 type Tag
 	export var t as Count
@@ -182,34 +126,6 @@ type Box
 	end 'create'
 end 'Box'
 
-type Reg
-	export var items as Boxes
-
-	static function create() returns Self
-		return Self{items: Boxes.create(0)}
-	end 'create'
-end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
-
 type Pair
 	export var left as Boxes
 	export var right as Boxes
@@ -248,7 +164,6 @@ The write by the sibling record's method happens before the store, so the `let` 
 
 ```maxon
 typealias Count = int(0 to 1000)
-typealias Boxes = Array with Box
 
 type Box
 	export var n as Count
@@ -257,34 +172,6 @@ type Box
 		return Self{n: n}
 	end 'create'
 end 'Box'
-
-type Reg
-	export var items as Boxes
-
-	static function create() returns Self
-		return Self{items: Boxes.create(0)}
-	end 'create'
-end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
 
 type Cursor
 	export var current as Box
@@ -340,26 +227,6 @@ type Reg
 	end 'create'
 end 'Reg'
 
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
-
 function build() returns Reg
 	var reg = Reg.create()
 	let a = Box.create(2)
@@ -403,22 +270,6 @@ type Reg
 	end 'create'
 end 'Reg'
 
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
 function zeroBox(w Box)
 	w.n = 0
 end 'zeroBox'
@@ -449,7 +300,6 @@ end 'main'
 
 ```maxon
 typealias Count = int(0 to 1000)
-typealias Boxes = Array with Box
 
 type Box
 	export var n as Count
@@ -458,34 +308,6 @@ type Box
 		return Self{n: n}
 	end 'create'
 end 'Box'
-
-type Reg
-	export var items as Boxes
-
-	static function create() returns Self
-		return Self{items: Boxes.create(0)}
-	end 'create'
-end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
 
 type Wide
 	export var f0 as Count
@@ -603,34 +425,6 @@ type Box
 		return Self{n: n}
 	end 'create'
 end 'Box'
-
-type Reg
-	export var items as Boxes
-
-	static function create() returns Self
-		return Self{items: Boxes.create(0)}
-	end 'create'
-end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
 
 function register(b Box, registry mutable Boxes)
 	registry.push(b)
@@ -2186,34 +1980,6 @@ type Box
 	end 'create'
 end 'Box'
 
-type Reg
-	export var items as Boxes
-
-	static function create() returns Self
-		return Self{items: Boxes.create(0)}
-	end 'create'
-end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
-
 function register(b Box, registry mutable Boxes)
 	registry.push(b)
 end 'register'
@@ -2261,26 +2027,6 @@ type Reg
 		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
 
 function stash(reg Reg, b Box)
 	reg.items.push(b)
@@ -2337,18 +2083,6 @@ type Outer
 		return Self{inner: Reg.create()}
 	end 'create'
 end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
 
 function stash(o Outer, b Box)
 	o.inner.items.push(b)
@@ -2414,10 +2148,6 @@ type Top
 	end 'create'
 end 'Top'
 
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
-
 function stash(t Top, b Box)
 	var o = t.outer
 	o.inner.items.push(b)
@@ -2466,26 +2196,6 @@ type Reg
 		return Self{items: Boxes.create(0)}
 	end 'create'
 end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
 
 function put(items Boxes, b Box)
 	items.push(b)
@@ -2674,7 +2384,6 @@ error E3210: <fragment>:52:11: 'ListSink.take' writes its receiver, but 'Sink.ta
 
 ```maxon
 typealias Count = int(0 to 1000)
-typealias Boxes = Array with Box
 
 type Box
 	export var n as Count
@@ -2683,34 +2392,6 @@ type Box
 		return Self{n: n}
 	end 'create'
 end 'Box'
-
-type Reg
-	export var items as Boxes
-
-	static function create() returns Self
-		return Self{items: Boxes.create(0)}
-	end 'create'
-end 'Reg'
-
-type Outer
-	export var inner as Reg
-
-	static function create() returns Self
-		return Self{inner: Reg.create()}
-	end 'create'
-end 'Outer'
-
-type Top
-	export var outer as Outer
-
-	static function create() returns Self
-		return Self{outer: Outer.create()}
-	end 'create'
-end 'Top'
-
-function zeroBox(w Box)
-	w.n = 0
-end 'zeroBox'
 
 type Cursor
 	export var current as Box

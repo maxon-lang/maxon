@@ -729,12 +729,22 @@ public function f(v export.X) returns ExitCode
 end 'f'
 
 // --- file: app/main.maxon
+type Meter implements lib.X
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function size() returns ExitCode
+		return 0
+	end 'size'
+end 'Meter'
+
 function sizeOf(s lib.X) returns ExitCode
 	return s.size()
 end 'sizeOf'
 
 function main() returns ExitCode
-	return f(7)
+	return f(7) + sizeOf(Meter.create())
 end 'main'
 ```
 ```exitcode
@@ -751,12 +761,22 @@ module interface X
 end 'X'
 
 // --- file: lib/use.maxon
+type Meter implements lib.X
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function size() returns ExitCode
+		return 2
+	end 'size'
+end 'Meter'
+
 function sizeOf(s lib.X) returns ExitCode
 	return s.size()
 end 'sizeOf'
 
 export function libCode() returns ExitCode
-	return 2
+	return sizeOf(Meter.create())
 end 'libCode'
 
 // --- file: digits.maxon
@@ -1564,10 +1584,21 @@ function own() returns HeapCensusMode
 	return HeapCensusMode.first
 end 'own'
 
+export function ownIsFirst() returns bool
+	return match own() 'which'
+		first gives true
+		second gives false
+	end 'which'
+end 'ownIsFirst'
+
 export let MODE = stdlib.HeapCensusMode.byTag
 
 // --- file: app/main.maxon
 function main() returns ExitCode
+	if not ownIsFirst() 'ownIsWrong'
+		return 2
+	end 'ownIsWrong'
+
 	return match MODE 'which'
 		byTag gives 7
 		bySizeClass gives 1
@@ -1614,6 +1645,13 @@ function own() returns HeapCensusMode
 	return HeapCensusMode.first
 end 'own'
 
+export function ownIsFirst() returns bool
+	return match own() 'which'
+		first gives true
+		second gives false
+	end 'which'
+end 'ownIsFirst'
+
 export function flip(m stdlib.HeapCensusMode) returns stdlib.HeapCensusMode
 	return match m 'which'
 		byTag gives stdlib.HeapCensusMode.bySizeClass
@@ -1623,6 +1661,10 @@ end 'flip'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
+	if not ownIsFirst() 'ownIsWrong'
+		return 2
+	end 'ownIsWrong'
+
 	return match flip(stdlib.HeapCensusMode.bySizeClass) 'which'
 		byTag gives 7
 		bySizeClass gives 1
@@ -2595,12 +2637,26 @@ export interface Outer extends Inner
 end 'Outer'
 
 // --- file: app/main.maxon
+type Impl implements Outer
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function code() returns ExitCode
+		return 3
+	end 'code'
+
+	export function more() returns ExitCode
+		return 4
+	end 'more'
+end 'Impl'
+
 function use(o Outer) returns ExitCode
 	return o.code() + o.more()
 end 'use'
 
 function main() returns ExitCode
-	return 7
+	return use(Impl.create())
 end 'main'
 ```
 ```exitcode

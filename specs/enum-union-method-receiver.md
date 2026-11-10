@@ -602,6 +602,7 @@ function helper() returns Integer
 end 'helper'
 
 function main() returns ExitCode
+	let _ = sizeof(Later)
 	let a = Sib.alpha
 	return a.outer() as ExitCode
 end 'main'

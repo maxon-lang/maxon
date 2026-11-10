@@ -617,9 +617,6 @@ end 'main'
 Test cleanup of deeply nested structs with multiple managed fields at function return.
 
 ```maxon
-enum MyError implements Error
-	failed
-end 'MyError'
 
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int

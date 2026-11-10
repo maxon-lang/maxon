@@ -746,7 +746,8 @@ typealias Offset = int(0 to i64.max)
   range whose lower bound is non-negative and whose upper bound is negative (`int(0 to -1)`).
 - An upper bound above `i64.max` makes the range unsigned (see [Integers](#integers)).
 - `typealias X = i64` is **E2003**; the sized names exist only as bounds.
-- A typealias nothing uses is **E3062**.
+- A typealias nothing uses is **E3062**; any other file-private top-level declaration nothing uses is
+  **E3219** (see [Visibility](#visibility)).
 
 `.min` and `.max` are also integer expressions anywhere a literal is valid: `let limit = u16.max`.
 
@@ -4937,6 +4938,14 @@ E3092 for [E3167](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3167). Every ty
 ranged, function, generic-instance and tuple — is audited, and a use credits exactly the declaration it
 means, a use reached only through a called function's signature included.
 
+An unmarked top-level `function`, `let`, `type`, `enum`, `union` or `interface` is checked the other way: when
+nothing live in its own file names it, the compiler reports **E3219** (`unused function: 'helper' is
+file-private and nothing live in this file names it; delete it`). A declaration is live when code that is not
+itself an unmarked top-level declaration names it (an `export`, `module` or `public` declaration, `main`, a
+test, a method), or a live unmarked declaration does, so declarations that only name each other, or a
+function that only calls itself, are all reported. A name spelled in a branch of `#if` the target excludes
+counts as a use. Like the unused-export checks, it runs once the program has no other error.
+
 ### `public`
 
 `public` gives exactly the visibility of `export` and declares the symbol **API surface**: something that
@@ -7264,7 +7273,7 @@ result, a closure written for its parameter, or a use of a binding whose initial
 reported through that refusal. A parse error abandons the function body, initializer or
 declaration it is in, and the rest of its file is checked; one inside a generic body, or one that leaves
 the file's block structure unreadable, fails the whole file. Unused bindings (**E3012**, **E3077**),
-unused exports (**E3092**–**E3094**), target refusals and the checks made while generating code are
+unused exports (**E3092**–**E3094**), unused file-private declarations (**E3219**), target refusals and the checks made while generating code are
 reported once the program has no other error, so fixing every reported error can surface more.
 
 Each example below is refused with the diagnostic shown.

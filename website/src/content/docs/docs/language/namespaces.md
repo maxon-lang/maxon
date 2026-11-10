@@ -109,6 +109,14 @@ E3092 for [E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisible
 ranged, function, generic-instance and tuple — is audited, and a use credits exactly the declaration it
 means, a use reached only through a called function's signature included.
 
+An unmarked top-level `function`, `let`, `type`, `enum`, `union` or `interface` is checked the other way: when
+nothing live in its own file names it, the compiler reports **E3219** (`unused function: 'helper' is
+file-private and nothing live in this file names it; delete it`). A declaration is live when code that is not
+itself an unmarked top-level declaration names it (an `export`, `module` or `public` declaration, `main`, a
+test, a method), or a live unmarked declaration does, so declarations that only name each other, or a
+function that only calls itself, are all reported. A name spelled in a branch of `#if` the target excludes
+counts as a use. Like the unused-export checks, it runs once the program has no other error.
+
 ## `public`
 
 `public` gives exactly the visibility of `export` and declares the symbol **API surface**: something that

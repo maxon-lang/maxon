@@ -1234,14 +1234,6 @@ typealias Tally = int(0 to u64.max)
 typealias Measure = function() returns Tally
 typealias TallyPromise = Promise with Tally
 
-type Counter
-	export var n as Tally
-
-	static function create(n Tally) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Counter'
-
 function later(measure Measure) returns Tally
 	sleep(1)
 

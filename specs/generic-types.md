@@ -3246,9 +3246,6 @@ typealias AlphaBox = Box with Alpha
 function overAlpha(x Alpha) returns Integer
 	return x.a + 4
 end 'overAlpha'
-function overInteger(x Integer) returns Integer
-	return x + 22
-end 'overInteger'
 function main() returns ExitCode
 	let b = AlphaBox.create(Alpha.create(3))
 	print("{overAlpha(b.get())}\n")
@@ -3290,9 +3287,6 @@ function overShape(x Shape) returns Integer
 		square(s) then return s + 5
 	end 'k'
 end 'overShape'
-function overInteger(x Integer) returns Integer
-	return x + 22
-end 'overInteger'
 function main() returns ExitCode
 	let b = ShapeBox.create(Shape.circle(3))
 	print("{overShape(b.get())}\n")
@@ -4317,9 +4311,9 @@ error E2056: <fragment>:10:20: generic type 'Pair' expects 2 type argument(s), b
 
 <!-- test: a-nested-datatype-through-a-function-typed-field-compiles -->
 ```maxon
-typealias Val = int(i64.min to i64.max)
+public typealias Val = int(i64.min to i64.max)
 
-type Pair uses A, B
+public type Pair uses A, B
 	export var a as A
 	export var b as B
 
@@ -4328,7 +4322,7 @@ type Pair uses A, B
 	end 'create'
 end 'Pair'
 
-type Nest uses T
+public type Nest uses T
 	export typealias Doubled = Pair with (T, T)
 	export typealias Deeper = Nest with Doubled
 	export typealias Grow = function(Deeper) returns Val
@@ -4341,9 +4335,9 @@ type Nest uses T
 	end 'create'
 end 'Nest'
 
-typealias ValNest = Nest with Val
+public typealias ValNest = Nest with Val
 
-function peek(n ValNest) returns Val
+public function peek(n ValNest) returns Val
 	return n.v
 end 'peek'
 

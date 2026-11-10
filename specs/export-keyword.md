@@ -1322,15 +1322,12 @@ not depend on the order files are walked, which is alphabetical. **The paths bel
 // --- file: lib/a.maxon
 module typealias Score = int(0 to 100)
 
-function fromA() returns Score
-	return 7
-end 'fromA'
-
 // --- file: zz/b.maxon
 typealias Score = int(0 to 50)
 
-function fromB() returns Score
-	return 3
+public function fromB() returns ExitCode
+	let s = 3 as Score
+	return s
 end 'fromB'
 
 // --- file: lib/main.maxon

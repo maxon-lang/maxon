@@ -198,6 +198,7 @@ function describe(_ Calc.request) returns Integer
 end 'describe'
 
 function main() returns ExitCode
+	let _ = describe
 	let h = spawn Calc.create()
 	return serve(h) as ExitCode
 end 'main'
@@ -1171,10 +1172,6 @@ type Reader
 		return self.n
 	end 'read'
 end 'Reader'
-
-function serve(_ Reader.handle) returns Integer
-	return 1
-end 'serve'
 
 function main() returns ExitCode
 	spawn Reader.from(3)
@@ -2637,6 +2634,7 @@ function offer(h Door.handle, held immutable Holder)
 end 'offer'
 
 function main() returns ExitCode
+	let _ = sizeof(Port)
 	let h = spawn Door.create()
 	h.shutdown()
 

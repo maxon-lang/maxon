@@ -136,12 +136,6 @@ def generate_maxon(supp_count, output_path):
     lines.append("typealias GeneralCategory = int(0 to 29)")
     lines.append("")
 
-    # Category constants
-    lines.append("// Category constants")
-    for cat, code in sorted(CATEGORY_CODES.items(), key=lambda x: x[1]):
-        lines.append(f"let GC_{cat} = {code}")
-    lines.append("")
-
     # Bitmask constants
     lines.append("// Category bitmask helpers for CharacterSet")
     for mask_name, cats in MASK_DEFS.items():

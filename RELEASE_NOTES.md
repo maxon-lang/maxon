@@ -24,6 +24,13 @@ release's version as its heading when the release is cut.
   (`b = Box.full(42)`); write `let` for a `var` that is only matched; drop `isolated`, `merge` and `freeze` on
   a union of immutable payloads; match a unique payload out of a `let` union.
 
+- A file-private top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its file
+  names is E3219, the way an unused local is E3012 and an unused `typealias` is E3062. A declaration is live when
+  code that is not itself a file-private declaration names it (an `export`, `module` or `public` declaration,
+  `main`, a test, a method), or a live file-private declaration does; declarations that only name each other, or
+  a function that only calls itself, are all reported. A name spelled in a branch of `#if` the target excludes
+  counts as a use.
+  Fix: delete the declaration (the compiler lists each one), or use it.
 - `+`, `-` and `*` over a full-width unsigned alias (`int(0 to u64.max)`, which `Count`, `ElementIndex` and
   `BytePos` are) are range-checked where they are computed: a carry out of bit 63, a borrow
   (`a.count() - b.count()` with `b` larger) or a product past `u64.max` panics with `Range check failed:

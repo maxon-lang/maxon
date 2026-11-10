@@ -182,11 +182,11 @@ export type Gate
 end 'Gate'
 
 // --- file: main.maxon
-typealias P1 = int(0 to 5)
-typealias P2 = int(0 to 5)
-typealias P3 = int(0 to 5)
+public typealias P1 = int(0 to 5)
+public typealias P2 = int(0 to 5)
+public typealias P3 = int(0 to 5)
 
-function pad(a P1, _ P2, _ P3) returns P1
+public function pad(a P1, _ P2, _ P3) returns P1
 	return a
 end 'pad'
 
@@ -469,12 +469,12 @@ export type Holder
 end 'Holder'
 
 // --- file: main.maxon
-typealias P1 = int(0 to 5)
-typealias P2 = int(0 to 5)
-typealias P3 = int(0 to 5)
-typealias P4 = int(0 to 5)
+public typealias P1 = int(0 to 5)
+public typealias P2 = int(0 to 5)
+public typealias P3 = int(0 to 5)
+public typealias P4 = int(0 to 5)
 
-function pad(a P1, _ P2, _ P3, _ P4) returns P1
+public function pad(a P1, _ P2, _ P3, _ P4) returns P1
 	return a
 end 'pad'
 

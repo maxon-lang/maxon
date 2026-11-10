@@ -162,7 +162,7 @@ type Point
 end 'Point'
 
 /// The kinds of thing.
-enum Kind
+public enum Kind
 	/// the first
 	alpha
 	/// the second

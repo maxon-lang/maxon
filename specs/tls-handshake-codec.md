@@ -1296,16 +1296,6 @@ function fromHex(hex String) returns ByteArray
 	return bytes
 end 'fromHex'
 
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
-
 function report(id String, protocol TlsProtocol, hex String)
 	if let message = try TlsHandshakeCodec.decode(fromHex(hex), protocol: protocol) 'decoded'
 		let kind = match message 'kind'
@@ -1403,42 +1393,6 @@ noApplicationProtocol 120
 <!-- test: tls-handshake-codec.a-field-longer-than-its-length-prefix-is-refused-when-encoding -->
 `TlsHandshakeCodec.encode` throws `TlsEncodeError.vectorTooLong` for a field that does not fit its length prefix (uint8 session id, uint16 ticket and extension block, uint24 handshake body) and writes the largest one that fits. A line prints the encoded length.
 ```maxon
-function digit(symbol Byte) returns Byte
-	if symbol >= 0x61 'letter'
-		return symbol - 0x57
-	end 'letter'
-
-	return symbol - 0x30
-end 'digit'
-
-function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
-	var high = 0 as Byte
-	var isHigh = true
-
-	for symbol in hex.bytes() 'eachSymbol'
-		if isHigh 'first'
-			high = digit(symbol)
-		end 'first' else 'second'
-			bytes.push(high * 16 + digit(symbol))
-		end 'second'
-
-		isHigh = not isHigh
-	end 'eachSymbol'
-
-	return bytes
-end 'fromHex'
-
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
-
 function filled(count Count) returns ByteArray
 	var bytes = ByteArray.create(0)
 	bytes.resize(count)

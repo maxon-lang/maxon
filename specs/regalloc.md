@@ -337,10 +337,6 @@ for seed = 0.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function opaque(x Integer) returns Integer
-	return x + 0
-end 'opaque'
-
 function kernel(seed Integer) returns Integer
 	// Four "early" values, defined at the top of the source. Each is
 	// a small computation rather than a call so the scheduler can

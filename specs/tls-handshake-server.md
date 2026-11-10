@@ -3939,16 +3939,6 @@ queued=0
 <!-- tier: stdlib/helpers/tls -->
 `TlsServerEntropy.fresh` draws a 32-byte random, a 64-byte PSS salt and one private key per group the config lists, 32 bytes each, with the public key the group derives from it; two draws share nothing; a group without a key is `internalError`; a server started from it has sent nothing.
 ```maxon
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
-
 function secretOf(entropy TlsServerEntropy, group TlsGroupCode) returns TlsKeySecret
 	return try entropy.secret(group) otherwise panic("no secret for the group")
 end 'secretOf'
@@ -4290,14 +4280,6 @@ function onlyTls13() returns TlsProtocolArray
 	return TlsProtocolArray from [TlsProtocol.tls13]
 end 'onlyTls13'
 
-function onlyTls12() returns TlsProtocolArray
-	return TlsProtocolArray from [TlsProtocol.tls12]
-end 'onlyTls12'
-
-function bothVersions() returns TlsProtocolArray
-	return TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12]
-end 'bothVersions'
-
 function schemes(tweak Tweak, pkcs1Tweak Tweak, pkcs1 TlsSignatureSchemeCodeArray, preference TlsSignatureSchemeCodeArray) returns TlsSignatureSchemeCodeArray
 	if tweak == pkcs1Tweak 'pkcs1Only'
 		return pkcs1
@@ -4475,10 +4457,6 @@ function scenario(label String, serverKind ServerKind, clientKind ClientKind, se
 		print("{label} refused {failure}\n")
 	end 'refused'
 end 'scenario'
-
-function suiteList(suite TlsCipherSuiteCode) returns TlsCipherSuiteCodeArray
-	return TlsCipherSuiteCodeArray from [suite]
-end 'suiteList'
 
 function main() returns ExitCode
 	scenario("chacha20-poly1305", serverKind: ServerKind.p256, clientKind: ClientKind.none, serverProtocols: onlyTls13(), clientProtocols: onlyTls13(), suites: TlsCipherSuiteCodeArray from [0x1303], tweak: Tweak.none)

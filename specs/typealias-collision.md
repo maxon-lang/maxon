@@ -242,12 +242,9 @@ module typealias Score = int(0 to 100)
 // --- file: legacy/util.maxon
 typealias Score = int(0 to 999)
 
-function legacyCheck(x Score) returns Score
+public function helper() returns ExitCode
+	let x = 10 as Score
 	return x
-end 'legacyCheck'
-
-function helper() returns Score
-	return legacyCheck(10)
 end 'helper'
 
 // --- file: app/main.maxon

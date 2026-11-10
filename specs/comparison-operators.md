@@ -346,12 +346,7 @@ arithmetic family does — would let the non-negative side impose an unsigned re
 this backwards.
 
 ```maxon
-typealias Wide = bits(64)
 typealias Signed = int(i64.min to i64.max)
-
-function wide(n Wide) returns Wide
-	return n
-end 'wide'
 
 function signed(n Signed) returns Signed
 	return n

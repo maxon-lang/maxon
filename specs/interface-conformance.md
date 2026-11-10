@@ -536,7 +536,7 @@ field declaration may not carry a `with` clause directly (`var managed as __Mana
 Element` is refused), so the alias is not a style choice — it is the only spelling, and it is
 `stdlib/Array.maxon`'s own. The refusal one case down is what a field over the WRONG element earns.
 ```maxon
-type MyCollection uses Element implements BuiltinArrayLiteral
+public type MyCollection uses Element implements BuiltinArrayLiteral
 	typealias Buf = __ManagedMemory with Element
 
 	var managed as Buf

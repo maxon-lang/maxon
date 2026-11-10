@@ -177,6 +177,7 @@ class Plan:
                 users.setdefault(key, set()).add(NORMALIZED(entry))
                 readers.setdefault(key, set()).add(NORMALIZED(entry))
 
+        hand_text = "\n".join(hand_codec_lines(self.tree))
         emitted = {}
         errors = []
 
@@ -188,7 +189,8 @@ class Plan:
                 visibility = self.visibility_prefix(item, external, users.get(item, set()))
                 reader_external = any(f != NORMALIZED(self.item_path(item)) for f in readers.get(item, set()))
                 reader_visibility = visibility if reader_external or kind != "alias" else ""
-                emitted[item] = self.emit(kind, name, visibility, reader_visibility)
+                read_plain = bool(readers.get(item)) or ("cacheRead%s(" % name) in hand_text
+                emitted[item] = self.emit(kind, name, visibility, reader_visibility, read_plain)
             except Unresolved as failure:
                 errors.append((item, str(failure)))
 
@@ -233,9 +235,9 @@ class Plan:
 
         return []
 
-    def emit(self, kind, name, visibility, reader_visibility):
+    def emit(self, kind, name, visibility, reader_visibility, read_plain):
         if kind == "alias":
-            return ("alias", self.emitter.alias_helpers(name, visibility, reader_visibility))
+            return ("alias", self.emitter.alias_helpers(name, visibility, reader_visibility, read_plain))
 
         if kind == "frozenAlias":
             return ("alias", self.emitter.frozen_alias_helpers(name, visibility))

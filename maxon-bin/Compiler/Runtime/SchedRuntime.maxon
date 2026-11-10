@@ -297,8 +297,8 @@ let PointerSlotBytes = 8 as ByteOffset
 // to the processor, and a processor can be handed to somebody else.
 //
 // ⛔⛔ **THREE OF THESE FIELDS ON THE P WOULD BE A SILENT CORRUPTION AT THE FIRST HANDOFF.** The failure
-// shape is identical in all three and it is the one `POffReservedSystemStackSP` records: two Ms writing one
-// region, interleaved, with no fault.
+// shape is identical in all three and it is the one the first bullet states: two Ms writing one region,
+// interleaved, with no fault.
 //
 //   • **the 64 KB syscall stack** — two Ms inside shimmed kernel calls would set RSP to the same top.
 //   • **`currentGt`** — the green thread executing inside the kernel call is the BLOCKED M's; a second M
@@ -744,19 +744,47 @@ let MStructSize = ((MOffPreemptOff + PointerSlotBytes) as FullRangeInt)
 // ==========================================================================
 //
 // ⭐ **THE HEADER IS A FIXED, PORTABLE LAYOUT THROUGH 0x78**, so an allocator shard index and a netpoll
-// both graft onto it without a field moving. Fields this file does not use are RESERVED rather
+// both graft onto it without a field moving. A word this file does not use is RESERVED rather
 // than omitted, for the reason `GtRuntime` reserves the GT's 0x60–0xA0 window: a field added later at a
 // different offset is a layout fork, and a layout fork under a shared reader is a silent wrong answer.
 //
 // ⚠⚠ **A P IS NOT ITS M, WHICH IS WHY THREE FIELDS SIT ON THE M INSTEAD.** A P bound to one OS
 // thread for life keeps `currentGt` at 0x18, a system stack at 0x70 and an inline `mainThread` at
 // 0x80; a P that can be HANDED to another M cannot, so those three live on the M (see its section
-// above) and their P slots are reserved rather than reused. `id`, `rng`, `POffReservedIdleFlag`,
-// `POffReservedWakeEvent`, `POffReservedOsThreadHandle` and `status` stay exactly where they are.
-// ⚠ **EVERY `POffReserved*` header word reads a permanent zero rather than a value** — the
-// local-queue length at 0x10, `currentGt`, `POffReservedIdleFlag`, `POffReservedWakeEvent`,
-// `POffReservedOsThreadHandle`, 0x50, the system stack and the remote-free head — which is worth
-// saying plainly to anyone grafting a reader onto this header.
+// above) and their P slots are reserved rather than reused.
+//
+// ⚠ **EVERY RESERVED HEADER WORD READS A PERMANENT ZERO rather than a value**, which is worth saying plainly
+// to anyone grafting a reader onto this header, and none is reused, so nothing else's value ever lands at one
+// of these offsets:
+//
+//   • **0x10, the local-queue length** — a ring's length is `tail - head` (see its counters below).
+//   • **0x18, `currentGt`** — the green thread executing inside a kernel call belongs to the M blocked there
+//     (`MOffCurrentGt`), and the shim reads that word again AFTER the call to restore the TIB, so a second M
+//     adopting the P in between would answer the first M's shim with its own green thread.
+//   • **0x30, a park flag** — one half of a Dekker pair (1 meaning *"this M has published that it is about
+//     to block on `MOffParkEvent`"*, written by the parking M with a `lock cmpxchg` and taken 1 -> 0 by the
+//     enqueuer that won the right to signal). ⛔⛔ **THE MECHANISM IS ABSENT, NOT RELOCATED.** Such a pair is
+//     needed only where the park publishes its intention OUTSIDE any lock and then re-searches. With the idle
+//     state on the M, the park's last looks and its release of the processor happen inside ONE `__sched_lock`
+//     critical section (`buildSchedLoop`'s park), and so does the whole of `startm`: two parties serialised by
+//     a mutex need no Dekker protocol, and **a flag beside the list would be a second idle mechanism** with
+//     nothing making the two agree. The missed-wakeup argument is *"the last look and the release are one
+//     transaction, and `startm` takes the same lock"*, and the auto-reset event (`MOffParkEvent`) covers the
+//     window between the idle-list join and the wait itself.
+//   • **0x38, a wake event** — the park event lives on the M, because an M that reached its wait handle
+//     through the processor it held would have none while holding no P.
+//   • **0x40, a worker-thread handle, AND THIS SLOT IS A LANDMINE** — the handle lives on the M
+//     (`MOffOsThreadHandle`). A handle here would name the M that CLAIMED this P, and a teardown would join it
+//     by walking `__sched_procs`; a P does not belong to one M for that M's life, so the walk would join a
+//     thread that has nothing to do with this processor any more, succeed (the handle is still live), and
+//     return while the worker it meant to wait for was still stepping the allocation counters
+//     `__mm_leak_check` reads three calls later.
+//   • **0x50** — part of the portable header; nothing reads or writes it.
+//   • **0x70, the syscall stack** — the scratch stack lives on the M (`MOffSystemStackSP`). A per-P stack is
+//     only as sound as *"an M can only reach its own P"*, and a P taken from an M blocked in a kernel call
+//     makes "its own P" name two Ms: both set RSP to the same top and write the same 64 KB.
+//   • **0x78, a remote-free queue** — it belongs to the SPAN (`SlabRuntime.MspanRemoteHeadOffset`), so a
+//     processor holds no queue of its own and going idle strands nothing.
 //
 // ⚠⚠ **THE TAIL CARRIES A 256-SLOT RING**, which a linked local queue has no equivalent of, so only the
 // HEADER is portable; the tail grafts onto nothing and the total size is its own.
@@ -768,26 +796,15 @@ let MStructSize = ((MOffPreemptOff + PointerSlotBytes) as FullRangeInt)
 // to have (a head that reads `h` twice really did not move — a pair of pointers can look identical after a
 // full lap). `POffRunqBase` at the P's tail is the slot array itself.
 //
-// ⛔ **THERE IS NO LENGTH WORD, AND 0x10 IS THEREFORE STILL RESERVED.** A LINKED-LIST queue needs a `len`
-// beside its head/tail because its length cannot be computed; a ring's is `tail - head`, and a third word
-// maintained beside two that already answer the question is a fact stored twice — which is exactly how a
-// queue comes to disagree with itself. It stays reserved rather than reused so the offset never forks.
+// ⛔ **THERE IS NO LENGTH WORD.** A LINKED-LIST queue needs a `len` beside its head/tail because its length
+// cannot be computed; a ring's is `tail - head`, and a third word maintained beside two that already answer
+// the question is a fact stored twice — which is exactly how a queue comes to disagree with itself.
 //
 // ⚠ NEITHER IS EXPORTED: *"does this ring hold anything?"* is asked through `emitSchedAnyRunnable` and
 // `__sched_any_work`, because where the ring keeps its counters and what makes it empty belong to the file
 // that owns the P.
 let POffRunqHead = 0x00
 let POffRunqTail = 0x08
-let POffReservedLocalQueueLen = 0x10 as ByteOffset
-
-// ⭐⭐ **A RESERVED `currentGt` SLOT — the running green thread lives on the M (`MOffCurrentGt`).** A global
-// cannot say *"the thread THIS M is running"* once there is more than one M, and neither can the P: the
-// green thread executing inside a kernel call belongs to the M that is blocked there, not to the processor
-// a handoff is about to give away, and the shim reads that word again AFTER the call to restore the TIB —
-// so a second M adopting the P in between would answer the first M's shim with its own green thread.
-//
-// It stays reserved rather than reused, so nothing else's value ever lands at this offset.
-let POffReservedCurrentGt = 0x18 as ByteOffset
 
 // This processor's index in `__sched_procs`, `0 .. numProcs-1`. It is also the shard index the sharded
 // allocator will key its mcache by, which is why it
@@ -800,37 +817,6 @@ export let POffId = 0x20 as ByteOffset
 // rounds in `__sched_find_runnable`. Seeded to `id + 1` at init, because a zero xorshift state is a FIXED
 // POINT: a P seeded 0 would draw 0 for ever and always try to steal from P[0].
 let POffRng = 0x28
-
-// ⭐⭐ **A RESERVED PARK-FLAG SLOT, AND NOTHING HERE HAS A TWIN OF IT.** It would be one half of a Dekker
-// pair: 1 meaning *"this M has published that it is about to block on `MOffParkEvent`"*,
-// written to 1 by the parking M with a `lock cmpxchg` (the LOCK prefix being the StoreLoad fence) and taken
-// 1 -> 0 by whichever enqueuer won the right to signal.
-//
-// ⛔⛔ **THE MECHANISM IS ABSENT, NOT RELOCATED.** Such a pair is needed only where the park publishes its
-// intention OUTSIDE any lock and then re-searches, so *"is this M idle?"* and *"has this M gone to sleep yet?"* had to be
-// answerable by a racing enqueuer through one word. With the idle state on the M, the park's last looks and
-// its release of the processor happen inside ONE `__sched_lock` critical section (`buildSchedLoop`'s park),
-// and so does the whole of `startm`. Two parties
-// serialised by a mutex do not need a Dekker protocol between them, and **a flag beside the list would be a
-// second idle mechanism**, with nothing making the two agree.
-//
-// ⇒ the missed-wakeup argument is *"the last look and the release are one transaction, and `startm` takes
-// the same lock"*. `buildSchedLoop`'s park states it, and the auto-reset event (`MOffParkEvent`) covers the
-// window between the idle-list join and the wait itself.
-let POffReservedIdleFlag = 0x30 as ByteOffset
-
-// ⭐⭐ **A RESERVED PER-P WAKE-EVENT SLOT — the park event lives on the M (`MOffParkEvent`).** An M that
-// reached its wait handle through the processor it held would have none while holding no P. Reserved
-// rather than reused for `POffReservedCurrentGt`'s reason — nothing else's value may land at this offset.
-let POffReservedWakeEvent = 0x38 as ByteOffset
-
-// ⭐⭐ **A RESERVED WORKER-THREAD-HANDLE SLOT — the handle lives on the M (`MOffOsThreadHandle`), AND THIS
-// SLOT IS A LANDMINE.** A handle here would name the M that CLAIMED this P, and a teardown would join it by
-// walking `__sched_procs`. A P does not belong to one M for that M's life, so the walk would join a thread
-// that has nothing to do with this processor any more, succeed (the handle is still live), and return while
-// the worker it meant to wait for was still stepping the allocation counters `__mm_leak_check` reads three
-// calls later.
-let POffReservedOsThreadHandle = 0x40 as ByteOffset
 
 // ⭐⭐ **THE CLAIM WORD — `PStatusUnused` (0) or `PStatusActive` (1).** A P struct exists for every processor
 // the program may ever run on, so *"does this P exist"* and *"is an M running on it"* are different
@@ -853,9 +839,6 @@ let POffReservedOsThreadHandle = 0x40 as ByteOffset
 let POffStatus = 0x48
 let PStatusUnused = 0
 let PStatusActive = 1
-
-// Reserved: part of the portable header, and nothing reads or writes it.
-let POffReservedPendingWaiter = 0x50 as ByteOffset
 
 // ⭐⭐⭐ **GO'S `runnext` — THE ONE GREEN THREAD THIS PROCESSOR RUNS BEFORE IT CONSULTS ITS RING**
 // (`proc.go:7530`). Every ready puts its thread here and kicks whatever the slot held to the ring TAIL, so the
@@ -880,18 +863,6 @@ let POffRunnext = 0x58
 // call, so a retake cannot move the P out from under one.
 let POffFreeListHead = 0x60 as ByteOffset
 let POffFreeListLen = 0x68 as ByteOffset
-
-// ⭐⭐ **A RESERVED SYSCALL-STACK SLOT — the scratch stack lives on the M (`MOffSystemStackSP`), AND THIS
-// SLOT IS THE WHOLE ARGUMENT FOR THAT.** A per-P scratch stack is only as sound as *"an M can only reach its
-// own P"*, and a P taken from an M blocked in a kernel call makes "its own P" name two Ms: both set RSP to
-// the same top and write the same 64 KB, which is silent interleaved corruption rather than a clean fault.
-// The stack belongs to the M that is EXECUTING. Reserved, not reused, for `POffReservedCurrentGt`'s reason.
-let POffReservedSystemStackSP = 0x70 as ByteOffset
-
-// Reserved, not reused, for `POffReservedCurrentGt`'s reason. A remote-free queue belongs to the SPAN
-// (`SlabRuntime.MspanRemoteHeadOffset`), so a processor holds no queue of its own and going idle strands
-// nothing.
-let POffReservedRemoteFreeHead = 0x78 as ByteOffset
 
 // ⭐ **THIS P's SCHEDULE COUNTER — Go's `schedtick`, and the reading `__Builtins.schedSliceCount()` sums.** One
 // up per call of `__sched_find_runnable` that starts a SLICE, and every 61st consults the GLOBAL queue before
@@ -1208,7 +1179,7 @@ let SchedMaxMachines = 10000
 //
 // ⭐⭐ **A LIST RATHER THAN A SCAN OF THE PROCESSORS, BECAUSE A PARKED MACHINE HOLDS NO PROCESSOR TO BE FOUND
 // BY.** Membership is decided under the one lock, with no idle flag beside it
-// (`POffReservedIdleFlag`), so there is no fence for a lock-free scan to preserve.
+// (the P header's reserved park-flag word), so there is no fence for a lock-free scan to preserve.
 //
 // `underSchedLock`, for `SchedAllMLabel`'s reason and one more: `__sched_startm` reads it in the hold that
 // takes an idle processor, so a wake finds a parked machine here or creates one (`buildSchedLoop`'s park).

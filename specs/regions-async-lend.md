@@ -53,15 +53,6 @@ A `String` variable is the coroutine's cell as well.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-type Holder
-	export var f as String
-	export var g as String
-
-	static function create() returns Self
-		return Self{f: "original", g: "other"}
-	end 'create'
-end 'Holder'
-
 function shout(text mutable String) returns Tally
 	sleep(1)
 	text = "replaced"

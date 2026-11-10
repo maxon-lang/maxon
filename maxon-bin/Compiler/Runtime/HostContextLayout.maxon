@@ -13,30 +13,31 @@ let SampleContextRipOffsetName = "SampleContextRipOffset"
 let SampleContextRspOffsetName = "SampleContextRspOffset"
 let SampleContextRbpOffsetName = "SampleContextRbpOffset"
 let ProfileRegionRecordBytesName = "ProfileRegionRecordBytes"
-let Win64MbiBaseAddressOffsetName = "Win64MbiBaseAddressOffset"
 let ProfileRegionAllocationBaseOffsetName = "ProfileRegionAllocationBaseOffset"
-let Win64MbiRegionSizeOffsetName = "Win64MbiRegionSizeOffset"
 let ProfileRegionSuspendedCyclesOffsetName = "ProfileRegionSuspendedCyclesOffset"
 let ProfileSampleThreadGoneName = "ProfileSampleThreadGone"
 let ProfileSampleNoRegistersName = "ProfileSampleNoRegisters"
 let ProfileSampleCallingThreadName = "ProfileSampleCallingThread"
 
 let MachSuccessName = "MachSuccess"
-let MachThreadStateFlavorName = "MachArmThreadState64"
-let MachThreadStateWordsName = "MachArmThreadState64Words"
 let MachStateStackPointerOffsetName = "MachStateStackPointerOffset"
 let MachThreadInfoFlavorName = "MachThreadBasicInfo"
 let MachThreadInfoWordsName = "MachThreadBasicInfoWords"
 let StackReadChunkBytesName = "StackReadChunkBytes"
 
+let Win64MbiBaseAddressOffset = 0
+let Win64MbiRegionSizeOffset = 24
+let MachArmThreadState64 = 6
+let MachArmThreadState64Words = 68
+let SeizedTablePidOffset = 0
+let SeizedTablePinOffset = 16
+let SeizedTableKilledOffset = 24
+let TraceKillSignal = 9
+
 let SeizedTableBytesName = "SeizedTableBytes"
-let SeizedTablePidOffsetName = "SeizedTablePidOffset"
 let SeizedTableCountOffsetName = "SeizedTableCountOffset"
-let SeizedTablePinOffsetName = "SeizedTablePinOffset"
-let SeizedTableKilledOffsetName = "SeizedTableKilledOffset"
 let SeizedTableThreadsOffsetName = "SeizedTableThreadsOffset"
 let SeizedWordBytesName = "SeizedWordBytes"
-let TraceKillSignalName = "TraceKillSignal"
 let PtraceDetachName = "PtraceDetach"
 let PtraceInterruptName = "PtraceInterrupt"
 let TraceStopBudgetMillisName = "TraceStopBudgetMillis"
@@ -116,9 +117,9 @@ export type HostContextLayout
 		end 'contextOffsetsDrifted'
 
 		self.regionRecordBytes = signatures.integerConstantIn(ProfileRegionRecordBytesName, filePath: sampler)
-		self.mbiBaseAddressOffset = signatures.integerConstantIn(Win64MbiBaseAddressOffsetName, filePath: sampler)
+		self.mbiBaseAddressOffset = Win64MbiBaseAddressOffset
 		self.regionAllocationBaseOffset = signatures.integerConstantIn(ProfileRegionAllocationBaseOffsetName, filePath: sampler)
-		self.mbiRegionSizeOffset = signatures.integerConstantIn(Win64MbiRegionSizeOffsetName, filePath: sampler)
+		self.mbiRegionSizeOffset = Win64MbiRegionSizeOffset
 		self.regionSuspendedCyclesOffset = signatures.integerConstantIn(ProfileRegionSuspendedCyclesOffsetName, filePath: sampler)
 		self.sampleThreadGone = signatures.integerConstantIn(ProfileSampleThreadGoneName, filePath: sampler)
 		self.sampleNoRegisters = signatures.integerConstantIn(ProfileSampleNoRegistersName, filePath: sampler)
@@ -129,8 +130,8 @@ export type HostContextLayout
 		self.sampleNoRegisters = signatures.integerConstantIn(ProfileSampleNoRegistersName, filePath: sampler)
 		self.sampleCallingThread = signatures.integerConstantIn(ProfileSampleCallingThreadName, filePath: sampler)
 		self.machSuccess = signatures.integerConstantIn(MachSuccessName, filePath: sampler)
-		self.machThreadStateFlavor = signatures.integerConstantIn(MachThreadStateFlavorName, filePath: sampler)
-		self.machThreadStateWords = signatures.integerConstantIn(MachThreadStateWordsName, filePath: sampler)
+		self.machThreadStateFlavor = MachArmThreadState64
+		self.machThreadStateWords = MachArmThreadState64Words
 		self.machStateStackPointerOffset = signatures.integerConstantIn(MachStateStackPointerOffsetName, filePath: sampler)
 		self.machThreadInfoFlavor = signatures.integerConstantIn(MachThreadInfoFlavorName, filePath: sampler)
 		self.machThreadInfoWords = signatures.integerConstantIn(MachThreadInfoWordsName, filePath: sampler)
@@ -139,13 +140,13 @@ export type HostContextLayout
 
 	function readPtraceSampler(signatures ProgramSignatures, sampler FilePath, debuggee FilePath)
 		self.seizedTableBytes = signatures.integerConstantIn(SeizedTableBytesName, filePath: sampler)
-		self.seizedPidOffset = signatures.integerConstantIn(SeizedTablePidOffsetName, filePath: sampler)
+		self.seizedPidOffset = SeizedTablePidOffset
 		self.seizedCountOffset = signatures.integerConstantIn(SeizedTableCountOffsetName, filePath: sampler)
-		self.seizedPinOffset = signatures.integerConstantIn(SeizedTablePinOffsetName, filePath: sampler)
-		self.seizedKilledOffset = signatures.integerConstantIn(SeizedTableKilledOffsetName, filePath: sampler)
+		self.seizedPinOffset = SeizedTablePinOffset
+		self.seizedKilledOffset = SeizedTableKilledOffset
 		self.seizedThreadsOffset = signatures.integerConstantIn(SeizedTableThreadsOffsetName, filePath: sampler)
 		self.seizedWordBytes = signatures.integerConstantIn(SeizedWordBytesName, filePath: sampler)
-		self.traceKillSignal = signatures.integerConstantIn(TraceKillSignalName, filePath: sampler)
+		self.traceKillSignal = TraceKillSignal
 		self.ptraceDetach = signatures.integerConstantIn(PtraceDetachName, filePath: debuggee)
 		self.ptraceInterrupt = signatures.integerConstantIn(PtraceInterruptName, filePath: debuggee)
 		self.traceStopBudgetMillis = signatures.integerConstantIn(TraceStopBudgetMillisName, filePath: sampler)

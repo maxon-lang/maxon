@@ -1236,7 +1236,7 @@ module function helper() returns ExitCode
 end 'helper'
 
 // --- file: generic.maxon
-function viaGeneric(a T) uses T returns T where T is Comparable
+public function viaGeneric(a T) uses T returns T where T is Comparable
 	let h = helper()
 
 	return a if h > 0 else a
@@ -1259,7 +1259,7 @@ export function helper() returns ExitCode
 end 'helper'
 
 // --- file: use/generic.maxon
-function viaGeneric(a T) uses T returns T where T is Comparable
+public function viaGeneric(a T) uses T returns T where T is Comparable
 	let h = helper()
 
 	return a if h > 0 else a

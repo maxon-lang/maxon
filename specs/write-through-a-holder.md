@@ -39,11 +39,6 @@ type Box
 	end 'clear'
 end 'Box'
 
-function zero(b Box) returns Count
-	b.n = 0
-	return 0
-end 'zero'
-
 type Env
 	export var b as Box
 	export var hits as Count
@@ -274,11 +269,6 @@ type Box
 	end 'clear'
 end 'Box'
 
-function zero(b Box) returns Count
-	b.n = 0
-	return 0
-end 'zero'
-
 type Slot
 	export var held as Box
 
@@ -333,11 +323,6 @@ type Box
 		return 0
 	end 'clear'
 end 'Box'
-
-function zero(b Box) returns Count
-	b.n = 0
-	return 0
-end 'zero'
 
 type Env
 	export var b as Box
@@ -397,11 +382,6 @@ type Box
 		return 0
 	end 'clear'
 end 'Box'
-
-function zero(b Box) returns Count
-	b.n = 0
-	return 0
-end 'zero'
 
 type Env
 	export var b as Box
@@ -538,11 +518,6 @@ type Box
 	end 'clear'
 end 'Box'
 
-function zero(b Box) returns Count
-	b.n = 0
-	return 0
-end 'zero'
-
 type Env
 	export var b as Box
 	export var hits as Count
@@ -599,11 +574,6 @@ type Box
 	end 'clear'
 end 'Box'
 
-function zero(b Box) returns Count
-	b.n = 0
-	return 0
-end 'zero'
-
 type Pair
 	export var first as Box
 	export var second as Box
@@ -656,11 +626,6 @@ type Box
 	end 'clear'
 end 'Box'
 
-function zero(b Box) returns Count
-	b.n = 0
-	return 0
-end 'zero'
-
 function bump(b Box) returns Count
 	return b.clear()
 end 'bump'
@@ -697,11 +662,6 @@ type Box
 		return 0
 	end 'clear'
 end 'Box'
-
-function zero(b Box) returns Count
-	b.n = 0
-	return 0
-end 'zero'
 
 type Env
 	export let b as Box

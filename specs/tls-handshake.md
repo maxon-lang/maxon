@@ -1817,57 +1817,6 @@ function renderRecords(records ByteArrays) returns String
 	return joined(texts)
 end 'renderRecords'
 
-function renderVersion(negotiation TlsNegotiation) returns String
-	return match negotiation 'negotiation'
-		pending gives "null"
-		accepted or
-		keyed gives "772"
-		accepted12 or
-		keyed12 gives "771"
-	end 'negotiation'
-end 'renderVersion'
-
-function renderSuite(negotiation TlsNegotiation) returns String
-	return match negotiation 'negotiation'
-		pending gives "null"
-		accepted(suite) gives "{suite.rawValue}"
-		keyed(suite, _) gives "{suite.rawValue}"
-		accepted12(suite) gives "{suite.rawValue}"
-		keyed12(suite, _) gives "{suite.rawValue}"
-	end 'negotiation'
-end 'renderSuite'
-
-function renderGroup(negotiation TlsNegotiation) returns String
-	return match negotiation 'negotiation'
-		pending or
-		accepted or
-		accepted12 gives "null"
-		keyed(_, group) gives "{group}"
-		keyed12(_, group) gives "{group}"
-	end 'negotiation'
-end 'renderGroup'
-
-function renderAlpn(alpn TlsAlpnChoice) returns String
-	return match alpn 'alpn'
-		absent gives "null"
-		negotiated(protocol) gives "\"{toHex(protocol)}\""
-	end 'alpn'
-end 'renderAlpn'
-
-function renderTrace(trace TlsReplayTrace) returns String
-	let state = "connected" if trace.connected else "handshaking"
-
-	return "\{\"state\":\"{state}\",\"version\":{renderVersion(trace.negotiation)},\"cipher_suite\":{renderSuite(trace.negotiation)},\"group\":{renderGroup(trace.negotiation)},\"alpn_protocol_hex\":{renderAlpn(trace.alpn)},\"outbound_records_hex\":{renderRecords(trace.outbound)},\"received_application_data_hex\":\"{toHex(trace.received)}\",\"peer_closed\":{trace.peerClosed},\"peer_authenticated\":{trace.peerAuthenticated}\}"
-end 'renderTrace'
-
-function report(id String, config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource, inbound ByteArrays, writes ByteArrays, closeNotify bool)
-	if let trace = try TlsClientReplay.run(config, entropy: entropy, peer: peer, helloSource: helloSource, inbound: inbound, writes: writes, closeNotify: closeNotify) 'replayed'
-		print("{id} {renderTrace(trace)}\n")
-	end 'replayed' else (failure) 'refused'
-		print("{id} {failure}\n")
-	end 'refused'
-end 'report'
-
 function reportRecords(id String, config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource, inbound ByteArrays)
 	var endpoint = try TlsClientHandshake.create(config, entropy: entropy, peer: peer, helloSource: helloSource) otherwise panic("a canra client was refused")
 	var outbound = endpoint.session().takeRecords()

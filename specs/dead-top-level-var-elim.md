@@ -28,7 +28,7 @@ Implemented at the Std-IR level inside `eliminateDeadStdFunctions` after the fun
 
 <!-- test: unused-array-literal-init-dropped -->
 ```maxon
-let deadArr = [1, 2, 3, 4, 5]
+public let deadArr = [1, 2, 3, 4, 5]
 
 function main() returns ExitCode
 	return 7

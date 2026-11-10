@@ -2646,17 +2646,9 @@ function clientIdentity(kind ClientKind) returns TlsClientIdentity
 	end 'kind'
 end 'clientIdentity'
 
-function onlyTls13() returns TlsProtocolArray
-	return TlsProtocolArray from [TlsProtocol.tls13]
-end 'onlyTls13'
-
 function onlyTls12() returns TlsProtocolArray
 	return TlsProtocolArray from [TlsProtocol.tls12]
 end 'onlyTls12'
-
-function bothVersions() returns TlsProtocolArray
-	return TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12]
-end 'bothVersions'
 
 function schemes(tweak Tweak, pkcs1Tweak Tweak, pkcs1 TlsSignatureSchemeCodeArray, preference TlsSignatureSchemeCodeArray) returns TlsSignatureSchemeCodeArray
 	if tweak == pkcs1Tweak 'pkcs1Only'
@@ -2835,10 +2827,6 @@ function scenario(label String, serverKind ServerKind, clientKind ClientKind, se
 		print("{label} refused {failure}\n")
 	end 'refused'
 end 'scenario'
-
-function suiteList(suite TlsCipherSuiteCode) returns TlsCipherSuiteCodeArray
-	return TlsCipherSuiteCodeArray from [suite]
-end 'suiteList'
 
 function main() returns ExitCode
 	scenario("ecdsa-p256-aes-128-gcm", serverKind: ServerKind.p256, clientKind: ClientKind.none, serverProtocols: onlyTls12(), clientProtocols: onlyTls12(), suites: TlsCipherSuiteCodeArray from [0xC02B], tweak: Tweak.none)
@@ -2961,17 +2949,9 @@ function clientIdentity(kind ClientKind) returns TlsClientIdentity
 	end 'kind'
 end 'clientIdentity'
 
-function onlyTls13() returns TlsProtocolArray
-	return TlsProtocolArray from [TlsProtocol.tls13]
-end 'onlyTls13'
-
 function onlyTls12() returns TlsProtocolArray
 	return TlsProtocolArray from [TlsProtocol.tls12]
 end 'onlyTls12'
-
-function bothVersions() returns TlsProtocolArray
-	return TlsProtocolArray from [TlsProtocol.tls13, TlsProtocol.tls12]
-end 'bothVersions'
 
 function schemes(tweak Tweak, pkcs1Tweak Tweak, pkcs1 TlsSignatureSchemeCodeArray, preference TlsSignatureSchemeCodeArray) returns TlsSignatureSchemeCodeArray
 	if tweak == pkcs1Tweak 'pkcs1Only'
@@ -3150,10 +3130,6 @@ function scenario(label String, serverKind ServerKind, clientKind ClientKind, se
 		print("{label} refused {failure}\n")
 	end 'refused'
 end 'scenario'
-
-function suiteList(suite TlsCipherSuiteCode) returns TlsCipherSuiteCodeArray
-	return TlsCipherSuiteCodeArray from [suite]
-end 'suiteList'
 
 function main() returns ExitCode
 	scenario("mutual-ecdsa-client", serverKind: ServerKind.p256, clientKind: ClientKind.p256, serverProtocols: onlyTls12(), clientProtocols: onlyTls12(), suites: TlsCipherSuiteCodeArray from [0xC02B], tweak: Tweak.none)
@@ -3453,10 +3429,6 @@ function scenario(label String, serverKind ServerKind, clientKind ClientKind, se
 		print("{label} refused {failure}\n")
 	end 'refused'
 end 'scenario'
-
-function suiteList(suite TlsCipherSuiteCode) returns TlsCipherSuiteCodeArray
-	return TlsCipherSuiteCodeArray from [suite]
-end 'suiteList'
 
 function main() returns ExitCode
 	scenario("both-sides-prefer-tls13", serverKind: ServerKind.p256, clientKind: ClientKind.none, serverProtocols: bothVersions(), clientProtocols: bothVersions(), suites: TlsCipherSuiteCodeArray from [0x1301, 0xC02B], tweak: Tweak.none)

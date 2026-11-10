@@ -208,7 +208,7 @@ end 'main'
 // not whichever enum a type-blind name search happens to reach first. Binding
 // to `Cond` would yield the empty ordinal span [7,6], so the exhaustive match
 // would match no arm for `Pred.gt` and fall through to a nil result.
-union Cond
+public union Cond
 	eqc
 	nec
 	mi

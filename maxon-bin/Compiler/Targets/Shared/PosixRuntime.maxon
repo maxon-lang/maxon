@@ -530,8 +530,8 @@ export let PosixWaitKindEvent = 1
 // off, which costs two instructions and is a no-op for the untagged descriptors `osFileOpenRead` and
 // `osStdHandle` already answer.
 //
-// ⚠ **KIND 0 IS THE DESCRIPTOR KIND ON PURPOSE**, so a raw fd from any other family is already a valid
-// handle and needs no tagging at its source — and so that the Std tier's `0 means no handle` sentinel
+// ⚠ **KIND 0 IS THE DESCRIPTOR KIND ON PURPOSE**, and has no constant because an untagged value is it, so a
+// raw fd from any other family is already a valid handle and needs no tagging at its source — and so that the Std tier's `0 means no handle` sentinel
 // (which `emitSubpCloseSlotHandles` relies on, and which is `CloseHandle(NULL)`'s Win32 no-op) keeps
 // meaning exactly that.
 //
@@ -540,7 +540,6 @@ export let PosixWaitKindEvent = 1
 // unconditionally; on Windows `CloseHandle(0)` is a no-op by the API's own contract, while here fd 0 is
 // STANDARD INPUT and closing it would take the program's stdin away.
 export let PosixHandleKindShift = 48 as ShiftCount
-let PosixHandleKindDescriptor = 0
 export let PosixHandleKindObject = 1
 
 // How WIDE the kind field is — the bits above the 48-bit payload, which on every POSIX lane is every bit a

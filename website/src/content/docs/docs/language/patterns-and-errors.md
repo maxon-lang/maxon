@@ -141,7 +141,7 @@ result, a closure written for its parameter, or a use of a binding whose initial
 reported through that refusal. A parse error abandons the function body, initializer or
 declaration it is in, and the rest of its file is checked; one inside a generic body, or one that leaves
 the file's block structure unreadable, fails the whole file. Unused bindings (**E3012**, **E3077**),
-unused exports (**E3092**–**E3094**), target refusals and the checks made while generating code are
+unused exports (**E3092**–**E3094**), unused file-private declarations (**E3219**), target refusals and the checks made while generating code are
 reported once the program has no other error, so fixing every reported error can surface more.
 
 Each example below is refused with the diagnostic shown.

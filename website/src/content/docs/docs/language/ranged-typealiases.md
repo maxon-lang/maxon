@@ -37,7 +37,8 @@ typealias Offset = int(0 to i64.max)
   range whose lower bound is non-negative and whose upper bound is negative (`int(0 to -1)`).
 - An upper bound above `i64.max` makes the range unsigned (see [Integers](/docs/language/types/#integers)).
 - `typealias X = i64` is **E2003**; the sized names exist only as bounds.
-- A typealias nothing uses is **E3062**.
+- A typealias nothing uses is **E3062**; any other file-private top-level declaration nothing uses is
+  **E3219** (see [Visibility](/docs/language/namespaces/#visibility)).
 
 `.min` and `.max` are also integer expressions anywhere a literal is valid: `let limit = u16.max`.
 

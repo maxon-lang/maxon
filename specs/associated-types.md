@@ -3957,11 +3957,11 @@ generally.
 
 <!-- test: associated-types.extends.the-ancestor-conformance-alone-still-answers -->
 ```maxon
-interface Cursor uses Element
+public interface Cursor uses Element
 	function current() returns Element
 end 'Cursor'
 
-interface BiCursor extends Cursor
+public interface BiCursor extends Cursor
 	function retreat(mutable self)
 end 'BiCursor'
 
@@ -4177,16 +4177,16 @@ diagnostic naming a type its program never wrote.
 ```maxon
 typealias Num = int(0 to 1000)
 
-interface Holder uses Element
+public interface Holder uses Element
 	export typealias ElementArray = Array with Element
 	function absorb(mutable self, value ElementArray)
 end 'Holder'
 
-interface Maker
+public interface Maker
 	static function spawn() returns Self
 end 'Maker'
 
-type Bag uses Element implements Holder with Element, Maker
+public type Bag uses Element implements Holder with Element, Maker
 	typealias ElementArray = Array with Element
 	var items = ElementArray.create(0)
 

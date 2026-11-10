@@ -965,6 +965,10 @@ A service's message parameter, message reply or factory parameter carries data w
 
 Unary `-` is applied to a value of a full-width unsigned alias (`int(0 to u64.max)`, which `Count`, `ElementIndex` and `BytePos` are). Such an alias holds 0 to `u64.max`, so the negation of any value above 0 is outside it. Write a deliberately wrapping negation over a `bits(64)` typealias, or convert the value to a signed typealias first with `as`.
 
+### E3219 — `semanticUnusedFilePrivateDeclaration`
+
+A file-private top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its file names. A declaration is live when code that is not itself a file-private declaration names it (an `export`, `module` or `public` declaration, `main`, a test, a method) or a live file-private declaration does, so declarations that only name each other, or a function that only calls itself, are all reported. A name spelled in a branch of `#if` the target excludes counts as a use. Delete the declaration, or use it. An unused `typealias` is E3062. Reported once the program has no other error.
+
 ## Intermediate Representation (E4xxx)
 
 IR generation.

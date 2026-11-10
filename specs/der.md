@@ -188,16 +188,6 @@ function fromHex(hex String) returns ByteArray
 	return bytes
 end 'fromHex'
 
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
-
 function errorName(failure DerError) returns String
 	return match failure 'name'
 		truncated gives "truncated"
@@ -715,16 +705,6 @@ function fromHex(hex String) returns ByteArray
 
 	return bytes
 end 'fromHex'
-
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
 
 function errorName(failure DerError) returns String
 	return match failure 'name'

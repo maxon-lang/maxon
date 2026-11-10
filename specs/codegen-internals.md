@@ -142,7 +142,7 @@ end 'main'
 
 <!-- test: rdata-dead-global-array-no-init-code -->
 ```maxon
-let unusedTable = [100, 200, 300, 400]
+public let unusedTable = [100, 200, 300, 400]
 
 function main() returns ExitCode
 	return 42

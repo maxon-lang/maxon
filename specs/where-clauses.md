@@ -2396,17 +2396,17 @@ only thing that decides it is the parse.
 
 <!-- test: where-clauses.static-and-instance-requirement-of-one-name -->
 ```maxon
-typealias Code = int(0 to u32.max)
+public typealias Code = int(0 to u32.max)
 
-interface StaticOrigin
+public interface StaticOrigin
 	static function origin() returns Code
 end 'StaticOrigin'
 
-interface InstanceOrigin
+public interface InstanceOrigin
 	function origin() returns Code
 end 'InstanceOrigin'
 
-type Box uses T where T is StaticOrigin, T is InstanceOrigin
+public type Box uses T where T is StaticOrigin, T is InstanceOrigin
 	export var item as T
 
 	function go() returns Code
@@ -3663,7 +3663,7 @@ true false 5 6
 <!-- test: where-clauses.a-static-dispatching-in-a-generic-nothing-instantiates-compiles -->
 No instantiation of `Holder` exists, so nothing calls `below` or `hashBoth`; both reserve the tables a call would hand them and the program compiles.
 ```maxon
-type Holder uses T where T is Comparable
+public type Holder uses T where T is Comparable
 	var v as T
 
 	static function below(a T, b T) returns bool

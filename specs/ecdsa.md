@@ -71,16 +71,6 @@ function fromHex(hex String) returns ByteArray
 	return bytes
 end 'fromHex'
 
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
-
 function errorName(failure EcdsaError) returns String
 	return match failure 'name'
 		invalidPublicKey gives "invalidPublicKey"
@@ -283,16 +273,6 @@ function fromHex(hex String) returns ByteArray
 	return bytes
 end 'fromHex'
 
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
-
 function errorName(failure EcdsaError) returns String
 	return match failure 'name'
 		invalidPublicKey gives "invalidPublicKey"
@@ -494,16 +474,6 @@ function fromHex(hex String) returns ByteArray
 
 	return bytes
 end 'fromHex'
-
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
 
 function errorName(failure EcdsaError) returns String
 	return match failure 'name'
@@ -951,16 +921,6 @@ function fromHex(hex String) returns ByteArray
 	return bytes
 end 'fromHex'
 
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
-
 function errorName(failure EcdsaError) returns String
 	return match failure 'name'
 		invalidPublicKey gives "invalidPublicKey"
@@ -1169,16 +1129,6 @@ function fromHex(hex String) returns ByteArray
 
 	return bytes
 end 'fromHex'
-
-function toHex(bytes ByteArray) returns String
-	var text = ""
-
-	for byte in bytes 'eachByte'
-		text.append("{byte:02x}")
-	end 'eachByte'
-
-	return text
-end 'toHex'
 
 function errorName(failure EcdsaError) returns String
 	return match failure 'name'

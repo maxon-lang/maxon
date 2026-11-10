@@ -700,7 +700,7 @@ error E3185: <fragment>:2:23: '__ManagedDirectory' named outside the library tie
 <!-- tier: stdlib -->
 The same program in the library tier.
 ```maxon
-function nameLength(d __ManagedDirectory) returns Count
+public function nameLength(d __ManagedDirectory) returns Count
 	return d.filename().length()
 end 'nameLength'
 
@@ -849,7 +849,7 @@ error E3185: <fragment>:2:19: '__ManagedSocket' named outside the library tiers:
 <!-- tier: stdlib -->
 The same program in the library tier.
 ```maxon
-function isLate(s __ManagedSocket) returns bool
+public function isLate(s __ManagedSocket) returns bool
 	return s.timedOut()
 end 'isLate'
 
@@ -1039,7 +1039,7 @@ error E3185: <fragment>:2:23: '__ManagedPages' named outside the library tiers: 
 <!-- tier: stdlib -->
 The same program in the library tier.
 ```maxon
-function isHeld(pages __ManagedPages) returns bool
+public function isHeld(pages __ManagedPages) returns bool
 	return pages.base() != 0
 end 'isHeld'
 
@@ -1086,7 +1086,7 @@ error E3185: <fragment>:2:23: '__ManagedHandle' named outside the library tiers:
 <!-- tier: stdlib -->
 The same program in the library tier.
 ```maxon
-function isHeld(timer __ManagedHandle) returns bool
+public function isHeld(timer __ManagedHandle) returns bool
 	return timer.handle() != 0
 end 'isHeld'
 

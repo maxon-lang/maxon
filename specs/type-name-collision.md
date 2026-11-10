@@ -1649,6 +1649,7 @@ type Array_Foo
 end 'Array_Foo'
 
 function main() returns ExitCode
+	let _ = sizeof(Foo)
 	let xs = [Bar.create(1), Bar.create(2)]
 	let m = Array_Foo.create(7)
 
@@ -2777,6 +2778,7 @@ function relay(c Container) returns ExitCode
 end 'relay'
 
 function main() returns ExitCode
+	let _ = relay
 	var fromBCalls = 0 as Count
 	_ = fromB(fromBCalls)
 
@@ -3873,6 +3875,7 @@ type Doc implements Parsable
 end 'Doc'
 
 function main() returns ExitCode
+	let _ = sizeof(Doc)
 	return 0
 end 'main'
 ```
@@ -3889,12 +3892,22 @@ export interface Parsable
 end 'Parsable'
 
 // --- file: app/main.maxon
+type Doc implements Parsable
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function parse() returns bool
+		return true
+	end 'parse'
+end 'Doc'
+
 function parsed(x T) uses T returns bool where T is Parsable
 	return x.parse()
 end 'parsed'
 
 function main() returns ExitCode
-	return 0
+	return 0 if parsed(Doc.create()) else 1
 end 'main'
 ```
 ```exitcode
@@ -3914,8 +3927,22 @@ interface Fancy extends Parsable
 	function shine() returns bool
 end 'Fancy'
 
+type Shiny implements Fancy
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function parse() returns bool
+		return true
+	end 'parse'
+
+	export function shine() returns bool
+		return true
+	end 'shine'
+end 'Shiny'
+
 function main() returns ExitCode
-	return 0
+	return 0 if Shiny.create().shine() else 1
 end 'main'
 ```
 ```exitcode
@@ -3926,7 +3953,7 @@ end 'main'
 An author `Comparable` names the author's interface, and the library's `where Element is Comparable`
 still names the library's, which `int` meets.
 ```maxon
-interface Comparable
+public interface Comparable
 	function compare(other Self) returns Ordering
 end 'Comparable'
 
@@ -3948,7 +3975,7 @@ end 'main'
 <!-- test: an-authors-comparable-leaves-the-library-sort-on-strings -->
 The same for `String`, which meets the library's `Comparable` as `int` does.
 ```maxon
-interface Comparable
+public interface Comparable
 	function compare(other Self) returns Ordering
 end 'Comparable'
 
@@ -3970,7 +3997,7 @@ a
 <!-- test: an-authors-equatable-leaves-the-library-contains-on-ints -->
 An author `Equatable` beside the library's `where Element is Equatable`.
 ```maxon
-interface Equatable
+public interface Equatable
 	function equals(other Self) returns bool
 end 'Equatable'
 
@@ -4044,7 +4071,7 @@ end 'main'
 <!-- test: an-authors-hashable-leaves-library-map-keys-hashing -->
 An author `Hashable` beside `Map` keys the library hashes: `int`, `String` and a payload-free enum.
 ```maxon
-interface Hashable
+public interface Hashable
 	function hash() returns HashValue
 end 'Hashable'
 
@@ -4082,7 +4109,7 @@ end 'main'
 <!-- test: an-authors-error-leaves-the-compiler-owned-errors-catchable -->
 An author `Error` beside a division by zero and a raw-value lookup that both fail and are caught.
 ```maxon
-interface Error
+public interface Error
 	function code() returns bool
 end 'Error'
 
@@ -4896,7 +4923,7 @@ A program declares a struct `Array_Byte` beside an interface requirement returni
 requirement's return type is the byte array its alias names, not the author's struct that shares the
 instance's name, so `p.packed()` through the interface is a byte array and its count is 3.
 ```maxon
-type Array_Byte
+public type Array_Byte
 	let tag as ExitCode
 end 'Array_Byte'
 

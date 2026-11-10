@@ -726,10 +726,6 @@ function show(b BlockId) returns String
 	return "block {b}"
 end 'show'
 
-function showText(s String) returns String
-	return s
-end 'showText'
-
 function main() returns ExitCode
 	let block = 8 as BlockId
 	let varId = 5 as VarId
@@ -741,7 +737,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at a-mixed-expression-into-a-nominal-parameter-is-guarded-at-the-call.test:17: Range check failed: value outside typealias 'BlockId'
+panic at a-mixed-expression-into-a-nominal-parameter-is-guarded-at-the-call.test:13: Range check failed: value outside typealias 'BlockId'
 Stack trace:
   in main
   in mrt_start

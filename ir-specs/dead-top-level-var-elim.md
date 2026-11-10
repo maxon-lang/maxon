@@ -15,7 +15,7 @@ The cases of `specs/dead-top-level-var-elim.md` whose subject is the emitted cod
 An array `let` is IMAGE DATA: its bytes are laid down in `.rdata` and it reserves no `.data` slot at
 all, so the `data` block lists none for it and nothing builds it before `main`.
 ```maxon
-let deadArr = [1, 2, 3, 4, 5]
+public let deadArr = [1, 2, 3, 4, 5]
 
 function main() returns ExitCode
 	return 7

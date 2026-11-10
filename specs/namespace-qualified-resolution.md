@@ -1746,12 +1746,12 @@ The root declaration keeps the bare name, and what is true of another directory'
 never returns — is not true of it: the call returns and the statement after it runs.
 ```maxon
 // --- file: alpha/f.maxon
-function pick()
+public function pick()
 	panic("alpha never returns")
 end 'pick'
 
 // --- file: beta/f.maxon
-function pick()
+public function pick()
 	print("beta pick\n")
 end 'pick'
 
@@ -1780,17 +1780,17 @@ The same holds for "always throws": the root `pick` returns normally, so a propa
 followed by the next statement.
 ```maxon
 // --- file: alpha/f.maxon
-function pick() throws Oops
+public function pick() throws Oops
 	throw Oops.bad
 end 'pick'
 
 // --- file: beta/f.maxon
-function pick()
+public function pick()
 	print("beta pick\n")
 end 'pick'
 
 // --- file: main.maxon
-module enum Oops implements Error
+public enum Oops implements Error
 	bad
 end 'Oops'
 
@@ -3183,15 +3183,9 @@ no result to type. It prints `n7`.
 public typealias Score = int(0 to 100)
 
 // --- file: main.maxon
-typealias Integer = int(i64.min to i64.max)
-
 function pickScore(n lib.fmt.Score)
 	print("n{n}\n")
 end 'pickScore'
-
-function pickPair(pair (Integer, Integer)) returns String
-	return "p{pair.0}"
-end 'pickPair'
 
 function main() returns ExitCode
 	pickScore(7)

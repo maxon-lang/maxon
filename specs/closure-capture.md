@@ -302,7 +302,7 @@ function main() returns ExitCode
 	var arr = LRArray.create(0)
 	arr.push(LiveRange.create(7))
 	arr.push(LiveRange.create(10))
-	return allocate(arr)
+	return allocate(arr) + earliestSlot(SlotRange.create(0))
 end 'main'
 ```
 ```exitcode

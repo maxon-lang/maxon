@@ -382,6 +382,9 @@ function f(x Coord) returns Coord
 - A variable **or parameter** that is never read is **E3012**. Bind a value you do not need to `_`.
 - A typealias never named in a type position of its own file is **E3062**, unless it is visible outside the
   file (`module`, `export` or `public`). A bare `[...]` literal inferring the type is not a use.
+- A file-private top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its
+  file names is **E3219**: delete it. Declarations that only name each other, or a function that only calls
+  itself, are dead together.
 - A `var` that is neither reassigned nor mutated (`push`, `append`, a field write…) is **E3077** — use `let`,
   whatever the `var` was bound from.
 - Assigning a value to itself (`x = x`, `p.x = p.x`) is **E3067**.

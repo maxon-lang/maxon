@@ -35,9 +35,9 @@ unconditionally: the slot survives, so its target must be there to fill it.
 A function nothing calls is not emitted. The emitted code (`--emit-ir`) contains `main` and nothing
 else; nothing in the suite pins it.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
-function unusedHelper(x Integer) returns Integer
+public function unusedHelper(x Integer) returns Integer
 	return x * 3
 end 'unusedHelper'
 
@@ -53,13 +53,13 @@ end 'main'
 The whole cone goes, not just its entry: `deadOuter` is unreachable, so `deadInner` — which only
 `deadOuter` calls — is unreachable too.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
-function deadInner(x Integer) returns Integer
+public function deadInner(x Integer) returns Integer
 	return x + 1
 end 'deadInner'
 
-function deadOuter(x Integer) returns Integer
+public function deadOuter(x Integer) returns Integer
 	return deadInner(x) * 2
 end 'deadOuter'
 
@@ -75,16 +75,16 @@ end 'main'
 Liveness is REACHABILITY, not a use count. `pingDead` and `pongDead` each have a caller — each other —
 so a "does anything call this?" test would keep both. Neither is reachable from `main`, so both go.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
-function pingDead(n Integer) returns Integer
+public function pingDead(n Integer) returns Integer
 	if n <= 0 'base'
 		return 0
 	end 'base'
 	return pongDead(n - 1)
 end 'pingDead'
 
-function pongDead(n Integer) returns Integer
+public function pongDead(n Integer) returns Integer
 	return pingDead(n - 1)
 end 'pongDead'
 
@@ -168,7 +168,7 @@ exit code alone would not catch it, but the leak gate would (the elements are ne
 alongside a prune: `unusedInThisProgram` in the same file is dropped.
 ```maxon
 typealias Count = int(0 to u64.max)
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
 type Container uses Element
 	typealias ElementArray = Array with Element
@@ -190,7 +190,7 @@ end 'Container'
 
 typealias StringContainer = Container with String
 
-function unusedInThisProgram(x Integer) returns Integer
+public function unusedInThisProgram(x Integer) returns Integer
 	return x * 9
 end 'unusedInThisProgram'
 

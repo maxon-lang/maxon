@@ -666,12 +666,6 @@ function settle(dest mutable String, src Integer) returns Integer
 	return src
 end 'settle'
 
-function settleText(dest mutable String, src String) returns Integer
-	Scheduler.yield()
-	print("{dest}{src}\n")
-	return 0
-end 'settleText'
-
 function main() returns ExitCode
 	var s = "a-{1}"
 	let p = async settle(s, src: 5)

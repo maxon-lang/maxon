@@ -647,7 +647,8 @@ end 'main'
 // --- file: b/b.maxon
 typealias Bytes = Array with String
 
-function names(xs Bytes) returns Count
+public function names() returns Count
+	let xs = Bytes.create(0)
 	return xs.count()
 end 'names'
 ```

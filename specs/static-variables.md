@@ -2925,7 +2925,7 @@ let keywordMap = [
 	b"else": KeywordInfo.create(2, helpText: describe(2))
 ]
 
-let unusedNames = StringArray.create(0)
+public let unusedNames = StringArray.create(0)
 
 function main() returns ExitCode
 	view info = try keywordMap.get(b"else") otherwise KeywordInfo.create(0, helpText: "")

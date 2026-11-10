@@ -263,7 +263,7 @@ class Emitter:
 
         return out
 
-    def alias_helpers(self, name, visibility, reader_visibility):
+    def alias_helpers(self, name, visibility, reader_visibility, read_plain):
         node = self.resolve(name)
         assert node.kind in CONTAINER_KINDS, name
         write_name = "cacheWrite%s" % name
@@ -283,6 +283,10 @@ class Emitter:
             out.append("\tend 'eachItem'")
 
         out.append("end '%s'" % write_name)
+
+        if not read_plain:
+            return out
+
         out.append("")
 
         return out + self.alias_reader(name, reader_visibility, frozen=False)

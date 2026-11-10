@@ -668,9 +668,9 @@ end 'main'
 Nothing ever loads `Pair.origin`, and the program still runs to a clean exit.
 
 ```maxon
-typealias Count = int(0 to u64.max)
+public typealias Count = int(0 to u64.max)
 
-type Pair
+public type Pair
 	export var a as Count
 	export var b as Count
 

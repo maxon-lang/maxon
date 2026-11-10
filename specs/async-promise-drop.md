@@ -4193,14 +4193,6 @@ function relay(p IntPromise, n Integer) returns Integer
 	return (await p) + n
 end 'relay'
 
-function relayFlag(p IntPromise, n bool) returns Integer
-	if n 'done'
-		Scheduler.yield()
-	end 'done'
-
-	return await p
-end 'relayFlag'
-
 function main() returns ExitCode
 	let p = async work(1)
 	let r = async relay(p, n: 1)
@@ -4511,11 +4503,6 @@ function work(n Integer) returns Integer
 	Scheduler.yield()
 	return n + 1
 end 'work'
-
-function peekBack(p IntPromise, v Integer) returns IntPromise
-	print("{v}\n")
-	return p
-end 'peekBack'
 
 function peekText(_ IntPromise, v String) returns Integer
 	return v.count() as Integer

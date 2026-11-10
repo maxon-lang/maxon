@@ -53,9 +53,9 @@ The control for the whole feature. Nothing reads `Counter.cached`, so the line i
 the only evidence that the initializer ran at all.
 
 ```maxon
-typealias Count = int(0 to u64.max)
+public typealias Count = int(0 to u64.max)
 
-type Counter
+public type Counter
 	static let cached = Counter.createInstance()
 	export var id as Count
 
@@ -85,9 +85,9 @@ binding is declared decides nothing about when its initializer runs, and the two
 makes that a rule rather than a coincidence of one scope.
 
 ```maxon
-typealias Count = int(0 to u64.max)
+public typealias Count = int(0 to u64.max)
 
-type Counter
+public type Counter
 	export var id as Count
 
 	static function createInstance() returns Counter
@@ -96,7 +96,7 @@ type Counter
 	end 'createInstance'
 end 'Counter'
 
-let cached = Counter.createInstance()
+public let cached = Counter.createInstance()
 
 function main() returns ExitCode
 	print("main")

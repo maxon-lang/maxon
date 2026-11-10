@@ -85,7 +85,6 @@ let TerminalEnvNameRdataPrefix = "__tty_env_"
 // ⚠ **THE FOUR BYTES ARE READ ONE AT A TIME AND REASSEMBLED**, though one zero-extending `u32` load
 // (`accessWidthFor`) would read them at once. The reassembly is three shifts that keep the whole test to ONE
 // comparison rather than four branches.
-let DumbTermName = "dumb"
 let DumbTermLength = 4
 
 // `dumb` as one little-endian 32-bit word: 'd'=0x64 at the low byte through 'b'=0x62 at the high one.
@@ -195,7 +194,7 @@ function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry 
 	let termLen = emitHostEnvReadAscii(module, block: checkTerm, name: termName, valueBuf: scratch, capacity: termCap, ids: ids)
 	emitBranchOnCompare(module, block: checkTerm, value: termLen, pred: StdCmpPred.eq, against: DumbTermLength, whenTrue: compareDumb, whenFalse: allow, ids: ids)
 
-	// See `DumbTermName` for why the case fold is exact rather than approximate, and why the bytes are
+	// See `DumbTermLength` for why the case fold is exact rather than approximate, and why the bytes are
 	// read singly. The read is in bounds by the count test above: the API wrote four bytes and a
 	// terminator into a five-byte buffer.
 	let foldMask = emitConst(module, block: compareDumb, value: AsciiCaseFoldMaskByte, ids: ids)

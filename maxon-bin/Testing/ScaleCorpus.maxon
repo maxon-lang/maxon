@@ -206,6 +206,12 @@ let DeepBlocksBase = 200
 // spill bracket knob, not merely a call-depth knob.
 let CallChainBase = 8
 
+// N file-private functions declared callee-first, each calling the one before it, with only the top
+// public: the shape where a liveness walk over the file-private declarations has to follow N edges in
+// the order that reaches the fewest of them per pass. Its base is large because that walk's cost per
+// edge is a few ops against the whole compile's, so only a long chain separates the phase from noise.
+let FilePrivateChainBase = 256
+
 // ONE function, N pressured loops. Its base is the smallest of the six because its cost can overtake
 // everything else as the ladder climbs.
 //
@@ -1450,7 +1456,8 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 
 	// The chain writes and registers itself, like `writeManyFunctions`: its driver is its TOP link,
 	// whose name is known only to the loop that mints the links (see `writeCallChain`).
-	sourceBytes = sourceBytes + try writeCallChain(dir, length: knobAt(CallChainBase, rung: rung), written: written, drivers: drivers)
+	sourceBytes = sourceBytes + try writeCallChain(dir, shape: ChainShape.surface, length: knobAt(CallChainBase, rung: rung), written: written, drivers: drivers)
+	sourceBytes = sourceBytes + try writeCallChain(dir, shape: ChainShape.filePrivate, length: knobAt(FilePrivateChainBase, rung: rung), written: written, drivers: drivers)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(PressuredDriver))
 
 	// Beside `f_loops` because it is the other half of the same subject — values live across a call —
@@ -1694,6 +1701,10 @@ end 'exportedFunctionHeader'
 function exportedFunctionSignature(name String, parameters String) returns String
 	return "public function {name}({parameters})"
 end 'exportedFunctionSignature'
+
+function filePrivateFunctionHeader(name String, parameters String) returns String
+	return "function {name}({parameters}) returns {ScaleIntAlias}\n"
+end 'filePrivateFunctionHeader'
 
 // The shape every knob's DRIVER has: it takes the threaded accumulator and hands one back.
 function driverHeader(name String) returns String
@@ -1942,13 +1953,38 @@ function deepBlocksSource(ifElseCount KnobSize, localCount KnobSize) returns Str
 	return out.build()
 end 'deepBlocksSource'
 
+// How a chain's links are declared: every link `public`, or every link but the top file-private. Both
+// chains are one generator because the link bodies must not drift apart; only the visibility differs.
+enum ChainShape
+	surface
+	filePrivate
+end 'ChainShape'
+
 // One link of the chain, by index — the `smallFunctionName` pattern: ONE name function, read by the
 // generator that emits the links and by the driver registration below. The chain takes a name
 // FUNCTION where every other knob takes a name constant, because it generates N functions rather
 // than one.
-function chainLinkName(link KnobIndex) returns String
-	return "scaleChain{link}"
+function chainLinkName(shape ChainShape, link KnobIndex) returns String
+	return match shape 'shape'
+		surface gives "scaleChain{link}"
+		filePrivate gives "scalePrivateChain{link}"
+	end 'shape'
 end 'chainLinkName'
+
+function chainFileName(shape ChainShape) returns String
+	return match shape 'shape'
+		surface gives "e_chain"
+		filePrivate gives "e_pchain"
+	end 'shape'
+end 'chainFileName'
+
+function chainLinkHeader(shape ChainShape, name String, isTop bool) returns String
+	if shape == ChainShape.filePrivate and not isTop 'anInnerLinkOfThePrivateChain'
+		return filePrivateFunctionHeader(name, parameters: "a {ScaleIntAlias}")
+	end 'anInnerLinkOfThePrivateChain'
+
+	return driverHeader(name)
+end 'chainLinkHeader'
 
 // The `callChain` knob: N functions, each calling the one below it and holding values LIVE ACROSS
 // that call. The live values are the point — a bare call chain would measure call lowering, but
@@ -1975,22 +2011,22 @@ end 'chainLinkName'
 // miscompiled base therefore moves link 1's witness, which is a real failure and not a tautology.
 //
 // ⚠ A one-link chain would make the base the DRIVER, and a driver must hand back its argument. The knob
-// cannot reach that (`CallChainBase` is 8 and rungs only double it), and the check below says so rather
+// cannot reach that (the smallest chain base is 8 and rungs only double it), and the check below says so rather
 // than leaving the next person to retune it to 1 and get a rung that exits 1 for no visible reason.
-function writeCallChain(dir FilePath, length KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
+function writeCallChain(dir FilePath, shape ChainShape, length KnobSize, written StringArray, drivers StringArray) returns BytePos throws ScaleError
 	if length < MinCallChainLength 'baseWouldBeTheDriver'
-		panic("ScaleCorpus.writeCallChain: a chain of {length} makes the un-witnessed base link the knob's DRIVER, and a driver must return its argument — raise CallChainBase back to at least {MinCallChainLength}")
+		panic("ScaleCorpus.writeCallChain: a chain of {length} makes the un-witnessed base link the knob's DRIVER, and a driver must return its argument — raise the chain's base back to at least {MinCallChainLength}")
 	end 'baseWouldBeTheDriver'
 
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the call-chain knob — {length} chained calls, values live across each.\n")
 
 	// The base of the chain: takes no call, so the recursion of generated text terminates.
-	out.append(driverHeader(chainLinkName(0)))
+	out.append(chainLinkHeader(shape, name: chainLinkName(shape, link: 0), isTop: false))
 	out.append("\treturn a + {ChainBaseIncrement}\n")
-	out.append("end '{chainLinkName(0)}'\n")
+	out.append("end '{chainLinkName(shape, link: 0)}'\n")
 
-	var topName = chainLinkName(0)
+	var topName = chainLinkName(shape, link: 0)
 
 	// What THIS link's callee hands back: the base's `a + 1` for link 1, and a bare `a` from link 2 up,
 	// because every link above the base returns its argument once its own witness holds. Carried rather
@@ -1998,21 +2034,21 @@ function writeCallChain(dir FilePath, length KnobSize, written StringArray, driv
 	var calleeValue = corpusSeedValue() + ChainBaseIncrement
 
 	for i in 1 upto length 'eachLink'
-		var linkName = chainLinkName(i as KnobIndex)
+		var linkName = chainLinkName(shape, link: i as KnobIndex)
 		let x = corpusSeedValue() + ((i mod 9 + 1) as TrackedValue)
 		let y = corpusSeedValue() * 2
 		out.append("\n")
-		out.append(driverHeader(linkName))
+		out.append(chainLinkHeader(shape, name: linkName, isTop: i == length - 1))
 		out.append("\tvar wit = 0 as {ScaleIntAlias}\n")
 		out.append("\tlet x = a + {i mod 9 + 1}\n")
 		out.append("\tlet y = a * 2\n")
-		out.append("\tlet z = {chainLinkName((i - 1) as KnobIndex)}(a)\n")
+		out.append("\tlet z = {chainLinkName(shape, link: (i - 1) as KnobIndex)}(a)\n")
 		out.append(driverWitnessTail(linkName, valueExpr: "x + y + z", expected: x + y + calleeValue))
 		topName = linkName
 		calleeValue = corpusSeedValue()
 	end 'eachLink'
 
-	return try writeRungFile(dir, name: "e_chain", source: out.build(), written: written, drivers: drivers, driver: RungDriver.threads(topName))
+	return try writeRungFile(dir, name: chainFileName(shape), source: out.build(), written: written, drivers: drivers, driver: RungDriver.threads(topName))
 end 'writeCallChain'
 
 // The base link's only arithmetic, and the amount link 1 expects to see arrive in `z`. One constant, read
@@ -5328,8 +5364,9 @@ function interfaceConformancePair(interfaceName String, typeName String, salt Kn
 	// ⚠ DECLARED AND NEVER CONSTRUCTED, WHICH IS THE COST IT IS HERE TO CARRY: `TypeCycleCheck` reads
 	// DECLARATIONS, and a holder that were constructed would put a widening store in the corpus, so it would be
 	// measuring construction instead. It closes no cycle: nothing conforms to `{interfaceName}` but
-	// `{typeName}`, whose only field is an int.
-	out.append("\ntype {typeName}{InterfaceHolderSuffix}\n")
+	// `{typeName}`, whose only field is an int. It is `public` because a file-private type nothing names
+	// is E3219.
+	out.append("\npublic type {typeName}{InterfaceHolderSuffix}\n")
 	out.append("\tlet {InterfaceHolderFieldName} as {interfaceName}\n")
 	out.append("end '{typeName}{InterfaceHolderSuffix}'\n")
 	return out.build()
@@ -5583,6 +5620,7 @@ export function printCorpusManifest()
 	print("      is DISTINCT from the pressured-loops knob, which makes the SPLITTER work instead\n")
 	print("    if, if/else, while, and NESTED while (to a doubling depth); `break` out of a loop\n")
 	print("    functions (<=6 params), cross-file merge, chained calls holding values live across them\n")
+	print("      (a chain of public links, and a chain of file-private links declared callee-first)\n")
 	print("    short-circuit `and` and `or` (control flow, not operators), `xor` and `not` over bools,\n")
 	print("      bitwise `and` / `or` / `xor` / `not` over ints\n")
 	print("    shl / shr with: a CONSTANT count (folded) AND a DYNAMIC count (runtime-guarded), over a\n")

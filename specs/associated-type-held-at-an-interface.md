@@ -671,15 +671,15 @@ nothing instantiates `Counter` and nothing calls `Counter.of`.
 `associated-types.md`'s `error.existential-return-claim-cannot-be-resolved-in-the-declaration-view` pins an
 E3127 sentence reading `bound to 'T'`.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
-interface Cursor uses Element
+public interface Cursor uses Element
 	function current() returns Element
 	function tag() returns Integer
 	function advance(mutable self) throws IterationError
 end 'Cursor'
 
-type UpCursor implements Cursor with Integer
+public type UpCursor implements Cursor with Integer
 	var pos as Integer
 	let limit as Integer
 
@@ -706,7 +706,7 @@ type UpCursor implements Cursor with Integer
 	end 'advance'
 end 'UpCursor'
 
-type Counter uses Element
+public type Counter uses Element
 	export typealias ElementCursor = Cursor with Element
 	export var seen as Integer
 

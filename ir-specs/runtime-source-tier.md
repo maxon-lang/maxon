@@ -254,9 +254,9 @@ it. `dormant` is a user function nothing calls, so its query reaches no body and
 same answer the unreached tier probe above gets, here for the program's own dead code. The sched words
 would land between `used` and the console probes, which is where a prefix compare can see them.
 ```maxon
-typealias WorkerCount = int(0 to u64.max)
+public typealias WorkerCount = int(0 to u64.max)
 
-function dormant() returns WorkerCount
+public function dormant() returns WorkerCount
 	return Scheduler.counters().maxActiveWorkers
 end 'dormant'
 

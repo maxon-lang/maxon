@@ -586,18 +586,6 @@ type Point
 	end 'create'
 end 'Point'
 
-function relay(p Point) returns Point
-	return p
-end 'relay'
-
-function make(n Integer) returns Point throws PointError
-	if n < 0 'neg'
-		throw PointError.negative
-	end 'neg'
-
-	return Point.create(n)
-end 'make'
-
 enum PointError implements Error
 	negative
 end 'PointError'
@@ -629,7 +617,7 @@ The binding is compiled in every function, whether or not anything calls it: the
 holds, and `fp` is read after it.
 ```maxon
 
-function helper() returns ExitCode
+public function helper() returns ExitCode
 	let fp = try FilePath.from("some/dir") otherwise panic("a relative path is valid")
 	var s = fp.toString()
 	s.append(" more")
@@ -649,7 +637,7 @@ end 'main'
 The accepted twin of the case above: the same unreached function, reading the string and never writing it.
 ```maxon
 
-function helper() returns ExitCode
+public function helper() returns ExitCode
 	let fp = try FilePath.from("some/dir") otherwise panic("a relative path is valid")
 	let s = fp.toString()
 	print("{s} {fp.toString()}\n")

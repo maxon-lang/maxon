@@ -1105,7 +1105,7 @@ end 'main'
 <!-- test: a-static-storing-a-borrowed-element-of-a-never-instantiated-generic-compiles -->
 No instantiation of `Box` exists, so no call can hand `moveWhileClearing` a descriptor and nothing runs the body. The declaration is legal: no descriptor is reserved and the program compiles.
 ```maxon
-type Box uses T
+public type Box uses T
 	export typealias Items = Array with T
 	var items as Items
 

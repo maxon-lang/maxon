@@ -267,12 +267,12 @@ end 'main'
 A byte string global whose only reader is eliminated as dead code must not be allocated and
 then left unreleased — dead-code elimination drops the literal along with the global it fed.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 
 let Live = b"aa"
-let Dead = b"bbbb"
+public let Dead = b"bbbb"
 
-function readDead() returns Integer
+public function readDead() returns Integer
 		return Dead.count()
 end 'readDead'
 

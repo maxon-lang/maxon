@@ -1392,7 +1392,7 @@ PROGRAM's container and every library-only member is refused on a value the read
 is declared on `stdlib/Array.maxon` and nowhere else here, so it is the whole question. The program
 prints `false false` and exits 5.
 ```maxon
-type Array uses Element implements BuiltinArrayLiteral
+public type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
@@ -1427,7 +1427,7 @@ RATHER THAN AN EXPECTATION MISMATCH.** `["a", "bb"]` interns `Array with String`
 only from the library's declaration. The two `String` records are freed by one `__managed_decref` walk,
 so a record identity that picked the wrong declaration exits 101 rather than 2.
 ```maxon
-type Array uses Element implements BuiltinArrayLiteral
+public type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
@@ -1834,7 +1834,7 @@ error E3005: <fragment>:27:16: argument type mismatch for 'key': expected 'Strin
 <!-- tier: stdlib -->
 The program's `get` is keyed by a `String`, and the library array `String.split` returns still takes an element index: the index is judged against the library's own declaration.
 ```maxon
-type Array uses Element implements BuiltinArrayLiteral
+public type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 
 	export var managed as ElementMemory
@@ -2079,7 +2079,7 @@ end 'main'
 <!-- tier: stdlib -->
 A library `StringArray` is a working `Map` key in a program that declares its own `type Array`.
 ```maxon
-type Array uses Element implements BuiltinArrayLiteral
+public type Array uses Element implements BuiltinArrayLiteral
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 	static function init(managed mutable ElementMemory) returns Self
@@ -2111,7 +2111,7 @@ end 'main'
 The library `StringArray` key hashes and compares through the library's own conformance, never through
 the `hash` and `equals` a program's own `type Array` declares.
 ```maxon
-type Array uses Element implements BuiltinArrayLiteral, Hashable, Equatable
+public type Array uses Element implements BuiltinArrayLiteral, Hashable, Equatable
 	export typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory
 	static function init(managed mutable ElementMemory) returns Self

@@ -143,7 +143,7 @@ end 'loadConfig'
 <!-- test: error.enum-simple-error -->
 ```maxon
 // Simple enum error type
-enum MyError implements Error
+public enum MyError implements Error
 	invalidInput
 	notFound
 end 'MyError'
@@ -159,7 +159,7 @@ end 'main'
 <!-- test: error.enum-int-backed-error -->
 ```maxon
 // Int-backed enum error type (type inferred from values)
-enum MyError implements Error
+public enum MyError implements Error
 	invalidInput = 1
 	notFound = 404
 end 'MyError'
@@ -192,7 +192,7 @@ function mayFail(n Integer) returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	return 42
+	return (try mayFail(42) otherwise 0) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -217,7 +217,7 @@ function mayFail(shouldFail bool) returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	return 42
+	return (try mayFail(false) otherwise 0) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1261,15 +1261,15 @@ interner it would name a decoy (a wrong layout / wrong field offset → a wrong
 answer or crash), not `Payload`. This is the adversarial interner-robustness pin.
 ```maxon
 // --- file: app.maxon
-typealias Tiny = int(0 to 7)
+public typealias Tiny = int(0 to 7)
 
-type Decoy1
+public type Decoy1
 	export var alpha as Tiny
 	export var beta as Tiny
 	export var gamma as Tiny
 end 'Decoy1'
 
-type Decoy2
+public type Decoy2
 	export var only as Tiny
 end 'Decoy2'
 
@@ -2727,7 +2727,7 @@ only the thrown type IS the declared one, and it compiles, runs, and decodes `bO
 ```maxon
 typealias Code = int(0 to u32.max)
 
-enum ErrA implements Error
+public enum ErrA implements Error
 	aZero
 	aOne
 end 'ErrA'
