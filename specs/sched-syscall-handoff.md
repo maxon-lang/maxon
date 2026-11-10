@@ -827,9 +827,9 @@ type Spinner
 		self.started.publish(true)
 
 		var turns = 0 as Integer
-		while not self.released.current() 'spin'
+		while not self.released.current() 'innerSpin'
 			turns = turns + 1
-		end 'spin'
+		end 'innerSpin'
 
 		return 1
 	end 'spin'

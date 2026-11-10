@@ -474,7 +474,7 @@ function scan(limit Integer) returns Integer
 	var found = 0 as Integer
 	var i = 0 as Integer
 
-	while i < limit 'scan'
+	while i < limit 'innerScan'
 		i = i + 1
 
 		if i mod 4 == 0 'a'
@@ -491,7 +491,7 @@ function scan(limit Integer) returns Integer
 		end 'c' else 'd'
 			found = found + 1
 		end 'd'
-	end 'scan'
+	end 'innerScan'
 
 	return found * 100 + i
 end 'scan'

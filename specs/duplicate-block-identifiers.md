@@ -8,7 +8,8 @@ category: error-handling
 
 ## Documentation
 
-The compiler prevents using the same block identifier for multiple blocks within overlapping scopes.
+A block may not reuse the label of a block that encloses it, nor the name of the function, method or type it sits
+in (**E2081**), so an `end` names exactly one open block. Blocks that do not enclose one another may share a label.
 
 **Valid Code - Different Identifiers:**
 
@@ -31,48 +32,48 @@ end 'main'
 ```
 
 
-**Valid Code - Shadowing at Different Nesting Levels:**
+**Valid Code - Sibling Blocks Sharing a Label:**
 
 ```maxon
 function main() returns ExitCode
 	var x = 0 as ExitCode
 	if true 'check'
 		x = 1
-		if true 'check'
+	end 'check'
+
+	while x < 3 'check'
+		x = x + 1
+	end 'check'
+
+	return x
+end 'main'
+```
+```exitcode
+3
+```
+
+
+**Invalid Code - A Nested Block Reusing an Enclosing Label:**
+
+```text
+function main() returns ExitCode
+	var x = 0 as ExitCode
+	if true 'check'
+		x = 1
+		if true 'check'  // error E2081: 'check' is already the label of the enclosing block
 			x = 2
 		end 'check'
 	end 'check'
 	return x
 end 'main'
 ```
-```exitcode
-2
-```
-
-
-**Invalid Code - Duplicate at Same Level:**
-
-Note: Currently duplicate block identifiers at the same scope level are not validated. This is a known limitation.
-
-```text
-function main() returns int
-  var x = 0
-  if true 'check'
-    x = 1
-  end 'check'
-  while false 'check'  // Would error: duplicate 'check' at same level
-    x = 2
-  end 'check'
-  return x
-end 'main'
-```
 
 
 **Notes:**
-- Block identifiers must be unique within the same function scope
-- Nested blocks can reuse identifiers from parent scopes
-- Error message indicates the duplicate identifier and its location
-- Applies to if, else, while, and for statements
+- The label of an enclosing block, and the name of the enclosing function, method or type, cannot be reused by a nested block
+- Blocks that do not enclose one another, such as the arms of an if-else chain or two loops in a row, may share a label
+- The error message names both labels' positions
+- Applies to if, else, while, for, match, try and otherwise blocks
 
 ## Tests
 
@@ -108,8 +109,27 @@ function main() returns ExitCode
 	return x
 end 'main'
 ```
+```maxoncstderr
+error E2081: <fragment>:6:11: Block label 'check' is already the label of an enclosing block or declaration (line 4, column 10); an `end 'check'` could close either, so rename the inner block's label
+```
+
+<!-- test: duplicate-block-identifiers.sibling-same-id -->
+```maxon
+function main() returns ExitCode
+	var x = 0 as ExitCode
+	if true 'check'
+		x = 1
+	end 'check'
+
+	while x < 3 'check'
+		x = x + 1
+	end 'check'
+
+	return x
+end 'main'
+```
 ```exitcode
-2
+3
 ```
 
 <!-- test: duplicate-block-identifiers.multiple-nested -->

@@ -52,10 +52,10 @@ function spin(rounds Rounds) returns Rounds
 	var acc = 0 as Rounds
 	var i = 0 as Rounds
 
-	while i < rounds 'spin'
+	while i < rounds 'innerSpin'
 		acc = acc + i
 		i = i + 1
-	end 'spin'
+	end 'innerSpin'
 
 	return acc mod 251
 end 'spin'

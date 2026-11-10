@@ -2833,7 +2833,7 @@ type Ledger
 end 'Ledger'
 
 function fill(h Ledger.handle, base Tally) returns Tally
-	for i in 0 upto attempts 'fill'
+	for i in 0 upto attempts 'innerFill'
 		try h.take(base + i) otherwise (e) 'refused'
 			match e 'why'
 				mailboxFull then print("refused after {i} sends\n")
@@ -2842,7 +2842,7 @@ function fill(h Ledger.handle, base Tally) returns Tally
 
 			return i
 		end 'refused'
-	end 'fill'
+	end 'innerFill'
 
 	panic("a capacity of 20 took 22 sends")
 end 'fill'

@@ -2245,9 +2245,9 @@ end 'weigh'
 
 function scan(table Word) returns Word
 	var n = 0
-	for r in 0 upto 64 'scan'
+	for r in 0 upto 64 'eachRegister'
 		n = n + weigh(table, regNum: r)
-	end 'scan'
+	end 'eachRegister'
 	return n
 end 'scan'
 

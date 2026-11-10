@@ -195,10 +195,10 @@ function grow(holder Holder) returns ExitCode
 end 'grow'
 
 function size(holder Holder) returns ExitCode
-	return match holder 'size'
+	return match holder 'innerSize'
 		held(items) gives items.count() as ExitCode
 		empty gives 99
-	end 'size'
+	end 'innerSize'
 end 'size'
 
 function main() returns ExitCode

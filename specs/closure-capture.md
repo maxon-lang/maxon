@@ -531,10 +531,10 @@ enum Color
 end 'Color'
 
 function shade(c Color) returns Integer
-	return match c 'shade'
+	return match c 'innerShade'
 		red gives 1
 		green gives 41
-	end 'shade'
+	end 'innerShade'
 end 'shade'
 
 function main() returns ExitCode

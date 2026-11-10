@@ -270,11 +270,11 @@ function letters(count Repetition) returns ByteArray
 end 'letters'
 
 function oneShot(algorithm HashAlgorithm, data ByteArray) returns ByteArray
-	return match algorithm 'oneShot'
+	return match algorithm 'innerOneShot'
 		sha256 gives sha256(data)
 		sha384 gives sha384(data)
 		sha512 gives sha512(data)
-	end 'oneShot'
+	end 'innerOneShot'
 end 'oneShot'
 
 function chunked(algorithm HashAlgorithm, chunk ByteArray) returns ByteArray

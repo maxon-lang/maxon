@@ -271,9 +271,9 @@ typealias Vec4 = FixedArray with 4 Int
 
 function sum(v Vec4, n Count) returns Int
 	var total = 0 as Int
-	for i in 0 upto n 'sum'
+	for i in 0 upto n 'innerSum'
 		total = total + v.get(i)
-	end 'sum'
+	end 'innerSum'
 	return total
 end 'sum'
 

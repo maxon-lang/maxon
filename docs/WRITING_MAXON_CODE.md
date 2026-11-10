@@ -68,6 +68,9 @@ end 'positive'
 
 This applies to: `if`, `else`, `while`, `for`, `match`, `try` and `try...otherwise` blocks, `function`, `type`, `enum`, `union`, `interface`, `extension`, `test`.
 
+A label differs from the label of every block that encloses it and from the name of the enclosing function,
+method or type (E2081); blocks that do not enclose one another may share a label.
+
 ### 2. `else` MUST appear on the same line as its `end`
 
 ```maxon

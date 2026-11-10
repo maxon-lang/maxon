@@ -82,11 +82,11 @@ function make_point(x Integer, y Integer) returns Point
 end 'make_point'
 
 function describe(s Shape) returns Integer
-	return match s 'describe'
+	return match s 'innerDescribe'
 		circle(label) gives label.count() as Integer
 		square(label) gives label.count() as Integer
 		blank gives 0
-	end 'describe'
+	end 'innerDescribe'
 end 'describe'
 
 function apply(f FnTypeAlias1, x Integer) returns Integer

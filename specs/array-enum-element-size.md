@@ -123,18 +123,18 @@ typealias IrOpArray = Array with IrOp
 
 function checkFirst(ops IrOpArray) returns Integer
 		let first = try ops.get(0) otherwise IrOp.arith(0)
-		match first 'checkFirst'
+		match first 'innerCheckFirst'
 				arith(v) then return v
 				cf then return 99
-		end 'checkFirst'
+		end 'innerCheckFirst'
 end 'checkFirst'
 
 function checkMid(ops IrOpArray) returns Integer
 		let mid = try ops.get(2) otherwise IrOp.arith(0)
-		match mid 'checkMid'
+		match mid 'innerCheckMid'
 				cf then return 1
 				arith then return 0
-		end 'checkMid'
+		end 'innerCheckMid'
 end 'checkMid'
 
 function main() returns ExitCode

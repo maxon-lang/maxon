@@ -856,17 +856,17 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function opened(label String, protection Tls13RecordProtection, record ByteArray)
-	if let result = try protection.open(record) 'opened'
+	if let result = try protection.open(record) 'innerOpened'
 		print("{label} {result.contentType.rawValue} {toHex(result.plaintext())}\n")
-	end 'opened' else (failure) 'refused'
+	end 'innerOpened' else (failure) 'refused'
 		print("{label} {failure}\n")
 	end 'refused'
 end 'opened'
 
 function sealed(label String, protection Tls13RecordProtection, contentType TlsContentType, message ByteArray)
-	if let record = try protection.seal(contentType, plaintext: message) 'sealed'
+	if let record = try protection.seal(contentType, plaintext: message) 'innerSealed'
 		print("{label} {record.count()}\n")
-	end 'sealed' else (failure) 'refused'
+	end 'innerSealed' else (failure) 'refused'
 		print("{label} {failure}\n")
 	end 'refused'
 end 'sealed'
@@ -948,17 +948,17 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function opened(label String, protection Tls12RecordProtection, record ByteArray)
-	if let result = try protection.open(record) 'opened'
+	if let result = try protection.open(record) 'innerOpened'
 		print("{label} {result.contentType.rawValue} {toHex(result.plaintext())}\n")
-	end 'opened' else (failure) 'refused'
+	end 'innerOpened' else (failure) 'refused'
 		print("{label} {failure}\n")
 	end 'refused'
 end 'opened'
 
 function sealed(label String, protection Tls12RecordProtection, contentType TlsContentType, message ByteArray)
-	if let record = try protection.seal(contentType, plaintext: message) 'sealed'
+	if let record = try protection.seal(contentType, plaintext: message) 'innerSealed'
 		print("{label} {record.count()}\n")
-	end 'sealed' else (failure) 'refused'
+	end 'innerSealed' else (failure) 'refused'
 		print("{label} {failure}\n")
 	end 'refused'
 end 'sealed'

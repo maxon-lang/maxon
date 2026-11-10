@@ -724,13 +724,13 @@ end 'build'
 function churn(idx Integer) returns ByteArray
 	let survivor = build((idx mod 65536) as Seed)
 
-	for j in 0 upto Churn 'churn'
+	for j in 0 upto Churn 'innerChurn'
 		let tmp = build(((idx + j) mod 65536) as Seed)
 
 		if tmp.count() != PayloadBytes 'short'
 			return ByteArray.create(0)
 		end 'short'
-	end 'churn'
+	end 'innerChurn'
 
 	return survivor
 end 'churn'

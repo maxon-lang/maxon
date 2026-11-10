@@ -903,9 +903,8 @@ end 'main'
 error E3005: <fragment>:18:9: argument type mismatch for 'info': expected 'stdlib.FileInfo', got 'FileInfo'
 ```
 
-<!-- test: stdlib-user-shadows.a-member-typealias-after-a-method-named-like-its-type-stays-a-member -->
-A method may be named like its type, so its own `end 'Holder'` is not where the type's body ends. The member
-typealias after it is the type's `Holder.Range`, and the program's bare `Range` is still the library's.
+<!-- test: stdlib-user-shadows.a-member-typealias-after-a-method-stays-a-member -->
+The member typealias after a method is the type's `Holder.Range`, and the program's bare `Range` is still the library's.
 ```maxon
 typealias Small = int(0 to 50)
 
@@ -916,9 +915,9 @@ type Holder
 		return Holder{n: 3}
 	end 'make'
 
-	function Holder() returns Small
+	function held() returns Small
 		return self.n
-	end 'Holder'
+	end 'held'
 
 	typealias Range = int(0 to 9)
 
@@ -935,7 +934,7 @@ function main() returns ExitCode
 		total = total + (v as ExitCode)
 	end 'each'
 
-	return total + (Holder.make().widened() as ExitCode) + (Holder.make().Holder() as ExitCode)
+	return total + (Holder.make().widened() as ExitCode) + (Holder.make().held() as ExitCode)
 end 'main'
 ```
 ```exitcode

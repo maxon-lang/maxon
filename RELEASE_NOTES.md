@@ -15,6 +15,13 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- A block may not reuse the label of a block that encloses it, and the name of the enclosing function, method,
+  `type`, `enum`, `union`, `interface` or `extension` counts as that block's label: `if x 'flipped'` inside
+  `function flipped`, a `while … 'scan'` inside another `'scan'`, or a block labelled `'Shade'` in a method of
+  `union Shade` is E2081. `end '<label>'` closes the innermost block it names, so a repeated label made the
+  closer ambiguous. Two blocks that do not enclose one another may still share a label.
+  Fix: rename the inner block's label.
+
 - Every union payload is a `let`, and `let` before a payload (`case(let name T)`) is a syntax error. A `match`
   binding of a payload is never reassigned, so `full(value) then value = 42` is E2013 under a `var` scrutinee
   too, and a `var` that is only matched is E3077. A union whose payload types are all immutable is itself

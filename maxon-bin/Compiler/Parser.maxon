@@ -15347,21 +15347,87 @@ function bindingPartWhenRefusedWithin(key PositionKey, extentEnd PositionKey, re
 end 'bindingPartWhenRefusedWithin'
 
 union OpenedBlockLabel
-	spelled(label immutable ByteArray)
+	claimed(label immutable ByteArray, key immutable ByteArray, at ElementIndex)
+	// A label that reuses an enclosing one, or one whose position is not tracked. It owns no key in
+	// `OpenLabels.positions`, so closing it must not release the enclosing block's key.
+	unclaimed(label immutable ByteArray)
 	unread
 
 	function expectedAt(closing immutable ByteArray) returns immutable ByteArray
 		return match self 'opened'
-			spelled(label) gives label
+			claimed(label, _, _) gives label
+			unclaimed(label) gives label
 			unread gives closing
 		end 'opened'
 	end 'expectedAt'
 end 'OpenedBlockLabel'
 
 typealias OpenedBlockLabelArray = Array with OpenedBlockLabel
+typealias OpenLabelPositions = Map with ByteArray, ElementIndex
+
+union LabelReuse
+	reused(label immutable ByteArray, outerAt ElementIndex, innerAt ElementIndex)
+end 'LabelReuse'
+
+typealias LabelReuseArray = Array with LabelReuse
+
+function reusedBlockLabelMessage(label String, outer Token) returns String
+	return "Block label '{label}' is already the label of an enclosing block or declaration (line {outer.line}, column {outer.column}); an `end '{label}'` could close either, so rename the inner block's label"
+end 'reusedBlockLabelMessage'
+
+// The open blocks, innermost last, and which label key each claimed block holds. Every reuse is
+// recorded and the walk continues, so one pass reports them all.
+type OpenLabels
+	var stack as OpenedBlockLabelArray
+	var positions as OpenLabelPositions
+	var reuses as LabelReuseArray
+
+	static function create() returns Self
+		return Self{stack: OpenedBlockLabelArray.create(0), positions: OpenLabelPositions.create(), reuses: LabelReuseArray.create(0)}
+	end 'create'
+
+	function open(entry OpenedBlockLabel)
+		match entry 'claim'
+			claimed(label, key, at) then self.stack.push(self.claim(label, key: key, at: at))
+			unclaimed or
+			unread then self.stack.push(entry)
+		end 'claim'
+	end 'open'
+
+	function claim(label immutable ByteArray, key immutable ByteArray, at ElementIndex) returns OpenedBlockLabel
+		if self.positions.contains(key) 'taken'
+			let outerAt = try self.positions.get(key) otherwise panic("OpenLabels.claim: a key the map contains has a position")
+			self.reuses.push(LabelReuse.reused(label, outerAt: outerAt, innerAt: at))
+			return OpenedBlockLabel.unclaimed(label)
+		end 'taken'
+
+		self.positions.upsert(key, value: at)
+		return OpenedBlockLabel.claimed(label, key: key, at: at)
+	end 'claim'
+
+	function close() returns OpenedBlockLabel
+		let innermost = try self.stack.pop() otherwise panic("OpenLabels.close: the walk returns when the outermost block closes, so a closer always has an opener to pop")
+
+		match innermost 'released'
+			claimed(_, key, _) then _ = self.positions.remove(key)
+			unclaimed or
+			unread then break
+		end 'released'
+
+		return innermost
+	end 'close'
+
+	function isEmpty() returns bool
+		return self.stack.isEmpty()
+	end 'isEmpty'
+
+	function foundReuses() returns LabelReuseArray
+		return self.reuses
+	end 'foundReuses'
+end 'OpenLabels'
 
 union BlockCloserScan
-	closed
+	closed(reuses LabelReuseArray)
 	misclosed(expected immutable ByteArray, closer ElementIndex)
 	unterminated
 end 'BlockCloserScan'
@@ -20543,6 +20609,8 @@ export type Parser
 			self.skipAbandonedDeclaration()
 			return
 		end 'abandoned'
+
+		self.recordReusedBlockLabels()
 
 		let confinement = try self.confine(RegionKind.declaration) otherwise 'unconfined'
 			try self.dispatchTopLevel()
@@ -34255,25 +34323,53 @@ export type Parser
 			return
 		end 'repeatsIt'
 
-		match self.scanBlockClosers(bodyStart, openingLabel: openingLabel) 'scan'
+		match self.scanBlockClosers(bodyStart, opening: OpenedBlockLabel.unclaimed(openingLabel)) 'scan'
 			misclosed(expected, at) then self.misclosedBlock = MisclosedBlock.recorded(String.from(expected), got: String.from(self.tokenAt(at + 1).value), closer: at, bodyStart: bodyStart)
 			closed or
 			unterminated then return
 		end 'scan'
 	end 'noteDeclarationCloser'
 
-	function scanBlockClosers(bodyStart ElementIndex, openingLabel ByteArray) returns BlockCloserScan
-		var open = OpenedBlockLabelArray.create(0)
-		open.push(OpenedBlockLabel.spelled(openingLabel))
+	function recordReusedBlockLabels()
+		let keyword = pastVisibilityModifiers(self.tokens, index: self.pos)
+		let kind = self.kindAt(keyword)
+
+		if kind != TokenKind.function and not tokenKindDeclaresANominalType(kind) and kind != TokenKind.extension and not testDeclarationAt(self.tokens, index: keyword) 'hasNoBody'
+			return
+		end 'hasNoBody'
+
+		match self.scanBlockClosers(keyword + 2, opening: self.claimedLabelAt(keyword + 1)) 'scan'
+			closed(reuses) then self.recordEachReusedBlockLabel(reuses)
+			misclosed or
+			unterminated then return
+		end 'scan'
+	end 'recordReusedBlockLabels'
+
+	function recordEachReusedBlockLabel(reuses LabelReuseArray)
+		for reuse in reuses 'eachReuse'
+			match reuse 'found'
+				reused(label, outerAt, innerAt) then self.recordArtifactDiagnostic(ErrorCode.blockLabelReused, message: reusedBlockLabelMessage(String.from(label), outer: self.tokenAt(outerAt)), range: SourceRange.ofToken(self.tokenAt(innerAt)))
+			end 'found'
+		end 'eachReuse'
+	end 'recordEachReusedBlockLabel'
+
+	function scanBlockClosers(bodyStart ElementIndex, opening OpenedBlockLabel) returns BlockCloserScan
+		var open = OpenLabels.create()
+		open.open(opening)
 		var q = bodyStart
 
 		while self.kindAt(q) != TokenKind.eof 'walk'
+			// A body missing its `end` must not pair against, or take labels from, the declarations after it.
+			if q > bodyStart and self.tokenAt(q).column == DeclarationHeadColumn and declarationOpensIn(self.tokens, index: q) 'nextDeclaration'
+				return BlockCloserScan.unterminated
+			end 'nextDeclaration'
+
 			if self.functionDeclarationAt(q) 'declaration'
-				open.push(OpenedBlockLabel.spelled(self.tokenAt(q + 1).value))
+				open.open(self.claimedLabelAt(q + 1))
 			end 'declaration' else if self.opensBlockAt(q) or self.armBlockIfAt(q) 'opens'
-				open.push(self.blockHeaderLabelAt(q))
+				open.open(self.blockHeaderLabelAt(q))
 			end 'opens' else if self.closesBlockAt(q) 'closes'
-				view innermost = try open.pop() otherwise panic("scanBlockClosers: the walk returns when the outermost block closes, so a closer always has an opener to pop")
+				view innermost = open.close()
 
 				if self.kindAt(q + 1) == TokenKind.charLiteral 'labelled'
 					let label = self.tokenAt(q + 1).value
@@ -34285,7 +34381,7 @@ export type Parser
 				end 'labelled'
 
 				if open.isEmpty() 'outermostClosed'
-					return BlockCloserScan.closed
+					return BlockCloserScan.closed(open.foundReuses())
 				end 'outermostClosed'
 			end 'closes'
 
@@ -34294,6 +34390,11 @@ export type Parser
 
 		return BlockCloserScan.unterminated
 	end 'scanBlockClosers'
+
+	function claimedLabelAt(index ElementIndex) returns OpenedBlockLabel
+		let label = self.tokenAt(index).value
+		return OpenedBlockLabel.claimed(label, key: self.labelInNameSpace(label), at: index)
+	end 'claimedLabelAt'
 
 	function blockHeaderLabelAt(opener ElementIndex) returns OpenedBlockLabel
 		var q = opener + 1
@@ -34306,7 +34407,7 @@ export type Parser
 			return OpenedBlockLabel.unread
 		end 'noTrailingLabel'
 
-		return OpenedBlockLabel.spelled(self.tokenAt(q - 1).value)
+		return self.claimedLabelAt(q - 1)
 	end 'blockHeaderLabelAt'
 
 	export function publishMisclosedBlock()
@@ -37275,9 +37376,9 @@ export type Parser
 	end 'witnessReserveFor'
 
 	function seedLayoutReserve(func IrFunction, firstId ParamCount, reserve ParamCount, anchor Token)
-		for r in 0 upto reserve 'seedLayoutReserve'
+		for r in 0 upto reserve 'eachReserved'
 			self.seedHiddenIntegerParam((firstId + r) as ValueId, anchor: anchor)
-		end 'seedLayoutReserve'
+		end 'eachReserved'
 
 		func.layoutReserve = reserve
 	end 'seedLayoutReserve'

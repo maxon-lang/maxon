@@ -13,7 +13,9 @@ An `end` that carries a label must repeat the label its opener gave it. For a bl
 `for`, `match`, a `try` block and an `otherwise` handler — that is the label written after the header. For a
 declaration — `function`, `type`, `enum`, `union`, `interface` and `extension` — it is the declared name. A
 mismatch is **E2008**, positioned at the `end`, so a label that names a different block or declaration is never
-read as closing this one.
+read as closing this one. A block's label also differs from every label that encloses it, the enclosing
+declaration's name included: the repeat is **E2081**, positioned at the inner label, so an `end` names exactly
+one open block. Blocks that do not enclose one another may share a label.
 
 ```maxon
 function helper() returns ExitCode
@@ -480,4 +482,392 @@ end 'helper'
 ```maxoncstderr
 error E3071: <fragment>:7:2: unreachable code after 'return'
 error E2004: <fragment>:21:13: Expected expression but got ')'
+```
+
+<!-- test: sibling-blocks-and-other-declarations-may-share-a-label -->
+Blocks that do not enclose one another may reuse a label: a loop run twice, the arms of one `if` chain, a block
+inside `main` named after another function, and one label in two methods of a type.
+```maxon
+typealias Count = int(0 to 100)
+
+function sum(limit Count) returns Count
+	var total = 0 as Count
+
+	for i in 0 upto limit 'each'
+		total = total + i
+	end 'each'
+
+	for j in 0 upto limit 'each'
+		total = total + j
+	end 'each'
+
+	if total > 20 'check'
+		total = total + 5
+	end 'check' else if total > 10 'check'
+		total = total + 1
+	end 'check' else 'check'
+		total = total + 3
+	end 'check'
+
+	return total
+end 'sum'
+
+type Meter
+	var reading as Count
+
+	static function create() returns Self
+		return Self{reading: 2}
+	end 'create'
+
+	function up() returns Count
+		if self.reading > 0 'step'
+			return self.reading + 1
+		end 'step'
+
+		return 0
+	end 'up'
+
+	function down() returns Count
+		if self.reading > 0 'step'
+			return self.reading - 1
+		end 'step'
+
+		return 0
+	end 'down'
+end 'Meter'
+
+function main() returns ExitCode
+	let total = sum(4)
+	let meter = Meter.create()
+
+	if total == 13 'sum'
+		return (total + meter.up() + meter.down()) as ExitCode
+	end 'sum'
+
+	return 1
+end 'main'
+```
+```exitcode
+17
+```
+
+<!-- test: error.a-block-reuses-its-functions-name -->
+```maxon
+function flipped(x ExitCode) returns ExitCode
+	if x > 0 'flipped'
+		return 1
+	end 'flipped'
+
+	return 0
+end 'flipped'
+
+function main() returns ExitCode
+	return flipped(1)
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:3:11: Block label 'flipped' is already the label of an enclosing block or declaration (line 2, column 10); an `end 'flipped'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.a-block-reuses-its-methods-name -->
+```maxon
+typealias Count = int(0 to 10)
+
+type Box
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	function bump() returns Count
+		if self.n > 0 'bump'
+			return 1
+		end 'bump'
+
+		return 0
+	end 'bump'
+end 'Box'
+
+function main() returns ExitCode
+	return Box.create().bump() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:12:17: Block label 'bump' is already the label of an enclosing block or declaration (line 11, column 11); an `end 'bump'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.a-block-in-a-method-reuses-its-types-name -->
+```maxon
+typealias Count = int(0 to 10)
+
+type Box
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	function bump() returns Count
+		if self.n > 0 'Box'
+			return 1
+		end 'Box'
+
+		return 0
+	end 'bump'
+end 'Box'
+
+function main() returns ExitCode
+	return Box.create().bump() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:12:17: Block label 'Box' is already the label of an enclosing block or declaration (line 4, column 6); an `end 'Box'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.a-block-in-a-union-method-reuses-the-unions-name -->
+```maxon
+typealias Count = int(0 to 10)
+
+union Shade
+	light
+	dark
+
+	function level() returns Count
+		let seen = 1 as Count
+
+		if seen > 0 'Shade'
+			return 1
+		end 'Shade'
+
+		return 2
+	end 'level'
+end 'Shade'
+
+function main() returns ExitCode
+	return Shade.dark.level() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:11:15: Block label 'Shade' is already the label of an enclosing block or declaration (line 4, column 7); an `end 'Shade'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.a-block-in-an-enum-method-reuses-the-enums-name -->
+```maxon
+typealias Count = int(0 to 10)
+
+enum Color
+	red
+	green
+
+	function rank() returns Count
+		if self == Color.red 'Color'
+			return 1
+		end 'Color'
+
+		return 2
+	end 'rank'
+end 'Color'
+
+function main() returns ExitCode
+	return Color.green.rank() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:9:24: Block label 'Color' is already the label of an enclosing block or declaration (line 4, column 6); an `end 'Color'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.a-block-in-an-extension-method-reuses-the-extended-types-name -->
+```maxon
+typealias Count = int(0 to 10)
+
+type Box
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+end 'Box'
+
+extension Box
+	function doubled() returns Count
+		if self.n > 0 'Box'
+			return self.n * 2
+		end 'Box'
+
+		return 0
+	end 'doubled'
+end 'Box'
+
+function main() returns ExitCode
+	return Box.create().doubled() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:14:17: Block label 'Box' is already the label of an enclosing block or declaration (line 12, column 11); an `end 'Box'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.a-nested-block-reuses-an-outer-blocks-label -->
+```maxon
+function main() returns ExitCode
+	var total = 0 as ExitCode
+
+	while total < 3 'scan'
+		if total == 1 'scan'
+			total = total + 2
+		end 'scan'
+
+		total = total + 1
+	end 'scan'
+
+	return total
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:6:17: Block label 'scan' is already the label of an enclosing block or declaration (line 5, column 18); an `end 'scan'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.a-label-reused-two-levels-down -->
+```maxon
+function main() returns ExitCode
+	var total = 0 as ExitCode
+
+	for i in 0 upto 2 'outer'
+		while total < 3 'middle'
+			if total == 1 'outer'
+				total = total + 2
+			end 'outer'
+
+			total = total + i + 1
+		end 'middle'
+	end 'outer'
+
+	return total
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:7:18: Block label 'outer' is already the label of an enclosing block or declaration (line 5, column 20); an `end 'outer'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.a-match-reuses-an-enclosing-blocks-label -->
+```maxon
+function main() returns ExitCode
+	var total = 0 as ExitCode
+
+	while total < 3 'scan'
+		match total 'scan'
+			1 then total = 2
+			default then total = total + 1
+		end 'scan'
+	end 'scan'
+
+	return total
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:6:15: Block label 'scan' is already the label of an enclosing block or declaration (line 5, column 18); an `end 'scan'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.an-else-branch-reuses-an-enclosing-blocks-label -->
+```maxon
+function main() returns ExitCode
+	var total = 0 as ExitCode
+
+	while total < 3 'scan'
+		if total == 1 'first'
+			total = total + 2
+		end 'first' else 'scan'
+			total = total + 1
+		end 'scan'
+	end 'scan'
+
+	return total
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:8:20: Block label 'scan' is already the label of an enclosing block or declaration (line 5, column 18); an `end 'scan'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.a-method-named-like-its-type -->
+```maxon
+typealias Count = int(0 to 10)
+
+type Box
+	var n as Count
+
+	static function create() returns Self
+		return Self{n: 3}
+	end 'create'
+
+	function Box() returns Count
+		return self.n
+	end 'Box'
+end 'Box'
+
+function main() returns ExitCode
+	return Box.create().Box() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:11:11: Block label 'Box' is already the label of an enclosing block or declaration (line 4, column 6); an `end 'Box'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.a-reused-label-in-a-function-leaves-its-callers-unreported -->
+The reuse is the only error: `remake` keeps its declared `mutable` result, so storing the result of `remake(source)` into the array is not refused beside it.
+```maxon
+typealias Tally = int(0 to 1024)
+typealias BoxArray = Array with Box
+
+type Box
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function remake(source Box) returns mutable Box
+	if source.n > 0 'remake'
+		return Box.create(source.n)
+	end 'remake'
+
+	return Box.create(0)
+end 'remake'
+
+function main() returns ExitCode
+	let source = freeze Box.create(7)
+	var copy = remake(source)
+	var all = BoxArray.create(0)
+	all.push(copy)
+
+	return all.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:14:18: Block label 'remake' is already the label of an enclosing block or declaration (line 13, column 10); an `end 'remake'` could close either, so rename the inner block's label
+```
+
+<!-- test: error.every-reused-label-of-one-declaration-is-reported -->
+```maxon
+function main() returns ExitCode
+	var total = 0 as ExitCode
+
+	while total < 3 'scan'
+		if total == 1 'scan'
+			total = total + 2
+		end 'scan'
+
+		if total == 2 'scan'
+			total = total + 1
+		end 'scan'
+
+		total = total + 1
+	end 'scan'
+
+	return total
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:6:17: Block label 'scan' is already the label of an enclosing block or declaration (line 5, column 18); an `end 'scan'` could close either, so rename the inner block's label
+error E2081: <fragment>:10:17: Block label 'scan' is already the label of an enclosing block or declaration (line 5, column 18); an `end 'scan'` could close either, so rename the inner block's label
 ```

@@ -3209,10 +3209,10 @@ type Bag uses Element
 
 	function fill(x Element, times Idx)
 		var n = 0 as Idx
-		while n < times 'fill'
+		while n < times 'innerFill'
 			items.push(x)
 			n = n + 1
-		end 'fill'
+		end 'innerFill'
 	end 'fill'
 
 	function at(i Idx) returns Element throws ArrayError

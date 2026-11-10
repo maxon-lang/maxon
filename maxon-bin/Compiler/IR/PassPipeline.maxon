@@ -853,7 +853,7 @@ export type PassPipeline
 	function dispatch(pass PassKind) throws CompileError
 		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
 
-		match pass 'dispatch'
+		match pass 'byPass'
 			reportDeferredNames then reportDeferredNameDiagnostics(self.project, signatures: self.signatures)
 			checkSignatureVisibility then checkSignatureVisibility(self.project, module: self.maxonModule, signatures: self.signatures)
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
@@ -890,7 +890,7 @@ export type PassPipeline
 			refineVersionedRanges then panic("PassPipeline.dispatch: `{passKindToString(pass)}` reached the serial dispatch — it is a fan-out member and runs only inside `stdFanOut`, which `requireFanOutMembership` checks before the first pass")
 			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 			valueTupleReturn then applyValueTupleReturn(self.project, module: self.stdModule, signatures: self.signatures)
-		end 'dispatch'
+		end 'byPass'
 
 		// ⭐ **THE DEBUG-SPAN CURSOR IS THIS PASS'S, NEVER THE NEXT ONE'S.** A pass that rewrites around a
 		// source op points the cursor at it; left pointed, the runtime installers below the pipeline would

@@ -172,14 +172,14 @@ min/max are only valid for numeric ranges
 typealias Score = int(i64.min to i64.max)
 
 function grade(score Score) returns Score
-	match score 'grade'
+	match score 'innerGrade'
 		90 to 100 then return 65  // 'A'
 		80 upto 90 then return 66   // 'B'
 		70 upto 80 then return 67   // 'C'
 		60 upto 70 then return 68   // 'D'
 		0 upto 60 then return 70    // 'F'
 		default then return 63   // '?'
-	end 'grade'
+	end 'innerGrade'
 end 'grade'
 
 function main() returns ExitCode
@@ -1131,11 +1131,11 @@ through to `default` — a wrong answer, not a diagnostic. `\{` is the literal b
 typealias Choice = int(0 to 9)
 
 function pick(s String) returns Choice
-	match s 'pick'
+	match s 'innerPick'
 		"a\nb" then return 4
 		"\{" then return 2
 		default then return 1
-	end 'pick'
+	end 'innerPick'
 end 'pick'
 
 function main() returns ExitCode
@@ -1868,25 +1868,22 @@ end 'main'
 5
 ```
 
-⭐ **THE SEARCH ORDER IS MATCHES-BEFORE-LOOPS, AND IT IS OBSERVABLE.** When a match
-statement and an enclosing loop carry the SAME label, a labelled `break 'dup'` names
-the MATCH — the innermost construct wearing that label — and is therefore E2048. Nothing
-else in the suite distinguishes the two search loops in `resolveControlTarget`, so
-reversing them would stay green everywhere else while this program compiled and left the loop.
+A labelled `break` that names the `match` it sits in is E2048 even inside a loop: only the label of an outer
+loop reaches past the `match`.
 
-<!-- test: match-break.error-match-label-shadows-loop-label -->
+<!-- test: match-break.error-labelled-break-names-its-own-match-inside-a-loop -->
 ```maxon
 function main() returns ExitCode
 	var n = 0 as Count
 	var trips = 0 as ExitCode
-	while n < 3 'dup'
+	while n < 3 'trip'
 		n = n + 1
 		match n 'dup'
 			1 then break 'dup'
 			default then trips = trips + 1
 		end 'dup'
 		trips = trips + 10
-	end 'dup'
+	end 'trip'
 	return trips
 end 'main'
 ```

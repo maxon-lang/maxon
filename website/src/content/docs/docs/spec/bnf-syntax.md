@@ -132,6 +132,9 @@ literal token, but its content is PROSE — spaces, digits and punctuation are a
 the lexer validates none of it. It appears only in `test_decl`, where the trailing `end` must
 repeat it verbatim.
 
+A block's `LABEL` differs from the label of every block that encloses it, and from the name of the
+function, method or type that holds it (E2081); sibling blocks may share one.
+
 ### 1.6 Operators and Punctuation
 
 ```

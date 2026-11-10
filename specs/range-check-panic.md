@@ -4094,9 +4094,9 @@ Stack trace:
 typealias Slot = int(0 to u64.max)
 
 function either(a Slot, b Slot, c bool) returns Slot
-	if a >= b or c 'either'
+	if a >= b or c 'innerEither'
 		return a - b
-	end 'either'
+	end 'innerEither'
 
 	return 0
 end 'either'

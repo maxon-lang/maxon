@@ -63,13 +63,13 @@ type Spinner
 
 	export function spin() returns Integer
 		var acc = 0 as Integer
-		while not self.released.current() 'spin'
+		while not self.released.current() 'innerSpin'
 			var i = 0 as Integer
 			while i < 1000 'burst'
 				acc = step(acc, depth: 4)
 				i = i + 1
 			end 'burst'
-		end 'spin'
+		end 'innerSpin'
 		return acc mod 2 + 1
 	end 'spin'
 end 'Spinner'
@@ -138,12 +138,12 @@ type Recurser
 		let expected = down(20000, acc: 1)
 		var wrong = 0 as Integer
 		var r = 0 as Integer
-		while r < rounds or not self.released.current() 'churn'
+		while r < rounds or not self.released.current() 'innerChurn'
 			if down(20000, acc: 1) != expected 'differs'
 				wrong = wrong + 1
 			end 'differs'
 			r = r + 1
-		end 'churn'
+		end 'innerChurn'
 		return wrong
 	end 'churn'
 end 'Recurser'
@@ -210,13 +210,13 @@ type Spinner
 
 	export function spin() returns Integer
 		var acc = 0 as Integer
-		while not self.released.current() 'spin'
+		while not self.released.current() 'innerSpin'
 			var i = 0 as Integer
 			while i < 1000 'burst'
 				acc = step(acc, depth: 4)
 				i = i + 1
 			end 'burst'
-		end 'spin'
+		end 'innerSpin'
 		return acc mod 2 + 1
 	end 'spin'
 end 'Spinner'
@@ -430,14 +430,14 @@ type Mixer
 		let start = Clock.nowMs()
 		var wrong = 0 as Integer
 		var i = 0 as Integer
-		while (Clock.elapsedMs(start) as Integer) < ms or Scheduler.counters().preempts <= 1 'churn'
+		while (Clock.elapsedMs(start) as Integer) < ms or Scheduler.counters().preempts <= 1 'innerChurn'
 			let k = i mod variants
 			let want = try expected.get(k as ElementIndex) otherwise panic("expected.get out of range at {k}: bounded by variants")
 			if mix(k, b: 2 + self.shift, c: 3, d: 4 + self.shift, e: 5, f: 6 + self.shift, g: 7, h: 8 + self.shift, p: 1.5 * self.scale, q: 2.25, r: 3.125 * self.scale, s: 4.0625, t: 5.5 * self.scale, u: 6.75, v: 7.875 * self.scale, w: 8.5, depth: 7) != want 'differs'
 				wrong = wrong + 1
 			end 'differs'
 			i = i + 1
-		end 'churn'
+		end 'innerChurn'
 		return wrong
 	end 'churn'
 end 'Mixer'
@@ -488,14 +488,14 @@ type Spinner
 	export function spin() returns Integer
 		var acc = 0 as Integer
 		var i = 0 as Integer
-		while not self.released.current() 'spin'
+		while not self.released.current() 'innerSpin'
 			var k = 0 as Integer
 			while k < chunkSteps 'chunk'
 				acc = (acc * 31 + i) mod 1000003
 				i = i + 1
 				k = k + 1
 			end 'chunk'
-		end 'spin'
+		end 'innerSpin'
 		return acc mod 2 + 1
 	end 'spin'
 end 'Spinner'
@@ -560,14 +560,14 @@ type Spinner
 	export function spin() returns Integer
 		var acc = 0 as Integer
 		var i = 0 as Integer
-		while not self.released.current() 'spin'
+		while not self.released.current() 'innerSpin'
 			var k = 0 as Integer
 			while k < chunkSteps 'chunk'
 				acc = (acc * 31 + i) mod 1000003
 				i = i + 1
 				k = k + 1
 			end 'chunk'
-		end 'spin'
+		end 'innerSpin'
 		return acc mod 2 + 1
 	end 'spin'
 end 'Spinner'

@@ -60,7 +60,10 @@ name; a test's label is its quoted name. Labels on `if`, `else`, `while`, `for`,
 blocks are chosen by you and name the block for `break` and `continue`. A label written after `end` must be
 the block's own label: anything else is **E2008** (`Mismatched end label: expected 'tick', got 'loop'`), and
 **E2043** for a `match`. Only a `test` must write it; on every other block the label after `end` may be
-omitted. Statements end at the end of the line, except inside an open `(`, `[` or `{` (see
+omitted. A block may not reuse the label of a block that encloses it, nor the name of the function, method
+or type it sits in (**E2081**), because `end '<label>'` closes the innermost block it names; two blocks
+that do not enclose one another may share a label. Statements end at the end of the line, except inside
+an open `(`, `[` or `{` (see
 [Line Breaks Inside Brackets](#line-breaks-inside-brackets)), and a block runs from its label to its
 `end`. A block label, a statement and a match arm each end their line, so the next one starts on a line
 of its own; a token after one on the same line is **E2001**:

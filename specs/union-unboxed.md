@@ -1025,12 +1025,12 @@ union Wide
 end 'Wide'
 
 function pick(n Weight) returns Wide
-	return match n 'pick'
+	return match n 'innerPick'
 		0 gives Wide.idle
 		1 gives Wide.done
 		2 gives Wide.failed
 		default gives Wide.skipped
-	end 'pick'
+	end 'innerPick'
 end 'pick'
 
 function weigh(w Wide) returns Weight
@@ -1443,7 +1443,7 @@ enum Unmatched
 end 'Unmatched'
 
 function bucket(w Wide) returns Weight
-	return match w 'bucket'
+	return match w 'innerBucket'
 		idle or
 		done or
 		failed gives 1
@@ -1455,15 +1455,15 @@ function bucket(w Wide) returns Weight
 		text or
 		label or
 		other gives 4
-	end 'bucket'
+	end 'innerBucket'
 end 'bucket'
 
 function partial(w Wide) returns Weight throws Unmatched
-	return match w 'partial'
+	return match w 'innerPartial'
 		done gives 20
 		failed gives 30
 		default throws Unmatched.unhandled
-	end 'partial'
+	end 'innerPartial'
 end 'partial'
 
 function main() returns ExitCode
@@ -1536,7 +1536,7 @@ union Wide
 end 'Wide'
 
 function code(w Wide) returns ExitCode
-	return match w 'code'
+	return match w 'innerCode'
 		idle gives 1
 		done gives 2
 		failed gives 3
@@ -1547,7 +1547,7 @@ function code(w Wide) returns ExitCode
 		text or
 		label or
 		other gives 99
-	end 'code'
+	end 'innerCode'
 end 'code'
 
 function lookup(name String) returns ExitCode

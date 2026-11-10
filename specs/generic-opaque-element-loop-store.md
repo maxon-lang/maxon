@@ -421,10 +421,10 @@ type Bag uses Element
 
 	function fill(n Idx, v Element)
 		var i = 0 as Idx
-		while i < n 'fill'
+		while i < n 'innerFill'
 			store(v)
 			i = i + 1
-		end 'fill'
+		end 'innerFill'
 	end 'fill'
 
 	function at(i Idx) returns Element throws ArrayError
@@ -481,10 +481,10 @@ type Bag uses Element
 
 	function fill(n Idx, v Element)
 		var i = 0 as Idx
-		while i < n 'fill'
+		while i < n 'innerFill'
 			store(v)
 			i = i + 1
-		end 'fill'
+		end 'innerFill'
 	end 'fill'
 
 	function count() returns Idx

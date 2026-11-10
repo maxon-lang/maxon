@@ -247,6 +247,10 @@ A cast's operand is itself a cast: `x as A as B`, or `(x as A) as B` through any
 
 A `return` is written in a top-level or `static` binding's initializer, as in a handler block: `let LEVEL = try parse(3) otherwise (e) 'h'`, then `return 3`. An initializer is not a function, so `return` has nothing to leave. End the handler with `panic(…)`, or give the `try` a fallback value: `let LEVEL = try parse(3) otherwise 3`.
 
+### E2081 — `blockLabelReused`
+
+A block is labelled with the label of a block that encloses it, or with the name of the function, method or type that holds it: `if x 'flipped'` inside `function flipped`, or a second `'scan'` loop inside a `'scan'` loop. An `end '<label>'` closes the innermost block it names, so a repeated label leaves the closer ambiguous. Rename the inner block's label. Blocks that do not enclose one another may share a label.
+
 ## Semantic Analysis (E3xxx)
 
 Type checking, borrowing, visibility, declaration lookup.
