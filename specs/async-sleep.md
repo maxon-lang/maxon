@@ -350,7 +350,7 @@ A `sleep(1)` in a function nothing calls compiles for wasm32-wasi: the target ga
 own calls whether or not `main` reaches them, and `__gt_sleep` has a wasm lowering, so it has nothing to
 refuse.
 ```maxon
-function napper()
+public function napper()
 	sleep(1)
 end 'napper'
 

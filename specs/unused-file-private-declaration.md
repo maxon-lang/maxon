@@ -435,7 +435,7 @@ end 'main'
 
 <!-- test: used.declarations-indented-inside-a-conditional-region -->
 ```maxon
-#if not os(Wasi)
+#if not testing(true)
 	let Step = 3
 
 	enum Shade

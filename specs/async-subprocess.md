@@ -1221,14 +1221,14 @@ opposite outcome for an entry written in stdlib source, where the gate is reacha
 no stdlib declaration (see the *Documentation* section), so it keeps the property, exactly as
 `builtins-clock.thread-cpu-ticks-rejected-on-wasm-when-unreached` does for `__Builtins.threadCpuTicks`.
 ```maxon
-function spawner() returns Integer
+public function spawner() returns Integer
 	return try __Builtins.runProcess("cmd /c exit 1") otherwise 9
 end 'spawner'
 
 function main() returns ExitCode
 	return 4
 end 'main'
-typealias Integer = int(i64.min to i64.max)
+public typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3104: <fragment>:3:24: this construct lowers to the runtime entry '__gt_process_run', which has no wasm32-wasi implementation

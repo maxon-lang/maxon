@@ -461,7 +461,7 @@ The other side of the reachability asymmetry: `reader` is the program's own func
 source whether or not a path from `main` reaches it. `main` never calls `reader`, yet the program is
 refused.
 ```maxon
-function reader() returns ThreadCpuTicks
+public function reader() returns ThreadCpuTicks
 	return Clock.threadCpuTicks()
 end 'reader'
 
@@ -492,7 +492,7 @@ type Plot
 	end 'at'
 end 'Plot'
 
-function launcher()
+public function launcher()
 	let h = spawn Plot.create()
 	try h.at(1) otherwise return
 end 'launcher'

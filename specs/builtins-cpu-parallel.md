@@ -337,7 +337,7 @@ refused. `SemanticCheck` visits every function and dead-function elimination run
 so this is the same rule that reports a type error in an unreached function — the half
 `builtins-clock.thread-cpu-ticks-rejected-on-wasm-when-unreached` keeps for the CPU-clock intrinsic.
 ```maxon
-function probe() returns ExitCode
+public function probe() returns ExitCode
 	return __Builtins.cpuCount() as ExitCode
 end 'probe'
 

@@ -556,7 +556,7 @@ same rule that reports a type error in an unreached function. Pinned because the
 exemption (`checkCalls` skips an unreached stdlib body) points the other way: it is the unreached stdlib
 BODY that is exempt, not an unreached function of the program's own.
 ```maxon
-function napper() returns ExitCode
+public function napper() returns ExitCode
 	return __Builtins.threadCpuTicks() as ExitCode
 end 'napper'
 

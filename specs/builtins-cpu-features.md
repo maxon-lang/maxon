@@ -166,7 +166,7 @@ error E3104: <fragment>:3:26: this construct lowers to the runtime entry '__cpuf
 The refusal does not depend on the program reaching the call: `probe` is never called and is still refused,
 for the reason `builtins-cpu-parallel.cpu-count-rejected-on-wasm-when-unreached` gives.
 ```maxon
-function probe() returns bool
+public function probe() returns bool
 	return __Builtins.cpuHasAes()
 end 'probe'
 
