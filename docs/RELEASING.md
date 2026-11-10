@@ -106,7 +106,8 @@ Withdrawing the modifier leaves the declaration, its body and every table standi
 and compiles the unshimmed tree; what the first build loses is the wider tier and no code.
 
 The fourth is a LANGUAGE FORM the seed cannot parse, such as a `readonly` element type
-(`Array with readonly T`) or a `let` union payload (`case(let name T)`). The patch withdraws the form and
+(`Array with readonly T`) or a `let` union payload (`case(let name T)`), or a form the seed reads by an older
+rule: a bare payload, which the patch writes `let` for a seed that reads a bare one as reassignable. The patch withdraws the form and
 writes whatever the seed's older rules then demand in its place (a `.clone()` where the seed still holds a
 borrow across a mutation, an index loop where it will not let a loop element be assigned through, a `let`
 where it sees no assignment to a `var`), leaving every table standing. The sites are found by building with the

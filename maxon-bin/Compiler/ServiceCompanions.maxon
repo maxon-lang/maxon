@@ -109,7 +109,7 @@ end 'cacheReadServiceSpawnCandidateArray'
 
 export union SpawnGate
 	always
-	defaultOf(let declaration DefaultDeclaration)
+	defaultOf(declaration DefaultDeclaration)
 
 	// A library `spawn` outside a `default`: live only while a reached body spawns its type. Gated
 	// `always`, it would make every program a service program, scheduler and share walks included.
@@ -562,7 +562,7 @@ module union ServiceRosterVerdict
 
 	// A message parameter of a type that cannot cross to another green thread. `noun` is what it IS, so the
 	// sentence reads as the reason rather than as a spelling (see `untransferableParameterNoun`).
-	messageParameterIsNotTransferable(let methodName immutable ByteArray, let paramName immutable ByteArray, noun String)
+	messageParameterIsNotTransferable(methodName immutable ByteArray, paramName immutable ByteArray, noun String)
 
 	// ⭐⭐ **A MESSAGE WHOSE REPLY WILL NOT FIT THE CELL.** A reply travels in TWO WORDS — the value, and
 	// one error word holding the handler's `ordinal + bias` — so a `float`
@@ -573,27 +573,27 @@ module union ServiceRosterVerdict
 	// `__behave` completes a reply for every reply-bearing variant whether or not the program ever sends one,
 	// so a message the cell cannot carry would put `__gt_cell_complete(cell, <a float>, 0)` in a body the
 	// service really runs. Refusing it at the send would leave that body built.
-	messageReplyIsNotCarriable(let methodName immutable ByteArray, noun String)
+	messageReplyIsNotCarriable(methodName immutable ByteArray, noun String)
 
 	// A reply whose graph, at the type an instantiation substitutes, reaches a type no per-type walk can be
 	// built for. E3138, the refusal the handler's `return` raises for a type its body declares.
-	messageReplyGraphIsNotWalkable(let methodName immutable ByteArray, noun String)
+	messageReplyGraphIsNotWalkable(methodName immutable ByteArray, noun String)
 
-	messageReplyHoldsAPromise(let methodName immutable ByteArray, noun String)
+	messageReplyHoldsAPromise(methodName immutable ByteArray, noun String)
 
 	// A reply declared at a bare `T` that hands back the service's own state, at an instantiation resolving
 	// `T` to a managed type. E3137, the refusal a handler's `return` raises for a type its body declares.
-	messageReplyAliasesServiceState(let methodName immutable ByteArray, replyTypeName String)
+	messageReplyAliasesServiceState(methodName immutable ByteArray, replyTypeName String)
 
-	messageDeclaresTheSendTimeoutLabel(let methodName immutable ByteArray)
+	messageDeclaresTheSendTimeoutLabel(methodName immutable ByteArray)
 
-	stateFieldHoldsAPromise(let fieldName immutable ByteArray, noun String)
+	stateFieldHoldsAPromise(fieldName immutable ByteArray, noun String)
 
-	messageParameterNeedsACapability(let methodName immutable ByteArray, let paramName immutable ByteArray, noun String)
+	messageParameterNeedsACapability(methodName immutable ByteArray, paramName immutable ByteArray, noun String)
 
-	messageReplyNeedsACapability(let methodName immutable ByteArray, noun String)
+	messageReplyNeedsACapability(methodName immutable ByteArray, noun String)
 
-	factoryParameterNeedsACapability(let factoryName immutable ByteArray, let paramName immutable ByteArray, noun String)
+	factoryParameterNeedsACapability(factoryName immutable ByteArray, paramName immutable ByteArray, noun String)
 
 	function isDispatchable() returns bool
 		return match self 'verdict'
@@ -793,7 +793,7 @@ end 'classifyServiceRoster'
 
 union UnmarkedParameter
 	allMarkedOrValues
-	needsAWord(let paramName immutable ByteArray, noun String)
+	needsAWord(paramName immutable ByteArray, noun String)
 end 'UnmarkedParameter'
 
 // Asked last, so a program an earlier rule refuses at the same `spawn` keeps that rule's code. Only
@@ -1613,15 +1613,15 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
 		let paramName = serviceParamName(decl, index: p as ParamCount)
 		let slotType = serviceParamSlotType(signatures, declared: declared, into: into, declFilePath: declFilePath)
-		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: plainDeclaredSurface(), declaredBrand: serviceParamBrand(signatures, decl: decl, index: p, slotType: slotType, declFilePath: declFilePath), isLet: false, capability: ParamCapability.unmarked))
+		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: plainDeclaredSurface(), declaredBrand: serviceParamBrand(signatures, decl: decl, index: p, slotType: slotType, declFilePath: declFilePath), capability: ParamCapability.unmarked))
 
 		if maxonTypeTag(slotType) == ValueTypeTag.interfaceRef 'aFatPointer'
-			payloads.push(PayloadField.create(serviceWitnessHalfSlotName(paramName), declaredType: MaxonType.integer, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, isLet: false, capability: ParamCapability.unmarked))
+			payloads.push(PayloadField.create(serviceWitnessHalfSlotName(paramName), declaredType: MaxonType.integer, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, capability: ParamCapability.unmarked))
 		end 'aFatPointer'
 	end 'eachParam'
 
 	if serviceMessageHasAReply(signatures, key: key, decl: decl) 'awaitable'
-		payloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, isLet: false, capability: ParamCapability.unmarked))
+		payloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, capability: ParamCapability.unmarked))
 	end 'awaitable'
 
 	return payloads
@@ -2101,7 +2101,7 @@ function adoptedPayloads(signatures ProgramSignatures, payloads PayloadFieldArra
 	var adopted = PayloadFieldArray.create(payloads.count(), zeroed: false)
 
 	for field in payloads 'eachField'
-		adopted.push(PayloadField.create(field.name, declaredType: signatures.adoptType(field.declaredType, into: into), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, isLet: field.isLet, capability: field.capability, typeSite: field.typeSite))
+		adopted.push(PayloadField.create(field.name, declaredType: signatures.adoptType(field.declaredType, into: into), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, capability: field.capability, typeSite: field.typeSite))
 	end 'eachField'
 
 	return adopted

@@ -1,36 +1,34 @@
 ---
 feature: let-union-payloads
 status: experimental
-keywords: [union, enum, payload, let, immutable, match, write-back, let field]
+keywords: [union, enum, payload, let, immutable, match, let field]
 category: memory
 ---
 
-# `let` payloads of a union
+# Union payloads are `let`
 
 ## Documentation
 
-A case of an `enum` or `union` may declare a payload with `let`, exactly as a record declares a `let` field:
+Every payload of an `enum` or `union` case is a `let`, exactly as a record's `let` field is, and `let` is not
+a word a payload accepts:
 
 ```text
 union Op
-	call(result Integer, let callee ByteArray)
+	call(result Integer, callee ByteArray)
 	nop
 end 'Op'
 ```
 
 The payload is never reassigned for the whole life of the value:
 
-- A `match` binding of a `let` payload is a `let`: assigning to the binding, which would write back into the union, is
-  `E2013`. A field store, a receiver-writing method or a call that writes its parameter writes the record the
-  union holds.
+- A `match` binding of a payload is a `let`, whatever the scrutinee: assigning to it is `E2013`. A field store,
+  a receiver-writing method or a call that writes its parameter writes the record the union holds.
 - The value stored into it at construction may be a `var` that is read again: the payload and the `var` name one
   record. A `var` at its last use moves in.
 - A read of the payload may be bound to a `var`.
 
-A payload takes a capability word as a record field does (`let callee immutable ByteArray`), and an immutable value
+A payload takes a capability word as a record field does (`callee immutable ByteArray`), and an immutable value
 such as a constant byte string is stored only into a payload declared `immutable` (`E3196`).
-
-A payload declared without `let` is writable through its binding under a `var` scrutinee.
 
 ## Tests
 
@@ -41,7 +39,7 @@ The immutable `source.title` is stored into the `let` payload `callee`, which is
 typealias Integer = int(i64.min to i64.max)
 
 union Op
-	call(let callee immutable ByteArray, weight Integer)
+	call(callee immutable ByteArray, weight Integer)
 	nop
 end 'Op'
 
@@ -77,7 +75,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Op
-	call(let callee ByteArray, weight Integer)
+	call(callee ByteArray, weight Integer)
 	nop
 end 'Op'
 
@@ -107,7 +105,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Op
-	call(let callee ByteArray, weight Integer)
+	call(callee ByteArray, weight Integer)
 	nop
 end 'Op'
 
@@ -142,7 +140,7 @@ type Cell
 end 'Cell'
 
 union Holder
-	held(let cell Cell)
+	held(cell Cell)
 	empty
 end 'Holder'
 
@@ -166,7 +164,7 @@ end 'main'
 
 ```maxon
 union Holder
-	held(let items ByteArray)
+	held(items ByteArray)
 	empty
 end 'Holder'
 
@@ -200,7 +198,7 @@ type Cell
 end 'Cell'
 
 union Holder
-	held(let cell Cell)
+	held(cell Cell)
 	empty
 end 'Holder'
 
@@ -219,6 +217,49 @@ end 'main'
 error E2013: specs/let-union-payloads/error.assigning-to-the-binding-of-a-let-payload.maxon:21:19: 'cell' is a let and cannot be reassigned
 ```
 
+<!-- test: error.assigning-to-the-binding-of-a-payload-under-a-var-scrutinee -->
+A `var` scrutinee does not make a payload reassignable: every payload is a `let`.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Holder
+	held(level Integer)
+	empty
+end 'Holder'
+
+function main() returns ExitCode
+	var holder = Holder.held(1)
+
+	match holder 'write'
+		held(level) then level = 5
+		empty then return 1
+	end 'write'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:13:20: 'level' is a let and cannot be reassigned
+```
+
+<!-- test: error.let-before-a-payload -->
+`let` is not a word a payload accepts.
+
+```maxon
+union Op
+	call(let callee ByteArray)
+	nop
+end 'Op'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:3:7: Expected identifier but got 'let'
+```
+
 <!-- test: a-let-payload-read-into-a-var -->
 A `var` may name the record a `let` payload holds.
 
@@ -234,7 +275,7 @@ type Cell
 end 'Cell'
 
 union Holder
-	held(let cell Cell)
+	held(cell Cell)
 	empty
 end 'Holder'
 
@@ -254,44 +295,6 @@ end 'main'
 0
 ```
 
-<!-- test: a-non-let-payload-read-into-a-var -->
-The accepted twin of the case above: a payload that is not `let` is held by a `var` holder, so the record bound out
-of it is a writable name for the payload the holder owns and `copy` may take it.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Cell
-	export var level as Integer
-
-	static function create() returns Self
-		return Self{level: 0}
-	end 'create'
-end 'Cell'
-
-union Holder
-	held(cell Cell)
-	empty
-end 'Holder'
-
-function main() returns ExitCode
-	var holder = Holder.held(Cell.create())
-	var copy = Cell.create()
-
-	match holder 'read'
-		held(cell) then copy = cell
-		empty then return 1
-	end 'read'
-
-	copy.level = 4
-
-	return copy.level as ExitCode
-end 'main'
-```
-```exitcode
-4
-```
-
 <!-- test: the-binding-of-a-let-payload-passed-to-a-callee-that-writes-it -->
 `bump` writes its parameter, and the record bound out of the `let` payload may be passed to it.
 
@@ -307,7 +310,7 @@ type Cell
 end 'Cell'
 
 union Holder
-	held(let cell Cell)
+	held(cell Cell)
 	empty
 end 'Holder'
 
@@ -345,7 +348,7 @@ type Cell
 end 'Cell'
 
 union Holder
-	held(let cell Cell)
+	held(cell Cell)
 	empty
 end 'Holder'
 
@@ -392,45 +395,6 @@ type Cell
 end 'Cell'
 
 union Holder
-	held(let cell Cell)
-	empty
-end 'Holder'
-
-function payloadOf(holder Holder) returns Cell
-	return match holder 'read'
-		held(cell) gives cell
-		empty gives Cell.create()
-	end 'read'
-end 'payloadOf'
-
-function main() returns ExitCode
-	let holder = Holder.held(Cell.create())
-	var copy = payloadOf(holder)
-	copy.level = 4
-
-	return copy.level as ExitCode
-end 'main'
-```
-```exitcode
-4
-```
-
-<!-- test: a-non-let-payload-returned-by-a-call-is-read-into-a-var -->
-The accepted twin of the case above: the payload is not `let` and the holder is a `var`, so the function hands back
-a writable record and the `var` binding takes it.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Cell
-	export var level as Integer
-
-	static function create() returns Self
-		return Self{level: 0}
-	end 'create'
-end 'Cell'
-
-union Holder
 	held(cell Cell)
 	empty
 end 'Holder'
@@ -443,7 +407,7 @@ function payloadOf(holder Holder) returns Cell
 end 'payloadOf'
 
 function main() returns ExitCode
-	var holder = Holder.held(Cell.create())
+	let holder = Holder.held(Cell.create())
 	var copy = payloadOf(holder)
 	copy.level = 4
 
@@ -470,7 +434,7 @@ type Cell
 end 'Cell'
 
 union Holder
-	held(let cell Cell)
+	held(cell Cell)
 	empty
 end 'Holder'
 
@@ -522,7 +486,7 @@ type Cell
 end 'Cell'
 
 union Holder
-	held(let cell Cell)
+	held(cell Cell)
 	empty
 end 'Holder'
 
@@ -555,64 +519,6 @@ end 'main'
 1
 ```
 
-<!-- test: a-payload-without-let-still-follows-the-scrutinee -->
-`open` is declared without `let`, so under a `var` scrutinee it is writable even though `fixed` beside it is not.
-
-```maxon
-union Pair
-	both(let fixed ByteArray, open ByteArray)
-	neither
-end 'Pair'
-
-function main() returns ExitCode
-	var pair = Pair.both(ByteArray.create(0), open: ByteArray.create(0))
-
-	match pair 'write'
-		both(_, open) then open.push(1)
-		neither then return 1
-	end 'write'
-
-	match pair 'read'
-		both(_, open) then return open.count() as ExitCode
-		neither then return 1
-	end 'read'
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- test: a-writable-payload-sharing-a-slot-with-a-let-payload-of-another-case -->
-Slot 0 is a `let` payload in `named` and a `var` payload in `numbered`; the two hold different kinds of record, so
-the `var` one stays writable.
-
-```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntegerArray = Array with Integer
-
-union Slot
-	named(let label ByteArray)
-	numbered(values IntegerArray)
-end 'Slot'
-
-function main() returns ExitCode
-	var slot = Slot.numbered(IntegerArray.create(0))
-
-	match slot 'write'
-		numbered(values) then values.push(7)
-		named then return 1
-	end 'write'
-
-	match slot 'read'
-		numbered(values) then return values.count() as ExitCode
-		named then return 1
-	end 'read'
-end 'main'
-```
-```exitcode
-1
-```
-
 <!-- test: an-all-let-record-and-a-scalar-go-into-let-payloads -->
 A record whose fields are all `let` is a value type and a scalar owns no storage, so a `var` of either goes into a
 `let` payload and stays usable afterwards.
@@ -630,7 +536,7 @@ type Point
 end 'Point'
 
 union Mark
-	at(let point Point, let tick Integer)
+	at(point Point, tick Integer)
 	cleared
 end 'Mark'
 
@@ -655,7 +561,7 @@ end 'main'
 
 ```maxon
 union Op
-	call(let callee ByteArray)
+	call(callee ByteArray)
 	nop
 end 'Op'
 
@@ -689,7 +595,7 @@ end 'main'
 typealias Bytes = Array with Byte
 
 union Parts
-	parts(let prefix Bytes, let member Bytes)
+	parts(prefix Bytes, member Bytes)
 	none
 end 'Parts'
 
@@ -719,7 +625,7 @@ The same program where `Bytes` is also declared, over another instance, in a sec
 typealias Bytes = Array with Byte
 
 union Parts
-	parts(let prefix Bytes, let member Bytes)
+	parts(prefix Bytes, member Bytes)
 	none
 end 'Parts'
 
@@ -757,7 +663,7 @@ typealias Row = Array with Byte
 typealias Grid = Array with Row
 
 union Op
-	call(let grid Grid)
+	call(grid Grid)
 	nop
 end 'Op'
 
@@ -800,7 +706,7 @@ type Cell
 end 'Cell'
 
 union Holder
-	held(let cell Cell)
+	held(cell Cell)
 	empty
 end 'Holder'
 
@@ -845,7 +751,7 @@ type Cell
 end 'Cell'
 
 union Holder
-	held(let cell Cell, let tag Integer)
+	held(cell Cell, tag Integer)
 	empty
 end 'Holder'
 

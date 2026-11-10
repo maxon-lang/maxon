@@ -15,6 +15,15 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- Every union payload is a `let`, and `let` before a payload (`case(let name T)`) is a syntax error. A `match`
+  binding of a payload is never reassigned, so `full(value) then value = 42` is E2013 under a `var` scrutinee
+  too, and a `var` that is only matched is E3077. A union whose payload types are all immutable is itself
+  immutable, so `isolated` and `merge` on it are refused (E3200), and a unique payload cannot be handed to a
+  call that keeps it (E3078).
+  Fix: delete `let` before each payload; give a union a new payload by assigning it a new case
+  (`b = Box.full(42)`); write `let` for a `var` that is only matched; drop `isolated`, `merge` and `freeze` on
+  a union of immutable payloads; match a unique payload out of a `let` union.
+
 - `+`, `-` and `*` over a full-width unsigned alias (`int(0 to u64.max)`, which `Count`, `ElementIndex` and
   `BytePos` are) are range-checked where they are computed: a carry out of bit 63, a borrow
   (`a.count() - b.count()` with `b` larger) or a product past `u64.max` panics with `Range check failed:

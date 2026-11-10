@@ -1,197 +1,21 @@
 ---
 feature: mutable-enums
 status: experimental
-keywords: [enum, mutable, associated values, match, write-back]
+keywords: [enum, mutable, associated values, match, write-through]
 category: type-system
 ---
 
-# Mutable Enum Associated Values
+# Writing through a payload binding
 
 ## Documentation
 
-### Mutable Match Bindings
-
-When an enum variable is mutable (`var`), match bindings on associated values are also mutable. Assigning to a match binding writes the new value back to the enum's heap block in-place.
-
-For scalar bindings (integers, booleans, etc.), use direct assignment:
-
-```text
-var b = Box.full(10)
-match b 'update'
-  full(value) then value = 42
-  empty then return
-end 'update'
-```
-
-For heap-pointer bindings (structs, enums with associated values, strings), use direct assignment:
-
-```text
-var b = Named.named("hello")
-match b 'update'
-  named(name) then name = "world"
-  anonymous then return
-end 'update'
-```
-
-When the enum variable is immutable (`let`), a match binding cannot be assigned: the assignment is `E2013`
-(`'value' is a let and cannot be reassigned`), because the payload replacement must reach a union that can be
-written. A `let` forbids reassigning the name, not writing through it, so a payload that is a record may still be
-written in place through its binding, and may be handed to a callee that writes it.
-
-### What counts as a mutable scrutinee
-
-A `var` local is one, and so is a union-typed **parameter**: a parameter is a borrowed reference to the
-caller's record, which the callee may already write — `s.append(…)` on a `String` parameter is ordinary
-Maxon. A union-typed parameter lets an arm write a field of a payload record in place; assigning the payload
-requires the parameter to be `mutable` (`E2013` otherwise).
-
-A TEMPORARY is one too: a union constructed at the `match` has no other holder, so a write through its
-payload binding is a write nobody else can see. A `let` local is not one: assigning its payload binding is
-`E2013`, though a write through a record payload is legal.
+A match binding of a payload is a `let`, so assigning to it is `E2013` (`'value' is a let and cannot be
+reassigned`); a new payload is a new case assigned to the union. A `let` forbids reassigning the name, not
+writing through it, so a payload that is a record is written in place through its binding, and may be handed
+to a callee that writes it, whatever the scrutinee is: a `var` or `let` local, a union-typed parameter, or a
+union constructed at the `match`.
 
 ## Tests
-
-<!-- test: basic-mutable -->
-Mutate an associated value through a match binding on a `var` enum.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-union Box
-	empty
-	full(value Integer)
-end 'Box'
-
-function main() returns ExitCode
-	var b = Box.full(10)
-	match b 'update'
-		full(value) then value = 42
-		empty then return 0
-	end 'update'
-	match b 'read'
-		full(value) then return value
-		empty then return 0
-	end 'read'
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: write-back-verify -->
-Verify that mutation through match binding persists after the match.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-union Wrapper
-	none
-	some(n Integer)
-end 'Wrapper'
-
-function readValue(w Wrapper) returns Integer
-	match w 'r'
-		some(n) then return n
-		none then return 0
-	end 'r'
-end 'readValue'
-
-function main() returns ExitCode
-	var w = Wrapper.some(5)
-	match w 'mutate'
-		some(n) then n = 99
-		none then return 0
-	end 'mutate'
-	return readValue(w)
-end 'main'
-```
-```exitcode
-99
-```
-
-<!-- test: multiple-mutable-fields -->
-Multiple mutable fields in one case, mutate one at a time.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-union Pair
-	empty
-	values(a Integer, b Integer)
-end 'Pair'
-
-function main() returns ExitCode
-	var p = Pair.values(1, b: 2)
-	match p 'update-a'
-		values(a, _) then a = 10
-		empty then return 0
-	end 'update-a'
-	match p 'update-b'
-		values(_, b) then b = 32
-		empty then return 0
-	end 'update-b'
-	match p 'read'
-		values(a, b) then return a + b
-		empty then return 0
-	end 'read'
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: mixed-readonly-and-mutable -->
-Only assign to some bindings, leave others unchanged.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-union Record
-	blank
-	data(id Integer, count Integer)
-end 'Record'
-
-function main() returns ExitCode
-	var e = Record.data(1, count: 0)
-	match e 'inc'
-		data(id, count) then count = count + id
-		blank then return 0
-	end 'inc'
-	match e 'read'
-		data(id, count) then return id + count
-		blank then return 0
-	end 'read'
-end 'main'
-```
-```exitcode
-2
-```
-
-<!-- test: mutate-twice -->
-Mutate the same associated value twice in sequence.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-union Cell
-	empty
-	holding(value Integer)
-end 'Cell'
-
-function main() returns ExitCode
-	var c = Cell.holding(10)
-	match c 'first'
-		holding(value) then value = 20
-		empty then return 0
-	end 'first'
-	match c 'second'
-		holding(value) then value = value + 22
-		empty then return 0
-	end 'second'
-	match c 'read'
-		holding(value) then return value
-		empty then return 0
-	end 'read'
-end 'main'
-```
-```exitcode
-42
-```
 
 <!-- test: error.assign-to-let-enum-binding -->
 Error: assigning to a match binding when the enum variable is `let`.
@@ -214,65 +38,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E2013: specs/mutable-enums/error.assign-to-let-enum-binding.maxon:12:20: 'value' is a let and cannot be reassigned
-```
-
-<!-- test: mutate-string-payload -->
-Mutate a String-typed associated value.
-```maxon
-union Named
-	anonymous
-	named(name String)
-end 'Named'
-
-function main() returns ExitCode
-	var n = Named.named("hello")
-	match n 'update'
-		named(name) then name = "world"
-		anonymous then return 0
-	end 'update'
-	match n 'read'
-		named(name) then return name.byteLength()
-		anonymous then return 0
-	end 'read'
-end 'main'
-```
-```exitcode
-5
-```
-
-<!-- test: mutate-struct-payload -->
-Mutate a struct-typed associated value.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Point
-	export var x as Integer
-	export var y as Integer
-
-	static function create(x Integer, y Integer) returns Self
-		return Self{x: x, y: y}
-	end 'create'
-end 'Point'
-
-union Shape
-	nothing
-	located(pos Point)
-end 'Shape'
-
-function main() returns ExitCode
-	var s = Shape.located(Point.create(1, y: 2))
-	match s 'update'
-		located(pos) then pos = Point.create(10, y: 32)
-		nothing then return 0
-	end 'update'
-	match s 'read'
-		located(pos) then return pos.x + pos.y
-		nothing then return 0
-	end 'read'
-end 'main'
-```
-```exitcode
-42
 ```
 
 <!-- test: mutable-payload-of-a-parameter -->
@@ -391,67 +156,6 @@ end 'main'
 ```
 ```exitcode
 42
-```
-
-<!-- test: error.let-to-a-callee-that-writes-back-a-payload -->
-⚖ The write-back is a store into the SCRUTINEE's box, so a callee whose arm assigns a payload of its
-`mutable` parameter writes the caller's record — and a `let` may not fill that position. Without this the
-parameter ruling would have handed `bump` a licence its caller never granted.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-union Slot
-	empty
-	holding(n Integer)
-end 'Slot'
-
-function bump(s mutable Slot)
-	match s 'step'
-		holding(n) then n = 42
-		empty then return
-	end 'step'
-end 'bump'
-
-function main() returns ExitCode
-	let s = Slot.holding(10)
-	bump(s)
-	match s 'read'
-		holding(n) then return n
-		empty then return 0
-	end 'read'
-end 'main'
-```
-```maxoncstderr
-error E2013: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-payload.maxon:18:2: 's' is a let and cannot be passed to the `mutable` parameter 's'; bind it to a `var`
-```
-
-<!-- test: error.let-to-a-callee-that-writes-back-a-managed-payload -->
-The MANAGED twin, which writes the caller's box twice over: the store publishes the new payload and the
-displaced one is decrefed out of the `let`'s own record.
-```maxon
-union Named
-	anonymous
-	named(name String)
-end 'Named'
-
-function rename(n mutable Named)
-	match n 'step'
-		named(name) then name = "world"
-		anonymous then return
-	end 'step'
-end 'rename'
-
-function main() returns ExitCode
-	let n = Named.named("hello")
-	rename(n)
-	match n 'read'
-		named(name) then return name.byteLength()
-		anonymous then return 0
-	end 'read'
-end 'main'
-```
-```maxoncstderr
-error E2013: specs/mutable-enums/error.let-to-a-callee-that-writes-back-a-managed-payload.maxon:16:2: 'n' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
 ```
 
 <!-- test: a-let-scrutinee-payload-record-is-written-by-a-callee -->

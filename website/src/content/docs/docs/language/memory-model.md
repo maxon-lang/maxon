@@ -149,7 +149,7 @@ The rules:
   read-only wherever it goes, one a call returns included. Binding the tuple, or one of its read-only
   elements, to a `var`, assigning it to existing `var` names, or storing it into a `var` field or a container
   is **E3078**, and passing it to a function that writes it is **E3159**.
-- **A `let` names writable data.** A `let` binding, a `let` field and a `let` payload hold records that stay
+- **A `let` names writable data.** A `let` binding, a `let` field and a union payload hold records that stay
   writable through every name, so a write through a `let` field reaches the record it holds. An `immutable`
   field takes `immutable` data only.
 - **`let b = a`, where `a` is a `var`, moves `a`.** `b` is then the record's only holder. Where `a` is a `let`,

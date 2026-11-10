@@ -503,7 +503,7 @@ all.
 ```maxon
 union Slot
 	empty
-	filled(let chars immutable CharacterSet)
+	filled(chars immutable CharacterSet)
 end 'Slot'
 
 function main() returns ExitCode

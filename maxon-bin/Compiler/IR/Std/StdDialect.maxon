@@ -1497,7 +1497,7 @@ export union StdOp
 	// metadata (`isCall`/`isMemory`/`isStore`/`clobbersFlags` all true, `isPure` false
 	// — a call may read/write memory and must not move or drop). APPENDED at the END of
 	// the call band, after `param`.
-	call(resultId ValueId, let callee immutable ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	call(resultId ValueId, callee immutable ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// Void return terminator — the return of a function with no `returns` clause. A
 	// DISTINCT variant rather than a `ret` carrying some absent-value ValueId: `ValueId`
@@ -1522,7 +1522,7 @@ export union StdOp
 	// address that cannot change, so it is freely REMATERIALIZABLE — an x64 `lea
 	// [rip+disp32]` needs no input register at all) and `isMemory: false` (it computes an
 	// address; it does not TOUCH memory — nothing is loaded).
-	globalAddr(resultId ValueId, let label immutable ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	globalAddr(resultId ValueId, label immutable ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 
 	// Read `valueType` bytes from `addrId + offset` into `resultId`.
 	//
@@ -1605,7 +1605,7 @@ export union StdOp
 	// than one with a section field because the section is the whole difference the relocation kind
 	// carries: `globalAddr` lowers to a `.data` relocation (`dataSectionRipRelDisp32`), this to an
 	// `.rdata` one (`ripRelDisp32`).
-	rdataAddr(resultId ValueId, let label immutable ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	rdataAddr(resultId ValueId, label immutable ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 
 	// --- scalar error handling ---
 	//
@@ -1617,7 +1617,7 @@ export union StdOp
 	// identical to `call`: full call-barrier semantics. The x64/arm64 lowering captures BOTH return
 	// registers through the parallel-copy resolver (never a naive `mov;mov`, which collapses a
 	// value/flag swap — see StdToX64Conversion.lowerTryCall).
-	tryCall(resultId ValueId, errorFlagId ValueId, let callee immutable ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	tryCall(resultId ValueId, errorFlagId ValueId, callee immutable ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// The DUAL-REGISTER epilogue terminator: write `retValId` to the primary return register (R8 / x0)
 	// and `errorFlagId` to the error-flag register (R10 / x9), then the return terminator. This is the
@@ -1648,7 +1648,7 @@ export union StdOp
 	// one with a section field because the section is the whole difference the relocation kind carries:
 	// `globalAddr`→a `.data` reloc, `rdataAddr`→an `.rdata` one, this→a `.text` function-symbol fixup (x64
 	// `CallFixup`, resolved intra-`.text` by `resolveCallFixups`).
-	funcAddr(resultId ValueId, let funcName immutable ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	funcAddr(resultId ValueId, funcName immutable ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 
 	// A call THROUGH a function VALUE — `resultId = calleeReg(args…)`. `calleeReg` is the SSA value holding
 	// the code pointer (from a `funcAddr`, a param, or a field load), NOT a name — the whole reason it is
@@ -1715,7 +1715,7 @@ export union StdOp
 	//
 	// Its `category: system` places it logically,
 	// independent of this tail position.
-	osPanic(let label immutable ByteArray) = StdOpMeta{category: StdOpCategory.system, role: OpRole.diverging, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osPanic(label immutable ByteArray) = StdOpMeta{category: StdOpCategory.system, role: OpRole.diverging, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// --- The OS-import primitive the green-thread SLEEP substrate's clock needs ---
 	//

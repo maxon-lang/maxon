@@ -1,7 +1,7 @@
 ---
 feature: union-unboxed
 status: experimental
-keywords: [union, payload, unboxed, tagged pointer, ownership, drop, write-back]
+keywords: [union, payload, unboxed, tagged pointer, ownership, drop]
 category: ownership
 ---
 
@@ -28,11 +28,8 @@ A union is stored this way when all of these hold:
 Any other union keeps the heap box. The two forms behave alike: the same ownership, the same `match`, the same
 diagnostics.
 
-Assigning a match binding replaces the payload held by the matched union, so it writes the union itself.
-The write must be able to reach the union: the scrutinee is a local `var`, a field of a `var` or of a record
-parameter, or a parameter marked `mutable`. A scrutinee that is an unmarked parameter is E2013, which names
-the parameter and the fix. Writing through the payload record in place (`c.n = c.n + 1`) is not an
-assignment of the binding and stays legal on a parameter's payload.
+A match binding of a payload is a `let`; a union takes a new payload by being assigned a new case. Writing
+through the payload record in place (`c.n = c.n + 1`) is legal whatever the scrutinee is.
 
 ## Tests
 
@@ -132,121 +129,6 @@ end 'main'
 ```
 ```exitcode
 9
-```
-
-<!-- test: write-back-replaces-the-payload-of-a-local-var -->
-```maxon
-union Named
-	anonymous
-	named(name String)
-end 'Named'
-
-function main() returns ExitCode
-	var v = Named.named("x{1}")
-
-	match v 'update'
-		named(name) then name = "yy{2}"
-		anonymous then return 1
-	end 'update'
-
-	match v 'read'
-		named(name) then return name.byteLength() as ExitCode
-		anonymous then return 0
-	end 'read'
-end 'main'
-```
-```exitcode
-3
-```
-
-<!-- test: write-back-through-a-field-of-a-var-record -->
-```maxon
-union Named
-	anonymous
-	named(name String)
-end 'Named'
-
-type Card
-	export var label as Named
-
-	static function create() returns Self
-		return Self{label: Named.named("abc")}
-	end 'create'
-end 'Card'
-
-function lengthen(card Card)
-	match card.label 'update'
-		named(name) then name = "abcdef"
-		anonymous then return
-	end 'update'
-end 'lengthen'
-
-function main() returns ExitCode
-	var card = Card.create()
-	lengthen(card)
-
-	match card.label 'read'
-		named(name) then return name.byteLength() as ExitCode
-		anonymous then return 0
-	end 'read'
-end 'main'
-```
-```exitcode
-6
-```
-
-<!-- test: write-back-through-a-mutable-parameter -->
-```maxon
-union Named
-	anonymous
-	named(name String)
-end 'Named'
-
-function rename(n mutable Named)
-	match n 'step'
-		named(name) then name = "world!"
-		anonymous then return
-	end 'step'
-end 'rename'
-
-function main() returns ExitCode
-	var n = Named.named("hi")
-	rename(n)
-
-	match n 'read'
-		named(name) then return name.byteLength() as ExitCode
-		anonymous then return 0
-	end 'read'
-end 'main'
-```
-```exitcode
-6
-```
-
-<!-- test: error.payload-assignment-through-a-by-value-parameter -->
-The parameter is passed by value, so the assignment could not reach the caller; the diagnostic names the
-parameter and both fixes.
-```maxon
-union Named
-	anonymous
-	named(name String)
-end 'Named'
-
-function rename(n Named)
-	match n 'step'
-		named(name) then name = "world"
-		anonymous then return
-	end 'step'
-end 'rename'
-
-function main() returns ExitCode
-	var n = Named.named("hello")
-	rename(n)
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2013: specs/union-unboxed/error.payload-assignment-through-a-by-value-parameter.maxon:9:20: 'name' is a payload of the by-value parameter 'n', so assigning it cannot reach the caller's union; mark 'n' mutable or copy it into a local var
 ```
 
 <!-- test: a-union-in-an-array-and-in-a-map -->
@@ -624,7 +506,7 @@ type Point
 end 'Point'
 
 union Shape
-	dot(let at Point)
+	dot(at Point)
 	nothing
 end 'Shape'
 
@@ -685,7 +567,7 @@ type Cell
 end 'Cell'
 
 union Shape
-	cell(let c Cell)
+	cell(c Cell)
 	nothing
 end 'Shape'
 
@@ -744,7 +626,7 @@ type Cell
 end 'Cell'
 
 union Shape
-	cell(let c Cell)
+	cell(c Cell)
 	nothing
 end 'Shape'
 
@@ -796,7 +678,7 @@ end 'main'
 typealias Count = int(0 to 1000)
 
 union Note
-	text(let body String)
+	text(body String)
 	blank
 end 'Note'
 
@@ -853,8 +735,8 @@ typealias Count = int(0 to 10000)
 typealias WordArray = Array with String
 
 union Blob
-	bytes(let data ByteArray)
-	words(let list WordArray)
+	bytes(data ByteArray)
+	words(list WordArray)
 	nothing
 end 'Blob'
 
@@ -919,68 +801,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-<!-- test: error.payload-assignment-to-a-union-nothing-holds -->
-The scrutinee is a temporary, so the assignment could not reach any union; it is refused.
-```maxon
-union Named
-	anonymous
-	named(name String)
-end 'Named'
-
-function make() returns Named
-	return Named.named("hello")
-end 'make'
-
-function main() returns ExitCode
-	match make() 'step'
-		named(name) then name = "world"
-		anonymous then return 1
-	end 'step'
-
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2013: specs/union-unboxed/error.payload-assignment-to-a-union-nothing-holds.maxon:13:20: 'name' is a let and cannot be reassigned
-```
-
-<!-- test: error.payload-assignment-to-a-boxed-union-nothing-holds -->
-The refusal does not depend on the union's representation: a union too wide for a word is refused the same way.
-```maxon
-union Wide
-	p0(value String)
-	p1(value String)
-	p2(value String)
-	p3(value String)
-	p4(value String)
-	p5(value String)
-	p6(value String)
-	p7(value String)
-end 'Wide'
-
-function make() returns Wide
-	return Wide.p7("hello")
-end 'make'
-
-function main() returns ExitCode
-	match make() 'step'
-		p7(value) then value = "world"
-		p0 or
-		p1 or
-		p2 or
-		p3 or
-		p4 or
-		p5 or
-		p6 then return 1
-	end 'step'
-
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2013: specs/union-unboxed/error.payload-assignment-to-a-boxed-union-nothing-holds.maxon:19:18: 'value' is a let and cannot be reassigned
 ```
 
 <!-- test: a-match-on-a-temporary-word-gives-its-payload -->
@@ -1347,20 +1167,6 @@ mm_alloc StringRecord #13 size=58
 mm_decref StringRecord #11 rc=1
 mm_decref StringRecord #11 rc=0
 mm_free StringRecord #11
-mm_incref Point #2 rc=2
-mm_decref Point #2 rc=1
-mm_incref ArrayRecord #4 rc=2
-mm_decref ArrayRecord #4 rc=1
-mm_incref StringRecord #5 rc=2
-mm_decref StringRecord #5 rc=1
-mm_incref StringRecord #6 rc=2
-mm_decref StringRecord #6 rc=1
-mm_incref Point #8 rc=2
-mm_decref Point #8 rc=1
-mm_incref ArrayRecord #10 rc=2
-mm_decref ArrayRecord #10 rc=1
-mm_incref Point #12 rc=2
-mm_decref Point #12 rc=1
 mm_decref Point #12 rc=0
 mm_decref StringRecord #13 rc=0
 mm_free StringRecord #13
@@ -1522,9 +1328,9 @@ mm_decref StringRecord #24 rc=0
 mm_free StringRecord #24
 ```
 
-<!-- test: a-wide-union-var-is-reassigned-and-written-back -->
+<!-- test: a-wide-union-var-is-reassigned -->
 <!-- MmTrace -->
-A `var` moves between payload cases, payload-free cases of both storages, and back, each assignment releasing what the old value held; then a payload is written back through a `match`, which rebuilds the word with the stored tag.
+A `var` moves between payload cases, payload-free cases of both storages, and back, each assignment releasing what the old value held.
 ```maxon
 typealias Weight = int(0 to 1000)
 
@@ -1575,20 +1381,7 @@ function main() returns ExitCode
 	w = Wide.skipped
 	w = Wide.failed
 	w = Wide.bytes(ByteArray.create(5))
-
-	match w 'grow'
-		bytes(data) then data = ByteArray.create(9)
-		idle or
-		text or
-		point or
-		done or
-		label or
-		spot or
-		blob or
-		failed or
-		other or
-		skipped then return 100
-	end 'grow'
+	w = Wide.bytes(ByteArray.create(9))
 
 	let grown = weigh(w)
 	w = Wide.done
@@ -1618,15 +1411,9 @@ mm_alloc ArrayRecord #5 size=69
 mm_decref ArrayRecord #5 rc=0
 mm_free ArrayRecord #5
 mm_alloc ArrayRecord #6 size=69
-mm_incref ArrayRecord #6 rc=2
 mm_alloc ArrayRecord #7 size=73
-mm_decref ArrayRecord #6 rc=1
-mm_incref ArrayRecord #7 rc=2
 mm_decref ArrayRecord #6 rc=0
 mm_free ArrayRecord #6
-mm_decref ArrayRecord #7 rc=1
-mm_incref ArrayRecord #7 rc=2
-mm_decref ArrayRecord #7 rc=1
 mm_decref ArrayRecord #7 rc=0
 mm_free ArrayRecord #7
 ```
@@ -1874,12 +1661,6 @@ mm_alloc StringRecord #10 size=58
 mm_decref StringRecord #8 rc=1
 mm_decref StringRecord #8 rc=0
 mm_free StringRecord #8
-mm_incref Point #4 rc=2
-mm_decref Point #4 rc=1
-mm_incref StringRecord #6 rc=2
-mm_decref StringRecord #6 rc=1
-mm_incref Point #9 rc=2
-mm_decref Point #9 rc=1
 mm_alloc StringRecord #11 size=58
 mm_alloc Point #12 size=16
 mm_incref StringRecord #11 rc=2
@@ -1889,8 +1670,6 @@ mm_decref StringRecord #11 rc=0
 mm_free StringRecord #11
 mm_alloc Point #14 size=16
 mm_alloc StringRecord #15 size=58
-mm_incref Point #14 rc=2
-mm_decref Point #14 rc=1
 mm_decref Point #14 rc=0
 mm_decref StringRecord #15 rc=0
 mm_free StringRecord #15
@@ -1932,9 +1711,9 @@ end 'Point'
 
 union Wide
 	idle
-	spot(let at Point)
+	spot(at Point)
 	done
-	text(let value String)
+	text(value String)
 	failed
 	skipped
 	eight

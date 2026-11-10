@@ -1169,7 +1169,7 @@ A union payload takes a capability word like a field: `named` holds image data, 
 let Alpha = b"alpha"
 
 union Label
-	named(let text immutable ByteArray)
+	named(text immutable ByteArray)
 	anonymous
 end 'Label'
 
@@ -1199,7 +1199,7 @@ end 'main'
 let Alpha = b"alpha"
 
 union Label
-	named(let text ByteArray)
+	named(text ByteArray)
 	anonymous
 end 'Label'
 
@@ -1216,7 +1216,7 @@ error E3196: <fragment>:10:26: cannot store an immutable 'ByteArray' into 'Label
 <!-- test: error.a-write-through-an-immutable-union-payload-is-refused -->
 ```maxon
 union Label
-	named(let text immutable ByteArray)
+	named(text immutable ByteArray)
 	anonymous
 end 'Label'
 
@@ -1415,7 +1415,7 @@ end 'main'
 
 ```maxon
 export union Member
-	one(let name immutable ByteArray)
+	one(name immutable ByteArray)
 	none
 end 'Member'
 
@@ -1641,7 +1641,7 @@ typealias NameList = Array with immutable ByteArray
 
 union Source
 	file
-	body(let name immutable ByteArray)
+	body(name immutable ByteArray)
 end 'Source'
 
 type Holder
@@ -1688,8 +1688,8 @@ A union with two payload cases is boxed, and its second case takes `immutable` e
 typealias NameList = Array with immutable ByteArray
 
 union Shape
-	named(let name immutable ByteArray)
-	pair(let left immutable ByteArray, let right immutable ByteArray)
+	named(name immutable ByteArray)
+	pair(left immutable ByteArray, right immutable ByteArray)
 end 'Shape'
 
 function weigh(shape Shape) returns Count
@@ -2203,7 +2203,7 @@ type Bag
 end 'Bag'
 
 union Lookup
-	found(let bag Bag)
+	found(bag Bag)
 	notFound
 end 'Lookup'
 
@@ -2284,7 +2284,7 @@ end 'Frozen'
 
 union Base
 	none
-	over(let frozen Frozen)
+	over(frozen Frozen)
 end 'Base'
 
 type Holder

@@ -985,7 +985,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	var prepared = PreparedTestArray.create(tests.count(), zeroed: false)
 
 	for (iter, test) in tests.withIterator() 'eachCompile'
-		var batchedStep = batch.stepFor(iter.index())
+		let batchedStep = batch.stepFor(iter.index())
 
 		match batchedStep 'batched'
 			found(step) then prepared.push(step)
@@ -2050,7 +2050,7 @@ end 'StagedTest'
 // that names a path escaping the scratch directory. A union, so a failure carries its reason and
 // there is no half-staged state to inspect.
 union StagingResult
-	staged(let test StagedTest)
+	staged(test StagedTest)
 	failed(reason String)
 end 'StagingResult'
 
@@ -2334,7 +2334,7 @@ function prepareOneTest(test SpecTest, specName String, specDirName String, temp
 		return PreparedTest.finished(TestRun.notCompiled("could not form output path for {test.name}"))
 	end 'badExePath'
 
-	var staging = stageTest(tempDir, test: test, specDirName: specDirName)
+	let staging = stageTest(tempDir, test: test, specDirName: specDirName)
 
 	match staging 'staging'
 		failed(reason) then return PreparedTest.finished(TestRun.notCompiled(reason))
@@ -3460,8 +3460,8 @@ end 'fragmentSource'
 // section the case pinned disagrees with the linked image — and otherwise says so, carrying the three
 // pins its execution will be judged against.
 union PreRunVerdict
-	settled(let outcome TestOutcome)
-	needsExecution(let expected SpecExitCode, let stderr SpecStderr, let stdout SpecStdout)
+	settled(outcome TestOutcome)
+	needsExecution(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout)
 end 'PreRunVerdict'
 
 function preRunVerdict(test SpecTest, specName String, compile CompileAnswer, staged StagedTest, exePath FilePath, effectiveTarget Target) returns PreRunVerdict

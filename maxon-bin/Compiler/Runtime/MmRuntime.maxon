@@ -4459,7 +4459,7 @@ end 'installGenericInstanceDictionaryDestructors'
 export union FieldDropKind
 	// The ordinary field: one machine word holding a managed pointer, released by a STATICALLY chosen
 	// `(box) -> void` callee — `__str_decref`, `__mm_decref`, `__managed_decref`, a nested `__destruct_<T>`.
-	direct(let callee immutable ByteArray)
+	direct(callee immutable ByteArray)
 
 	// ⭐ A value held at an INTERFACE TYPE: a fat pointer whose conformer — and therefore whose destructor — is
 	// a RUN-TIME fact, so no static callee exists to name. The witness half at `+witnessDisplacement` from the
@@ -4477,7 +4477,7 @@ export union FieldDropKind
 	//
 	// ⚠ It carries the descriptor's `ValueId` rather than reading a well-known one, because it is a PARAMETER
 	// of the cascade being emitted and nothing outside that emit knows its number.
-	throughDescriptor(let callee immutable ByteArray, descriptor ValueId, blockOffset ByteOffset)
+	throughDescriptor(callee immutable ByteArray, descriptor ValueId, blockOffset ByteOffset)
 end 'FieldDropKind'
 
 // ⭐ **A FIELD'S RELEASE, OR THAT IT HAS NONE** — the answer `dictionaryFieldDropKind` gives, where
@@ -5065,8 +5065,8 @@ function synthesizeStructCascade(module StdModule, layout StructLayout, typeName
 end 'synthesizeStructCascade'
 
 union CascadeSubject
-	aggregate(let name immutable ByteArray)
-	instance(let id GenericInstanceId)
+	aggregate(name immutable ByteArray)
+	instance(id GenericInstanceId)
 end 'CascadeSubject'
 
 function ownMeetingOfShareWalk(action CascadeAction, signatures ProgramSignatures, subject CascadeSubject) returns WalkMeeting

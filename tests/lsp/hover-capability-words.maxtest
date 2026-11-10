@@ -1,0 +1,48 @@
+test 'hover on a capability word in a type position shows the keyword'
+	let rendering = hoverRendering(capabilityHoverDocument(), line: 0, character: 22)
+
+	Expect.contains(rendering, needle: "mutable", message: "the rendering names the word it hovered.")
+
+	Expect.contains(rendering, needle: "Maxon language keyword.", message: "the `mutable` in `value mutable Count` is a language word, and hovering it says so.")
+end 'hover on a capability word in a type position shows the keyword'
+
+test 'hover on a capability after a parameter name shows the keyword'
+	let rendering = hoverRendering(capabilityHoverDocument(), line: 0, character: 43)
+
+	Expect.contains(rendering, needle: "immutable", message: "the rendering names the word it hovered.")
+
+	Expect.contains(rendering, needle: "Maxon language keyword.", message: "the `immutable` in `data immutable ByteArray` is a language word, and hovering it says so.")
+end 'hover on a capability after a parameter name shows the keyword'
+
+test 'hover on a binding named immutable is not the keyword'
+	let rendering = hoverRendering(capabilityHoverDocument(), line: 1, character: 10)
+
+	Expect.contains(rendering, needle: "42", message: "`let immutable = 42` binds an ordinary name, so its hover shows the value.")
+
+	Expect.isFalse(rendering.contains("Maxon language keyword."), message: "a binding named by a capability word is not the language word.")
+end 'hover on a binding named immutable is not the keyword'
+
+test 'hover on the capability of a receiver shows the keyword'
+	let rendering = hoverRendering(capabilityHoverDocument(), line: 6, character: 20)
+
+	Expect.contains(rendering, needle: "immutable", message: "the rendering names the word it hovered.")
+
+	Expect.contains(rendering, needle: "Maxon language keyword.", message: "the `immutable` in `function peek(immutable self)` is a language word, and hovering it says so.")
+end 'hover on the capability of a receiver shows the keyword'
+
+test 'hover on the receiver itself is not the capability word'
+	expectNoHover(capabilityHoverDocument(), line: 6, character: 30, note: "`self` after a receiver capability is not the capability word, and the rendering for `immutable` must not answer for it.")
+end 'hover on the receiver itself is not the capability word'
+
+function capabilityHoverDocument() returns String
+	return String.from(b"function keep(value mutable Count, data immutable ByteArray) returns Count
+    let immutable = 42
+    return immutable
+end 'keep'
+
+type Reader
+    function peek(immutable self) returns Count
+        return 0
+    end 'peek'
+end 'Reader'")
+end 'capabilityHoverDocument'

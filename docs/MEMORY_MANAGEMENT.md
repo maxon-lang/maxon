@@ -186,7 +186,6 @@ A union of at most seven cases gives each case the key `declaration index + 1`. 
 - **Construction** allocates only the payload; the word owns the reference the payload arrived with.
 - **Drop and retain** go through `__destruct_<U>(word)` and `__uretain_<U>(word)`, synthesized per union. Both switch on the tag, mask the pointer out and skip a null payload.
 - **`match`** dispatches on the key: `word & 7` for a union of at most seven cases, and `(word & 7) | (word >> 48)` (logical shift) for a larger one. An arm that binds a payload covers exactly one case, so it takes the payload as `word - key` with that case's key. `.ordinal` answers the declaration index of the case with that key. A payload binding is a hold when the arm cannot write it or displace its source (the compiler lowers the hold to a reference only where an operation in its window may release the payload), and a retained reference when it can.
-- **Assigning a payload binding** builds a new word, `payload | key`, and stores it where the union lives: a local `var`'s variable, the field or element slot that held it, or a `mutable` parameter's argument. The displaced payload is released. This is why the assignment must reach its union ([Mutable Match Bindings](LANGUAGE_REFERENCE.md#mutable-match-bindings)).
 
 ## Buffers (`__ManagedMemory`)
 

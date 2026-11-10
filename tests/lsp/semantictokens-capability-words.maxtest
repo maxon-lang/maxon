@@ -1,0 +1,142 @@
+let CapabilityWordUri = "file:///test.maxon"
+
+let CapabilityWordQuintupleWidth = 5
+let CapabilityWordDeltaLineSlot = 0
+let CapabilityWordDeltaCharacterSlot = 1
+let CapabilityWordTypeSlot = 3
+
+let CapabilityWordKeywordType = 0
+let CapabilityWordVariableType = 7
+let CapabilityWordCapabilityType = 16
+
+typealias CapabilityWordTally = int(0 to i64.max)
+
+type CapabilityWordToken
+	export var line as SemanticTokenValue
+	export var character as SemanticTokenValue
+	export var tokenType as SemanticTokenValue
+
+	static function create(line SemanticTokenValue, character SemanticTokenValue, tokenType SemanticTokenValue) returns CapabilityWordToken
+		return Self{line: line, character: character, tokenType: tokenType}
+	end 'create'
+end 'CapabilityWordToken'
+
+typealias CapabilityWordTokenArray = Array with CapabilityWordToken
+
+test 'semantic tokens colour a capability word before a type as a capability and a binding named by one as a name'
+	var client = LspClient.start()
+
+	if let data = try capabilityWordTokensOf(client, source: capabilityWordFixture()) 'tokens'
+		client.release()
+		assertCapabilityWordColours(capabilityWordDecode(data))
+	end 'tokens' else (e) 'failed'
+		abandonedSession(client, failure: e, doing: "the semantic-tokens request did not complete")
+	end 'failed'
+end 'semantic tokens colour a capability word before a type as a capability and a binding named by one as a name'
+
+function capabilityWordTokensOf(client LspClient, source String) returns SemanticTokenValueArray throws LspClientError
+	_ = try client.initialize()
+	try client.initialized()
+	try client.openDocument(CapabilityWordUri, content: source)
+
+	let tokens = try client.semanticTokensFull(CapabilityWordUri)
+
+	return tokens.data
+end 'capabilityWordTokensOf'
+
+function assertCapabilityWordColours(tokens CapabilityWordTokenArray) throws TestFailure
+	try assertCapabilityWordColour(tokens, line: 1, character: 15, expected: CapabilityWordCapabilityType, what: "the capability in the payload `named(text immutable ByteArray, ...)`")
+	try assertCapabilityWordColour(tokens, line: 2, character: 18, expected: CapabilityWordCapabilityType, what: "the capability in the payload `shared(callee isolated Box)`")
+	try assertCapabilityWordColour(tokens, line: 5, character: 20, expected: CapabilityWordCapabilityType, what: "the marker in the parameter `value mutable Count`")
+	try assertCapabilityWordColour(tokens, line: 5, character: 40, expected: CapabilityWordCapabilityType, what: "the capability in the parameter `data immutable ByteArray`")
+	try assertCapabilityWordColour(tokens, line: 5, character: 69, expected: CapabilityWordCapabilityType, what: "the capability in `returns immutable ByteArray`")
+	try assertCapabilityWordColour(tokens, line: 6, character: 8, expected: CapabilityWordVariableType, what: "the binding in `let immutable = 42`")
+	try assertCapabilityWordColour(tokens, line: 7, character: 8, expected: CapabilityWordVariableType, what: "the binding in `var mutable = data`")
+	try assertCapabilityWordColour(tokens, line: 11, character: 30, expected: CapabilityWordCapabilityType, what: "the capability in `Array with immutable ByteArray`")
+	try assertCapabilityWordColour(tokens, line: 12, character: 15, expected: CapabilityWordVariableType, what: "the parameter named in `other(immutable ByteArray, ...)`")
+	try assertCapabilityWordColour(tokens, line: 12, character: 36, expected: CapabilityWordVariableType, what: "the parameter named in `other(..., isolated Count)`")
+	try assertCapabilityWordColour(tokens, line: 16, character: 18, expected: CapabilityWordCapabilityType, what: "the capability in the field `var frozen as immutable ByteArray`")
+	try assertCapabilityWordColour(tokens, line: 19, character: 25, expected: CapabilityWordCapabilityType, what: "the capability in `typealias SettledIndex = immutable IndexBuilder`")
+	try assertCapabilityWordColour(tokens, line: 20, character: 26, expected: CapabilityWordCapabilityType, what: "the marker in the function type `function(mutable Counter)`")
+	try assertCapabilityWordColour(tokens, line: 21, character: 38, expected: CapabilityWordCapabilityType, what: "the capability in the function type `function(label Text, immutable ByteArray)`")
+	try assertCapabilityWordColour(tokens, line: 24, character: 18, expected: CapabilityWordCapabilityType, what: "the capability in the receiver `function peek(immutable self)`")
+	try assertCapabilityWordColour(tokens, line: 30, character: 24, expected: CapabilityWordVariableType, what: "the operand in `freeze mutable(seed)`, a call to a name and not a qualifier")
+	try assertCapabilityWordColour(tokens, line: 31, character: 23, expected: CapabilityWordVariableType, what: "the operand in `spawn isolated(seed)`, a call to a name and not a qualifier")
+	try assertCapabilityWordColour(tokens, line: 35, character: 29, expected: CapabilityWordKeywordType, what: "the `readonly` in `Array with readonly ByteArray`, which stays a plain keyword")
+end 'assertCapabilityWordColours'
+
+function assertCapabilityWordColour(tokens CapabilityWordTokenArray, line SemanticTokenValue, character SemanticTokenValue, expected SemanticTokenValue, what String) throws TestFailure
+	var matched = 0 as CapabilityWordTally
+	var observed = -1 as SemanticTokenValue
+
+	for token in tokens 'eachToken'
+		if token.line == line and token.character == character 'atThePosition'
+			matched = matched + 1
+			observed = token.tokenType
+		end 'atThePosition'
+	end 'eachToken'
+
+	try Expect.equal(matched, expected: 1, message: "exactly one token should start at line {line}, column {character} ({what}), and {matched} did.")
+	try Expect.equal(observed, expected: expected, message: "{what} is expected to be token type {expected} and was {observed}. `isolated`, `immutable` and `mutable` are contextual words: the `capability` type (16) where they qualify a type, and an ordinary name everywhere else.")
+end 'assertCapabilityWordColour'
+
+function capabilityWordDecode(data SemanticTokenValueArray) returns CapabilityWordTokenArray
+	var tokens = CapabilityWordTokenArray.create(0)
+	var currentLine = 0 as SemanticTokenValue
+	var currentCharacter = 0 as SemanticTokenValue
+	var lineAdvanced = false
+
+	for (position, value) in data.withIterator() 'eachValue'
+		let slot = position.index() mod CapabilityWordQuintupleWidth
+
+		if slot == CapabilityWordDeltaLineSlot 'delta'
+			currentLine = currentLine + value
+			lineAdvanced = value > 0
+		end 'delta' else if slot == CapabilityWordDeltaCharacterSlot 'deltaCharacter'
+			currentCharacter = value if lineAdvanced else currentCharacter + value
+		end 'deltaCharacter' else if slot == CapabilityWordTypeSlot 'tokenType'
+			tokens.push(CapabilityWordToken.create(currentLine, character: currentCharacter, tokenType: value))
+		end 'tokenType'
+	end 'eachValue'
+
+	return tokens
+end 'capabilityWordDecode'
+
+function capabilityWordFixture() returns String
+	return String.from(b"union Label
+    named(text immutable ByteArray, weight Count)
+    shared(callee isolated Box)
+end 'Label'
+
+function keep(value mutable Count, data immutable ByteArray) returns immutable ByteArray
+    let immutable = 42
+    var mutable = data
+    return data
+end 'keep'
+
+typealias Frozen = Array with immutable ByteArray
+function other(immutable ByteArray, isolated Count)
+end 'other'
+
+type Holder
+    var frozen as immutable ByteArray
+end 'Holder'
+
+typealias SettledIndex = immutable IndexBuilder
+typealias Step = function(mutable Counter)
+typealias Pick = function(label Text, immutable ByteArray) returns Count
+
+type Reader
+    function peek(immutable self) returns Count
+        return 0
+    end 'peek'
+end 'Reader'
+
+function seeds(seed Box) returns Box
+    let sealed = freeze mutable(seed)
+    let worker = spawn isolated(seed)
+    return sealed
+end 'seeds'
+
+typealias Shelf = Array with readonly ByteArray")
+end 'capabilityWordFixture'

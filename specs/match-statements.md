@@ -1855,7 +1855,7 @@ through a fallthrough edge.
 ```maxon
 function main() returns ExitCode
 	var r = 0 as ExitCode
-	var n = 1 as Count
+	let n = 1 as Count
 	match n 'check'
 		1 then r = 5 and fallthrough
 		2 then break

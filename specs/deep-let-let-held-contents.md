@@ -312,7 +312,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias StepArray = Array with Step
 
 union Step
-	move(let distance Integer)
+	move(distance Integer)
 	stop
 end 'Step'
 

@@ -199,7 +199,7 @@ export function visibilityModifierSpelling(word VisibilityModifierWord) returns 
 end 'visibilityModifierSpelling'
 
 export union SpelledFieldName
-	named(let name immutable ByteArray)
+	named(name immutable ByteArray)
 	unnamed
 end 'SpelledFieldName'
 
@@ -611,7 +611,7 @@ export let CompilerOwnedDeclFilePath = FilePath from ""
 
 export union PayloadBindingSlot
 	unbound
-	inBox(scrutBox ValueId, offset ByteOffset, storage MaxonType)
+	inBox(scrutBox ValueId)
 end 'PayloadBindingSlot'
 
 // @generated library-cache begin
@@ -620,14 +620,12 @@ function cacheWritePayloadBindingSlot(writer LibraryCacheWriter, value PayloadBi
 
 	match value 'payload'
 		unbound then break
-		inBox(a0, a1, a2) then cacheWritePayloadBindingSlotInBox(writer, a0: a0, a1: a1, a2: a2)
+		inBox(a0) then cacheWritePayloadBindingSlotInBox(writer, a0: a0)
 	end 'payload'
 end 'cacheWritePayloadBindingSlot'
 
-function cacheWritePayloadBindingSlotInBox(writer LibraryCacheWriter, a0 ValueId, a1 ByteOffset, a2 MaxonType)
+function cacheWritePayloadBindingSlotInBox(writer LibraryCacheWriter, a0 ValueId)
 	writer.unsigned(a0 as CacheUnsigned)
-	writer.unsigned(a1 as CacheUnsigned)
-	cacheWriteMaxonType(writer, value: a2)
 end 'cacheWritePayloadBindingSlotInBox'
 
 function cacheReadPayloadBindingSlot(reader LibraryCacheReader) returns PayloadBindingSlot throws LibraryCacheDamage
@@ -642,10 +640,8 @@ end 'cacheReadPayloadBindingSlot'
 
 function cacheReadPayloadBindingSlotInBox(reader LibraryCacheReader) returns PayloadBindingSlot throws LibraryCacheDamage
 	let a0 = (try reader.unsigned()) as ValueId
-	let a1 = (try reader.unsigned()) as ByteOffset
-	let a2 = try cacheReadMaxonType(reader)
 
-	return PayloadBindingSlot.inBox(a0, offset: a1, storage: a2)
+	return PayloadBindingSlot.inBox(a0)
 end 'cacheReadPayloadBindingSlotInBox'
 
 // @generated library-cache end
@@ -655,13 +651,6 @@ export typealias DebugLocalSlot = int(0 to u64.max) implements ElementIndex
 // Which merge renumbering an artifact walk is: one per walk per `Project`, counting up from 1, so no record a
 // parse built starts out marked as rewritten.
 export typealias RenumberingEpoch = int(0 to u64.max)
-
-function remappedPayloadSlot(slot PayloadBindingSlot, remap TypeIdRemap) returns PayloadBindingSlot
-	return match slot 'slot'
-		unbound gives PayloadBindingSlot.unbound
-		inBox(scrutBox, offset, storage) gives PayloadBindingSlot.inBox(scrutBox, offset: offset, storage: remapMaxonType(storage, remap: remap))
-	end 'slot'
-end 'remappedPayloadSlot'
 
 export union CellEpoch
 	notACell
@@ -863,30 +852,9 @@ export type VarInfo
 	export let isSelfField as bool
 	export let fieldIndex as FieldIndex
 
-	// ⭐ **THIS NAME IS A MATCH-ARM PAYLOAD BINDING, AND A WRITE TO IT GOES BACK INTO THE BOX** — the
-	// whole of `specs/mutable-enums.md`. `full(value) then value = 42` on a `var` union rebinds the
-	// SSA name AND stores 42 into the scrutinee's heap block, so a later `match` reads the new value.
-	//
-	// ⭐ **KEYED ON THE SCRUTINEE'S SSA VALUE, NOT ON ITS NAME.** Names are resolved at parse time and
-	// `ValueId`s are passed everywhere else, so the box is named by the id the LOAD read from. A name
-	// would have to be looked up again in a scope the write may have shadowed, and a scrutinee that
-	// has no name at all (a temporary) would need a second answer.
-	//
-	// ⭐ **THE OFFSET AND THE STORAGE TYPE ARE CARRIED RATHER THAN RE-DERIVED, and that is the opposite
-	// of `fieldIndex` above ON PURPOSE.** A self-field alias re-derives from `(layout, index)` because
-	// its use site HOLDS the layout; an assignment holds nothing but the binding — reaching a layout
-	// would mean re-resolving the union off the box AND re-classifying the slot, i.e. a second
-	// derivation of the two numbers the load already committed to. The store must hit exactly the
-	// address and width `emitUnionPayloadLoad` read, so they are computed ONCE, at the bind, from the
-	// one `PayloadClass` that load classified.
+	// Keyed on the scrutinee's SSA value, not on its name: a scrutinee that has no name at all (a
+	// temporary) still has the id the load read from.
 	export var payload as PayloadBindingSlot
-
-	// ⭐ **IS THIS BINDING'S SLOT IN THE BOX CURRENTLY NULL?** True from the moment a MANAGED payload is
-	// moved out of an OWNED scrutinee (`Parser.moveOutManagedPayload` nulls the slot) until a write-back
-	// refills it. It is what lets the write-back answer the scrutinee's `partiallyMoved` question
-	// HONESTLY: a case with two managed payloads of which only one is assigned still has a hole, and
-	// clearing the scrutinee's bit there would hand a later match a null slot to dereference.
-	export var payloadSlotVacated as bool
 
 	// ⭐ **IS THIS NAME A PARAMETER?** — set only by `Parser.bindParameters`.
 	//
@@ -1034,7 +1002,7 @@ export type VarInfo
 	// binding that quietly claims to be a parameter in exactly one code path. A new field is one
 	// default and one line, and the kinds that care name it.
 	//
-	// `ownership`, `movedFrom`, `partiallyMoved`, `payloadSlotVacated`, `referenced` and
+	// `ownership`, `movedFrom`, `partiallyMoved`, `referenced` and
 	// `mutabilityExercised` take no parameter at all: they are per-path STATE the parser writes as it goes,
 	// and every binding starts with them clear. A constructor argument for one of them would be a way to
 	// start a binding already moved-from, which nothing means.
@@ -1042,7 +1010,7 @@ export type VarInfo
 	// The type is the binding's own copy: a binding rides its body's artifact, and its type is often a record the
 	// signature index holds (`ParseStaging.artifactOwnedOp`).
 	static function make(name ByteArray, varType MaxonType, kind BindingKind, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, payload PayloadBindingSlot = PayloadBindingSlot.unbound, isParameter bool = false, isCellBinding bool = false, cellCrossesByReference bool = false, brandId TypeNameId = UnnamedTypeId, isErrorMatchObligation bool = false) returns VarInfo
-		return Self{name: name, brandKey: EmptySourceText, varType: varType.clone(), kind: kind, rootKind: ReadOnlyRootKind.view if kind == BindingKind.view else ReadOnlyRootKind.letBinding, slot: slot, boundValue: boundValue, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, payload: payload, payloadSlotVacated: false, isParameter: isParameter, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, cellCrossesByReference: cellCrossesByReference, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
+		return Self{name: name, brandKey: EmptySourceText, varType: varType.clone(), kind: kind, rootKind: ReadOnlyRootKind.view if kind == BindingKind.view else ReadOnlyRootKind.letBinding, slot: slot, boundValue: boundValue, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, payload: payload, isParameter: isParameter, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, cellCrossesByReference: cellCrossesByReference, brandId: brandId, isErrorMatchObligation: isErrorMatchObligation}
 	end 'make'
 
 	export static function create(name ByteArray, varType MaxonType, kind BindingKind, slot VarSlot) returns VarInfo
@@ -1057,7 +1025,6 @@ export type VarInfo
 
 		self.renumberedIn = epoch
 		self.varType = remapMaxonType(self.varType, remap: remap)
-		self.payload = remappedPayloadSlot(self.payload, remap: remap)
 		self.brandId = remap.applyName(self.brandId)
 	end 'renumberTypeIds'
 
@@ -1077,17 +1044,10 @@ export type VarInfo
 		return Self.make(name, varType: varType, kind: BindingKind.let, isSelfField: true, fieldIndex: fieldIndex)
 	end 'createSelfField'
 
-	// The value binding a MATCH-ARM PAYLOAD gets — `createValueBinding` plus the box coordinates a write
-	// back into the scrutinee needs (see `isPayloadBinding`). It is a VALUE binding like every other name
-	// the parser installs: the payload is an SSA substitution, and `slot` is 0 and unread.
-	//
-	// `kind` is the caller's, and it is a fact about the SCRUTINEE rather than about this name — a
-	// payload bound out of a `let` union is read-only however the pattern spells it
-	// (`Parser.declarePayloadBindings`).
-	//
-	// The storage type is its own copy, for `make`'s reason.
-	export static function createPayloadBinding(name ByteArray, varType MaxonType, kind BindingKind, boundValue ValueId, scrutBox ValueId, slotOffset ByteOffset, storage MaxonType) returns VarInfo
-		return Self.make(name, varType: varType, kind: kind, boundValue: boundValue, payload: PayloadBindingSlot.inBox(scrutBox, offset: slotOffset, storage: storage.clone()))
+	// A payload binding is a VALUE binding like every other name the parser installs: the payload is an
+	// SSA substitution, and `slot` is 0 and unread. Every payload is a `let`, so the binding is one too.
+	export static function createPayloadBinding(name ByteArray, varType MaxonType, boundValue ValueId, scrutBox ValueId) returns VarInfo
+		return Self.make(name, varType: varType, kind: BindingKind.let, boundValue: boundValue, payload: PayloadBindingSlot.inBox(scrutBox))
 	end 'createPayloadBinding'
 
 	export function isMutable() returns bool
@@ -1105,30 +1065,12 @@ export type VarInfo
 		end 'slot'
 	end 'isPayloadBinding'
 
-	export function isLetPayloadBinding() returns bool
-		return self.isPayloadBinding() and self.rootKind == ReadOnlyRootKind.letPayload
-	end 'isLetPayloadBinding'
-
 	export function payloadScrutBox() returns ValueId
 		match self.payload 'slot'
 			unbound then panic("VarInfo.payloadScrutBox: '{String.from(self.name)}' is not a match-arm payload binding — ask `isPayloadBinding` first")
-			inBox(scrutBox, _, _) then return scrutBox
+			inBox(scrutBox) then return scrutBox
 		end 'slot'
 	end 'payloadScrutBox'
-
-	export function payloadSlotOffset() returns ByteOffset
-		match self.payload 'slot'
-			unbound then panic("VarInfo.payloadSlotOffset: '{String.from(self.name)}' is not a match-arm payload binding — ask `isPayloadBinding` first")
-			inBox(_, offset, _) then return offset
-		end 'slot'
-	end 'payloadSlotOffset'
-
-	export function payloadStorage() returns MaxonType
-		match self.payload 'slot'
-			unbound then panic("VarInfo.payloadStorage: '{String.from(self.name)}' is not a match-arm payload binding — ask `isPayloadBinding` first")
-			inBox(_, _, storage) then return storage
-		end 'slot'
-	end 'payloadStorage'
 
 	// The owned entry that holds a combined error's match obligation (`isErrorMatchObligation`) — named after the
 	// `(e)` binding it answers for, and bound to the caught flag.
@@ -1225,7 +1167,6 @@ export type VarInfo
 		writer.flag(self.isSelfField)
 		writer.unsigned(self.fieldIndex as CacheUnsigned)
 		cacheWritePayloadBindingSlot(writer, value: self.payload)
-		writer.flag(self.payloadSlotVacated)
 		writer.flag(self.isParameter)
 		writer.unsigned(self.lastReadToken as CacheUnsigned)
 		writer.unsigned(self.declaredLine as CacheUnsigned)
@@ -1258,7 +1199,6 @@ export type VarInfo
 		let f_isSelfField = try reader.flag()
 		let f_fieldIndex = (try reader.boundedUnsigned(0, high: 65535)) as FieldIndex
 		let f_payload = try cacheReadPayloadBindingSlot(reader)
-		let f_payloadSlotVacated = try reader.flag()
 		let f_isParameter = try reader.flag()
 		let f_lastReadToken = (try reader.unsigned()) as ElementIndex
 		let f_declaredLine = (try reader.unsigned()) as LineNumber
@@ -1277,11 +1217,11 @@ export type VarInfo
 		let f_renumberedIn = (try reader.unsigned()) as RenumberingEpoch
 		let f_brandKey = freeze try reader.bytes()
 
-		return Self{name: f_name, varType: f_varType, kind: f_kind, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, payloadSlotVacated: f_payloadSlotVacated, isParameter: f_isParameter, lastReadToken: f_lastReadToken, declaredLine: f_declaredLine, declaredColumn: f_declaredColumn, declaredToken: f_declaredToken, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, rootKind: f_rootKind, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, awaitingMoveReads: f_awaitingMoveReads, isEnrolled: false, enrolledAt: 0, renumberedIn: f_renumberedIn, brandKey: f_brandKey}
+		return Self{name: f_name, varType: f_varType, kind: f_kind, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, isParameter: f_isParameter, lastReadToken: f_lastReadToken, declaredLine: f_declaredLine, declaredColumn: f_declaredColumn, declaredToken: f_declaredToken, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, rootKind: f_rootKind, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, awaitingMoveReads: f_awaitingMoveReads, isEnrolled: false, enrolledAt: 0, renumberedIn: f_renumberedIn, brandKey: f_brandKey}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize256
-		return sizeof(VarInfo) as CacheSize256
+	static function cacheLayoutBytes() returns CacheSize248
+		return sizeof(VarInfo) as CacheSize248
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1927,7 +1867,7 @@ let FullWordBitWidth = 64
 
 export union RangedAliasDomain
 	quantity
-	pattern(let width BitWidth)
+	pattern(width BitWidth)
 
 	export function isPattern() returns bool
 		return match self 'domain'
@@ -4968,7 +4908,7 @@ export let noWrapOperands = WrapOperandsColumn.unwritten
 // `typealias-file-scope/*contested-element-index*` pins it.
 export union RangeCheckSiteTarget
 	alias(alias RangedTypeAlias)
-	callArgument(callResult ValueId, argIndex ParamCount, let label immutable ByteArray, sourceMayBeNegative bool)
+	callArgument(callResult ValueId, argIndex ParamCount, label immutable ByteArray, sourceMayBeNegative bool)
 	literalUse(alias RangedTypeAlias)
 	arithmetic(alias RangedTypeAlias)
 	foldedArithmetic(alias RangedTypeAlias, lhs FullRangeInt, rhs FullRangeInt, op MaxonBinOp)
@@ -5154,7 +5094,7 @@ export type RangeCheckArgSite
 end 'RangeCheckArgSite'
 
 export union ArgSiteParameter
-	ofCallee(let callee immutable ByteArray, argIndex ParamCount, let label immutable ByteArray)
+	ofCallee(callee immutable ByteArray, argIndex ParamCount, label immutable ByteArray)
 	slotAlias(alias RangedTypeAlias)
 end 'ArgSiteParameter'
 
@@ -6806,7 +6746,7 @@ export union FieldDefault
 	// deliberate divergence from the parameter twin's "one mechanism, one place a default is produced".
 	// `Parser.fillFieldDefault` states the reason: a literal is folded away entirely by `InsertRangeChecks`
 	// and a call result cannot be.
-	helper(let name immutable ByteArray)
+	helper(name immutable ByteArray)
 
 	// ⭐⭐ **THE DEFAULT IS AN EMPTY CONTAINER — `create(0)` OR `create(0, zeroed: …)` FOR AN ARRAY (BOTH BUILD
 	// THE SAME ARRAY), `create()` FOR EVERY OTHER CONTAINER — AND THAT IS THE ONE EXPRESSION SHAPE A READER IN
@@ -6821,7 +6761,7 @@ export union FieldDefault
 	// lays down, so it must change the hash.
 	//
 	// ⚠ Declared after `helper`.
-	emptyCreateHelper(let name immutable ByteArray)
+	emptyCreateHelper(name immutable ByteArray)
 end 'FieldDefault'
 
 // @generated library-cache begin
@@ -7958,12 +7898,11 @@ export type PayloadField
 	// without this column the `match` binding was minted with no surface, i.e. the `Array` one. Read through
 	// `ProgramSignatures.payloadSurfaceOf`, which ORs in the element bit the sweep could not answer.
 	export let declaredSurface as immutable DeclaredSurface
-	export let isLet as bool
 	export let capability as ParamCapability
 	export let typeSite as PositionKey
 
-	export static function create(name ByteArray, declaredType MaxonType, declaredSurface immutable DeclaredSurface, declaredBrand ByteArray, isLet bool, capability ParamCapability, typeSite PositionKey = PositionlessSite) returns PayloadField
-		return Self{name: name, declaredType: declaredType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, isLet: isLet, capability: capability, typeSite: typeSite}
+	export static function create(name ByteArray, declaredType MaxonType, declaredSurface immutable DeclaredSurface, declaredBrand ByteArray, capability ParamCapability, typeSite PositionKey = PositionlessSite) returns PayloadField
+		return Self{name: name, declaredType: declaredType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, capability: capability, typeSite: typeSite}
 	end 'create'
 
 	// @generated library-cache begin
@@ -7972,7 +7911,6 @@ export type PayloadField
 		cacheWriteMaxonType(writer, value: self.declaredType)
 		writer.bytes(self.declaredBrand)
 		cacheWriteDeclaredSurface(writer, value: self.declaredSurface)
-		writer.flag(self.isLet)
 		writer.unsigned(self.capability.ordinal as CacheUnsigned)
 		writer.unsigned(self.typeSite as CacheUnsigned)
 	end 'cacheWrite'
@@ -7982,15 +7920,14 @@ export type PayloadField
 		let f_declaredType = try cacheReadMaxonType(reader)
 		let f_declaredBrand = freeze try reader.bytes()
 		let f_declaredSurface = try cacheReadFrozenDeclaredSurface(reader)
-		let f_isLet = try reader.flag()
 		let f_capability = try cacheReadParamCapability(reader)
 		let f_typeSite = (try reader.unsigned()) as PositionKey
 
-		return Self{name: f_name, declaredType: f_declaredType, declaredBrand: f_declaredBrand, declaredSurface: f_declaredSurface, isLet: f_isLet, capability: f_capability, typeSite: f_typeSite}
+		return Self{name: f_name, declaredType: f_declaredType, declaredBrand: f_declaredBrand, declaredSurface: f_declaredSurface, capability: f_capability, typeSite: f_typeSite}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize56
-		return sizeof(PayloadField) as CacheSize56
+	static function cacheLayoutBytes() returns CacheSize48
+		return sizeof(PayloadField) as CacheSize48
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -8147,14 +8084,14 @@ export union EnumBackingFieldValue
 
 	// `Priority.low` — a case of ANOTHER enum, whose tag is a whole-program fact the declaration cannot
 	// reach. Both names ride verbatim and the tag is read at the use site.
-	enumCase(let enumName immutable ByteArray, let caseName immutable ByteArray)
+	enumCase(enumName immutable ByteArray, caseName immutable ByteArray)
 
 	// ⭐ **A NESTED STRUCT CONSTANT — `Inner{value: 1}` or `Inner.create(1)` written for a field whose own
 	// type is `Inner`.** It carries NO number, because a record is not one: this arm marks the entry as the
 	// OWNER of a group, and the constants are the entries of that group (see `EnumBackingField`). The
 	// struct's written NAME rides so the door can check it against the field's declared type, exactly as the
 	// `enumCase` arm's enum name is checked against a field's declared enum.
-	nestedStruct(let structName immutable ByteArray)
+	nestedStruct(structName immutable ByteArray)
 end 'EnumBackingFieldValue'
 
 // @generated library-cache begin
@@ -9137,7 +9074,7 @@ end 'cacheTableAgreesEnumBacking'
 
 export union EnumBackingStruct
 	none
-	declared(let typeName immutable ByteArray)
+	declared(typeName immutable ByteArray)
 
 	export function isDeclared() returns bool
 		return match self 'backingStruct'
@@ -9438,18 +9375,6 @@ export type EnumLayout
 	export function carriesPayloads() returns bool
 		return self.maxPayloadArity() > 0
 	end 'carriesPayloads'
-
-	export function everyPayloadIsLet() returns bool
-		for caseIndex in 0 upto self.caseCount() 'eachCase'
-			for field in self.payloadsAt(caseIndex) 'eachPayload'
-				if not field.isLet 'aVarPayload'
-					return false
-				end 'aVarPayload'
-			end 'eachPayload'
-		end 'eachCase'
-
-		return true
-	end 'everyPayloadIsLet'
 
 	// The payload bytes `__mm_alloc` must be asked for: the tag word plus one slot per payload field
 	// of the widest case. THE one place the box size is computed, so the allocation and the stores
@@ -11359,8 +11284,8 @@ end 'functionTypeDoorNoun'
 
 export union SlotOwner
 	unowned
-	declaredBy(let typeName immutable ByteArray)
-	tupleElement(let place String)
+	declaredBy(typeName immutable ByteArray)
+	tupleElement(place String)
 end 'SlotOwner'
 
 // ⭐ **THE PLACE AN ASSIGNMENT NAMES, WORDED THE WAY `specs/assignment.md` WORDS IT.** The noun comes from
@@ -11645,7 +11570,7 @@ end 'cacheReadPendingBrandRecordArray'
 
 export union FunctionTypeDoorPlace
 	unnamed
-	named(let name immutable ByteArray)
+	named(name immutable ByteArray)
 end 'FunctionTypeDoorPlace'
 
 // @generated library-cache begin
@@ -11720,7 +11645,7 @@ end 'cacheTableAgreesDiscardDoor'
 
 export union DiscardSubject
 	none
-	runtimeRead(let qualifiedName immutable ByteArray)
+	runtimeRead(qualifiedName immutable ByteArray)
 end 'DiscardSubject'
 
 // @generated library-cache begin
@@ -11756,7 +11681,7 @@ end 'cacheReadDiscardSubjectRuntimeRead'
 // @generated library-cache end
 
 export union DiscardedProducer
-	intrinsic(let name immutable ByteArray)
+	intrinsic(name immutable ByteArray)
 	call(opIndex ElementIndex)
 end 'DiscardedProducer'
 
@@ -12937,7 +12862,7 @@ export let ReversedSourceOrderValue = "reversed"
 export union SourceOrder
 	natural
 	reversed
-	unrecognized(let text String)
+	unrecognized(text String)
 
 	export function reversesTheWalk() returns bool
 		return match self 'order'

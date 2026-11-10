@@ -140,12 +140,10 @@ export type Scope
 		self.install(VarInfo.createSelfField(name, varType: varType, fieldIndex: fieldIndex))
 	end 'declareSelfField'
 
-	// Declare a MATCH-ARM PAYLOAD binding. A value binding like any other — reads resolve to the SSA
-	// value the arm loaded out of the box — carrying the box coordinates a WRITE goes back through
-	// (`VarInfo.isPayloadBinding`, `Parser.writeBackPayload`). It shares `declareBinding` with the two
-	// constructors below, so the self-field shadow rule is the one rule for every name a scope installs.
-	export function declarePayloadValueBinding(name ByteArray, varType MaxonType, kind BindingKind, value ValueId, scrutBox ValueId, slotOffset ByteOffset, storage MaxonType) returns VarInfo throws ScopeError
-		return try self.declareBinding(VarInfo.createPayloadBinding(name, varType: varType, kind: kind, boundValue: value, scrutBox: scrutBox, slotOffset: slotOffset, storage: storage))
+	// It shares `declareBinding` with the two constructors below, so the self-field shadow rule is the one
+	// rule for every name a scope installs.
+	export function declarePayloadValueBinding(name ByteArray, varType MaxonType, value ValueId, scrutBox ValueId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createPayloadBinding(name, varType: varType, boundValue: value, scrutBox: scrutBox))
 	end 'declarePayloadValueBinding'
 
 	// Declare a value binding (the SSA-substitution model): bind `name` to the SSA

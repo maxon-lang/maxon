@@ -96,13 +96,13 @@ error E3217: <fragment>:26:16: the message `Plotter.origin` returns a `Point` wi
 ```
 
 <!-- test: error.an-unmarked-union-reply-is-refused -->
-A union that carries a `String` is data of the region like a record.
+A union that carries a `ByteArray` is data of the region like a record.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 union Outcome
-	found(name String)
+	found(name ByteArray)
 	missing
 end 'Outcome'
 
@@ -136,7 +136,7 @@ The same union as a parameter.
 typealias Integer = int(i64.min to i64.max)
 
 union Outcome
-	found(name String)
+	found(name ByteArray)
 	missing
 end 'Outcome'
 
@@ -149,7 +149,7 @@ type Finder
 
 	export function record(outcome Outcome)
 		let weight = match outcome 'weight'
-			found(name) gives name.byteLength() as Integer
+			found(name) gives name.count() as Integer
 			missing gives 0 as Integer
 		end 'weight'
 
@@ -462,13 +462,13 @@ end 'main'
 ```
 
 <!-- test: marked-union-parameters-replies-and-factories-run -->
-A union that carries a `String` takes the same two words on a message parameter, a reply and the factory's parameter.
+A union that carries a `ByteArray` takes the same two words on a message parameter, a reply and the factory's parameter.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
 union Outcome
-	found(name String)
+	found(name ByteArray)
 	missing
 end 'Outcome'
 
@@ -481,7 +481,7 @@ type Finder
 
 	static function weighed(outcome Outcome) returns Integer
 		return match outcome 'weight'
-			found(name) gives name.byteLength() as Integer
+			found(name) gives name.count() as Integer
 			missing gives 0 as Integer
 		end 'weight'
 	end 'weighed'
@@ -497,19 +497,19 @@ type Finder
 	end 'compare'
 
 	export function latest() returns isolated Outcome
-		return Outcome.found("latest")
+		return Outcome.found("latest".toByteArray())
 	end 'latest'
 
 	export function pinned() returns immutable Outcome
-		return freeze Outcome.found("pinned")
+		return freeze Outcome.found("pinned".toByteArray())
 	end 'pinned'
 end 'Finder'
 
 function main() returns ExitCode
-	let first = Outcome.found("ab") as isolated Outcome
+	let first = Outcome.found("ab".toByteArray()) as isolated Outcome
 	let finder = spawn Finder.create(first)
-	let second = Outcome.found("cde") as isolated Outcome
-	let shared = freeze Outcome.found("fghij")
+	let second = Outcome.found("cde".toByteArray()) as isolated Outcome
+	let shared = freeze Outcome.found("fghij".toByteArray())
 	let total = try await finder.record(second) otherwise panic("main: a fresh finder answers record")
 	let compared = try await finder.compare(shared) otherwise panic("main: a fresh finder answers compare")
 	let newest = try await finder.latest() otherwise panic("main: a fresh finder answers latest")
@@ -517,12 +517,12 @@ function main() returns ExitCode
 	finder.shutdown()
 
 	let newestWeight = match newest 'newest'
-		found(name) gives name.byteLength()
+		found(name) gives name.count()
 		missing gives 0
 	end 'newest'
 
 	let keptWeight = match kept 'kept'
-		found(name) gives name.byteLength()
+		found(name) gives name.count()
 		missing gives 0
 	end 'kept'
 

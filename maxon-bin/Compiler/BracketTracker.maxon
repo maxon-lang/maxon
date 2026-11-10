@@ -8,18 +8,23 @@ typealias OpenGroupRoleArray = Array with OpenGroupRole
 module type BracketTracker
 	var groups as OpenGroupRoleArray
 	var prevKind as TokenKind
-	var prevIsReadonlyModifier as bool
+	var prevQualifiesAType as bool
+	var prevIsPrefixOperator as bool
+	var lineBrokeSincePrev as bool
 	var inTypealiasDeclaration as bool
 	var inBareTypeList as bool
 
 	module static function create() returns BracketTracker
-		return Self{groups: OpenGroupRoleArray.create(0), prevKind: TokenKind.eof, prevIsReadonlyModifier: false, inTypealiasDeclaration: false, inBareTypeList: false}
+		return Self{groups: OpenGroupRoleArray.create(0), prevKind: TokenKind.eof, prevQualifiesAType: false, prevIsPrefixOperator: false, lineBrokeSincePrev: false, inTypealiasDeclaration: false, inBareTypeList: false}
 	end 'create'
 
-	module function observe(kind TokenKind, value ByteArray)
+	module function observe(token Token, nextKind TokenKind)
+		let kind = token.kind
+
 		if kind == TokenKind.newline 'statementEnds'
 			self.inTypealiasDeclaration = false
 			self.inBareTypeList = false
+			self.lineBrokeSincePrev = true
 			return
 		end 'statementEnds'
 
@@ -27,7 +32,7 @@ module type BracketTracker
 			return
 		end 'prose'
 
-		let isModifier = kind == TokenKind.identifier and isReadonlyWord(value) and readonlyMayFollow(self.prevKind) and (self.prevKind == TokenKind.with or self.innermostGroupIsTypeList())
+		let isQualifier = kind == TokenKind.identifier and self.qualifiesATypeHere(token.value, nextKind: nextKind)
 
 		if tokenKindOpensABracket(kind) 'opensGroup'
 			self.groups.push(self.roleOfGroupOpenedBy(kind))
@@ -46,13 +51,37 @@ module type BracketTracker
 			self.inBareTypeList = true
 		end 'bareTypeListBegins'
 
-		self.prevIsReadonlyModifier = isModifier
+		self.prevQualifiesAType = isQualifier
+		self.prevIsPrefixOperator = tokenIsAPrefixOperator(token)
 		self.prevKind = kind
+		self.lineBrokeSincePrev = false
 	end 'observe'
 
-	module function lastWasReadonlyModifier() returns bool
-		return self.prevIsReadonlyModifier
-	end 'lastWasReadonlyModifier'
+	module function lastQualifiedAType() returns bool
+		return self.prevQualifiesAType
+	end 'lastQualifiedAType'
+
+	function qualifiesATypeHere(word ByteArray, nextKind TokenKind) returns bool
+		if not isTypeQualifierWord(word) or not readonlyOperandStartsWith(nextKind) 'notAQualifier'
+			return false
+		end 'notAQualifier'
+
+		let inATypeList = self.prevKind == TokenKind.with or (readonlyMayFollow(self.prevKind) and self.innermostGroupIsTypeList())
+
+		if isReadonlyWord(word) 'readonly'
+			return inATypeList
+		end 'readonly'
+
+		return inATypeList or self.followsATypedName() or self.followsAnAliasEquals(word)
+	end 'qualifiesATypeHere'
+
+	function followsATypedName() returns bool
+		return not self.lineBrokeSincePrev and not self.prevIsPrefixOperator and (self.prevKind == TokenKind.identifier or self.prevKind == TokenKind.returns or self.prevKind == TokenKind.as)
+	end 'followsATypedName'
+
+	function followsAnAliasEquals(word ByteArray) returns bool
+		return self.inTypealiasDeclaration and self.groups.count() == 0 and self.prevKind == TokenKind.equals and not word.equals(MutableMarkerWord)
+	end 'followsAnAliasEquals'
 
 	module function hasOpenGroup() returns bool
 		return self.groups.count() > 0
@@ -68,10 +97,18 @@ module type BracketTracker
 	end 'innermostGroupIsTypeList'
 
 	function roleOfGroupOpenedBy(kind TokenKind) returns OpenGroupRole
-		if kind == TokenKind.leftParen and (self.prevKind == TokenKind.with or self.prevIsReadonlyModifier or self.innermostGroupIsTypeList()) 'typeListParenthesis'
+		if kind == TokenKind.leftParen and (self.prevKind == TokenKind.with or self.prevKind == TokenKind.function or self.prevQualifiesAType or self.innermostGroupIsTypeList()) 'typeListParenthesis'
 			return OpenGroupRole.typeList
 		end 'typeListParenthesis'
 
 		return OpenGroupRole.expression
 	end 'roleOfGroupOpenedBy'
 end 'BracketTracker'
+
+module function isTypeQualifierWord(word ByteArray) returns bool
+	return isReadonlyWord(word) or spellsCapabilityWord(word)
+end 'isTypeQualifierWord'
+
+function tokenIsAPrefixOperator(token Token) returns bool
+	return token.kind == TokenKind.identifier and (wordIsARegionOperator(token.value) or tokenIsTheSpawnKeyword(token))
+end 'tokenIsAPrefixOperator'

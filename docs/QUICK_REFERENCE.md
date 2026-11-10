@@ -829,13 +829,9 @@ match result 'handle'
 		pending then print("waiting")
 end 'handle'
 
-// Mutable match bindings (var union = write-back, let union = read-only)
+// A payload binding is a `let`; a new payload is a new case
 var box = Result.success(10)
-match box 'update'
-		success(v) then v = 42       // writes back to box in-place
-		failure(c, msg) then return
-		pending then return
-end 'update'
+box = Result.success(42)
 
 // Create from name (throws EnumError.invalidName on unknown name)
 var c = try Result.fromName("success", 42) otherwise Result.pending

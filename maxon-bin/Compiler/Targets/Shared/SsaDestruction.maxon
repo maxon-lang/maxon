@@ -1012,7 +1012,7 @@ end 'retargetControlOp'
 // this target uses. `predBlockId` is carried only for the panic, because the block itself may not be held
 // across the writes these arms make (see the caller).
 function retargetCondBranchOp(module TargetModule, opIdx ElementIndex, predBlockId BlockId, oldTarget BlockId, newTarget BlockId) returns bool
-	var op = try module.ops.get(opIdx) otherwise panic("retargetCondBranchOp: conditional branch op {opIdx} not in module.ops")
+	let op = try module.ops.get(opIdx) otherwise panic("retargetCondBranchOp: conditional branch op {opIdx} not in module.ops")
 
 	match op 'cond'
 		jcc(cond, target) then return retargetJcc(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget)
@@ -1029,7 +1029,7 @@ end 'retargetCondBranchOp'
 // The TERMINATOR half — the block's terminator op. Every arm that is not a real terminator panics, which is
 // the roster the caller would otherwise carry inline.
 function retargetTerminatorOp(module TargetModule, opIdx ElementIndex, oldTarget BlockId, newTarget BlockId) returns bool
-	var op = try module.ops.get(opIdx) otherwise panic("retargetTerminatorOp: terminator not in module.ops")
+	let op = try module.ops.get(opIdx) otherwise panic("retargetTerminatorOp: terminator not in module.ops")
 
 	match op 'term'
 		jmp(target) then return retargetJmp(module, opIdx: opIdx, target: target, oldTarget: oldTarget, newTarget: newTarget)

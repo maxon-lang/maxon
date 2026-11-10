@@ -18,7 +18,7 @@
 // They are written twice below — a constant and a position in an array — and `requireLegendPosition`
 // CHECKS the two agree on every `initialize`, because a legend that drifts from the indices does not
 // fail: it recolours the whole file, silently, in every editor at once.
-typealias LspSemanticTokenType = int(0 to 15) implements ElementIndex
+typealias LspSemanticTokenType = int(0 to 16) implements ElementIndex
 
 let KeywordTokenType = 0
 let TypeTokenType = 1
@@ -29,6 +29,7 @@ let EnumMemberTokenType = 10
 let StringTokenType = 12
 let NumberTokenType = 13
 let CommentTokenType = 14
+let CapabilityTokenType = 16
 
 // A value on the wire. LSP encodes the whole file as one flat run of non-negative integers.
 typealias LspSemanticTokenValue = int(0 to u64.max)
@@ -87,7 +88,7 @@ end 'semanticTokensAnswer'
 // ORDER, by contrast, is free, and this one is chosen so that the indices the suite pins are the indices
 // this server sends.
 function legendTokenTypeNames() returns StringArray
-	let names = ["keyword", "type", "struct", "enum", "interface", "function", "method", "variable", "parameter", "modifier", "enumMember", "property", "string", "number", "comment", "operator"]
+	let names = ["keyword", "type", "struct", "enum", "interface", "function", "method", "variable", "parameter", "modifier", "enumMember", "property", "string", "number", "comment", "operator", "capability"]
 
 	requireLegendPosition(names, index: KeywordTokenType, name: "keyword")
 	requireLegendPosition(names, index: TypeTokenType, name: "type")
@@ -98,6 +99,7 @@ function legendTokenTypeNames() returns StringArray
 	requireLegendPosition(names, index: StringTokenType, name: "string")
 	requireLegendPosition(names, index: NumberTokenType, name: "number")
 	requireLegendPosition(names, index: CommentTokenType, name: "comment")
+	requireLegendPosition(names, index: CapabilityTokenType, name: "capability")
 
 	return names
 end 'legendTokenTypeNames'
@@ -145,7 +147,7 @@ function encodedTokensOf(source String, keywords KeywordTable) returns LspSemant
 
 	for (position, token) in tokens.withIterator() 'eachToken'
 		// Ahead of the layout skip: the newline is what ends a typealias's bare type list.
-		brackets.observe(token.kind, value: token.value)
+		brackets.observe(token, nextKind: tokenKindAt(tokens, index: position.index() + 1))
 
 		if token.kind == TokenKind.eof or tokenKindIsSkippedLayout(token.kind) and token.kind != TokenKind.docComment 'notCode'
 			continue
@@ -164,7 +166,7 @@ function encodedTokensOf(source String, keywords KeywordTable) returns LspSemant
 
 		let start = index.positionOf(source, offset: token.startByte)
 		let finish = index.positionOf(source, offset: token.endByte)
-		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: insideCaseList(blocks, line: start.line), readonlyModifier: lspTrackedReadonlyModifier(brackets, tokens: tokens, at: position.index()))
+		let tokenType = tokenTypeOf(tokens, at: position.index(), token: token, firstOnLine: firstOnLine, inCaseList: insideCaseList(blocks, line: start.line), typeQualifier: brackets.lastQualifiedAType())
 
 		let deltaLine = start.line - previousLine
 		var deltaCharacter = start.character
@@ -191,7 +193,7 @@ union PreviousTokenLine
 	at(line LineNumber)
 end 'PreviousTokenLine'
 
-function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLine bool, inCaseList bool, readonlyModifier bool) returns LspSemanticTokenType
+function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLine bool, inCaseList bool, typeQualifier bool) returns LspSemanticTokenType
 	// A case list is spelled one name per line, so the line's FIRST word is the case and anything after it
 	// belongs to its associated values.
 	if inCaseList and firstOnLine 'aCaseName'
@@ -216,9 +218,13 @@ function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLin
 		return StringTokenType
 	end 'text'
 
-	if readonlyModifier 'readonlyModifier'
+	if typeQualifier and isReadonlyWord(token.value) 'readonlyQualifier'
 		return KeywordTokenType
-	end 'readonlyModifier'
+	end 'readonlyQualifier'
+
+	if typeQualifier or lspIsReceiverCapability(token) 'capabilityQualifier'
+		return CapabilityTokenType
+	end 'capabilityQualifier'
 
 	if token.kind == TokenKind.identifier 'aName'
 		return declaredNameTokenType(tokens, at: at)

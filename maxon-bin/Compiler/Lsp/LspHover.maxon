@@ -82,6 +82,10 @@ function bindingKindWord(keyword TokenKind) returns String
 end 'bindingKindWord'
 
 function hoverRenderingOf(request LspRequest, document HoverDocument, cursor ElementIndex) returns HoverRendering
+	if lspIsTypeQualifier(document.tokens, at: cursor) 'aContextualKeyword'
+		return keywordRendering(document.tokenAt(cursor))
+	end 'aContextualKeyword'
+
 	let inTheBuffer = document.renderingForToken(cursor)
 
 	match inTheBuffer 'buffer'
@@ -100,10 +104,6 @@ end 'hoverRenderingOf'
 // FUNCTION, written as a call or as a member — both of which `reservedWordOutOfNamePosition` lets
 // past — while a parameter is local and the buffer rung has already answered it.
 function hoverBeyondTheBuffer(request LspRequest, document HoverDocument, cursor ElementIndex) returns HoverRendering
-	if lspIsReadonlyModifier(document.tokens, at: cursor) 'aContextualKeyword'
-		return keywordRendering(document.tokenAt(cursor))
-	end 'aContextualKeyword'
-
 	if document.reservedWordOutOfNamePosition(cursor) 'theLanguagesOwnWord'
 		return reservedWordRendering(document.tokenAt(cursor))
 	end 'theLanguagesOwnWord'
@@ -210,7 +210,7 @@ enum HoverDeclarationScope
 end 'HoverDeclarationScope'
 
 union HoverMemberOwner
-	declaredIn(let name immutable ByteArray)
+	declaredIn(name immutable ByteArray)
 	notAMemberLine
 end 'HoverMemberOwner'
 
@@ -266,7 +266,7 @@ let NoDeclarationHopsLeft = 0
 // compiler's diagnostic renderer cannot supply it: a generic instance renders there as the bare word
 // `struct` (`IrInterface.maxon` says so), which would tell an editor user nothing.
 union HoverType
-	named(let base immutable ByteArray, let rendered String, let written immutable ByteArray)
+	named(base immutable ByteArray, rendered String, written immutable ByteArray)
 	unknown
 end 'HoverType'
 
@@ -286,7 +286,7 @@ union HoverTypeParamSite
 end 'HoverTypeParamSite'
 
 union HoverDeclaringType
-	at(let owner immutable ByteArray)
+	at(owner immutable ByteArray)
 	none
 end 'HoverDeclaringType'
 

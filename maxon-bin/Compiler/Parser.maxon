@@ -1988,7 +1988,7 @@ export union SourceParseError implements Error
 	// `spawn` that made the type a service as a NOTE, because the two sites are in different files as often
 	// as not, and it is the one arm of this union that does — which is why it threads the note rather than
 	// widening every other arm with a field they would all answer `none` to.
-	serviceReplyAliasesState(explanation String, line LineNumber, column ColumnNumber, let note DiagnosticNote)
+	serviceReplyAliasesState(explanation String, line LineNumber, column ColumnNumber, note DiagnosticNote)
 
 	// ⭐ **THE SEVENTH, AND IT IS THE ONLY ONE ABOUT THE HANDLE'S OWN TYPE RATHER THAN ABOUT A DECLARATION.**
 	// Every arm above is decided from what the source declares; this one is decided from what the VALUE at a
@@ -1997,7 +1997,7 @@ export union SourceParseError implements Error
 	// `spawn` is exactly the site where the fact is still present.
 	serviceReplyInstanceUnknown(explanation String, line LineNumber, column ColumnNumber)
 
-	registryRefused(code ErrorCode, explanation String, line LineNumber, column ColumnNumber, let note DiagnosticNote)
+	registryRefused(code ErrorCode, explanation String, line LineNumber, column ColumnNumber, note DiagnosticNote)
 	duplicateDeclaration(explanation String, line LineNumber, column ColumnNumber)
 
 	// These four render exactly as `unsupported`, `serviceNotASpawnTarget`, `serviceArgumentNotUnique`
@@ -2125,7 +2125,7 @@ end 'ServiceReplyValue'
 
 union MessageRoute
 	mailbox
-	sendTable(slot CaseIndex, let interfaceName immutable ByteArray)
+	sendTable(slot CaseIndex, interfaceName immutable ByteArray)
 end 'MessageRoute'
 
 function payloadsAgree(payloads PayloadFieldArray, other PayloadFieldArray) returns bool
@@ -2136,7 +2136,7 @@ function payloadsAgree(payloads PayloadFieldArray, other PayloadFieldArray) retu
 	for (position, field) in payloads.withIterator() 'eachSlot'
 		let theirs = try other.get(position.index()) otherwise panic("payloadsAgree: other.get OOB at {position.index()} below the equal count just compared")
 
-		if not maxonTypesDenoteSame(field.declaredType, b: theirs.declaredType) or field.isLet != theirs.isLet or field.capability != theirs.capability 'differentSlot'
+		if not maxonTypesDenoteSame(field.declaredType, b: theirs.declaredType) or field.capability != theirs.capability 'differentSlot'
 			return false
 		end 'differentSlot'
 	end 'eachSlot'
@@ -2222,13 +2222,13 @@ enum GivingArmSearchError implements Error
 end 'GivingArmSearchError'
 
 union AsyncCalleeLookup
-	found(let callee immutable ByteArray)
+	found(callee immutable ByteArray)
 
 	// ⭐ **A SERVICE REPLY CELL** — a promise whose defining op is a `serviceReplyCell`, naming the
 	// MESSAGE whose reply it will carry. It is a distinct arm rather than a second `found` because the two
 	// roads describe the promise differently at every door: an `async` spawn's facts come off the callee's
 	// own signature, a reply's off the message's.
-	serviceReply(let messageName immutable ByteArray, let awaitedService immutable ByteArray)
+	serviceReply(messageName immutable ByteArray, awaitedService immutable ByteArray)
 	none
 end 'AsyncCalleeLookup'
 
@@ -2758,7 +2758,7 @@ typealias MergedSettlingOpMap = Map with (ValueId, SettlingOpArray)
 
 union EmittedCallOp
 	none
-	at(let op ElementIndex)
+	at(op ElementIndex)
 
 	function opIndex() returns ElementIndex throws AbsentError
 		match self 'emitted'
@@ -3470,7 +3470,7 @@ end 'StorageSubjectError'
 
 union StorageSubject
 	none
-	storage(let name immutable ByteArray)
+	storage(name immutable ByteArray)
 
 	function storageName() returns immutable ByteArray throws StorageSubjectError
 		match self 'subject'
@@ -3644,7 +3644,7 @@ typealias HandedOffArgumentArray = Array with HandedOffArgument
 
 union FiledSite
 	none
-	at(let index ElementIndex)
+	at(index ElementIndex)
 end 'FiledSite'
 
 type InterfaceParam
@@ -3938,7 +3938,7 @@ end 'unmarkValue'
 // missing. Carrying the name in the union rather than beside a `bool` is what makes "allowed" and "the
 // name it is allowed under" one fact instead of two that can disagree.
 union ParamDefaultOwner
-	declaredFunction(let name immutable ByteArray, let declaredAt Token)
+	declaredFunction(name immutable ByteArray, declaredAt Token)
 	closureLiteral
 	interfaceRequirement
 end 'ParamDefaultOwner'
@@ -4026,8 +4026,8 @@ end 'inferredClosureResultType'
 // under — a contested free function's mint included — and what a call site in any file looks the default
 // up by.
 export union DefaultHelperOwner
-	parameter(let sourceName immutable ByteArray, paramIndex ParamCount)
-	field(let helperName immutable ByteArray)
+	parameter(sourceName immutable ByteArray, paramIndex ParamCount)
+	field(helperName immutable ByteArray)
 end 'DefaultHelperOwner'
 
 // One captured default awaiting its helper's parse (a parameter's or a field's): whose
@@ -4110,7 +4110,7 @@ end 'RangedParamError'
 union FieldDefaultFill
 	none
 	literal(value ConstValue)
-	callsHelper(let name immutable ByteArray)
+	callsHelper(name immutable ByteArray)
 end 'FieldDefaultFill'
 
 function fieldDefaultFill(layout StructLayout, index FieldIndex) returns FieldDefaultFill
@@ -4354,7 +4354,7 @@ end 'RecordedTryTarget'
 
 union SpawnStartReply
 	noReply
-	viaCell(let callee immutable ByteArray)
+	viaCell(callee immutable ByteArray)
 end 'SpawnStartReply'
 
 // How a `spawn` of a throwing factory awaits its start. `caught` is the target of a `try`, which
@@ -4515,7 +4515,7 @@ function receiverArgumentOf(args ValueIdArray) returns ReceiverArgument
 end 'receiverArgumentOf'
 
 union ReceiverSource
-	producedByCall(let callee immutable ByteArray, receiver ReceiverArgument)
+	producedByCall(callee immutable ByteArray, receiver ReceiverArgument)
 	boundOutOf(unionName immutable ByteArray)
 	unknown
 end 'ReceiverSource'
@@ -4536,8 +4536,8 @@ end 'ValueProducer'
 union RoutableOp
 	notRoutable
 	division(op MaxonBinOp)
-	call(result ValueId, let callee immutable ByteArray, receiver ReceiverArgument)
-	tryChannelCall(result ValueId, let callee immutable ByteArray, receiver ReceiverArgument)
+	call(result ValueId, callee immutable ByteArray, receiver ReceiverArgument)
+	tryChannelCall(result ValueId, callee immutable ByteArray, receiver ReceiverArgument)
 	witness(result ValueId)
 	await(result ValueId, promise ValueId)
 	send(result ValueId)
@@ -4714,7 +4714,7 @@ end 'ReceiverArg'
 
 union SourceBinding
 	none
-	local(let name immutable ByteArray)
+	local(name immutable ByteArray)
 
 	function isLocal() returns bool
 		return match self 'source'
@@ -4733,7 +4733,7 @@ end 'SourceBinding'
 
 union FactoryInference
 	none
-	of(let base immutable ByteArray)
+	of(base immutable ByteArray)
 
 	function isOf() returns bool
 		return match self 'inference'
@@ -4856,10 +4856,10 @@ function operandHoldKindOf(passing OperandPassing, valueKind HoldKind) returns H
 end 'operandHoldKindOf'
 
 union CallArgTarget
-	witnessDispatch(declarations DeclarationFactsArray, let requirement immutable ByteArray)
-	callee(let name immutable ByteArray)
-	movedInto(let name immutable ByteArray)
-	coroutine(let name immutable ByteArray)
+	witnessDispatch(declarations DeclarationFactsArray, requirement immutable ByteArray)
+	callee(name immutable ByteArray)
+	movedInto(name immutable ByteArray)
+	coroutine(name immutable ByteArray)
 
 	function dispatchedName() returns immutable ByteArray
 		return match self 'target'
@@ -4936,8 +4936,8 @@ end 'CallArgTarget'
 
 union ByRefFormal
 	unranged
-	ranged(let identity immutable ByteArray)
-	associated(let name String)
+	ranged(identity immutable ByteArray)
+	associated(name String)
 
 	function verdictFor(variableAlias ByteArray, signatures ProgramSignatures, readerFilePath FilePath) returns FormalVerdict
 		return match self 'formal'
@@ -4950,7 +4950,7 @@ end 'ByRefFormal'
 
 union FormalVerdict
 	holds
-	refused(let words FormalRefusalWords)
+	refused(words FormalRefusalWords)
 end 'FormalVerdict'
 
 type FormalRefusalWords
@@ -4994,7 +4994,7 @@ end 'declaredParamAtColumn'
 
 union SiblingMethod
 	none
-	named(let qualified immutable ByteArray)
+	named(qualified immutable ByteArray)
 
 	function qualifiedName() returns immutable ByteArray throws AbsentError
 		match self 'sibling'
@@ -5006,7 +5006,7 @@ end 'SiblingMethod'
 
 union GenericInstanceBody
 	none
-	named(let instanceName immutable ByteArray)
+	named(instanceName immutable ByteArray)
 
 	function isInstance() returns bool
 		return match self 'body'
@@ -5057,7 +5057,7 @@ end 'ArmAliasJoin'
 
 union PendingUnstorableRequirement
 	none
-	noted(let interfaceName immutable ByteArray, position DeclaredStoragePosition, line LineNumber, column ColumnNumber)
+	noted(interfaceName immutable ByteArray, position DeclaredStoragePosition, line LineNumber, column ColumnNumber)
 
 	function isNoted() returns bool
 		return match self 'pending'
@@ -5106,7 +5106,7 @@ end 'typesProvablyDiffer'
 // nothing.
 union UninferredFactoryReason
 	// No factory parameter is declared at this type parameter, so no argument can carry it.
-	noParameterFixesIt(let paramName immutable ByteArray)
+	noParameterFixesIt(paramName immutable ByteArray)
 
 	// Every parameter was found and an argument still names a type parameter — a `spawn` written inside
 	// another generic body, whose enclosing parameters name no layout.
@@ -5168,7 +5168,7 @@ end 'TypeParameterScope'
 
 union SurfaceReach
 	reachable
-	refused(let refusal SourceParseError)
+	refused(refusal SourceParseError)
 end 'SurfaceReach'
 
 enum HandleSurface
@@ -5208,13 +5208,13 @@ union StaticMemberResolution
 	surface(surface CompilerOwnedStaticSurface)
 
 	// `int.fromString` → `__int_fromString` (`CalleeMint.primitiveStatic`).
-	minted(let callee immutable ByteArray)
+	minted(callee immutable ByteArray)
 
 	// `File.readText` at its registration key — the ordinary static. `declaredByAFile` is false for a key
 	// nothing declares, which a call carries on to `SemanticCheck`'s E3004.
-	named(let callee immutable ByteArray, declaredByAFile bool)
+	named(callee immutable ByteArray, declaredByAFile bool)
 
-	directory(let callee immutable ByteArray)
+	directory(callee immutable ByteArray)
 
 	requirement(interfaceName ByteArray)
 
@@ -5236,7 +5236,7 @@ end 'StaticMemberResolution'
 // base index so a statement is parsed by the answer that claimed it. It is taken once and cleared.
 union HandedResolution
 	empty
-	handed(at ElementIndex, let resolution StaticMemberResolution)
+	handed(at ElementIndex, resolution StaticMemberResolution)
 
 	function handsOverAt(index ElementIndex) returns bool
 		return match self 'handed'
@@ -5282,9 +5282,9 @@ end 'ConstraintOnParameter'
 typealias ConstraintOnParameterArray = Array with ConstraintOnParameter
 
 union ConstraintRequirement
-	staticDeclaredBy(let interfaceName ByteArray)
-	instanceDeclaredBy(let interfaceName ByteArray)
-	unresolved(let refusal SourceParseError)
+	staticDeclaredBy(interfaceName ByteArray)
+	instanceDeclaredBy(interfaceName ByteArray)
+	unresolved(refusal SourceParseError)
 	notDeclared
 end 'ConstraintRequirement'
 
@@ -5362,7 +5362,7 @@ end 'NestedAliasResult'
 // a shared empty string can only carry one of them.
 union TupleAliasOwner
 	fileScope
-	enclosingType(let name immutable ByteArray)
+	enclosingType(name immutable ByteArray)
 	unpublished
 
 	function isFileScope() returns bool
@@ -5442,7 +5442,7 @@ end 'tupleAssignTargetDeclares'
 // the same shape of question with a sentinel index instead, and its header says why the two differ.)
 union DiscardedCallee
 	notACall
-	named(let callee immutable ByteArray, result ValueId, opIndex ElementIndex)
+	named(callee immutable ByteArray, result ValueId, opIndex ElementIndex)
 end 'DiscardedCallee'
 
 // Did a call produce the value at all? The `try` rewrite's half of `directCallDefining` — it needs the fact,
@@ -5550,7 +5550,7 @@ end 'elementSourceIsInferred'
 union MethodSurface
 	// Methods DECLARED on a struct or a generic base — the loop emits `<typeName>.current` /
 	// `<typeName>.advance` as direct calls, and `ProgramSignatures.declaresCallee` is what says they exist.
-	declared(let typeName immutable ByteArray, receiver ValueId)
+	declared(typeName immutable ByteArray, receiver ValueId)
 
 	// ⭐⭐ **A RECEIVER THAT DISPATCHES THROUGH A WITNESS TABLE — BOTH of the kinds the language has**, an
 	// EXISTENTIAL (the fat pointer's own witness half) and a CONSTRAINED TYPE PARAMETER (the enclosing body's
@@ -5768,7 +5768,7 @@ end 'StructBase'
 
 union SelfFieldAlias
 	none
-	field(let name immutable ByteArray)
+	field(name immutable ByteArray)
 
 	function fieldName() returns immutable ByteArray throws AbsentError
 		match self 'alias'
@@ -6896,7 +6896,7 @@ end 'ArgumentRoot'
 union PlaceStorage
 	notHanded
 	handed(storage ValueId)
-	unreachable(let blame immutable ByteArray)
+	unreachable(blame immutable ByteArray)
 end 'PlaceStorage'
 
 let noHandedPlaceStorage = PlaceStorage.notHanded
@@ -7177,7 +7177,7 @@ end 'ArrayLiteralElement'
 
 union ElementFit
 	opaque
-	checked(let payload PayloadClass)
+	checked(payload PayloadClass)
 end 'ElementFit'
 
 type ElementSlot
@@ -7194,11 +7194,11 @@ end 'ElementSlot'
 
 union ElementLiteralTargets
 	none
-	typed(let adopted MaxonType, let arrayTarget DeclaredArrayInstance, let tupleTarget DeclaredTupleTarget)
+	typed(adopted MaxonType, arrayTarget DeclaredArrayInstance, tupleTarget DeclaredTupleTarget)
 end 'ElementLiteralTargets'
 
 union DirectoryFunction
-	declared(let callee immutable ByteArray)
+	declared(callee immutable ByteArray)
 	notADirectoryFunction
 end 'DirectoryFunction'
 
@@ -7211,10 +7211,10 @@ end 'ArrayStaticKind'
 
 union ImageNote
 	construction(layout StructLayout, fields ValueIdArray)
-	call(let callee immutable ByteArray, args ValueIdArray, labels NameRoster)
-	unionCase(let typeName immutable ByteArray, let caseName immutable ByteArray)
+	call(callee immutable ByteArray, args ValueIdArray, labels NameRoster)
+	unionCase(typeName immutable ByteArray, caseName immutable ByteArray)
 	emptyContainer
-	inlineWord(payload FullRangeInt, let typeName immutable ByteArray)
+	inlineWord(payload FullRangeInt, typeName immutable ByteArray)
 end 'ImageNote'
 
 typealias ImageNoteMap = Map with (ValueId, ImageNote)
@@ -7521,7 +7521,7 @@ end 'ParsedRangeBound'
 // sites, and shared, so the "no type was named" marker is one object rather than one per bound parsed.
 union BoundQualifier
 	literal
-	typed(let typeName immutable ByteArray)
+	typed(typeName immutable ByteArray)
 
 	function typeName() returns immutable ByteArray throws AbsentError
 		match self 'qualifier'
@@ -7699,7 +7699,7 @@ end 'shortCircuitOperator'
 // every trivial scalar is, and nothing else is. A `named` field is a ranged INT alias and its placeholder is
 // the plain integer the alias is one of — the same join a `var i = 0` and a later `as Round` value make.
 union NascentSlotPlaceholder
-	value(let valueType MaxonType)
+	value(valueType MaxonType)
 	ownsHeap
 end 'NascentSlotPlaceholder'
 
@@ -9903,8 +9903,8 @@ function instanceRequirementThroughTypeParameter(written String, interfaceName B
 end 'instanceRequirementThroughTypeParameter'
 
 module union StaticRequirementReach
-	valueOf(let receiver String)
-	typeParameter(let name String)
+	valueOf(receiver String)
+	typeParameter(name String)
 end 'StaticRequirementReach'
 
 module function staticRequirementMessage(requirement String, reach StaticRequirementReach) returns String
@@ -10139,10 +10139,10 @@ end 'GreenThreadHandOff'
 
 union ThreadHandOffDoor
 	message(blame String, argumentOf String)
-	spawnFactory(let blame String, let argumentOf String)
-	publish(let key immutable ByteArray)
-	coroutine(let callee immutable ByteArray)
-	closureCapture(let name immutable ByteArray)
+	spawnFactory(blame String, argumentOf String)
+	publish(key immutable ByteArray)
+	coroutine(callee immutable ByteArray)
+	closureCapture(name immutable ByteArray)
 end 'ThreadHandOffDoor'
 
 function handOffDoorBlame(door ThreadHandOffDoor) returns String
@@ -11636,7 +11636,7 @@ union CharLiteralValue
 	// A literal whose UTF-8 body is more than one byte: `'é'`, `'中'`, an emoji, an EGC. The BYTES ride the
 	// case because the decode already has them and re-deriving them at the emit site would be the same
 	// escape walk twice.
-	multiByte(let bytes immutable ByteArray)
+	multiByte(bytes immutable ByteArray)
 
 	// A `\` escape this decoder does not know.
 	badEscape(text String)
@@ -11680,7 +11680,7 @@ end 'charValueOf'
 
 // The result of decoding a quoted body's escape sequences.
 union DecodedLiteral
-	bytes(let buf immutable ByteArray)
+	bytes(buf immutable ByteArray)
 	unknownEscape(text String)
 
 	// A `\xNN`/`\uNNNN` escape with the wrong number of hex digits — see `CharLiteralValue.badDigitEscape`
@@ -11944,7 +11944,7 @@ let RawExitCodeRequirement = "the exit code of a RuntimeAbort case"
 union PanicMessage
 	// A plain string literal — the whole line is a parse-time constant, interned as an immortal `.rdata`
 	// cstr by `LowerMaxonToStd.lowerPanicAbort` and carried by `MaxonOp.panicAbort`.
-	baked(let line immutable ByteArray)
+	baked(line immutable ByteArray)
 
 	// An INTERPOLATION — the line is assembled on the heap at run time and this is the address of its
 	// bytes, carried by `MaxonOp.panicAbortValue`.
@@ -13192,7 +13192,7 @@ let NascentSelfSlotPrefix = "__self_"
 // What `Parser.enumAccessorReadOf` found. A union rather than a bool-plus-out-parameter for the ordinary
 // reason: the MEMBER only exists when there was a read, and the two answers must not be representable apart.
 union EnumAccessorLookup
-	read(let member immutable ByteArray)
+	read(member immutable ByteArray)
 	notAnAccessor
 end 'EnumAccessorLookup'
 
@@ -13392,26 +13392,26 @@ end 'ifConditionCatches'
 union TryTarget
 	// A DIRECT call: the callee NAME, which the signature index answers for. ⚠ The
 	// EMITTED symbol for a builtin — `tryTargetNamedNoun` turns it back into the author's spelling.
-	named(let callee immutable ByteArray)
+	named(callee immutable ByteArray)
 
 	// A witness-dispatched interface method: the method NAME for diagnostics, and the
 	// interface's own declared `throws` clause — the only carrier of that fact.
-	witness(let methodName immutable ByteArray, let throwsClause ThrowsClause)
+	witness(methodName immutable ByteArray, throwsClause ThrowsClause)
 
 	// An `await` of a promise typed at a `Promise` instance — one out of storage, or a declared spawn,
 	// which `mintSpawnPromise` mints at its instance: the instance's name for diagnostics, and the
 	// `throws` clause its `ErrorType` argument spells, the only carrier of that fact — a container
 	// holds no `asyncCall` to recover a callee from. An undeclared spawn's await takes `deferred`, so
 	// it is reported as E3004 rather than E3055.
-	promise(let storageName immutable ByteArray, let throwsClause ThrowsClause)
+	promise(storageName immutable ByteArray, throwsClause ThrowsClause)
 
-	serviceReply(let messageName immutable ByteArray, let awaitedService immutable ByteArray)
+	serviceReply(messageName immutable ByteArray, awaitedService immutable ByteArray)
 
-	sentReply(let messageName immutable ByteArray, let awaitedService immutable ByteArray, let sendErrorName immutable ByteArray)
+	sentReply(messageName immutable ByteArray, awaitedService immutable ByteArray, sendErrorName immutable ByteArray)
 
-	send(let messageName immutable ByteArray, let throwsClause ThrowsClause)
+	send(messageName immutable ByteArray, throwsClause ThrowsClause)
 
-	serviceStart(let factory immutable ByteArray, let awaitedService immutable ByteArray)
+	serviceStart(factory immutable ByteArray, awaitedService immutable ByteArray)
 
 	// A call to a callee nothing defines, or the await of a spawn of one: its `unresolved` result is a
 	// deferral to E3004, so every door passes it through (see `deferredUnresolvedMemberResult`).
@@ -13440,7 +13440,7 @@ type AwaitedPromise
 end 'AwaitedPromise'
 
 union AwaitedResult
-	declared(let returnType MaxonReturnType)
+	declared(returnType MaxonReturnType)
 	deferred
 end 'AwaitedResult'
 
@@ -13611,16 +13611,16 @@ end 'EnumAccessorBase'
 // measured +3,465 allocations on rung 5 of a corpus that declares no managed binding at all, doubling with
 // the program. The narrow answer is not the cheap one here; the narrow QUESTION is.
 union ManagedReceiverBinding
-	inlineWord(payload FullRangeInt, let typeName immutable ByteArray)
+	inlineWord(payload FullRangeInt, typeName immutable ByteArray)
 
 	// A managed `let` — `bytes`/`kind` are what `emitManagedConstant` re-materializes.
-	constant(let bytes immutable ByteArray, kind ManagedConstKind)
+	constant(bytes immutable ByteArray, kind ManagedConstKind)
 
 	// A STORED managed binding (a record `let` the compiler cannot image) — `label`/`valueType` are what
 	// `emitGlobalLoad` reads the slot with. Such a `let` is stored AND immutable: `Live.push(1)` must be
 	// E3159 where `Buffer.push(1)` is legal, and the synthetic `VarInfo` the dispatch wears is the only
 	// thing that can say so.
-	global(let label immutable ByteArray, valueType MaxonType)
+	global(label immutable ByteArray, valueType MaxonType)
 	none
 
 	// ⭐ An IMAGE-DATA `let` whose value is a RECORD the image describes — a constant array literal, an
@@ -13639,7 +13639,7 @@ union ManagedReceiverBinding
 	// box is `.rdata` too, so it is immutable for the arm above's reason, and it differs in carrying its
 	// bytes, its type NAME and the tag its value stands at rather than a record description: a box has no
 	// stride, count or element destructor to describe.
-	imageBox(nodes ImmortalBoxNodeArray, root ElementIndex, let typeName immutable ByteArray, tag ValueTypeTag)
+	imageBox(nodes ImmortalBoxNodeArray, root ElementIndex, typeName immutable ByteArray, tag ValueTypeTag)
 	poisoned
 end 'ManagedReceiverBinding'
 
@@ -14845,7 +14845,7 @@ end 'ErrorUnionArmEntry'
 // A broken match obligation held for the handler's end (`Parser.errorMatchRefusal`).
 union ErrorMatchRefusal
 	none
-	held(let bindingName immutable ByteArray, reason String, line LineNumber, column ColumnNumber)
+	held(bindingName immutable ByteArray, reason String, line LineNumber, column ColumnNumber)
 end 'ErrorMatchRefusal'
 
 // E3161's reason where two paths reach one point with a combined error matched on one and not the other.
@@ -14926,7 +14926,7 @@ let SynthesizedErrorUnionName = b"__ErrorUnion"
 
 union CaughtErrorBinding
 	anonymous
-	named(let name immutable ByteArray)
+	named(name immutable ByteArray)
 end 'CaughtErrorBinding'
 
 union RuntimeSourceOffence
@@ -15355,7 +15355,7 @@ function bindingPartWhenRefusedWithin(key PositionKey, extentEnd PositionKey, re
 end 'bindingPartWhenRefusedWithin'
 
 union OpenedBlockLabel
-	spelled(let label immutable ByteArray)
+	spelled(label immutable ByteArray)
 	unread
 
 	function expectedAt(closing immutable ByteArray) returns immutable ByteArray
@@ -15370,7 +15370,7 @@ typealias OpenedBlockLabelArray = Array with OpenedBlockLabel
 
 union BlockCloserScan
 	closed
-	misclosed(let expected immutable ByteArray, closer ElementIndex)
+	misclosed(expected immutable ByteArray, closer ElementIndex)
 	unterminated
 end 'BlockCloserScan'
 
@@ -15393,30 +15393,6 @@ union PayloadHolder
 	word
 end 'PayloadHolder'
 
-union UnionWritePlace
-	nowhere
-	readOnlyParameter(let name immutable ByteArray)
-	variable(let name immutable ByteArray)
-	slot(box ValueId, offset ByteOffset)
-end 'UnionWritePlace'
-
-typealias UnionWriteMap = Map with (ValueId, UnionWritePlace)
-
-type LastIndirectLoad
-	export var recorded as bool
-	export var result as ValueId
-	export var box as ValueId
-	export var offset as ByteOffset
-
-	static function create() returns Self
-		return Self{recorded: false, result: 0, box: 0, offset: 0}
-	end 'create'
-
-	export function isLoadOf(value ValueId) returns bool
-		return self.recorded and self.result == value
-	end 'isLoadOf'
-end 'LastIndirectLoad'
-
 union LastFieldRead
 	none
 	read(value ValueId, box ValueId, offset ByteOffset)
@@ -15438,7 +15414,7 @@ end 'LastFieldRead'
 
 union LastRuntimeRead
 	none
-	read(result ValueId, let typeName immutable ByteArray, let methodName immutable ByteArray)
+	read(result ValueId, typeName immutable ByteArray, methodName immutable ByteArray)
 end 'LastRuntimeRead'
 
 type CaughtErrorBinder
@@ -15585,7 +15561,7 @@ end 'StatementRole'
 // those bytes are a zero-copy slice of the source buffer this parse already holds.
 union PrecedingTerminator
 	none
-	keyword(let name immutable ByteArray)
+	keyword(name immutable ByteArray)
 end 'PrecedingTerminator'
 
 enum StatementForm
@@ -15672,7 +15648,7 @@ end 'caughtErrorUnionMatch'
 // rather than a case that arrives.
 union TryBinding
 	none
-	required(let name immutable ByteArray)
+	required(name immutable ByteArray)
 
 	function requires(name ByteArray) returns bool
 		return match self 'binding'
@@ -16194,7 +16170,7 @@ union PayloadFill
 	// `h.bump(5)` — the author is SENDING a message, and the box is on its way to another green thread. It
 	// carries the SERVICE's type name because the refusal names the message the argument belongs to, and the
 	// case name alone (`caseTok`) is only half of it.
-	serviceMessage(let serviceTypeName immutable ByteArray)
+	serviceMessage(serviceTypeName immutable ByteArray)
 end 'PayloadFill'
 
 // The sentence a mis-typed payload is refused in, per fill. See `SlotMismatchVoice` for what each voice says.
@@ -16206,8 +16182,8 @@ function payloadFillVoice(fill PayloadFill) returns SlotMismatchVoice
 end 'payloadFillVoice'
 
 union ContainerElementSite
-	call(let method Token)
-	literalElement(let element Token)
+	call(method Token)
+	literalElement(element Token)
 end 'ContainerElementSite'
 
 function containerElementSiteAnchor(site ContainerElementSite) returns Token
@@ -16654,7 +16630,7 @@ end 'DeclaredStoragePosition'
 // `Parser.genericArgSlotOf`, which decides it once from the base.
 union GenericArgSlot
 	containerElement
-	associatedTypeBinding(let interfaceName immutable ByteArray)
+	associatedTypeBinding(interfaceName immutable ByteArray)
 end 'GenericArgSlot'
 
 // ⭐ **WHAT A DISPATCH NEEDS TO KNOW TO BUILD THE FAT POINTER ITS RESULT IS** — the interface the associated
@@ -16880,7 +16856,7 @@ union KnownLiteralBytes
 	// the literal's identity: two values naming one literal (a rebind, a second use) share it, so it is what
 	// `literalHasSingleByteGraphemes` memoizes the UAX#29 answer under. Deriving it a second time from the
 	// value would be the same read written twice, free to be given a different value id one edit later.
-	payload(literalOp ElementIndex, let bytes immutable ByteArray)
+	payload(literalOp ElementIndex, bytes immutable ByteArray)
 end 'KnownLiteralBytes'
 
 // ⭐ **THE BYTE POSITION BEHIND A `StringIndex` THE COMPILER MINTED, OR THE ABSENCE OF ONE.** `0` is the
@@ -17290,20 +17266,6 @@ export function parameterReassignMessage(name String, kind ParameterReassignKind
 		genericParameter gives "'{name}' is a generic parameter and cannot be reassigned; return the new value"
 	end 'kind'
 end 'parameterReassignMessage'
-
-// The by-value parameter wording is pinned byte-for-byte by `specs/union-unboxed.md`; changing it
-// fails the suite.
-function payloadOfAParameterMessage(payload String, parameter String) returns String
-	if parameter == String.from(ReceiverSourceSpelling) 'theReceiver'
-		return "'{payload}' is a payload of the receiver, so assigning it cannot reach the caller's union; copy the union into a local var"
-	end 'theReceiver'
-
-	return "'{payload}' is a payload of the by-value parameter '{parameter}', so assigning it cannot reach the caller's union; mark '{parameter}' mutable or copy it into a local var"
-end 'payloadOfAParameterMessage'
-
-function payloadOfAnUnreachableUnionMessage(payload String) returns String
-	return "'{payload}' is a payload of a union that is not a local var, a field of a var or a record parameter, or a mutable parameter, so assigning it cannot reach the union; copy the union into a local var"
-end 'payloadOfAnUnreachableUnionMessage'
 
 function parameterReassignError(nameTok Token, kind ParameterReassignKind) returns SourceParseError
 	return SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: parameterReassignMessage(String.from(nameTok.value), kind: kind), line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
@@ -18395,9 +18357,6 @@ type FunctionBodyState
 	// the interpolation's internal scratch buffers are freed inside `emitStringInterp`, never tracked here.
 	export var pendingTempDrops as ValueIdArray
 
-	export var unionWritePlaces as UnionWriteMap
-	export var lastIndirectLoad as LastIndirectLoad
-
 	// The last `named` field read, so `throw <boxed-union field>` can move the box out of its
 	// container (`moveOutThrownField` nulls the recorded `(box, offset)`). The thrown value is recognized
 	// by identity against the recorded value, and an equal value id can only have come from this exact
@@ -19412,8 +19371,6 @@ type FunctionBodyState
 			referencedNames: NameRoster.create(0),
 			mutabilityExercisedNames: NameRoster.create(0),
 			pendingTempDrops: ValueIdArray.create(0),
-			unionWritePlaces: UnionWriteMap.create(),
-			lastIndirectLoad: LastIndirectLoad.create(),
 			lastFieldRead: LastFieldRead.none,
 			lastRuntimeRead: LastRuntimeRead.none,
 			loops: LoopContextArray.create(0),
@@ -19561,7 +19518,7 @@ end 'FunctionBodyState'
 
 union QualifiedTypeBase
 	none
-	at(index ElementIndex, let name immutable ByteArray, declFilePath FilePath)
+	at(index ElementIndex, name immutable ByteArray, declFilePath FilePath)
 end 'QualifiedTypeBase'
 
 export type TypeDeclarationHeader
@@ -19617,7 +19574,7 @@ export typealias BlockExtentsByPath = Map with (String, BlockExtents)
 
 union DeclaredTupleTarget
 	none
-	layout(let name immutable ByteArray)
+	layout(name immutable ByteArray)
 end 'DeclaredTupleTarget'
 
 let NoDeclaredTupleTarget = DeclaredTupleTarget.none
@@ -19632,7 +19589,7 @@ end 'tupleTargetNamed'
 // vanish.
 union TypeNameVerdict
 	nameable
-	hidden(kind HiddenSymbolKind, tier Visibility, let noun immutable ByteArray, anchor Token)
+	hidden(kind HiddenSymbolKind, tier Visibility, noun immutable ByteArray, anchor Token)
 end 'TypeNameVerdict'
 
 enum TypeNameHeadForm
@@ -19663,8 +19620,8 @@ function typeNameVerdictOf(hiding TypeNameHiding, noun ByteArray, anchor Token) 
 end 'typeNameVerdictOf'
 
 union SpawnedType
-	declared(let declaration ChainType, consumed ElementIndex)
-	named(let typeName immutable ByteArray)
+	declared(declaration ChainType, consumed ElementIndex)
+	named(typeName immutable ByteArray)
 
 	function typeName() returns immutable ByteArray
 		return match self 'spawned'
@@ -19675,7 +19632,7 @@ union SpawnedType
 end 'SpawnedType'
 
 union QualifiedTypeChain
-	declared(let declaration ChainType, consumed ElementIndex)
+	declared(declaration ChainType, consumed ElementIndex)
 	notQualified
 end 'QualifiedTypeChain'
 
@@ -25611,7 +25568,7 @@ export type Parser
 			if depth == 0 and self.atTypeAliasDeclaration() 'isInnerAlias'
 				let nestedVisibility = try self.consumeOptionalVisibility() otherwise break
 				let nestedNameTok = self.tokenAt(self.pos + 1)
-				var nested = try self.readNestedTypeAlias(nestedVisibility, recordFunctionSignature: false, tupleOwner: TupleAliasOwner.enclosingType(self.enclosingTypeName())) otherwise break
+				let nested = try self.readNestedTypeAlias(nestedVisibility, recordFunctionSignature: false, tupleOwner: TupleAliasOwner.enclosingType(self.enclosingTypeName())) otherwise break
 
 				self.signatures.recordTypeBodyInnerAliasMember(joinQualifiedName(self.enclosingTypeName(), member: nestedNameTok.value))
 
@@ -26179,7 +26136,7 @@ export type Parser
 					// conformer's.
 					let nestedIsTheTypesOwn = index.typeBodyDeclaresInnerAlias(joinQualifiedName(conformer, member: nestedNameTok.value))
 					view nestedTupleOwner = TupleAliasOwner.unpublished if extensionMethodsWithheld(verdict) or nestedIsTheTypesOwn else TupleAliasOwner.enclosingType(conformer)
-					var nested = try self.readNestedTypeAlias(memberVisibility, recordFunctionSignature: false, tupleOwner: nestedTupleOwner) otherwise break
+					let nested = try self.readNestedTypeAlias(memberVisibility, recordFunctionSignature: false, tupleOwner: nestedTupleOwner) otherwise break
 
 					// ⚠ **READ ALWAYS, PUBLISH ONLY WHEN THE EXTENSION IS THIS CONFORMER'S** — the withheld
 					// method rule applied to a declaration instead of a signature, and for its reason. The READ
@@ -33318,12 +33275,6 @@ export type Parser
 		var fields = PayloadFieldArray.create(0)
 
 		while true 'fieldLoop'
-			let isLet = self.at(TokenKind.let)
-
-			if isLet 'letPayload'
-				self.advance()
-			end 'letPayload'
-
 			let nameTok = try self.consume(TokenKind.identifier)
 
 			// A `__`-prefixed field is reserved, at the name, exactly as a struct field's is
@@ -33350,7 +33301,7 @@ export type Parser
 			let fieldType = try self.parseTypeReference(BarePrimitiveVoice.asAType)
 			try self.requireCapabilityFits(writtenCapability, wordTok: capabilityTok, spelled: fieldType)
 			try self.requireStorableDeclaredType(fieldType, position: DeclaredStoragePosition.unionPayload, line: typeTok.line, column: typeTok.column)
-			fields.push(PayloadField.create(nameTok.value, declaredType: fieldType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, isLet: isLet, capability: self.aliasCapabilityOr(writtenCapability, typeTok: typeTok), typeSite: writtenTypeSiteOf(typeTok)))
+			fields.push(PayloadField.create(nameTok.value, declaredType: fieldType, declaredSurface: declaredSurface, declaredBrand: declaredBrand, capability: self.aliasCapabilityOr(writtenCapability, typeTok: typeTok), typeSite: writtenTypeSiteOf(typeTok)))
 
 			if not self.at(TokenKind.comma) 'endFields'
 				break
@@ -34947,8 +34898,7 @@ export type Parser
 	end 'markMutabilityExercised'
 
 	// The same mark reached by NAME, for the doors that hold a name rather than the binding — a call
-	// ARGUMENT, a method RECEIVER and a `match` scrutinee, all of which carry the storage's name because
-	// E3159 and the payload write-back already needed it.
+	// ARGUMENT and a method RECEIVER, both of which carry the storage's name because E3159 needs it.
 	//
 	// ⭐ **THE GUARD IS THE SCOPE, NOT `mutableVars`.** `scope.contains` plus `binding.isMutable()` is the
 	// question itself — only a `var` in scope can ever be an E3077 candidate, so a name that is not one (a
@@ -39843,7 +39793,7 @@ export type Parser
 
 	// ⭐ **A BARE TARGET IS THE ASSIGNMENT `x = <that element>`, and it goes through the same door.** Everything
 	// a rebind owes — the E3012 mention, the mutability refusal (E2013), the type and
-	// aggregate-identity checks, the cell store and the payload write-back — is `parseAssignment`'s and is
+	// aggregate-identity checks and the cell store — is `parseAssignment`'s and is
 	// asked here through the same two routines, in the same order.
 	//
 	// ⚠ **`rhsWasBareLocal` IS FALSE, and that is a fact rather than a simplification.** The value is a FIELD
@@ -39896,7 +39846,7 @@ export type Parser
 	// initializer or right-hand side for a fixed sentence to name. The `let` triple keeps both
 	// sentences byte-identical to their committed pins.
 	function requireDestructurableTuple(value ValueId, nameToks TokenArray, keywordTok Token, patternSubject String, sourceNoun String, needsClause String) returns DestructuredSource throws SourceParseError
-		var source = try self.requireTupleLayout(value, keywordTok: keywordTok, patternSubject: patternSubject, sourceNoun: sourceNoun, needsClause: needsClause)
+		let source = try self.requireTupleLayout(value, keywordTok: keywordTok, patternSubject: patternSubject, sourceNoun: sourceNoun, needsClause: needsClause)
 
 		match source 'source'
 			tuple(layout) then try self.requireNamesEveryElement(layout, nameToks: nameToks, keywordTok: keywordTok, patternSubject: patternSubject)
@@ -40316,10 +40266,6 @@ export type Parser
 	// afterwards). A tuple assignment cannot ask it there — its RHS is evaluated once, ahead of every
 	// target — so it asks it per target, in target order, which is the order its own pins read in.
 	function completeLocalRebind(func IrFunction, binding VarInfo, nameTok Token, written ValueId, rhsBareLocalName SourceBinding, valueStart ElementIndex, valueEnd ElementIndex) throws SourceParseError
-		if binding.isPayloadBinding() 'aPayloadAssignment'
-			try self.requirePayloadAssignmentLands(binding, nameTok: nameTok)
-		end 'aPayloadAssignment'
-
 		let value = try self.destinationTemporary(written, declared: binding.varType, anchor: nameTok)
 		let declaredTag = maxonTypeTag(binding.varType)
 		let valueTag = self.tagOf(value)
@@ -40394,14 +40340,6 @@ export type Parser
 		end 'livesInACell'
 
 		try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: stored, rhsBareLocalName: rhsBareLocalName)
-
-		// ⭐ A MATCH-ARM PAYLOAD BINDING IS ALSO A PLACE IN THE SCRUTINEE'S BOX, so the rebind above is only
-		// half of the write — the other half is the store that makes a later `match` read the new value.
-		// AFTER the rebind, deliberately: the box takes its reference to the value the BINDING ended up
-		// holding, which for a borrowed RHS is the owned copy `reassignBindingValue` promoted it to.
-		if binding.isPayloadBinding() 'writeBackIntoTheBox'
-			try self.writeBackPayload(func, binding: binding, nameTok: nameTok)
-		end 'writeBackIntoTheBox'
 	end 'completeLocalRebind'
 
 	function stampDeclaredFunctionType(value ValueId, binding VarInfo, sourceIsBareLocal bool)
@@ -40489,18 +40427,6 @@ export type Parser
 		return binding.varType
 	end 'bindingDeclaredType'
 
-	// Assigning a payload binding replaces the payload its matched union holds, so that union must be
-	// a place this frame may write (`unionWritePlaceOf`); the refusal names the fix rather than drop
-	// or misdirect the write.
-	function requirePayloadAssignmentLands(binding VarInfo, nameTok Token) throws SourceParseError
-		match self.unionWritePlaceFor(binding.payloadScrutBox()) 'place'
-			readOnlyParameter(parameter) then throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: payloadOfAParameterMessage(String.from(nameTok.value), parameter: String.from(parameter)), line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
-			nowhere then throw SourceParseError.registryRefused(ErrorCode.assignToImmutable, explanation: payloadOfAnUnreachableUnionMessage(String.from(nameTok.value)), line: nameTok.line, column: nameTok.column, note: DiagnosticNote.none)
-			variable or
-			slot then break
-		end 'place'
-	end 'requirePayloadAssignmentLands'
-
 	function valueIsAnUnboxedUnion(value ValueId) returns bool
 		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
 			return false
@@ -40509,152 +40435,6 @@ export type Parser
 		view decl = self.enumMatchFor(value)
 		return enumMatchIsDeclared(decl) and self.signatures.unionRepresentation(requireEnumLayout(decl)) == UnionRepresentation.word
 	end 'valueIsAnUnboxedUnion'
-
-	function writeBackUnboxedPayload(func IrFunction, binding VarInfo, nameTok Token) throws SourceParseError
-		let range = SourceRange.ofToken(nameTok)
-		let scrut = binding.payloadScrutBox()
-		let payload = binding.boundValue
-
-		self.noteUnionWriteReach(func, scrut: scrut)
-		self.emitIncref(payload, range: range)
-
-		let tag = self.emitMachineWordBinOp(scrut, rhs: self.emitLiteral(UnboxedTagMask, valueType: MaxonType.integer, range: range), op: MaxonBinOp.bitAnd, resultType: MaxonType.integer, range: range)
-		let newWord = self.emitMachineWordBinOp(payload, rhs: tag, op: MaxonBinOp.bitOr, resultType: self.typeOf(scrut), range: range)
-
-		match self.unionWritePlaceFor(scrut) 'store'
-			nowhere or
-			readOnlyParameter then panic("writeBackUnboxedPayload: requirePayloadAssignmentLands refuses a payload assignment that reaches no union before it gets here")
-			variable(name) then try self.rebindUnionVariable(func, name: name, nameTok: nameTok, word: newWord)
-			slot(box, offset) then self.storeUnionWordIntoSlot(box, offset: offset, scrut: scrut, word: newWord, range: range)
-		end 'store'
-	end 'writeBackUnboxedPayload'
-
-	function noteUnionWriteReach(func IrFunction, scrut ValueId)
-		var written = paramMaskOfValue(func, value: scrut)
-
-		match self.unionWritePlaceFor(scrut) 'place'
-			slot(box, _) then written = written or paramMaskOfValue(func, value: box)
-			nowhere or
-			readOnlyParameter or
-			variable then break
-		end 'place'
-
-		func.writesThroughParamMask = func.writesThroughParamMask or written
-	end 'noteUnionWriteReach'
-
-	function rebindUnionVariable(func IrFunction, name immutable ByteArray, nameTok Token, word ValueId) throws SourceParseError
-		let variableTok = Token.create(nameTok.kind, line: nameTok.line, column: nameTok.column, value: name, startByte: nameTok.startByte, endByte: nameTok.endByte)
-		self.markValueOwnsHeap(word, exclusivity: OwnedHeapExclusivity.coOwned)
-		var target = self.bodyState.scope.getInfo(name)
-		try self.reassignBindingValue(func, binding: target, nameTok: variableTok, value: word, rhsBareLocalName: SourceBinding.none)
-
-		if target.isPayloadBinding() 'anOuterWindow'
-			try self.writeBackPayload(func, binding: target, nameTok: variableTok)
-		end 'anOuterWindow'
-	end 'rebindUnionVariable'
-
-	function storeUnionWordIntoSlot(box ValueId, offset ByteOffset, scrut ValueId, word ValueId, range SourceRange)
-		let displaced = self.emitIndirectLoad(self.typeOf(scrut), box: box, offset: offset, storageType: MaxonType.integer, range: range)
-		self.emitIndirectStore(box, offset: offset, value: word, storageType: MaxonType.integer, range: range)
-		self.emitDecref(displaced, range: range)
-	end 'storeUnionWordIntoSlot'
-
-	// ⭐⭐ **WRITE A MUTATED PAYLOAD BINDING BACK INTO THE SCRUTINEE'S BOX** — the exact inverse of
-	// `emitUnionPayloadLoad`, and the whole of `specs/mutable-enums.md`. It stores through
-	// `emitIndirectStore` (THE one `storeIndirect` emit) at the offset and width the LOAD committed
-	// to, carried on the binding rather than re-derived (see `VarInfo.isPayloadBinding`). A word union
-	// has no box to store into: `writeBackUnboxedPayload` rebuilds the word and rebinds the union
-	// variable, or stores the word into the slot that held it.
-	//
-	// ⭐ **THE BOX TAKES ITS OWN REFERENCE; THE BINDING KEEPS ITS OWN.** After the store the value has TWO
-	// owners — the box, whose `__destruct_<U>` cascade releases the slot, and the binding, which
-	// `dropArmScopedOwned` releases at the arm's exit — so a MANAGED payload is increfed here. It is the
-	// same unconditional, structural refcount `retainBorrowedPayload` takes for the mirror-image case (a
-	// binding retained out of a box somebody else owns), and it balances for the same reason: the compiler's
-	// release is structural, so an unconditional acquire is unconditionally released.
-	//
-	// ⚠ **THE OPS EMITTED HERE ARE THE ONLY ACCOUNTING THERE IS**, since no refcount dataflow pass
-	// supplies a second incref/decref pair that would double with them, so omitting them leaks the
-	// displaced value and frees the new one twice.
-	//
-	// ⚠ **"MANAGED" IS READ FROM `ownedBindings` MEMBERSHIP, not from a bit copied onto the binding.** The
-	// binding is in the owned set iff its payload is managed (`ownPayloadBinding` is the only enroller, and
-	// a reassignment cannot change the answer — a scalar binding's declared type refuses a heap RHS), so
-	// membership IS the fact, already single-homed in `bindingIsOwned`. A second column would be free to
-	// disagree with the set that actually emits the drop.
-	function writeBackPayload(func IrFunction, binding VarInfo, nameTok Token) throws SourceParseError
-		if self.valueIsAnUnboxedUnion(binding.payloadScrutBox()) 'aWordUnion'
-			try self.writeBackUnboxedPayload(func, binding: binding, nameTok: nameTok)
-			return
-		end 'aWordUnion'
-
-		let range = SourceRange.ofToken(nameTok)
-		let value = binding.boundValue
-		let managed = self.bindingIsOwned(binding)
-
-		// ⚖⚖ **THE STORE BELOW WRITES THE SCRUTINEE'S BOX, AND WHERE THE SCRUTINEE IS A `mutable`
-		// PARAMETER OR LIVES IN A RECORD PARAMETER'S FIELD THAT BOX IS THE CALLER'S.** So a body whose
-		// arm writes back summarises as writing that parameter's record, and E3159 can answer at the call
-		// — without this seed `bump(s)` whose arm is `n = 42` reports nothing and mutates a caller's
-		// `let` (`specs/mutable-enums.md`'s two `error.let-to-a-callee-that-writes-back-*`). It is the
-		// RECORD-WRITE column and not the narrow receiver column, because a write-back is neither a
-		// container method on the parameter nor a store into a field of `self`: putting it there would
-		// refuse a `let` RECEIVER for a method that writes back its own payload, which is the exemption
-		// one tier up.
-		self.noteUnionWriteReach(func, scrut: binding.payloadScrutBox())
-		self.noteClosureStoreSite(ClosureStoreDestination.field(binding.payloadScrutBox(), base: ClosureStoreBase.unspelled), value: value, at: nameTok)
-
-		if managed 'boxBecomesASecondOwner'
-			self.emitIncref(value, range: range)
-		end 'boxBecomesASecondOwner'
-
-		// ⛔⛔ **A SLOT THAT WAS NEVER VACATED STILL HOLDS THE BOX'S OWN REFERENCE, AND THE STORE BELOW
-		// OVERWRITES IT — so the box releases the displaced payload here or nothing ever does.** A move-out
-		// nulled the slot and there is nothing to release; a RETAINED payload (`declarePayloadBindings`'s
-		// `retainedCoOwn` arm, taken by every solely-owned `var` union) left the box's reference in place. The
-		// slot is LOADED rather than the binding's previous value being remembered, for `emitOpaqueSlotReleases`'
-		// reason: the load is what the box holds at this moment, which is the only thing a release may act on.
-		//
-		// ⚠ **THE INCREF ABOVE COMES FIRST.** The incoming value may be a second name for the very record the
-		// slot holds, and releasing that first would drive it to zero before the store re-published it.
-		if managed and not binding.payloadSlotVacated 'releaseTheDisplacedPayload'
-			let displaced = self.emitIndirectLoad(binding.varType, box: binding.payloadScrutBox(), offset: binding.payloadSlotOffset(), storageType: binding.payloadStorage(), range: range)
-			self.storePayloadSlot(binding, value: value, range: range)
-			self.emitDecref(displaced, range: range)
-		end 'releaseTheDisplacedPayload' else 'nothingDisplaced'
-			self.storePayloadSlot(binding, value: value, range: range)
-		end 'nothingDisplaced'
-
-		// ⭐ **THE SLOT IS WHOLE AGAIN, so the scrutinee may stop being partially moved — BUT ONLY IF NO
-		// OTHER BINDING OF THE SAME BOX IS STILL HOLDING A HOLE.** `values(a String, b String)` with only
-		// `a` assigned leaves `b`'s slot null; clearing the bit there would let the code after the match
-		// re-bind `b` and dereference a null payload. So the bit is RECOMPUTED from the live bindings
-		// rather than assumed, and `mutate-string-payload`'s second `match n` is legal because that
-		// recomputation genuinely finds no hole left.
-		if binding.payloadSlotVacated 'holeFilled'
-			binding.payloadSlotVacated = false
-			self.setBindingPartiallyMoved(binding.payloadScrutBox(), value: self.boxHasVacatedPayloadSlot(binding.payloadScrutBox()))
-		end 'holeFilled'
-	end 'writeBackPayload'
-
-	function storePayloadSlot(binding VarInfo, value ValueId, range SourceRange)
-		self.emitIndirectStore(binding.payloadScrutBox(), offset: binding.payloadSlotOffset(), value: value, storageType: binding.payloadStorage(), range: range)
-	end 'storePayloadSlot'
-
-	// Does any LIVE payload binding still have its slot in `box` nulled? The honest half of the
-	// `partiallyMoved` recomputation above. It scans `ownedBindings` because that is exactly where a
-	// vacated binding lives — only a MANAGED payload is moved out, and only a managed payload binding is
-	// enrolled (`ownPayloadBinding`) — and those entries are popped at the arm's own exit
-	// (`dropArmScopedOwned`), which is also the last point a write-back can be parsed.
-	function boxHasVacatedPayloadSlot(box ValueId) returns bool
-		for owned in self.bodyState.ownedBindings 'each'
-			if owned.isPayloadBinding() and owned.payloadSlotVacated and owned.payloadScrutBox() == box 'stillEmpty'
-				return true
-			end 'stillEmpty'
-		end 'each'
-
-		return false
-	end 'boxHasVacatedPayloadSlot'
 
 	// ⭐ **REBIND A `var` TO A NEW VALUE, RELEASING WHAT IT OWNED.** The rebinding half is one line —
 	// `Scope.setValue` — but a `var` that owns a heap allocation (an owned interpolation String, a
@@ -45921,7 +45701,7 @@ export type Parser
 		end 'propagate'
 
 		var fork = self.openTryFork(func, flag: flag, result: result, anchor: tryTok, leg: leg)
-		var handler = try self.parseOtherwiseHandler(func, result: result, flag: fork.errFlag, fused: fork.errFused, target: target, resultUsed: resultUsed, tryTok: tryTok)
+		let handler = try self.parseOtherwiseHandler(func, result: result, flag: fork.errFlag, fused: fork.errFused, target: target, resultUsed: resultUsed, tryTok: tryTok)
 		var errEnd = self.bodyState.currentBlock
 		let errMoveMark = self.captureMoveMark()
 
@@ -50067,9 +49847,7 @@ export type Parser
 
 		// ⭐ **AND THE OP IS THE FACT: after this line `value`'s allocation has two owners.** The mark rides
 		// here rather than at the named doors above because that is what makes it unforgettable — see
-		// `markValueCoOwnsHeap`. It matters even for a value that was FRESH: `writeBackPayload` increfs a
-		// payload the arm moved out of a box it solely owned, and the box is now the second owner of it, so a
-		// nested `match` on that same binding must retain rather than steal the slot back.
+		// `markValueCoOwnsHeap`.
 		self.markValueCoOwnsHeap(value)
 	end 'emitIncref'
 
@@ -50199,10 +49977,8 @@ export type Parser
 	// rather than of the doors that reach it — the only form of it that cannot be forgotten. **EVERY such op
 	// calls this on its SOURCE, and there are FIVE of them, not one:**
 	//
-	//   • `emitIncref` — `__mm_incref` in place (a write-back taking the box's own reference, a consuming
-	//     argument co-owning a borrow, a `try … otherwise` phi edge). Its operand may already carry a fresh
-	//     allocation's `sole` claim: `writeBackPayload` increfs a payload the arm moved out of a box it solely
-	//     owned, and the box becomes that payload's second owner.
+	//   • `emitIncref` — `__mm_incref` in place (a consuming argument co-owning a borrow, a `try … otherwise`
+	//     phi edge).
 	//   • `emitRetainCall` — `__mm_retain`, the RETURNING twin, which mints a fresh name for the same box.
 	//   • `retainBorrowedByteRecord` — `__str_retain`, an incref on its heap branch.
 	//   • `emitRetainExistentialCall` — `__retain_existential`, an incref through the witness.
@@ -57596,14 +57372,6 @@ export type Parser
 
 		let scrutTag = self.tagOf(scrut)
 
-		// ⭐ **E3077's SCRUTINEE DOOR.** A `match` arm may WRITE a payload back into the scrutinee's box
-		// (`full(value) then value = 42` — `VarInfo.isPayloadBinding`), which is legal only for a `var`
-		// scrutinee, so matching on one is a use of its mutability. Both references say the same
-		// (`_reassignedVars.Add(scrutineeVarName)` when the scrutinee is a mutable var), and
-		// `specs/mutable-enums.md`'s six cases are exactly this shape and nothing else. Marked for a
-		// BARE-NAME scrutinee through the shared span test, which is the only shape that names a binding.
-		self.noteSpanMayWriteItsBinding(scrutStart)
-
 		if not self.at(TokenKind.charLiteral) 'noLabel'
 			let missing = self.current()
 			throw SourceParseError.matchMissingBlockId(missing.line, column: missing.column)
@@ -57612,22 +57380,6 @@ export type Parser
 		let labelTok = try self.consume(TokenKind.charLiteral)
 		let matchLabel = labelTok.value
 		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
-
-		// The write place is read here, right after the scrutinee expression, while `lastIndirectLoad`
-		// still names the slot load that produced it; an arm's own loads would overwrite it, and a
-		// writable field scrutinee would then be refused as reaching nowhere.
-		if not isErrorUnionMatch and self.valueIsBoxedUnion(scrut) 'aPayloadBearingScrutinee'
-			self.bodyState.unionWritePlaces.upsert(scrut, value: self.unionWritePlaceOf(func, scrutStart: scrutStart, scrut: scrut))
-
-			if self.valueIsAnUnboxedUnion(scrut) 'aWordRebindsItsVariable'
-				match self.unionWritePlaceFor(scrut) 'carryTheVariable'
-					variable(name) then self.carryUnionVariable(carried, name: name)
-					nowhere or
-					readOnlyParameter or
-					slot then break
-				end 'carryTheVariable'
-			end 'aWordRebindsItsVariable'
-		end 'aPayloadBearingScrutinee'
 
 		let entryVals = self.snapshotBindings(carried)
 
@@ -57738,14 +57490,10 @@ export type Parser
 		let scrutOwned = self.valueIsOwnedHeap(scrut)
 		let scrutSolelyOwned = self.valueIsSoleHeapOwner(scrut)
 
-		// ⭐ **AND WHETHER THE ARMS MAY WRITE THROUGH THEIR BINDINGS (`specs/mutable-enums.md`)** — read
-		// HERE, beside the ownership question it is the second half of, and BEFORE the temporary-scrutinee
-		// enrolment below so the question is asked of the author's own bindings. See
-		// `scrutineeBindingIsMutable`.
-		// ⚖ Derived ONCE here because two readers ask it — `scrutineeBindingIsMutable`, which states the
-		// ruling, and `declarePayloadBindings`' co-ownership demotion, which must not contradict it.
+		// Whether the scrutinee's slots can be read again after this match, and so may not be emptied by a
+		// move-out — read BEFORE the temporary-scrutinee enrolment below, so it is asked of the author's own
+		// bindings. See `scrutineeBindingIsMutable`.
 		let scrutMutable = self.scrutineeBindingIsMutable(scrut, isAParameter: valueIsAParameter(scrut, paramCount: func.paramCount)) or self.matchScrutineeFieldChainIsWritable(scrutStart, scrut: scrut) or self.matchScrutineeIsAMutableParameter(scrutStart)
-		let scrutIsAFreshTemporary = scrutSolelyOwned and self.pendingTempsContain(scrut)
 
 		// "Some reaching path left the scrutinee consumed" — the merge-level union of the per-arm bit, which
 		// is NOT the same as "some arm of THIS match moved a payload out": a nested `match m` in an arm body
@@ -58136,16 +57884,14 @@ export type Parser
 					if deferredScrutinee 'deferredScrutineeBindings'
 						try self.declareDeferredPatternBindings(func, names: deferredBindings)
 					end 'deferredScrutineeBindings' else 'payloadSlotBindings'
-						let armMovedManaged = try self.declarePayloadBindings(arm.bindings, scrutBox: payloadBox, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, scrutIsAFreshTemporary: scrutIsAFreshTemporary, layout: requireEnumLayout(arm.payloadEnum))
+						let armMovedManaged = try self.declarePayloadBindings(arm.bindings, scrutBox: payloadBox, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, layout: requireEnumLayout(arm.payloadEnum))
 
 						if armMovedManaged 'consumed'
 							// The scrutinee is dead for the rest of this arm from here: its slot is nulled, so the arm
 							// body's own re-read must be E3102 rather than a null deref.
 							//
-							// ⚠ It does not latch `scrutConsumed` (`mutable-enums`): a write-back can put the payload
-							// back (`writeBackPayload`), so "this arm took a payload out" is not "this arm left the
-							// scrutinee consumed", and the merge-level bit is read off the arm's exit state — by the
-							// next arm's `beginFreshArm`, and for the last arm by the single read after the loop.
+							// The merge-level bit is read off the arm's exit state — by the next arm's
+							// `beginFreshArm`, and for the last arm by the single read after the loop.
 							self.setBindingPartiallyMoved(scrut, value: true)
 						end 'consumed'
 					end 'payloadSlotBindings'
@@ -58268,9 +58014,7 @@ export type Parser
 		//
 		// ⭐ **THE LAST ARM'S OWN EXIT STATE IS READ HERE, and it is the same read every EARLIER arm gets
 		// from the `beginFreshArm` that follows it.** No arm follows the last one, so without this line its
-		// consume would be lost. Reading the STATE rather than latching a bit at the bind is what lets a
-		// write-back un-consume the scrutinee (`writeBackPayload` — `mutable-enums`): the question is what
-		// the arm LEFT BEHIND, not what it did on the way.
+		// consume would be lost.
 		scrutConsumed = scrutConsumed or self.bindingIsPartiallyMoved(scrut)
 
 		if scrutConsumed 'consumeScrut'
@@ -58379,8 +58123,7 @@ export type Parser
 
 	// Set the `partiallyMoved` bit of the binding `owner` denotes — `true` where something moved a managed
 	// payload OUT of a box this binding still owns (a re-read is then E3102, but the box is still dropped:
-	// see `VarInfo.partiallyMoved`), `false` where a fresh sibling `match` arm rewinds that, or where a
-	// write-back has refilled the last vacated slot (`writeBackPayload`).
+	// see `VarInfo.partiallyMoved`), `false` where a fresh sibling `match` arm rewinds that.
 	//
 	// ⭐⭐ **TWO PRODUCERS, ONE FACT — AND THE SECOND IS WHY THIS IS NO LONGER NAMED FOR SCRUTINEES.** A
 	// binding-match nulls a union's payload slot; `__ManagedList.remove` nulls a NODE's `value@16` when it
@@ -58407,36 +58150,24 @@ export type Parser
 		return owned.partiallyMoved
 	end 'bindingIsPartiallyMoved'
 
-	// ⭐⭐ **MAY A `match` ARM WRITE THROUGH THIS SCRUTINEE'S PAYLOAD BINDINGS (`specs/mutable-enums.md`)?**
+	// May a later read of this scrutinee find its slots again, so that no arm may empty one by a move-out?
 	// A binding that OWNS the box decides it — `var b = Box.full(10)` yes, `let b` no — and where no binding
 	// owns it, the two shapes below do.
 	//
-	// ⭐ **IT ASKS OWNERSHIP, NOT THE TOKENS.** Ownership answers the question from the fact that
-	// actually licenses the store, and answers it in this compiler's own currency (a `ValueId`). Probing for
-	// `identifier` + the match label before the scrutinee is parsed would answer the same for a bare local
-	// only, and would need a second grammar for "what shapes may appear before a match label".
+	// It asks ownership, not the tokens: probing for `identifier` + the match label before the scrutinee is
+	// parsed would answer the same for a bare local only, and would need a second grammar for "what shapes
+	// may appear before a match label".
 	//
-	// ⚖ **A UNION-TYPED PARAMETER ANSWERS `true` HERE**, and it is the only shape that owns no binding
-	// and still does: a parameter is a borrowed reference to the CALLER's union, so no arm may empty
-	// its slot. That answer is not permission to assign a payload. `unionWritePlaceOf` is, and it
-	// admits a parameter only when it is `mutable`; the caller's argument then answers for the write
-	// at the call, by the very E3159 that judges it.
+	// A union-typed parameter answers `true`, and it is the only shape that owns no binding and still does:
+	// a parameter is a borrowed reference to the caller's union, so no arm may empty its slot.
 	//
-	// ⛔ **A TEMPORARY IS NOT ONE, THOUGH ITS FRAME OWNS IT.** `scrutMutable` is also the move-out's gate
-	// (`scrutSolelyOwned and not scrutMutable`), so admitting a temporary would silently move
-	// `match <a constructed union>` off the destructive move-out and onto `retainedCoOwn` — a refcount change
-	// on a common path, in the class the member-alias leak came out of — and a nested `match` on the same box
-	// would then answer read-only where the outer answered mutable. Nothing needs it.
+	// A temporary answers `false`, though its frame owns it: admitting one would move
+	// `match <a constructed union>` off the destructive move-out and onto the retain, a refcount change on a
+	// common path.
 	//
-	// ⛔ **WHAT MOVES IS WRITABILITY AT THIS ONE SHAPE.** `scrutSolelyOwned` still decides the destructive
-	// move-out on its own stricter evidence, a temporary, a field read and a co-owned expression still answer
-	// `false`, and a `let` local OWNS its box, so it never reaches this line and stays read-only.
-	//
-	// ⚠ **IT IS MEMBERSHIP, AND THE ACQUISITION DECISION (`scrutSolelyOwned`) IS PROVENANCE — THEY DISAGREE ON
-	// THE LOOP-CARRIED PHI.** This one is right about mutability there and the provenance columns are wrong about
-	// ownership, so a `var` union matched inside the loop that reassigns it comes out mutable-but-retained.
-	// `declarePayloadBindings` binds that combination through its `retainedCoOwn` arm, which every
-	// mutable scrutinee takes, so the box keeps its own reference to the payload.
+	// ⚠ This is membership, and `scrutSolelyOwned` is provenance; they disagree on the loop-carried phi. A
+	// `var` union matched inside the loop that reassigns it answers `true` here, so `declarePayloadBindings`
+	// retains its payloads and the box keeps its own reference.
 	function scrutineeBindingIsMutable(scrut ValueId, isAParameter bool) returns bool
 		let index = try self.liveOwnerIndexOf(scrut) otherwise return isAParameter
 
@@ -58454,51 +58185,6 @@ export type Parser
 		view info = self.bodyState.scope.getInfo(name)
 		return info.isParameter and info.cellCrossesByReference
 	end 'matchScrutineeIsAMutableParameter'
-
-	function unionWritePlaceOf(func IrFunction, scrutStart ElementIndex, scrut ValueId) returns UnionWritePlace
-		if valueIsAParameter(scrut, paramCount: func.paramCount) and not self.hasLiveOwner(scrut) 'anUnmarkedParameter'
-			return UnionWritePlace.readOnlyParameter(self.tokenAt(scrutStart).value)
-		end 'anUnmarkedParameter'
-
-		if let index = try self.liveOwnerIndexOf(scrut) 'aLocalVariable'
-			view owner = try self.bodyState.ownedBindings.get(index) otherwise panic("unionWritePlaceOf: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
-
-			if owner.isMutable() 'writable'
-				return UnionWritePlace.variable(owner.name)
-			end 'writable'
-
-			return UnionWritePlace.nowhere
-		end 'aLocalVariable'
-
-		if not (self.matchScrutineeFieldChainIsWritable(scrutStart, scrut: scrut) or self.matchScrutineeIsAMutableParameter(scrutStart)) 'notWritable'
-			return UnionWritePlace.nowhere
-		end 'notWritable'
-
-		if not self.bodyState.lastIndirectLoad.isLoadOf(scrut) 'notLoadedFromASlot'
-			return UnionWritePlace.nowhere
-		end 'notLoadedFromASlot'
-
-		return UnionWritePlace.slot(self.bodyState.lastIndirectLoad.box, offset: self.bodyState.lastIndirectLoad.offset)
-	end 'unionWritePlaceOf'
-
-	function carryUnionVariable(carried VarInfoArray, name ByteArray)
-		for binding in carried 'alreadyCarried'
-			if binding.name.equals(name) 'theVariable'
-				return
-			end 'theVariable'
-		end 'alreadyCarried'
-
-		for binding in self.bodyState.mutableVars 'eachMutable'
-			if binding.name.equals(name) 'theMutable'
-				carried.push(binding)
-				return
-			end 'theMutable'
-		end 'eachMutable'
-	end 'carryUnionVariable'
-
-	function unionWritePlaceFor(scrutinee ValueId) returns UnionWritePlace
-		return try self.bodyState.unionWritePlaces.get(scrutinee) otherwise UnionWritePlace.nowhere
-	end 'unionWritePlaceFor'
 
 	// Parse ONE arm's body, in one of THREE shapes. An EXPRESSION arm is either a `gives` — a single
 	// expression, whose value feeds the merge phi — or a DIVERGING terminal form (`panic("…")` /
@@ -60879,14 +60565,12 @@ export type Parser
 	//
 	// ⭐ **A SCALAR binding is a COPY** (not a borrow into the box), so dropping the box does not
 	// invalidate it. A MANAGED binding (String/struct/boxed union) OWNS its payload either way — it drops at its
-	// own scope exit — but HOW it acquires that ownership depends on WHO ELSE CAN READ THE BOX'S SLOTS, and on
-	// whether this frame can still WRITE them:
-	//   • a scrutinee this frame is the SOLE owner of AND cannot write again — an immutable binding, or a
+	// own scope exit — but HOW it acquires that ownership depends on WHO ELSE CAN READ THE BOX'S SLOTS:
+	//   • a scrutinee this frame is the SOLE owner of and that is read no more — an immutable binding, or a
 	//     temporary ⇒ a MOVE-OUT, and the box slot is nulled so the box's cascade skips it
 	//     (`moveOutManagedPayload`);
-	//   • a scrutinee this frame is the SOLE owner of and CAN write again — a `var` binding ⇒ a RETAIN, because
-	//     its slot is a place `specs/mutable-enums.md` lets the arm write through and an arm that mutates
-	//     its payload in place never assigns the binding at all (see the arm below);
+	//   • a scrutinee this frame is the SOLE owner of and may match again — a `var` binding ⇒ a RETAIN, because
+	//     its later `match` reads the slot;
 	//   • a BORROWED scrutinee (a parameter, a receiver, a bare field read) ⇒ the same RETAIN, and the slot is
 	//     left INTACT because the box's real owner is the caller's local (`retainBorrowedPayload`);
 	//   • a CO-OWNED scrutinee — one this frame owns a reference to WHILE SOMETHING ELSE HOLDS THE SAME BOX ⇒
@@ -60896,21 +60580,14 @@ export type Parser
 	//     of them SEGFAULTED while the move-out's gate asked `valueIsOwnedHeap` — a predicate that answers
 	//     *"this value owns a reference"* where the null store needs *"nobody else will read these slots"*. The
 	//     gate is `valueIsSoleHeapOwner`; see `OwnedHeapExclusivity` for the six measured programs.
-	// Each RETAIN above is a hold (`holdBindingRead`) when nothing can write the binding and its
-	// payload is not a `typeParameter` or an `interfaceRef`. `HoldResolution.maxon` lowers the hold
+	// Each RETAIN above is a hold (`holdBindingRead`) when its payload is not a `typeParameter` or an
+	// `interfaceRef`. `HoldResolution.maxon` lowers the hold
 	// to the same incref only where an op in the window may release or displace what the binding
 	// reads.
 	// Returns whether ANY managed field was MOVED out — the whole match then consumes the scrutinee
 	// (`setBindingPartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
 	// box, and marking it moved would make the other owner's later re-read a false E3102.
-	//
-	// ⭐ **`scrutMutable` DECIDES WHETHER THE BINDINGS ACCEPT A WRITE (`specs/mutable-enums.md`).** It
-	// is a fact about the SCRUTINEE and never about the pattern: every binding of a `var` union is
-	// writable and every binding of a `let` one is E2013, whatever the arm spells. A per-binding `var`
-	// keyword may not override an immutable scrutinee, and that is the honest rule — the write is a
-	// store into the scrutinee's box (or the rebuilt word of a word union), so the scrutinee's own
-	// mutability is the permission being asked for.
-	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutSolelyOwned bool, scrutMutable bool, scrutIsAFreshTemporary bool, layout EnumLayout) returns bool throws SourceParseError
+	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutSolelyOwned bool, scrutMutable bool, layout EnumLayout) returns bool throws SourceParseError
 		var movedManaged = false
 		let unboxed = self.signatures.unionRepresentation(layout) == UnionRepresentation.word
 
@@ -60928,11 +60605,8 @@ export type Parser
 			let declared = self.signatures.payloadTypeOf(binding.field, layout: layout, into: self.artifact.typeNames)
 			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: layout.declFilePath)
 
-			// ⭐ **THE SLOT'S ADDRESS AND ITS WIDTH, DERIVED ONCE AND HANDED TO ALL THREE HALVES** — the
-			// LOAD, the binding that records them for a write-back, and the move-out's null store. They were
-			// derived independently inside `emitUnionPayloadLoad` and again here, which is two derivations
-			// of the pair a load and its store must agree on EXACTLY; pure functions on equal inputs, so
-			// they could not disagree today, but nothing made that a property rather than a coincidence.
+			// The slot's address and width are derived once and handed to both halves — the load and the
+			// move-out's null store — which must agree on them exactly.
 			let offset = layout.payloadSlotOffset(binding.slot)
 			let storage = payloadStorageOf(class)
 			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, valueType: payloadValueTypeOf(class, declared: declared), source: PayloadSource.word(layout.wordKeyOfIndex(binding.caseIndex)) if unboxed else PayloadSource.slot(offset, storage: storage), range: range)
@@ -60944,8 +60618,7 @@ export type Parser
 				self.carryReadOnlyProvenance(loaded, from: scrutBox, source: self.bodyState, path: ValueCarryPath.part)
 			end 'payloadOwnsARecord'
 
-			let bindingWrites = (scrutMutable or scrutIsAFreshTemporary) and payloadBindingAcceptsWrites(class) and not binding.field.isLet
-			var bindingInfo = try self.bodyState.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), kind: bindingKindOfMutability(bindingWrites), value: loaded, scrutBox: scrutBox, slotOffset: offset, storage: storage) otherwise throw SourceParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingTypeName()), line: binding.nameTok.line, column: binding.nameTok.column)
+			var bindingInfo = try self.bodyState.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), value: loaded, scrutBox: scrutBox) otherwise throw SourceParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingTypeName()), line: binding.nameTok.line, column: binding.nameTok.column)
 
 			// ⭐ **E3012 — AN ARM THAT NAMES A PAYLOAD IT NEVER READS MEANT `_`.** The discard is the spelling
 			// for a payload the arm does not want, and it is already skipped above, so a NAME here is a claim
@@ -60977,22 +60650,17 @@ export type Parser
 				// immutable scrutinee on the condition the box's move-out uses, so a later read is E3102 in
 				// either representation.
 				movedManaged = movedManaged or (scrutSolelyOwned and not scrutMutable)
-				self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, bindingWrites: bindingWrites, range: range)
+				self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, range: range)
 			end 'aWordPayload' else if payloadClassIsManaged(class) 'managedPayload'
-				// ⭐⭐ **A `var` UNION'S PAYLOAD SLOT IS A PLACE THIS FRAME MAY STILL WRITE, SO THE BIND BORROWS
-				// IT RATHER THAN EMPTYING IT.** The move-out is destructive — it nulls the slot and consumes the
-				// scrutinee — and that is only honest where nothing can ever put a payload back. A `let` union is
-				// exactly that: it is never assigned again, so an arm may take its payload for good. A `var` one
-				// is the opposite: `specs/mutable-enums.md`'s whole premise is that its slot is a writable
-				// place and the arm's binding a window onto it, and an arm that MUTATES its payload in place
-				// (`text.append(" tail")`) writes through that window without ever assigning the binding — so a
-				// move-out hands the record to a binding that frees it at the arm's exit, leaving the box holding
-				// a null the author never emptied. The retain keeps the box's own reference where it is.
+				// A `var` union's slot is read again by its next `match`, so the bind borrows it rather than
+				// emptying it: a move-out would hand the record to a binding that frees it at the arm's exit,
+				// leaving the box holding a null the author never emptied. A `let` union is never read after
+				// the match consumes it, so an arm may take its payload for good.
 				if scrutSolelyOwned and not scrutMutable and not self.sendErrorSlotIsCoOwnedByType(layout, slotType: declared) 'ownedMoveOut'
 					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, exclusivity: serviceSendErrorExclusivity(self.signatures, unionName: layout.name), range: range)
 					movedManaged = true
 				end 'ownedMoveOut' else 'borrowed'
-					self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, bindingWrites: bindingWrites, range: range)
+					self.borrowPayload(bindingInfo, loaded: loaded, name: binding.nameTok.value, range: range)
 				end 'borrowed'
 			end 'managedPayload'
 		end 'each'
@@ -61043,11 +60711,6 @@ export type Parser
 
 		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
 		self.emitIndirectStore(scrutBox, offset: offset, value: zero, storageType: storage, range: range)
-
-		// The HOLE this just made, recorded ON the binding that made it. A write-back through this binding
-		// fills it again, and only when NO hole is left may the scrutinee stop being `partiallyMoved` —
-		// see `VarInfo.payloadSlotVacated` and `writeBackPayload`.
-		bindingInfo.payloadSlotVacated = true
 	end 'moveOutManagedPayload'
 
 	// ⭐ **RETAIN A MANAGED PAYLOAD BOUND OUT OF A UNION THIS BIND MUST LEAVE WHOLE.** The load borrowed
@@ -61084,8 +60747,8 @@ export type Parser
 		self.ownPayloadBinding(bindingInfo, loaded: loaded, exclusivity: OwnedHeapExclusivity.coOwned)
 	end 'retainBorrowedPayload'
 
-	function borrowPayload(bindingInfo VarInfo, loaded ValueId, name ByteArray, bindingWrites bool, range SourceRange)
-		if not bindingWrites and not self.holdReplacesItsSource(loaded) 'heldRead'
+	function borrowPayload(bindingInfo VarInfo, loaded ValueId, name ByteArray, range SourceRange)
+		if not self.holdReplacesItsSource(loaded) 'heldRead'
 			_ = self.holdBindingRead(loaded, name: name, range: range)
 			return
 		end 'heldRead'
@@ -61099,8 +60762,7 @@ export type Parser
 	// struct payload is not mistaken for a borrow — and `ownedBindings` is what DROPS it, at the arm's own exit.
 	//
 	// ⚠ **`exclusivity` IS THE CALLER'S BECAUSE IT IS THE ONE THING THE TWO PATHS DO NOT SHARE, and folding it
-	// in here would re-derive the move-vs-retain decision at a second site** — the split that produced the
-	// write-back leak `declarePayloadBindings` records, one question over.
+	// in here would re-derive the move-vs-retain decision at a second site**.
 	//
 	// `markValueOwnsHeap` rather than `trackOwnedTemp`, for the reason a consumed parameter needs the same
 	// half: the BINDING owns the drop, not the statement, so enrolling a statement-scoped pending temp
@@ -66707,7 +66369,7 @@ export type Parser
 	end 'reportUnneededCastFrom'
 
 	function unneededCastSourceAlias(value ValueId, target DeclaredAlias) returns DeclaredAlias
-		var proven = self.valueDenotedAlias(value)
+		let proven = self.valueDenotedAlias(value)
 
 		match proven 'denoted'
 			declared then return proven
@@ -74927,9 +74589,7 @@ export type Parser
 			self.stateDeclaredLiteralTarget(self.signatures.payloadTypeOf(payloadField, layout: layout, into: self.artifact.typeNames), scopeFilePath: layout.declFilePath, valueStart: valueStart)
 			let value = try self.parseValueExpression(func)
 
-			if payloadField.isLet 'aLetPayload'
-				try self.requireStoreIntoAWritablePlace(value, valueStart: valueStart, place: payloadPlaceText(layout, field: payloadField, caseTok: caseTok), anchor: labelTok, slot: payloadField.capability)
-			end 'aLetPayload'
+			try self.requireStoreIntoAWritablePlace(value, valueStart: valueStart, place: payloadPlaceText(layout, field: payloadField, caseTok: caseTok), anchor: labelTok, slot: payloadField.capability)
 
 			try self.admitStore(func, slot: payloadField.capability, value: value, valueStart: valueStart, place: payloadPlaceText(layout, field: payloadField, caseTok: caseTok), holder: StoreHolder.unheld)
 
@@ -75374,12 +75034,8 @@ export type Parser
 	// reference can record the release obligation ON THE RECORD, rather than a caller inferring "a reference
 	// was taken" from the returned value differing (which the substituted-concrete arm also does).
 	//
-	// ⚠ **ITS SIBLING IS `writeBackPayload`, AND THE TWO PROTOCOLS DIFFER WHILE THE INVARIANT DOES NOT.** This
-	// is the MOVE: the box becomes the value's SOLE owner, the source is poisoned or de-listed, no incref.
-	// A write-back is the RETAIN: the binding keeps its own reference and lives on for the rest of the arm, so
-	// the box takes a SECOND one. Both leave the box holding exactly one reference it will release through
-	// `__destruct_<U>`, which is why they agree — but a caller reaching for the wrong one either strands a
-	// reference or frees the binding's value out from under it.
+	// This is the MOVE: the box becomes the value's sole owner, the source is poisoned or de-listed, no
+	// incref, and the box holds exactly one reference it releases through `__destruct_<U>`.
 	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, owner ValueId, anchor Token, range SourceRange) returns ValueId throws SourceParseError
 		if payloadClassIsTypeParam(class) 'opaqueSlot'
 			return try self.moveOpaqueValueInto(arg, argBareLocal: argBareLocal, slot: DurableOpaqueSlot.inRecord(owner), range: range)
@@ -76041,8 +75697,8 @@ export type Parser
 	// ⚠ **THE SOURCE (A SLOT'S ADDRESS AND WIDTH, OR THE WORD) AND THE VALUE TYPE ARE ALL THE
 	// CALLER'S, exactly as they are on the STORE side (`emitEnumBox`), and that is not a
 	// convenience.** `declarePayloadBindings` needs the slot's `PayloadClass` anyway — to decide
-	// managed-vs-scalar ownership, and to record the slot's ADDRESS and WIDTH on a binding a
-	// write-back may later store through — so classifying the slot a SECOND time here would derive
+	// managed-vs-scalar ownership, and to hand the slot's ADDRESS and WIDTH to the move-out's null
+	// store — so classifying the slot a SECOND time here would derive
 	// each of the numbers twice. The load and the store must agree on the address and the width
 	// EXACTLY or the store corrupts the box, so they are derived ONCE at the caller and passed to
 	// everything that emits with them.
@@ -93504,10 +93160,6 @@ export type Parser
 	function emitIndirectLoad(declared MaxonType, box ValueId, offset ByteOffset, storageType MaxonType, range SourceRange) returns ValueId
 		let result = self.mintValueOfType(declared)
 		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.loadIndirect(result, addr: box, offset: offset, valueType: storageType), range: range)
-		self.bodyState.lastIndirectLoad.recorded = true
-		self.bodyState.lastIndirectLoad.result = result
-		self.bodyState.lastIndirectLoad.box = box
-		self.bodyState.lastIndirectLoad.offset = offset
 		return result
 	end 'emitIndirectLoad'
 

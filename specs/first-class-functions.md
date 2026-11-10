@@ -1648,7 +1648,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.capturing-closure-in-payload-binding -->
-Assigning a capturing closure through a payload binding writes it back into the union's box, which owns it.
+A capturing closure stored into a payload is owned by the union's box, and the binding that reads it back calls it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1666,10 +1666,7 @@ end 'Action'
 function main() returns ExitCode
 	let bump = 20
 	var a = Action.run(double)
-	match a 'go'
-		run(op) then op = function(n Integer) gives n + bump
-		idle then return 1
-	end 'go'
+	a = Action.run(function(n Integer) gives n + bump)
 
 	match a 'call'
 		run(op) then return op(22)

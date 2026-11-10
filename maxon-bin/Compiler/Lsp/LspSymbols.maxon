@@ -556,30 +556,31 @@ module function lspLineOf(line LineNumber) returns LspLineNumber
 	return line - 1
 end 'lspLineOf'
 
-module function lspIsReadonlyModifier(tokens TokenArray, at ElementIndex) returns bool
+module function lspIsReceiverCapability(token Token) returns bool
+	return token.kind == TokenKind.leftParen and spellsCapabilityWord(token.value)
+end 'lspIsReceiverCapability'
+
+module function lspIsTypeQualifier(tokens TokenArray, at ElementIndex) returns bool
 	let cursor = lspTokenAt(tokens, index: at)
 
-	if cursor.kind != TokenKind.identifier or not isReadonlyWord(cursor.value) 'notTheWord'
+	if lspIsReceiverCapability(cursor) 'aReceiverCapability'
+		return true
+	end 'aReceiverCapability'
+
+	if cursor.kind != TokenKind.identifier or not isTypeQualifierWord(cursor.value) 'notAQualifierWord'
 		return false
-	end 'notTheWord'
+	end 'notAQualifierWord'
 
 	var brackets = BracketTracker.create()
 	var index = 0 as ElementIndex
 
 	while index <= at 'eachTokenUpToTheCursor'
-		let token = lspTokenAt(tokens, index: index)
-		brackets.observe(token.kind, value: token.value)
+		brackets.observe(lspTokenAt(tokens, index: index), nextKind: tokenKindAt(tokens, index: index + 1))
 		index = index + 1
 	end 'eachTokenUpToTheCursor'
 
-	return lspTrackedReadonlyModifier(brackets, tokens: tokens, at: at)
-end 'lspIsReadonlyModifier'
-
-module function lspTrackedReadonlyModifier(brackets BracketTracker, tokens TokenArray, at ElementIndex) returns bool
-	let next = try tokens.get(at + 1) otherwise Token.eof()
-
-	return brackets.lastWasReadonlyModifier() and readonlyOperandStartsWith(next.kind)
-end 'lspTrackedReadonlyModifier'
+	return brackets.lastQualifiedAType()
+end 'lspIsTypeQualifier'
 
 // Every index this file forms is derived from an `LspTokenLine`, whose bounds came from the same array — so an
 // out-of-range read is a defect in this walk and not an input a document can present.

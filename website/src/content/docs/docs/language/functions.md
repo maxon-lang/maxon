@@ -204,9 +204,6 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A union parameter whose `match` assigns a payload binding is marked `mutable` too, because the assignment
-  replaces the payload the caller's union holds; unmarked, it is **E2013** (see
-  [Mutable Match Bindings](/docs/language/enums-unions/#mutable-match-bindings)).
 - A record-type parameter is never rebound, marked or not: reassigning one is **E2013** (`'r' is a record
   parameter and cannot be reassigned; copy it into a local var`). Writing through it — a field store
   (`p.x = 99`) or a mutating call on a field (`p.items.push(x)`) — is not a reassignment and reaches the

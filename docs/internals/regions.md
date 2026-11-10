@@ -97,7 +97,7 @@ target reads its receiver after the right-hand side. The if-condition frame rest
 
 ## `let` and constant data
 
-A `let` binding, a `let` field and a `let` payload are write-through names. `readOnlyBlameOfBinding` answers
+A `let` binding, a `let` field and a union payload are write-through names. `readOnlyBlameOfBinding` answers
 `WriteBlame.rebindOnly` for them: a write through the name is recorded exactly as a write through a `var` is
 (it feeds the mutation summary, `provenanceWrites`, hold resolution and the capability seeds), and the only
 callee that refuses the name is one that reassigns a `mutable` by-reference parameter (E2013), because a `let`

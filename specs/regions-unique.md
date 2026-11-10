@@ -768,8 +768,8 @@ end 'main'
 error E3102: <fragment>:25:18: use of moved value 'pair': its ownership moved to the parameter 'pair' of 'keep', which keeps it
 ```
 
-<!-- test: a-payload-binding-kept-by-a-call-moves-its-subject -->
-`keep` stores the `token` payload, so the call moves the union it was bound out of and `slot` is dead afterwards.
+<!-- test: error.a-unique-payload-of-a-var-union-kept-by-a-call -->
+`keep` stores the `token` payload, which would move it out of the `var` union `slot`; a payload binding is a `let`, so it cannot carry the unique value away.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -815,7 +815,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:38:57: use of moved value 'slot': its ownership moved to the parameter 'token' of 'keep', which keeps it
+error E3078: <fragment>:38:33: cannot pass 'token' to parameter 'token' of 'keep': it keeps a unique value, which moves out of the caller's mutable data, and 'token' is not a `var`
 ```
 
 <!-- test: a-payload-binding-read-after-its-subject-is-handed-to-a-consuming-call-is-refused -->

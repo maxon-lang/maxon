@@ -2464,7 +2464,7 @@ end 'describe'
 function offer(h Store.handle, other Store.handle, w immutable Wrap)
 	try h.keep(w) otherwise (e) 'refused'
 		match e 'why'
-			mailboxFull(back) then try other.keep(freeze back.clone()) otherwise panic("a service with room takes the send")
+			mailboxFull(back) then try other.keep(back.clone()) otherwise panic("a service with room takes the send")
 			serviceStopped then panic("the service is running")
 		end 'why'
 	end 'refused'
@@ -2473,7 +2473,7 @@ end 'offer'
 function main() returns ExitCode
 	let h = spawn(capacity: 1) Store.create(1)
 	let other = spawn Store.create(2)
-	let first = freeze Wrap.held("first{1}")
+	let first = Wrap.held("first{1}")
 
 	for _ in 0 upto 3 'many'
 		offer(h, other: other, w: first)
@@ -2539,13 +2539,13 @@ end 'offer'
 function main() returns ExitCode
 	let h = spawn(capacity: 1) Store.create()
 	let other = spawn Store.create()
-	let first = freeze Wrap.held("first{1}")
+	let first = Wrap.held("first{1}")
 
 	try offer(h, w: first) otherwise panic("a capacity of one takes the first send")
 
 	try offer(h, w: first) otherwise (e) 'refused'
 		match e 'why'
-			mailboxFull(back) then try other.keep(freeze back.clone()) otherwise panic("a service with room takes the send")
+			mailboxFull(back) then try other.keep(back.clone()) otherwise panic("a service with room takes the send")
 			serviceStopped then return 1
 		end 'why'
 	end 'refused'
@@ -16360,7 +16360,7 @@ Every payload of `Note` is a `let`, so nothing can write its value: the send sha
 typealias Count = int(0 to 1000)
 
 union Note
-	text(let body String)
+	text(body String)
 	blank
 end 'Note'
 

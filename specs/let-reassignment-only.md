@@ -181,7 +181,7 @@ end 'main'
 <!-- test: a-match-binding-of-a-let-payload-is-written-through -->
 ```maxon
 union Holder
-	held(let items ByteArray)
+	held(items ByteArray)
 	empty
 end 'Holder'
 

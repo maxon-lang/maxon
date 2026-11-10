@@ -2592,141 +2592,6 @@ end 'main'
 error E3005: <fragment>:20:30: type mismatch: 'expected Inner, got Other'
 ```
 
-<!-- test: nested-union-payload-write-back -->
-A nested boxed-union payload bound out of a `var` union is WRITABLE, exactly as a String or a struct
-payload is (`payloadBindingAcceptsWrites`) — the two facts a write-back needs are both statically
-available for it: the move-out nulled the slot, so there is no previous owner to release, and the box's
-own reference is the `__mm_incref` the write-back emits. The displaced `Ty` box is dropped when the
-binding it moved into leaves the arm, the replacement is released by `__destruct_Expr` → `__destruct_Ty`
-→ `__str_decref` at scope exit, and the second `match` reads the value the FIRST one stored — so the
-exit code is the replacement's byte length (43) and not the original's (66). Every one of those
-allocations is a real heap record, so a missed drop or a double release would be exit 101 rather than a
-wrong number.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-union Ty
-	concrete(name String)
-	stringy
-end 'Ty'
-
-union Expr
-	direct(ty Ty)
-	unresolved
-end 'Expr'
-
-function tyLen(ty Ty) returns Integer
-	return match ty 'l'
-		concrete(name) gives name.byteLength() as Integer
-		stringy gives 0
-	end 'l'
-end 'tyLen'
-
-function main() returns ExitCode
-	var e = Expr.direct(Ty.concrete("the first nested payload, long enough to be a real heap allocation"))
-
-	match e 'write'
-		direct(ty) then ty = Ty.concrete("the second one, also a real heap allocation")
-		unresolved then print("none")
-	end 'write'
-
-	return match e 'read'
-		direct(ty) gives tyLen(ty) as ExitCode
-		unresolved gives 99
-	end 'read'
-end 'main'
-```
-```exitcode
-43
-```
-
-<!-- test: write-back-through-a-loop-carried-nested-union-payload -->
-⭐⭐ **THE EDGE OF THE CASE ABOVE — A LOOP-CARRIED `var` — AND IT IS THE SAME ANSWER.** Writability is
-decided from MEMBERSHIP (`scrutMutable` — is the scrutinee a `var`?) and the acquisition from PROVENANCE
-(`scrutOwned` — does the value carry an owned-heap bit?), and inside the loop the scrutinee's current
-value is a header phi. A phi with no provenance bit would make the two disagree: the payload acquired by
-RETAIN, the slot left occupied, `declarePayloadBindings` demoting the binding to read-only, and the
-write-back refused E2013 — a compiler defect that would wear a rule's clothes.
-
-⛔⛔ **A PHI IS NOT A FRESH VALUE** — it is the same allocation the merged binding already owned, renamed
-at a join — so `mintPhiForBinding` carries the owned-heap bit onto it (and `pushMergedEdgeValue` checks
-every other incoming against it). Membership and provenance agree, the payload is CONSUMED exactly as it
-is outside a loop, and the write-back is the ordinary one the case above pins.
-
-⚠ **THE SAME MISSING BIT WOULD ALSO BE A LEAK.** A merged name that reads as borrowed gets laundered by
-whatever it is handed to next, so a rebind would both POISON its source (a move: nothing drops it) and
-emit an `__mm_retain` (a co-own: something must). One reference, no owner — in the compiler's own
-self-compile, an `IrBlock` leaked per `matchnext` block, and the leak gate's exit 101.
-
-```maxon
-union Ty
-	concrete(name String)
-	stringy
-end 'Ty'
-
-union Expr
-	direct(ty Ty)
-	unresolved
-end 'Expr'
-
-function main() returns ExitCode
-	var e = Expr.direct(Ty.concrete("the first nested payload, long enough to be a real heap allocation"))
-	var total = 0 as FullRangeInt
-
-	for i in 1 to 2 'round'
-		total = total + i
-		match e 'write'
-			direct(ty) then ty = Ty.concrete("a replacement, also a real heap allocation")
-			unresolved then total = total + 1
-		end 'write'
-		e = Expr.direct(Ty.concrete("the next round's payload, a real heap allocation too"))
-	end 'round'
-
-	return total
-end 'main'
-```
-```exitcode
-3
-```
-
-<!-- test: write-back-through-a-loop-carried-string-payload-is-the-same-answer -->
-⭐⭐ **THE CONTROL FOR THE CASE ABOVE, AND IT IS WHAT MAKES THE ANSWER ATTRIBUTABLE.** The identical shape
-over a `String` payload — a payload kind `mutable-enums.md` makes writable — gets the identical
-answer. So the acceptance does not belong to the nested-union payload kind: it belongs to how a
-loop-carried scrutinee's provenance is read. ⚠ Keep BOTH halves of the pair — a single-payload-kind
-case cannot tell a payload-kind rule from an acquisition rule.
-
-⚠ **THE EXIT CODE IS NOT THE SUBJECT — THE LEAK GATE IS.** `total` is 3 for a loop that runs twice
-whatever the payloads do, so a `3` here proves only that the program ran. What discriminates is that
-every string in both programs is a real heap record: a payload acquired by retain and then written back
-would strand the box's reference and exit 101, and a payload consumed twice would double-free. The
-answer being 3 AND the process exiting 3 is the pin.
-```maxon
-union Expr
-	direct(s String)
-	unresolved
-end 'Expr'
-
-function main() returns ExitCode
-	var e = Expr.direct("the first payload, long enough to be a real heap allocation")
-	var total = 0 as FullRangeInt
-
-	for i in 1 to 2 'round'
-		total = total + i
-		match e 'write'
-			direct(s) then s = "a replacement, also a real heap allocation"
-			unresolved then total = total + 1
-		end 'write'
-		e = Expr.direct("the next round's payload, a real heap allocation too")
-	end 'round'
-
-	return total
-end 'main'
-```
-```exitcode
-3
-```
-
 <!-- test: co-owned-container-field-bind-then-the-field-is-read-again -->
 ⭐⭐ **CO-OWNERSHIP IS THE THIRD STATE, AND A MOVE-OUT OF A CO-OWNED BOX IS A THEFT.** `let borrowed = h.ty`
 reads a union out of a MUTABLE struct field, and a value read out of a rebindable slot is promoted by
@@ -2909,7 +2774,7 @@ end 'tyLen'
 function main() returns ExitCode
 	var arr = TyArray.create(0)
 	arr.push(Ty.concrete("an array element payload, long enough to be a real heap allocation"))
-	var borrowed = try arr.get(0) otherwise panic("get failed")
+	let borrowed = try arr.get(0) otherwise panic("get failed")
 	let first = match borrowed 'b'
 		concrete(name) gives name.byteLength() as ExitCode
 		stringy gives 0
@@ -3565,48 +3430,6 @@ end 'main'
 ```
 ```stdout
 celsius 21.5
-```
-
-<!-- test: a-float-payload-is-written-back-through-a-var-binding -->
-Matching a `var` binds the payload mutably: the write lands in the union's own payload, and a union rebuilt
-from the bound value carries the new float.
-```maxon
-union Reading
-	celsius(value FullRangeFloat)
-	missing
-end 'Reading'
-
-function describe(r Reading) returns String
-	return match r 'which'
-		celsius(value) gives "celsius {value}"
-		missing gives "missing"
-	end 'which'
-end 'describe'
-
-function main() returns ExitCode
-	var r = Reading.celsius(21.5)
-
-	match r 'adjust'
-		celsius(value) then value = value + 0.25
-		missing then return 1
-	end 'adjust'
-
-	let doubled = match r 'rebuild'
-		celsius(value) gives Reading.celsius(value * 2.0)
-		missing gives Reading.missing
-	end 'rebuild'
-
-	print("{describe(r)}\n")
-	print("{describe(doubled)}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-celsius 21.75
-celsius 43.5
 ```
 
 <!-- test: a-read-only-payload-outlives-the-replacement-of-its-owner -->

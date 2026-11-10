@@ -414,9 +414,6 @@ enum SignatureDiscriminator
 	// identically through `mixPayloadField`'s type, while the `match` binding out of them reaches a different
 	// member roster.
 	payloadShapeSurface = 74
-	payloadShapeLet = 141
-	payloadLetBit = 148
-	payloadVarBit = 0
 
 	// A FUNCTION typealias's shape discriminator — `declShapeAlias`'s twin, for its reason: a name
 	// that stops being a ranged alias and becomes a function one, or whose function return type changes,
@@ -1004,7 +1001,7 @@ export union TopLevelConstant
 	// arm is WIDENED rather than duplicated because a folded enum case is not a second kind of scalar
 	// constant, it is a scalar constant that names its type; two arms would be one fact with two spellings
 	// free to drift. Bytes and not an id — see `ConstValue.typeName` for why the interner forbids an id here.
-	value(payload FullRangeInt, tag ValueTypeTag, let typeName immutable ByteArray)
+	value(payload FullRangeInt, tag ValueTypeTag, typeName immutable ByteArray)
 
 	// THIS declaration is defective, and `error` is the positioned diagnostic for it. Held rather
 	// than reported, because the sweep that found it is deliberately TOLERANT and has no business
@@ -1021,17 +1018,17 @@ export union TopLevelConstant
 	// payload and `kind` says which literal it came from. The `value` arm's twin, and a SEPARATE arm
 	// rather than a widened one because the two payloads are different things: a number a reader copies
 	// into a `literal` op, versus bytes a reader re-materializes as a record.
-	managedValue(let bytes immutable ByteArray, kind ManagedConstKind)
+	managedValue(bytes immutable ByteArray, kind ManagedConstKind)
 
 	// An initializer the sweep does not parse (a record, or anything with a call); `settleRecordInitializers`
 	// replaces it with its settled answer.
 	deferredRecord
 
-	storedRecord(valueType MaxonType, let brand immutable ByteArray, runsProgramCode bool, mapColumns MapLiteralColumns)
+	storedRecord(valueType MaxonType, brand immutable ByteArray, runsProgramCode bool, mapColumns MapLiteralColumns)
 
 	imagedRecord(image TopLevelImageRecord)
 
-	imagedBox(nodes ImmortalBoxNodeArray, root ElementIndex, let typeName immutable ByteArray, tag ValueTypeTag)
+	imagedBox(nodes ImmortalBoxNodeArray, root ElementIndex, typeName immutable ByteArray, tag ValueTypeTag)
 
 	unvalidatedRecord(followUp InitializerFollowUp)
 
@@ -1456,7 +1453,7 @@ end 'cacheTableAgreesManagedConstKind'
 
 export union OwnershipCallee
 	inert
-	named(let callee immutable ByteArray)
+	named(callee immutable ByteArray)
 
 	export function names(callee ByteArray) returns bool
 		return match self 'callee'
@@ -1632,7 +1629,7 @@ end 'tokenKindIsRecordShaped'
 // that spawns a service.
 export union GlobalThreadReach
 	// A `let`, which every message may read: `callee` marks its graph shared, so every count on it is atomic.
-	everyThreadThrough(let callee immutable ByteArray)
+	everyThreadThrough(callee immutable ByteArray)
 
 	// A `let` whose graph no share walk can mark, and `noun` says what it holds.
 	everyThreadUnwalkable(noun String)
@@ -1642,12 +1639,12 @@ end 'GlobalThreadReach'
 
 export union ManagedGlobalInitializer
 	literal(build ManagedGlobalRecord)
-	initializerFunction(let callee immutable ByteArray)
+	initializerFunction(callee immutable ByteArray)
 end 'ManagedGlobalInitializer'
 
 export union ManagedGlobalRecord
-	stringRecord(let bytes immutable ByteArray)
-	constArrayRecord(elementSize ElementStride, elementCount FullRangeInt, let bytes immutable ByteArray)
+	stringRecord(bytes immutable ByteArray)
+	constArrayRecord(elementSize ElementStride, elementCount FullRangeInt, bytes immutable ByteArray)
 end 'ManagedGlobalRecord'
 
 // ONE argument a container's `create` is stamped with — an `element_size@24` stride, or the
@@ -1663,7 +1660,7 @@ export union ContainerCreateStamp
 	inline(value FullRangeInt)
 
 	// The RAW `.text` ADDRESS of a managed column's drop callee.
-	dropCallee(let callee immutable ByteArray)
+	dropCallee(callee immutable ByteArray)
 end 'ContainerCreateStamp'
 
 // WHICH record a managed LITERAL global's bytes build — the `ManagedConstKind` → `ManagedGlobalRecord`
@@ -1887,7 +1884,7 @@ end 'TopLevelDecl'
 
 export union DataSlotLabel
 	unlabelled
-	labelled(let label immutable ByteArray)
+	labelled(label immutable ByteArray)
 
 	export function label() returns immutable ByteArray throws AbsentError
 		match self 'slot'
@@ -2228,13 +2225,13 @@ end 'ConstValue'
 
 export union FoldedInitializer
 	scalar(value ConstValue)
-	managed(let bytes immutable ByteArray, kind ManagedConstKind)
+	managed(bytes immutable ByteArray, kind ManagedConstKind)
 	runtimeRecord
 end 'FoldedInitializer'
 
 export union InitializerFollowUp
 	none
-	nonConstantCall(let callee immutable ByteArray, line LineNumber, column ColumnNumber)
+	nonConstantCall(callee immutable ByteArray, line LineNumber, column ColumnNumber)
 end 'InitializerFollowUp'
 
 // @generated library-cache begin
@@ -2296,7 +2293,7 @@ export union ProbedScalarKind
 	boolean
 	integer
 	float
-	enumCase(let typeName immutable ByteArray)
+	enumCase(typeName immutable ByteArray)
 
 	function enumTypeName() returns immutable ByteArray
 		return match self 'kind'
@@ -2331,10 +2328,10 @@ end 'probedScalarKindOfConst'
 export union ProbedSlot
 	scalar(payload FullRangeInt, kind ProbedScalarKind)
 	emptyContainer(valueType MaxonType)
-	helperDefault(let callee immutable ByteArray)
-	unionCase(let typeName immutable ByteArray, let caseName immutable ByteArray)
+	helperDefault(callee immutable ByteArray)
+	unionCase(typeName immutable ByteArray, caseName immutable ByteArray)
 	box(node ElementIndex)
-	inlineWord(payload FullRangeInt, let typeName immutable ByteArray)
+	inlineWord(payload FullRangeInt, typeName immutable ByteArray)
 end 'ProbedSlot'
 
 export function inlineWordOfProbedSlots(layout StructLayout, slots ProbedSlotArray) returns FullRangeInt throws AbsentError
@@ -2383,10 +2380,10 @@ end 'pushProbedConstruction'
 
 export union ProbedShape
 	opaque
-	constBlob(elementSize ElementStride, elementCount FullRangeInt, let bytes immutable ByteArray, bounds ColumnBounds)
+	constBlob(elementSize ElementStride, elementCount FullRangeInt, bytes immutable ByteArray, bounds ColumnBounds)
 	stringTable(texts ByteBlobArray)
 	emptyContainer
-	payloadFreeUnionCase(let typeName immutable ByteArray, let caseName immutable ByteArray)
+	payloadFreeUnionCase(typeName immutable ByteArray, caseName immutable ByteArray)
 	construction(nodes ProbedConstructionArray)
 end 'ProbedShape'
 
@@ -2405,7 +2402,7 @@ end 'ProbedRecord'
 union ProbedImage
 	none
 	record(image TopLevelImageRecord)
-	box(nodes ImmortalBoxNodeArray, root ElementIndex, let typeName immutable ByteArray, tag ValueTypeTag)
+	box(nodes ImmortalBoxNodeArray, root ElementIndex, typeName immutable ByteArray, tag ValueTypeTag)
 end 'ProbedImage'
 
 let GlobalInitializerPrefix = b"__global_init."
@@ -2441,7 +2438,7 @@ union ConstEvalOutcome
 	// `typeName` rides for `TopLevelConstant.value`'s reason: a constant that folded to an enum CASE is a
 	// number whose type is the enum, and a reference from ANOTHER constant (`let B = A`) resolves through
 	// this answer — so dropping the name here would silently retype `B` as a bare int.
-	value(payload FullRangeInt, tag ValueTypeTag, let typeName immutable ByteArray)
+	value(payload FullRangeInt, tag ValueTypeTag, typeName immutable ByteArray)
 	failed
 	notFound
 end 'ConstEvalOutcome'
@@ -2504,14 +2501,14 @@ end 'BareCallKind'
 export union TopLevelConstantLookup
 	// `typeName` rides for `TopLevelConstant.value`'s reason — this is the answer a USE site reads, and it
 	// is the one place the enum's spelling has to arrive for the emitted literal to be typed as the enum.
-	found(payload FullRangeInt, tag ValueTypeTag, let typeName immutable ByteArray)
+	found(payload FullRangeInt, tag ValueTypeTag, typeName immutable ByteArray)
 
 	// The MANAGED twin of `found`: a use re-materializes the literal
 	// from these bytes rather than inlining a number. It sits BESIDE `found` — unlike
 	// `TopLevelConstant.managedValue`, which is appended — because the two "a constant of this name is
 	// visible here" cases want to be one arm at the caller that only asks whether it EXISTS
 	// (`Parser.rejectNonGlobalAssignment`: assigning to either is E2013).
-	foundManaged(let bytes immutable ByteArray, kind ManagedConstKind)
+	foundManaged(bytes immutable ByteArray, kind ManagedConstKind)
 	notFound
 
 	// ⭐⭐ **AN IMAGE-DATA RECORD `let`** — a constant array literal or an empty `Array with T`, whose bytes
@@ -2541,7 +2538,7 @@ export union TopLevelConstantLookup
 	// ⚠ **THE TYPE CROSSES AS A NAME, NOT AS AN INTERNED ID** — `found`'s rule, and it is the difference
 	// between a value the reading file can mint and a panic: every `structRef` and `named` id is minted from
 	// the FILE's own interner, and an id minted here names something else there.
-	foundImageBox(nodes ImmortalBoxNodeArray, root ElementIndex, let typeName immutable ByteArray, tag ValueTypeTag)
+	foundImageBox(nodes ImmortalBoxNodeArray, root ElementIndex, typeName immutable ByteArray, tag ValueTypeTag)
 
 	// The binding's initializer, or one it reads, owns a diagnostic already (`TopLevelConstant.poisoned`). A
 	// read mints a deferred value, so that diagnostic is not repeated at every use.
@@ -2611,7 +2608,7 @@ end 'TopLevelImageRecord'
 // different instance than the slot was laid out for.
 export union TopLevelGlobalLookup
 	// `brand` is the generic-instance alias the initializer spelled (`Xs.create()`), or empty.
-	found(let label immutable ByteArray, valueType MaxonType, let brand immutable ByteArray)
+	found(label immutable ByteArray, valueType MaxonType, brand immutable ByteArray)
 	notFound
 
 	// `TopLevelConstantLookup.poisoned`, for a binding with a slot.
@@ -2897,7 +2894,7 @@ export union CalleeReturn
 	// means it returns nothing at all (using the call as a value is an error — `Parser.parseCall`),
 	// `value(t)` means it returns a `t`. The old code mapped BOTH of these and the case below onto
 	// one `unresolved`, which is how `let x = noop()` then `x + 4` compiled.
-	declared(let returnType MaxonReturnType)
+	declared(returnType MaxonReturnType)
 
 	// NO file declares it. The parser DEFERS — it types the call `unresolved` — rather than
 	// reporting, and that is deliberate: the authoritative answer belongs to
@@ -2943,7 +2940,7 @@ end 'scopeBindsEveryTypeParam'
 // (`low: 0`) would make an undeclared name read as UNSIGNED, which is the one thing it must never
 // silently do.
 export union DeclaredAlias
-	declared(let alias RangedTypeAlias)
+	declared(alias RangedTypeAlias)
 	undeclared
 end 'DeclaredAlias'
 
@@ -3738,48 +3735,6 @@ export function payloadClassIsAGreenThread(class PayloadClass) returns bool
 	end 'c'
 end 'payloadClassIsAGreenThread'
 
-// ⭐ **MAY A MATCH-ARM BINDING ON THIS SLOT BE WRITTEN BACK INTO THE BOX (`specs/mutable-enums.md`)?**
-// The write-back (`Parser.writeBackPayload`) must state, statically, who owns the value the slot held
-// BEFORE it and who owns the one going in — and only these four classes state it:
-//
-//   • `scalar` — the slot owns nothing, so a store is the whole of the write.
-//   • `managed` — the box's reference to the value the slot held is releasable by a statically named
-//     decref, and the box takes its own reference to the incoming one. A MOVED-OUT slot is null and has
-//     nothing to release; a RETAINED one still holds the box's reference, which `Parser.writeBackPayload`
-//     drops before the store.
-//   • `nestedUnion` — a boxed union is an owned heap pointer with a statically named release
-//     (`unionBoxDropCallee`), so the sentence above is true of it word for word.
-//   • `greenThread` — a one-word slot, so a bound payload takes a write exactly as a scalar one
-//     does.
-//
-// ⚠ **THIS PREDICATE IS NOT THE WHOLE GATE, AND SAYING SO IS THE POINT OF THIS PARAGRAPH.** It answers
-// about the CLASS. WHO ELSE OWNS THE BOX is a fact about the ACQUISITION, and
-// `Parser.declarePayloadBindings` decides it separately (`scrutSolelyOwned`) — from PROVENANCE, where this
-// door's caller decides writability from MEMBERSHIP, and the two disagree on a loop-carried phi: a `var`
-// union matched inside the loop that reassigns it is mutable by membership and co-owned by provenance. A
-// write through such a binding would publish a payload swap to an owner this frame cannot name, so the
-// retain arm there demotes it to read-only.
-//
-// Every other class keeps a read-only binding rather than a guessed protocol. `typeParam` is the
-// one that could be wrongly waved through: its slot's reference protocol is a RUN-TIME fact reached
-// through the instance descriptor (`Parser.moveOpaqueValueInto`), so a plain store would drop the
-// reference the box still holds — and it is unreachable besides, a generic union having no
-// construct syntax. `undeclaredName` is an error path.
-//
-// A `match` like its siblings, so a case appended to `PayloadClass` fails to compile here rather than
-// being silently absorbed into either answer.
-export function payloadBindingAcceptsWrites(class PayloadClass) returns bool
-	return match class 'c'
-		scalar or
-		managed or
-		nestedUnion or
-		greenThread gives true
-		typeParam or
-		existential or
-		undeclaredName gives false
-	end 'c'
-end 'payloadBindingAcceptsWrites'
-
 // Is a classified slot an EXISTENTIAL — the two-slot fat pointer, whose admitted values and whose
 // DROP both differ from every other managed kind? Its reader is the field-type door
 // (`Parser.requireFieldType`); it is a `match` like its two siblings rather than an `is` test so
@@ -4276,7 +4231,7 @@ typealias TypeParamIdSet = Set with TypeParamId
 // `bool` because two askers want two different things of it: the DROP SITE must check that the descriptor it
 // carries lays out THAT list, and the cascade INSTALLER only needs to know a slot exists at all.
 export union OpaqueSlotDeclaration
-	declaredBy(let typeName immutable ByteArray)
+	declaredBy(typeName immutable ByteArray)
 	none
 end 'OpaqueSlotDeclaration'
 
@@ -4829,9 +4784,9 @@ end 'FunctionValueSlot'
 // namespace is admitted to the receiver-reachable side whether or not this particular chain names it. Wider
 // than the exact question, and wider only across `stdlib`'s own free functions, which are few.
 export union ForwardCall
-	bare(let name immutable ByteArray)
-	throughAReceiver(let name immutable ByteArray)
-	throughSelf(let typeName immutable ByteArray, let name immutable ByteArray)
+	bare(name immutable ByteArray)
+	throughAReceiver(name immutable ByteArray)
+	throughSelf(typeName immutable ByteArray, name immutable ByteArray)
 end 'ForwardCall'
 
 // @generated library-cache begin
@@ -4982,7 +4937,7 @@ export union DeclCallability
 
 	// A method of `typeName`: a bare call (implicit `self` reaches a sibling — MEASURED), any
 	// receiver-qualified call, and a `self.`/`Self.`-qualified call inside `typeName`'s own body.
-	methodOf(let typeName immutable ByteArray)
+	methodOf(typeName immutable ByteArray)
 end 'DeclCallability'
 
 // @generated library-cache begin
@@ -5516,7 +5471,7 @@ export union ParamDefaultProducer
 	required
 	callerLine
 	callerFile
-	helper(let name immutable ByteArray)
+	helper(name immutable ByteArray)
 end 'ParamDefaultProducer'
 
 // @generated library-cache begin
@@ -5683,7 +5638,7 @@ end 'ParamDefaultInfo'
 
 export union DefaultHelperAliasReturn
 	statesNothing
-	states(let info GlobalAliasReturnInfo)
+	states(info GlobalAliasReturnInfo)
 end 'DefaultHelperAliasReturn'
 
 export type SweptDefaultHelper
@@ -6051,7 +6006,7 @@ end 'cacheReadDeclaredBodyFactNameSet'
 
 export union EnclosingTypeScope
 	fileScope
-	typeBody(let name immutable ByteArray)
+	typeBody(name immutable ByteArray)
 
 	export function isType() returns bool
 		return match self 'scope'
@@ -6113,18 +6068,18 @@ end 'cacheReadEnclosingTypeScopeTypeBody'
 export union FreshReturnForward
 	// `name(…)`: the enclosing type's member when that type declares one, else the free function the
 	// writing file means (`ProgramSignatures.resolveFunctionName`).
-	unqualified(enclosingType EnclosingTypeScope, let name immutable ByteArray)
+	unqualified(enclosingType EnclosingTypeScope, name immutable ByteArray)
 
 	// `self.name(…)` (`takesReceiver`) or `Self.name(…)` — a member of the enclosing type.
-	ofEnclosingType(let typeName immutable ByteArray, let name immutable ByteArray, takesReceiver bool)
+	ofEnclosingType(typeName immutable ByteArray, name immutable ByteArray, takesReceiver bool)
 
 	// `Type.name(…)` with the type written by name. The sweep has already refused a head that a local, a
 	// parameter, a type parameter or an inner alias of the enclosing type could be.
-	ofNamedType(let typeName immutable ByteArray, let name immutable ByteArray)
+	ofNamedType(typeName immutable ByteArray, name immutable ByteArray)
 
 	// `self.f….name(…)`, a move-out door on a field of the enclosing type. Only the move-out channel
 	// (`ProgramSignatures.returnsAMovedOutElement`) records or reads one.
-	ofFieldOfEnclosingType(let typeName immutable ByteArray, let fields NameRoster, let name immutable ByteArray)
+	ofFieldOfEnclosingType(typeName immutable ByteArray, fields NameRoster, name immutable ByteArray)
 end 'FreshReturnForward'
 
 // @generated library-cache begin
@@ -6290,13 +6245,13 @@ end 'cacheReadFreshReturnForwardMap'
 // The declaration a forwarding call reaches, or none this index can name — a spelling whose target the close
 // cannot resolve exactly, which retracts the forwarder's claim.
 union FreshReturnForwardTarget
-	declaration(let key immutable ByteArray)
+	declaration(key immutable ByteArray)
 	unnameable
 end 'FreshReturnForwardTarget'
 
 union FieldMoveOutTarget
 	libraryDoor
-	declaration(let key immutable ByteArray)
+	declaration(key immutable ByteArray)
 	unnameable
 end 'FieldMoveOutTarget'
 
@@ -7027,12 +6982,12 @@ end 'serviceHandleClonerOf'
 
 export union UncloneableExistentialSlot
 	none
-	slot(let structName immutable ByteArray, let fieldName immutable ByteArray, let interfaceName immutable ByteArray, let conformerName immutable ByteArray)
+	slot(structName immutable ByteArray, fieldName immutable ByteArray, interfaceName immutable ByteArray, conformerName immutable ByteArray)
 end 'UncloneableExistentialSlot'
 
 union ConformerCloneBlame
 	none
-	conformer(let name immutable ByteArray)
+	conformer(name immutable ByteArray)
 end 'ConformerCloneBlame'
 
 export type CascadeWalkBreak
@@ -7110,8 +7065,8 @@ end 'CascadeWalkFrame'
 
 union OwnedOsHandle
 	none
-	handle(let name immutable ByteArray)
-	pin(let name immutable ByteArray)
+	handle(name immutable ByteArray)
+	pin(name immutable ByteArray)
 end 'OwnedOsHandle'
 
 // ⭐ **HOW A MANAGED FIELD OF DECLARED TYPE `fieldType` IS CLONED OR PROVED SOLE.** The exact STRUCTURAL DUAL
@@ -7127,7 +7082,7 @@ export union ManagedCascadeStrategy
 	// TRIVIAL-element Array → `__managed_clone`, TRIVIAL-element chain → `__list_clone` (each duplicates the
 	// record's words, and the result is independently droppable). This is the ONLY strategy an ARRAY ELEMENT may
 	// carry, because an element cloner is invoked through `callIndirect(fn, elem)`.
-	direct(let callee immutable ByteArray)
+	direct(callee immutable ByteArray)
 
 	// ⭐ A MANAGED-element CONTAINER FIELD: `containerClone(field, funcAddr(elementClone))`, where `containerClone`
 	// is the container's own per-element copy entry (`__managed_clone_managed` for the record,
@@ -7141,7 +7096,7 @@ export union ManagedCascadeStrategy
 	// duplicating the record's arm: `emitCloneCall`, `emitWalkCall` and `noteFieldCascadeNeeds` each carry ONE arm for this shape,
 	// and a third element-bearing container would add a caller here rather than a case, three emitters and a
 	// usage-closure arm.
-	managedElements(let containerEntry immutable ByteArray, let elementEntry immutable ByteArray)
+	managedElements(containerEntry immutable ByteArray, elementEntry immutable ByteArray)
 
 	// Not deep-cloneable by any strategy above — a compiler-owned aggregate (`__ManagedFile`), a
 	// base-layout-less generic instance with no runtime copy of its own (a cursor), a container ELEMENT held at
@@ -7153,7 +7108,7 @@ export union ManagedCascadeStrategy
 	// second slot (`IrInterface.InterfaceWitnessHalfOffset`) — `__mm_sole_existential` / `__mm_share_existential`
 	// / `__mm_clone_existential`, each calling what the conformer's witness table names for that action. It
 	// needs the witness beside the value, so a FIELD position only.
-	throughWitness(let entry immutable ByteArray)
+	throughWitness(entry immutable ByteArray)
 end 'ManagedCascadeStrategy'
 
 // What a graph handed to another green thread is, as far as walking it goes.
@@ -7167,7 +7122,7 @@ export union TransferSubject
 	// A managed value whose record carries no name to read its layout by.
 	nameless
 	functionValue
-	aggregate(let name immutable ByteArray)
+	aggregate(name immutable ByteArray)
 end 'TransferSubject'
 
 // How a graph is made safe to hand to another green thread (`ProgramSignatures.transferWalkOf`).
@@ -7177,14 +7132,14 @@ export union TransferWalk
 
 	// `callee(value, visits)` walks the graph, and `__mm_walk_settle` then aborts on a record with an owner the
 	// walk never met.
-	walkedBy(let callee immutable ByteArray)
+	walkedBy(callee immutable ByteArray)
 
 	// `callee(value)` walks a graph of one record, aborting on the spot at an owner outside it.
-	walkedAlone(let callee immutable ByteArray)
+	walkedAlone(callee immutable ByteArray)
 
 	// `entry(witness, value, visits)` walks a value held at an interface type through the walk its witness table
 	// names for the conformer it holds, and `__mm_walk_settle` then aborts as for `walkedBy`.
-	walkedThroughWitness(let entry immutable ByteArray)
+	walkedThroughWitness(entry immutable ByteArray)
 
 	// No walk can be built for this shape, and `noun` says what the shape is.
 	refused(noun String)
@@ -7797,7 +7752,7 @@ export union GenericInstanceConformer
 
 	// A DECLARED generic (`type Wrapper uses T implements Named`): its conformance is a property of the
 	// declaration and its impls are one shared body, so the base name is the conformer for every instance.
-	declaredBase(let name immutable ByteArray)
+	declaredBase(name immutable ByteArray)
 
 	// Neither — a non-conforming array, or an instance of a BUILTIN base that declares nothing.
 	unreduced
@@ -9780,10 +9735,10 @@ end 'tupleElementRejectionSentence'
 // for the reader that renders the name and the writer that records the token ledger.
 union TupleElementCitation
 	// A nested tuple, cited by the token its registered layout owns.
-	nestedTuple(let name immutable ByteArray)
+	nestedTuple(name immutable ByteArray)
 
 	// A spelling holding `TupleElementSeparator`, cited by its digest token.
-	separatorBearing(let spelling immutable ByteArray)
+	separatorBearing(spelling immutable ByteArray)
 
 	asSpelled(spelling String)
 end 'TupleElementCitation'
@@ -10034,7 +9989,7 @@ end 'GenericAliasDeclarationGroup'
 typealias GenericAliasDeclarationGroupMap = Map with (ByteArray, GenericAliasDeclarationGroup)
 
 union NamespaceAlias
-	declared(let declFilePath FilePath, let name immutable ByteArray, kind TypeDeclKind)
+	declared(declFilePath FilePath, name immutable ByteArray, kind TypeDeclKind)
 	notAnAlias
 
 	function isDeclared() returns bool
@@ -10046,8 +10001,8 @@ union NamespaceAlias
 end 'NamespaceAlias'
 
 union WrittenAlias
-	declared(let key immutable ByteArray, let readerFilePath FilePath, let kind TypeDeclKind)
-	spelled(let key immutable ByteArray, let readerFilePath FilePath)
+	declared(key immutable ByteArray, readerFilePath FilePath, kind TypeDeclKind)
+	spelled(key immutable ByteArray, readerFilePath FilePath)
 
 	function keyOf() returns immutable ByteArray
 		return match self 'written'
@@ -10712,7 +10667,7 @@ typealias NominalFirstDirectoryMap = Map with (ByteArray, String)
 
 module union DirectoryHolder
 	absent
-	one(let index ElementIndex)
+	one(index ElementIndex)
 	several
 end 'DirectoryHolder'
 
@@ -10789,8 +10744,8 @@ end 'BindingContest'
 
 module union BareBindingMeaning
 	unrelated
-	declared(let identity immutable ByteArray)
-	ambiguous(let candidates NameRoster)
+	declared(identity immutable ByteArray)
+	ambiguous(candidates NameRoster)
 end 'BareBindingMeaning'
 
 function authorMintSeparator() returns String
@@ -11891,7 +11846,7 @@ export enum InstanceSizeLookup implements Error
 end 'InstanceSizeLookup'
 
 export union ElementCountSource
-	stated(let count FixedElementCount)
+	stated(count FixedElementCount)
 	inTheRecord
 	callerSlot
 end 'ElementCountSource'
@@ -11902,8 +11857,8 @@ end 'InstanceShapeLookup'
 
 export union InstanceShape
 	unsized
-	sized(let count FixedElementCount)
-	readOnlyArgs(let mask ReadOnlyArgMask, let frozen ReadOnlyArgMask)
+	sized(count FixedElementCount)
+	readOnlyArgs(mask ReadOnlyArgMask, frozen ReadOnlyArgMask)
 	runtimeSized
 
 	export function isSized() returns bool
@@ -12616,7 +12571,7 @@ export union GenericArgNode
 	// instance that is neither a sized or runtime-sized `FixedArray` nor spells a `readonly` argument.
 	// It rides the NODE because the node is all `resolveArgNode` has when it interns the instance, and
 	// the shape is part of that instance's identity (`GenericInstanceRegistry.instanceKey`).
-	instanceHeader(let baseName immutable ByteArray, argCount FieldIndex, shape InstanceShape)
+	instanceHeader(baseName immutable ByteArray, argCount FieldIndex, shape InstanceShape)
 end 'GenericArgNode'
 
 // @generated library-cache begin
@@ -13278,7 +13233,7 @@ export typealias InnerAliasEntryArray = Array with InnerAliasEntry
 
 export union InnerAliasMember
 	none
-	named(let name immutable ByteArray)
+	named(name immutable ByteArray)
 end 'InnerAliasMember'
 
 // @generated library-cache begin
@@ -13481,7 +13436,7 @@ module typealias ConformerBareAliasArray = Array with ConformerBareAlias
 
 export union InterfaceName
 	none
-	named(let name immutable ByteArray)
+	named(name immutable ByteArray)
 
 	export function isNamed() returns bool
 		return match self 'interface'
@@ -13546,7 +13501,7 @@ end 'cacheReadInterfaceNameNamed'
 
 export union ReturnAliasSpelling
 	none
-	named(let name immutable ByteArray)
+	named(name immutable ByteArray)
 end 'ReturnAliasSpelling'
 
 // ⭐ **WHERE ONE `interface` DECLARATION SITS IN ITS FILE'S TOKEN STREAM** — the file, and the index
@@ -13969,10 +13924,10 @@ end 'cacheReadInstantiatedTypeNameSet'
 export union ExtensionTarget
 	// `paramNames` is the interface's `uses` list — the positions a `WhereConstraint.typeParamIndex` and a
 	// conformer's `StructLayout.conformanceBindings` are both indexed by.
-	interfaceExtension(let paramNames immutable NameRoster, let conformers NameRoster)
+	interfaceExtension(paramNames immutable NameRoster, conformers NameRoster)
 
 	// `paramNames` is the type's own `uses` list, and `conformers` is the extended type alone.
-	typeExtension(let paramNames immutable NameRoster, let conformers NameRoster)
+	typeExtension(paramNames immutable NameRoster, conformers NameRoster)
 
 	// A name that declares no interface, type, enum, union or primitive: an unknown name or a typealias. It
 	// expands nothing; the real parse refuses it with a position.
@@ -14216,7 +14171,7 @@ end 'cacheReadAssociatedTypeHoldingMap'
 
 module union AssociatedHolding
 	unheld
-	heldAt(let interfaceName immutable ByteArray)
+	heldAt(interfaceName immutable ByteArray)
 
 	export function isHeld() returns bool
 		return match self 'holding'
@@ -14298,7 +14253,7 @@ end 'cacheReadAssociatedHoldingArray'
 // neither — it is `MapError.keyNotFound` at that door, exactly as it was before the split.
 union HeldAssociatedArg
 	instantiated(gid GenericInstanceId)
-	bare(let interfaceName immutable ByteArray)
+	bare(interfaceName immutable ByteArray)
 end 'HeldAssociatedArg'
 
 // The witness constraints of an extension method that are NOT its enclosing type's own — see
@@ -14393,7 +14348,7 @@ export union DeclaredTypeMeaning
 	// is the pre-order argument tree `GenericAliasEntry` carries, and base + args + shape is the same content
 	// `GenericInstanceRegistry.instanceKey` builds an instance's identity out of — compared here BEFORE that
 	// interner exists, because the declaration door runs in the sweep that builds it.
-	genericInstance(let baseName immutable ByteArray, args GenericArgNodeArray, argCount FieldIndex)
+	genericInstance(baseName immutable ByteArray, args GenericArgNodeArray, argCount FieldIndex)
 end 'DeclaredTypeMeaning'
 
 // ⭐⭐ **THE MEANING THE COMPILER ALREADY HOLDS FOR AN OWNED NAME — ONE TABLE, FOR THE WHOLE SET.**
@@ -14667,9 +14622,9 @@ end 'qualifiedCalleeHead'
 
 export union NamespaceMember
 	none
-	one(kind TypeDeclKind, let declFilePath FilePath, let name immutable ByteArray)
+	one(kind TypeDeclKind, declFilePath FilePath, name immutable ByteArray)
 	several(candidates StringArray)
-	hidden(symbolKind HiddenSymbolKind, tier Visibility, kind TypeDeclKind, let declFilePath FilePath, let name immutable ByteArray)
+	hidden(symbolKind HiddenSymbolKind, tier Visibility, kind TypeDeclKind, declFilePath FilePath, name immutable ByteArray)
 end 'NamespaceMember'
 
 module enum TypeHeadKind
@@ -14716,7 +14671,7 @@ export enum ContainerCreateRoute
 end 'ContainerCreateRoute'
 
 export union QualifiedNameParts
-	parts(let prefix immutable ByteArray, let member immutable ByteArray)
+	parts(prefix immutable ByteArray, member immutable ByteArray)
 	notQualified
 end 'QualifiedNameParts'
 
@@ -15218,7 +15173,7 @@ end 'cacheReadFunctionDeclSiteMap'
 // probe maps argument `k` onto the field named after parameter `k`, so a caller holding one of them holds
 // half a mapping.
 export union ConstFactoryConstruction
-	folds(layout StructLayout, let paramNames NameRoster)
+	folds(layout StructLayout, paramNames NameRoster)
 	unfoldable
 end 'ConstFactoryConstruction'
 
@@ -15470,7 +15425,7 @@ end 'cacheReadContestedFreeFunctionMap'
 // they now belong.
 union FreeFunctionContest
 	uncontested
-	newlyContested(let incumbentRegistrationName immutable ByteArray)
+	newlyContested(incumbentRegistrationName immutable ByteArray)
 	alreadyContested
 end 'FreeFunctionContest'
 
@@ -15500,8 +15455,8 @@ end 'sharesADirectoryWithAnEarlierDeclaration'
 // lists. `undeclared` is a contested bare name the file may name no declaration of, or a qualified name that
 // routes to no free function.
 export union FunctionNameResolution
-	declaration(let name immutable ByteArray)
-	ambiguous(let candidates NameRoster)
+	declaration(name immutable ByteArray)
+	ambiguous(candidates NameRoster)
 	undeclared
 end 'FunctionNameResolution'
 
@@ -22314,8 +22269,7 @@ export type ProgramSignatures
 	function mixPayloadField(state HashDigest, field PayloadField) returns HashDigest
 		let named = self.mixType(mixBytes(Hasher.combined(state, value: SignatureDiscriminator.payloadShapeSlot), bytes: field.name), t: field.declaredType)
 		let surfaced = mixSurface(Hasher.combined(named, value: SignatureDiscriminator.payloadShapeSurface), surface: field.declaredSurface)
-		let letOrVar = Hasher.combined(Hasher.combined(surfaced, value: SignatureDiscriminator.payloadShapeLet), value: SignatureDiscriminator.payloadLetBit if field.isLet else SignatureDiscriminator.payloadVarBit)
-		return Hasher.combined(letOrVar, value: field.capability.ordinal as HashDigest)
+		return Hasher.combined(surfaced, value: field.capability.ordinal as HashDigest)
 	end 'mixPayloadField'
 
 	// Fold EVERYTHING the compiler reads off field `index` into the index's hash. See `recordStruct`
@@ -23266,7 +23220,7 @@ export type ProgramSignatures
 		end 'defined'
 
 		var parser = self.initializerParser(decl, role: InitializerRole.sweepFold, anchors: anchors)
-		var folded = try parser.foldSweepInitializer(decl, stack: stack) otherwise (err) 'noValue'
+		let folded = try parser.foldSweepInitializer(decl, stack: stack) otherwise (err) 'noValue'
 			parser.recordTypeNamesPastTheCursor()
 			return self.recordFailure(decl, error: err)
 		end 'noValue'
@@ -28092,7 +28046,7 @@ export type ProgramSignatures
 	// erasure door: both collapse to their `int`/`float` underlying before lowering, exactly as a plain
 	// ranged alias does; only the per-instance one ALSO carries nominal identity (kept in the value column).
 	export function qualifiedAliasOf(name ByteArray, readerFilePath FilePath) returns DeclaredAlias
-		var inner = self.innerAliasOf(name)
+		let inner = self.innerAliasOf(name)
 
 		match inner 'inner'
 			declared then return inner
@@ -34883,7 +34837,7 @@ export type ProgramSignatures
 
 		for field in payloads 'eachSlot'
 			if let resolved = try self.rewrittenSlotTypeUnder(rule, declared: field.declaredType, slotScopeFilePath: layout.declFilePath) 'theRuleClaimsIt'
-				rewritten.push(PayloadField.create(field.name, declaredType: resolved, declaredSurface: field.declaredSurface, declaredBrand: self.sharedInstanceMintOr(field.declaredBrand, readerFilePath: layout.declFilePath, fallback: field.declaredBrand), isLet: field.isLet, capability: field.capability, typeSite: field.typeSite))
+				rewritten.push(PayloadField.create(field.name, declaredType: resolved, declaredSurface: field.declaredSurface, declaredBrand: self.sharedInstanceMintOr(field.declaredBrand, readerFilePath: layout.declFilePath, fallback: field.declaredBrand), capability: field.capability, typeSite: field.typeSite))
 				changed = true
 			end 'theRuleClaimsIt' else 'unchanged'
 				rewritten.push(field)
@@ -41207,10 +41161,6 @@ export type ProgramSignatures
 	function declaredUnionIsImmutable(name ByteArray, visited ClonerSet) returns bool
 		view layout = try self.settledDeclarations().enumTypes.get(name) otherwise panic("ProgramSignatures.declaredUnionIsImmutable: `{String.from(name)}` is not a declared union or enum — every caller asked `containsEnumInAnyFile` first")
 
-		if not layout.everyPayloadIsLet() 'aVarPayload'
-			return false
-		end 'aVarPayload'
-
 		if not self.cloneWalkMayDescendInto(name, visited: visited) 'alreadyInFlight'
 			return true
 		end 'alreadyInFlight'
@@ -41730,7 +41680,7 @@ export type ProgramSignatures
 		view layout = self.structLayoutOf(name)
 
 		for i in 0 upto layout.fieldCount() 'eachField'
-			var nested = self.osHandleInSlot(layoutFieldType(layout, structName: name, index: i), visited: visited)
+			let nested = self.osHandleInSlot(layoutFieldType(layout, structName: name, index: i), visited: visited)
 
 			match nested 'nested'
 				handle or
@@ -41778,7 +41728,7 @@ export type ProgramSignatures
 		end 'alreadyInFlight'
 
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
-			var nested = self.osHandleInSlot(self.substituteInstanceFieldType(id, index: i), visited: visited)
+			let nested = self.osHandleInSlot(self.substituteInstanceFieldType(id, index: i), visited: visited)
 
 			match nested 'nested'
 				handle or
@@ -41798,7 +41748,7 @@ export type ProgramSignatures
 
 			for fi in 0 upto payloads.count() 'eachPayload'
 				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.osHandleInUnion: payloadsAt count disagrees with get at {fi}")
-				var nested = self.osHandleInSlot(field.declaredType, visited: visited)
+				let nested = self.osHandleInSlot(field.declaredType, visited: visited)
 
 				match nested 'nested'
 					handle or
@@ -45433,7 +45383,7 @@ end 'IndexBase'
 
 union IndexBaseRef
 	none
-	over(let base immutable IndexBase)
+	over(base immutable IndexBase)
 end 'IndexBaseRef'
 
 module type IndexTables
@@ -46184,7 +46134,7 @@ end 'requireInlineManagedFieldFirst'
 // One question about the rows every parse mints. See `ProgramSignatures.rowSetAnswer`.
 export union RowSetQuery
 	typeArgKind(param TypeParamId, kind TypeArgInstantiationKind)
-	dropDiverges(let typeName immutable ByteArray, index FieldIndex, let sharedCallee immutable ByteArray)
+	dropDiverges(typeName immutable ByteArray, index FieldIndex, sharedCallee immutable ByteArray)
 end 'RowSetQuery'
 
 // @generated library-cache begin
@@ -46240,7 +46190,7 @@ end 'cacheReadRowSetQueryDropDiverges'
 export union RowSetAnswer
 	noInstance
 	instance(site InstantiationSiteLookup)
-	holds(let value bool)
+	holds(value bool)
 end 'RowSetAnswer'
 
 // @generated library-cache begin

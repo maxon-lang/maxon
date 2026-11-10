@@ -44,15 +44,17 @@ qualifier on a container's element type (`Array with readonly T`, `Map with (K, 
 union case's payload (`case(let name T)`) are parse errors to a seed that predates them, and the patch
 withdraws the qualifier at every declaration, which leaves the container and union types the seed always held.
 A `mutable` marker before a parameter's type (`count mutable ElementIndex`, `function(mutable Count)`) is withdrawn
-at every declaration and function type, always and without a flag: the seed then infers by reference from the
-function's own write to the parameter, a reassignment or an in-place `String` write, which is what the marker states.
-A receiver capability (`mutable self`), a `mutates captures` clause on a function type and a `type X is unique`
-clause are withdrawn always, and without a flag: the seed then reads the receiver, the function type and the type as it
-always did.
+at every declaration and function type: the seed then infers by reference from the function's own write to the
+parameter, a reassignment or an in-place `String` write, which is what the marker states. A receiver capability
+(`mutable self`), a `mutates captures` clause on a function type and a `type X is unique` clause are withdrawn: the
+seed then reads the receiver, the function type and the type as it always did.
+A bare union payload is written `let` for a seed that reads a bare payload as reassignable, so the seed judges every
+payload by the `let` rule the tree applies to all of them.
 A `view` binding is written `let`, which the seed reads as a read-only binding of the same value, and a capability
 qualifier — `keep` or `sole` on a parameter of a function-type alias or an interface requirement, `returns sole`,
 `returns readonly` — is withdrawn. The script withdraws those two only with
-`--withdraw-view-forms`, and the older forms above only with `--older-seed`, each for a seed that predates them.
+`--withdraw-view-forms`, and the older forms above only with `--older-seed`, each for a seed that predates them;
+without `--older-seed` every payload is written `let`.
 Only those forms and the casts go; the declarations and every table stay, so `C1` knows the forms and compiles the
 unshimmed tree. The casts are found by building with the seed for one native target at a time until it is clean,
 and again for any lane the tree changed under since its last clean build, so the code a lane's `#if` selects is

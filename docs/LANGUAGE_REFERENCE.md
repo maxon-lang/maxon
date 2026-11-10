@@ -2576,16 +2576,17 @@ literal passed for a `float` payload widens to the float: `Reading.celsius(21)` 
 
 ### Payload Declarations
 
-A payload declared `let` is never reassigned for the whole life of the value, like a `let` field: assigning to
-a match binding of it is **E2013** (`'callee' is a let and cannot be reassigned`). Writes reach through it, so
-a field store or a `push` on the record or array it holds is legal. A union whose payloads are all `let` and
-all value types is itself a value type.
+Every payload is a `let`: it is never reassigned for the whole life of the value, like a `let` field, and
+assigning to a match binding of it is **E2013** (`'callee' is a let and cannot be reassigned`). Writes reach
+through it, so a field store or a `push` on the record or array it holds is legal. To give a union a new
+payload, assign the union a new case: `b = Box.full(42)`. A union whose payloads are all value types is itself
+a value type.
 
-A payload takes the capability words a field does, written before its type: `named(let text immutable
+A payload takes the capability words a field does, written before its type: `named(text immutable
 ByteArray)`. An `immutable` payload holds frozen data. What is stored into it must be `immutable` (a `b"…"`
 literal, a constant `let`, a `freeze`d value, or data read from another `immutable` slot); a plain
 `ByteArray` is **E3196**. A payload that is not declared `immutable` cannot hold immutable data: storing a
-constant name into `named(let text ByteArray)` is **E3196** (``cannot store an immutable 'ByteArray' into
+constant name into `named(text ByteArray)` is **E3196** (``cannot store an immutable 'ByteArray' into
 'Label.named.text', which holds a mutable 'ByteArray'; declare the payload `immutable ByteArray` ``). A
 `match` binding of an `immutable` payload is `immutable`, so a write through it is **E3207**.
 
@@ -2593,7 +2594,7 @@ constant name into `named(let text ByteArray)` is **E3196** (``cannot store an i
 typealias Weight = int(0 to 100)
 
 union Op
-	call(let callee immutable ByteArray, weight Weight)
+	call(callee immutable ByteArray, weight Weight)
 	nop
 end 'Op'
 
@@ -2624,48 +2625,11 @@ In a `match`, `caseName(a, b)` binds the payload for that arm; the bindings are 
 - A match on a union must cover every case (**E2026**); use `default throws` or `default panic(…)` for a
   deliberate catch-all (see [Statements](#default-throws-and-default-panic)).
 
-### Mutable Match Bindings
+### Payload Bindings
 
-Assigning to a binding replaces the payload the matched union holds, so the union must be a place the
-function can write. The scrutinee is a local `var`, a field of a `var` or of a record parameter (`p.shape`),
-or a parameter marked `mutable` (see [Parameter Passing](#parameter-passing)). The assignment writes back into
-that union:
-
-```maxon
-typealias Amount = int(i64.min to i64.max)
-
-union Box
-	empty
-	full(value Amount)
-end 'Box'
-
-function main() returns ExitCode
-	var b = Box.full(10)
-	match b 'update'
-		full(value) then value = 42
-		empty then return 1
-	end 'update'
-
-	match b 'read'
-		full(value) then print("{value}\n")    // 42
-		empty then print("empty\n")
-	end 'read'
-
-	return 0
-end 'main'
-```
-
-Every other scrutinee is **E2013**, and the message names the fix:
-
-- A `let` scrutinee: the union is never reassigned, so its bindings are too (`'value' is a let and cannot be
-  reassigned`).
-- An unmarked union parameter: `'value' is a payload of the by-value parameter 'b', so assigning it cannot
-  reach the caller's union; mark 'b' mutable or copy it into a local var`.
-- The receiver `self`: copy the union into a local `var` and match on that.
-- A temporary, or any union nothing holds: copy it into a local `var` first.
-
-Writing a field of a payload record in place (`value.count = value.count + 1`) is not an assignment of the
-binding, and it is legal whatever the scrutinee is.
+A match binding names the payload the matched union holds, and it is a `let`. Writing a field of a payload
+record in place (`value.count = value.count + 1`) or handing the record to a function that writes it is legal
+whatever the scrutinee is.
 
 ### Comparing Union Values
 
@@ -3329,9 +3293,6 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A union parameter whose `match` assigns a payload binding is marked `mutable` too, because the assignment
-  replaces the payload the caller's union holds; unmarked, it is **E2013** (see
-  [Mutable Match Bindings](#mutable-match-bindings)).
 - A record-type parameter is never rebound, marked or not: reassigning one is **E2013** (`'r' is a record
   parameter and cannot be reassigned; copy it into a local var`). Writing through it — a field store
   (`p.x = 99`) or a mutating call on a field (`p.items.push(x)`) — is not a reassignment and reaches the
@@ -6759,7 +6720,7 @@ The rules:
   read-only wherever it goes, one a call returns included. Binding the tuple, or one of its read-only
   elements, to a `var`, assigning it to existing `var` names, or storing it into a `var` field or a container
   is **E3078**, and passing it to a function that writes it is **E3159**.
-- **A `let` names writable data.** A `let` binding, a `let` field and a `let` payload hold records that stay
+- **A `let` names writable data.** A `let` binding, a `let` field and a union payload hold records that stay
   writable through every name, so a write through a `let` field reaches the record it holds. An `immutable`
   field takes `immutable` data only.
 - **`let b = a`, where `a` is a `var`, moves `a`.** `b` is then the record's only holder. Where `a` is a `let`,

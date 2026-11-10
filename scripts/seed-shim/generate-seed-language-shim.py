@@ -7,7 +7,11 @@ With --withdraw-view-forms, two forms are withdrawn for a seed that predates the
 value. A capability qualifier is withdrawn: `keep` and `sole` on a parameter of a function-type alias or an
 interface requirement, and `sole` or `readonly` after `returns`.
 
-With --older-seed, five more forms are withdrawn for a seed that predates them: a `typealias ... implements`
+Without --older-seed, `let` is written before every union payload, for a seed that reads a bare payload as
+reassignable where the tree makes every payload a `let`.
+
+With --older-seed, more forms are withdrawn for a seed that predates them: a `mutable` parameter marker, a
+receiver capability (`mutable self`), a `mutates captures` clause, a `type X is unique` clause, a `typealias ... implements`
 clause, a generic function (`function f(...) uses T`), a type body's inferred field (`var x = e as T`,
 `var x = Type.member(...)`, `var x = "text"`, which the seed reads only as `var x as T = e`), a `readonly`
 qualifier on a container's element type (`Array with readonly T`, `Map with (K, readonly V)`) and a `let` on a
@@ -111,7 +115,9 @@ SCOPE_OPENERS = ("if let ", "if var ", "while let ", "while var ", "for ")
 PLAIN_BINDERS = ("let ", "var ")
 
 HEADER = """# A form is withdrawn only against a seed that predates it: `--withdraw-view-forms` for the first two paragraphs,
-# `--older-seed` for the next five.
+# `--older-seed` for the rest.
+# A seed that reads a bare union payload as reassignable gets `let` written before every payload, so it judges each one
+# by the `let` rule the tree applies to all of them.
 # The seed cannot parse a `view` binding, so each is written `let`, which the seed reads as a read-only binding of
 # the same value; a `var` the seed then reads as moved by that `let` is written `let` too where nothing reassigns it.
 # The seed cannot parse a capability qualifier (`keep` or `sole` on a parameter of a function-type alias or an
@@ -182,6 +188,8 @@ READONLY_WORD = "readonly"
 READONLY_ARGUMENT = re.compile(r"(?:\bwith |, |\()(?P<modifier>readonly (?=[A-Za-z(]))")
 UNION_OPEN = re.compile(r"^(?P<indent>[ \t]*)(?:[a-z]+ )*union (?P<name>[A-Z][A-Za-z0-9_]*)")
 UNION_CASE = re.compile(r"^[ \t]*[a-z][A-Za-z0-9_]*\(")
+PAYLOAD_LET_WORD = "let "
+UNION_WORD = "union "
 PAYLOAD_LET = re.compile(r"(?:(?<=\()|(?<=, ))let (?=[a-z_][A-Za-z0-9_]* [A-Z(])")
 VIEW_WORD = "view"
 BINDING_WORD = "let"
@@ -510,10 +518,13 @@ class ReadonlyArguments(LineRewrite):
 		return [(m.start("modifier"), m.end("modifier"), "") for m in READONLY_ARGUMENT.finditer(masked)]
 
 
-class PayloadLets(LineRewrite):
+class UnionPayloadRewrite(LineRewrite):
 	def __init__(self):
 		self.end = None
 		self.case_indent = ""
+
+	def payload_edits(self, masked, open_index, close):
+		raise NotImplementedError
 
 	def edits(self, line, masked):
 		if self.end is None:
@@ -535,13 +546,29 @@ class PayloadLets(LineRewrite):
 			return []
 
 		open_index = declared.end() - 1
-		close = match_forward(masked, open_index)
-
-		return [(m.start(), m.end(), "") for m in PAYLOAD_LET.finditer(masked, open_index, close)]
+		return self.payload_edits(masked, open_index, match_forward(masked, open_index))
 
 	def finish(self):
 		if self.end is not None:
 			raise Unhandled("a union is never closed")
+
+
+class PayloadLets(UnionPayloadRewrite):
+	def payload_edits(self, masked, open_index, close):
+		return [(m.start(), m.end(), "") for m in PAYLOAD_LET.finditer(masked, open_index, close)]
+
+
+class PayloadLetsWritten(UnionPayloadRewrite):
+	def payload_edits(self, masked, open_index, close):
+		edits = []
+
+		for begin, end in top_level_parts(masked, open_index + 1, close):
+			name = begin + len(masked[begin:end]) - len(masked[begin:end].lstrip())
+
+			if not masked.startswith(PAYLOAD_LET_WORD, name):
+				edits.append((name, name, PAYLOAD_LET_WORD))
+
+		return edits
 
 
 class MutableMarkers(LineRewrite):
@@ -612,7 +639,11 @@ def strip_readonly_arguments(work):
 
 
 def strip_payload_lets(work):
-	return rewrite_code(work, lambda text: "let " in text and "union " in text, lambda rel: PayloadLets())
+	return rewrite_code(work, lambda text: PAYLOAD_LET_WORD in text and UNION_WORD in text, lambda rel: PayloadLets())
+
+
+def write_payload_lets(work):
+	return rewrite_code(work, lambda text: UNION_WORD in text, lambda rel: PayloadLetsWritten())
 
 
 def lexer_keywords(work):
@@ -2811,6 +2842,8 @@ def converge(work, seed_name, lanes, rewriter, rounds, started, verified):
 
 
 def withdraw_older_seed_forms(work):
+	print(f"withdrew {strip_mutable_markers(work)} `mutable` parameter markers", flush=True)
+	print(f"withdrew {strip_region_forms(work)} `mutable self` receivers, `mutates captures` clauses and `is unique` clauses", flush=True)
 	generics = strip_generic_functions(work)
 	print(f"withdrew {generics} generic functions", flush=True)
 	print(f"stripped {strip_clauses(work)} implements clauses", flush=True)
@@ -2904,11 +2937,12 @@ def main():
 	if not args.resume:
 		os.makedirs(work, exist_ok=True)
 		stage_work(tree, work, seed, output)
-		print(f"withdrew {strip_mutable_markers(work)} `mutable` parameter markers", flush=True)
-		print(f"withdrew {strip_region_forms(work)} `mutable self` receivers, `mutates captures` clauses and `is unique` clauses", flush=True)
 
-		if args.older_seed and withdraw_older_seed_forms(work) != 0:
-			return 1
+		if args.older_seed:
+			if withdraw_older_seed_forms(work) != 0:
+				return 1
+		else:
+			print(f"wrote `let` before {write_payload_lets(work)} union payloads", flush=True)
 
 		if args.withdraw_view_forms:
 			views, bare, view_names, view_sources = strip_view_bindings(work)
