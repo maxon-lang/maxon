@@ -4349,6 +4349,97 @@ end 'main'
 0
 ```
 
+<!-- test: a-closure-is-accepted-by-a-function-type-over-a-nested-datatype -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Pair uses A, B
+	export var a as A
+	export var b as B
+
+	static function create(a A, b B) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+type Nest uses T
+	export typealias Doubled = Pair with (T, T)
+	export typealias Deeper = Nest with Doubled
+	export typealias Grow = function(Deeper) returns Val
+
+	export var v as T
+	var f as Grow
+
+	static function create(v T, f Grow) returns Self
+		return Self{v: v, f: f}
+	end 'create'
+end 'Nest'
+
+typealias ValNest = Nest with Val
+
+function main() returns ExitCode
+	let n = ValNest.create(7, f: function(_) gives 0)
+	return n.v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: an-array-literal-takes-its-element-type-from-a-static-call-through-a-generic-alias -->
+```maxon
+typealias Octet = int(0 to 255)
+
+type Bag uses T
+	export typealias Items = Array with T
+
+	static function first(items Items) returns T
+		return try items.get(0) otherwise panic("empty")
+	end 'first'
+end 'Bag'
+
+typealias OctetBag = Bag with Octet
+
+function main() returns ExitCode
+	let head = OctetBag.first([7, 8, 9])
+	return head as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.a-closure-over-a-nested-alias-of-an-unfixed-type-parameter-is-not-typed -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+
+type Pair uses A, B
+	export var a as A
+	export var b as B
+end 'Pair'
+
+type Nest uses T
+	export typealias Doubled = Pair with (T, T)
+	export typealias Deeper = Nest with Doubled
+	export typealias Grow = function(Deeper) returns Val
+
+	export var v as T
+	var f as Grow
+
+	static function create(v T, f Grow) returns Self
+		return Self{v: v, f: f}
+	end 'create'
+end 'Nest'
+
+function main() returns ExitCode
+	let n = Nest.create(7, f: function(_) gives 0)
+	return n.v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:23:37: Unsupported: parameter '_' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type
+```
+
 <!-- test: error.mutually-recursive-generics-growing-through-another-base -->
 ```maxon
 typealias Val = int(i64.min to i64.max)

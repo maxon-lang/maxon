@@ -26024,9 +26024,13 @@ export type ProgramSignatures
 
 	export function arrayInstanceDeclaredAtParamOfReceiver(callee ByteArray, sourceIndex ParamCount, label ByteArray, receiver GenericInstanceId, readerFilePath FilePath) returns DeclaredArrayInstance
 		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label, readerFilePath: readerFilePath) otherwise return DeclaredArrayInstance.none
-		let substituted = self.substituteThroughInstanceInterned(param.declared, id: receiver, interner: self.typeNames)
 
-		if maxonTypesDenoteSame(substituted, b: param.declared) 'theReceiverFixesNothing'
+		// A swept parameter is a bare alias name, which the substitution passes through untouched, so the
+		// alias is resolved first or the element type stays the declaration's `T`.
+		let declared = self.declaredSlotType(param.declared, into: self.typeNames, slotScopeFilePath: param.declFilePath)
+		let substituted = self.substituteThroughInstanceInterned(declared, id: receiver, interner: self.typeNames)
+
+		if maxonTypesDenoteSame(substituted, b: declared) 'theReceiverFixesNothing'
 			return self.arrayInstanceOfDeclaredType(param.declared, interner: self.typeNames, readerFilePath: param.declFilePath)
 		end 'theReceiverFixesNothing'
 
@@ -37668,7 +37672,7 @@ export type ProgramSignatures
 		return self.typeDisplayName(try self.declaredSlotTypeOfField(structName, fieldName: fieldName) otherwise panic("declaredFieldTypeDisplayName: '{String.from(structName)}' has no field '{String.from(fieldName)}' — the caller named a field it just read"))
 	end 'declaredFieldTypeDisplayName'
 
-	function denotedArg(id GenericInstanceId, position ElementIndex) returns MaxonType
+	export function denotedArg(id GenericInstanceId, position ElementIndex) returns MaxonType
 		return self.denotedType(self.substitutedInstanceArg(id, position: position))
 	end 'denotedArg'
 

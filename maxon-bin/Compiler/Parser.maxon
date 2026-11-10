@@ -82172,18 +82172,18 @@ export type Parser
 	// behind it walks the callee's declarations, while every argument of every call in the program
 	// passes this line.
 	function stateLiteralTargetForArgument(target CallArgTarget, sourceIndex ParamCount, label ByteArray, valueStart ElementIndex, args ValueIdArray, receiverArgs ParamCount, constructorInstance ConstructorInstance)
-		self.stateArrayLiteralTargetAt(self.arrayTargetForArgument(target, sourceIndex: sourceIndex, label: label, valueStart: valueStart, args: args, receiverArgs: receiverArgs), tokenIndex: valueStart)
+		self.stateArrayLiteralTargetAt(self.arrayTargetForArgument(target, sourceIndex: sourceIndex, label: label, valueStart: valueStart, args: args, receiverArgs: receiverArgs, constructorInstance: constructorInstance), tokenIndex: valueStart)
 		self.stateTupleLiteralTargetAt(self.tupleTargetForArgument(target, sourceIndex: sourceIndex, label: label, valueStart: valueStart, args: args, receiverArgs: receiverArgs, constructorInstance: constructorInstance), tokenIndex: valueStart)
 	end 'stateLiteralTargetForArgument'
 
-	function arrayTargetForArgument(target CallArgTarget, sourceIndex ParamCount, label ByteArray, valueStart ElementIndex, args ValueIdArray, receiverArgs ParamCount) returns DeclaredArrayInstance
+	function arrayTargetForArgument(target CallArgTarget, sourceIndex ParamCount, label ByteArray, valueStart ElementIndex, args ValueIdArray, receiverArgs ParamCount, constructorInstance ConstructorInstance) returns DeclaredArrayInstance
 		if self.kindAt(valueStart) != TokenKind.leftBracket 'noLiteralToType'
 			return DeclaredArrayInstance.none
 		end 'noLiteralToType'
 
 		let callee = try target.declaredName() otherwise return DeclaredArrayInstance.none
-		let receiver = try self.callReceiverInstance(args, receiverArgs: receiverArgs) otherwise return self.signatures.arrayInstanceDeclaredAtParam(callee, sourceIndex: sourceIndex, label: label, readerFilePath: self.job.path)
-		return self.signatures.arrayInstanceDeclaredAtParamOfReceiver(callee, sourceIndex: sourceIndex, label: label, receiver: receiver, readerFilePath: self.job.path)
+		let instance = try self.callInstanceOf(args, receiverArgs: receiverArgs, constructorInstance: constructorInstance) otherwise return self.signatures.arrayInstanceDeclaredAtParam(callee, sourceIndex: sourceIndex, label: label, readerFilePath: self.job.path)
+		return self.signatures.arrayInstanceDeclaredAtParamOfReceiver(callee, sourceIndex: sourceIndex, label: label, receiver: instance, readerFilePath: self.job.path)
 	end 'arrayTargetForArgument'
 
 	function callReceiverInstance(args ValueIdArray, receiverArgs ParamCount) returns GenericInstanceId throws AbsentError
@@ -82227,12 +82227,12 @@ export type Parser
 	// value is parsed for `stateLiteralTargetForArgument`'s reason: a closure's parameter types decide
 	// how its body parses. Only an argument that OPENS with `function` pays the lookup, and it answers
 	// whether it stated an offer, so the argument loop clears exactly the offers it made.
-	function stateClosureParamOfferForArgument(target CallArgTarget, sourceIndex ParamCount, label ByteArray, valueStart ElementIndex, args ValueIdArray, receiverArgs ParamCount) returns bool
+	function stateClosureParamOfferForArgument(target CallArgTarget, sourceIndex ParamCount, label ByteArray, valueStart ElementIndex, args ValueIdArray, receiverArgs ParamCount, constructorInstance ConstructorInstance) returns bool
 		if not self.argumentOpensAClosure(valueStart) 'noClosureLiteral'
 			return false
 		end 'noClosureLiteral'
 
-		self.stateClosureParamOfferAt(valueStart, offer: self.closureParamOfferAt(target, sourceIndex: sourceIndex, label: label, args: args, receiverArgs: receiverArgs))
+		self.stateClosureParamOfferAt(valueStart, offer: self.closureParamOfferAt(target, sourceIndex: sourceIndex, label: label, args: args, receiverArgs: receiverArgs, constructorInstance: constructorInstance))
 		return true
 	end 'stateClosureParamOfferForArgument'
 
@@ -82265,15 +82265,15 @@ export type Parser
 	// ⭐⭐ **THE PARAMETER TYPES THE CALLEE DECLARES FOR A CLOSURE AT ONE ARGUMENT.** Read off the whole-program
 	// index, because the callee may be declared in any file: the declaration of the name names its slot's type,
 	// and a slot declared with a function typealias offers that alias's parameter types — the sweep's reading,
-	// repaired from the alias's own file and fixed through the receiver's instance, so `SortComparator`'s
-	// `Element` is the receiver's element.
+	// repaired from the alias's own file and fixed through the call's instance (the receiver's, or the one a
+	// constructor or generic-alias static call builds), so `SortComparator`'s `Element` is the receiver's element.
 	//
 	// ⛔ **THE OFFER IS ONLY WHAT THE NAMEABLE DECLARATION STATES.** The declaration is `declarationNameableHere`'s.
 	// A declaration with no slot for this argument, or whose slot is a concrete type no closure is, offers
 	// nothing, and so does a slot this door cannot judge — one the sweep did not read, or a type parameter the
-	// receiver does not fix: the untyped parameter is then E2015, never a type taken from a declaration the call
+	// call's instance does not fix: the untyped parameter is then E2015, never a type taken from a declaration the call
 	// may not resolve to.
-	function closureParamOfferAt(target CallArgTarget, sourceIndex ParamCount, label ByteArray, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
+	function closureParamOfferAt(target CallArgTarget, sourceIndex ParamCount, label ByteArray, args ValueIdArray, receiverArgs ParamCount, constructorInstance ConstructorInstance) returns ClosureParamOffer
 		if not self.signatures.allFilesFolded 'theAliasRegistriesAreStillFilling'
 			return noClosureParamOffer
 		end 'theAliasRegistriesAreStillFilling'
@@ -82282,7 +82282,7 @@ export type Parser
 		let candidate = try self.declarationNameableHere(callee) otherwise return noClosureParamOffer
 		let slot = try argSlotPosition(candidate.paramNames, argIndex: sourceIndex, label: label) otherwise return noClosureParamOffer
 		let swept = try candidate.paramTypes.get(slot) otherwise panic("closureParamOfferAt: paramTypes.get OOB at {slot} — the sweep records one type per parameter name")
-		let slotType = self.slotTypeThroughCallReceiver(self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames), scopeFilePath: candidate.declFilePath), args: args, receiverArgs: receiverArgs, scopeFilePath: candidate.declFilePath)
+		let slotType = self.slotTypeThroughCallReceiver(self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames), scopeFilePath: candidate.declFilePath), args: args, receiverArgs: receiverArgs, constructorInstance: constructorInstance, scopeFilePath: candidate.declFilePath)
 
 		if maxonTypeTag(slotType) != ValueTypeTag.function 'noClosureStandsHere'
 			return noClosureParamOffer
@@ -82294,12 +82294,12 @@ export type Parser
 			return noClosureParamOffer
 		end 'aFunctionTypeNoAliasGoverns'
 
-		return self.offeredClosureParamTypesOf(aliasName, readerFilePath: candidate.declFilePath, origin: ReceiverOrigin.derivedFrom(singleName(genericTemplateName(callee))), args: args, receiverArgs: receiverArgs)
+		return self.offeredClosureParamTypesOf(aliasName, readerFilePath: candidate.declFilePath, origin: ReceiverOrigin.derivedFrom(singleName(genericTemplateName(callee))), args: args, receiverArgs: receiverArgs, constructorInstance: constructorInstance)
 	end 'closureParamOfferAt'
 
-	function offeredClosureParamTypesOf(offeredAlias ByteArray, readerFilePath FilePath, origin ReceiverOrigin, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
+	function offeredClosureParamTypesOf(offeredAlias ByteArray, readerFilePath FilePath, origin ReceiverOrigin, args ValueIdArray, receiverArgs ParamCount, constructorInstance ConstructorInstance) returns ClosureParamOffer
 		match self.functionAliasMeantFrom(offeredAlias, readerFilePath: readerFilePath) 'alias'
-			declared(alias) then return self.offeredClosureParamTypes(alias, aliasName: offeredAlias, origin: origin, args: args, receiverArgs: receiverArgs)
+			declared(alias) then return self.offeredClosureParamTypes(alias, aliasName: offeredAlias, origin: origin, args: args, receiverArgs: receiverArgs, constructorInstance: constructorInstance)
 			undeclared then panic("closureParamOfferAt: '{String.from(offeredAlias)}' was offered only after `namesADeclaredFunctionAlias` found it declared")
 		end 'alias'
 	end 'offeredClosureParamTypesOf'
@@ -82321,15 +82321,15 @@ export type Parser
 	end 'functionAliasKeyFor'
 
 	// The offer itself: one type per parameter of `alias`, each rebuilt into this file's interner, repaired from the
-	// alias's declaring file and fixed through the receiver. A parameter type still naming a type parameter this
+	// alias's declaring file and fixed through the call's instance. A parameter type still naming a type parameter this
 	// body does not declare — bare, or as a type argument (`Array with T`) — would type the closure against a
 	// binding nothing here supplies, so it withholds.
-	function offeredClosureParamTypes(alias FunctionTypeAlias, aliasName ByteArray, origin ReceiverOrigin, args ValueIdArray, receiverArgs ParamCount) returns ClosureParamOffer
+	function offeredClosureParamTypes(alias FunctionTypeAlias, aliasName ByteArray, origin ReceiverOrigin, args ValueIdArray, receiverArgs ParamCount, constructorInstance ConstructorInstance) returns ClosureParamOffer
 		var paramTypes = MaxonTypeArray.create(alias.paramTypes.count(), zeroed: false)
 
 		for param in alias.paramTypes 'eachParam'
 			let stored = maxonTypeOfStoredAliasParam(param, typeNames: self.artifact.typeNames)
-			let offered = self.slotTypeThroughCallReceiver(self.repairSweptType(stored, scopeFilePath: alias.declFilePath), args: args, receiverArgs: receiverArgs, scopeFilePath: alias.declFilePath)
+			let offered = self.slotTypeThroughCallReceiver(self.repairSweptType(stored, scopeFilePath: alias.declFilePath), args: args, receiverArgs: receiverArgs, constructorInstance: constructorInstance, scopeFilePath: alias.declFilePath)
 
 			if self.namesTypeParameterOutOfScope(offered) 'anUnboundTypeParameter'
 				return noClosureParamOffer
@@ -82340,7 +82340,7 @@ export type Parser
 
 		let result = match maxonTypeOfStoredAliasReturn(alias, typeNames: self.artifact.typeNames) 'declaredReturn'
 			void gives ClosureResult.inferred
-			value(inner) gives self.declaredClosureResult(self.slotTypeThroughCallReceiver(self.repairSweptType(inner, scopeFilePath: alias.declFilePath), args: args, receiverArgs: receiverArgs, scopeFilePath: alias.declFilePath), offeredAlias: self.signatures.declaredIdentityOfSpelling(alias.name, declFilePath: alias.declFilePath), origin: origin)
+			value(inner) gives self.declaredClosureResult(self.slotTypeThroughCallReceiver(self.repairSweptType(inner, scopeFilePath: alias.declFilePath), args: args, receiverArgs: receiverArgs, constructorInstance: constructorInstance, scopeFilePath: alias.declFilePath), offeredAlias: self.signatures.declaredIdentityOfSpelling(alias.name, declFilePath: alias.declFilePath), origin: origin)
 		end 'declaredReturn'
 
 		return ClosureParamOffer.offered(paramTypes, result: result, aliasName: aliasName)
@@ -82354,15 +82354,17 @@ export type Parser
 		return ClosureResult.declared(declared, offeredAlias: offeredAlias, origin: origin.clone())
 	end 'declaredClosureResult'
 
-	// A slot declared in a shared generic body, read through this call's receiver when it has one.
-	function slotTypeThroughCallReceiver(declared MaxonType, args ValueIdArray, receiverArgs ParamCount, scopeFilePath FilePath) returns MaxonType
-		let receiver = try self.callReceiverInstance(args, receiverArgs: receiverArgs) otherwise return declared
-		return self.functionSlotThroughInstance(declared, gid: receiver, scopeFilePath: scopeFilePath)
+	// A slot declared in a shared generic body, read through this call's instance when it has one: the
+	// receiver's, else the constructed one.
+	function slotTypeThroughCallReceiver(declared MaxonType, args ValueIdArray, receiverArgs ParamCount, constructorInstance ConstructorInstance, scopeFilePath FilePath) returns MaxonType
+		let instance = try self.callInstanceOf(args, receiverArgs: receiverArgs, constructorInstance: constructorInstance) otherwise return declared
+		return self.functionSlotThroughInstance(declared, gid: instance, scopeFilePath: scopeFilePath)
 	end 'slotTypeThroughCallReceiver'
 
 	// Does `t` name, at any depth of its type arguments, a type parameter the enclosing declaration does not
-	// declare? The walk is finite because `TypeCycleCheck` has refused a type that owns itself (E4014).
-	function namesTypeParameterOutOfScope(t MaxonType) returns bool
+	// declare? A type argument written as a generic alias's name is read as the instance it denotes. The
+	// walk ends on an instance already open on it: a cyclic alias reaches this before E3091 refuses it.
+	function namesTypeParameterOutOfScope(t MaxonType, open GenericInstanceIdArray = GenericInstanceIdArray.create(0)) returns bool
 		let tag = maxonTypeTag(t)
 
 		if tag == ValueTypeTag.typeParameter 'aTypeParameter'
@@ -82375,13 +82377,24 @@ export type Parser
 
 		let id = genericInstanceIdOf(t)
 
+		for earlier in open 'eachOpenInstance'
+			if earlier == id 'revisited'
+				return false
+			end 'revisited'
+		end 'eachOpenInstance'
+
+		open.push(id)
+		var unbound = false
+
 		for position in 0 upto self.signatures.genericInstanceArgCount(id) 'eachTypeArgument'
-			if self.namesTypeParameterOutOfScope(self.signatures.substitutedInstanceArg(id, position: position)) 'unboundInside'
-				return true
+			if self.namesTypeParameterOutOfScope(self.signatures.denotedArg(id, position: position), open: open) 'unboundInside'
+				unbound = true
+				break
 			end 'unboundInside'
 		end 'eachTypeArgument'
 
-		return false
+		_ = try open.pop() otherwise panic("namesTypeParameterOutOfScope: open.pop on a path this call pushed to")
+		return unbound
 	end 'namesTypeParameterOutOfScope'
 
 	// Does the enclosing declaration's `uses` list mint `token`? The identity `parseTypeReference` gives a bare
@@ -82414,7 +82427,7 @@ export type Parser
 		end 'noClosureToOffer'
 
 		match self.functionAliasForName(self.internedName(typeNameIdOf(declared))) 'alias'
-			declared(alias) then self.stateClosureParamOfferAt(valueStart, offer: self.offeredClosureParamTypes(alias, aliasName: self.internedName(typeNameIdOf(declared)), origin: ReceiverOrigin.unattributed, args: ValueIdArray.create(0), receiverArgs: 0))
+			declared(alias) then self.stateClosureParamOfferAt(valueStart, offer: self.offeredClosureParamTypes(alias, aliasName: self.internedName(typeNameIdOf(declared)), origin: ReceiverOrigin.unattributed, args: ValueIdArray.create(0), receiverArgs: 0, constructorInstance: ConstructorInstance.none))
 			undeclared then break
 		end 'alias'
 	end 'stateClosureOfferOfDeclaredType'
@@ -99164,7 +99177,7 @@ export type Parser
 				// value a later coercion could fix. `argIndex` is the SOURCE position, which is the alignment
 				// `SweptDeclaration.paramNames` carries — a prepended receiver fills no source parameter.
 				self.stateLiteralTargetForArgument(target, sourceIndex: argIndex, label: label, valueStart: valueStart, args: args, receiverArgs: receiverArgs as ParamCount, constructorInstance: constructorInstance)
-				let offersAClosure = self.stateClosureParamOfferForArgument(target, sourceIndex: argIndex, label: label, valueStart: valueStart, args: args, receiverArgs: receiverArgs as ParamCount)
+				let offersAClosure = self.stateClosureParamOfferForArgument(target, sourceIndex: argIndex, label: label, valueStart: valueStart, args: args, receiverArgs: receiverArgs as ParamCount, constructorInstance: constructorInstance)
 
 				// ⚠ The blame name is CLEARED before the argument is parsed — by `parseValueExpression` itself,
 				// which is the one door every value expression comes through and therefore the one place that

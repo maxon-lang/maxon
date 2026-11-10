@@ -353,10 +353,10 @@ end 'main'
 13
 ```
 
-<!-- test: error-a-type-parameter-no-receiver-fixes-is-not-offered-even-as-a-type-argument -->
-A static call has no receiver to fix the generic type's own parameter, so `Inspect`'s parameter is still
-`Array with T` where the closure is written — a type `main` has no `T` for. The offer is withheld, as it is
-for a bare `T`, rather than typing `items` against a parameter nothing at this call binds.
+<!-- test: a-generic-alias-fixes-the-type-parameter-a-static-call-offers -->
+A static call through a generic alias is made on that alias's instance, so `Inspect`'s parameter, which
+is `Array with T` where it is declared, is `Array with Tally` where the closure is written, and `items`
+takes that type.
 ```maxon
 typealias Tally = int(0 to 1000)
 
@@ -379,6 +379,6 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:19:53: Unsupported: parameter 'items' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type
+```stdout
+1
 ```
