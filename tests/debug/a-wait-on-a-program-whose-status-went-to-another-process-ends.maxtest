@@ -7,7 +7,6 @@ let StatusLostAttachOption = "--attach="
 let StatusLostAcceptMs = 20000
 let StatusLostReplyMs = 10000
 let StatusLostWaitMs = 15000
-let StatusLostStubMs = 10000
 let StatusLostLogStem = "stub-"
 let StatusLostSessionMs = 60000
 let StatusLostReceiveBytes = 256
@@ -104,11 +103,13 @@ function waitVerdict(program StreamingSubprocess) returns String
 	return "exited {code}"
 end 'waitVerdict'
 
-function stubEndedAfterDetach(stub StreamingSubprocess) returns bool
-	_ = try stub.waitWithTimeout(StatusLostStubMs) otherwise return false
-
-	return true
-end 'stubEndedAfterDetach'
+function stubGone(treeEnd TreeEnd) returns bool
+	return match treeEnd 'which'
+		ended gives true
+		survived or
+		unconfirmed gives false
+	end 'which'
+end 'stubGone'
 
 function detachedWhileDying(entitled FilePath, staged FilePath, round Count) throws TestFailure
 	let log = staged.join("{StatusLostLogStem}{round}.log")
@@ -144,21 +145,20 @@ function detachedWhileDying(entitled FilePath, staged FilePath, round Count) thr
 
 	_ = try socket.send(StatusLostAcknowledgePacket) otherwise panic("the gate could not run — the detach reply could not be acknowledged.")
 
-	let stubEnded = stubEndedAfterDetach(stub)
+	let stubEnd = stub.endTree()
 	let verdict = waitVerdict(program)
 
 	sleep(StatusLostSettleMs)
 
 	let again = waitVerdict(program)
 
-	_ = stub.endTree()
 	stub.release()
 	_ = program.endTree()
 	program.release()
 
 	try Expect.isTrue(stopped.contains(StatusLostStopPrefix), message: "round {round}: the stub never reported the stop the interrupt asks for. It said: {stopped}")
 	try Expect.isTrue(acknowledged.contains(StatusLostAcknowledgement), message: "round {round}: the stub never acknowledged the detach. It said: {acknowledged}")
-	try Expect.isTrue(stubEnded, message: "round {round}: the stub did not exit within {StatusLostStubMs} ms of acknowledging the detach, so the program's parent is not settled.")
+	try Expect.isTrue(stubGone(stubEnd), message: "round {round}: the stub acknowledged the detach and could not be ended, so the program's parent is not settled. {stubEnd.displayReason()}")
 	try Expect.isTrue(verdict == StatusLostKilledVerdict or verdict.contains(StatusLostWording), message: "round {round}: ⛔ A PROGRAM KILLED WHILE A DEBUG STUB HELD IT ENDS WITH ITS STATUS EITHER HANDED BACK TO THIS PROCESS OR IN THE HANDS OF A PROCESS THAT IS NOT ITS PARENT, AND A WAIT FOR IT MUST SAY WHICH INSTEAD OF REPORTING AN EXIT CODE IT NEVER READ. The wait answered: {verdict}")
 	try Expect.isTrue(again == verdict, message: "round {round}: once the stub has exited, the answer is a property of the program's state and does not change with time. The first wait answered '{verdict}', the second '{again}'.")
 

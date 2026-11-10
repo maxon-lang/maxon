@@ -121,6 +121,11 @@ union GdbStubProcess
 	running(child StreamingSubprocess)
 end 'GdbStubProcess'
 
+union GdbStubEnding
+	awaited
+	forced
+end 'GdbStubEnding'
+
 union GdbExpedited
 	none
 	from(stop GdbStopReport)
@@ -274,17 +279,17 @@ export type GdbRemoteBackend
 
 		self.link = GdbRemoteLink.unconnected
 		self.stopListening()
-		self.stubReaped()
+		self.stubReaped(GdbStubEnding.awaited)
 	end 'close'
 
-	function stubReaped()
+	function stubReaped(ending GdbStubEnding)
 		self.stubOutputDrained()
 
 		var heldStub = self.stubProcess
 
 		match heldStub 'stub'
 			none then return
-			running(child) then gdbStubEnded(child)
+			running(child) then gdbStubEnded(child, ending: ending)
 		end 'stub'
 
 		self.stubProcess = GdbStubProcess.none
@@ -1055,9 +1060,13 @@ export type GdbRemoteBackend
 
 		self.setAside = GdbSetAside.nothing
 
-		// A program that died while the stub held it cannot be waited on until the stub has exited, and the
-		// answer is settled afterwards, so the session waits for the stub here before it polls the program.
-		self.stubReaped()
+		// A program that died while the stub held it cannot be waited on until the stub is gone, and the
+		// stub has nothing left to do once it acknowledges the detach, so it is ended here, not awaited:
+		// debugserver does not always exit on its own after a detach. Closing the connection first does
+		// not help: a debugserver that sees the close in the same pass as the detach detaches a second
+		// time and hangs.
+		self.stubReaped(GdbStubEnding.forced)
+		self.close()
 
 		return true
 	end 'detach'
@@ -1650,13 +1659,30 @@ function gdbIsOutputPacket(payload String) returns bool
 	return payload.startsWith(GdbOutputPrefix) and payload != GdbOkReply
 end 'gdbIsOutputPacket'
 
-function gdbStubEnded(child StreamingSubprocess)
-	try child.waitWithTimeout(GdbStubExitBudgetMs) otherwise (failure) 'notExited'
-		gdbStubWaitFailed(failure)
-	end 'notExited'
+function gdbStubEnded(child StreamingSubprocess, ending GdbStubEnding)
+	match ending 'how'
+		awaited then gdbStubAwaited(child)
+		forced then gdbStubForced(child)
+	end 'how'
 
 	child.release()
 end 'gdbStubEnded'
+
+function gdbStubAwaited(child StreamingSubprocess)
+	try child.waitWithTimeout(GdbStubExitBudgetMs) otherwise (failure) 'notExited'
+		gdbStubWaitFailed(failure)
+	end 'notExited'
+end 'gdbStubAwaited'
+
+function gdbStubForced(child StreamingSubprocess)
+	let treeEnd = child.endTree()
+
+	match treeEnd 'tree'
+		ended then break
+		survived or
+		unconfirmed then printError("{GdbStubNotEndedNotice}{treeEnd.displayReason()}\n")
+	end 'tree'
+end 'gdbStubForced'
 
 function gdbStubWaitFailed(failure SubprocessError)
 	if failure.timedOut() 'killedAtTheBudget'
