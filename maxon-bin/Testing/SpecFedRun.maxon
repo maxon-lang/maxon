@@ -1,22 +1,6 @@
 let FedRunSurvivorDrainMs = 100
 let FedRunLineEnd = "\n"
 
-export union ChildProgress
-	finished(status TerminationStatus)
-	waiting
-end 'ChildProgress'
-
-export function childProgress(child StreamingSubprocess) returns ChildProgress
-	if not childStreamsEnded(child) 'stillOpen'
-		return ChildProgress.waiting
-	end 'stillOpen'
-
-	return match child.pollTermination() 'polled'
-		ended(status) gives ChildProgress.finished(status)
-		running gives ChildProgress.waiting
-	end 'polled'
-end 'childProgress'
-
 type FedRun
 	var child as StreamingSubprocess
 	var stdout = ""

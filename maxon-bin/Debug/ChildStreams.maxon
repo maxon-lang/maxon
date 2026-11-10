@@ -12,6 +12,18 @@ export function pollChildStreamLine(child StreamingSubprocess, stream ChildStrea
 	end 'which'
 end 'pollChildStreamLine'
 
-export function childStreamsEnded(child StreamingSubprocess) returns bool
-	return child.streamHasEnded(StdioStream.stdout) and child.streamHasEnded(StdioStream.stderr)
-end 'childStreamsEnded'
+export union ChildProgress
+	finished(status TerminationStatus)
+	waiting
+end 'ChildProgress'
+
+export function childProgress(child StreamingSubprocess) returns ChildProgress
+	if not child.outputHasEnded() 'stillOpen'
+		return ChildProgress.waiting
+	end 'stillOpen'
+
+	return match child.pollTermination() 'polled'
+		ended(status) gives ChildProgress.finished(status)
+		running gives ChildProgress.waiting
+	end 'polled'
+end 'childProgress'

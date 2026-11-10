@@ -1298,6 +1298,11 @@ public type StreamingSubprocess
 		end 'state'
 	end 'streamHasEnded'
 
+	/// Have reads found the end of both `stdout` and `stderr`? `streamHasEnded` for each.
+	public function outputHasEnded() returns bool
+		return self.streamHasEnded(StdioStream.stdout) and self.streamHasEnded(StdioStream.stderr)
+	end 'outputHasEnded'
+
 	function terminationAfterExit(code ExitInt) returns TerminationStatus
 		return match exitPollOf(__Builtins.subprocessExitSignal(handle) as ExitAnswer) 'signal'
 			running panic("StreamingSubprocess.pollTermination: the child answered that it had exited and then that it was running")
