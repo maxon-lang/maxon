@@ -1166,7 +1166,7 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#16
   readerStillOut:
-    x64.leaRegRdata rcx, [rip + __str_blob_197]  ; "panic at Subprocess.maxon:1363: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_197]  ; "panic at Subprocess.maxon:1368: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 184
@@ -2529,7 +2529,7 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x19 + 16]
     arm64.cbz x0, ifcont#16
   readerStillOut:
-    arm64.leaRdata x0, __str_blob_197  ; "panic at Subprocess.maxon:1363: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
+    arm64.leaRdata x0, __str_blob_197  ; "panic at Subprocess.maxon:1368: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -3930,7 +3930,7 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x19 + 16]
     arm64.cbz x0, ifcont#16
   readerStillOut:
-    arm64.leaRdata x0, __str_blob_197  ; "panic at Subprocess.maxon:1363: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
+    arm64.leaRdata x0, __str_blob_197  ; "panic at Subprocess.maxon:1368: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
