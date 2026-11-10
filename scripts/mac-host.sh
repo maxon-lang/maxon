@@ -45,6 +45,8 @@ readonly JobAlive=alive
 readonly JobFinished=finished
 readonly JobGone=gone
 readonly JobUnstarted=unstarted
+readonly ProcessTableWarnPercent=50
+readonly ProcessTableRefusePercent=80
 readonly ExitSuccess=0
 readonly ExitFailure=1
 readonly ExitUsage=2
@@ -57,12 +59,16 @@ usage() {
 		"Usage: scripts/mac-host.sh <command> [arguments]" \
 		"" \
 		"  status                             the lock, its holder, its heartbeat's age (and STALE when it is)," \
-		"                                     its job, and the agent sessions" \
+		"                                     its job, the process count of the Mac's account against its limit" \
+		"                                     (PROCESSES), and the agent sessions" \
 		"  lock <session> [--wait=SECONDS] <purpose...>" \
 		"                                     take the host lock and print token=<TOKEN>, the proof of" \
 		"                                     ownership that heartbeat, unlock and run ask for; exits $ExitHeld" \
 		"                                     at once if the lock is held; with --wait it breaks a STALE lock and" \
-		"                                     takes it, and retries every ${WaitStepSeconds} s until SECONDS pass on one that is not" \
+		"                                     takes it, and retries every ${WaitStepSeconds} s until SECONDS pass on one that is not." \
+		"                                     It warns when the account's processes reach ${ProcessTableWarnPercent}% of kern.maxprocperuid" \
+		"                                     and exits $ExitFailure at ${ProcessTableRefusePercent}%: defunct processes under launchd" \
+		"                                     cannot be reaped, so the Mac needs a reboot" \
 		"  heartbeat <session> <token>        mark the lock as still in use" \
 		"  unlock <session> <token>           release the lock; refused while its job is alive" \
 		"  break [--force] <reason...>        release a STALE lock, logging who held it, since when, and the" \
@@ -746,12 +752,39 @@ r_job_finish() {
 	r_op_leave
 }
 
+r_probe_process_table() {
+	local uid counts number
+
+	proc_user="$(id -un)"
+	uid="$(id -u)"
+	proc_limit="$(sysctl -n kern.maxprocperuid)"
+	counts="$(ps -axo stat=,uid= | awk -v uid="$uid" '$2 == uid { total++; if ($1 ~ /Z/) defunct++ } END { print total + 0, defunct + 0 }')"
+	read -r proc_count proc_defunct <<<"$counts"
+
+	for number in "$proc_limit" "$proc_count" "$proc_defunct"; do
+		case "$number" in
+			''|*[!0-9]*) r_fail "cannot read the process table: limit '$proc_limit', count '$proc_count', defunct '$proc_defunct'" ;;
+		esac
+	done
+
+	proc_summary="$proc_count of $proc_limit processes are in use by $proc_user ($proc_defunct defunct)"
+
+	if [ $((proc_count * 100)) -ge $((proc_limit * ProcessTableRefusePercent)) ]; then
+		proc_verdict=full
+	elif [ $((proc_count * 100)) -ge $((proc_limit * ProcessTableWarnPercent)) ]; then
+		proc_verdict=crowded
+	else
+		proc_verdict=ok
+	fi
+}
+
 r_cmd_status() {
 	local path age
 
 	r_op_enter
 	r_judge_lock
 	r_op_leave
+	r_probe_process_table
 
 	if [ "$judged_verdict" = free ]; then
 		echo "LOCK free"
@@ -768,6 +801,15 @@ r_cmd_status() {
 		fi
 	fi
 
+	echo "PROCESSES $proc_summary"
+
+	case "$proc_verdict" in
+		ok) ;;
+		crowded) echo "  CROWDED: lock warns at ${ProcessTableWarnPercent}% of the limit" ;;
+		full) echo "  FULL: lock refuses at ${ProcessTableRefusePercent}% of the limit; the Mac needs a reboot" ;;
+		*) r_fail "unknown process table verdict '$proc_verdict'" ;;
+	esac
+
 	echo "agent sessions:"
 
 	for path in "$agents_dir"/*; do
@@ -779,6 +821,12 @@ r_cmd_status() {
 
 r_cmd_lock() {
 	local session="$1" purpose="$2" from="$3" break_stale="$4"
+
+	r_probe_process_table
+
+	if [ "$proc_verdict" = full ]; then
+		r_fail "refusing the lock: $proc_summary, at least ${ProcessTableRefusePercent}% of kern.maxprocperuid, so jobs would fail to spawn. The defunct processes belong to launchd, which this account cannot reap: the Mac needs a reboot"
+	fi
 
 	r_op_enter
 	r_judge_lock
@@ -795,6 +843,10 @@ r_cmd_lock() {
 			;;
 		*) exit "$ExitHeld" ;;
 	esac
+
+	if [ "$proc_verdict" = crowded ]; then
+		r_warn "warning: $proc_summary, at least ${ProcessTableWarnPercent}% of kern.maxprocperuid; refusing at ${ProcessTableRefusePercent}%, and only a reboot of the Mac clears defunct processes"
+	fi
 
 	r_take_lock "$session" "$purpose" "$from"
 	r_op_leave

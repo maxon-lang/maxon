@@ -110,6 +110,9 @@ scripts/mac-host.sh drop <session> <KEY>
 - A Mac job outlives any subagent: a subagent's turn ends whatever its brief says. Brief it to ship, clone,
   lock and START the job, leave the fetch and drop recipe, and stop. The coordinator owns the Monitor on
   `job <session>`, the fetch and the drop.
+- **`status` prints `PROCESSES`, the account's process count against `kern.maxprocperuid`, and `lock`
+  warns at 50% of that limit and exits 1 at 80%.** Defunct processes whose parent is launchd are never
+  reaped, so a full table (every job fails to spawn) clears only when the Mac reboots: report it, do not retry.
 - `fetch` needs no lock and no key; run it before `drop`, which deletes the clone.
 - `drop` the session when done; it releases a lock the session still holds.
 - ⚠ **`mac-host.sh: skipped — MAXON_MAC_HOST is not set` means no Mac is configured.** It exits 0 and
