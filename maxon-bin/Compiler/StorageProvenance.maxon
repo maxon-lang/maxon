@@ -9815,8 +9815,17 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'uniqueSiteIndicesOf'
 
 	module function moveUniqueArgument(func IrFunction, value ValueId, call SourceRange, parameter ArgumentParameter, callee immutable ByteArray)
-		for siteIndex in self.uniqueSiteIndicesOf(func, value: value, call: call) 'eachDoor'
+		let doors = self.uniqueSiteIndicesOf(func, value: value, call: call)
+		let argumentRefused = self.anyUniqueArgumentDoorIsRefused(func, doors: doors)
+
+		for siteIndex in doors 'eachDoor'
 			view site = try func.provenanceSites(self.noSites).moveSites.get(siteIndex) otherwise panic("ProvenanceTracer.moveUniqueArgument: moveSites.get OOB at {siteIndex}")
+
+			// A refused argument moves nothing out of its subject, so a later read of the subject is not
+			// a use after move.
+			if site.destinationKind == MoveDestinationKind.uniqueSubject and argumentRefused 'subjectNeverMoved'
+				continue
+			end 'subjectNeverMoved'
 
 			match site.destinationKind 'kind'
 				uniqueSlot then self.refuseUniqueSlot(site, parameter: parameter, callee: callee)
@@ -9832,8 +9841,24 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.refuse(site.line, column: site.column, code: ErrorCode.semanticUniqueValueRefused, message: message)
 	end 'refuseUniqueSlot'
 
+	function uniqueArgumentNeedsAVar(func IrFunction, site MoveSite) returns bool
+		return not site.sourceIsMutable and site.sourceValue >= valueIdAtParamPosition(func.paramCount)
+	end 'uniqueArgumentNeedsAVar'
+
+	function anyUniqueArgumentDoorIsRefused(func IrFunction, doors MoveSiteIndexArray) returns bool
+		for siteIndex in doors 'eachDoor'
+			view site = try func.provenanceSites(self.noSites).moveSites.get(siteIndex) otherwise panic("ProvenanceTracer.anyUniqueArgumentDoorIsRefused: moveSites.get OOB at {siteIndex}")
+
+			if site.destinationKind == MoveDestinationKind.uniqueArgument and self.uniqueArgumentNeedsAVar(func, site: site) 'refused'
+				return true
+			end 'refused'
+		end 'eachDoor'
+
+		return false
+	end 'anyUniqueArgumentDoorIsRefused'
+
 	function moveUniqueName(func IrFunction, site MoveSite, parameter ArgumentParameter, callee ByteArray)
-		if not site.sourceIsMutable and site.sourceValue >= valueIdAtParamPosition(func.paramCount) 'notTheCallersMutableData'
+		if self.uniqueArgumentNeedsAVar(func, site: site) 'notTheCallersMutableData'
 			self.refuse(site.line, column: site.column, code: ErrorCode.semanticVarFromImmutable, message: uniqueArgumentNeedsAVarMessage(String.from(site.source), paramName: parameter.displayName(), functionName: String.from(callee)))
 			return
 		end 'notTheCallersMutableData'

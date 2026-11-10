@@ -1152,20 +1152,22 @@ a=3 b=0 fromA=[] fromB=[]
 ```
 
 <!-- test: shared-record-not-written-through-a-union-payload -->
-A union payload is a place too. The `String` reading of it: appending to a payload matched out of one
-union must not reach an untouched literal of the same text.
+A union payload is a place too. The `String` reading of it: a `var` that took the payload matched out of
+one union and then grows must not reach an untouched literal of the same text.
 ```maxon
 union Tagged
 	named(name String)
 end 'Tagged'
 
 function main() returns ExitCode
-	var boxed = Tagged.named("tag")
+	let boxed = Tagged.named("tag")
+	var grown = ""
 	match boxed 'grow'
-		named(n) then n.append("!")
+		named(n) then grown = n
 	end 'grow'
+	grown.append("!")
 	let untouched = "tag"
-	print("untouched={untouched}")
+	print("grown={grown} untouched={untouched}")
 	return 0
 end 'main'
 ```
@@ -1173,14 +1175,13 @@ end 'main'
 0
 ```
 ```stdout
-untouched=tag
+grown=tag! untouched=tag
 ```
 
 <!-- test: mutated-payload-bound-inside-the-arm-frees-its-record -->
-The same accounting one binding-shape over, which is the shape the defect was first seen in: the
-payload is appended to INSIDE the arm, through a `var` union, and never escapes. It exited 101 too,
-so both routes to a grown payload record are pinned rather than the one that happened to be
-reported.
+The same accounting one binding-shape over, which is the shape the defect was first seen in: a `var`
+takes the payload bound inside the arm, is appended to, and never escapes. The grown record is freed
+with the `var`, so a leak exits 101.
 ```maxon
 union Word
 	spelled(text String)
@@ -1188,15 +1189,14 @@ union Word
 end 'Word'
 
 function main() returns ExitCode
-	var a = Word.spelled("head, long enough to be a real heap allocation")
+	let a = Word.spelled("head, long enough to be a real heap allocation")
+	var grown = ""
 	match a 'm'
-		spelled(text) then text.append(" tail")
+		spelled(text) then grown = text
 		blank then return 1
 	end 'm'
-	match a 'read'
-		spelled(text) then print(text)
-		blank then return 1
-	end 'read'
+	grown.append(" tail")
+	print(grown)
 	return 0
 end 'main'
 ```

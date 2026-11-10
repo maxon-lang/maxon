@@ -927,8 +927,6 @@ end 'main'
 ```mm-trace
 mm_alloc Body #1 size=8
 mm_alloc Shelf #2 size=8
-mm_incref Body #1 rc=2
-mm_decref Body #1 rc=1
 mm_decref Shelf #2 rc=0
 mm_decref Body #1 rc=0
 mm_free Body #1
