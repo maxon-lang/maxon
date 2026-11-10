@@ -485,7 +485,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Sampler.maxon:1387: SampleTimer.wait: the timer was closed
+panic at Sampler.maxon:1379: SampleTimer.wait: the timer was closed
 Stack trace:
   in SampleTimer.wait
   in main

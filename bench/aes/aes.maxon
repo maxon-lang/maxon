@@ -213,7 +213,7 @@ function sealReusing(aead AesGcm, f Fixtures, plaintext ByteArray, output ByteAr
 end 'sealReusing'
 
 function step(workload Workload, f Fixtures, previous ByteArray) returns ByteArray
-	return match workload 'step'
+	return match workload 'byWorkload'
 		keySetup128 gives keySetup(f.key128)
 		keySetup128Into gives keySetupInto(f.key128, output: previous)
 		block128 gives try f.aes128.encryptBlock(previous) otherwise panic("block")
@@ -229,7 +229,7 @@ function step(workload Workload, f Fixtures, previous ByteArray) returns ByteArr
 		gcm128Open16k gives try f.gcm128.open(f.nonce, sealed: f.sealed16k, additionalData: f.aad) otherwise panic("open")
 		gcm256Seal16k gives try f.gcm256.seal(f.nonce, plaintext: f.kib16, additionalData: f.aad) otherwise panic("seal")
 		gcm256Seal16kInto gives sealReusing(f.gcm256, f: f, plaintext: f.kib16, output: previous)
-	end 'step'
+	end 'byWorkload'
 end 'step'
 
 function runOnce(workload Workload, f Fixtures, iterations Count) returns ByteArray
