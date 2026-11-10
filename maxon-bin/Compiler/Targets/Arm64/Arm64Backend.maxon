@@ -178,7 +178,7 @@ let Arm64ShiftTypeLsr = 0x400000
 //
 // ⛔ **NEITHER HAS AN OFFSET FIELD**, so `StdToArm64Conversion` folds `base + offset` into x16 before the
 // access. See `TargetOp.arm64LoadAcquire` for why the `FEAT_LRCPC2` offset forms are deliberately unused.
-let Arm64OpLdarB = 0x08DFFC00
+export let Arm64OpLdarB = 0x08DFFC00
 
 // EXPORTED: the hand-assembled green-thread trampoline publishes `completed` with the same instruction the
 // isel emits, so the two cannot come to disagree about which store is the ordered one.
@@ -3013,12 +3013,12 @@ end 'encodeArm64FunctionChunk'
 // managed top-level global), `debugStream` the DebugStream producer's attach/detach bracket, and
 // `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
 // `Arm64Runtime.arm64OsCallKind`).
-function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, os Os, entryFunction ByteArray)
+function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, gatesDescendants bool, os Os, entryFunction ByteArray)
 	chunks.push(buildArm64EntryStubChunk(leakCheck, initGlobals: initGlobals, drainGreenThreads: drainGreenThreads, captureArgv: captureArgv, debugStream: debugStream, dumpCoverage: dumpCoverage, releasesRegistry: releasesRegistry, os: os, entryFunction: entryFunction))
 
 	// Directly behind the stub — the layout `recordChunkSymbol` requires of the thread entry.
 	if drainGreenThreads 'mainIsAGreenThread'
-		chunks.push(buildArm64MainThreadEntryChunk(initGlobals, entryFunction: entryFunction))
+		chunks.push(buildArm64MainThreadEntryChunk(initGlobals, gatesDescendants: gatesDescendants, entryFunction: entryFunction))
 	end 'mainIsAGreenThread'
 end 'appendArm64RuntimeChunks'
 
@@ -3299,7 +3299,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// Its by-name calls read `Project.entryStubCalls`, the record the reachability roots and the inliner's
 	// census were built from, so the stub calls exactly what those kept alive.
 	let stub = project.entryStubCalls
-	appendArm64RuntimeChunks(entryChunks, leakCheck: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, releasesRegistry: stub.releasesRegistry, os: target.os, entryFunction: project.entryFunctionName)
+	appendArm64RuntimeChunks(entryChunks, leakCheck: stub.checksLeaks, initGlobals: usage.usesManagedGlobals, drainGreenThreads: stub.runsMainOnAGreenThread, captureArgv: usage.usesCommandLine, debugStream: stub.bracketsDebugStream, dumpCoverage: stub.dumpsCoverage, releasesRegistry: stub.releasesRegistry, gatesDescendants: stub.gatesDescendants, os: target.os, entryFunction: project.entryFunctionName)
 
 	placeChunksAhead(entryChunks, chunks: chunks)
 

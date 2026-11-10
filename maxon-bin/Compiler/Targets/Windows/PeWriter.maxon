@@ -580,6 +580,9 @@ export enum IatSlot
 	InitializeProcThreadAttributeList = IatSlotMeta{dll: ImportDll.kernel32}
 	UpdateProcThreadAttribute = IatSlotMeta{dll: ImportDll.kernel32}
 	DeleteProcThreadAttributeList = IatSlotMeta{dll: ImportDll.kernel32}
+	IsProcessInJob = IatSlotMeta{dll: ImportDll.kernel32}
+	QueryFullProcessImageNameW = IatSlotMeta{dll: ImportDll.kernel32}
+	SetEnvironmentVariableW = IatSlotMeta{dll: ImportDll.kernel32}
 
 	// ⭐ **A SECOND `ReadFile` THUNK, BECAUSE THE SHIM CLASSIFIES BY SLOT.** The overlapped pipe read answers
 	// `ERROR_IO_PENDING` at once and the thread parks on the completion port, so it must not be a bracketed
@@ -785,6 +788,9 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 		shutdown or
 		NtGetNextThread or
 		RegGetValueW or
+		IsProcessInJob or
+		QueryFullProcessImageNameW or
+		SetEnvironmentVariableW or
 		SetNamedPipeHandleState or
 		InitializeProcThreadAttributeList or
 		UpdateProcThreadAttribute or
@@ -933,6 +939,9 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 		InitializeProcThreadAttributeList or
 		UpdateProcThreadAttribute or
 		DeleteProcThreadAttributeList or
+		IsProcessInJob or
+		QueryFullProcessImageNameW or
+		SetEnvironmentVariableW or
 		ReadFileOverlapped or
 		RegGetValueW gives true
 
@@ -2003,7 +2012,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// TLS pair lives in this band too. It also answers for a spawning image, whose child-process bodies are
 	// installed only with the scheduler. `usesEnvironment` answers for an image that reads its
 	// environment without a scheduler, whose `__env_entry` calls the whole-environment pair.
-	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesProcessLiveness or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesProcessDebug or codeResult.stdModule.usesProcessNamespace or codeResult.stdModule.usesEnvironment
+	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesProcessLiveness or codeResult.stdModule.usesProcessDescendants or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesProcessDebug or codeResult.stdModule.usesProcessNamespace or codeResult.stdModule.usesEnvironment
 
 	// ⭐ **THE SAMPLER IS ntdll's ONLY PRODUCER**, and it feeds BOTH gates: the suspend/context/read/resume
 	// family, the timer pair and the module walk ride the optional kernel32 band above, while

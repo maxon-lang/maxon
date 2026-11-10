@@ -1,4 +1,4 @@
-let AgeSweepStagingDir = "temp/mcp-old-format-leftovers"
+let AgeSweepStagingDir = "mcp-old-format-leftovers"
 let DebuggeeStem = "debuggee-0000"
 let PlantedText = "left by an older compiler"
 let AgeProbeLabel = "mcp-old-format-leftovers"
@@ -11,11 +11,11 @@ function plantedAged(directory FilePath, name String)
 end 'plantedAged'
 
 test 'a server starts over old-format snippets and debug builds and sweeps the week-old ones, and keeps what another host minted'
-	let cacheRoot = stagingDir(AgeSweepStagingDir)
-	clearStagedFiles(cacheRoot)
-	_ = stagingDir("{AgeSweepStagingDir}/{CacheVendorDirName}")
-	let snippets = stagingDir("{AgeSweepStagingDir}/{CacheVendorDirName}/{SnippetDirName}")
-	let builds = stagingDir("{AgeSweepStagingDir}/{CacheVendorDirName}/{DebugBuildDirName}")
+	let cacheRoot = stagedDirNamed(AgeSweepStagingDir)
+	clearStagedTree(cacheRoot)
+	_ = stagedDirNamed("{AgeSweepStagingDir}/{CacheVendorDirName}")
+	let snippets = stagedDirNamed("{AgeSweepStagingDir}/{CacheVendorDirName}/{SnippetDirName}")
+	let builds = stagedDirNamed("{AgeSweepStagingDir}/{CacheVendorDirName}/{DebugBuildDirName}")
 
 	let ended = endedProcessId()
 	let oldSnippet = "{SnippetStem}-{ended}-1{MaxonSourceSuffix}"
@@ -54,4 +54,6 @@ test 'a server starts over old-format snippets and debug builds and sweeps the w
 	try Expect.isTrue(File.exists(builds.join(youngBuild)), message: "{youngBuild} claims no owner but is not yet a week old, and the sweep removed it")
 	try Expect.isTrue(File.exists(snippets.join(foreignSnippet)), message: "{foreignSnippet} names another host's process, which only that host can judge, and age alone must not remove it")
 	try Expect.isTrue(File.exists(builds.join(foreignBuild)), message: "{foreignBuild} names another host's process, which only that host can judge, and age alone must not remove it")
+
+	discardStagedDir(stagedDirNamed(AgeSweepStagingDir))
 end 'a server starts over old-format snippets and debug builds and sweeps the week-old ones, and keeps what another host minted'

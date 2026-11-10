@@ -122,7 +122,7 @@ kernel still got scheduled after eight that did. A P handed off to a blocking M 
 takes this reply with it, and the case reads a 120 s timeout rather than a wrong number.
 
 ⚠ **THE FILES ARE NAMED PER SERVICE AND DELETED ON EVERY PATH**, including both error paths, because the
-harness runs its cases in parallel out of one `temp/` directory.
+harness runs its cases in parallel out of one working directory.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias ReaderHandleArray = Array with Reader.handle

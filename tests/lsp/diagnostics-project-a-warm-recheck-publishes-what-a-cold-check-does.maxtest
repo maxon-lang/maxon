@@ -13,7 +13,7 @@ test 'a warm recheck after an unsaved edit publishes what a cold check of the sa
 
 	let warm = probeProjectCheckAcrossAnEdit(warmRoot, fileName: WarmRecheckBufferFileName, content: WarmRecheckCleanSource, diskEdits: CorpusDiskEditArray.create(0), editedContent: WarmRecheckBrokenSource)
 
-	discardOutsideCheckoutDir(warmRoot)
+	discardStagedDir(warmRoot)
 
 	let coldRoot = stagedProjectDiagnosticsRoot(WarmRecheckColdDirName)
 	writeCorpusFile(coldRoot, fileName: WarmRecheckDeclaringFileName, content: WarmRecheckDeclaringSource)
@@ -21,7 +21,7 @@ test 'a warm recheck after an unsaved edit publishes what a cold check of the sa
 
 	let cold = probeProjectCheckDiagnostics(coldRoot, fileName: WarmRecheckBufferFileName, content: WarmRecheckBrokenSource, edits: StringArray.create(0))
 
-	discardOutsideCheckoutDir(coldRoot)
+	discardStagedDir(coldRoot)
 
 	expectNoProjectDiagnostics(projectDiagnosticsPublish(warm, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding `clamp(1)`, exactly the disk's bytes, and a `maxon build` of the staged project exits 0. This publish is the CONTROL.")
 

@@ -507,7 +507,7 @@ function buildTestBinary(subject TestSubject, target Target, groups TestFileGrou
 		return TestBinaryBuild.failed(refuseTestRun(stagingRefusalReason(e)))
 	end 'noBuildRoot'
 
-	var staged = try stageTestBuild(buildRoot.join("{StagedTreeDirName}"), subject: subject, groups: groups) otherwise (e) 'stagingRefused'
+	var staged = try stageTestBuild(buildRoot.join("{StagedTreeDirName}"), subject: subject, groups: groups, tracksDescendants: targetProvidesFacility(target, facility: HostFacility.processDescendants)) otherwise (e) 'stagingRefused'
 		return TestBinaryBuild.failed(refuseTestRun(stagingRefusalReason(e)))
 	end 'stagingRefused'
 
@@ -537,7 +537,9 @@ end 'compileAndRunTests'
 function runBuiltTests(args MaxonArgs, staged StagedTestBuild, binary FilePath, compileMs DurationMs, selected TestSelection, color bool) returns ExitCode
 	let runStarted = Clock.nowMs()
 
-	let plan = TestLaunchPlan.create(binary, timeoutMs: args.testTimeoutMs)
+	let plan = TestLaunchPlan.create(binary, timeoutMs: args.testTimeoutMs, tracksDescendants: staged.tracksDescendants)
+	removeEndedRunsScratch(plan.buildDirectory())
+
 	var progress = TestRunProgress.create()
 	let reportOrder = reportFileOrder(staged.groups)
 	var ran = TestFileResultsArray.create(staged.groups.count(), zeroed: false)

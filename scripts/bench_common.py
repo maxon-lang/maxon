@@ -1,4 +1,5 @@
 import argparse
+import csv
 import datetime
 import hashlib
 import json
@@ -10,6 +11,7 @@ import stat
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,6 +53,10 @@ REF_SHA_MAX_HEX_DIGITS = 40
 REF_ENTRY_PATTERN = re.compile(f"^{REF_ENTRY_PREFIX}[0-9a-f]{{{REF_SHA_MIN_HEX_DIGITS},{REF_SHA_MAX_HEX_DIGITS}}}$")
 GIT_ENTRY_NAME = ".git"
 LOCK_FILE_NAME = ".bench.lock"
+TEMP_NAMES_TABLE = os.path.join(REPO, "scripts", "lib", "temp-names.tsv")
+TEMP_NAMES_SEPARATOR = "\t"
+SCRIPT_TEMP_ROW = "script"
+SECONDS_PER_MINUTE = 60
 # Past the holder text at the start of the file: on Windows `msvcrt.locking` blocks reads of the
 # locked range, and a refused run must be able to read who holds the lock.
 LOCK_REGION_OFFSET = 1 << 20
@@ -491,23 +497,57 @@ def mark_ref_used(entry):
 
 # Retries only a failed delete: `shutil.rmtree` cannot resume after a failed `os.open`, so any other
 # failure is raised.
-def make_writable_and_retry(function, path, failure):
-    error = failure[1] if isinstance(failure, tuple) else failure
-    if function not in (os.unlink, os.remove, os.rmdir):
-        raise error
-    try:
-        os.chmod(os.path.dirname(path), stat.S_IRWXU)
-        os.chmod(path, stat.S_IRWXU)
-        function(path)
-    except OSError:
-        raise error from None
+def writable_retry_within(root):
+    root = os.path.abspath(root)
+
+    def make_writable_and_retry(function, path, failure):
+        error = failure[1] if isinstance(failure, tuple) else failure
+        if function not in (os.unlink, os.remove, os.rmdir):
+            raise error
+        try:
+            if os.path.abspath(path) != root:
+                os.chmod(os.path.dirname(path), stat.S_IRWXU)
+            os.chmod(path, stat.S_IRWXU)
+            function(path)
+        except OSError:
+            raise error from None
+
+    return make_writable_and_retry
 
 
 def remove_tree(path):
+    retry = writable_retry_within(path)
     if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=make_writable_and_retry)
+        shutil.rmtree(path, onexc=retry)
     else:
-        shutil.rmtree(path, onerror=make_writable_and_retry)
+        shutil.rmtree(path, onerror=retry)
+
+
+def temp_names_row(name):
+    with open(TEMP_NAMES_TABLE, newline="") as table:
+        for row in csv.DictReader(table, delimiter=TEMP_NAMES_SEPARATOR):
+            if row["name"] == name:
+                return row
+
+    raise LookupError(f"{TEMP_NAMES_TABLE} has no row named {name!r}")
+
+
+def sweep_stale_temp(temp_root):
+    row = temp_names_row(SCRIPT_TEMP_ROW)
+    prefix = row["prefix"]
+    horizon = time.time() - int(row["stale_minutes"]) * SECONDS_PER_MINUTE
+    for entry in os.scandir(temp_root):
+        try:
+            if entry.name.startswith(prefix) and entry.is_dir(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_mtime < horizon:
+                remove_tree(entry.path)
+        except OSError as failure:
+            print(f"left {entry.path}: {failure}", file=sys.stderr)
+
+
+def temp_directory(label):
+    temp_root = tempfile.gettempdir()
+    sweep_stale_temp(temp_root)
+    return tempfile.TemporaryDirectory(prefix=f"{temp_names_row(SCRIPT_TEMP_ROW)['prefix']}{label}-")
 
 
 def remove_worktree(tree):

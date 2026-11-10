@@ -11,7 +11,7 @@ category: system
 
 | Function | Meaning |
 |---|---|
-| `Process.isAlive(pid Pid) returns bool` | `true` while a process with id `pid` exists, `false` once it has ended and been reaped |
+| `Process.isAlive(pid Pid) returns bool` | `true` while a process with id `pid` is running, `false` once it has ended, whether or not its parent has reaped it |
 
 An id no host can hand out — zero, one past the 32-bit range, any `Pid` up to `u64.max` — answers `false`,
 never a range panic. Its body is the library-tier intrinsic `__Builtins.processIsAlive(pid)`, which takes a
@@ -155,6 +155,9 @@ end 'main'
 <!-- test: process-liveness.a-running-child-is-alive -->
 <!-- unsupported-targets: wasm32-wasi -->
 ```maxon
+let ChildEndsWithinMs = 30000
+let ChildPollMs = 50
+
 function main() returns ExitCode
 	#if os(Windows)
 	var config = Configuration.create(Executable.name("ping"))
@@ -166,7 +169,16 @@ function main() returns ExitCode
 	config.arguments.push("2")
 	#endif
 	let pid = try config.runDetached() otherwise return 2
-	if Process.isAlive(pid) 'alive'
+	let aliveAtStart = Process.isAlive(pid)
+	var waitedMs = 0 as DurationMs
+	while Process.isAlive(pid) and waitedMs < ChildEndsWithinMs 'untilItEnds'
+		sleep(ChildPollMs)
+		waitedMs = waitedMs + ChildPollMs
+	end 'untilItEnds'
+	if Process.isAlive(pid) 'neverEnded'
+		return 5
+	end 'neverEnded'
+	if aliveAtStart 'alive'
 		return 3
 	end 'alive'
 	return 4
@@ -174,6 +186,46 @@ end 'main'
 ```
 ```exitcode
 3
+```
+
+<!-- test: process-liveness.a-detached-child-that-ended-reads-ended-though-unreaped -->
+<!-- unsupported-targets: wasm32-wasi -->
+A detached child is one nobody waits for, so under POSIX it stays an unreaped zombie after it ends. It reads as ended all the same: the id still names an entry in the process table, and `isAlive` answers about the process.
+```maxon
+let ChildEndsWithinMs = 30000
+let ChildPollMs = 50
+
+function main() returns ExitCode
+	#if os(Windows)
+	var config = Configuration.create(Executable.name("cmd"))
+	config.arguments.push("/c")
+	config.arguments.push("exit")
+	config.arguments.push("0")
+	#else
+	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise return 2))
+	config.arguments.push("-c")
+	config.arguments.push("exit 0")
+	#endif
+	let pid = try config.runDetached() otherwise return 2
+	var waitedMs = 0 as DurationMs
+	var everReadEnded = false
+	while waitedMs < ChildEndsWithinMs and not everReadEnded 'untilItEnds'
+		if not Process.isAlive(pid) 'ended'
+			everReadEnded = true
+		end 'ended' else 'running'
+			sleep(ChildPollMs)
+			waitedMs = waitedMs + ChildPollMs
+		end 'running'
+	end 'untilItEnds'
+	print("ended={everReadEnded}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ended=true
 ```
 
 <!-- test: process-liveness.a-program-alias-named-like-the-runtimes-parameter-changes-nothing -->

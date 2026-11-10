@@ -29,11 +29,13 @@ type SourceLaunchSession implements DapSession
 end 'SourceLaunchSession'
 
 test 'a launch naming a maxon source builds it and stops in what it built'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: SourceLaunchCaseLabel, fixture: SteppingFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: SourceLaunchCaseLabel, fixture: SteppingFixtureName)
 	var session = SourceLaunchSession.create(staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: OuterCallAnchor))
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.isTrue(dapSuccess(session.launch), message: "`{LaunchCommand}` refused a `.maxon` source. A build failure answers the request with the compiler's diagnostics, so this is what it said: {dapDescribed(session.launch)}")
 	try Expect.isTrue(session.verified, message: "a breakpoint in the built source was not verified, which is what an image built WITHOUT debug info looks like")
 	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the program built from source must stop on the breakpoint; the stop said `{session.stopReason}`")
+
+	discardStagedDir(staged)
 end 'a launch naming a maxon source builds it and stops in what it built'

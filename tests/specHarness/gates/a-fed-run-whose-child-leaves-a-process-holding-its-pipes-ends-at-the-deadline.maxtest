@@ -1,5 +1,5 @@
 let FedRunProbeFixtureDir = "tests/specHarness/gates/a-fed-run-whose-child-leaves-a-process-holding-its-pipes-ends-at-the-deadline"
-let FedRunProbeStagingDir = "temp/fed-run-probe"
+let FedRunProbeDirName = "fed-run-probe"
 let FedRunProbeSourcePath = "maxon-bin/Testing/SpecFedRun.maxon"
 let FedRunProbeStreamsPath = "maxon-bin/Debug/ChildStreams.maxon"
 let FedRunProbeExecuteWord = "execute"
@@ -12,9 +12,10 @@ let FedRunHolderVerdict = "deadline error after the deadline true, before the su
 let FedRunCleanVerdict = "exit 0, stdout anchor|done|tail|, prompt true"
 
 function fedRunProbe(scenario String) returns CollectedOutput
-	let caseDir = stagingDir("{FedRunProbeStagingDir}/{scenario}")
-	let sources = freshStagingDir("{FedRunProbeStagingDir}/{scenario}/{FedRunProbeSourcesDirName}")
-	let cache = stagingDir("{FedRunProbeStagingDir}/{scenario}/{FedRunProbeCacheDirName}")
+	let probeRoot = projectScratchDir().join("{FedRunProbeDirName}-{scenario}")
+	let caseDir = stagingDir(probeRoot.toString())
+	let sources = freshStagingDir(probeRoot.join(FedRunProbeSourcesDirName).toString())
+	let cache = stagingDir(probeRoot.join(FedRunProbeCacheDirName).toString())
 
 	stageStoredTree(fixtureDir(FedRunProbeFixtureDir), into: sources)
 
@@ -28,7 +29,10 @@ function fedRunProbe(scenario String) returns CollectedOutput
 	argv.push(sources.toString())
 	argv.push(scenario)
 
-	return spawnCompiler(argv, staged: caseDir, what: "the fed-run probe", environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()]))
+	let run = spawnCompiler(argv, staged: caseDir, what: "the fed-run probe", environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()]))
+	discardStagedDir(probeRoot)
+
+	return run
 end 'fedRunProbe'
 
 function collectUnlessSaid(scenario String, verdict String, broken StringArray)

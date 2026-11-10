@@ -1,12 +1,12 @@
 let RewrittenLinePrefix = "formatted: "
 let LibraryTierDirNames = ["stdlib", "runtime"]
-let LibraryTiersStagingDirName = "temp/fmt-library-tiers"
+let LibraryTiersStagingDirName = "fmt-library-tiers"
 let LibraryTiersSpawnName = "the library tiers"
 let LibraryTiersTreeDescription = "the stdlib and runtime sources staged from the tree"
 
 // `maxon-bin/` is left out: formatting it takes longer than a test file's deadline.
 test 'every source under stdlib and runtime is already formatted'
-	let staging = freshStagingDir(LibraryTiersStagingDirName)
+	let staging = freshStagingDir(libraryTiersStagingPath())
 	var stagedCount = 0 as FileTally
 
 	for tierName in LibraryTierDirNames 'eachTier'
@@ -26,7 +26,7 @@ test 'every source under stdlib and runtime is already formatted'
 		panic("the gate could not run — no source was found under {LibraryTierDirNames.count()} library tier directories, so `fmt` would run over an empty tree and this test would pass having formatted nothing.")
 	end 'nothingStaged'
 
-	let run = spawnFmtOverStagedTree(LibraryTiersStagingDirName, what: LibraryTiersSpawnName)
+	let run = spawnFmtOverStagedTree(libraryTiersStagingPath(), what: LibraryTiersSpawnName)
 	requireFmtRunSucceeded(run, runLabel: FirstRunLabel, over: LibraryTiersTreeDescription)
 
 	var rewritten = StringArray.create(0)
@@ -39,4 +39,10 @@ test 'every source under stdlib and runtime is already formatted'
 
 	Expect.isEmpty(listedLines(rewritten), message: "`fmt` rewrites these library sources, so the committed text is not what `maxon fmt` writes. Run `./maxon-bin/.maxon/maxon fmt <file>` on each and commit the result.")
 	Expect.contains(withoutCarriageReturns(run.stdout), needle: "{stagedCount} unchanged.", message: "`fmt` did not report all {stagedCount} staged sources as unchanged. It wrote to stdout: {run.stdout}")
+
+	discardStagedDir(staging)
 end 'every source under stdlib and runtime is already formatted'
+
+function libraryTiersStagingPath() returns String
+	return "{testScratchDir().toString()}{PortablePathSeparator}{LibraryTiersStagingDirName}"
+end 'libraryTiersStagingPath'

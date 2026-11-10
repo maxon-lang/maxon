@@ -23,6 +23,9 @@ test 'a detach whose answer is the stub report that the program ended is refused
 		Expect.isTrue(File.exists(trace), message: "the stub proxy never answered a `{EndedDetachRequestPrefix}` request with {ExitReportInPlaceOfTheAnswer}, so the case measured nothing. It printed: {listedLines(kinds)}. {said}")
 		Expect.equal(eventsOfKind(events, kind: ErrorEventName).count(), expected: 1, message: "⭐ A REPORT THAT THE PROGRAM ENDED IS NOT AN ACKNOWLEDGEMENT. The detach the stub answered with one must be reported failed. It printed: {listedLines(kinds)}. {said}")
 		Expect.atMost(session.elapsedMs(), than: EndedDetachPatienceMs, message: "⭐ NOTHING MORE IS COMING ONCE THE STUB HAS REPORTED THE PROGRAM ENDED. The detach waited for a reply that could not follow the report, and the session ran {session.elapsedMs()} ms. It printed: {listedLines(kinds)}. {said}")
+
+		discardStagedDir(staged)
+		discardStagedDir(proxies)
 	#else
 		Expect.isFalse(hostTargetTriple() == EndedDetachLaneTriple, message: "only the arm64-macos lane drives a program through a stub it can be put in front of, and runs the case above.")
 	#endif

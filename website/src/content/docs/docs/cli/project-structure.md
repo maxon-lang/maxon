@@ -218,8 +218,9 @@ project. Two or more positionals are always paths.
 ### Rebuilding a running compiler
 
 A build whose output is the compiler running the command (such as the Maxon repository's own) can still
-build. Once the compile succeeds, the compiler renames its running image to `maxon.previous`
-(`maxon.previous.exe` on Windows) and writes the new binary into the empty slot. If an older
+build. The new binary is written into the build's staging directory, as every build's is (see
+[`maxon build`](/docs/cli/#maxon-build)). Once the compile succeeds, the compiler renames its running image to
+`maxon.previous` (`maxon.previous.exe` on Windows) and renames the new binary into the empty slot. If an older
 `maxon.previous` is itself still running, for example an editor's language server, it is renamed aside to
 `maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later rebuild. A **failed** build leaves
 the running compiler in place. Such a build always compiles: every build of the compiler changes the compiler identity a

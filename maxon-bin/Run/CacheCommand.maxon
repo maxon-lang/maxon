@@ -103,14 +103,32 @@ type FirstFailure
 	end 'adopt'
 end 'FirstFailure'
 
-// One file or directory under a cache root.
+enum CacheEntryKind
+	file
+	directory
+	link
+end 'CacheEntryKind'
+
+// One file, directory or link under a cache root.
 type CacheEntry
 	export let path as FilePath
-	export let isDirectory as bool
+	export let kind as CacheEntryKind
 
-	static function create(path FilePath, isDirectory bool) returns CacheEntry
-		return Self{path: path, isDirectory: isDirectory}
+	static function create(path FilePath, kind CacheEntryKind) returns CacheEntry
+		return Self{path: path, kind: kind}
 	end 'create'
+
+	function isFile() returns bool
+		return self.kind == CacheEntryKind.file
+	end 'isFile'
+
+	function isDirectory() returns bool
+		return self.kind == CacheEntryKind.directory
+	end 'isDirectory'
+
+	function isLink() returns bool
+		return self.kind == CacheEntryKind.link
+	end 'isLink'
 end 'CacheEntry'
 
 // What one walk of one root found: its entries in the order a removal may act on them, and the first part
@@ -214,6 +232,15 @@ type CacheRemoval
 		return decided
 	end 'useOfLock'
 
+	function removeLink(path FilePath)
+		if not Directory.removeTree(path).isEmpty() 'stays'
+			self.failure.note("could not remove {path.toString()}")
+			return
+		end 'stays'
+
+		self.files = self.files + 1
+	end 'removeLink'
+
 	function leaveUnjudged(path FilePath) returns bool
 		self.failure.note("could not tell whether a build is using {path.toString()}, so it was not removed")
 		self.noteEnclosingDirectories(path)
@@ -304,7 +331,7 @@ function libraryEntriesIn(contents CacheContents, library FilePath) returns Cach
 	var entries = 0 as CacheTally
 
 	for entry in contents.entries 'eachEntry'
-		if not entry.isDirectory and entry.path.isInside(library) 'aLibraryEntry'
+		if not entry.isDirectory() and entry.path.isInside(library) 'aLibraryEntry'
 			entries = entries + 1
 		end 'aLibraryEntry'
 	end 'eachEntry'
@@ -361,7 +388,7 @@ function censusOf(contents CacheContents) returns CacheCensus
 	census.failure.adopt(contents.failure)
 
 	for entry in contents.entries 'eachEntry'
-		if entry.isDirectory 'notAFile'
+		if not entry.isFile() 'notAFile'
 			continue
 		end 'notAFile'
 
@@ -471,7 +498,12 @@ function readCacheTree(root FilePath) returns CacheContents
 		return contents
 	end 'nothingThere'
 
-	collectCacheTree(root, into: contents)
+	let physical = try root.resolvedPhysically() otherwise 'unresolvable'
+		contents.failure.note("could not read {root.toString()}")
+		return contents
+	end 'unresolvable'
+
+	collectCacheTree(root, physical: physical, into: contents)
 
 	return contents
 end 'readCacheTree'
@@ -482,7 +514,7 @@ end 'readCacheTree'
 //
 // ⛔ **A DIRECTORY THAT COULD NOT BE READ IS NOT COLLECTED**, so nothing counts or removes a directory
 // whose contents are unknown.
-function collectCacheTree(dir FilePath, into CacheContents)
+function collectCacheTree(dir FilePath, physical FilePath, into CacheContents)
 	let entries = try Directory.list(dir) otherwise 'unreadable'
 		into.failure.note("could not read {dir.toString()}")
 		return
@@ -490,25 +522,36 @@ function collectCacheTree(dir FilePath, into CacheContents)
 
 	for entry in entries 'eachEntry'
 		if Directory.isDirectory(entry) 'aDirectory'
-			collectCacheTree(entry, into: into)
+			collectDirectoryEntry(entry, physicalParent: physical, into: into)
 			continue
 		end 'aDirectory'
 
-		into.entries.push(CacheEntry.create(entry, isDirectory: false))
+		into.entries.push(CacheEntry.create(entry, kind: CacheEntryKind.file))
 	end 'eachEntry'
 
-	into.entries.push(CacheEntry.create(dir, isDirectory: true))
+	into.entries.push(CacheEntry.create(dir, kind: CacheEntryKind.directory))
 end 'collectCacheTree'
 
-export function discardCacheTree(directory FilePath)
-	for entry in readCacheTree(directory).entries 'eachEntry'
-		if entry.isDirectory 'aDirectory'
-			try Directory.delete(entry.path) otherwise ignore
-			continue
-		end 'aDirectory'
+// A directory whose physical path is not its parent's joined with its name is reached through a link.
+// It is collected as one entry and never entered, so a clear removes the link and nothing it points at.
+function collectDirectoryEntry(entry FilePath, physicalParent FilePath, into CacheContents)
+	let physical = try entry.resolvedPhysically() otherwise 'unresolvable'
+		into.failure.note("could not read {entry.toString()}")
+		return
+	end 'unresolvable'
 
-		try File.delete(entry.path) otherwise ignore
-	end 'eachEntry'
+	if not physical.equals(physicalParent.join(entry.filename())) 'aLink'
+		into.entries.push(CacheEntry.create(entry, kind: CacheEntryKind.link))
+		return
+	end 'aLink'
+
+	collectCacheTree(entry, physical: physical, into: into)
+end 'collectDirectoryEntry'
+
+export function discardCacheTree(directory FilePath)
+	for stuck in Directory.removeTree(directory) 'eachStuck'
+		printError("maxon: could not remove {stuck.toString()} from the cache; a later build removes it once nothing holds it\n")
+	end 'eachStuck'
 end 'discardCacheTree'
 
 // The walk's entries removed in the order it collected them, which is what lets a directory go: it was
@@ -519,24 +562,29 @@ function removeContents(contents CacheContents, removal CacheRemoval)
 	for entry in contents.entries 'eachEntry'
 		// A directory still holding a kept build would refuse the delete and fail the clear. Every kept
 		// file is noted before its directories are reached, because the walk is post-order.
-		if entry.isDirectory and removal.keptUnder.contains(entry.path.toString()) 'holdsALiveSessionsBuild'
+		if entry.isDirectory() and removal.keptUnder.contains(entry.path.toString()) 'holdsALiveSessionsBuild'
 			continue
 		end 'holdsALiveSessionsBuild'
 
 		// Kept even when empty: a build creating its claim file in it at this moment would find its
 		// directory gone.
-		if entry.isDirectory and isBuildLocksDirectory(entry.path) 'theLocksDirectoryStays'
+		if entry.isDirectory() and isBuildLocksDirectory(entry.path) 'theLocksDirectoryStays'
 			removal.noteEnclosingDirectories(entry.path)
 			continue
 		end 'theLocksDirectoryStays'
 
-		if entry.isDirectory 'aDirectory'
+		if entry.isDirectory() 'aDirectory'
 			try Directory.delete(entry.path) otherwise (e) 'notRemoved'
 				removal.failure.note("could not remove {entry.path.toString()}: {deleteRefusal(e)}")
 			end 'notRemoved'
 
 			continue
 		end 'aDirectory'
+
+		if entry.isLink() 'aLink'
+			removal.removeLink(entry.path)
+			continue
+		end 'aLink'
 
 		if isHeldByALiveDebugSession(entry.path) 'aLiveSessionsBuild'
 			removal.keep(entry.path)

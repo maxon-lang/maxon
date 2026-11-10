@@ -37,7 +37,7 @@ type EndedSession implements DapSession
 end 'EndedSession'
 
 test 'after the program ended, the listings answer empty and every other request says the program has ended'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: EndedCaseLabel, fixture: HeaplessFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: EndedCaseLabel, fixture: HeaplessFixtureName)
 	var session = EndedSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged))
 	try dapRunSession(session, completing: "complete")
 
@@ -53,4 +53,6 @@ test 'after the program ended, the listings answer empty and every other request
 	try Expect.contains(dapRefusal(session.evaluated), needle: ProgramEndedWording, message: "the refusal of `{EvaluateCommand}` must say the program has ended")
 	try Expect.isFalse(dapSuccess(session.continued), message: "`{ContinueCommand}` after the end has no program to run and must be refused. It answered {dapDescribed(session.continued)}")
 	try Expect.contains(dapRefusal(session.continued), needle: ProgramEndedWording, message: "the refusal of `{ContinueCommand}` must say the program has ended")
+
+	discardStagedDir(staged)
 end 'after the program ended, the listings answer empty and every other request says the program has ended'

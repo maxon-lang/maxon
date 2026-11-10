@@ -227,7 +227,7 @@ let InheritHandlesTrue = 1  // CreateProcessW bInheritHandles=TRUE (the child in
 let CreateSuspended = 0x00000004
 let CreateUnicodeEnvironment = 0x00000400
 let SpawnFixedCreationFlags = CreateSuspended or CreateUnicodeEnvironment
-let JobObjectExtendedLimitInformationClass = 9
+module let JobObjectExtendedLimitInformationClass = 9
 let PipeMessageMode = 0x0  // PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT
 let PipeMaxInstances = 1  // one server instance per uniquely-named pipe
 let PipeBufferSize = 0x10000  // nOutBufferSize / nInBufferSize (64 KB)
@@ -1255,6 +1255,7 @@ export type StdToX64Lowering
 			storeRelease or
 			osHandleFileType or
 			osProcessProbe or
+			osDescendants or
 			osProcessExitSignal or
 			osAdoptNamedSegment or
 			osUnmapNamedSegment or
@@ -1551,6 +1552,7 @@ export type StdToX64Lowering
 			osSocketClose(sockId) then self.lowerOsSocketClose(sockId, dstBlock: dstBlock)
 			osSocketServe(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsSocketServe(resultId, verb: verb, operands: threeArgs(a0Id, second: a1Id, third: a2Id), dstBlock: dstBlock)
 			osPathQuery(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsPathQuery(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstBlock: dstBlock)
+			osDescendants(resultId, verbId, bufId, capId) then self.lowerOsDescendants(resultId, verbId: verbId, bufId: bufId, capId: capId, dstBlock: dstBlock)
 
 			// The MACHINE query behind `__Builtins.cpuCount()`; the clamp is builder-built Std, not here.
 			osCpuCount(resultId) then self.lowerOsCpuCount(resultId, dstBlock: dstBlock)
@@ -1814,6 +1816,7 @@ export type StdToX64Lowering
 			osSocketOverlapped then panic("StdToX64Lowering: an `osSocketOverlapped` op appeared as a block terminator (lowering bug — a socket transfer produces a value and does not terminate)")
 			cryptoRoutine then panic("StdToX64Lowering: a `cryptoRoutine` op appeared as a block terminator (lowering bug — a crypto routine produces a value and does not terminate a block)")
 			osPathQuery then panic("StdToX64Lowering: an `osPathQuery` op appeared as a block terminator (lowering bug — a path query produces a value and does not terminate)")
+			osDescendants then panic("StdToX64Lowering: an `osDescendants` op appeared as a block terminator (lowering bug — a descendant sweep produces a value and does not terminate a block)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -3137,10 +3140,19 @@ export type StdToX64Lowering
 		self.lowerHostValue(TargetVReg.virtual(resultId), callee: self.hostCalleeOn(IatSlot.GetFileType, chunk: HostHandleFileTypeName), args: argsOf(handleId), dstBlock: dstBlock)
 	end 'lowerOsHandleFileType'
 
+	function lowerOsDescendants(resultId ValueId, verbId ValueId, bufId ValueId, capId ValueId, dstBlock IrBlock)
+		let chunkName = match x64OsCallKind(self.target.os) 'route'
+			importCall gives WindowsProcessDescendantsName
+			syscall gives HostProcDescendantsName
+		end 'route'
+
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(chunkName), args: threeArgs(verbId, second: bufId, third: capId), dstBlock: dstBlock)
+	end 'lowerOsDescendants'
+
 	function lowerOsProcessProbe(resultId ValueId, pidId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsProcessProbeWin64(resultId, pidId: pidId, dstBlock: dstBlock)
-			syscall then self.lowerOsProcessProbeLinux(resultId, pidId: pidId, dstBlock: dstBlock)
+			syscall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostProcProbeName), args: argsOf(pidId), dstBlock: dstBlock)
 		end 'route'
 	end 'lowerOsProcessProbe'
 
@@ -3165,37 +3177,19 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(TargetVReg.virtual(resultId), lhs: handle, rhs: answeredError))
 	end 'lowerOsProcessProbeWin64'
 
-	function lowerOsProcessProbeLinux(resultId ValueId, pidId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(pidId)))
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rsi), value: PosixProbeSignal as MachineWord))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallKill))
-		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
-	end 'lowerOsProcessProbeLinux'
-
 	// The operand is the child's tree, not the child (`GtRuntime.SubpSlotProcessTree`): on this lane
 	// the job object the spawn put the child in, or the child's own process handle where the
 	// assignment failed; on a POSIX one the child's wait object, whose pid is also its process-group
 	// id. Ending the tree is the contract, because a child that is a shell has already started the
 	// processes the deadline is aimed at.
 	function lowerOsProcessTerminate(resultId ValueId, handleId ValueId, exitCodeId ValueId, dstBlock IrBlock)
-		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.lowerOsProcessTerminateWin64(resultId, handleId: handleId, exitCodeId: exitCodeId, dstBlock: dstBlock)
-
-			// The tree kill, then `kill(-pgid, SIGKILL)`; see `buildX64LinuxProcTerminateChunk` for the
-			// code it records.
-			syscall then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostProcTerminateName), args: twoArgs(handleId, second: exitCodeId), dstBlock: dstBlock)
+		let chunkName = match x64OsCallKind(self.target.os) 'route'
+			importCall gives WindowsProcessTerminateName
+			syscall gives HostProcTerminateName
 		end 'route'
-	end 'lowerOsProcessTerminate'
 
-	// The tree may be a job or a process handle, so both terminates are asked of it; the one handed
-	// the wrong kind of handle fails, and the answer is the OR of the two BOOLs.
-	function lowerOsProcessTerminateWin64(resultId ValueId, handleId ValueId, exitCodeId ValueId, dstBlock IrBlock)
-		var treeEnded = self.mintVirtual()
-		self.lowerHostValue(treeEnded, callee: HostCallee.import(IatSlot.TerminateJobObject), args: twoArgs(handleId, second: exitCodeId), dstBlock: dstBlock)
-		var childEnded = self.mintVirtual()
-		self.lowerHostValue(childEnded, callee: HostCallee.import(IatSlot.TerminateProcess), args: twoArgs(handleId, second: exitCodeId), dstBlock: dstBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(TargetVReg.virtual(resultId), lhs: treeEnded, rhs: childEnded))
-	end 'lowerOsProcessTerminateWin64'
+		self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(chunkName), args: twoArgs(handleId, second: exitCodeId), dstBlock: dstBlock)
+	end 'lowerOsProcessTerminate'
 
 	function lowerOsProcessExitSignal(resultId ValueId, handleId ValueId, dstBlock IrBlock)
 		match x64OsCallKind(self.target.os) 'route'
@@ -5498,6 +5492,7 @@ export type StdToX64Lowering
 			osNetpoll or
 			cryptoRoutine or
 			osPathQuery or
+			osDescendants or
 			osSocketOverlapped or
 			osSocketServe gives false
 		end 'term'
@@ -5755,6 +5750,7 @@ export type StdToX64Lowering
 			osSocketOverlapped panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osSocketOverlapped`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			cryptoRoutine panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `cryptoRoutine`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osPathQuery panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osPathQuery`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osDescendants panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osDescendants`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

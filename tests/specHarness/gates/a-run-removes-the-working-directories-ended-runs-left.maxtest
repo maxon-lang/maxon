@@ -1,0 +1,33 @@
+let EndedRunLeftoverName = "stale.txt"
+let LiveRunLeftoverName = "kept.txt"
+let WorkingDirOwnedPrefix = ".spec-run-"
+
+test 'a run removes the working directory of a run that has ended and leaves that of a run still going'
+	let staged = stagedGateFixture()
+	let ended = staged.join("{WorkingDirOwnedPrefix}{endedProcessId()}")
+	let live = staged.join("{WorkingDirOwnedPrefix}{Process.id()}")
+
+	Expect.isTrue(Directory.create(ended), message: "the gate could not create {ended.toString()}")
+	Expect.isTrue(Directory.create(live), message: "the gate could not create {live.toString()}")
+	File.writeText(ended.join(EndedRunLeftoverName), content: "left by a run that ended\n")
+	File.writeText(live.join(LiveRunLeftoverName), content: "belongs to a run still going\n")
+
+	let run = runSpecTest(staged, includeNetwork: false)
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	if Directory.exists(ended) 'endedRunStays'
+		broken.push("the run left {ended.toString()}, the working directory of a run whose process has ended")
+	end 'endedRunStays'
+
+	if not File.exists(live.join(LiveRunLeftoverName)) 'liveRunSwept'
+		broken.push("the run removed {live.toString()}, the working directory of a run whose process is still going")
+	end 'liveRunSwept'
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	discardStagedDir(staged)
+	requireNothingBroken(broken, headline: "a run's sweep of the working directories earlier runs left")
+end 'a run removes the working directory of a run that has ended and leaves that of a run still going'

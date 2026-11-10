@@ -31,7 +31,8 @@
 //
 // ⛔ **ONE SPAWNING `test`, ONE FILE, ONE COMPILE.** The dump and the symbolize lookup are two further
 // spawns and no further compiles, which is what keeps this inside the per-file deadline. Staging
-// goes to a directory named for THIS case, because `maxon test` runs files concurrently.
+// goes to a directory named for THIS case, because the cases of one process share its test scratch
+// directory.
 
 // The label this case stages under, and the build it dumps.
 let DumpCaseLabel = "sidecar-dump"
@@ -63,7 +64,7 @@ typealias FixtureLineNumber = int(0 to u64.max)
 // ============================================================================================
 
 test 'the sidecar names this build, this source and every function the fixture declares'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: DumpCaseLabel, fixture: SpansFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: DumpCaseLabel, fixture: SpansFixtureName)
 	let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: DumpBuildLabel)
 
 	let noSections = StringArray.create(0)
@@ -133,6 +134,8 @@ test 'the sidecar names this build, this source and every function the fixture d
 	let bodyEnd = sourceLineStartingWith(staged, prefix: "{FunctionEndPrefix}{probeName}{FunctionEndSuffix}", what: "the `{FunctionEndPrefix}{probeName}{FunctionEndSuffix}` closing `{probeName}`")
 	Expect.atLeast(resolvedLine, than: bodyStart, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, ABOVE `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. An offset inside a function must resolve to a line inside it. It printed: {symbolized}")
 	Expect.atMost(resolvedLine, than: bodyEnd, message: "`{SymbolizeOption}` placed {probeOffset} at {StagedProgramFileName}:{resolvedLine}, BELOW `{probeName}`, which the staged source declares over lines {bodyStart}-{bodyEnd}. It printed: {symbolized}")
+
+	discardStagedDir(staged)
 end 'the sidecar names this build, this source and every function the fixture declares'
 
 // ============================================================================================

@@ -12,8 +12,8 @@
 		let root = stagedProjectDiagnosticsRoot(UnrootedLinkDirName)
 		writeCorpusFile(root, fileName: UnrootedLinkHelperFileName, content: UnrootedLinkHelperSource)
 
-		let link = hostTempDir().join(outsideCheckoutDirName(UnrootedLinkLinkDirName))
-		_ = runSystemTool("ln", arguments: ["-s", root.toString(), link.toString()], what: "`ln -s` making a link to the staged project")
+		let link = testScratchDir().join(UnrootedLinkLinkDirName)
+		plantedDirectoryLink(link, target: root.toString())
 
 		var client = LspClient.start()
 
@@ -22,7 +22,7 @@
 
 			try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
 
-			discardOutsideCheckoutDir(root)
+			discardStagedDir(root)
 
 			try Expect.isTrue(answered.isPresent, message: "a call to an `export`ed declaration in a sibling file did not resolve in a session that named no workspace folder.")
 			try Expect.equal(answered.uri, expected: fileUriOf(link.join(UnrootedLinkHelperFileName)), message: "the sibling was answered under a spelling the editor never opened the file with.")

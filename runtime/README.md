@@ -26,7 +26,7 @@ self-compiles `maxon-bin/AGENTS.md` describes.
 | `CpuFeatures.maxon` | `__cpufeat_aes_usable` | `__Builtins.cpuHasAes` |
 | `FaultProbe.maxon` | `maxon_force_segfault` | `__Builtins.forceSegfault` |
 | `ParallelBoundary.maxon` | `__parallel_boundary` | `__Builtins.parallelBoundary` |
-| `Process.maxon` | `__proc_pid`, `__proc_bg_priority`, `__proc_alive` | `__Builtins.currentProcessId`, `enterBackgroundPriority`, `processIsAlive` |
+| `Process.maxon` | `__proc_pid`, `__proc_bg_priority`, `__proc_alive`, `__proc_end_descendants_text` | `__Builtins.currentProcessId`, `enterBackgroundPriority`, `processIsAlive`, `processEndDescendants` (the scheduler bring-up arms tracking through the `osDescendants` op itself) |
 | `ManagedGeometry.maxon` | `__mg_element_bits`, `__mg_bits_to_bytes`, `__mg_element_byte_len` | calls the managed-memory, file and buffer builders mint (`ManagedMemoryRuntime.emitElementBits`, `emitBitsToBytes`, `emitElementByteLen`) — compiler-called roster |
 | `SlabArena.maxon` | `__slab_assert_os_alloc`, `__slab_arena_new`, `__slab_arena_alloc_chunks`, `__slab_arena_free_chunks`, `__slab_arena_of`, `__slab_arena_scavenge`, `__slab_arena_committed_bytes`, `__slab_arena_map_ensure`, `__slab_arena_map_set` | calls `installSlabRuntime`'s builders mint, and calls from the two slab tier files — compiler-called roster |
 | `SlabRuntime.maxon` | `__slab_os_direct_alloc`, `__slab_os_direct_free`, `__slab_state_base`, `__slab_state_committed`, `__slab_meta_alloc`, `__slab_meta_free`, `__slab_census`, `__slab_census_tally_walk`, `__slab_census_bucket_count`, `__slab_census_bucket_bytes` | calls `installSlabRuntime`'s builders mint (the census entries from the locked `__slab_live_bytes`-family wrappers) — compiler-called roster |

@@ -1,0 +1,27 @@
+let SleeperLabel = "sleeper="
+let SleeperSeconds = 60
+
+function sleeperConfiguration() returns Configuration
+	#if os(Windows)
+		var config = Configuration.create(Executable.name("ping"))
+		config.arguments.push("-n")
+		config.arguments.push("{SleeperSeconds}")
+		config.arguments.push("127.0.0.1")
+	#else
+		var config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise panic("/bin/sleep is not a path")))
+		config.arguments.push("{SleeperSeconds}")
+	#endif
+
+	return config
+end 'sleeperConfiguration'
+
+test 'a test that passes but leaves a detached sleeper running'
+	let pid = sleeperConfiguration().runDetached()
+
+	printError("{SleeperLabel}{pid}\n")
+	Expect.isTrue(Process.isAlive(pid))
+end 'a test that passes but leaves a detached sleeper running'
+
+test 'a sibling test that leaves nothing running'
+	Expect.equal(1 + 1, expected: 2)
+end 'a sibling test that leaves nothing running'

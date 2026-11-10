@@ -10,14 +10,14 @@ test 'a union replaced by a type of its name leaves no cycle behind in a warm re
 
 	let warm = probeProjectCheckAcrossAnEdit(warmRoot, fileName: ReplacedUnionFileName, content: ReplacedUnionSavedSource, diskEdits: CorpusDiskEditArray.create(0), editedContent: ReplacedUnionEditedSource)
 
-	discardOutsideCheckoutDir(warmRoot)
+	discardStagedDir(warmRoot)
 
 	let coldRoot = stagedProjectDiagnosticsRoot(ReplacedUnionColdDirName)
 	writeCorpusFile(coldRoot, fileName: ReplacedUnionFileName, content: ReplacedUnionEditedSource)
 
 	let cold = probeProjectCheckDiagnostics(coldRoot, fileName: ReplacedUnionFileName, content: ReplacedUnionEditedSource, edits: StringArray.create(0))
 
-	discardOutsideCheckoutDir(coldRoot)
+	discardStagedDir(coldRoot)
 
 	expectNoProjectDiagnostics(projectDiagnosticsPublish(warm, index: ProjectDiagnosticsAtOpen), note: "the buffer opened holding `union Shape` with a `Holder` payload, exactly the disk's bytes, and a `maxon build` of it exits 0. This publish is the CONTROL: it is the check that files `Shape` as a union in the held project.")
 	expectNoProjectDiagnostics(cold, note: "a cold session opened the edited text saved on disk: `type Shape` with no `union Shape`, and a `Holder` holding a `Shape`. This is the CONTROL for the publish below.")

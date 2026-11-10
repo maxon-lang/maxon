@@ -1,7 +1,7 @@
 let RefusedStepCaseLabel = "a-refused-step-keeps-the-stop"
 
 test 'a step the driver refuses leaves the session stopped where it was'
-	let staged = builtLibraryTierFixture(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: RefusedStepCaseLabel, fixture: CrashFixtureName)
+	let staged = builtLibraryTierFixture(FixturesDirName, caseLabel: RefusedStepCaseLabel, fixture: CrashFixtureName)
 	let commands = debugCommandLine([RunCommand, NextCommand, BacktraceCommand, LocalsCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
@@ -15,4 +15,6 @@ test 'a step the driver refuses leaves the session stopped where it was'
 	try Expect.equal(eventsOfKind(events, kind: ErrorEventName).count(), expected: 1, message: "a fault is terminal, so the driver refuses the `{NextCommand}` from it, and that refusal is the session's one error. {said}")
 	try Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count(), expected: 1, message: "the refused `{NextCommand}` moved nothing, so `{BacktraceCommand}` still walks the stop; a session that forgot the stop answers that the program is running. {said}")
 	try Expect.equal(eventsOfKind(events, kind: LocalsEventName).count(), expected: 1, message: "`{LocalsCommand}` after the refusal still reads the stop. {said}")
+
+	discardStagedDir(staged)
 end 'a step the driver refuses leaves the session stopped where it was'

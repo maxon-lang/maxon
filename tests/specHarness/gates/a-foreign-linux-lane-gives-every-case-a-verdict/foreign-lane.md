@@ -41,3 +41,21 @@ typealias Integer = int(i64.min to i64.max)
 ```exitcode
 3
 ```
+
+<!-- test: foreign-lane.is-armed -->
+
+```maxon
+function main() returns ExitCode
+	let value = try Process.environmentVariable("MAXON_TRACK_DESCENDANTS") otherwise return 1
+	print("flipped={value.startsWith("D")}\n")
+	return 0
+end 'main'
+```
+
+```exitcode
+0
+```
+
+```stdout
+flipped=true
+```

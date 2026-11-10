@@ -393,8 +393,9 @@ last 4 KiB of output, starting on a character boundary).
 - The answer is read from the run's [`--result-json`](/docs/cli/compiler-development/#maxon-spec-test) document, written to
   `.spec-tmp/spec-result.<tag>.<start>.<pid>.<serial>.json` in the checkout, one per call, and deleted
   when the call ends. A run that writes no document is answered with a tool error carrying `rawTail`.
-- **`harnessErrors`** lists each `harness error:` line the run printed, `[]` when there was none. A run
-  whose only problem is such a line answers `failed: 0`, `success: false` and `exitCode` 1.
+- **`harnessErrors`** lists each `harness error:` line and each `left .spec-run/<name>` line the run
+  printed, `[]` when there was none. A run whose only problem is such a line answers `failed: 0`,
+  `success: false` and `exitCode` 1.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -433,8 +434,9 @@ deleted when the call ends.
 
 The server is the compiler, so building the compiler (for example with the `build` tool and
 `path: "maxon-bin"`) replaces the executable the server runs from. That works: once the compile
-succeeds, the running image is renamed to `maxon.previous` and the new compiler is written in its
-place, and the server keeps answering from the renamed image. A server started before an earlier
+succeeds, the running image is renamed to `maxon.previous` and the new compiler, written beside it in the
+build's staging directory, is renamed into its place, and the server keeps answering from the renamed
+image. A server started before an earlier
 rebuild is running an older `maxon.previous`; that file is renamed aside to
 `maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later rebuild once the server has exited.
 A failed build leaves the running compiler in the slot.

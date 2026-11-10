@@ -24,8 +24,13 @@ public type Directory
 	public static function list(path FilePath) returns FilePathArray throws DirectoryListError
 		let pattern = "{path.path}{FilePath.separator()}*"
 		var search = Directory{
-			dir: try __ManagedDirectory.openSearch(pattern.addressableBytes()) otherwise 'open'
-				throw DirectoryListError.notFound
+			dir: try __ManagedDirectory.openSearch(pattern.addressableBytes()) otherwise (opening) 'open'
+				match opening 'why'
+					notFound then throw DirectoryListError.notFound
+					accessDenied then throw DirectoryListError.accessDenied
+					openSearchFailed then throw DirectoryListError.listFailed
+					default panic("__ManagedDirectory.openSearch answered an error it does not throw")
+				end 'why'
 			end 'open'
 		}
 
@@ -85,6 +90,89 @@ public type Directory
 			end 'classify'
 		end 'failed'
 	end 'delete'
+
+	/// Remove `path` and everything below it, and answer the entries that could not be removed; an empty
+	/// answer means nothing is left. A path that does not exist answers empty. A link is removed as one
+	/// entry and never followed.
+	public static function removeTree(path FilePath) returns FilePathArray
+		let unremoved = FilePathArray.create(0)
+		Directory.removeEntry(path, unremoved: unremoved)
+
+		return unremoved
+	end 'removeTree'
+
+	/// Remove everything inside the directory `path` and keep the directory, answering the entries that
+	/// could not be removed, as `removeTree` does.
+	public static function removeContents(path FilePath) returns FilePathArray
+		let unremoved = FilePathArray.create(0)
+
+		if not Directory.exists(path) 'nothingThere'
+			return unremoved
+		end 'nothingThere'
+
+		Directory.removeEntriesOf(path, unremoved: unremoved)
+
+		return unremoved
+	end 'removeContents'
+
+	static function removeEntriesOf(directory FilePath, unremoved FilePathArray)
+		let entries = try Directory.list(directory) otherwise (e) 'unlistable'
+			match e 'why'
+				notFound then return
+				accessDenied or
+				listFailed then unremoved.push(directory)
+			end 'why'
+
+			return
+		end 'unlistable'
+
+		for entry in entries 'eachEntry'
+			Directory.removeEntry(entry, unremoved: unremoved)
+		end 'eachEntry'
+	end 'removeEntriesOf'
+
+	// Deleted as a file first, and emptied only once `Directory.delete` refuses it as not empty: a link,
+	// to a file or to a directory, goes in one of those two calls as one entry, so the walk never enters
+	// a link and removes nothing outside the tree.
+	static function removeEntry(entry FilePath, unremoved FilePathArray)
+		try File.delete(entry) otherwise (notAFile) 'notDeletedAsAFile'
+			match notAFile 'why'
+				notFound then return
+				accessDenied or
+				busy or
+				failed then Directory.removeDirectory(entry, unremoved: unremoved)
+			end 'why'
+
+			return
+		end 'notDeletedAsAFile'
+	end 'removeEntry'
+
+	static function removeDirectory(directory FilePath, unremoved FilePathArray)
+		try Directory.delete(directory) otherwise (refusal) 'notDeletedAsADirectory'
+			match refusal 'why'
+				notFound then return
+				notEmpty then Directory.removeFilledDirectory(directory, unremoved: unremoved)
+				deleteFailed then unremoved.push(directory)
+			end 'why'
+		end 'notDeletedAsADirectory'
+	end 'removeDirectory'
+
+	static function removeFilledDirectory(directory FilePath, unremoved FilePathArray)
+		let before = unremoved.count()
+		Directory.removeEntriesOf(directory, unremoved: unremoved)
+
+		if unremoved.count() > before 'somethingInsideStays'
+			return
+		end 'somethingInsideStays'
+
+		try Directory.delete(directory) otherwise (refusal) 'stays'
+			match refusal 'why'
+				notFound then return
+				notEmpty or
+				deleteFailed then unremoved.push(directory)
+			end 'why'
+		end 'stays'
+	end 'removeFilledDirectory'
 
 	/// Get the current working directory as a FilePath
 	public static function currentPath() returns FilePath

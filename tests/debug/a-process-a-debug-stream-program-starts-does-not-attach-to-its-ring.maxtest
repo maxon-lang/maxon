@@ -9,7 +9,7 @@ let ParentAttachedLine = "parent attached=true"
 let ChildDetachedLine = "child attached=false"
 
 test 'a process a monitored debug stream program starts is not attached to the ring the program writes'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: OwnRingCaseLabel, fixture: OwnRingFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: OwnRingCaseLabel, fixture: OwnRingFixtureName)
 
 	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join(OutputFileStem), label: OwnRingBuildLabel, extraArguments: [OwnRingDebugStreamOption])
 
@@ -24,4 +24,6 @@ test 'a process a monitored debug stream program starts is not attached to the r
 	Expect.equal(monitored.exitCode(), expected: 0, message: "the monitored program did not exit 0. {said}")
 	Expect.contains(stdout, needle: ParentAttachedLine, message: "the monitored program was not attached to the ring, so the gate says nothing about its child. {said}")
 	Expect.contains(stdout, needle: ChildDetachedLine, message: "a process the monitored program started attached to the ring the program writes: two processes would then write one ring under two locks, and the monitor would decode entries neither wrote whole. {said}")
+
+	discardStagedDir(staged)
 end 'a process a monitored debug stream program starts is not attached to the ring the program writes'

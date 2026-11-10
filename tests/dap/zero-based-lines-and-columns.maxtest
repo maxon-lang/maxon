@@ -41,7 +41,7 @@ type ZeroBasedSession implements DapSession
 end 'ZeroBasedSession'
 
 test 'a client that counts lines and columns from zero is answered in its own count'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ZeroBasedCaseLabel, fixture: SplicedFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ZeroBasedCaseLabel, fixture: SplicedFixtureName)
 	let printedAt = (anchorLine(staged.join(StagedProgramFileName), anchor: ZeroBasedPrintAnchor) - OneBasedOffset) as SourceLine
 	let calledAt = anchorLine(staged.join(StagedProgramFileName), anchor: ZeroBasedCallAnchor)
 	let callColumn = sourceColumnOf(staged, line: calledAt, spelling: ZeroBasedCallSpelling) as DapNumber - OneBasedOffset
@@ -54,4 +54,6 @@ test 'a client that counts lines and columns from zero is answered in its own co
 	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: 0), expected: printedAt as DapNumber, message: "a client that said `linesStartAt1: false` reads every line it is sent as counted from zero")
 	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: ZeroBasedCallerFrame), expected: (calledAt - OneBasedOffset) as DapNumber, message: "the caller frame's line is its call's, counted from zero")
 	try Expect.equal(dapFrameNumberAt(session.frameColumns, frame: ZeroBasedCallerFrame), expected: callColumn, message: "a client that said `columnsStartAt1: false` reads every column it is sent as counted from zero")
+
+	discardStagedDir(staged)
 end 'a client that counts lines and columns from zero is answered in its own count'

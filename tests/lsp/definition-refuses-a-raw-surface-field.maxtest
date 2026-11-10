@@ -1,4 +1,4 @@
-let RawSurfaceDefinitionDirName = "temp/lsp/definition-refuses-a-raw-surface-field"
+let RawSurfaceDefinitionDirName = "definition-refuses-a-raw-surface-field"
 let RawSurfaceDefinitionFileName = "main.maxon"
 let RawSurfaceDefinitionSource = "function main() returns ExitCode\n\tvar arr = [1, 2, 3]\n\tarr.push(4)\n\tlet raw = arr.managed\n\treturn 0\nend 'main'\n"
 let RawSurfaceDefinitionPushLine = 2
@@ -20,6 +20,8 @@ test 'definition refuses a field the compiler refuses as raw surface'
 	let control = probeCorpusDefinition(directory, fileName: RawSurfaceDefinitionFileName, content: RawSurfaceDefinitionSource, line: RawSurfaceDefinitionPushLine, character: RawSurfaceDefinitionPushCharacter)
 
 	expectDefinitionInFile(control, fileTail: RawSurfaceDefinitionArrayTail, startLine: corpusLineDeclaring(corpusStdlibArrayPath(), needle: RawSurfaceDefinitionPushNeedle), note: "a cursor on `push` in `arr.push(4)` did not resolve into `stdlib/Array.maxon`, so the negative above is passing on silence rather than on a filter.")
+
+	discardStagedDir(directory)
 end 'definition refuses a field the compiler refuses as raw surface'
 
 function corpusStdlibArrayPath() returns FilePath

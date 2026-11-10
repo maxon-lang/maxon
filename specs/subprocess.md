@@ -254,6 +254,7 @@ function main() returns ExitCode
 	print("{lineB}\n")
 	print("{lineC}\n")
 
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
 	child.release()
 	return 0
 end 'main'
@@ -297,11 +298,13 @@ function main() returns ExitCode
 	let blank = try child.readStdoutLine() otherwise return 6
 	let lineC = try child.readStdoutLine() otherwise return 7
 	let past = try child.readStdoutLine() otherwise (e) 'ended'
+		_ = try child.wait() otherwise panic("the child ends once its input is closed")
 		child.release()
 		print("[{lineA}]\n[{blank}]\n[{lineC}]\nthen: {e.displayReason()}\n")
 		return 0
 	end 'ended'
 
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
 	child.release()
 	print("[{lineA}]\n[{blank}]\n[{lineC}]\nthen: a line of {past.byteLength()} bytes\n")
 	return 0
@@ -353,6 +356,7 @@ function echoFromGreenThread() returns StepCode
 	child.closeStdin()
 
 	let lineA = try child.readStdoutLine() otherwise return 5
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
 	child.release()
 
 	if lineA != "alpha" 'check-a'
@@ -681,6 +685,233 @@ end 'main'
 ```
 ```stdout
 tree ended true, child exited true, grandchild ended true
+```
+
+<!-- test: subprocess-a-deadline-ends-the-sleep-the-shell-was-forking -->
+<!-- process: own -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A deadline can fall while the child's shell is forking its `sleep`. The case runs a hundred shells, each
+under a deadline of a different number of milliseconds so that the kill lands at every stage of the shell's
+start, and after each deadline asks for the live descendants of the program: the shell and the `sleep` it
+forked are ended and awaited, so there are none.
+```maxon
+let Laps = 100
+let DeadlineSpanMs = 25
+
+function main() returns ExitCode
+	let armed = Process.endDescendants()
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var timedOut = 0 as Count
+	var leaked = 0 as Count
+	var lap = 0 as Count
+
+	while lap < Laps 'laps'
+		var argv = StringArray.create(0)
+
+		argv.push("-c")
+		argv.push("echo hello; sleep 60")
+
+		try Subprocess.run(exe, arguments: argv, timeoutMs: (1 + lap mod DeadlineSpanMs) as DurationMs) otherwise (e) 'expired'
+			if e.timedOut() 'counted'
+				timedOut = timedOut + 1
+			end 'counted'
+		end 'expired'
+
+		leaked = leaked + Process.endDescendants().count()
+		lap = lap + 1
+	end 'laps'
+
+	print("armed={armed.count()} laps={lap} timedOut={timedOut} leaked={leaked}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+armed=0 laps=100 timedOut=100 leaked=0
+```
+
+<!-- test: subprocess-the-tree-end-awaits-a-process-the-shell-left-in-its-group -->
+<!-- process: own -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A shell that backgrounds a `sleep` and exits leaves it in the group the shell led, with no live parent. The
+tree end finds it through the group and awaits its end as it does a child's, so asking for the program's
+live descendants right after each tree end finds none.
+```maxon
+let Laps = 50
+let ShellExitsWithinMs = 150
+
+function treeEndedCleanly(found TreeEnd) returns bool
+	return match found 'seen'
+		ended gives true
+		survived or
+		unconfirmed gives false
+	end 'seen'
+end 'treeEndedCleanly'
+
+function main() returns ExitCode
+	let armed = Process.endDescendants()
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var endedCleanly = 0 as Count
+	var leaked = 0 as Count
+	var lap = 0 as Count
+
+	while lap < Laps 'laps'
+		var argv = StringArray.create(0)
+
+		argv.push("-c")
+		argv.push("sleep 60 </dev/null >/dev/null 2>&1 & exit 0")
+
+		var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+
+		sleep(ShellExitsWithinMs)
+
+		if treeEndedCleanly(child.endTree()) 'cleanly'
+			endedCleanly = endedCleanly + 1
+		end 'cleanly'
+
+		child.release()
+		leaked = leaked + Process.endDescendants().count()
+		lap = lap + 1
+	end 'laps'
+
+	print("armed={armed.count()} laps={lap} endedCleanly={endedCleanly} leaked={leaked}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+armed=0 laps=50 endedCleanly=50 leaked=0
+```
+
+<!-- test: subprocess-the-tree-end-of-a-reaped-child-awaits-what-its-group-left -->
+<!-- process: own -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+`the-tree-end-awaits-a-process-the-shell-left-in-its-group`'s subject with the shell already reaped. Its
+pid is no longer a process, but the group it led still holds the backgrounded `sleep`, so the tree end
+finds that `sleep` through the group and awaits its end, and asking for the program's live descendants
+right after each tree end finds none.
+```maxon
+let Laps = 50
+
+function treeEndedCleanly(found TreeEnd) returns bool
+	return match found 'seen'
+		ended gives true
+		survived or
+		unconfirmed gives false
+	end 'seen'
+end 'treeEndedCleanly'
+
+function main() returns ExitCode
+	let armed = Process.endDescendants()
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
+	var endedCleanly = 0 as Count
+	var leaked = 0 as Count
+	var lap = 0 as Count
+
+	while lap < Laps 'laps'
+		var argv = StringArray.create(0)
+
+		argv.push("-c")
+		argv.push("sleep 60 </dev/null >/dev/null 2>&1 & exit 0")
+
+		var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+
+		_ = try child.wait() otherwise return 4
+
+		if treeEndedCleanly(child.endTree()) 'cleanly'
+			endedCleanly = endedCleanly + 1
+		end 'cleanly'
+
+		child.release()
+		leaked = leaked + Process.endDescendants().count()
+		lap = lap + 1
+	end 'laps'
+
+	print("armed={armed.count()} laps={lap} endedCleanly={endedCleanly} leaked={leaked}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+armed=0 laps=50 endedCleanly=50 leaked=0
+```
+
+<!-- test: subprocess-the-tree-end-of-a-reaped-child-ends-the-group-members-own-group-children -->
+<!-- process: own -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+`the-tree-end-of-a-reaped-child-awaits-what-its-group-left`'s subject with a member of the reaped shell's group
+that has started a child of its own. Every Maxon child leads a process group of its own, so that child is in
+no group the shell led, but it belongs to the session and descends from the member. The tree end ends it
+with the member, and asking for the program's live descendants right after finds none.
+```maxon
+let SleeperLifeMs = 60000
+
+function treeEndedCleanly(found TreeEnd) returns bool
+	return match found 'seen'
+		ended gives true
+		survived or
+		unconfirmed gives false
+	end 'seen'
+end 'treeEndedCleanly'
+
+function argumentsFor(mode String) returns StringArray
+	var argv = StringArray.create(0)
+	argv.push(mode)
+	return argv
+end 'argumentsFor'
+
+function main() returns ExitCode
+	let exePath = try Process.executablePath() otherwise return 2
+	let me = Executable.path(exePath)
+	let mode = try CommandLine.args().get(1) otherwise ""
+
+	if mode == "sleeper" 'sleeper'
+		sleep(SleeperLifeMs)
+		return 0
+	end 'sleeper'
+
+	if mode == "member" 'member'
+		var sleeper = try StreamingSubprocess.spawn(me, arguments: argumentsFor("sleeper")) otherwise return 3
+		print("ready\n")
+		sleep(SleeperLifeMs)
+		sleeper.release()
+		return 0
+	end 'member'
+
+	let armed = Process.endDescendants()
+	let sh = Executable.path(try FilePath.from("/bin/sh") otherwise return 4)
+	var argv = StringArray.create(0)
+
+	argv.push("-c")
+	argv.push("\"$0\" member & exit 0")
+	argv.push(exePath.toString())
+
+	var shell = try StreamingSubprocess.spawn(sh, arguments: argv) otherwise return 5
+	let ready = try shell.readStdoutLine() otherwise return 6
+
+	_ = try shell.wait() otherwise return 7
+
+	let endedCleanly = treeEndedCleanly(shell.endTree())
+
+	shell.release()
+
+	let leaked = Process.endDescendants().count()
+
+	print("armed={armed.count()} ready={ready.trim()} endedCleanly={endedCleanly} leaked={leaked}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+armed=0 ready=ready endedCleanly=true leaked=0
 ```
 
 <!-- test: subprocess-a-deadline-spares-the-process-the-child-started-detached -->
@@ -1478,6 +1709,7 @@ function main() returns ExitCode
 
 	try File.delete(parentDir.join(parentOnly)) otherwise panic("the parent-side tool can be removed")
 	try File.delete(childDir.join(childOnly)) otherwise panic("the child-side tool can be removed")
+	try Directory.delete(childDir) otherwise panic("the child directory can be removed")
 	return 0
 end 'main'
 ```
@@ -2109,6 +2341,7 @@ function main() returns ExitCode
 	let counted = try child.readStdoutBytes(5) otherwise return 4
 	let lined = try child.readStdoutLine() otherwise return 5
 	let errored = try child.readStderrLine() otherwise return 6
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
 	child.release()
 
 	print("{describe("bytes", text: counted)}\n")
@@ -2721,15 +2954,19 @@ copy of its write end is closed, so if a `ping` child inherited one of those wri
 until the `ping` exits. Every collect must finish well inside the `ping` children's lifetime.
 ```maxon
 typealias Tally = int(0 to 30)
+typealias PidArray = Array with Pid
 
 let rounds = 30 as Tally
 let slowMs = 1500
+let pollMs = 50
+let endsWithinMs = 30000
 
 type Spawner
 	var started as Tally
+	var pids as PidArray
 
 	static function create() returns Self
-		return Self{started: 0}
+		return Self{started: 0, pids: PidArray.create(0)}
 	end 'create'
 
 	export function burst()
@@ -2741,7 +2978,8 @@ type Spawner
 		config.arguments = argv
 
 		for _ in 0 upto rounds 'spawn'
-			_ = try config.runDetached() otherwise panic("ping starts")
+			let pid = try config.runDetached() otherwise panic("ping starts")
+			self.pids.push(pid)
 			self.started = self.started + 1
 		end 'spawn'
 	end 'burst'
@@ -2749,6 +2987,33 @@ type Spawner
 	export function count() returns Tally
 		return self.started
 	end 'count'
+
+	export function stillRunningAfterWaiting() returns Tally
+		var waited = 0 as DurationMs
+
+		while waited < endsWithinMs 'poll'
+			if self.running() == 0 'allEnded'
+				return 0
+			end 'allEnded'
+
+			sleep(pollMs)
+			waited = waited + pollMs
+		end 'poll'
+
+		return self.running()
+	end 'stillRunningAfterWaiting'
+
+	function running() returns Tally
+		var alive = 0 as Tally
+
+		for pid in self.pids 'eachPid'
+			if Process.isAlive(pid) 'stillThere'
+				alive = alive + 1
+			end 'stillThere'
+		end 'eachPid'
+
+		return alive
+	end 'running'
 end 'Spawner'
 
 function main() returns ExitCode
@@ -2776,7 +3041,8 @@ function main() returns ExitCode
 	end 'collect'
 
 	let started = try await spawner.count() otherwise return 3
-	print("pings={started} collects={rounds} answered={answered} slow={slow}\n")
+	let running = try await spawner.stillRunningAfterWaiting() otherwise return 4
+	print("pings={started} collects={rounds} answered={answered} slow={slow} running={running}\n")
 	return 0
 end 'main'
 ```
@@ -2784,7 +3050,7 @@ end 'main'
 0
 ```
 ```stdout
-pings=30 collects=30 answered=30 slow=0
+pings=30 collects=30 answered=30 slow=0 running=0
 ```
 <!-- test: subprocess-take-stdout-moves-the-stdout-side-out-of-the-child -->
 <!-- unsupported-targets: wasm32-wasi -->
@@ -2818,6 +3084,7 @@ function main() returns ExitCode
 
 	try child.reclaimStdout() otherwise return 8
 	let second = try child.readStdoutLine() otherwise return 10
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
 	child.release()
 	print("{first} {second}\n")
 	return 0
@@ -2859,7 +3126,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1368: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+panic at Subprocess.maxon:1428: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
 Stack trace:
   in StreamingSubprocess.release
   in main
@@ -2918,6 +3185,7 @@ function main() returns ExitCode
 	end 'drainFailed'
 
 	try child.reclaimStdout() otherwise return 8
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
 	child.release()
 	print("{lines}\n")
 	return 0
@@ -2986,6 +3254,683 @@ function main() returns ExitCode
 	end 'drainFailed'
 
 	try child.reclaimStdout() otherwise return 8
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{lines}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-stdout-reader-read-bytes-yields-the-written-bytes-in-chunks -->
+<!-- unsupported-targets: wasm32-wasi -->
+`StdoutReader.readBytes(count)` answers exactly `count` bytes while the child has that many to give, so reads smaller than the total return the child's bytes in order, and the last short read returns what remained.
+```maxon
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("abcdefghij")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStdout() otherwise return 4
+
+	let first = try reader.readBytes(4) otherwise return 5
+	let second = try reader.readBytes(4) otherwise return 6
+	let third = try reader.readBytes(2) otherwise return 7
+
+	try child.reclaimStdout() otherwise return 8
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{first}|{second}|{third}\n")
+	return 0
+end 'main'
+```
+```stdout
+abcd|efgh|ij
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-stdout-reader-read-bytes-at-end-of-stream-answers-what-remained -->
+<!-- unsupported-targets: wasm32-wasi -->
+At end of stream `readBytes` does not throw: a read that finds fewer bytes than asked returns the remainder, a read after the last byte returns the empty string, and a count of 0 returns the empty string.
+```maxon
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("abcdef")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStdout() otherwise return 4
+
+	let whole = try reader.readBytes(4) otherwise return 5
+	let remainder = try reader.readBytes(4) otherwise return 6
+	let atEnd = try reader.readBytes(4) otherwise return 7
+	let none = try reader.readBytes(0) otherwise return 9
+
+	try child.reclaimStdout() otherwise return 8
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("whole={whole} remainder={remainder} atEnd={atEnd.byteLength()} none={none.byteLength()}\n")
+	return 0
+end 'main'
+```
+```stdout
+whole=abcd remainder=ef atEnd=0 none=0
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-stdout-reader-read-bytes-and-read-line-share-one-stream -->
+<!-- unsupported-targets: wasm32-wasi -->
+`readLine` and `readBytes` read one stream in order: a header read by line, the body read by count, and the line that follows the body read by line again, with no byte lost or repeated between them.
+```maxon
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("Length: 4\nWXYZ")
+		print("\nlast\n")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStdout() otherwise return 4
+
+	let header = try reader.readLine() otherwise return 5
+	let body = try reader.readBytes(4) otherwise return 6
+	let rest = try reader.readLine() otherwise return 7
+	let last = try reader.readLine() otherwise return 9
+	let tail = try reader.readBytes(3) otherwise return 10
+
+	try child.reclaimStdout() otherwise return 8
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{header}|{body}|{rest.byteLength()}|{last}|{tail.byteLength()}\n")
+	return 0
+end 'main'
+```
+```stdout
+Length: 4|WXYZ|0|last|0
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-stdout-reader-read-bytes-after-the-child-is-released-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+A reader kept past `reclaimStdout` and `release` names a child that no longer exists, so `readBytes` throws `SubprocessError.ioFailed` rather than reading a closed handle.
+```maxon
+function readAfterRelease(reader StdoutReader) returns String
+	let text = try reader.readBytes(4) otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+
+	return "answered {text.byteLength()} bytes"
+end 'readAfterRelease'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("abcdefghij")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStdout() otherwise return 4
+	let first = try reader.readBytes(4) otherwise return 5
+
+	try child.reclaimStdout() otherwise return 8
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{first} {readAfterRelease(reader)}\n")
+	return 0
+end 'main'
+```
+```stdout
+abcd I/O failed: used after release()
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-take-stderr-moves-the-stderr-side-out-of-the-child -->
+<!-- unsupported-targets: wasm32-wasi -->
+`takeStderr` hands the child's stderr side to a `StderrReader` that reads while the child keeps its stdin and its lifetime. While the reader is out the child's own stderr reads refuse, and so does a second `takeStderr`; `reclaimStderr` makes the side the child's again, with the line the reader left in the shared buffer still there, and refuses a child whose stderr is not out.
+```maxon
+function readRefusal(child StreamingSubprocess) returns String
+	let line = try child.readStderrLine() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+
+	return "answered {line}"
+end 'readRefusal'
+
+function takeRefusal(child StreamingSubprocess) returns String
+	let reader = try child.takeStderr() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+
+	_ = reader
+	return "took a second reader"
+end 'takeRefusal'
+
+function reclaimRefusal(child StreamingSubprocess) returns String
+	try child.reclaimStderr() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+
+	return "reclaimed"
+end 'reclaimRefusal'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		printError("alpha\nbeta\n")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStderr() otherwise return 4
+
+	let first = try reader.readLine() otherwise return 5
+	let direct = readRefusal(child)
+	let again = takeRefusal(child)
+	try child.reclaimStderr() otherwise return 8
+	let second = try child.readStderrLine() otherwise return 10
+	let notOut = reclaimRefusal(child)
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{first}\n{direct}\n{again}\n{second}\n{notOut}\n")
+	return 0
+end 'main'
+```
+```stdout
+alpha
+I/O failed: stderr is out with a StderrReader
+I/O failed: stderr is out with a StderrReader
+beta
+I/O failed: reclaimStderr: this child's stderr is not out
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-stderr-reader-read-line-yields-each-line-then-ends-the-stream -->
+<!-- unsupported-targets: wasm32-wasi -->
+`StderrReader.readLine` answers each line the child wrote to stderr without its terminator: a blank line is an empty string, a CRLF terminator loses its CR too, and a read after the last line throws the end-of-stream error rather than an empty answer.
+```maxon
+function endOf(reader StderrReader) returns String
+	let line = try reader.readLine() otherwise (e) 'ended'
+		return "{e.displayReason()} {e.endedTheStream()}"
+	end 'ended'
+
+	return "answered {line}"
+end 'endOf'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		printError("one\n\nthree\r\n")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStderr() otherwise return 4
+
+	let one = try reader.readLine() otherwise return 5
+	let blank = try reader.readLine() otherwise return 6
+	let three = try reader.readLine() otherwise return 7
+	let ended = endOf(reader)
+
+	try child.reclaimStderr() otherwise return 8
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{one}|{blank.byteLength()}|{three}|{three.byteLength()}|{ended}\n")
+	return 0
+end 'main'
+```
+```stdout
+one|0|three|5|end of stream true
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-stderr-reader-read-line-after-the-child-is-released-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+A reader kept past `reclaimStderr` and `release` names a child that no longer exists, so `readLine` throws `SubprocessError.ioFailed` rather than reading a closed handle.
+```maxon
+function readAfterRelease(reader StderrReader) returns String
+	let text = try reader.readLine() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+
+	return "answered {text}"
+end 'readAfterRelease'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		printError("alpha\nbeta\n")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStderr() otherwise return 4
+	let first = try reader.readLine() otherwise return 5
+
+	try child.reclaimStderr() otherwise return 8
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{first} {readAfterRelease(reader)}\n")
+	return 0
+end 'main'
+```
+```stdout
+alpha I/O failed: used after release()
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-release-while-the-stderr-reader-is-out-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+Releasing the child closes the handle the reader reads, so `release` refuses while the stderr reader is out instead of leaving a read of a closed handle.
+```maxon
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStderr() otherwise return 4
+	_ = reader
+	child.release()
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+```
+```stderr
+panic at Subprocess.maxon:1432: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first
+Stack trace:
+  in StreamingSubprocess.release
+  in main
+  in mrt_start
+```
+
+<!-- test: subprocess-tryreadstderrline-while-the-stderr-reader-is-out-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+`tryReadStderrLine` throws `SubprocessError.ioFailed` while the stderr reader is out instead of reading a stream another coroutine owns, and answers again once `reclaimStderr` has given the side back.
+```maxon
+function polled(child StreamingSubprocess) returns String
+	let poll = try child.tryReadStderrLine() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+
+	return match poll 'answer'
+		line(text) gives "line {text}"
+		none gives "none"
+	end 'answer'
+end 'polled'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStderr() otherwise return 4
+	_ = reader
+	let whileOut = polled(child)
+
+	try child.reclaimStderr() otherwise return 5
+	let afterReclaim = polled(child)
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{whileOut} / {afterReclaim}\n")
+	return 0
+end 'main'
+```
+```stdout
+I/O failed: stderr is out with a StderrReader / none
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-tryreadstdoutline-while-the-stdout-reader-is-out-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+`tryReadStdoutLine` throws `SubprocessError.ioFailed` while the stdout reader is out instead of reading a stream another coroutine owns, and answers again once `reclaimStdout` has given the side back.
+```maxon
+function polled(child StreamingSubprocess) returns String
+	let poll = try child.tryReadStdoutLine() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+
+	return match poll 'answer'
+		line(text) gives "line {text}"
+		none gives "none"
+	end 'answer'
+end 'polled'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStdout() otherwise return 4
+	_ = reader
+	let whileOut = polled(child)
+
+	try child.reclaimStdout() otherwise return 5
+	let afterReclaim = polled(child)
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{whileOut} / {afterReclaim}\n")
+	return 0
+end 'main'
+```
+```stdout
+I/O failed: stdout is out with a StdoutReader / none
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-the-stdout-and-stderr-readers-are-out-and-reclaimed-independently -->
+<!-- unsupported-targets: wasm32-wasi -->
+Both readers can be out at once, each reading its own stream, and each refuses only its own stream's reads on the child: reclaiming stderr gives the child its stderr reads back while stdout stays refused, and reclaiming stdout then gives it that side too.
+```maxon
+function stdoutRefusal(child StreamingSubprocess) returns String
+	let line = try child.readStdoutLine() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+
+	return "answered {line}"
+end 'stdoutRefusal'
+
+function stderrRefusal(child StreamingSubprocess) returns String
+	let line = try child.readStderrLine() otherwise (e) 'refused'
+		return e.displayReason()
+	end 'refused'
+
+	return "answered {line}"
+end 'stderrRefusal'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("out-1\nout-2\n")
+		printError("err-1\nerr-2\n")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let outReader = try child.takeStdout() otherwise return 4
+	let errReader = try child.takeStderr() otherwise return 5
+
+	let out1 = try outReader.readLine() otherwise return 6
+	let err1 = try errReader.readLine() otherwise return 7
+	let bothOut = "{stdoutRefusal(child)} / {stderrRefusal(child)}"
+
+	try child.reclaimStderr() otherwise return 8
+	let err2 = try child.readStderrLine() otherwise return 9
+	let stderrBack = "{stdoutRefusal(child)} / {err2}"
+
+	try child.reclaimStdout() otherwise return 10
+	let out2 = try child.readStdoutLine() otherwise return 11
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{out1} {err1}\n{bothOut}\n{stderrBack}\n{out2}\n")
+	return 0
+end 'main'
+```
+```stdout
+out-1 err-1
+I/O failed: stdout is out with a StdoutReader / I/O failed: stderr is out with a StderrReader
+I/O failed: stdout is out with a StdoutReader / err-2
+out-2
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-release-names-the-reader-still-out-after-the-other-is-reclaimed -->
+<!-- unsupported-targets: wasm32-wasi -->
+`release` checks each reader on its own: with both out and the stderr reader reclaimed, the stdout reader that is still out is the one `release` names.
+```maxon
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let outReader = try child.takeStdout() otherwise return 4
+	let errReader = try child.takeStderr() otherwise return 5
+	_ = outReader
+	_ = errReader
+	try child.reclaimStderr() otherwise return 8
+	child.release()
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+```
+```stderr
+panic at Subprocess.maxon:1428: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+Stack trace:
+  in StreamingSubprocess.release
+  in main
+  in mrt_start
+```
+
+<!-- test: subprocess-release-names-the-stderr-reader-still-out-after-the-stdout-reader-is-reclaimed -->
+<!-- unsupported-targets: wasm32-wasi -->
+With both readers out and the stdout reader reclaimed, `release` names the stderr reader that is still out.
+```maxon
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let outReader = try child.takeStdout() otherwise return 4
+	let errReader = try child.takeStderr() otherwise return 5
+	_ = outReader
+	_ = errReader
+	try child.reclaimStdout() otherwise return 8
+	child.release()
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+```
+```stderr
+panic at Subprocess.maxon:1432: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first
+Stack trace:
+  in StreamingSubprocess.release
+  in main
+  in mrt_start
+```
+
+<!-- test: subprocess-a-stderr-reader-whose-drain-ends-is-reclaimed-before-the-child-is-released -->
+<!-- unsupported-targets: wasm32-wasi -->
+A coroutine drains a taken stderr reader to the end of the stream; once it has ended, the error path and the plain path both reclaim the stderr side before `release`, so the child is released with its reader back.
+```maxon
+typealias Lines = int(0 to 1000)
+
+function drainOf(reader StderrReader) returns Lines throws SubprocessError
+	var count = 0 as Lines
+
+	while true 'lineLoop'
+		let line = try reader.readLine() otherwise (e) 'unread'
+			if not e.endedTheStream() 'aReadFailure'
+				throw e
+			end 'aReadFailure'
+
+			return count
+		end 'unread'
+
+		_ = line
+		count = count + 1
+	end 'lineLoop'
+
+	panic("drainOf: the loop above is only left by `return` or `throw`")
+end 'drainOf'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		printError("one\ntwo\n")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStderr() otherwise return 4
+	let drain = async drainOf(reader)
+
+	let lines = try await drain otherwise (e) 'drainFailed'
+		try child.reclaimStderr() otherwise return 8
+		child.release()
+		print("{e.displayReason()}\n")
+		return 9
+	end 'drainFailed'
+
+	try child.reclaimStderr() otherwise return 8
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
+	child.release()
+	print("{lines}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: subprocess-a-taken-stderr-reader-handed-to-a-coroutine-leaves-its-promise-storable -->
+<!-- unsupported-targets: wasm32-wasi -->
+A taken stderr reader is a clean input to `async`, so the promise of the coroutine that drains it may be stored and awaited later.
+```maxon
+typealias Lines = int(0 to 1000)
+typealias LinePromise = Promise with (Lines, SubprocessError)
+typealias LinePromises = Array with LinePromise
+
+function drainOf(reader StderrReader) returns Lines throws SubprocessError
+	var count = 0 as Lines
+
+	while true 'lineLoop'
+		let line = try reader.readLine() otherwise (e) 'unread'
+			if not e.endedTheStream() 'aReadFailure'
+				throw e
+			end 'aReadFailure'
+
+			return count
+		end 'unread'
+
+		_ = line
+		count = count + 1
+	end 'lineLoop'
+
+	panic("drainOf: the loop above is only left by `return` or `throw`")
+end 'drainOf'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		printError("one\ntwo\n")
+		return 0
+	end 'childMode'
+
+	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var argv = StringArray.create(0)
+	argv.push("emit")
+	var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+	child.closeStdin()
+	let reader = try child.takeStderr() otherwise return 4
+	var drains = LinePromises.create(0)
+	drains.push(async drainOf(reader))
+
+	let drain = try drains.pop() otherwise panic("one drain was pushed")
+	let lines = try await drain otherwise (e) 'drainFailed'
+		try child.reclaimStderr() otherwise return 8
+		child.release()
+		print("{e.displayReason()}\n")
+		return 9
+	end 'drainFailed'
+
+	try child.reclaimStderr() otherwise return 8
+	_ = try child.wait() otherwise panic("the child ends once its input is closed")
 	child.release()
 	print("{lines}\n")
 	return 0

@@ -36,7 +36,7 @@ type InlinedCallLineSession implements DapSession
 end 'InlinedCallLineSession'
 
 test 'a source breakpoint on a line whose whole statement is an inlined call is verified and stops at that line'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: InlinedCallLineCaseLabel, fixture: LeafPairFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: InlinedCallLineCaseLabel, fixture: LeafPairFixtureName)
 	let anchored = anchorLine(staged.join(StagedProgramFileName), anchor: FirstCallAnchor)
 	var session = InlinedCallLineSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchored)
 	try dapRunSession(session, completing: "complete")
@@ -45,4 +45,6 @@ test 'a source breakpoint on a line whose whole statement is an inlined call is 
 	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the program must stop on the breakpoint at the call line")
 	try Expect.equal(dapFrameNameAt(session.frameNames, frame: 0), expected: CallerFunctionName, message: "the top frame is the caller, standing at its call. Frames: {joined(session.frameNames, separator: Space)}")
 	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: 0), expected: anchored as DapNumber, message: "the top frame stands on the call line. Frames: {joined(session.frameNames, separator: Space)}")
+
+	discardStagedDir(staged)
 end 'a source breakpoint on a line whose whole statement is an inlined call is verified and stops at that line'

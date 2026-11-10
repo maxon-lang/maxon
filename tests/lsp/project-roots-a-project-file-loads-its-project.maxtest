@@ -13,7 +13,7 @@ test 'project roots: opening a .maxproj loads the project it marks'
 	let uri = fileUriOf(root.join(ProjectFileFileName))
 	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(uri, content: ProjectFileSource))
 
-	discardOutsideCheckoutDir(root)
+	discardStagedDir(root)
 
 	match probe 'probe'
 		answered(projects, notices) then requireTheMarkedProjectLoaded(projects, notices: notices)
@@ -23,7 +23,7 @@ end 'project roots: opening a .maxproj loads the project it marks'
 
 function requireTheMarkedProjectLoaded(projects ListProjectsResult, notices ProjectLoadingNoticeArray) throws TestFailure
 	let note = "`{ProjectFileFileName}` was opened, beside the project's `{ProjectFileSiblingFileName}`, in a session that named no workspace folder. A `.maxproj` states that its directory is a project, so opening it loads that project as opening any of its sources does."
-	let expectedTail = outsideCheckoutDirName(ProjectFileRootDirName)
+	let expectedTail = ProjectFileRootDirName
 
 	try requireOneAnnouncedLoad(notices, expectedTail: expectedTail, note: note)
 

@@ -1,4 +1,4 @@
-let RebuildSweepsRetiredImagesStagedDirName = "temp/mcp-rebuild-sweeps-retired-images"
+let RebuildSweepsRetiredImagesStagedDirName = "mcp-rebuild-sweeps-retired-images"
 let ProbeLabel = "mcp-rebuild-sweeps-retired-images"
 let RetiredBase = "maxon.retired"
 let NumberedRetiredBase = "maxon.retired-"
@@ -7,8 +7,8 @@ let PlantedSerial = 7
 let RebuildSweepsRetiredImagesPlantedText = "left by an earlier build"
 
 test 'a self-rebuild deletes the retired images and sidecars of both spellings, and keeps every other file that shares the stem'
-	let dir = stagingDir(RebuildSweepsRetiredImagesStagedDirName)
-	clearStagedFiles(dir)
+	let dir = stagedInTreeDirNamed(RebuildSweepsRetiredImagesStagedDirName)
+	clearStagedTree(dir)
 
 	let imageName = "{CompilerStem}{executableSuffix()}"
 	let compiler = stagedCopyOf(testedCompilerPath(), dir: dir, name: CompilerStem)
@@ -50,4 +50,6 @@ test 'a self-rebuild deletes the retired images and sidecars of both spellings, 
 	for name in kept 'eachKeptName'
 		Expect.isTrue(File.exists(dir.join(name)), message: "{name} only shares the stem of {imageName}, it is not a retired image, and the self-rebuild deleted it")
 	end 'eachKeptName'
+
+	discardStagedDir(dir)
 end 'a self-rebuild deletes the retired images and sidecars of both spellings, and keeps every other file that shares the stem'

@@ -5,7 +5,7 @@ let ParentSegmentManifestFileName = "app.maxproj"
 let ParentSegmentMainSource = "typealias ExitCode = int(0 to 255)\n\nfunction main() returns ExitCode\n\tlet started = WallClock.nowUnixSeconds()\n\treturn 0 if started > 0 else 1\nend 'main'\n"
 
 test 'a manifest source naming a runtime file through parent segments reads that file once, as the tiers'
-	let staged = stagedProject(ParentSegmentCaseLabel, fixture: DefaultFixtureName)
+	let staged = stagedProjectBelowTheCheckout(ParentSegmentCaseLabel, fixture: DefaultFixtureName)
 	let libraryFile = "{parentSegmentsToTheCheckout(staged)}{NamedRuntimeFile}"
 
 	writeStagedFile(staged.join(StagedProgramFileName), content: ParentSegmentMainSource)
@@ -16,6 +16,8 @@ test 'a manifest source naming a runtime file through parent segments reads that
 
 	Expect.equal(build.exitCode(), expected: 0, message: "the manifest names `{libraryFile}`, the runtime tier's own file, beside the program. The file is the tier's however a manifest spells the way to it, and a build that reads it once compiles clean. {said}")
 	Expect.isTrue(File.exists(executableIn(staged, stem: BuiltStem)), message: "the build exited 0 and wrote no executable. {said}")
+
+	discardStagedDir(caseRootOf(staged))
 end 'a manifest source naming a runtime file through parent segments reads that file once, as the tiers'
 
 function manifestNaming(libraryFile String) returns String
@@ -27,10 +29,14 @@ function parentSegmentsToTheCheckout(staged FilePath) returns String
 	var segments = ""
 	var current = staged
 
-	while not current.equals(checkout) 'climb'
-		segments = "{segments}{ParentSegment}"
-		current = try current.parent() otherwise panic("{ParentSegmentCaseLabel}: the gate could not run - {staged.toString()} is not under the checkout {checkout.toString()}")
-	end 'climb'
+	while true 'climb'
+		if let below = try checkout.relativeTo(current) 'reached'
+			let spelled = below.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
 
-	return segments
+			return "{segments}{spelled}{PortablePathSeparator}" if not spelled.isEmpty() else segments
+		end 'reached'
+
+		segments = "{segments}{ParentSegment}"
+		current = try current.parent() otherwise panic("{ParentSegmentCaseLabel}: the gate could not run - {staged.toString()} shares no directory with the checkout {checkout.toString()}")
+	end 'climb'
 end 'parentSegmentsToTheCheckout'

@@ -15,7 +15,7 @@ let FreeToSpanCallPrefix = "arm64.bl __slab_free_to_span"
 let PublicationReason = "The owner word is published by the EVICTING processor: it pops the span dry and stores `SpanOwnerState.full` into `owning_p` with a release (`stlr`). Both of these doors run on another OS thread, under `__slab_lock` — and that lock does not serialise the evicting processor's lock-free pop, so it supplies no ordering edge to that store. A plain `ldr` of the owner word therefore has no edge to the release at all: armv8 may satisfy the free-list head load that follows it from a line fetched before the span was popped dry, and the slot then goes back onto a free list the span no longer owns, handing a LIVE slot out twice. The read is `StdOp.loadAcquire`, which is `ldar` on both arm64 lanes and the same plain `mov` on x64."
 
 test 'both locked relist doors re-read the span owner word with an acquire load'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: LockedRelistDoorsRecheckTheOwnerWithAnAcquireLoadCaseLabel, fixture: SpawnFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: LockedRelistDoorsRecheckTheOwnerWithAnAcquireLoadCaseLabel, fixture: SpawnFixtureName)
 
 	var doors = StringArray.create(0)
 	doors.push(FreeToFullFunctionName)
@@ -29,6 +29,8 @@ test 'both locked relist doors re-read the span owner word with an acquire load'
 	end 'eachDoor'
 
 	Expect.isTrue(findings.isEmpty(), message: "a locked relist door re-reads the span's owner word without the ordering that word is published with:{renderedFindings(findings)}\n\n  {PublicationReason}")
+
+	discardStagedDir(staged)
 end 'both locked relist doors re-read the span owner word with an acquire load'
 
 function noteOwnerRead(findings StringArray, staged FilePath, target String, functionName String)

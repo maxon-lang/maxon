@@ -12,7 +12,7 @@ let AbsentFunctionPhrase = "this program contains nothing named "
 let FillReason = "A freed managed box is filled with 0x3F only by a build that asks for it with the poison option. Every other build frees a box through the plain slab free without writing to it, so the fill costs nothing there; a build that asks must route `__mm_free` through the door that fills, whose body writes the fill byte."
 
 test 'a freed box is filled only when the build asks for it'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: AFreedBoxIsFilledOnlyWhenTheBuildAsksForItCaseLabel, fixture: HeapFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: AFreedBoxIsFilledOnlyWhenTheBuildAsksForItCaseLabel, fixture: HeapFixtureName)
 
 	var findings = StringArray.create(0)
 	noteUnpoisoned(findings, staged: staged, target: MacosTargetName)
@@ -21,6 +21,8 @@ test 'a freed box is filled only when the build asks for it'
 	notePoisoned(findings, staged: staged, target: LinuxTargetName)
 
 	Expect.isTrue(findings.isEmpty(), message: "the freed-box fill is not tied to the build option:{renderedFindings(findings)}\n\n  {FillReason}")
+
+	discardStagedDir(staged)
 end 'a freed box is filled only when the build asks for it'
 
 function noteUnpoisoned(findings StringArray, staged FilePath, target String)

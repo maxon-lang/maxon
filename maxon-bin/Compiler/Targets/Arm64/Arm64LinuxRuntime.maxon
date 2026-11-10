@@ -208,6 +208,7 @@ let Arm64LinuxSyscallPipe2 = 59
 let Arm64LinuxSyscallPpoll = 73
 export let Arm64LinuxSyscallExit = 93
 let Arm64LinuxSyscallKill = 129
+let Arm64LinuxSyscallPrctl = 167
 let Arm64LinuxSyscallGetRandom = 278
 let Arm64LinuxSyscallSetsid = 157
 let Arm64LinuxSyscallGetsid = 156
@@ -3180,7 +3181,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	end 'processTrace'
 
 	if usage.usesProcessLiveness 'processLiveness'
-		chunks.push(buildArm64PosixProcProbeChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome)))
+		chunks.push(buildArm64PosixProcProbeChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), lane: PosixTreeLane.linux(errnoHome)))
 	end 'processLiveness'
 
 	if linuxReadsEnvironment(usage) 'envRead'
@@ -3261,10 +3262,19 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.syscall(Arm64LinuxSyscallPipe2, errnoHome: errnoHome), flags: LinuxOpenCloseOnExec))
 		chunks.push(buildArm64LinuxNetpollArmPipeChunk())
 		chunks.push(buildArm64PosixPipePeekChunk(PosixPollCall.ppollSyscall(Arm64LinuxSyscallPpoll, sigsetBytes: LinuxSigsetBytes)))
-		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome)))
+		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), lane: PosixTreeLane.linux(errnoHome)))
 		chunks.push(buildArm64PosixProcTreeKillChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), lane: PosixTreeLane.linux(errnoHome)))
-		chunks.push(buildArm64LinuxProcTreeAdoptChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), errnoHome: errnoHome))
+		chunks.push(buildArm64LinuxProcTreeAdoptChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), errnoHome: errnoHome, kind: PosixProcWalkKind.sessionTree))
 	end 'childPipes'
+
+	if usage.usesProcessDescendants 'processDescendants'
+		chunks.push(buildArm64PosixProcDescendantsChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), lane: PosixTreeLane.linux(errnoHome)))
+		chunks.push(buildArm64LinuxProcTreeAdoptChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), errnoHome: errnoHome, kind: PosixProcWalkKind.descendants))
+	end 'processDescendants'
+
+	if posixUsesProcessEndWait(usage) 'processEndWait'
+		chunks.push(buildArm64PosixProcAwaitEndedChunk(PosixTreeLane.linux(errnoHome)))
+	end 'processEndWait'
 
 	if posixReadsMonotonicClock(usage) 'clocks'
 		chunks.push(buildArm64PosixTickMsChunk())
@@ -3586,9 +3596,9 @@ function buildArm64LinuxNetpollCounterChunk(name ByteArray, syscallNumber Machin
 	return asm.finishFunction(name)
 end 'buildArm64LinuxNetpollCounterChunk'
 
-module function arm64LinuxEmitTreeListMap(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome)
+module function arm64LinuxEmitTreeListMap(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome, bytes MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixTreeInitialBytes as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: bytes)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MmapProtReadWrite)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: MmapAnonPrivateLinux)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: MmapAnonFd)
@@ -3662,7 +3672,157 @@ function arm64LinuxEmitParseStatNumber(asm Arm64RuntimeAsm, value Arm64Register)
 	asm.placeLabel(done)
 end 'arm64LinuxEmitParseStatNumber'
 
-function buildArm64LinuxProcTreeAdoptChunk(kill PosixHostCall, errnoHome LinuxErrnoHome) returns FunctionCodeChunk
+function arm64LinuxEmitSkipEndedProcess(asm Arm64RuntimeAsm, skip BlockId)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x3, rhs: Arm64Register.x2)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x4, base: Arm64Register.x4, imm: LinuxProcStatParenToState as Imm32)
+	arm64EmitLoadByte(asm, dest: Arm64Register.x5, base: Arm64Register.x4)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x5, imm: LinuxProcStateZombie as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: skip)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x5, imm: LinuxProcStateDead as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: skip)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x5, imm: LinuxProcStateDeadLegacy as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: skip)
+end 'arm64LinuxEmitSkipEndedProcess'
+
+module function arm64LinuxEndedProbeSlots() returns StackSize
+	return 2 + runtimeFrameSlots(LinuxProcStateProbeBytes) + runtimeFrameSlots(LinuxProcPathBytes)
+end 'arm64LinuxEndedProbeSlots'
+
+module function arm64LinuxEmitBranchIfPidEnded(asm Arm64RuntimeAsm, pidSlot StackSize, probeSlot StackSize, ended BlockId)
+	let SlotFd = probeSlot
+	let SlotRead = probeSlot + 1
+	let SlotStat = probeSlot + 2
+	let SlotPath = SlotStat + runtimeFrameSlots(LinuxProcStateProbeBytes)
+	let digits = asm.newLabel()
+	let copyDigits = asm.newLabel()
+	let digitsCopied = asm.newLabel()
+	let openFailed = asm.newLabel()
+	let scanBack = asm.newLabel()
+	let alive = asm.newLabel()
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x12, slot: pidSlot)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x10, slot: SlotStat)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x11, value: LinuxProcStateProbeBytes as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x13, value: LinuxProcDecimalBase as MachineWord)
+
+	asm.placeLabel(digits)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpUdiv, dest: Arm64Register.x14, lhs: Arm64Register.x12, rhs: Arm64Register.x13)
+	arm64EmitMsub(asm.code, rd: arm64RuntimeReg(Arm64Register.x15), rn: arm64RuntimeReg(Arm64Register.x14), rm: arm64RuntimeReg(Arm64Register.x13), ra: arm64RuntimeReg(Arm64Register.x12))
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x15, base: Arm64Register.x15, imm: LinuxProcDigitZero as Imm32)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x11, base: Arm64Register.x11, imm: -1)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x6, lhs: Arm64Register.x10, rhs: Arm64Register.x11)
+	arm64EmitStoreByte(asm, src: Arm64Register.x15, base: Arm64Register.x6)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x12, src: Arm64Register.x14)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x12, label: digits)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: LinuxProcPidPathPrefixWord)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPath)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x9, base: Arm64Register.x1, byteOffset: 0)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x1, imm: LinuxProcPidPathPrefixBytes as Imm32)
+
+	asm.placeLabel(copyDigits)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x11, imm: LinuxProcStateProbeBytes as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: digitsCopied)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x6, lhs: Arm64Register.x10, rhs: Arm64Register.x11)
+	arm64EmitLoadByte(asm, dest: Arm64Register.x7, base: Arm64Register.x6)
+	arm64EmitStoreByte(asm, src: Arm64Register.x7, base: Arm64Register.x2)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: 1)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x11, base: Arm64Register.x11, imm: 1)
+	arm64EmitBranchTo(asm, label: copyDigits)
+
+	asm.placeLabel(digitsCopied)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: LinuxProcStatSuffixWord)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x9, base: Arm64Register.x2, byteOffset: 0)
+
+	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPath)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixOpenReadOnly or LinuxOpenCloseOnExec)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: openFailed)
+
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxProcStateProbeBytes as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRead)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotRead)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFd)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClose)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotRead)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: alive)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: SlotStat)
+
+	asm.placeLabel(scanBack)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: -1)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: alive)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x3, rhs: Arm64Register.x2)
+	arm64EmitLoadByte(asm, dest: Arm64Register.x5, base: Arm64Register.x4)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x5, imm: LinuxProcClosingParenthesis as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: scanBack)
+	arm64LinuxEmitSkipEndedProcess(asm, skip: ended)
+	arm64EmitBranchTo(asm, label: alive)
+
+	asm.placeLabel(openFailed)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchFileOrDirectory.rawValue) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: ended)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: ended)
+
+	asm.placeLabel(alive)
+end 'arm64LinuxEmitBranchIfPidEnded'
+
+function arm64LinuxEmitRecordComm(asm Arm64RuntimeAsm, stateSlot StackSize, parenSlot StackSize, statSlot StackSize)
+	let findOpen = asm.newLabel()
+	let haveOpen = asm.newLabel()
+	let copy = asm.newLabel()
+	let done = asm.newLabel()
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: stateSlot)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x5, base: Arm64Register.x4, byteOffset: PosixTreeStateCount as MachineWord)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x5, base: Arm64Register.x5, imm: -1)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x5), rn: arm64RuntimeReg(Arm64Register.x5), sh: DescendantsCommShift)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x6, base: Arm64Register.x4, byteOffset: PosixTreeStateList as MachineWord)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x6, lhs: Arm64Register.x6, rhs: Arm64Register.x5)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x6, base: Arm64Register.x6, imm: PosixTreeInitialBytes as Imm32)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x7, slot: parenSlot)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: statSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+
+	asm.placeLabel(findOpen)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x2, rhs: Arm64Register.x7)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: done)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x3, rhs: Arm64Register.x2)
+	arm64EmitLoadByte(asm, dest: Arm64Register.x5, base: Arm64Register.x4)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x5, imm: LinuxProcOpeningParenthesis as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: haveOpen)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: 1)
+	arm64EmitBranchTo(asm, label: findOpen)
+
+	asm.placeLabel(haveOpen)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: 1)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: 0)
+
+	asm.placeLabel(copy)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x2, rhs: Arm64Register.x7)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: done)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x9, imm: DescendantsCommMax as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: done)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x3, rhs: Arm64Register.x2)
+	arm64EmitLoadByte(asm, dest: Arm64Register.x5, base: Arm64Register.x4)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x6, rhs: Arm64Register.x9)
+	arm64EmitStoreByte(asm, src: Arm64Register.x5, base: Arm64Register.x4)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: 1)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x9, base: Arm64Register.x9, imm: 1)
+	arm64EmitBranchTo(asm, label: copy)
+
+	asm.placeLabel(done)
+end 'arm64LinuxEmitRecordComm'
+
+function buildArm64LinuxProcTreeAdoptChunk(kill PosixHostCall, errnoHome LinuxErrnoHome, kind PosixProcWalkKind) returns FunctionCodeChunk
 	let SlotState = 0
 	let SlotDirFd = 1
 	let SlotCursor = 2
@@ -3673,8 +3833,15 @@ function buildArm64LinuxProcTreeAdoptChunk(kill PosixHostCall, errnoHome LinuxEr
 	let SlotDirents = 7
 	let SlotStat = SlotDirents + runtimeFrameSlots(LinuxProcDirentBytes)
 	let SlotPath = SlotStat + runtimeFrameSlots(LinuxProcStatBytes)
-	var asm = Arm64RuntimeAsm.beginFunction(SlotPath + runtimeFrameSlots(LinuxProcPathBytes))
+	let SlotParen = SlotPath + runtimeFrameSlots(LinuxProcPathBytes)
+	// The fd's slot, free once the stat line is read, for `X64LinuxRuntime.ProcWalkSlotGroup`'s reason.
+	let SlotGroup = SlotFd
+	var asm = Arm64RuntimeAsm.beginFunction(SlotParen + 1)
 	let lane = PosixTreeLane.linux(errnoHome)
+	let chunkName = match kind 'name'
+		sessionTree gives HostProcTreeAdoptName
+		descendants gives HostProcDescendantsAdoptName
+	end 'name'
 
 	let nextEntry = asm.newLabel()
 	let haveEntry = asm.newLabel()
@@ -3683,10 +3850,17 @@ function buildArm64LinuxProcTreeAdoptChunk(kill PosixHostCall, errnoHome LinuxEr
 	let notYetKnown = asm.newLabel()
 	let scanBack = asm.newLabel()
 	let adopt = asm.newLabel()
+	let groupCheck = asm.newLabel()
+	let groupAdmitted = asm.newLabel()
+	let append = asm.newLabel()
 	let scanFailed = asm.newLabel()
 	let closeDirectory = asm.newLabel()
 	let procUnreadable = asm.newLabel()
 	let answered = asm.newLabel()
+	let notAChild = match kind 'notAChild'
+		sessionTree gives groupCheck
+		descendants gives nextEntry
+	end 'notAChild'
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotState)
 
@@ -3797,20 +3971,51 @@ function buildArm64LinuxProcTreeAdoptChunk(kill PosixHostCall, errnoHome LinuxEr
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x5, imm: LinuxProcClosingParenthesis as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: scanBack)
 
+	if kind == PosixProcWalkKind.descendants 'skipEnded'
+		arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotParen)
+		arm64LinuxEmitSkipEndedProcess(asm, skip: nextEntry)
+	end 'skipEnded'
+
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: LinuxProcStatStateToPpid as Imm32)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x6, slot: SlotRead)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: LinuxProcDecimalBase as MachineWord)
 	arm64LinuxEmitParseStatNumber(asm, value: Arm64Register.x7)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: 1)
 	arm64LinuxEmitParseStatNumber(asm, value: Arm64Register.x10)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x10, slot: SlotGroup)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x2, imm: 1)
 	arm64LinuxEmitParseStatNumber(asm, value: Arm64Register.x10)
-	arm64PosixEmitTreeMembership(asm, valueReg: Arm64Register.x7, stateSlot: SlotState, found: adopt, missing: nextEntry)
+	arm64PosixEmitTreeMembership(asm, valueReg: Arm64Register.x7, stateSlot: SlotState, found: adopt, missing: notAChild)
+
+	if kind == PosixProcWalkKind.sessionTree 'groupMember'
+		asm.placeLabel(groupCheck)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotGroup)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: SlotState)
+		arm64EmitLoadWord64At(asm, dest: Arm64Register.x4, base: Arm64Register.x4, byteOffset: PosixTreeStateList as MachineWord)
+		arm64EmitLoadWord32At(asm, dest: Arm64Register.x5, base: Arm64Register.x4, byteOffset: 0)
+		arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x5)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: groupAdmitted)
+		arm64EmitBranchTo(asm, label: nextEntry)
+
+		asm.placeLabel(groupAdmitted)
+		arm64PosixEmitTreeAdoptSession(asm, sessionReg: Arm64Register.x10, stateSlot: SlotState)
+		arm64EmitBranchTo(asm, label: append)
+	end 'groupMember'
 
 	asm.placeLabel(adopt)
-	arm64PosixEmitTreeSessionMismatch(asm, sessionReg: Arm64Register.x10, stateSlot: SlotState, mismatch: nextEntry)
-	arm64PosixEmitTreeAppend(asm, lane: lane, stateSlot: SlotState, pidSlot: SlotPid, refused: closeDirectory)
+
+	if kind == PosixProcWalkKind.sessionTree 'sameSession'
+		arm64PosixEmitTreeSessionMismatch(asm, sessionReg: Arm64Register.x10, stateSlot: SlotState, mismatch: nextEntry)
+	end 'sameSession'
+
+	asm.placeLabel(append)
+	arm64PosixEmitTreeAppend(asm, lane: lane, kind: kind, stateSlot: SlotState, pidSlot: SlotPid, refused: closeDirectory)
 	arm64PosixEmitTreeStop(asm, kill: kill, lane: lane, pidSlot: SlotPid)
+
+	if kind == PosixProcWalkKind.descendants 'recordName'
+		arm64LinuxEmitRecordComm(asm, stateSlot: SlotState, parenSlot: SlotParen, statSlot: SlotStat)
+	end 'recordName'
+
 	arm64EmitBranchTo(asm, label: nextEntry)
 
 	asm.placeLabel(scanFailed)
@@ -3825,5 +4030,29 @@ function buildArm64LinuxProcTreeAdoptChunk(kill PosixHostCall, errnoHome LinuxEr
 	arm64PosixEmitTreeMarkFailed(asm, stateSlot: SlotState)
 
 	asm.placeLabel(answered)
-	return asm.finishFunction(HostProcTreeAdoptName)
+	return asm.finishFunction(chunkName)
 end 'buildArm64LinuxProcTreeAdoptChunk'
+
+module function arm64LinuxEmitOwnPid(asm Arm64RuntimeAsm)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGetPid)
+end 'arm64LinuxEmitOwnPid'
+
+module function arm64LinuxEmitDescendantsTrack(asm Arm64RuntimeAsm)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxPrSetChildSubreaper as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: 1)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: 0)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallPrctl)
+end 'arm64LinuxEmitDescendantsTrack'
+
+module function arm64LinuxEmitDescendantsUnmap(asm Arm64RuntimeAsm)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DescendantsMapBytes as MachineWord)
+	arm64LinuxEmitTreeListUnmap(asm)
+end 'arm64LinuxEmitDescendantsUnmap'
+
+module function arm64LinuxEmitDescendantName(asm Arm64RuntimeAsm)
+	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x4), rn: arm64RuntimeReg(Arm64Register.x0), sh: DescendantsCommShift)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x4, lhs: Arm64Register.x4, rhs: Arm64Register.x2)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x4, base: Arm64Register.x4, imm: PosixTreeInitialBytes as Imm32)
+end 'arm64LinuxEmitDescendantName'

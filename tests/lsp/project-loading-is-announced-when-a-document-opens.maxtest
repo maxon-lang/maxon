@@ -14,7 +14,7 @@ test 'project loading is announced when a document of an unheld project opens, a
 
 	if let notices = try noticesOfTwoOpens(client, root: root) 'observed'
 		client.release()
-		discardOutsideCheckoutDir(root)
+		discardStagedDir(root)
 		let (firstOpen, secondOpen) = notices
 		requireLoadAnnouncedOnlyByTheFirstOpen(firstOpen, secondOpen: secondOpen)
 	end 'observed' else (e) 'failed'
@@ -43,7 +43,7 @@ function noticesOfTwoOpens(client LspClient, root FilePath) returns (ProjectLoad
 end 'noticesOfTwoOpens'
 
 function requireLoadAnnouncedOnlyByTheFirstOpen(firstOpen ProjectLoadingNoticeArray, secondOpen ProjectLoadingNoticeArray) throws TestFailure
-	try requireOneAnnouncedLoad(firstOpen, expectedTail: outsideCheckoutDirName(OpenAnnouncedDirName), note: "`{OpenAnnouncedFirstFileName}`, a clean document in a project the server did not yet hold, was opened and nothing else was asked. The notices were read once its `textDocument/publishDiagnostics` had arrived, and the project is built before the document is checked.")
+	try requireOneAnnouncedLoad(firstOpen, expectedTail: OpenAnnouncedDirName, note: "`{OpenAnnouncedFirstFileName}`, a clean document in a project the server did not yet hold, was opened and nothing else was asked. The notices were read once its `textDocument/publishDiagnostics` had arrived, and the project is built before the document is checked.")
 
 	try requireNoAnnouncedLoad(secondOpen, note: "`{OpenAnnouncedSecondFileName}`, a second document of the project the first open built, and of the same production view, was opened.")
 end 'requireLoadAnnouncedOnlyByTheFirstOpen'

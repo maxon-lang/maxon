@@ -3,7 +3,7 @@ let TraceNoFlagCaseLabel = "trace-unavailable-without-the-flag"
 let TraceUnavailableWithoutTheFlagAnchorName = "after-await"
 
 test 'trace in a session that was not started with --trace says so, over a program that could have answered'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TraceNoFlagCaseLabel, fixture: TracedFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: TraceNoFlagCaseLabel, fixture: TracedFixtureName)
 	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join(OutputFileStem), label: TracedBuildLabel, extraArguments: [DebugStreamBuildOption])
 
 	if build.exitCode() != 0 'didNotBuild'
@@ -26,4 +26,6 @@ test 'trace in a session that was not started with --trace says so, over a progr
 	Expect.equal(textOf(slice, node: slice.root, key: EventsUnavailableKey), expected: NotTracedReason, message: "⭐⭐ THIS IS THE CONTROL FOR `{NotBuiltWithDebugStreamReason}`. The SAME build that answers a full slice under `{DebugTraceOption}` answers `{NotTracedReason}` without it — so the two reasons are told apart by the one thing that differs, and a driver that blamed the build here would send its reader to rebuild a program that is already right. It said '{textOf(slice, node: slice.root, key: EventsUnavailableKey)}'. {said}")
 
 	Expect.equal(eventsOfKind(events, kind: ExitEventName).count(), expected: 1, message: "the session did not run the program to its end. {said}")
+
+	discardStagedDir(staged)
 end 'trace in a session that was not started with --trace says so, over a program that could have answered'

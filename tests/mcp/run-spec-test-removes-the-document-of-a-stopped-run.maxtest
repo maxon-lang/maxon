@@ -1,5 +1,5 @@
 let RunSpecTestRemovesTheDocumentOfAStoppedRunStagingCaseDirName = "run-spec-test-removes-the-document-of-a-stopped-run"
-let ProgramStagingDir = "temp/mcp-run-spec-test-stopped-run"
+let ProgramStagingDir = "mcp-run-spec-test-stopped-run"
 let RunSpecTestRemovesTheDocumentOfAStoppedRunBoundSeconds = 2
 
 function documentThenSleepSource() returns String
@@ -45,8 +45,10 @@ test 'run_spec_test removes the result document of a run it had to stop'
 
 	let answer = callTool("run_spec_test", argumentsJson: argumentsOf(["\"repoRoot\":{Json.quote(root.toString())}", secondsMember(TimeoutSecondsArgument, seconds: "{RunSpecTestRemovesTheDocumentOfAStoppedRunBoundSeconds}")]), devMode: true)
 	let left = leftoverDocumentsIn(root.join(SpecTempDirName))
-	discardOutsideCheckoutDir(root)
+	discardStagedDir(root)
 
 	Expect.isTrue(toolCallIsError(answer), message: "a run stopped at its bound answers a failure. It answered: {toolCallText(answer)}")
 	Expect.isTrue(left.isEmpty(), message: "the stopped run's result document was left on disk: {joined(left, separator: Space)}")
+
+	discardStagedDir(stagedDirNamed(ProgramStagingDir))
 end 'run_spec_test removes the result document of a run it had to stop'

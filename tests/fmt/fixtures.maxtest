@@ -34,7 +34,8 @@
 //
 // ⚠ **NOTHING IS STAGED UNDER `tests/`.** The corpus is inert on disk on purpose (rule 1: no stored
 // file is a live `.maxon`), and staging a runnable copy beside it would hand `maxon fmt` over the
-// checkout exactly the live tree that rule exists to deny it. Staging goes to gitignored `temp/`.
+// checkout exactly the live tree that rule exists to deny it. Staging goes to this process's test
+// scratch directory outside the checkout (`testScratchDir`).
 
 // Where the corpus lives, and this project's own directory, both relative to the checkout root.
 let FixturesDirName = "tests/fmt/fixtures"
@@ -44,10 +45,6 @@ let CorpusProjectFileName = "fmt.maxproj"
 // The one file in this directory that declares the shared half rather than a case. Together with the
 // directory above it is how the coverage guard counts case files without a hand-maintained number.
 let SharedHelperFileName = "fixtures.maxtest"
-
-// Where a case's runnable copy is built. Gitignored, outside `tests/`, and one directory per case so
-// two cases can never see each other's tree.
-let StagingRootDirName = "temp/fmt-fixtures"
 
 // The command being exercised. `fmt` takes no options at all — that refusal is itself under test — so
 // there is no reproducibility flag to add here the way `test`'s corpus needs two.
@@ -205,7 +202,7 @@ end 'no fixture is stored as a source maxon fmt would rewrite'
 // nothing else depends on, so it asks the two things that hold whatever the wording is: it must NOT
 // succeed, and it must NOT have written anything.
 test 'an option ahead of the command word is still refused'
-	let staged = freshStagingDir("{StagingRootDirName}/option-ahead-of-command")
+	let staged = freshStagingDir("{testScratchDir().toString()}/option-ahead-of-command")
 	stageStoredTree(fixtureDir("{FixturesDirName}/flag-refused-implemented-option/{InputDirName}"), into: staged)
 
 	let before = fileText(staged.join("Ugly.maxon"))
@@ -219,10 +216,12 @@ test 'an option ahead of the command word is still refused'
 
 	let after = fileText(staged.join("Ugly.maxon"))
 	Expect.equal(after, expected: before, message: "`--emit-ir fmt` was refused but WROTE ANYWAY. The refusal has to happen before the walk, not after it: a non-zero status over an already-rewritten tree is the incident with a better exit code.")
+
+	discardStagedDir(staged)
 end 'an option ahead of the command word is still refused'
 
 test 'an empty source and an empty .maxproj are left empty and counted unchanged'
-	let stagingDirName = "{StagingRootDirName}/empty-files-stay-empty"
+	let stagingDirName = "{testScratchDir().toString()}/empty-files-stay-empty"
 	let staged = freshStagingDir(stagingDirName)
 	let empties = [staged.join("Empty.maxon"), staged.join("marker.maxproj")]
 
@@ -239,10 +238,12 @@ test 'an empty source and an empty .maxproj are left empty and counted unchanged
 	for path in empties 'eachEmpty'
 		Expect.equal(fileText(path), expected: "", message: "`{path.filename()}` was empty and must stay empty, but `fmt` wrote into it. {said}")
 	end 'eachEmpty'
+
+	discardStagedDir(staged)
 end 'an empty source and an empty .maxproj are left empty and counted unchanged'
 
 test 'a CRLF source formats to LF lines, inside a block comment too'
-	let stagingDirName = "{StagingRootDirName}/crlf-block-comment"
+	let stagingDirName = "{testScratchDir().toString()}/crlf-block-comment"
 	let staged = freshStagingDir(stagingDirName)
 	let source = staged.join("Crlf.maxon")
 
@@ -253,10 +254,12 @@ test 'a CRLF source formats to LF lines, inside a block comment too'
 
 	Expect.equal(run.exitCode(), expected: SuccessExitCode, message: "`{TestedCommandName} .` over a CRLF source did not succeed. {said}")
 	Expect.equal(fileText(source), expected: "/* x\n   y */\nlet b = 2\n", message: "a CRLF source must come out with LF line endings everywhere, a block comment's interior included. {said}")
+
+	discardStagedDir(staged)
 end 'a CRLF source formats to LF lines, inside a block comment too'
 
 test 'a directory walk formats a .maxproj, a .maxtasks and a .maxtest beside its sources'
-	let stagingDirName = "{StagingRootDirName}/maxproj-and-maxtasks-walked"
+	let stagingDirName = "{testScratchDir().toString()}/maxproj-and-maxtasks-walked"
 	let staged = freshStagingDir(stagingDirName)
 
 	let unformatted = "let    f=6\n"
@@ -281,6 +284,8 @@ test 'a directory walk formats a .maxproj, a .maxtasks and a .maxtest beside its
 	for path in companions 'eachCompanion'
 		Expect.equal(fileText(path), expected: formatted, message: "`{path.filename()}` did not come out as `Main.maxon` did from the same text. {said}")
 	end 'eachCompanion'
+
+	discardStagedDir(staged)
 end 'a directory walk formats a .maxproj, a .maxtasks and a .maxtest beside its sources'
 
 // ============================================================================================
@@ -294,20 +299,14 @@ end 'a directory walk formats a .maxproj, a .maxtasks and a .maxtest beside its 
 type FixtureCase
 	let name as String
 	let dir as FilePath
-	let staged as FilePath
+	export let staged as FilePath
 	let tree as String
 
-	// Build a runnable copy of this case's `input/` under `temp/`, applying the stored-name mapping.
-	//
-	// ⚠ **THE STAGING DIRECTORY IS PURGED OF FILES RATHER THAN DELETED.** That is enough for a re-run:
-	// a case's input tree has the same SHAPE every time, so the directories left behind are exactly the
-	// ones staging is about to recreate, and every file in them is written fresh. What it does not
-	// survive is a fixture whose input LOSES a
-	// directory — an emptied `.git` left from a previous run would still prune a walk. Delete the
-	// staging root by hand after removing one.
+	// Build a runnable copy of this case's `input/` in this process's test scratch directory, applying
+	// the stored-name mapping.
 	static function stage(caseName String) returns FixtureCase
 		let caseDir = fixtureDir("{FixturesDirName}/{caseName}")
-		let staged = freshStagingDir("{StagingRootDirName}/{caseName}")
+		let staged = freshStagingDir("{testScratchDir().toString()}/{caseName}")
 		stageStoredTree(fixtureDir("{FixturesDirName}/{caseName}/{InputDirName}"), into: staged)
 
 		return FixtureCase{name: caseName, dir: caseDir, staged: staged, tree: portableSpelling(staged)}
@@ -512,6 +511,8 @@ function checkFixture(caseName String) throws TestFailure
 	let secondRun = fixture.spawn()
 	try fixture.checkIdempotence(secondRun)
 	try fixture.checkTree(SecondRunLabel)
+
+	discardStagedDir(fixture.staged)
 end 'checkFixture'
 
 // ============================================================================================
@@ -1003,7 +1004,7 @@ end 'a file with a keyword for a name, a stray end or an unclosed block is refus
 // a second run with nothing left to do.
 //
 // ⛔ **THE COPY IS FORMATTED, NEVER THE ORIGINAL.** `fmt` is spawned with its working directory in
-// gitignored `temp/`, and nothing here passes it a path inside the checkout's source tree.
+// the test scratch directory, and nothing here passes it a path inside the checkout's source tree.
 
 // Where the roster lives, relative to the checkout root. It is NOT under `fixtures/`: it has no
 // `input/`, no `expected-tree/` and no pins, so filed among the case directories it would be counted
@@ -1014,10 +1015,10 @@ let CensusSourceListFileName = "tests/fmt/census-sources.txt"
 // files are on it and why is the first thing a reader of a failure here needs.
 let CensusNotePrefix = "#"
 
-// Where the copies are built. A second staging root beside `StagingRootDirName` rather than a case
-// directory under it: `clearStagedFiles` clears a whole root, and sharing one with the fixtures would have
-// this test delete a case's staged tree out from under it.
-let CensusStagingDirName = "temp/fmt-census"
+// Where the copies are built: a directory of its own in the test scratch directory, never the scratch
+// directory itself. `freshStagingDir` clears what it names, and clearing the scratch directory would
+// delete a case's staged tree out from under it.
+let CensusStagingDirName = "fmt-census"
 
 // The path `fmt` is given: the staging directory it is already running in. Explicit rather than
 // relying on the no-argument default, which is a case of its own (`no-argument-defaults-to-cwd`) and
@@ -1059,7 +1060,7 @@ typealias CensusSourceArray = Array with CensusSource
 test 'formatting real sources keeps every comment, every doc comment and every line of code'
 	let sources = stageEveryCensusSource()
 
-	let firstRun = spawnFmtOverStagedTree(CensusStagingDirName, what: CensusSpawnName)
+	let firstRun = spawnFmtOverStagedTree(censusStagingPath(), what: CensusSpawnName)
 	requireFmtRunSucceeded(firstRun, runLabel: FirstRunLabel, over: CensusTreeDescription)
 
 	for source in sources 'eachSource'
@@ -1073,16 +1074,22 @@ test 'formatting real sources keeps every comment, every doc comment and every l
 	// The prediction goes through `summaryLine` — the ONE grammar this file parses the fixtures' first
 	// run with and predicts their second run with — rather than a substring: what the second run must
 	// say is exactly `0 changed` over every file the walk found, and the walk found what was staged.
-	let secondRun = spawnFmtOverStagedTree(CensusStagingDirName, what: CensusSpawnName)
+	let secondRun = spawnFmtOverStagedTree(censusStagingPath(), what: CensusSpawnName)
 	requireFmtRunSucceeded(secondRun, runLabel: SecondRunLabel, over: CensusTreeDescription)
 	requireSecondRunFoundNothingToDo(secondRun, stagedCount: sources.count() as FileTally, over: CensusTreeDescription)
+
+	discardStagedDir(stagingDir(censusStagingPath()))
 end 'formatting real sources keeps every comment, every doc comment and every line of code'
 
 // ⛔ **AN EMPTY ROSTER IS A PANIC, NOT A PASS.** A test that formatted nothing reports exactly what a
 // test that formatted everything and agreed reports — and unlike every case above, this one has no
 // stored expectation whose absence would give it away.
+function censusStagingPath() returns String
+	return "{testScratchDir().toString()}{PortablePathSeparator}{CensusStagingDirName}"
+end 'censusStagingPath'
+
 function stageEveryCensusSource() returns CensusSourceArray
-	let stagingRoot = freshStagingDir(CensusStagingDirName)
+	let stagingRoot = freshStagingDir(censusStagingPath())
 
 	var staged = CensusSourceArray.create(0)
 

@@ -1,0 +1,23 @@
+let UntrustedCaseDirName = "relay-untrusted"
+
+test 'relay: a workspace the client states untrusted is not served by the binary its checkout holds'
+	let caseDir = stagedRelayCase(UntrustedCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	var client = LspClient.start()
+
+	if let served = try servedWithoutTrust(client, caseDir: caseDir) 'served'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.notEqual(served, expected: RelayFakeServerName, message: "an untrusted workspace's slot compiler was run by the server the client launched.")
+	end 'served' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a workspace the client states untrusted is not served by the binary its checkout holds'
+
+function servedWithoutTrust(client LspClient, caseDir FilePath) returns String throws LspClientError
+	let advertised = try client.initializeAtRootWithTrust(relayCheckout(caseDir), trusted: false)
+
+	return try advertised.serverIdentity.serverName()
+end 'servedWithoutTrust'

@@ -1,0 +1,20 @@
+module function endedRunDirectories(parent FilePath, prefix String, own String) returns FilePathArray throws DirectoryListError
+	let ended = FilePathArray.create(0)
+	let entries = try Directory.list(parent)
+
+	for entry in entries 'eachEntry'
+		let name = entry.filename()
+
+		if name == own or not name.startsWith(prefix) 'notAnEndedRun'
+			continue
+		end 'notAnEndedRun'
+
+		let owner = try int.fromString(sliceAfterPrefix(name, prefix: prefix)) otherwise continue
+
+		if owner > 0 and owner <= i32.max and not Process.isAlive(owner as Pid) 'ownerGone'
+			ended.push(entry)
+		end 'ownerGone'
+	end 'eachEntry'
+
+	return ended
+end 'endedRunDirectories'

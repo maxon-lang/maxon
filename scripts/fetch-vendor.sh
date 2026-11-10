@@ -29,6 +29,7 @@ cd "$repo_root"
 . scripts/lib/host-binaries.sh
 . scripts/lib/archive.sh
 . scripts/lib/checksums.sh
+. scripts/lib/system-temp.sh
 
 # ⚠ `wasm-opt` IS NOT FETCHED BY DEFAULT BECAUSE NOTHING IN THIS TREE INVOKES IT. The wasm lane runs
 # `wasmtime` (to execute a component) and `wasm-tools` (to wrap the emitted core module into one, and
@@ -122,9 +123,8 @@ tool_version() {
 ext="$(maxon_target_exe_ext "$target")"
 fetched=0
 
-# Cleanup is explicit rather than trapped, so a FAILED run leaves this directory behind: it holds the
-# archive whose checksum did not match, which is the one thing worth looking at afterwards.
-work="$(mktemp -d)"
+temp_make dir fetch-vendor
+work="$TempMade"
 
 for tool in $tools; do
 	version="$(tool_version "$tool")"
@@ -187,5 +187,4 @@ for tool in $tools; do
 	fetched=$((fetched + 1))
 done
 
-rm -rf "$work"
 echo "fetch-vendor.sh: $fetched tool(s) fetched for $target into vendor/"

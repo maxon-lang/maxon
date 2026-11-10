@@ -3,8 +3,9 @@
 # ⛔ A NONZERO EXIT KEEPS THE DIRECTORY AND NAMES IT; A CLEAN EXIT REMOVES IT. The directory holds the
 #    logs and the binaries of whatever just failed, and an unconditional `rm -rf` in an EXIT trap
 #    destroys them at the one moment they are worth having — leaving a bare nonzero status with nothing
-#    to diagnose it by, which costs a blind re-run to learn nothing. What is kept is under `temp/` or
-#    `mktemp -d`, so the next run clears it and nothing accumulates.
+#    to diagnose it by, which costs a blind re-run to learn nothing. What is kept is a fixed
+#    `temp/<script>/`, which the next run clears and the SessionStart sweep
+#    (`.claude/hooks/sweep-temp.sh`) removes once it is stale, so nothing accumulates.
 #
 # ⇒ Source this and install `trap 'scratch_dir_on_exit $? "$dir" "<script>" "$keep"' EXIT`. `$?` must be
 #   the trap's first word, or the status it reads is the trap's own. Pass 1 for the keep flag to hold

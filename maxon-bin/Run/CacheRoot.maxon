@@ -20,10 +20,10 @@ export typealias CacheFormatNumber = int(1 to u32.max)
 	// nothing.
 	let HomeDirectoryVariable = "USERPROFILE"
 	let WindowsCacheRootVariable = "LOCALAPPDATA"
-	let WindowsTempVariable = "TEMP"
+	export let HostTempVariable = "TEMP"
 #else
 	let HomeDirectoryVariable = "HOME"
-	let PosixTempVariable = "TMPDIR"
+	export let HostTempVariable = "TMPDIR"
 #endif
 
 // `<scratch area>/maxon/<command>/<format>/…` — under a directory of this compiler's own, so a shared temp
@@ -231,14 +231,13 @@ function cacheRootCandidates() returns CacheRootCandidateArray
 	var candidates = CacheRootCandidateArray.create(0)
 	candidates.push(CacheRootCandidate.create(RunCacheRootVariable, suffix: vendorDir))
 
+	candidates.push(CacheRootCandidate.create(HomeDirectoryVariable, suffix: userCacheDir))
+
 	#if os(Windows)
-		candidates.push(CacheRootCandidate.create(HomeDirectoryVariable, suffix: userCacheDir))
 		candidates.push(CacheRootCandidate.create(WindowsCacheRootVariable, suffix: vendorDir))
-		candidates.push(CacheRootCandidate.create(WindowsTempVariable, suffix: vendorDir))
-	#else
-		candidates.push(CacheRootCandidate.create(HomeDirectoryVariable, suffix: userCacheDir))
-		candidates.push(CacheRootCandidate.create(PosixTempVariable, suffix: vendorDir))
 	#endif
+
+	candidates.push(CacheRootCandidate.create(HostTempVariable, suffix: vendorDir))
 
 	return candidates
 end 'cacheRootCandidates'

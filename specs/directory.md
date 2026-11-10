@@ -18,6 +18,8 @@ Directory operations use function-specific error types:
 ```maxon
 enum DirectoryListError implements Error
 	notFound
+	accessDenied
+	listFailed
 end 'DirectoryListError'
 ```
 
@@ -34,7 +36,7 @@ where `type FilePathArray implements Array with FilePath`
 
 **Returns:** Array of FilePath entries (excluding `.` and `..`)
 
-**Throws:** `DirectoryListError.notFound` if directory doesn't exist
+**Throws:** `DirectoryListError.notFound` if directory doesn't exist, `DirectoryListError.accessDenied` if the process may not list it, `DirectoryListError.listFailed` for any other failure
 
 **Example:**
 
@@ -85,6 +87,30 @@ Check if a path is a directory. Alias for `exists`.
 - `path`: Path to check
 
 **Returns:** `true` if path is a directory, `false` otherwise
+
+### Directory.removeTree
+
+Remove a file, a directory with everything under it, or a directory link.
+
+**Signature:** `static function removeTree(path FilePath) returns FilePathArray`
+
+**Parameters:**
+- `path`: The entry to remove
+
+**Returns:** The paths that could not be removed; empty when everything is gone. A path nothing is at removes nothing and reports nothing.
+
+A directory link (a symbolic link on POSIX, a junction or directory symbolic link on Windows) is removed as an entry: what it points at is never entered, listed or removed. An entry the process may not list or delete is reported and the walk goes on, so one stuck entry does not hide the rest; a directory holding a reported entry is itself reported only through that entry.
+
+### Directory.removeContents
+
+Remove everything inside a directory and keep the directory.
+
+**Signature:** `static function removeContents(path FilePath) returns FilePathArray`
+
+**Parameters:**
+- `path`: The directory to empty
+
+**Returns:** The paths that could not be removed, as `removeTree` reports them. A path that is not a directory removes nothing and reports nothing.
 
 ### Directory.currentPath
 
@@ -209,6 +235,9 @@ function main() returns ExitCode
 		return 8
 	end 'countZero'
 
+	try Directory.delete(emptyDir) otherwise return 9
+	try Directory.delete(oneFile) otherwise return 10
+
 	return 42
 end 'main'
 ```
@@ -232,6 +261,87 @@ end 'main'
 ```
 ```stdout
 Directory not found
+```
+
+<!-- test: list-an-unreadable-directory-is-access-denied -->
+<!-- unsupported-targets: wasm32-wasi -->
+A directory the process may not list is `accessDenied`, never `notFound`: a caller that cannot tell a missing directory from
+one it may not read cannot report the reason. The case denies itself the listing (a deny entry for Everyone on Windows,
+mode 000 elsewhere), lists the directory, then restores access and removes what it made.
+```maxon
+let toolTimeoutMs = 30000
+let directoryName = "directory-unreadable-listed"
+
+function runTool(tool String, arguments StringArray) returns bool
+	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise return false
+	return result.succeeded()
+end 'runTool'
+
+function denyListing(directory FilePath) returns bool
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push(directory.toString())
+	arguments.push("/deny")
+	arguments.push("*S-1-1-0:(RD)")
+	return runTool("icacls", arguments: arguments)
+	#else
+	arguments.push("000")
+	arguments.push(directory.toString())
+	return runTool("chmod", arguments: arguments)
+	#endif
+end 'denyListing'
+
+function restoreListing(directory FilePath) returns bool
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push(directory.toString())
+	arguments.push("/remove:d")
+	arguments.push("*S-1-1-0")
+	return runTool("icacls", arguments: arguments)
+	#else
+	arguments.push("755")
+	arguments.push(directory.toString())
+	return runTool("chmod", arguments: arguments)
+	#endif
+end 'restoreListing'
+
+function main() returns ExitCode
+	let directory = Directory.currentPath().join(directoryName)
+
+	if not Directory.create(directory) 'madeIt'
+		return 2
+	end 'madeIt'
+
+	if not denyListing(directory) 'denied'
+		try Directory.delete(directory) otherwise ignore
+		return 3
+	end 'denied'
+
+	var verdict = "listed"
+
+	if let entries = try Directory.list(directory) 'listed'
+		verdict = "listed {entries.count()} entries"
+	end 'listed' else (e) 'refused'
+		verdict = e.name
+	end 'refused'
+
+	if not restoreListing(directory) 'restored'
+		return 4
+	end 'restored'
+
+	try Directory.delete(directory) otherwise return 5
+
+	print("{verdict}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+accessDenied
 ```
 
 <!-- test: directory-exists -->
@@ -305,9 +415,8 @@ end 'main'
 ### Removing a directory
 
 `Directory.delete` removes an EMPTY directory and throws for anything else — a directory holding a
-file, and a name nothing created. These three cases run with the working directory `temp/` and beside
-every other case in the suite, so each names a directory nothing else here could reach and takes it
-away again.
+file, and a name nothing created. These three cases run beside every other case in the suite, so each
+names a directory nothing else here could reach and takes it away again.
 
 <!-- test: delete-removes-an-empty-directory -->
 ```maxon
@@ -383,6 +492,285 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+### Removing a tree
+
+`Directory.removeTree` and `Directory.removeContents` answer the paths they could not remove. Each case
+below makes its own directories and takes them away again on its passing path.
+
+<!-- test: remove-tree-removes-a-nested-tree -->
+```maxon
+function main() returns ExitCode
+	let base = FilePath from "test_remove_tree_nested_9c4e"
+	let deep = base.join("a").join("b")
+
+	if not Directory.create(deep) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try File.writeText(base.join("top.txt"), content: "x") otherwise return 2
+	try File.writeText(base.join("a").join("mid.txt"), content: "x") otherwise return 3
+	try File.writeText(deep.join("leaf.txt"), content: "x") otherwise return 4
+
+	let unremoved = Directory.removeTree(base)
+
+	if not unremoved.isEmpty() 'reportedAFailure'
+		return 5
+	end 'reportedAFailure'
+
+	if Directory.exists(base) 'stillThere'
+		return 6
+	end 'stillThere'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: remove-tree-removes-a-file -->
+```maxon
+function main() returns ExitCode
+	let file = FilePath from "test_remove_tree_file_1b3d.txt"
+	try File.writeText(file, content: "x") otherwise return 1
+
+	let unremoved = Directory.removeTree(file)
+
+	if not unremoved.isEmpty() 'reportedAFailure'
+		return 2
+	end 'reportedAFailure'
+
+	if File.exists(file) 'stillThere'
+		return 3
+	end 'stillThere'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: remove-tree-of-a-path-nothing-is-at-reports-nothing -->
+```maxon
+function main() returns ExitCode
+	let missing = FilePath from "test_remove_tree_absent_6d02"
+
+	if Directory.exists(missing) or File.exists(missing) 'somethingIsThere'
+		return 1
+	end 'somethingIsThere'
+
+	if not Directory.removeTree(missing).isEmpty() 'reportedAFailure'
+		return 2
+	end 'reportedAFailure'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: remove-contents-empties-a-directory-and-keeps-it -->
+```maxon
+function main() returns ExitCode
+	let base = FilePath from "test_remove_contents_c8f1"
+	let nested = base.join("sub")
+
+	if not Directory.create(nested) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try File.writeText(base.join("top.txt"), content: "x") otherwise return 2
+	try File.writeText(nested.join("leaf.txt"), content: "x") otherwise return 3
+
+	let unremoved = Directory.removeContents(base)
+
+	if not unremoved.isEmpty() 'reportedAFailure'
+		return 4
+	end 'reportedAFailure'
+
+	if not Directory.exists(base) 'directoryWentToo'
+		return 5
+	end 'directoryWentToo'
+
+	let left = try Directory.list(base) otherwise return 6
+
+	if not left.isEmpty() 'somethingStays'
+		return 7
+	end 'somethingStays'
+
+	try Directory.delete(base) otherwise return 8
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: remove-tree-removes-a-directory-link-and-not-what-it-points-at -->
+<!-- unsupported-targets: wasm32-wasi -->
+A directory link inside the tree is removed as an entry. The directory it points at, and what that holds, is
+never entered. The link is a junction on Windows and a symbolic link elsewhere.
+```maxon
+let linkToolTimeoutMs = 30000
+
+function plantDirectoryLink(link FilePath, target FilePath) returns bool
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push("/c")
+	arguments.push("mklink")
+	arguments.push("/J")
+	arguments.push(link.toString())
+	arguments.push(target.toString())
+	let tool = "cmd"
+	#else
+	arguments.push("-s")
+	arguments.push(target.toString())
+	arguments.push(link.toString())
+	let tool = "ln"
+	#endif
+
+	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, timeoutMs: linkToolTimeoutMs) otherwise return false
+
+	return result.succeeded()
+end 'plantDirectoryLink'
+
+function main() returns ExitCode
+	let base = Directory.currentPath().join("test_remove_tree_link_base_2f7a")
+	let target = Directory.currentPath().join("test_remove_tree_link_target_2f7a")
+	let kept = target.join("kept.txt")
+
+	if not Directory.create(base) or not Directory.create(target) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try File.writeText(kept, content: "kept") otherwise return 2
+
+	if not plantDirectoryLink(base.join("link"), target: target) 'couldNotLink'
+		return 3
+	end 'couldNotLink'
+
+	let unremoved = Directory.removeTree(base)
+
+	if not unremoved.isEmpty() 'reportedAFailure'
+		return 4
+	end 'reportedAFailure'
+
+	if Directory.exists(base) 'stillThere'
+		return 5
+	end 'stillThere'
+
+	if not File.exists(kept) 'followedTheLink'
+		return 6
+	end 'followedTheLink'
+
+	try File.delete(kept) otherwise return 7
+	try Directory.delete(target) otherwise return 8
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: remove-tree-reports-what-it-cannot-remove -->
+<!-- unsupported-targets: wasm32-wasi -->
+A directory the process may not list cannot be emptied. `removeTree` reports it, removes what it can around it,
+and leaves the directories above it standing. The case denies itself the listing (a deny entry for Everyone on
+Windows, mode 000 elsewhere), then restores access and removes what it made.
+```maxon
+let accessToolTimeoutMs = 30000
+
+function runAccessTool(tool String, arguments StringArray) returns bool
+	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise return false
+
+	return result.succeeded()
+end 'runAccessTool'
+
+function denyListing(directory FilePath) returns bool
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push(directory.toString())
+	arguments.push("/deny")
+	arguments.push("*S-1-1-0:(RD)")
+	return runAccessTool("icacls", arguments: arguments)
+	#else
+	arguments.push("000")
+	arguments.push(directory.toString())
+	return runAccessTool("chmod", arguments: arguments)
+	#endif
+end 'denyListing'
+
+function restoreListing(directory FilePath) returns bool
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push(directory.toString())
+	arguments.push("/remove:d")
+	arguments.push("*S-1-1-0")
+	return runAccessTool("icacls", arguments: arguments)
+	#else
+	arguments.push("755")
+	arguments.push(directory.toString())
+	return runAccessTool("chmod", arguments: arguments)
+	#endif
+end 'restoreListing'
+
+function main() returns ExitCode
+	let base = Directory.currentPath().join("test_remove_tree_refused_e5a9")
+	let locked = base.join("locked")
+
+	if not Directory.create(locked) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try File.writeText(base.join("loose.txt"), content: "x") otherwise return 2
+	try File.writeText(locked.join("held.txt"), content: "x") otherwise return 3
+
+	if not denyListing(locked) 'denied'
+		return 4
+	end 'denied'
+
+	let unremoved = Directory.removeTree(base)
+	print("unremoved {unremoved.count()}\n")
+
+	for stuck in unremoved 'eachStuck'
+		print("{stuck.filename()}\n")
+	end 'eachStuck'
+
+	print("loose.txt gone {not File.exists(base.join("loose.txt"))}\n")
+	print("base stands {Directory.exists(base)}\n")
+
+	if not restoreListing(locked) 'restored'
+		return 5
+	end 'restored'
+
+	if not Directory.removeTree(base).isEmpty() 'stillStuck'
+		return 6
+	end 'stillStuck'
+
+	if Directory.exists(base) 'stillThere'
+		return 7
+	end 'stillThere'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+unremoved 1
+locked
+loose.txt gone true
+base stands true
 ```
 
 <!-- test: a-path-holding-a-nul-names-no-directory-not-its-prefix -->

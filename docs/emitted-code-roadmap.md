@@ -2151,8 +2151,6 @@ cd temp/codegen-probe
 ```
 
 Then count `x64.jmp <t>` lines whose next non-blank line is `<t>:`.
-⚠ The suite runs every test binary with cwd `temp/`, so that directory is shared with anything else you
-park there — stage a binary you must keep somewhere else.
 
 The probes are reproduced in full below so they survive `temp/` being scratch. Maxon needs
 tabs for block indentation, `end '<name>'` to close a block, `mod` (not `%`) for remainder, and

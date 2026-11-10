@@ -36,7 +36,7 @@ type TerminatedSession implements DapSession
 end 'TerminatedSession'
 
 test 'threads sent after a terminate answer an empty list, and only an adapter that never launched says so'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TerminatedCaseLabel, fixture: SteppingFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: TerminatedCaseLabel, fixture: SteppingFixtureName)
 	var session = TerminatedSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: OuterCallAnchor))
 	try dapRunSession(session, completing: "complete")
 
@@ -46,4 +46,6 @@ test 'threads sent after a terminate answer an empty list, and only an adapter t
 	try Expect.isTrue(dapSuccess(session.after), message: "an editor asks for the threads late, after the session it stopped has ended; a program that was launched and has ended has no threads, which is an empty answer and not a refusal telling the client to launch. It answered {dapDescribed(session.after)}")
 	try Expect.equal(dapListLength(session.after, key: ThreadsKey), expected: 0, message: "a terminated program has no threads")
 	try Expect.isTrue(dapSuccess(session.frames), message: "`{StackTraceCommand}` after a terminate is answered, with no frames. It answered {dapDescribed(session.frames)}")
+
+	discardStagedDir(staged)
 end 'threads sent after a terminate answer an empty list, and only an adapter that never launched says so'

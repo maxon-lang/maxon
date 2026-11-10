@@ -29,6 +29,8 @@ cd "$repo_root"
 . scripts/lib/release-checks.sh
 # shellcheck disable=SC1091
 . scripts/lib/host-binaries.sh
+# shellcheck disable=SC1091
+. scripts/lib/system-temp.sh
 
 WebsiteDir="website"
 SyncDocsScript="scripts/sync-docs.mjs"
@@ -49,8 +51,8 @@ done
 version="$(check_release_version "$version" release-preflight.sh)" || exit 2
 
 # Captured stderr lands here rather than in the tree, which the first check reads.
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT INT TERM
+temp_make dir release-preflight
+work="$TempMade"
 
 head_commit="$(git rev-parse HEAD)"
 printf 'release-preflight.sh: %s at %s\n\n' "$version" "$(git rev-parse --short HEAD)"

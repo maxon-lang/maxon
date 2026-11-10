@@ -1,0 +1,24 @@
+let RelayedChildCaseDirName = "relay-relayed-child"
+let RelayedChildExpectedVersion = "generation 1 relayed"
+
+test 'relay: the compiler a relay starts is told it is relayed'
+	let caseDir = stagedRelayCase(RelayedChildCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	var client = LspClient.start()
+
+	if let observed = try versionOfTheServingCompiler(client, caseDir: caseDir) 'served'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.equal(observed, expected: RelayedChildExpectedVersion, message: "the compiler the relay started was not told it is relayed, so it could relay again.")
+	end 'served' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: the compiler a relay starts is told it is relayed'
+
+function versionOfTheServingCompiler(client LspClient, caseDir FilePath) returns String throws LspClientError
+	let advertised = try client.initializeAtRoot(relayCheckout(caseDir))
+
+	return try advertised.serverIdentity.version()
+end 'versionOfTheServingCompiler'

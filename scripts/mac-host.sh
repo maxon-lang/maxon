@@ -333,6 +333,21 @@ r_op_enter() {
 		[ "$(r_now)" -lt "$deadline" ] || r_fail "another lock operation has held $op_dir for too long"
 		sleep "$OpPollSeconds"
 	done
+
+	r_sweep_relics
+}
+
+r_sweep_relics() {
+	local relic age
+
+	for relic in "$lock_dir".new.* "$lock_dir".released.* "$op_dir".broken.*; do
+		[ -e "$relic" ] || continue
+		age="$(r_seconds_since "$(stat -f %m "$relic" 2>/dev/null || true)")"
+
+		if [ -n "$age" ] && [ "$age" -ge "$OpStaleSeconds" ]; then
+			rm -rf "$relic"
+		fi
+	done
 }
 
 r_op_claim() {
@@ -1156,8 +1171,8 @@ cmd_clone() {
 	origin="$(git -C "$repo_root" remote get-url origin)"
 
 	if [ -n "$seeding" ] && [ -z "$seed_from" ]; then
-		seed_dir="$(mktemp -d)"
-		trap 'rm -rf "$seed_dir"' EXIT
+		temp_make dir mac-host-seed
+		seed_dir="$TempMade"
 		local fetch_arguments=("$MacTarget" "--output=$seed_dir/maxon")
 		[ -z "$tag" ] || fetch_arguments+=("$tag")
 		"$repo_root/scripts/fetch-seed.sh" "${fetch_arguments[@]}"
@@ -1216,7 +1231,7 @@ cmd_fetch() {
 	[ -n "$destination" ] || die "fetch needs a destination"
 	staging="$destination.partial.$$"
 	connect
-	trap 'rm -f "$staging"' EXIT
+	temp_register "$staging"
 	remote r_cmd_fetch "$session" "$relative" > "$staging" || status=$?
 
 	if [ "$status" -ne "$ExitSuccess" ]; then
@@ -1224,7 +1239,6 @@ cmd_fetch() {
 	fi
 
 	mv -f "$staging" "$destination"
-	trap - EXIT
 }
 
 cmd_drop() {
@@ -1236,6 +1250,8 @@ cmd_drop() {
 }
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+TempNamesTable="$repo_root/scripts/lib/temp-names.tsv"
+. "$repo_root/scripts/lib/system-temp.sh"
 
 [ $# -gt 0 ] || usage
 command="$1"

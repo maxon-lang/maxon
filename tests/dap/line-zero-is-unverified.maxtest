@@ -23,7 +23,7 @@ type LineZeroSession implements DapSession
 end 'LineZeroSession'
 
 test 'a breakpoint on line 0 from a client counting from 1 is unverified and the rest of the request still arms'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: LineZeroCaseLabel, fixture: SteppingFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: LineZeroCaseLabel, fixture: SteppingFixtureName)
 	var session = LineZeroSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: InnerLoopAnchor))
 	try dapRunSession(session, completing: "complete")
 
@@ -31,4 +31,6 @@ test 'a breakpoint on line 0 from a client counting from 1 is unverified and the
 	try Expect.isFalse(dapBreakpointVerified(session.answer, index: 0), message: "a client counting from 1 has no line 0, so that breakpoint cannot be verified; it answered {dapDescribed(session.answer)}")
 	try Expect.isTrue(dapBreakpointHasMessage(session.answer, index: 0), message: "the unverified breakpoint must say why; it answered {dapDescribed(session.answer)}")
 	try Expect.isTrue(dapBreakpointVerified(session.answer, index: 1), message: "the request's other breakpoint is on a line that emits code and must verify; it answered {dapDescribed(session.answer)}")
+
+	discardStagedDir(staged)
 end 'a breakpoint on line 0 from a client counting from 1 is unverified and the rest of the request still arms'

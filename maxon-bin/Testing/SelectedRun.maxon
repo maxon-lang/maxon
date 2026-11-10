@@ -81,20 +81,25 @@ module function selectionMembersSource(indexAlias String) returns String
 end 'selectionMembersSource'
 
 module union SelectedLaunch
-	ran(exitCode ExitCodeValue, stdout String, stderr String)
+	ran(exitCode ExitCodeValue, stdout String, stderr String, leftovers StringArray)
 	deadlineExpired(stdout String, stderr String)
 	couldNotStart(reason String)
 end 'SelectedLaunch'
 
-module function launchSelected(exe Executable, leadingArguments StringArray, indices TestRunIndexArray, timeoutMs DurationMs, workingDirectory FilePath) returns SelectedLaunch
+module function launchSelected(exe Executable, leadingArguments StringArray, indices TestRunIndexArray, timeoutMs DurationMs, workingDirectory FilePath, projectScratchRoot FilePath, tracksDescendants bool) returns SelectedLaunch
 	var argv = leadingArguments.clone()
 	argv.push("{testSelectFlag()}{formatTestSelection(indices)}")
 
-	let run = try runProcess(exe, argv: argv, workingDirectory: workingDirectory, timeoutMs: timeoutMs) otherwise (e) 'didNotRun'
+	let scratch = try TestProcessScratch.create(projectScratchRoot) otherwise (refusal) 'noScratch'
+		return SelectedLaunch.couldNotStart(stagingRefusalReason(refusal))
+	end 'noScratch'
+
+	let run = try runProcess(exe, argv: argv, workingDirectory: workingDirectory, timeoutMs: timeoutMs, environment: scratch.environment(tracksDescendants)) otherwise (e) 'didNotRun'
+		_ = scratch.discard()
 		return launchFailureOf(e)
 	end 'didNotRun'
 
-	return SelectedLaunch.ran(run.exitCode, stdout: run.stdout, stderr: run.stderr)
+	return SelectedLaunch.ran(run.exitCode, stdout: run.stdout, stderr: run.stderr, leftovers: scratch.discard())
 end 'launchSelected'
 
 function launchFailureOf(error SubprocessError) returns SelectedLaunch
@@ -122,7 +127,7 @@ module type GeneratedBuild
 			throw TestStagingError.refused("could not create the staging directory {stagingRoot.toString()}")
 		end 'noStagingRoot'
 
-		purgeFilesIn(stagingRoot)
+		emptyScratchDirectory(stagingRoot)
 		return Self{root: stagingRoot, buildTargets: MaxonSourcePathArray.create(0), compilerWrittenSources: CompilerWrittenSourceArray.create(0), stagedSourceOrigins: StagedSourceOriginArray.create(0)}
 	end 'begin'
 

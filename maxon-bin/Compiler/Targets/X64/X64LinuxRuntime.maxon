@@ -179,7 +179,8 @@ let X64LinuxSyscallPipe2 = 293
 let X64LinuxSyscallDup3 = 292
 let X64LinuxSyscallExecve = 59
 let X64LinuxSyscallWait4 = 61
-export let X64LinuxSyscallKill = 62
+let X64LinuxSyscallKill = 62
+let X64LinuxSyscallPrctl = 157
 let X64LinuxSyscallGetRandom = 318
 let X64LinuxSyscallPpoll = 271
 
@@ -3470,6 +3471,36 @@ function x64LinuxEmitReapedField(asm X64RuntimeAsm, objSlot StackSize, field Mac
 end 'x64LinuxEmitReapedField'
 
 // ==========================================================================
+// mrt_host_proc_probe(rcx = pid) -> rax = 0 | -errno
+// ==========================================================================
+
+// The answers `buildArm64PosixProcProbeChunk` documents, a zombie reading as ended included.
+function buildX64LinuxProcProbeChunk() returns FunctionCodeChunk
+	let SlotPid = 0
+	let SlotProbe = 1
+	var asm = X64RuntimeAsm.beginFunction(SlotProbe + EndedProbeSlots)
+	let ended = asm.newLabel()
+	let answered = asm.newLabel()
+
+	x64LinuxEmitSlotStore(asm, slot: SlotPid, reg: X64Register.rcx)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: PosixProbeSignal as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: answered)
+
+	x64LinuxEmitBranchIfPidEnded(asm, pidSlot: SlotPid, probeSlot: SlotProbe, ended: ended)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(ended)
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: PosixProbeEndedAnswer)
+
+	asm.placeLabel(answered)
+	return asm.finishFunction(HostProcProbeName)
+end 'buildX64LinuxProcProbeChunk'
+
+// ==========================================================================
 // mrt_host_proc_terminate(rcx = handle, rdx = exitCode)
 // ==========================================================================
 
@@ -3477,7 +3508,7 @@ end 'x64LinuxEmitReapedField'
 // in the object once the kill was delivered (0) or found the group gone (`-ESRCH`), for the reap to
 // report on a SIGKILL status (see `PosixSignalExitCodeBase`); a refused kill records nothing and
 // answers FALSE. A child already reaped (its signal word set) still has its group killed, and a
-// TRUE answer carries `PosixTerminateTreeIncomplete`, both for the reasons
+// TRUE answer carries `TerminateTreeIncomplete`, both for the reasons
 // `buildArm64PosixProcTerminateChunk` gives.
 //
 // The pid is negated: a negative pid names a process group, and every child this runtime spawns
@@ -3497,6 +3528,7 @@ function buildX64LinuxProcTerminateChunk(errnoHome LinuxErrnoHome) returns Funct
 	let delivered = asm.newLabel()
 	let nothingLeftToKill = asm.newLabel()
 	let reapedGroup = asm.newLabel()
+	let reapedKill = asm.newLabel()
 	let reapedRefused = asm.newLabel()
 	let answered = asm.newLabel()
 	let refused = asm.newLabel()
@@ -3530,10 +3562,19 @@ function buildX64LinuxProcTerminateChunk(errnoHome LinuxErrnoHome) returns Funct
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
 	asm.placeLabel(reapedGroup)
+	x64LinuxEmitGroupSignal(asm, objSlot: SlotObj, signal: posixStopSignalNumber(Os.linux))
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: reapedKill)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rcx, slot: SlotObj)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcTreeKillName)
+	x64LinuxEmitSlotStore(asm, slot: SlotTreeBit, reg: X64Register.rax)
+
+	asm.placeLabel(reapedKill)
 	x64LinuxEmitGroupKillVerdict(asm, errnoHome: errnoHome, objSlot: SlotObj, groupGone: nothingLeftToKill, refusedTo: reapedRefused)
 
 	asm.placeLabel(reapedRefused)
-	x64LinuxEmitSlotStoreImm(asm, slot: SlotTreeBit, value: PosixTerminateTreeIncomplete as MachineWord)
+	x64LinuxEmitSlotStoreImm(asm, slot: SlotTreeBit, value: TerminateTreeIncomplete as MachineWord)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
@@ -3551,12 +3592,16 @@ function buildX64LinuxProcTerminateChunk(errnoHome LinuxErrnoHome) returns Funct
 	return asm.finishFunction(HostProcTerminateName)
 end 'buildX64LinuxProcTerminateChunk'
 
-function x64LinuxEmitGroupKillVerdict(asm X64RuntimeAsm, errnoHome LinuxErrnoHome, objSlot StackSize, groupGone BlockId, refusedTo BlockId)
+function x64LinuxEmitGroupSignal(asm X64RuntimeAsm, objSlot StackSize, signal MachineWord)
 	x64LinuxEmitSlotLoad(asm, reg: X64Register.rcx, slot: objSlot)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
 	encodeGrp3Reg(asm.code, ext: Grp3ExtNeg, reg: X64Register.rdi)
-	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: PosixSigKill)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: signal)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
+end 'x64LinuxEmitGroupSignal'
+
+function x64LinuxEmitGroupKillVerdict(asm X64RuntimeAsm, errnoHome LinuxErrnoHome, objSlot StackSize, groupGone BlockId, refusedTo BlockId)
+	x64LinuxEmitGroupSignal(asm, objSlot: objSlot, signal: PosixSigKill)
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: groupGone)
@@ -3630,78 +3675,115 @@ function x64LinuxEmitParseStatNumber(asm X64RuntimeAsm, statDisp Imm32, value X6
 	asm.placeLabel(done)
 end 'x64LinuxEmitParseStatNumber'
 
-// The walk `buildArm64PosixProcTreeKillChunk` documents, with the `/proc` scan inline.
-function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotState = 0
-	let SlotRoot = SlotState + PosixTreeStateWords
-	let SlotDirFd = SlotRoot + 1
-	let SlotProgress = SlotRoot + 2
-	let SlotCursor = SlotRoot + 3
-	let SlotFilled = SlotRoot + 4
-	let SlotPid = SlotRoot + 5
-	let SlotFd = SlotRoot + 6
-	let SlotRead = SlotRoot + 7
-	let SlotIndex = SlotRoot + 8
-	let SlotDirents = SlotRoot + 9
-	let DirentSlots = LinuxProcDirentBytes / SpillSlotBytes
-	let SlotStat = SlotDirents + DirentSlots
-	let StatSlots = LinuxProcStatBytes / SpillSlotBytes
-	let SlotPath = SlotStat + StatSlots
-	let PathSlots = LinuxProcPathBytes / SpillSlotBytes
-	var asm = X64RuntimeAsm.beginFunction(SlotPath + PathSlots)
-	let stateDisp = x64LinuxBufferDisp(asm, firstSlot: SlotState, slotCount: PosixTreeStateWords)
-	let direntDisp = x64LinuxBufferDisp(asm, firstSlot: SlotDirents, slotCount: DirentSlots)
-	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: StatSlots)
-	let pathDisp = x64LinuxBufferDisp(asm, firstSlot: SlotPath, slotCount: PathSlots)
-	let stopSignal = posixStopSignalNumber(Os.linux)
+let ProcWalkSlotState = 0
+let ProcWalkSlotRoot = ProcWalkSlotState + PosixTreeStateWords
+let ProcWalkSlotDirFd = ProcWalkSlotRoot + 1
+let ProcWalkSlotProgress = ProcWalkSlotRoot + 2
+let ProcWalkSlotCursor = ProcWalkSlotRoot + 3
+let ProcWalkSlotFilled = ProcWalkSlotRoot + 4
+let ProcWalkSlotPid = ProcWalkSlotRoot + 5
+let ProcWalkSlotFd = ProcWalkSlotRoot + 6
+let ProcWalkSlotRead = ProcWalkSlotRoot + 7
+let ProcWalkSlotIndex = ProcWalkSlotRoot + 8
+// Shares the fd's slot, which is free once the stat line is read: this frame lies on the
+// `__gt_io_read → terminate → tree_kill → await_ended` chain, which has no room left under the
+// green-thread stack guard (E5004) for another slot. The arm64 adopt chunk aliases its `SlotGroup` alike.
+let ProcWalkSlotGroup = ProcWalkSlotFd
+let ProcWalkSlotDirents = ProcWalkSlotRoot + 9
+let ProcWalkDirentSlots = LinuxProcDirentBytes / SpillSlotBytes
+let ProcWalkSlotStat = ProcWalkSlotDirents + ProcWalkDirentSlots
+let ProcWalkStatSlots = LinuxProcStatBytes / SpillSlotBytes
+let ProcWalkSlotPath = ProcWalkSlotStat + ProcWalkStatSlots
+let ProcWalkPathSlots = LinuxProcPathBytes / SpillSlotBytes
+let ProcWalkSlotsEnd = ProcWalkSlotPath + ProcWalkPathSlots
 
+let DescendantsSlotBuf = ProcWalkSlotsEnd
+let DescendantsSlotCap = ProcWalkSlotsEnd + 1
+let DescendantsSlotParen = ProcWalkSlotsEnd + 2
+let DescendantsSlotNeeded = ProcWalkSlotsEnd + 3
+let DescendantsSlotWritten = ProcWalkSlotsEnd + 4
+let DescendantsSlotLine = ProcWalkSlotsEnd + 5
+let DescendantsLineSlots = DescendantsLineBytes / SpillSlotBytes
+let DescendantsSlotsEnd = DescendantsSlotLine + DescendantsLineSlots
+
+function x64LinuxEmitSkipEndedProcess(asm X64RuntimeAsm, statDisp Imm32, skip BlockId)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: (statDisp + (LinuxProcStatParenToState as Imm32)) as Imm32, index: X64Register.rdx, indexScale: MemoryIndexScale.byOne)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxProcStateZombie as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: skip)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxProcStateDead as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: skip)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxProcStateDeadLegacy as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: skip)
+end 'x64LinuxEmitSkipEndedProcess'
+
+function x64LinuxEmitRecordComm(asm X64RuntimeAsm, stateDisp Imm32, statDisp Imm32)
+	let findOpen = asm.newLabel()
+	let haveOpen = asm.newLabel()
+	let copy = asm.newLabel()
+	let done = asm.newLabel()
+
+	x64LinuxEmitStateLoad(asm, reg: X64Register.rcx, stateDisp: stateDisp, field: PosixTreeStateCount)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rcx, imm: 1)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rcx, count: DescendantsCommShift)
+	x64LinuxEmitStateLoad(asm, reg: X64Register.rax, stateDisp: stateDisp, field: PosixTreeStateList)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: PosixTreeInitialBytes as Imm32)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdx, slot: DescendantsSlotParen)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
+
+	asm.placeLabel(findOpen)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: statDisp, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxProcOpeningParenthesis as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: haveOpen)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: findOpen)
+
+	asm.placeLabel(haveOpen)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: 0)
+
+	asm.placeLabel(copy)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
+	emitCmpRegImm(asm, reg: X64Register.r10, imm: DescendantsCommMax as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: statDisp, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r10, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: copy)
+
+	asm.placeLabel(done)
+end 'x64LinuxEmitRecordComm'
+
+function x64LinuxEmitProcWalk(asm X64RuntimeAsm, kind PosixProcWalkKind, errnoHome LinuxErrnoHome, procUnreadable BlockId, finish BlockId)
+	let stateDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotState, slotCount: PosixTreeStateWords)
+	let direntDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotDirents, slotCount: ProcWalkDirentSlots)
+	let statDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotStat, slotCount: ProcWalkStatSlots)
+	let pathDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotPath, slotCount: ProcWalkPathSlots)
+	let stopSignal = posixStopSignalNumber(Os.linux)
 	let round = asm.newLabel()
 	let nextEntry = asm.newLabel()
 	let haveEntry = asm.newLabel()
 	let digits = asm.newLabel()
 	let digitsDone = asm.newLabel()
 	let notYetKnown = asm.newLabel()
-	let scanBack = asm.newLabel()
 	let adopt = asm.newLabel()
+	let groupCheck = asm.newLabel()
+	let groupAdmitted = asm.newLabel()
+	let append = asm.newLabel()
 	let hasRoom = asm.newLabel()
-	let procUnreadable = asm.newLabel()
 	let scanFailed = asm.newLabel()
 	let closeDirectory = asm.newLabel()
-	let finish = asm.newLabel()
-	let killNext = asm.newLabel()
-	let release = asm.newLabel()
-	let allocationFailed = asm.newLabel()
-	let answered = asm.newLabel()
-	let incomplete = asm.newLabel()
-	let ended = asm.newLabel()
-
-	x64LinuxEmitSlotStore(asm, slot: SlotRoot, reg: X64Register.rcx)
-	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateStatus, value: PosixTreeStatusComplete as MachineWord)
-
-	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(PosixTreeInitialBytes as MachineWord))
-	x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: allocationFailed)
-	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateList, reg: X64Register.rax)
-
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: SlotRoot)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdi, wide: false)
-	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateCount, value: 1)
-	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateCapacity, value: PosixTreeInitialEntries as MachineWord)
-	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: stopSignal)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
-
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: SlotRoot)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetsid)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: finish)
-	x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: procUnreadable)
-	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateSession, reg: X64Register.rax)
+	let notAChild = match kind 'notAChild'
+		sessionTree gives groupCheck
+		descendants gives nextEntry
+	end 'notAChild'
 
 	asm.placeLabel(round)
-	x64LinuxEmitSlotStoreImm(asm, slot: SlotProgress, value: 0)
+	x64LinuxEmitSlotStoreImm(asm, slot: ProcWalkSlotProgress, value: 0)
 	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: LinuxProcDirectoryWord)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: pathDisp, srcReg: X64Register.rax, wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
@@ -3711,17 +3793,17 @@ function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns Functi
 	x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: procUnreadable)
-	x64LinuxEmitSlotStore(asm, slot: SlotDirFd, reg: X64Register.rax)
-	x64LinuxEmitSlotStoreImm(asm, slot: SlotCursor, value: 0)
-	x64LinuxEmitSlotStoreImm(asm, slot: SlotFilled, value: 0)
+	x64LinuxEmitSlotStore(asm, slot: ProcWalkSlotDirFd, reg: X64Register.rax)
+	x64LinuxEmitSlotStoreImm(asm, slot: ProcWalkSlotCursor, value: 0)
+	x64LinuxEmitSlotStoreImm(asm, slot: ProcWalkSlotFilled, value: 0)
 
 	asm.placeLabel(nextEntry)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: SlotCursor)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdx, slot: SlotFilled)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: ProcWalkSlotCursor)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdx, slot: ProcWalkSlotFilled)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: haveEntry)
 
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: SlotDirFd)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: ProcWalkSlotDirFd)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: direntDisp)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxProcDirentBytes as MachineWord)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetdents64)
@@ -3729,16 +3811,16 @@ function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns Functi
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: scanFailed)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: closeDirectory)
-	x64LinuxEmitSlotStore(asm, slot: SlotFilled, reg: X64Register.rax)
-	x64LinuxEmitSlotStoreImm(asm, slot: SlotCursor, value: 0)
+	x64LinuxEmitSlotStore(asm, slot: ProcWalkSlotFilled, reg: X64Register.rax)
+	x64LinuxEmitSlotStoreImm(asm, slot: ProcWalkSlotCursor, value: 0)
 
 	asm.placeLabel(haveEntry)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: SlotCursor)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: ProcWalkSlotCursor)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r8, base: X64Register.rbp, disp: direntDisp)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
 	encodeMovzxRegWordBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.r8, disp: LinuxDirentRecordLengthOffset)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
-	x64LinuxEmitSlotStore(asm, slot: SlotCursor, reg: X64Register.rax)
+	x64LinuxEmitSlotStore(asm, slot: ProcWalkSlotCursor, reg: X64Register.rax)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r8, base: X64Register.r8, disp: LinuxDirentNameOffset)
 
 	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r8, disp: 0)
@@ -3768,118 +3850,361 @@ function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns Functi
 	asm.placeLabel(digitsDone)
 	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: LinuxProcStatSuffixWord)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: pathDisp, srcReg: X64Register.rax, wide: true, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
-	x64LinuxEmitSlotStore(asm, slot: SlotPid, reg: X64Register.r9)
+	x64LinuxEmitSlotStore(asm, slot: ProcWalkSlotPid, reg: X64Register.r9)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r9, wide: true)
 	x64LinuxEmitTreeMembership(asm, stateDisp: stateDisp, found: nextEntry, missing: notYetKnown)
 
 	asm.placeLabel(notYetKnown)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: SlotDirFd)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: ProcWalkSlotDirFd)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: pathDisp)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixOpenReadOnly or LinuxOpenCloseOnExec)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: nextEntry)
-	x64LinuxEmitSlotStore(asm, slot: SlotFd, reg: X64Register.rax)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rax, wide: true)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: statDisp)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxProcStatBytes as MachineWord)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallRead)
-	x64LinuxEmitSlotStore(asm, slot: SlotRead, reg: X64Register.rax)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: SlotFd)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+	x64LinuxEmitReadStatParen(asm, statDisp: statDisp, statBytes: LinuxProcStatBytes, fdSlot: ProcWalkSlotFd, readSlot: ProcWalkSlotRead, unreadable: nextEntry)
 
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdx, slot: SlotRead)
-	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: nextEntry)
-
-	asm.placeLabel(scanBack)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rdx, imm: 1)
-	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: nextEntry)
-	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: statDisp, index: X64Register.rdx, indexScale: MemoryIndexScale.byOne)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxProcClosingParenthesis as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: scanBack)
+	if kind == PosixProcWalkKind.descendants 'skipEnded'
+		x64LinuxEmitSlotStore(asm, slot: DescendantsSlotParen, reg: X64Register.rdx)
+		x64LinuxEmitSkipEndedProcess(asm, statDisp: statDisp, skip: nextEntry)
+	end 'skipEnded'
 
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: LinuxProcStatStateToPpid as Imm32)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.r8, slot: SlotRead)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.r8, slot: ProcWalkSlotRead)
 	x64LinuxEmitParseStatNumber(asm, statDisp: statDisp, value: X64Register.r9)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: 1)
 	x64LinuxEmitParseStatNumber(asm, statDisp: statDisp, value: X64Register.r11)
+	x64LinuxEmitSlotStore(asm, slot: ProcWalkSlotGroup, reg: X64Register.r11)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: 1)
 	x64LinuxEmitParseStatNumber(asm, statDisp: statDisp, value: X64Register.r11)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r9, wide: true)
-	x64LinuxEmitTreeMembership(asm, stateDisp: stateDisp, found: adopt, missing: nextEntry)
+	x64LinuxEmitTreeMembership(asm, stateDisp: stateDisp, found: adopt, missing: notAChild)
+
+	if kind == PosixProcWalkKind.sessionTree 'groupMember'
+		asm.placeLabel(groupCheck)
+		x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: ProcWalkSlotGroup)
+		x64LinuxEmitSlotLoad(asm, reg: X64Register.rdx, slot: ProcWalkSlotRoot)
+		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: groupAdmitted)
+		encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: nextEntry)
+
+		asm.placeLabel(groupAdmitted)
+		x64LinuxEmitStateLoad(asm, reg: X64Register.rax, stateDisp: stateDisp, field: PosixTreeStateSession)
+		encodeMovRegImm64(asm.code, dest: X64Register.rdx, value: PosixTreeSessionUnknown)
+		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: append)
+		x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateSession, reg: X64Register.r11)
+		encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: append)
+	end 'groupMember'
 
 	asm.placeLabel(adopt)
-	x64LinuxEmitStateLoad(asm, reg: X64Register.rax, stateDisp: stateDisp, field: PosixTreeStateSession)
-	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.r11, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: nextEntry)
+
+	if kind == PosixProcWalkKind.sessionTree 'sameSession'
+		x64LinuxEmitStateLoad(asm, reg: X64Register.rax, stateDisp: stateDisp, field: PosixTreeStateSession)
+		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.r11, src: X64Register.rax, wide: true)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: nextEntry)
+	end 'sameSession'
+
+	asm.placeLabel(append)
 	x64LinuxEmitStateLoad(asm, reg: X64Register.r8, stateDisp: stateDisp, field: PosixTreeStateCount)
 	x64LinuxEmitStateLoad(asm, reg: X64Register.r9, stateDisp: stateDisp, field: PosixTreeStateCapacity)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.r8, src: X64Register.r9, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: hasRoom)
 
-	x64LinuxEmitStateLoad(asm, reg: X64Register.rdi, stateDisp: stateDisp, field: PosixTreeStateList)
-	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r9, count: PosixTreeEntryShift)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.r9, wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r9, src: X64Register.r9, wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r9, wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxMremapMayMove)
-	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: 0)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallMremap)
-	x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: scanFailed)
-	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateList, reg: X64Register.rax)
-	x64LinuxEmitStateLoad(asm, reg: X64Register.r9, stateDisp: stateDisp, field: PosixTreeStateCapacity)
-	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r9, src: X64Register.r9, wide: true)
-	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateCapacity, reg: X64Register.r9)
+	if kind == PosixProcWalkKind.sessionTree 'growable'
+		x64LinuxEmitStateLoad(asm, reg: X64Register.rdi, stateDisp: stateDisp, field: PosixTreeStateList)
+		encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r9, count: PosixTreeEntryShift)
+		encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.r9, wide: true)
+		encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r9, src: X64Register.r9, wide: true)
+		encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r9, wide: true)
+		encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxMremapMayMove)
+		encodeMovRegImm32(asm.code, dest: X64Register.r8, value: 0)
+		encodeX64Syscall(asm.code, number: X64LinuxSyscallMremap)
+		x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
+		emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: scanFailed)
+		x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateList, reg: X64Register.rax)
+		x64LinuxEmitStateLoad(asm, reg: X64Register.r9, stateDisp: stateDisp, field: PosixTreeStateCapacity)
+		encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r9, src: X64Register.r9, wide: true)
+		x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateCapacity, reg: X64Register.r9)
+	end 'growable' else 'fixedCapacity'
+		encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: scanFailed)
+	end 'fixedCapacity'
 
 	asm.placeLabel(hasRoom)
 	x64LinuxEmitStateLoad(asm, reg: X64Register.r8, stateDisp: stateDisp, field: PosixTreeStateCount)
 	x64LinuxEmitStateLoad(asm, reg: X64Register.rax, stateDisp: stateDisp, field: PosixTreeStateList)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: SlotPid)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: ProcWalkSlotPid)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdi, wide: false, index: X64Register.r8, indexScale: MemoryIndexScale.byFour)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r8, imm: 1)
 	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateCount, reg: X64Register.r8)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: stopSignal)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
-	x64LinuxEmitSlotStoreImm(asm, slot: SlotProgress, value: 1)
+
+	if kind == PosixProcWalkKind.descendants 'recordName'
+		x64LinuxEmitRecordComm(asm, stateDisp: stateDisp, statDisp: statDisp)
+	end 'recordName'
+
+	x64LinuxEmitSlotStoreImm(asm, slot: ProcWalkSlotProgress, value: 1)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: nextEntry)
 
 	asm.placeLabel(scanFailed)
 	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateStatus, value: PosixTreeStatusFailed as MachineWord)
 
 	asm.placeLabel(closeDirectory)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: SlotDirFd)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: ProcWalkSlotDirFd)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
 	x64LinuxEmitStateLoad(asm, reg: X64Register.rax, stateDisp: stateDisp, field: PosixTreeStateStatus)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixTreeStatusComplete as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: finish)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: SlotProgress)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: ProcWalkSlotProgress)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: round)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finish)
 
 	asm.placeLabel(procUnreadable)
 	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateStatus, value: PosixTreeStatusFailed as MachineWord)
+end 'x64LinuxEmitProcWalk'
 
-	asm.placeLabel(finish)
+function x64LinuxEmitKillThenAwaitEnded(asm X64RuntimeAsm, stateDisp Imm32, release BlockId)
+	let killNext = asm.newLabel()
+	let killed = asm.newLabel()
+
 	x64LinuxEmitStateLoad(asm, reg: X64Register.rax, stateDisp: stateDisp, field: PosixTreeStateCount)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: 1)
-	x64LinuxEmitSlotStore(asm, slot: SlotIndex, reg: X64Register.rax)
+	x64LinuxEmitSlotStore(asm, slot: ProcWalkSlotIndex, reg: X64Register.rax)
 
 	asm.placeLabel(killNext)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdx, slot: SlotIndex)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdx, slot: ProcWalkSlotIndex)
 	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 1)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: release)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: killed)
 	x64LinuxEmitStateLoad(asm, reg: X64Register.rcx, stateDisp: stateDisp, field: PosixTreeStateList)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: 0, wide: false, index: X64Register.rdx, indexScale: MemoryIndexScale.byFour)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rdx, imm: 1)
-	x64LinuxEmitSlotStore(asm, slot: SlotIndex, reg: X64Register.rdx)
+	x64LinuxEmitSlotStore(asm, slot: ProcWalkSlotIndex, reg: X64Register.rdx)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: PosixSigKill)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: killNext)
+
+	asm.placeLabel(killed)
+	x64LinuxEmitStateLoad(asm, reg: X64Register.rcx, stateDisp: stateDisp, field: PosixTreeStateList)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: PosixTreeEntryBytes as Imm32)
+	x64LinuxEmitStateLoad(asm, reg: X64Register.rdx, stateDisp: stateDisp, field: PosixTreeStateCount)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rdx, imm: 1)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcAwaitEndedName)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: release)
+	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateStatus, value: PosixTreeStatusFailed as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: release)
+end 'x64LinuxEmitKillThenAwaitEnded'
+
+function x64LinuxEmitReadStatParen(asm X64RuntimeAsm, statDisp Imm32, statBytes FullRangeInt, fdSlot StackSize, readSlot StackSize, unreadable BlockId)
+	let scanBack = asm.newLabel()
+
+	x64LinuxEmitSlotStore(asm, slot: fdSlot, reg: X64Register.rax)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rax, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: statDisp)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: statBytes as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallRead)
+	x64LinuxEmitSlotStore(asm, slot: readSlot, reg: X64Register.rax)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: fdSlot)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdx, slot: readSlot)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: unreadable)
+
+	asm.placeLabel(scanBack)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rdx, imm: 1)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: unreadable)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: statDisp, index: X64Register.rdx, indexScale: MemoryIndexScale.byOne)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: LinuxProcClosingParenthesis as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: scanBack)
+end 'x64LinuxEmitReadStatParen'
+
+let EndedProbeSlotFd = 0
+let EndedProbeSlotRead = 1
+let EndedProbeSlotStat = 2
+let EndedProbeStatSlots = LinuxProcStateProbeBytes / SpillSlotBytes
+let EndedProbeSlotPath = EndedProbeSlotStat + EndedProbeStatSlots
+let EndedProbePathSlots = LinuxProcPathBytes / SpillSlotBytes
+let EndedProbeSlots = EndedProbeSlotPath + EndedProbePathSlots
+
+function x64LinuxEmitBranchIfPidEnded(asm X64RuntimeAsm, pidSlot StackSize, probeSlot StackSize, ended BlockId)
+	let statDisp = x64LinuxBufferDisp(asm, firstSlot: probeSlot + EndedProbeSlotStat, slotCount: EndedProbeStatSlots)
+	let pathDisp = x64LinuxBufferDisp(asm, firstSlot: probeSlot + EndedProbeSlotPath, slotCount: EndedProbePathSlots)
+
+	let digits = asm.newLabel()
+	let copyDigits = asm.newLabel()
+	let digitsCopied = asm.newLabel()
+	let openFailed = asm.newLabel()
+	let alive = asm.newLabel()
+
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: pidSlot)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxProcStateProbeBytes)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: LinuxProcDecimalBase)
+
+	asm.placeLabel(digits)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: LinuxProcDigitZero as Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.r10, imm: 1)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rbp, disp: statDisp, srcReg: X64Register.rdx, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: digits)
+
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: LinuxProcPidPathPrefixWord)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: pathDisp, srcReg: X64Register.rax, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r8, base: X64Register.rbp, disp: (pathDisp + (LinuxProcPidPathPrefixBytes as Imm32)) as Imm32)
+
+	asm.placeLabel(copyDigits)
+	emitCmpRegImm(asm, reg: X64Register.r10, imm: LinuxProcStateProbeBytes as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: digitsCopied)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: statDisp, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.r8, disp: 0, srcReg: X64Register.rax)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r8, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r10, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: copyDigits)
+
+	asm.placeLabel(digitsCopied)
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: LinuxProcStatSuffixWord)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: 0, srcReg: X64Register.rax, wide: true)
+
+	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: pathDisp)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixOpenReadOnly or LinuxOpenCloseOnExec)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: openFailed)
+
+	x64LinuxEmitReadStatParen(asm, statDisp: statDisp, statBytes: LinuxProcStateProbeBytes, fdSlot: probeSlot + EndedProbeSlotFd, readSlot: probeSlot + EndedProbeSlotRead, unreadable: alive)
+	x64LinuxEmitSkipEndedProcess(asm, statDisp: statDisp, skip: ended)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: alive)
+
+	asm.placeLabel(openFailed)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.noSuchFileOrDirectory.rawValue) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: ended)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: ended)
+
+	asm.placeLabel(alive)
+end 'x64LinuxEmitBranchIfPidEnded'
+
+let AwaitEndedSlotList = 0
+let AwaitEndedSlotCount = 1
+let AwaitEndedSlotIndex = 2
+let AwaitEndedSlotBudget = 3
+let AwaitEndedSlotLate = 4
+let AwaitEndedSlotPid = 5
+let AwaitEndedSlotTimespec = 6
+let AwaitEndedSlotProbe = AwaitEndedSlotTimespec + LinuxTimespecSlots
+let AwaitEndedSlotsEnd = AwaitEndedSlotProbe + EndedProbeSlots
+
+function buildX64LinuxProcAwaitEndedChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(AwaitEndedSlotsEnd)
+
+	let nextPid = asm.newLabel()
+	let check = asm.newLabel()
+	let giveUp = asm.newLabel()
+	let ended = asm.newLabel()
+	let done = asm.newLabel()
+
+	x64LinuxEmitSlotStore(asm, slot: AwaitEndedSlotList, reg: X64Register.rcx)
+	x64LinuxEmitSlotStore(asm, slot: AwaitEndedSlotCount, reg: X64Register.rdx)
+	x64LinuxEmitSlotStoreImm(asm, slot: AwaitEndedSlotIndex, value: 0)
+	x64LinuxEmitSlotStoreImm(asm, slot: AwaitEndedSlotBudget, value: PosixEndedPolls as MachineWord)
+	x64LinuxEmitSlotStoreImm(asm, slot: AwaitEndedSlotLate, value: 0)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixChildPollMs)
+	x64LinuxEmitToTimespec(asm, amount: X64Register.rcx, unit: PosixTimeUnit.milliseconds, firstSlot: AwaitEndedSlotTimespec)
+
+	asm.placeLabel(nextPid)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: AwaitEndedSlotIndex)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rcx, slot: AwaitEndedSlotCount)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdx, slot: AwaitEndedSlotList)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: 0, wide: false, index: X64Register.rax, indexScale: MemoryIndexScale.byFour)
+	x64LinuxEmitSlotStore(asm, slot: AwaitEndedSlotPid, reg: X64Register.rax)
+
+	asm.placeLabel(check)
+	x64LinuxEmitBranchIfPidEnded(asm, pidSlot: AwaitEndedSlotPid, probeSlot: AwaitEndedSlotProbe, ended: ended)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: AwaitEndedSlotBudget)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: giveUp)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: 1)
+	x64LinuxEmitSlotStore(asm, slot: AwaitEndedSlotBudget, reg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxClockMonotonic)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxSleepIsRelative)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: AwaitEndedSlotTimespec, byteOffset: X64LinuxTimespecSecOffset))
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSleepDiscardsRemainder)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClockNanosleep)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: check)
+
+	asm.placeLabel(giveUp)
+	x64LinuxEmitSlotStoreImm(asm, slot: AwaitEndedSlotLate, value: 1)
+
+	asm.placeLabel(ended)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: AwaitEndedSlotIndex)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: 1)
+	x64LinuxEmitSlotStore(asm, slot: AwaitEndedSlotIndex, reg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: nextPid)
+
+	asm.placeLabel(done)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: AwaitEndedSlotLate)
+	return asm.finishFunction(HostProcAwaitEndedName)
+end 'buildX64LinuxProcAwaitEndedChunk'
+
+// The walk `buildArm64PosixProcTreeKillChunk` documents, with the `/proc` scan inline.
+function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(ProcWalkSlotsEnd)
+	let stateDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotState, slotCount: PosixTreeStateWords)
+	let stopSignal = posixStopSignalNumber(Os.linux)
+
+	let procUnreadable = asm.newLabel()
+	let sessionUnknown = asm.newLabel()
+	let sessionKnown = asm.newLabel()
+	let finish = asm.newLabel()
+	let release = asm.newLabel()
+	let allocationFailed = asm.newLabel()
+	let answered = asm.newLabel()
+	let incomplete = asm.newLabel()
+	let ended = asm.newLabel()
+
+	x64LinuxEmitSlotStore(asm, slot: ProcWalkSlotRoot, reg: X64Register.rcx)
+	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateStatus, value: PosixTreeStatusComplete as MachineWord)
+
+	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(PosixTreeInitialBytes as MachineWord))
+	x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: allocationFailed)
+	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateList, reg: X64Register.rax)
+
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: ProcWalkSlotRoot)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdi, wide: false)
+	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateCount, value: 1)
+	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateCapacity, value: PosixTreeInitialEntries as MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: stopSignal)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
+
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: ProcWalkSlotRoot)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetsid)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: sessionUnknown)
+	x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: procUnreadable)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: sessionKnown)
+
+	asm.placeLabel(sessionUnknown)
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: PosixTreeSessionUnknown)
+
+	asm.placeLabel(sessionKnown)
+	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateSession, reg: X64Register.rax)
+
+	x64LinuxEmitProcWalk(asm, kind: PosixProcWalkKind.sessionTree, errnoHome: errnoHome, procUnreadable: procUnreadable, finish: finish)
+
+	asm.placeLabel(finish)
+	x64LinuxEmitKillThenAwaitEnded(asm, stateDisp: stateDisp, release: release)
 
 	asm.placeLabel(release)
 	x64LinuxEmitStateLoad(asm, reg: X64Register.rdi, stateDisp: stateDisp, field: PosixTreeStateList)
@@ -3895,7 +4220,7 @@ function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns Functi
 	x64LinuxEmitStateLoad(asm, reg: X64Register.rax, stateDisp: stateDisp, field: PosixTreeStateStatus)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixTreeStatusComplete as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: ended)
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: PosixTerminateTreeIncomplete as MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: TerminateTreeIncomplete as MachineWord)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: incomplete)
 
 	asm.placeLabel(ended)
@@ -3904,6 +4229,184 @@ function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns Functi
 	asm.placeLabel(incomplete)
 	return asm.finishFunction(HostProcTreeKillName)
 end 'buildX64LinuxProcTreeKillChunk'
+
+function buildX64LinuxProcDescendantsChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(DescendantsSlotsEnd)
+	let stateDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotState, slotCount: PosixTreeStateWords)
+	let lineDisp = x64LinuxBufferDisp(asm, firstSlot: DescendantsSlotLine, slotCount: DescendantsLineSlots)
+
+	let sweep = asm.newLabel()
+	let procUnreadable = asm.newLabel()
+	let finish = asm.newLabel()
+	let release = asm.newLabel()
+	let allocationFailed = asm.newLabel()
+	let answered = asm.newLabel()
+	let enumerationFailed = asm.newLabel()
+	let answerOut = asm.newLabel()
+	let nextLine = asm.newLabel()
+	let nameLength = asm.newLabel()
+	let nameLengthKnown = asm.newLabel()
+	let nameBack = asm.newLabel()
+	let nameBackDone = asm.newLabel()
+	let digitLoop = asm.newLabel()
+	let copyLine = asm.newLabel()
+	let lineCopied = asm.newLabel()
+	let skipLine = asm.newLabel()
+	let listed = asm.newLabel()
+
+	x64LinuxEmitSlotStore(asm, slot: DescendantsSlotBuf, reg: X64Register.rdx)
+	x64LinuxEmitSlotStore(asm, slot: DescendantsSlotCap, reg: X64Register.r8)
+
+	emitCmpRegImm(asm, reg: X64Register.rcx, imm: ProcessDescendantsVerbEnd as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: sweep)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxPrSetChildSubreaper)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 1)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: 0)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: 0)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallPrctl)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answerOut)
+
+	asm.placeLabel(sweep)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetPid)
+	x64LinuxEmitSlotStore(asm, slot: ProcWalkSlotRoot, reg: X64Register.rax)
+	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateStatus, value: PosixTreeStatusComplete as MachineWord)
+
+	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(DescendantsMapBytes as MachineWord))
+	x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: allocationFailed)
+	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateList, reg: X64Register.rax)
+
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: ProcWalkSlotRoot)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdi, wide: false)
+	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateCount, value: 1)
+	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateCapacity, value: PosixTreeInitialEntries as MachineWord)
+
+	x64LinuxEmitProcWalk(asm, kind: PosixProcWalkKind.descendants, errnoHome: errnoHome, procUnreadable: procUnreadable, finish: finish)
+
+	asm.placeLabel(finish)
+	x64LinuxEmitSlotStoreImm(asm, slot: DescendantsSlotNeeded, value: 0)
+	x64LinuxEmitSlotStoreImm(asm, slot: DescendantsSlotWritten, value: 0)
+	x64LinuxEmitSlotStoreImm(asm, slot: ProcWalkSlotIndex, value: 1)
+
+	asm.placeLabel(nextLine)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: ProcWalkSlotIndex)
+	x64LinuxEmitStateLoad(asm, reg: X64Register.rcx, stateDisp: stateDisp, field: PosixTreeStateCount)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: listed)
+
+	x64LinuxEmitStateLoad(asm, reg: X64Register.rdx, stateDisp: stateDisp, field: PosixTreeStateList)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rdx, disp: 0, wide: false, index: X64Register.rax, indexScale: MemoryIndexScale.byFour)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r8, count: DescendantsCommShift)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r8, src: X64Register.rdx, wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r8, base: X64Register.r8, disp: PosixTreeInitialBytes as Imm32)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
+
+	asm.placeLabel(nameLength)
+	emitCmpRegImm(asm, reg: X64Register.rsi, imm: DescendantsCommMax as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: nameLengthKnown)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r8, disp: 0, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: nameLengthKnown)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: nameLength)
+
+	asm.placeLabel(nameLengthKnown)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: DescendantsLineLast)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: AsciiNewline)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rbp, disp: lineDisp, srcReg: X64Register.rax, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+
+	asm.placeLabel(nameBack)
+	emitCmpRegImm(asm, reg: X64Register.rsi, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: nameBackDone)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rsi, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.r10, imm: 1)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r8, disp: 0, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	emitClampToPrintableAscii(asm, reg: X64Register.rax)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rbp, disp: lineDisp, srcReg: X64Register.rax, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: nameBack)
+
+	asm.placeLabel(nameBackDone)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.r10, imm: 1)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: AsciiSpace)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rbp, disp: lineDisp, srcReg: X64Register.rax, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.r9, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: LinuxProcDecimalBase)
+
+	asm.placeLabel(digitLoop)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: LinuxProcDigitZero as Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.r10, imm: 1)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rbp, disp: lineDisp, srcReg: X64Register.rdx, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: digitLoop)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: DescendantsLineBytes)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rcx, src: X64Register.r10, wide: true)
+
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: DescendantsSlotNeeded)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	x64LinuxEmitSlotStore(asm, slot: DescendantsSlotNeeded, reg: X64Register.rax)
+
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdx, slot: DescendantsSlotWritten)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rdx, src: X64Register.rcx, wide: true)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: DescendantsSlotCap)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.above, targetBlockId: skipLine)
+
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.r8, slot: DescendantsSlotBuf)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: DescendantsSlotWritten)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+
+	asm.placeLabel(copyLine)
+	emitCmpRegImm(asm, reg: X64Register.rcx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: lineCopied)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: lineDisp, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.r8, disp: 0, srcReg: X64Register.rax)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r8, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r10, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rcx, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: copyLine)
+
+	asm.placeLabel(lineCopied)
+	x64LinuxEmitSlotStore(asm, slot: DescendantsSlotWritten, reg: X64Register.rdx)
+
+	asm.placeLabel(skipLine)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: ProcWalkSlotIndex)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: 1)
+	x64LinuxEmitSlotStore(asm, slot: ProcWalkSlotIndex, reg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: nextLine)
+
+	asm.placeLabel(listed)
+	x64LinuxEmitKillThenAwaitEnded(asm, stateDisp: stateDisp, release: release)
+
+	asm.placeLabel(release)
+	x64LinuxEmitStateLoad(asm, reg: X64Register.rdi, stateDisp: stateDisp, field: PosixTreeStateList)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: DescendantsMapBytes as MachineWord)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallMunmap)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(allocationFailed)
+	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateStatus, value: PosixTreeStatusFailed as MachineWord)
+
+	asm.placeLabel(answered)
+	x64LinuxEmitStateLoad(asm, reg: X64Register.rax, stateDisp: stateDisp, field: PosixTreeStateStatus)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixTreeStatusComplete as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: enumerationFailed)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: DescendantsSlotNeeded)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answerOut)
+
+	asm.placeLabel(enumerationFailed)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: DescendantsEnumerationFailed as Imm32)
+
+	asm.placeLabel(answerOut)
+	return asm.finishFunction(HostProcDescendantsName)
+end 'buildX64LinuxProcDescendantsChunk'
 
 // ==========================================================================
 // THE PROCESS-TRACE BAND
@@ -4896,6 +5399,18 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxThreadSignalChunk(errnoHome))
 		chunks.push(buildX64LinuxProcessSignalChunk(errnoHome))
 	end 'processTrace'
+
+	if usage.usesProcessLiveness 'processLiveness'
+		chunks.push(buildX64LinuxProcProbeChunk())
+	end 'processLiveness'
+
+	if usage.usesProcessDescendants 'processDescendants'
+		chunks.push(buildX64LinuxProcDescendantsChunk(errnoHome))
+	end 'processDescendants'
+
+	if posixUsesProcessEndWait(usage) 'processEndWait'
+		chunks.push(buildX64LinuxProcAwaitEndedChunk())
+	end 'processEndWait'
 
 	if posixReadsMonotonicClock(usage) 'clocks'
 		chunks.push(buildX64LinuxTickMsChunk())

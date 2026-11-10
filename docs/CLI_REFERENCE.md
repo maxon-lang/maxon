@@ -403,6 +403,19 @@ A build prints the compiler's version and an early-preview warning to stdout, th
 [Up to date](#up-to-date)), and exits 0. Progress lines (`[CMP] INFO: Wrote … bytes of code to …`) go to
 stderr; `--log=error` silences them. A compile error prints its diagnostics to stderr and exits 1.
 
+**Replacing the output.** A build writes its output into `.staging-<hex>/`, a directory beside the output
+named after the output's name, and publishes it by renaming: the previous output is renamed into that
+directory and the new one into its place, so a program still running from the output is replaced like
+any other file. A compile that fails moves the previous output out of the way, so nothing stale answers at
+the output path; a compiler rebuilding its own running image keeps it in the slot (see
+[Rebuilding a running compiler](#rebuilding-a-running-compiler)). A build that is killed leaves the
+previous output where it was. A read-only output, a staging directory that cannot be created, and an
+output that cannot be renamed are refused with
+[E6002](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e6002), which leaves the previous output in place.
+The next build of the same output removes what the staging directory still holds; an image a program
+is still running from stays until that program ends, and anything else that cannot be removed is named
+in a warning.
+
 A build of a project target has one more line, between the two: whether it compiled the `.maxproj`
 runner or reused the cached one. That compile is silent apart from that line — see
 [The project file](#the-project-file).
@@ -627,7 +640,9 @@ no owner, such as one an older Maxon wrote, is removed once it is 7 days old.
 It removes **only what Maxon created**. `MAXON_RUN_CACHE_ROOT` may name a directory that is already
 somebody's — a shared build area, or your own scratch directory — so the clear reaches only the Maxon
 directory a row of the table under [The run cache](#the-run-cache) names, and stops there. The directory
-you named, and everything else in it, is left exactly as it was.
+you named, and everything else in it, is left exactly as it was. A symbolic link or junction under a cache
+root is one entry: `clear` removes the link itself, counted among the files it removed, and the directory
+it points at stays as it was.
 
 **It sweeps every row of that table, not just the one in use.** A run caches under the first row whose
 variable names a directory it can create, so a build made before `MAXON_RUN_CACHE_ROOT` was set — or under
@@ -784,10 +799,29 @@ path in a test means what it means in your shell. The build lives in `<project>/
 test file run alone in `<its directory>/.maxon/test/<file name>/`, under a `.maxonignore` that keeps
 its generated sources out of every ordinary build.
 
+**Scratch directories.** Each test process gets two empty directories of its own, named in its
+environment: `MAXON_TEST_SCRATCH`, in the system temp area (`maxon-test-<pid>`, the pid of the process
+that runs the tests), for anything that must sit outside every checkout, a staged project included; and
+`MAXON_TEST_PROJECT_SCRATCH`, `<project>/.maxon/test/[<file name>/]scratch-<pid>`, for what must sit inside
+the tree, such as a copy of a compiler that finds `stdlib/` by walking up from itself. A test reads them
+through [`TestScratch`](STDLIB_REFERENCE.md#testscratch). Both are removed when the process ends, and a
+process that passes but leaves an entry in either FAILS, each entry named as
+`left MAXON_TEST_SCRATCH/<name>`. A run removes the scratch directories that runs whose process has ended
+left.
+
+**Processes a test leaves.** On every native target a test that passes but leaves a process running when
+it ends FAILS, naming each one as `<pid> <name>`, and the process is ended. A process the test waited for
+has ended by then; a test that starts a detached child polls `Process.isAlive` until it answers `false`.
+The check is the one [`spec-test`](#maxon-spec-test) makes, and `MAXON_TRACK_DESCENDANTS`
+arms it.
+
 **Isolation.** By default each test **file** runs in its own process. If a test crashes the process, the
 harness re-runs the remaining tests of that file so one crash does not hide the others' results, and a
-leak found at exit is attributed by re-running tests alone. `--isolate` gives every test its own
-process from the start.
+leak found at exit, an entry left in the process's scratch directories, or a process left running after
+its last test is attributed by re-running tests alone. When no single test reproduces it alone, every test
+of that process is reported (`LEAKED` for a leak, `FAIL` for the others) with the names of the tests in
+the process, so a leak never passes unreported. `--isolate` gives every test its own process from the
+start.
 
 **Outcomes.** A test that does not pass is reported as one of five states:
 
@@ -1103,6 +1137,7 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 | `MAXON_COMPILER` | `build` (project target), `run` (written, not read) | Set for the project file or task program to the path of the compiler running it, so the program can ask that compiler, for example its `maxon version` |
 | `MAXON_SECOND_STAGE` | `build` (project target), `run` | Set, with any value, it makes a build asking for [`rebuild_with_output`](#building-again-with-the-written-program) end at its own output. The driver sets it to `1` for the program it runs |
 | `MAXON_SOURCE_ORDER` | every compile; `spec-test` (test-only) | `reversed`, the only value, reverses the order the compiler reads the program's and the library's files in, and the order of each file's top-level declarations, so a suite run under it checks that no result depends on file or declaration order. A declaration's block must close with an `end` in the same column as the declaration's first token; a top-level line that starts no declaration, or a block closed any other way, is the error `<path>:<line>: MAXON_SOURCE_ORDER=reversed reverses top-level declarations, and it cannot place the top-level declaration at this line`; `spec-test` counts a case that error stops as SKIPPED. Any other non-empty value is the error `MAXON_SOURCE_ORDER is '<value>', and its only value is 'reversed'`. `spec-test` exits with an error naming the variable for a target whose suite runs in a copy of the compiler inside the OrbStack machine, because the variable does not reach that copy. A build records the value, so changing it rebuilds (`option sourceOrder changed`). Unset or empty reads files in the order the walk finds them |
+| `MAXON_TEST_SCRATCH`, `MAXON_TEST_PROJECT_SCRATCH` | `test` (written, not read) | Set for each test process to its two scratch directories, read through [`TestScratch`](STDLIB_REFERENCE.md#testscratch): see [`maxon test`](#maxon-test) |
 
 **Read by a compiled program at run time:**
 
@@ -1110,6 +1145,7 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 |----------|--------|
 | `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A decimal number from 1 to 2147483647, optionally led by `+`, sets it exactly, above the machine's count as well as below it; any other value is ignored. `Scheduler.processorCount()` answers the resulting count. |
 | `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
+| `MAXON_TRACK_DESCENDANTS` | Set by `maxon test` and `spec-test` for every program they run on a native target. A value starting `A` arms descendant tracking when the program starts, so [`Process.endDescendants()`](STDLIB_REFERENCE.md#process) finds every process it started; the program then rewrites the `A` to `D`, so the processes it starts inherit the variable without arming. A host that refuses the tracking ends the program at start with a fatal naming it. With any other value, or unset, a program that calls `Process.endDescendants()` tracks its descendants from startup, for that call alone; every other program runs untracked. |
 
 `MAXON_DEBUGSTREAM` is set by `maxon monitor`, and by `maxon debug --trace`, to attach a `--debugstream`
 program to the ring the driver created. You do not set it yourself.
@@ -1329,8 +1365,9 @@ project. Two or more positionals are always paths.
 #### Rebuilding a running compiler
 
 A build whose output is the compiler running the command (such as the Maxon repository's own) can still
-build. Once the compile succeeds, the compiler renames its running image to `maxon.previous`
-(`maxon.previous.exe` on Windows) and writes the new binary into the empty slot. If an older
+build. The new binary is written into the build's staging directory, as every build's is (see
+[`maxon build`](#maxon-build)). Once the compile succeeds, the compiler renames its running image to
+`maxon.previous` (`maxon.previous.exe` on Windows) and renames the new binary into the empty slot. If an older
 `maxon.previous` is itself still running, for example an editor's language server, it is renamed aside to
 `maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later rebuild. A **failed** build leaves
 the running compiler in place. Such a build always compiles: every build of the compiler changes the compiler identity a
@@ -2165,6 +2202,9 @@ Explorer, a Test Explorer and, on every native target, debugging. `.maxon` sourc
    script's default location);
 5. `maxon-bin/.maxon/maxon` in the checkout the extension itself is part of, when it runs from source.
 
+In a trusted workspace, a compiler found by a later step that opens a Maxon source checkout hands the
+session to that checkout's own build once there is one ([Serving a checkout](#maxon-lsp-server)).
+
 If none is found, the extension offers to **Install** Maxon with the install script or to **Locate…** a
 compiler, which it saves to `maxon.serverPath`. Before offering, the extension asks the install script
 for its directory (`--print-root`, `-PrintRoot`), and names that directory in the prompt, the progress
@@ -2252,7 +2292,9 @@ offer. To install it yourself, from Claude Code:
 or from a shell: `claude plugin install maxon-lsp --marketplace maxon-lang/maxon`.
 
 The plugin runs `maxon lsp-server` from `PATH`, for `.maxon`, `.maxproj`, `.maxtasks`, `.maxtest` and
-`.test` files. The MCP tools are configured separately (see [MCP Server](#mcp-server)).
+`.test` files. In a Maxon source checkout that server hands the session to the checkout's own build, and
+to each rebuild of it ([Serving a checkout](#maxon-lsp-server)). The MCP tools are configured separately
+(see [MCP Server](#mcp-server)).
 
 ### `maxon lsp-server`
 
@@ -2268,6 +2310,19 @@ headers. Its one option is [`--log=`](#logging), and it is normally started by a
 answers `null`, and `exit` ends the process with code **0** after a `shutdown` and **1** otherwise (as
 it does when stdin closes or a message cannot be framed). The process ends at once, stopping any
 project check still running.
+
+**Serving a checkout.** When `initialize` names a workspace root that is a Maxon source checkout (it holds
+`stdlib/`, `runtime/` and `maxon-bin/`) and the client trusts the workspace, any server other than that
+checkout's own build passes the session to it: it starts `maxon-bin/.maxon/maxon lsp-server` and relays
+every message both ways, so the checkout is served by the compiler built from it. The server looks at that
+binary twice a second. Once a rebuilt one has stayed unchanged across two looks, the server starts it and
+replays the session to it: `initialize`, `initialized`, the workspace notifications, and every open
+document at the version the client last sent. Each request still waiting for an answer is answered with
+error `-32801` (ContentModified), so the client asks again, and a `shutdown` with `null`. While no compiler
+is built into the checkout, requests are answered `-32801` too, and the server answers `initialize`
+itself. A compiler that cannot be started is reported once, in a `window/logMessage`, and started again
+when the binary changes; what the relayed compiler writes to its stderr is passed on the same way. A
+message from it longer than 64 MiB ends it.
 
 **Documents.** Text synchronization is **full**: every `textDocument/didChange` carries the whole
 document. The server handles `didOpen`, `didChange` and `didClose`. Each buffer is analysed from its
@@ -3095,8 +3150,9 @@ last 4 KiB of output, starting on a character boundary).
 - The answer is read from the run's [`--result-json`](#maxon-spec-test) document, written to
   `.spec-tmp/spec-result.<tag>.<start>.<pid>.<serial>.json` in the checkout, one per call, and deleted
   when the call ends. A run that writes no document is answered with a tool error carrying `rawTail`.
-- **`harnessErrors`** lists each `harness error:` line the run printed, `[]` when there was none. A run
-  whose only problem is such a line answers `failed: 0`, `success: false` and `exitCode` 1.
+- **`harnessErrors`** lists each `harness error:` line and each `left .spec-run/<name>` line the run
+  printed, `[]` when there was none. A run whose only problem is such a line answers `failed: 0`,
+  `success: false` and `exitCode` 1.
 
 | Argument | Type | Description |
 |----------|------|-------------|
@@ -3135,8 +3191,9 @@ deleted when the call ends.
 
 The server is the compiler, so building the compiler (for example with the `build` tool and
 `path: "maxon-bin"`) replaces the executable the server runs from. That works: once the compile
-succeeds, the running image is renamed to `maxon.previous` and the new compiler is written in its
-place, and the server keeps answering from the renamed image. A server started before an earlier
+succeeds, the running image is renamed to `maxon.previous` and the new compiler, written beside it in the
+build's staging directory, is renamed into its place, and the server keeps answering from the renamed
+image. A server started before an earlier
 rebuild is running an older `maxon.previous`; that file is renamed aside to
 `maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later rebuild once the server has exited.
 A failed build leaves the running compiler in the slot.
@@ -3196,6 +3253,11 @@ isolate the breaking case of within its budget of trial builds, prints a `harnes
 after the report, naming the cases that ran alone. Their own results decide them, and the run
 exits **1** even when every case passed.
 
+Every case's program runs with its working directory in `.spec-run-<pid>/`, a directory of the run's own
+directly under the checkout root, and on a native target a case that leaves a process running fails,
+naming it (`docs/SPECS.md`, "What a case leaves behind"). An entry a case leaves in that
+directory is reported after the summary as `left .spec-run/<name>`, and the run exits **1**.
+
 It refuses to start, with exit **2** and nothing run, when the compiler binary is older than the sources
 it was built from, or when another command holds the checkout's [tree lock](#the-tree-lock).
 
@@ -3211,8 +3273,8 @@ an accepted shard lists only its own.
 
 `--result-json=<path>` writes `{passed, failed, skipped, notRun, total, cases, harnessErrors}`, where
 `cases` lists every case in run order as `{spec, test, verdict}`, `verdict` is `PASS`, `FAIL`, `SKIP` or
-`NOTRUN`, a `FAIL` also carries its `reason`, and `harnessErrors` holds each `harness error:` line the run
-printed. A relative `<path>` is resolved against the working directory. A
+`NOTRUN`, a `FAIL` also carries its `reason`, and `harnessErrors` holds each `harness error:` and
+`left .spec-run/<name>` line the run printed. A relative `<path>` is resolved against the working directory. A
 `<path>` that is not a valid path exits 1 before any test runs; a document that cannot be written exits
 1 after the report.
 

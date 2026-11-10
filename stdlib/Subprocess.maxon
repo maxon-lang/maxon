@@ -998,7 +998,36 @@ public type StdoutReader
 		let raw = __Builtins.subprocessReadStdoutLine(handle, defaultReadLineCap)
 		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stdout)
 	end 'readLine'
+
+	/// Read exactly `count` bytes, fewer only at end of stream. Same contract as
+	/// `StreamingSubprocess.readStdoutBytes`.
+	public function readBytes(count ByteLimit) returns String throws SubprocessError
+		return try readStdoutBytesOf(handle, count: count)
+	end 'readBytes'
 end 'StdoutReader'
+
+/// The stderr side of a `StreamingSubprocess`, taken out with `takeStderr`. It only reads lines: it has no
+/// `release` and no `wait`. `StreamingSubprocess.reclaimStderr` returns the stderr side to the child once
+/// the coroutine that held the reader has ended.
+public type StderrReader
+	let handle as StreamingHandle
+
+	static function over(handle StreamingHandle) returns StderrReader
+		return Self{handle: handle}
+	end 'over'
+
+	/// Read one line, without its terminator. Same contract as `StreamingSubprocess.readStderrLine`.
+	public function readLine() returns String throws SubprocessError
+		let raw = __Builtins.subprocessReadStderrLine(handle, defaultReadLineCap)
+		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stderr)
+	end 'readLine'
+end 'StderrReader'
+
+function readStdoutBytesOf(handle StreamingHandle, count ByteLimit) returns String throws SubprocessError
+	let raw = __Builtins.subprocessReadStdoutBytes(handle, count)
+
+	return String.init(try finishRead(handle, raw: raw, wanted: count, stream: StdioStream.stdout))
+end 'readStdoutBytesOf'
 
 /// A child process whose stdin / stdout / stderr the caller drives by hand.
 ///
@@ -1033,6 +1062,9 @@ public type StreamingSubprocess
 	// True while the child's stdout side is out with a `StdoutReader`; the child's own stdout reads refuse
 	// until `reclaimStdout`.
 	var stdoutTaken as bool
+
+	// The stderr side's twin of `stdoutTaken`.
+	var stderrTaken as bool
 
 	/// Spawn `executable arguments...` with stdin/stdout/stderr as pipes the
 	/// caller drives. Working directory defaults to the parent's cwd; pass
@@ -1077,7 +1109,7 @@ public type StreamingSubprocess
 
 		// rawHandle is the wide builtin return; -1 is excluded above, so the
 		// narrow StreamingHandle range is satisfied.
-		return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false, stdoutTaken: false}
+		return StreamingSubprocess{handle: rawHandle as StreamingHandle, released: false, stdoutTaken: false, stderrTaken: false}
 	end 'spawnTraceable'
 
 	/// Write `line + "\n"` to the child's stdin, NUL bytes included. Throws on broken pipe.
@@ -1145,8 +1177,7 @@ public type StreamingSubprocess
 	/// answer.
 	public function readStdoutBytes(count ByteLimit) returns String throws SubprocessError
 		try requireStdoutHere()
-		let raw = __Builtins.subprocessReadStdoutBytes(handle, count)
-		return String.init(try finishRead(handle, raw: raw, wanted: count, stream: StdioStream.stdout))
+		return try readStdoutBytesOf(handle, count: count)
 	end 'readStdoutBytes'
 
 	/// Read one line from the child's stderr. Same contract as `readStdoutLine`: the terminator is
@@ -1156,8 +1187,27 @@ public type StreamingSubprocess
 		return try Self.readStderrLineCapped(self, maxBytes: defaultReadLineCap)
 	end 'readStderrLine'
 
+	/// Take the child's stderr side out as a `StderrReader`; the child's own stderr reads refuse until
+	/// `reclaimStderr`. The reader can run in a coroutine beside the child's owner because it shares no
+	/// data with the child.
+	public function takeStderr() returns StderrReader throws SubprocessError
+		try requireStderrHere()
+		self.stderrTaken = true
+		return StderrReader.over(self.handle)
+	end 'takeStderr'
+
+	/// Make the child's stderr side its own again, once the coroutine that held the `StderrReader` has ended.
+	/// Refuses a child whose stderr is not out.
+	public function reclaimStderr() throws SubprocessError
+		if not self.stderrTaken 'notOut'
+			throw SubprocessError.ioFailed("reclaimStderr: this child's stderr is not out")
+		end 'notOut'
+
+		self.stderrTaken = false
+	end 'reclaimStderr'
+
 	public function readStderrLineCapped(maxBytes ByteLimit) returns String throws SubprocessError
-		try requireLive()
+		try requireStderrHere()
 		let raw = __Builtins.subprocessReadStderrLine(handle, maxBytes)
 		return try readLineResultToString(handle, raw: raw, stream: StdioStream.stderr)
 	end 'readStderrLineCapped'
@@ -1330,10 +1380,12 @@ public type StreamingSubprocess
 
 	/// A line from the child's stderr if one is ALREADY buffered. Never blocks.
 	/// Same contract as `tryReadStdoutLine`.
-	public function tryReadStderrLine() returns LinePoll
+	public function tryReadStderrLine() returns LinePoll throws SubprocessError
 		if released 'gone'
 			return LinePoll.none
 		end 'gone'
+
+		try requireStderrHere()
 
 		return bufferedLineIn(__Builtins.subprocessTryReadStderrLine(handle, defaultReadLineCap))
 	end 'tryReadStderrLine'
@@ -1343,7 +1395,7 @@ public type StreamingSubprocess
 	/// freed struct on some lanes, so asking the runtime about it is already the bug.
 	function requireLive() throws SubprocessError
 		if released 'gone'
-			throw SubprocessError.ioFailed("used after release()")
+			throw SubprocessError.ioFailed(usedAfterReleaseReason)
 		end 'gone'
 	end 'requireLive'
 
@@ -1354,6 +1406,14 @@ public type StreamingSubprocess
 			throw SubprocessError.ioFailed("stdout is out with a StdoutReader")
 		end 'out'
 	end 'requireStdoutHere'
+
+	function requireStderrHere() throws SubprocessError
+		try requireLive()
+
+		if stderrTaken 'out'
+			throw SubprocessError.ioFailed("stderr is out with a StderrReader")
+		end 'out'
+	end 'requireStderrHere'
 
 	/// Release the OS handles this child owns — its process handle, its pipe
 	/// ends, and the job object naming its process tree where the platform
@@ -1367,6 +1427,10 @@ public type StreamingSubprocess
 		if stdoutTaken 'readerStillOut'
 			panic("StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first")
 		end 'readerStillOut'
+
+		if stderrTaken 'stderrReaderStillOut'
+			panic("StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first")
+		end 'stderrReaderStillOut'
 
 		if not released 'notYet'
 			__Builtins.subprocessReleaseHandle(handle)
@@ -1459,6 +1523,8 @@ end 'StdioStream'
 // terminating LF, so every real line — the empty one included — carries at least that byte.
 let lineReaderShortestAnswer = 1
 
+let usedAfterReleaseReason = "used after release()"
+
 /// Shared decode for the (stdout|stderr) line readers: the runtime returns a fresh __ManagedMemory
 /// holding the line bytes including the terminating LF, or a zero-length buffer at end of stream.
 /// The trailing CR goes with it so Windows CRLF doesn't leak into caller-visible strings.
@@ -1486,7 +1552,7 @@ function finishRead(handle StreamingHandle, raw __ManagedMemory, wanted ByteLimi
 		atEof then return raw
 		open then throw SubprocessError.ioFailed("a read on the child's {streamName(stream)} was refused: it answered {raw.length()} of {wanted} bytes with the stream still open")
 		readFailed then throw SubprocessError.ioFailed("a read on the child's {streamName(stream)} failed")
-		noSuchChild then throw SubprocessError.ioFailed("the streaming handle names no live child")
+		noSuchChild then throw SubprocessError.ioFailed(usedAfterReleaseReason)
 	end 'decide'
 end 'finishRead'
 

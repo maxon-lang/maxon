@@ -458,6 +458,21 @@ export function emitCmpRegImm(asm X64RuntimeAsm, reg X64Register, imm Imm32)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: reg, imm: imm)
 end 'emitCmpRegImm'
 
+module function emitClampToPrintableAscii(asm X64RuntimeAsm, reg X64Register)
+	let printable = asm.newLabel()
+	let unprintable = asm.newLabel()
+
+	emitCmpRegImm(asm, reg: reg, imm: DescendantsNameFirstPrintable as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: unprintable)
+	emitCmpRegImm(asm, reg: reg, imm: DescendantsNameLastPrintable as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.belowEqual, targetBlockId: printable)
+
+	asm.placeLabel(unprintable)
+	encodeMovRegImm32(asm.code, dest: reg, value: DescendantsNameReplacement)
+
+	asm.placeLabel(printable)
+end 'emitClampToPrintableAscii'
+
 // `lea dest, [rip + <string>]` — load the address of a chunk-local string constant.
 // Exported: the Linux host surface takes the address of its own chunk-local constants the same way — the
 // `/proc/self/exe` path it hands `readlinkat`, and every panic message a green-thread chunk names.
@@ -2331,10 +2346,627 @@ function buildWindowsProcessNamespaceChunk(usesGt bool) returns FunctionCodeChun
 	return asm.finishFunction(WindowsProcessNamespaceName)
 end 'buildWindowsProcessNamespaceChunk'
 
+export let WindowsProcessDescendantsName = b"mrt_win_proc_descendants"
+
+let WinDescJobName = "Local\\MaxonDescendants"
+let WinDescScratchBytes = 0x10000
+let WinDescMemCommitReserve = 0x3000
+let WinDescPageReadWrite = 4
+let WinDescMemRelease = 0x8000
+let WinDescResultOffset = 0x80
+let WinDescSizeOffset = 0x88
+let WinDescLimitOffset = 0x100
+let WinDescLimitFlagsOffset = 16
+let WinDescLineOffset = 0x200
+let WinDescLineLimit = 400
+let WinDescPathOffset = 0x400
+let WinDescPathUnits = 2048
+let WinDescListOffset = 0x2000
+let WinDescListBytes = WinDescScratchBytes - WinDescListOffset
+let WinDescListEntriesOffset = WinDescListOffset + 8
+let WinDescListCountOffset = WinDescListOffset + 4
+let WinDescProcessIdListClass = 3
+let WinDescOpenAccess = 0x101001
+let WinDescTerminatedExitCode = 1
+let WinDescPseudoCurrentProcess = 1
+let WinDescRoundSleepMs = 5
+let WinDescTempBytes = 32
+let WinDescBackslash = 0x5C
+let WinDescNewline = 10
+let WinDescSpace = 32
+let WinDescDecimalBase = 10
+let WinDescDigitZero = 0x30
+let WinDescEnumerationFailed = 1
+let WinDescSlotVerb = 0
+let WinDescSlotBuf = 1
+let WinDescSlotCap = 2
+let WinDescSlotScratch = 3
+let WinDescSlotSelf = 4
+let WinDescSlotJob = 5
+let WinDescSlotRound = 6
+let WinDescSlotIndex = 7
+let WinDescSlotCount = 8
+let WinDescSlotProc = 9
+let WinDescSlotLive = 10
+let WinDescSlotNeeded = 11
+let WinDescSlotWritten = 12
+let WinDescSlotPid = 13
+let WinDescSlotNameStart = 14
+let WinDescSlotNameEnd = 15
+let WinDescSlotFailed = 16
+let WinDescSlotTemp = 17
+let WinDescTempSlots = WinDescTempBytes / SpillSlotBytes
+let WinDescSlotDeadline = WinDescSlotTemp + WinDescTempSlots
+let WinDescSlotsEnd = WinDescSlotDeadline + 1
+
+function emitWinDescImport(asm X64RuntimeAsm, slot IatSlot, usesGt bool)
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(slot), usesGt: usesGt)
+	encodeImportAnswerWidth(asm.code, slot: slot)
+end 'emitWinDescImport'
+
+function emitWinDescSlotLoad(asm X64RuntimeAsm, reg X64Register, slot StackSize)
+	encodeLoadRegBaseDisp(asm.code, destReg: reg, base: X64Register.rbp, disp: asm.slotDisp(slot), wide: true)
+end 'emitWinDescSlotLoad'
+
+function emitWinDescSlotStore(asm X64RuntimeAsm, slot StackSize, reg X64Register)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(slot), srcReg: reg, wide: true)
+end 'emitWinDescSlotStore'
+
+function emitWinDescSlotStoreZero(asm X64RuntimeAsm, slot StackSize)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	emitWinDescSlotStore(asm, slot: slot, reg: X64Register.rax)
+end 'emitWinDescSlotStoreZero'
+
+function emitWinDescScratchAddress(asm X64RuntimeAsm, dest X64Register, offset FullRangeInt)
+	emitWinDescSlotLoad(asm, reg: dest, slot: WinDescSlotScratch)
+	encodeLeaRegRegImm32(asm.code, dest: dest, base: dest, disp: offset as Imm32)
+end 'emitWinDescScratchAddress'
+
+function emitWinDescCurrentProcess(asm X64RuntimeAsm, dest X64Register)
+	encodeMovRegImm32(asm.code, dest: dest, value: 0)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: dest, imm: WinDescPseudoCurrentProcess as Imm32)
+end 'emitWinDescCurrentProcess'
+
+function emitWinDescDecimalIntoTemp(asm X64RuntimeAsm, tempDisp Imm32)
+	let digit = asm.newLabel()
+
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: WinDescTempBytes)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: WinDescDecimalBase)
+
+	asm.placeLabel(digit)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	encodeGrp3Reg(asm.code, ext: Grp3ExtDiv, reg: X64Register.rcx)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rdx, imm: WinDescDigitZero as Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.r10, imm: 1)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rbp, disp: tempDisp, srcReg: X64Register.rdx, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: digit)
+end 'emitWinDescDecimalIntoTemp'
+
+// `track` puts this process in a job H that permits no breakaway and then in a job K inside it that
+// permits breakaway, so a detached child breaks away from K and still lands in H, which nothing this
+// process starts can leave. H is named `Local\MaxonDescendants<pid>` so that `end` can reopen it.
+//
+// `end` takes H's member list as one snapshot (`JobObjectBasicProcessIdList`) and counts a member only
+// while it is still in H (`IsProcessInJob`, which refuses a reused pid) and has not exited. It names and
+// terminates each, then lists again until only this process is left; the answer is the first
+// snapshot's.
+//
+// `seal` goes through `SetEnvironmentVariableW`, the copy of the environment Windows hands a child.
+function buildWindowsProcessDescendantsChunk(usesGt bool) returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(WinDescSlotsEnd, outgoingStackArgBytes: ((QueryJobObjectStackArgWords as StackSize) * SpillSlotBytes))
+	let tempDisp = asm.slotDisp(WinDescSlotTemp + WinDescTempSlots - 1)
+
+	let copyPrefix = asm.newLabel()
+	let prefixDone = asm.newLabel()
+	let copyDigits = asm.newLabel()
+	let digitsDone = asm.newLabel()
+	let sweep = asm.newLabel()
+	let setupFailed = asm.newLabel()
+	let enumerationFailed = asm.newLabel()
+	let answerOut = asm.newLabel()
+	let roundLoop = asm.newLabel()
+	let nextPid = asm.newLabel()
+	let roundEnd = asm.newLabel()
+	let closeProcess = asm.newLabel()
+	let terminate = asm.newLabel()
+	let advance = asm.newLabel()
+	let listFailed = asm.newLabel()
+	let finishSweep = asm.newLabel()
+	let releaseScratch = asm.newLabel()
+	let noName = asm.newLabel()
+	let findBase = asm.newLabel()
+	let notBackslash = asm.newLabel()
+	let baseFound = asm.newLabel()
+	let copyName = asm.newLabel()
+	let nameCopied = asm.newLabel()
+	let narrow = asm.newLabel()
+	let copyLine = asm.newLabel()
+	let lineCopied = asm.newLabel()
+	let skipLine = asm.newLabel()
+	let lineDone = asm.newLabel()
+	let alreadyTracked = asm.newLabel()
+	let copyLineDigits = asm.newLabel()
+	let lineDigitsDone = asm.newLabel()
+	let notSeal = asm.newLabel()
+	let sealed = asm.newLabel()
+
+	emitWinDescSlotStore(asm, slot: WinDescSlotVerb, reg: X64Register.rcx)
+	emitWinDescSlotStore(asm, slot: WinDescSlotBuf, reg: X64Register.rdx)
+	emitWinDescSlotStore(asm, slot: WinDescSlotCap, reg: X64Register.r8)
+
+	emitCmpRegImm(asm, reg: X64Register.rcx, imm: ProcessDescendantsVerbSeal as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: notSeal)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rdx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+	emitWinDescImport(asm, slot: IatSlot.SetEnvironmentVariableW, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: sealed)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answerOut)
+
+	asm.placeLabel(sealed)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answerOut)
+
+	asm.placeLabel(notSeal)
+	emitWinDescSlotStoreZero(asm, slot: WinDescSlotNeeded)
+	emitWinDescSlotStoreZero(asm, slot: WinDescSlotWritten)
+	emitWinDescSlotStoreZero(asm, slot: WinDescSlotRound)
+	emitWinDescSlotStoreZero(asm, slot: WinDescSlotScratch)
+	emitWinDescSlotStoreZero(asm, slot: WinDescSlotJob)
+	emitWinDescSlotStoreZero(asm, slot: WinDescSlotFailed)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: 0)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: WinDescScratchBytes)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: WinDescMemCommitReserve)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: WinDescPageReadWrite)
+	emitWinDescImport(asm, slot: IatSlot.VirtualAlloc, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: setupFailed)
+	emitWinDescSlotStore(asm, slot: WinDescSlotScratch, reg: X64Register.rax)
+
+	emitWinDescImport(asm, slot: IatSlot.GetCurrentProcessId, usesGt: usesGt)
+	emitWinDescSlotStore(asm, slot: WinDescSlotSelf, reg: X64Register.rax)
+
+	emitLeaString(asm, dest: X64Register.rcx, bytes: utf16LittleEndian(WinDescJobName))
+	emitWinDescSlotLoad(asm, reg: X64Register.rdi, slot: WinDescSlotScratch)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
+
+	asm.placeLabel(copyPrefix)
+	encodeMovzxRegWordBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: prefixDone)
+	encodeStoreBaseDispReg16(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: Utf16UnitBytes as Imm32)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: copyPrefix)
+
+	asm.placeLabel(prefixDone)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotSelf)
+	emitWinDescDecimalIntoTemp(asm, tempDisp: tempDisp)
+
+	asm.placeLabel(copyDigits)
+	emitCmpRegImm(asm, reg: X64Register.r10, imm: WinDescTempBytes as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: digitsDone)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: tempDisp, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+	encodeStoreBaseDispReg16(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: Utf16UnitBytes as Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r10, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: copyDigits)
+
+	asm.placeLabel(digitsDone)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: 0)
+	emitWinDescScratchAddress(asm, dest: X64Register.rdx, offset: 0)
+	emitWinDescImport(asm, slot: IatSlot.CreateJobObjectW, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: setupFailed)
+	emitWinDescSlotStore(asm, slot: WinDescSlotJob, reg: X64Register.rax)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotVerb)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: ProcessDescendantsVerbEnd as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: sweep)
+
+	emitWinDescCurrentProcess(asm, dest: X64Register.rcx)
+	emitWinDescSlotLoad(asm, reg: X64Register.rdx, slot: WinDescSlotJob)
+	emitWinDescScratchAddress(asm, dest: X64Register.r8, offset: WinDescResultOffset)
+	emitWinDescImport(asm, slot: IatSlot.IsProcessInJob, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: setupFailed)
+	emitWinDescScratchAddress(asm, dest: X64Register.rcx, offset: WinDescResultOffset)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: false)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: alreadyTracked)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: 0)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	emitWinDescImport(asm, slot: IatSlot.CreateJobObjectW, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: setupFailed)
+	emitWinDescSlotStore(asm, slot: WinDescSlotProc, reg: X64Register.rax)
+
+	emitWinDescScratchAddress(asm, dest: X64Register.rcx, offset: WinDescLimitOffset + WinDescLimitFlagsOffset)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: JobObjectLimitBreakawayOk)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax, wide: true)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotProc)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: JobObjectExtendedLimitInformationClass)
+	emitWinDescScratchAddress(asm, dest: X64Register.r8, offset: WinDescLimitOffset)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: ProcInfoJobLimitBytes)
+	emitWinDescImport(asm, slot: IatSlot.SetInformationJobObject, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: setupFailed)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotJob)
+	emitWinDescCurrentProcess(asm, dest: X64Register.rdx)
+	emitWinDescImport(asm, slot: IatSlot.AssignProcessToJobObject, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: setupFailed)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotProc)
+	emitWinDescCurrentProcess(asm, dest: X64Register.rdx)
+	emitWinDescImport(asm, slot: IatSlot.AssignProcessToJobObject, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: setupFailed)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotProc)
+	emitWinDescImport(asm, slot: IatSlot.CloseHandle, usesGt: usesGt)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: releaseScratch)
+
+	asm.placeLabel(alreadyTracked)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finishSweep)
+
+	asm.placeLabel(sweep)
+	emitWinDescImport(asm, slot: IatSlot.GetTickCount64, usesGt: usesGt)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: ProcessEndBoundMs as Imm32)
+	emitWinDescSlotStore(asm, slot: WinDescSlotDeadline, reg: X64Register.rax)
+	emitWinDescCurrentProcess(asm, dest: X64Register.rcx)
+	emitWinDescSlotLoad(asm, reg: X64Register.rdx, slot: WinDescSlotJob)
+	emitWinDescScratchAddress(asm, dest: X64Register.r8, offset: WinDescResultOffset)
+	emitWinDescImport(asm, slot: IatSlot.IsProcessInJob, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: listFailed)
+	emitWinDescScratchAddress(asm, dest: X64Register.rcx, offset: WinDescResultOffset)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: false)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: finishSweep)
+
+	asm.placeLabel(roundLoop)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotJob)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: WinDescProcessIdListClass)
+	emitWinDescScratchAddress(asm, dest: X64Register.r8, offset: WinDescListOffset)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: WinDescListBytes)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(0), srcReg: X64Register.rax, wide: true)
+	emitWinDescImport(asm, slot: IatSlot.QueryInformationJobObject, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: listFailed)
+
+	emitWinDescScratchAddress(asm, dest: X64Register.rcx, offset: WinDescListCountOffset)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: false)
+	emitWinDescSlotStore(asm, slot: WinDescSlotCount, reg: X64Register.rax)
+	emitWinDescSlotStoreZero(asm, slot: WinDescSlotIndex)
+	emitWinDescSlotStoreZero(asm, slot: WinDescSlotLive)
+
+	asm.placeLabel(nextPid)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotIndex)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotCount)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: roundEnd)
+	emitWinDescScratchAddress(asm, dest: X64Register.rdx, offset: WinDescListEntriesOffset)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: 0, wide: true, index: X64Register.rax, indexScale: MemoryIndexScale.byEight)
+	emitWinDescSlotStore(asm, slot: WinDescSlotPid, reg: X64Register.rax)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotSelf)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: advance)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: WinDescOpenAccess)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	emitWinDescSlotLoad(asm, reg: X64Register.r8, slot: WinDescSlotPid)
+	emitWinDescImport(asm, slot: IatSlot.OpenProcess, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: advance)
+	emitWinDescSlotStore(asm, slot: WinDescSlotProc, reg: X64Register.rax)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotProc)
+	emitWinDescSlotLoad(asm, reg: X64Register.rdx, slot: WinDescSlotJob)
+	emitWinDescScratchAddress(asm, dest: X64Register.r8, offset: WinDescResultOffset)
+	emitWinDescImport(asm, slot: IatSlot.IsProcessInJob, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: closeProcess)
+	emitWinDescScratchAddress(asm, dest: X64Register.rcx, offset: WinDescResultOffset)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, wide: false)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: closeProcess)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotProc)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	emitWinDescImport(asm, slot: IatSlot.WaitForSingleObject, usesGt: usesGt)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: WaitObject0 as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: closeProcess)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	emitWinDescSlotStore(asm, slot: WinDescSlotLive, reg: X64Register.rax)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotRound)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: terminate)
+
+	emitWinDescScratchAddress(asm, dest: X64Register.rcx, offset: WinDescSizeOffset)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WinDescPathUnits)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax, wide: true)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotProc)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	emitWinDescScratchAddress(asm, dest: X64Register.r8, offset: WinDescPathOffset)
+	emitWinDescScratchAddress(asm, dest: X64Register.r9, offset: WinDescSizeOffset)
+	emitWinDescImport(asm, slot: IatSlot.QueryFullProcessImageNameW, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: noName)
+
+	emitWinDescScratchAddress(asm, dest: X64Register.rcx, offset: WinDescPathOffset)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
+	encodeMovRegImm32(asm.code, dest: X64Register.r11, value: 0)
+
+	asm.placeLabel(findBase)
+	emitCmpRegImm(asm, reg: X64Register.rsi, imm: WinDescPathUnits as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: baseFound)
+	encodeMovzxRegWordBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, index: X64Register.rsi, indexScale: MemoryIndexScale.byTwo)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: baseFound)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: WinDescBackslash as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: notBackslash)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r11, base: X64Register.rsi, disp: 1)
+
+	asm.placeLabel(notBackslash)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: findBase)
+
+	asm.placeLabel(baseFound)
+	emitWinDescSlotStore(asm, slot: WinDescSlotNameStart, reg: X64Register.r11)
+	emitWinDescSlotStore(asm, slot: WinDescSlotNameEnd, reg: X64Register.rsi)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: lineDone)
+
+	asm.placeLabel(noName)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotProc)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: ProcessEndBoundMs)
+	emitWinDescImport(asm, slot: IatSlot.WaitForSingleObject, usesGt: usesGt)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: WaitObject0 as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: closeProcess)
+	emitWinDescSlotStoreZero(asm, slot: WinDescSlotNameStart)
+	emitWinDescSlotStoreZero(asm, slot: WinDescSlotNameEnd)
+
+	asm.placeLabel(lineDone)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotPid)
+	emitWinDescDecimalIntoTemp(asm, tempDisp: tempDisp)
+	emitWinDescSlotLoad(asm, reg: X64Register.rdi, slot: WinDescSlotScratch)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.rdi, disp: WinDescLineOffset as Imm32)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
+
+	asm.placeLabel(copyLineDigits)
+	emitCmpRegImm(asm, reg: X64Register.r10, imm: WinDescTempBytes as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: lineDigitsDone)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: tempDisp, index: X64Register.r10, indexScale: MemoryIndexScale.byOne)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r10, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: copyLineDigits)
+
+	asm.placeLabel(lineDigitsDone)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WinDescSpace)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.r8, slot: WinDescSlotNameStart)
+	emitWinDescSlotLoad(asm, reg: X64Register.r9, slot: WinDescSlotNameEnd)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.r8, src: X64Register.r9, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: copyName)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: DescendantsNameReplacement)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: nameCopied)
+
+	asm.placeLabel(copyName)
+	emitWinDescScratchAddress(asm, dest: X64Register.rcx, offset: WinDescPathOffset)
+
+	asm.placeLabel(narrow)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.r8, src: X64Register.r9, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: nameCopied)
+	emitCmpRegImm(asm, reg: X64Register.rsi, imm: WinDescLineLimit as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: nameCopied)
+	encodeMovzxRegWordBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: 0, index: X64Register.r8, indexScale: MemoryIndexScale.byTwo)
+	emitClampToPrintableAscii(asm, reg: X64Register.rax)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r8, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: narrow)
+
+	asm.placeLabel(nameCopied)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: WinDescNewline)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.rdi, disp: 0, srcReg: X64Register.rax, index: X64Register.rsi, indexScale: MemoryIndexScale.byOne)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rsi, imm: 1)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotNeeded)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rsi, wide: true)
+	emitWinDescSlotStore(asm, slot: WinDescSlotNeeded, reg: X64Register.rax)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.rdx, slot: WinDescSlotWritten)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rdx, src: X64Register.rsi, wide: true)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotCap)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.above, targetBlockId: skipLine)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.r8, slot: WinDescSlotBuf)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotWritten)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: 0)
+
+	asm.placeLabel(copyLine)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.r9, src: X64Register.rsi, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: lineCopied)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdi, disp: 0, index: X64Register.r9, indexScale: MemoryIndexScale.byOne)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.r8, disp: 0, srcReg: X64Register.rax, index: X64Register.r9, indexScale: MemoryIndexScale.byOne)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r9, imm: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: copyLine)
+
+	asm.placeLabel(lineCopied)
+	emitWinDescSlotStore(asm, slot: WinDescSlotWritten, reg: X64Register.rdx)
+
+	asm.placeLabel(skipLine)
+	asm.placeLabel(terminate)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotProc)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: WinDescTerminatedExitCode)
+	emitWinDescImport(asm, slot: IatSlot.TerminateProcess, usesGt: usesGt)
+
+	asm.placeLabel(closeProcess)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotProc)
+	emitWinDescImport(asm, slot: IatSlot.CloseHandle, usesGt: usesGt)
+
+	asm.placeLabel(advance)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotIndex)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: 1)
+	emitWinDescSlotStore(asm, slot: WinDescSlotIndex, reg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: nextPid)
+
+	asm.placeLabel(roundEnd)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotLive)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: finishSweep)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotRound)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: 1)
+	emitWinDescSlotStore(asm, slot: WinDescSlotRound, reg: X64Register.rax)
+	emitWinDescImport(asm, slot: IatSlot.GetTickCount64, usesGt: usesGt)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotDeadline)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: listFailed)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: WinDescRoundSleepMs)
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.Sleep), usesGt: usesGt)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: roundLoop)
+
+	asm.placeLabel(listFailed)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	emitWinDescSlotStore(asm, slot: WinDescSlotFailed, reg: X64Register.rax)
+
+	asm.placeLabel(finishSweep)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotJob)
+	emitWinDescImport(asm, slot: IatSlot.CloseHandle, usesGt: usesGt)
+
+	asm.placeLabel(releaseScratch)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinDescSlotScratch)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 0)
+	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: WinDescMemRelease)
+	emitWinDescImport(asm, slot: IatSlot.VirtualFree, usesGt: usesGt)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotFailed)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: enumerationFailed)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinDescSlotNeeded)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answerOut)
+
+	asm.placeLabel(setupFailed)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	emitWinDescSlotStore(asm, slot: WinDescSlotFailed, reg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: finishSweep)
+
+	asm.placeLabel(enumerationFailed)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: WinDescEnumerationFailed as Imm32)
+
+	asm.placeLabel(answerOut)
+	return asm.finishFunction(WindowsProcessDescendantsName)
+end 'buildWindowsProcessDescendantsChunk'
+
+export let WindowsProcessTerminateName = b"mrt_win_proc_terminate"
+
+let WinTermAccountingClass = 1
+let WinTermAccountingBytes = 48
+let WinTermActiveProcessesOffset = 40
+let WinTermPollMs = 1
+let WinTermSlotTree = 0
+let WinTermSlotCode = 1
+let WinTermSlotDelivered = 2
+let WinTermSlotDeadline = 3
+let WinTermSlotInfo = 4
+let WinTermInfoSlots = WinTermAccountingBytes / SpillSlotBytes
+let WinTermSlotsEnd = WinTermSlotInfo + WinTermInfoSlots
+
+// The tree may be a job or a process handle, so both terminates are asked of it; the one handed the
+// wrong kind of handle fails, and the answer is the OR of the two BOOLs. It answers only once the job
+// reports no active process, so every process the kill reached has ended; a job still active after
+// `ProcessEndBoundMs` answers `TerminateTreeIncomplete`.
+function buildWindowsProcessTerminateChunk(usesGt bool) returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(WinTermSlotsEnd, outgoingStackArgBytes: ((QueryJobObjectStackArgWords as StackSize) * SpillSlotBytes))
+	let infoDisp = asm.slotDisp(WinTermSlotInfo + WinTermInfoSlots - 1)
+
+	let poll = asm.newLabel()
+	let straggler = asm.newLabel()
+	let refused = asm.newLabel()
+	let answered = asm.newLabel()
+
+	emitWinDescSlotStore(asm, slot: WinTermSlotTree, reg: X64Register.rcx)
+	emitWinDescSlotStore(asm, slot: WinTermSlotCode, reg: X64Register.rdx)
+	emitWinDescImport(asm, slot: IatSlot.TerminateJobObject, usesGt: usesGt)
+	emitWinDescSlotStore(asm, slot: WinTermSlotDelivered, reg: X64Register.rax)
+
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinTermSlotTree)
+	emitWinDescSlotLoad(asm, reg: X64Register.rdx, slot: WinTermSlotCode)
+	emitWinDescImport(asm, slot: IatSlot.TerminateProcess, usesGt: usesGt)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinTermSlotDelivered)
+	encodeRmRegDirect(asm.code, opcode: OpcodeOrRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: refused)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
+	emitWinDescSlotStore(asm, slot: WinTermSlotDelivered, reg: X64Register.rax)
+
+	emitWinDescImport(asm, slot: IatSlot.GetTickCount64, usesGt: usesGt)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: ProcessEndBoundMs as Imm32)
+	emitWinDescSlotStore(asm, slot: WinTermSlotDeadline, reg: X64Register.rax)
+
+	asm.placeLabel(poll)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinTermSlotTree)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: WinTermAccountingClass)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r8, base: X64Register.rbp, disp: infoDisp)
+	encodeMovRegImm32(asm.code, dest: X64Register.r9, value: WinTermAccountingBytes)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(0), srcReg: X64Register.rax, wide: true)
+	emitWinDescImport(asm, slot: IatSlot.QueryInformationJobObject, usesGt: usesGt)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: answered)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: (infoDisp + (WinTermActiveProcessesOffset as Imm32)) as Imm32, wide: false)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: answered)
+
+	emitWinDescImport(asm, slot: IatSlot.GetTickCount64, usesGt: usesGt)
+	emitWinDescSlotLoad(asm, reg: X64Register.rcx, slot: WinTermSlotDeadline)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: straggler)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: WinTermPollMs)
+	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.Sleep), usesGt: usesGt)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: poll)
+
+	asm.placeLabel(straggler)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: (Win32True or TerminateTreeIncomplete) as MachineWord)
+	emitWinDescSlotStore(asm, slot: WinTermSlotDelivered, reg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
+
+	asm.placeLabel(refused)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
+	emitWinDescSlotStore(asm, slot: WinTermSlotDelivered, reg: X64Register.rax)
+
+	asm.placeLabel(answered)
+	emitWinDescSlotLoad(asm, reg: X64Register.rax, slot: WinTermSlotDelivered)
+	return asm.finishFunction(WindowsProcessTerminateName)
+end 'buildWindowsProcessTerminateChunk'
+
 export function appendX64WindowsHostSurfaceChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage)
 	if usage.usesProcessNamespace 'processNamespace'
 		chunks.push(buildWindowsProcessNamespaceChunk(usage.usesGt))
 	end 'processNamespace'
+
+	if usage.usesProcessDescendants 'processDescendants'
+		chunks.push(buildWindowsProcessDescendantsChunk(usage.usesGt))
+	end 'processDescendants'
+
+	if usage.usesChildPipes 'childPipes'
+		chunks.push(buildWindowsProcessTerminateChunk(usage.usesGt))
+	end 'childPipes'
 end 'appendX64WindowsHostSurfaceChunks'
 
 // The Linux-ONLY half: the rt_sigaction `runtime_init`, the signal-stack sizing it calls, the signal-stack

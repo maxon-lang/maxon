@@ -1,7 +1,7 @@
 let TestBodyBreakCaseLabel = "break-in-a-test-body-stops"
 
 test 'a breakpoint on a line of a test body is placed, stops there, and names the test'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TestBodyBreakCaseLabel, fixture: TestBodyFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: TestBodyBreakCaseLabel, fixture: TestBodyFixtureName)
 	let binary = builtTestBinary(staged, what: TestBodyBreakCaseLabel)
 	let bodyLine = anchorLine(staged.join(TestBodyTestFileName), anchor: "test-body")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(bodyLine, file: TestBodyTestFileName)}", RunCommand])
@@ -23,4 +23,6 @@ test 'a breakpoint on a line of a test body is placed, stops there, and names th
 	try Expect.equal(textOf(stop, node: stop.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop is the breakpoint's. {said}")
 	try Expect.equal(numberOf(stop, node: stop.root, key: LineKey), expected: bodyLine as EventNumber, message: "the stop is on the armed line of the test body. {said}")
 	try Expect.equal(textOf(stop, node: stop.root, key: FunctionKey), expected: TestBodyDisplayName, message: "the stop names the test it is inside by its prose. {said}")
+
+	discardStagedDir(staged)
 end 'a breakpoint on a line of a test body is placed, stops there, and names the test'

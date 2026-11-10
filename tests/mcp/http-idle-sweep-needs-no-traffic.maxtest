@@ -1,5 +1,5 @@
 let PastIdleMs = 3000
-let HttpIdleStagingDir = "temp/mcp-http-idle"
+let HttpIdleStagingDir = "mcp-http-idle"
 
 test 'an idle session is reaped on time with no request arriving, and its debuggee with it'
 	let program = stagedProgram(HttpIdleStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
@@ -26,6 +26,8 @@ test 'an idle session is reaped on time with no request arriving, and its debugg
 	try Expect.isFalse(toolCallIsError(started), message: "`{DebugStartTool}` refused a freshly built executable: {toolCallText(started)}")
 	try Expect.equal(debugToolState(continued), expected: DebugStoppedState, message: "the program must be STOPPED and therefore alive when the session goes idle, or the delete below proves nothing")
 	try Expect.isTrue(deletable, message: "no request arrived after the session went idle for longer than `{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}`, so only a sweep that runs on time can end it; its debuggee's image is still held, so the session outlived its timeout")
+
+	discardStagedDir(stagedDirNamed(HttpIdleStagingDir))
 end 'an idle session is reaped on time with no request arriving, and its debuggee with it'
 
 test 'closing stdin ends the http server with exit 0'

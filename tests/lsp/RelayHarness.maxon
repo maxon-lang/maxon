@@ -1,0 +1,241 @@
+public typealias RelayGeneration = int(0 to u64.max)
+
+public typealias RelayDocumentVersion = int(0 to i64.max)
+
+public let RelayFakeServerName = "fake-slot-compiler"
+public let RelayContentModifiedCode = -32801
+public let RelayAnsweredText = "answered"
+
+let RelayFixturesDirName = "tests/lsp/fixtures"
+let RelayFixtureName = "slotcompiler"
+let RelayStdlibDirName = "stdlib"
+let RelayRuntimeDirName = "runtime"
+let RelayCompilerDirName = "maxon-bin"
+let RelaySlotDirName = ".maxon"
+let RelaySlotStem = "maxon"
+let RelaySourceDirName = "source"
+let RelayBuildDirName = "build"
+let RelayCheckoutDirName = "checkout"
+let RelayGenerationFileName = "generation"
+let RelayPreviousImageName = "previous.image"
+let RelayStagedImageName = "staged.image"
+let RelaySwapMarkerName = "swap-on-hover"
+let RelaySwapOnShutdownMarkerName = "swap-on-shutdown"
+let RelaySwapOnInitializeMarkerName = "swap-on-initialize"
+let RelayCrashMarkerName = "crash-on-hover"
+let RelayFloodMarkerName = "flood-stderr-on-hover"
+let RelayOversizeMarkerName = "oversize-on-hover"
+
+#if os(Windows)
+	let RelayWindowsAclToolName = "icacls"
+	let RelayWindowsAclDenyFlag = "/deny"
+	let RelayWindowsAclRemoveDenyFlag = "/remove:d"
+	let RelayWindowsEveryoneSid = "*S-1-1-0"
+	let RelayWindowsEveryoneDeniedExecute = "*S-1-1-0:(X)"
+#else
+	let RelayPosixModeToolName = "chmod"
+	let RelayPosixRunnableMode = "755"
+	let RelayPosixUnrunnableMode = "644"
+#endif
+
+let RelayWaitBoundMs = 30000
+let RelayHoverLine = 0
+let RelayHoverCharacter = 0
+
+public function relayCheckout(caseDir FilePath) returns FilePath
+	return caseDir.join(RelayCheckoutDirName)
+end 'relayCheckout'
+
+function relaySlotDirectory(caseDir FilePath) returns FilePath
+	return relayCheckout(caseDir).join(RelayCompilerDirName).join(RelaySlotDirName)
+end 'relaySlotDirectory'
+
+public function relaySlotPath(caseDir FilePath) returns FilePath
+	return executableIn(relaySlotDirectory(caseDir), stem: RelaySlotStem)
+end 'relaySlotPath'
+
+function relayFakeImage(caseDir FilePath) returns ByteArray
+	return fileBytes(builtExecutable(caseDir.join(RelayBuildDirName)))
+end 'relayFakeImage'
+
+function writeRelayImage(path FilePath, image ByteArray)
+	try File.writeBinary(path, content: image, mode: FilePermission.executable) otherwise panic("the gate could not run — could not write the compiler image {path.toString()}.")
+end 'writeRelayImage'
+
+function writeRelayGeneration(caseDir FilePath, generation RelayGeneration)
+	writeStagedFile(relaySlotDirectory(caseDir).join(RelayGenerationFileName), content: "{generation}")
+end 'writeRelayGeneration'
+
+public function stagedRelayCase(caseDirName String) returns FilePath
+	let caseDir = stagingDir(testScratchDir().join(caseDirName).toString())
+	clearStagedTree(caseDir)
+
+	let source = stagingDir(caseDir.join(RelaySourceDirName).toString())
+	stageStoredTree(fixtureDir("{RelayFixturesDirName}/{RelayFixtureName}"), into: source)
+
+	let build = stagingDir(caseDir.join(RelayBuildDirName).toString())
+	_ = buildStagedSource(source, staged: build, what: "the fake slot compiler")
+
+	_ = stagingDir(relayCheckout(caseDir).join(RelayStdlibDirName).toString())
+	_ = stagingDir(relayCheckout(caseDir).join(RelayRuntimeDirName).toString())
+	_ = stagingDir(relaySlotDirectory(caseDir).toString())
+
+	return caseDir
+end 'stagedRelayCase'
+
+function writtenRelayImageAside(caseDir FilePath) returns FilePath
+	let aside = relaySlotDirectory(caseDir).join(RelayStagedImageName)
+	writeRelayImage(aside, image: relayFakeImage(caseDir))
+
+	return aside
+end 'writtenRelayImageAside'
+
+function movedIntoTheSlot(aside FilePath, caseDir FilePath)
+	try File.rename(aside, to: relaySlotPath(caseDir)) otherwise panic("the gate could not run — could not move the compiler image into the slot.")
+end 'movedIntoTheSlot'
+
+public function installRelaySlot(caseDir FilePath, generation RelayGeneration)
+	writeRelayGeneration(caseDir, generation: generation)
+
+	let aside = writtenRelayImageAside(caseDir)
+	backdatedToTheYear2000(aside)
+	movedIntoTheSlot(aside, caseDir: caseDir)
+end 'installRelaySlot'
+
+public function replaceRelaySlot(caseDir FilePath, generation RelayGeneration)
+	writeRelayGeneration(caseDir, generation: generation)
+
+	let aside = writtenRelayImageAside(caseDir)
+
+	try File.rename(relaySlotPath(caseDir), to: relaySlotDirectory(caseDir).join(RelayPreviousImageName)) otherwise panic("the gate could not run — could not move the slot compiler aside.")
+
+	movedIntoTheSlot(aside, caseDir: caseDir)
+end 'replaceRelaySlot'
+
+function armRelayMarker(caseDir FilePath, marker String)
+	writeStagedFile(relaySlotDirectory(caseDir).join(marker), content: marker)
+end 'armRelayMarker'
+
+public function armRelaySwapOnHover(caseDir FilePath)
+	armRelayMarker(caseDir, marker: RelaySwapMarkerName)
+end 'armRelaySwapOnHover'
+
+public function armRelaySwapOnInitialize(caseDir FilePath)
+	armRelayMarker(caseDir, marker: RelaySwapOnInitializeMarkerName)
+end 'armRelaySwapOnInitialize'
+
+public function armRelaySwapOnShutdown(caseDir FilePath)
+	armRelayMarker(caseDir, marker: RelaySwapOnShutdownMarkerName)
+end 'armRelaySwapOnShutdown'
+
+public function armRelayCrashOnHover(caseDir FilePath)
+	armRelayMarker(caseDir, marker: RelayCrashMarkerName)
+end 'armRelayCrashOnHover'
+
+public function armRelayFloodOnHover(caseDir FilePath)
+	armRelayMarker(caseDir, marker: RelayFloodMarkerName)
+end 'armRelayFloodOnHover'
+
+public function armRelayOversizeOnHover(caseDir FilePath)
+	armRelayMarker(caseDir, marker: RelayOversizeMarkerName)
+end 'armRelayOversizeOnHover'
+
+public function installUnrunnableRelaySlot(caseDir FilePath)
+	installRelaySlot(caseDir, generation: 1)
+	relaySlotExecutionAllowed(caseDir, allowed: false)
+end 'installUnrunnableRelaySlot'
+
+public function makeRelaySlotRunnable(caseDir FilePath)
+	relaySlotExecutionAllowed(caseDir, allowed: true)
+end 'makeRelaySlotRunnable'
+
+function relaySlotExecutionAllowed(caseDir FilePath, allowed bool)
+	let slot = relaySlotPath(caseDir).toString()
+
+	#if os(Windows)
+		if allowed 'allow'
+			_ = runSystemTool(RelayWindowsAclToolName, arguments: [slot, RelayWindowsAclRemoveDenyFlag, RelayWindowsEveryoneSid], what: "allowing {slot} to run")
+		end 'allow' else 'deny'
+			_ = runSystemTool(RelayWindowsAclToolName, arguments: [slot, RelayWindowsAclDenyFlag, RelayWindowsEveryoneDeniedExecute], what: "denying {slot} the right to run")
+		end 'deny'
+	#else
+		_ = runSystemTool(RelayPosixModeToolName, arguments: [RelayPosixRunnableMode if allowed else RelayPosixUnrunnableMode, slot], what: "setting the mode of {slot}")
+	#endif
+end 'relaySlotExecutionAllowed'
+
+public function installRealCompilerAsRelaySlot(caseDir FilePath) returns FilePath
+	writeRelayImage(relaySlotPath(caseDir), image: fileBytes(testedCompilerPath()))
+
+	return relaySlotPath(caseDir)
+end 'installRealCompilerAsRelaySlot'
+
+public function relayPublishCarries(published PublishedDiagnostics, message String) returns bool
+	for item in published.items 'eachDiagnostic'
+		if item.message == message 'carried'
+			return true
+		end 'carried'
+	end 'eachDiagnostic'
+
+	return false
+end 'relayPublishCarries'
+
+public function relayFirstMessage(published PublishedDiagnostics) returns String
+	let first = try published.items.get(0) otherwise panic("the gate could not run — a publish the fake slot compiler made carries no diagnostic.")
+
+	return first.message
+end 'relayFirstMessage'
+
+function relayIsContentModified(failure LspClientError) returns bool
+	return match failure 'reason'
+		serverRefused(code, _) gives code == RelayContentModifiedCode
+		transportFailed or
+		malformedResponse gives false
+	end 'reason'
+end 'relayIsContentModified'
+
+public function awaitFakePublish(client LspClient, uri String, generation RelayGeneration, text String) returns PublishedDiagnostics throws LspClientError
+	return try awaitFakeMessage(client, uri: uri, message: "generation {generation} saw: {text}")
+end 'awaitFakePublish'
+
+public function awaitFakeDocumentVersion(client LspClient, uri String, generation RelayGeneration, version RelayDocumentVersion) returns PublishedDiagnostics throws LspClientError
+	return try awaitFakeMessage(client, uri: uri, message: "generation {generation} version {version}")
+end 'awaitFakeDocumentVersion'
+
+public function awaitFakeNoDocument(client LspClient, uri String, generation RelayGeneration) returns PublishedDiagnostics throws LspClientError
+	return try awaitFakeMessage(client, uri: uri, message: "generation {generation} holds no document")
+end 'awaitFakeNoDocument'
+
+function awaitFakeMessage(client LspClient, uri String, message String) returns PublishedDiagnostics throws LspClientError
+	let started = Clock.nowMs()
+
+	while Clock.elapsedMs(started) < RelayWaitBoundMs 'untilPublished'
+		let needle = message.clone()
+
+		let attempt = try client.awaitPublishWhilePolling(uri, polled: uri, wanted: function(published) gives relayPublishCarries(published, message: needle)) otherwise (e) 'refused'
+			if relayIsContentModified(e) 'swapped'
+				continue
+			end 'swapped'
+
+			throw e
+		end 'refused'
+
+		match attempt 'taken'
+			found(published) then return published
+			none then continue
+		end 'taken'
+	end 'untilPublished'
+
+	throw LspClientError.transportFailed("no publish carrying `{message}` reached {uri} within {RelayWaitBoundMs} ms")
+end 'awaitFakeMessage'
+
+public function relayHoverRefusal(client LspClient, uri String) returns String throws LspClientError
+	_ = try client.hover(uri, line: RelayHoverLine, character: RelayHoverCharacter) otherwise (e) 'refused'
+		match e 'reason'
+			serverRefused(code, _) then return "{code}"
+			transportFailed or
+			malformedResponse then throw e
+		end 'reason'
+	end 'refused'
+
+	return RelayAnsweredText
+end 'relayHoverRefusal'

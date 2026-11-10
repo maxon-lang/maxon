@@ -40,6 +40,9 @@
 # Exit status: this script exits with the CHILD's status, so it composes in a pipeline.
 set -u
 
+TempNamesTable="$(dirname "$0")/lib/temp-names.tsv"
+. "$(dirname "$0")/lib/system-temp.sh"
+
 repeat=1
 if [ "${1:-}" = "--repeat" ]; then
 	repeat="$2"; shift 2
@@ -88,7 +91,8 @@ for _ in $(seq 1 "$repeat"); do
 		# ⚠ Paths reach PowerShell via `cygpath -m` (Windows drive, FORWARD slashes), never `-w`.
 		# A backslash path has to survive two layers of quoting, and getting that wrong is a
 		# silent wrong path rather than an error.
-		tmpdir="$(mktemp -d)"
+		temp_make dir peak-rss
+		tmpdir="$TempMade"
 		exe="$1"; shift
 		[ -f "$exe" ] && exe="$(cygpath -m "$(cd "$(dirname "$exe")" && pwd)/$(basename "$exe")")"
 		helper="$(cygpath -m "$(cd "$(dirname "$0")" && pwd)/lib/peak-rss.ps1")"
@@ -114,7 +118,8 @@ for _ in $(seq 1 "$repeat"); do
 	Linux)
 		# GNU time reports "Maximum resident set size (kbytes)"; its own exit status is the
 		# child's, which is what we propagate.
-		tmpf="$(mktemp)"
+		temp_make file peak-rss
+		tmpf="$TempMade"
 		/usr/bin/time -v -o "$tmpf" "$@"
 		child_exit=$?
 		bytes="$(( $(sed -n 's/.*Maximum resident set size (kbytes): *//p' "$tmpf" | tail -1) * 1024 ))"
@@ -122,7 +127,8 @@ for _ in $(seq 1 "$repeat"); do
 		;;
 	Darwin)
 		# BSD `time -l` reports "maximum resident set size" in BYTES on macOS.
-		tmpf="$(mktemp)"
+		temp_make file peak-rss
+		tmpf="$TempMade"
 		/usr/bin/time -l "$@" 2>"$tmpf"
 		child_exit=$?
 		grep -v 'maximum resident set size' "$tmpf" >&2 || true

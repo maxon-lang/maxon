@@ -75,6 +75,28 @@ end 'TestFailure'
 A `test` declaration is implicitly `throws TestFailure`. An error of any other type raised in a test body is
 reported as a failure naming the error and the line of the operation that threw it.
 
+## TestScratch
+
+`TestScratch` names the two directories `maxon test` makes for each test process, empty when the process
+starts ([Scratch directories](/docs/cli/#maxon-test)). The runner removes both when the process ends,
+and a process that passes but leaves an entry in either fails, naming the entry.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TestScratch.outsideCheckout()` | `FilePath` | `TestScratchError.unavailable` | A directory in the system temp area, outside every checkout and project: where a test stages a project, since a `.maxproj` inside another project is refused (E2074). |
+| `TestScratch.insideProject()` | `FilePath` | `TestScratchError.unavailable` | A directory under the project's `.maxon/test/`, for what must sit inside the tree, such as a copy of a compiler that finds `stdlib/` by walking up from itself. |
+| `TestScratch.outsideCheckoutVariable` | `String` | — | `MAXON_TEST_SCRATCH`, the variable that names the first directory. |
+| `TestScratch.insideProjectVariable` | `String` | — | `MAXON_TEST_PROJECT_SCRATCH`, the variable that names the second. |
+
+Both throw `unavailable` in a process `maxon test` did not start, where the variable is unset, empty or unparseable as
+a path.
+
+```maxon
+enum TestScratchError implements Error
+	unavailable
+end 'TestScratchError'
+```
+
 ## CownTorture
 
 `CownTorture` stress-tests the runtime's multi-cown acquire, the primitive that takes several services' states

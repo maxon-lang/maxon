@@ -1,0 +1,707 @@
+module typealias LspChildGeneration = int(0 to u64.max)
+
+module typealias LspRelayIdSet = Set with String
+
+module typealias LspRelayInFlightMap = Map with (String, LspInFlightRequest)
+
+module typealias LspChildLinkArray = Array with LspChildLink
+
+module typealias LspRelayDocumentMap = Map with (String, LspRelayDocument)
+
+let RelaySlotPollMs = 500
+let RelayChildExitDeadlineMs = 2000
+let RelayReapDeadlineMs = 3000
+let RelayStderrPendingCapBytes = 16384
+let RelayAppendedLineFeedBytes = 1
+let RelayLanguageId = "maxon"
+let RelayLanguageIdKey = "languageId"
+let RelayInitializedMethod = "initialized"
+let RelayNumberIdPrefix = "n"
+let RelayTextIdPrefix = "s"
+let RelayUnstatedDocumentVersion = 1
+let RelayContentModifiedText = "the compiler serving this checkout was replaced; ask again"
+let RelayDetachedText = "no compiler is built into this checkout's slot yet; ask again once it is"
+
+module union LspRelayRoute
+	stay
+	slot(path FilePath)
+end 'LspRelayRoute'
+
+module union LspAttachOutcome
+	attached
+	detached
+	failed(reason String)
+end 'LspAttachOutcome'
+
+module union LspRelayChild
+	none
+	running(link LspChildLink)
+end 'LspRelayChild'
+
+module function lspRelayRoute(doc JsonDoc) returns LspRelayRoute throws RunCacheError
+	if not trustedByInitializationOptions(doc) 'untrusted'
+		return LspRelayRoute.stay
+	end 'untrusted'
+
+	for root in clientRootsOf(doc) 'eachRoot'
+		if root.isAbsolute() and isMaxonCheckout(root) 'checkout'
+			return try lspRelayRouteTo(compilerBinaryPath(root))
+		end 'checkout'
+	end 'eachRoot'
+
+	return LspRelayRoute.stay
+end 'lspRelayRoute'
+
+function lspRelayRouteTo(slot FilePath) returns LspRelayRoute throws RunCacheError
+	let itself = try outputIsRunningImage(try entryIdentityPathOf(slot))
+
+	if itself 'stay'
+		return LspRelayRoute.stay
+	end 'stay'
+
+	return LspRelayRoute.slot(slot)
+end 'lspRelayRouteTo'
+
+function lspRelayIdKey(id LspRequestId) returns String
+	return match id 'addressee'
+		number(value) gives "{RelayNumberIdPrefix}{value}"
+		text(value) gives "{RelayTextIdPrefix}{value}"
+		absent panic("lspRelayIdKey: only a message with an id is keyed")
+	end 'addressee'
+end 'lspRelayIdKey'
+
+function lspMessageNamesMethod(doc JsonDoc) returns bool
+	for name in doc.get(doc.root).keys 'eachKey'
+		if name == JsonRpcMethodKey 'found'
+			return true
+		end 'found'
+	end 'eachKey'
+
+	return false
+end 'lspMessageNamesMethod'
+
+function lspMessageIsResponse(doc JsonDoc) returns bool
+	return match readRequestId(doc) 'addressee'
+		absent gives false
+		number or
+		text gives not lspMessageNamesMethod(doc)
+	end 'addressee'
+end 'lspMessageIsResponse'
+
+function relayDidOpenText(uri String, document LspRelayDocument) returns String
+	var doc = JsonDoc.create()
+
+	var item = LspJsonObject.create(doc)
+	item.put(LspUriKey, value: JsonNode.stringNode(uri))
+	item.put(RelayLanguageIdKey, value: JsonNode.stringNode(RelayLanguageId))
+	item.put(VersionKey, value: JsonNode.numberNode(document.replayedVersion() as JsonFloat))
+	item.put(TextKey, value: JsonNode.stringNode(document.text))
+
+	var params = LspJsonObject.create(doc)
+	params.putNode(TextDocumentKey, value: item.finish())
+
+	return lspNotificationText(doc, method: MethodDidOpen, params: params.finish())
+end 'relayDidOpenText'
+
+module type LspRelayDocument
+	module let text as String
+	module let version as ClientDocumentVersion
+
+	module static function create(text String, version ClientDocumentVersion) returns LspRelayDocument
+		return Self{text: text, version: version}
+	end 'create'
+
+	module function replayedVersion() returns JsonInt
+		return match self.version 'stated'
+			stated(number) gives number
+			unstated gives RelayUnstatedDocumentVersion
+		end 'stated'
+	end 'replayedVersion'
+end 'LspRelayDocument'
+
+module type LspInFlightRequest
+	module let id as LspRequestId
+	module let method as String
+
+	module static function create(id LspRequestId, method String) returns LspInFlightRequest
+		return Self{id: id, method: method}
+	end 'create'
+
+	module function isShutdown() returns bool
+		return self.method == MethodShutdown
+	end 'isShutdown'
+end 'LspInFlightRequest'
+
+module type LspSlotStamp
+	module let exists as bool
+	let size as FileSize
+	let modifiedTime as Timestamp
+	let createdTime as Timestamp
+
+	module static function absent() returns LspSlotStamp
+		return Self{exists: false, size: 0, modifiedTime: 0, createdTime: 0}
+	end 'absent'
+
+	module static function of(slot FilePath) returns LspSlotStamp throws FileInfoError
+		let info = try File.info(slot) otherwise (failure) 'unread'
+			match failure 'reason'
+				notFound then return Self.absent()
+				accessDenied or
+				busy or
+				failed then throw failure
+			end 'reason'
+		end 'unread'
+
+		if info.isDirectory 'notAFile'
+			return Self.absent()
+		end 'notAFile'
+
+		return Self{exists: true, size: info.size, modifiedTime: info.modifiedTime, createdTime: info.createdTime}
+	end 'of'
+
+	module function agrees(other LspSlotStamp) returns bool
+		return self.exists == other.exists and self.size == other.size and self.modifiedTime == other.modifiedTime and self.createdTime == other.createdTime
+	end 'agrees'
+end 'LspSlotStamp'
+
+module type LspChildLink
+	module let generation as LspChildGeneration
+	module let process as StreamingSubprocess
+	module let reader as StdoutReader
+	module let errorReader as StderrReader
+	module let swallowed as LspRelayIdSet
+	module var stdoutOpen as bool
+	module var stderrOpen as bool
+	module var pendingStderr as String
+	module var omittedStderrLines as Count
+
+	module static function create(generation LspChildGeneration, process StreamingSubprocess, reader StdoutReader, errorReader StderrReader) returns LspChildLink
+		return Self{generation: generation, process: process, reader: reader, errorReader: errorReader, swallowed: LspRelayIdSet.create(), stdoutOpen: true, stderrOpen: true, pendingStderr: "", omittedStderrLines: 0}
+	end 'create'
+
+	module function send(body String)
+		try self.process.writeStdinLine("Content-Length: {body.byteLength() + RelayAppendedLineFeedBytes}\r\n\r\n{body}") otherwise ignore
+	end 'send'
+
+	module function noteStderrLine(line String)
+		if self.pendingStderr.byteLength() >= RelayStderrPendingCapBytes 'full'
+			self.omittedStderrLines = self.omittedStderrLines + 1
+			return
+		end 'full'
+
+		self.pendingStderr.append("{line}\n")
+	end 'noteStderrLine'
+
+	module function takePendingStderr() returns String
+		var text = self.pendingStderr
+		self.pendingStderr = ""
+
+		if self.omittedStderrLines > 0 'omitted'
+			text.append("({self.omittedStderrLines} further lines omitted)\n")
+			self.omittedStderrLines = 0
+		end 'omitted'
+
+		return text
+	end 'takePendingStderr'
+
+	module function drained() returns bool
+		return not self.stdoutOpen and not self.stderrOpen
+	end 'drained'
+
+	module function reap()
+		try self.process.reclaimStdout() otherwise panic("LspChildLink.reap: the stdout of a child whose output ended was not out with its reader")
+		try self.process.reclaimStderr() otherwise panic("LspChildLink.reap: the stderr of a child whose error output ended was not out with its reader")
+		self.process.release()
+	end 'reap'
+end 'LspChildLink'
+
+module type LspRelay
+	let slot as FilePath
+	let initializeBody as String
+	let initializeId as LspRequestId
+	var initializedBody as StatedText
+	var stateNotices as StringArray
+	var documents as LspRelayDocumentMap
+	var inFlight as LspRelayInFlightMap
+	var current as LspRelayChild
+	var retired as LspChildLinkArray
+	var nextGeneration as LspChildGeneration
+	var attached as LspSlotStamp
+	var observed as LspSlotStamp
+	var spawnFailed as LspSlotStamp
+	var unreadableTold as StatedText
+
+	module static function create(slot FilePath, initializeBody String, initializeId LspRequestId) returns LspRelay
+		return Self{slot: slot, initializeBody: initializeBody, initializeId: initializeId, initializedBody: StatedText.unstated, stateNotices: StringArray.create(0), documents: LspRelayDocumentMap.create(), inFlight: LspRelayInFlightMap.create(), current: LspRelayChild.none, retired: LspChildLinkArray.create(0), nextGeneration: 0, attached: LspSlotStamp.absent(), observed: LspSlotStamp.absent(), spawnFailed: LspSlotStamp.absent(), unreadableTold: StatedText.unstated}
+	end 'create'
+
+	module function armTick(workspace LspWorkspaceState)
+		workspace.arrivals.push(async slotTickAfter(RelaySlotPollMs))
+	end 'armTick'
+
+	module function report(reason String, workspace LspWorkspaceState)
+		announceLspLog(workspace.writer, sentence: "maxon lsp-server: {reason}")
+	end 'report'
+
+	module function attachInitial(workspace LspWorkspaceState) returns LspAttachOutcome
+		let stamp = try LspSlotStamp.of(self.slot) otherwise (failure) 'unreadable'
+			let reason = self.unreadableReason(failure)
+			self.unreadableTold = StatedText.stated(reason)
+
+			return LspAttachOutcome.failed(reason)
+		end 'unreadable'
+
+		self.observed = stamp
+
+		return self.attach(stamp, initial: true, workspace: workspace)
+	end 'attachInitial'
+
+	module function clientFrame(body String, doc JsonDoc, workspace LspWorkspaceState)
+		let id = readRequestId(doc)
+
+		let method = try doc.getString(doc.root, key: JsonRpcMethodKey) otherwise 'aResponse'
+			self.forward(body)
+			return
+		end 'aResponse'
+
+		self.remember(method, doc: doc, body: body, workspace: workspace)
+
+		match self.current 'child'
+			running(link) then self.forwardTo(link, body: body, id: id, method: method)
+			none then self.answerWhileDetached(method, id: id, workspace: workspace)
+		end 'child'
+	end 'clientFrame'
+
+	module function childArrived(arrival LspArrival, workspace LspWorkspaceState)
+		match arrival 'arrival'
+			childFramed(generation, body) then self.childFrame(generation, body: body, workspace: workspace)
+			childEnded(generation, reason) then self.childEnded(generation, reason: reason, workspace: workspace)
+			childStderr(generation, line) then self.childStderr(generation, line: line, workspace: workspace)
+			childStderrEnded(generation) then self.childStderrEnded(generation, workspace: workspace)
+			childStderrFailed(generation, reason) then self.childStderrFailed(generation, reason: reason, workspace: workspace)
+			default panic("LspRelay.childArrived: only a child's arrival is handed here")
+		end 'arrival'
+	end 'childArrived'
+
+	module function slotTicked(workspace LspWorkspaceState)
+		self.armTick(workspace)
+		self.forwardStderr(workspace)
+
+		let stamp = try LspSlotStamp.of(self.slot) otherwise (failure) 'unreadable'
+			self.tellUnreadable(failure, workspace: workspace)
+			return
+		end 'unreadable'
+
+		self.unreadableTold = StatedText.unstated
+
+		// A rebuilt slot is attached once two polls agree on it, so a build still writing the binary is
+		// never spawned; a stamp a spawn already failed on is retried only after the slot changes again.
+		let settled = stamp.exists and stamp.agrees(self.observed)
+		self.observed = stamp
+
+		if settled and not stamp.agrees(self.attached) and not stamp.agrees(self.spawnFailed) 'replaced'
+			match self.attach(stamp, initial: false, workspace: workspace) 'attachment'
+				attached or
+				detached then break
+				failed(reason) then self.report(reason, workspace: workspace)
+			end 'attachment'
+		end 'replaced'
+	end 'slotTicked'
+
+	module function shutDown(workspace LspWorkspaceState)
+		match self.current 'child'
+			running(link) then self.endGracefully(link, workspace: workspace)
+			none then break
+		end 'child'
+
+		self.inFlight = LspRelayInFlightMap.create()
+		self.current = LspRelayChild.none
+
+		let started = Clock.nowMs()
+		workspace.arrivals.push(async slotTickAfter(RelayReapDeadlineMs))
+
+		while self.retired.count() > 0 and workspace.arrivals.count() > 0 and Clock.elapsedMs(started) < RelayReapDeadlineMs 'reaping'
+			let arrival = workspace.nextPendingArrival()
+
+			match arrival 'arrival'
+				childFramed or
+				childEnded or
+				childStderr or
+				childStderrEnded or
+				childStderrFailed then self.childArrived(arrival, workspace: workspace)
+				slotTick or
+				framed or
+				endOfStream or
+				framingError or
+				projectResolved then continue
+			end 'arrival'
+		end 'reaping'
+	end 'shutDown'
+
+	function childFrame(generation LspChildGeneration, body String, workspace LspWorkspaceState)
+		let link = self.linkOf(generation)
+		self.rearm(link, workspace: workspace)
+
+		if not self.serves(link) 'retired'
+			return
+		end 'retired'
+
+		self.relayChildFrame(link, body: body, workspace: workspace)
+	end 'childFrame'
+
+	function childEnded(generation LspChildGeneration, reason String, workspace LspWorkspaceState)
+		let link = self.linkOf(generation)
+		link.stdoutOpen = false
+
+		if self.serves(link) 'current'
+			self.currentEnded(link, reason: reason, workspace: workspace)
+		end 'current'
+
+		self.reapIfDrained(link, workspace: workspace)
+	end 'childEnded'
+
+	// Re-armed for every line, so a child writing to its error output never blocks on a full pipe while
+	// it serves; the lines are held and reported on the next slot tick.
+	function childStderr(generation LspChildGeneration, line String, workspace LspWorkspaceState)
+		let link = self.linkOf(generation)
+		link.noteStderrLine(line)
+		workspace.arrivals.push(async nextChildStderrArrival(link.errorReader, generation: generation))
+	end 'childStderr'
+
+	function childStderrEnded(generation LspChildGeneration, workspace LspWorkspaceState)
+		let link = self.linkOf(generation)
+		link.stderrOpen = false
+		self.reapIfDrained(link, workspace: workspace)
+	end 'childStderrEnded'
+
+	function childStderrFailed(generation LspChildGeneration, reason String, workspace LspWorkspaceState)
+		let link = self.linkOf(generation)
+		link.stderrOpen = false
+		self.report("the error output of the compiler at {self.slot.path} could not be read: {reason}", workspace: workspace)
+		self.reapIfDrained(link, workspace: workspace)
+	end 'childStderrFailed'
+
+	function endGracefully(link LspChildLink, workspace LspWorkspaceState)
+		link.process.closeStdin()
+
+		try link.process.waitWithTimeout(RelayChildExitDeadlineMs) otherwise (failure) 'notExited'
+			self.report("the compiler at {self.slot.path} did not end when its input closed: {failure.displayReason()}", workspace: workspace)
+		end 'notExited'
+
+		self.retireLink(link, workspace: workspace)
+	end 'endGracefully'
+
+	function retireLink(link LspChildLink, workspace LspWorkspaceState)
+		let treeEnd = link.process.endTree()
+
+		match treeEnd 'ended'
+			ended then break
+			survived or
+			unconfirmed then self.report("the compiler at {self.slot.path} could not be ended: {treeEnd.displayReason()}", workspace: workspace)
+		end 'ended'
+
+		self.retired.push(link)
+	end 'retireLink'
+
+	function reapIfDrained(link LspChildLink, workspace LspWorkspaceState)
+		if not link.drained() 'stillReading'
+			return
+		end 'stillReading'
+
+		for (position, held) in self.retired.withIterator() 'eachRetired'
+			if held.generation == link.generation 'reapable'
+				self.tellStderr(held, workspace: workspace)
+				held.reap()
+				_ = try self.retired.remove(position.index()) otherwise panic("LspRelay.reapIfDrained: a retired link was found at a position of the array")
+				return
+			end 'reapable'
+		end 'eachRetired'
+
+		panic("LspRelay.reapIfDrained: a link whose output streams both ended was not retired")
+	end 'reapIfDrained'
+
+	function attach(stamp LspSlotStamp, initial bool, workspace LspWorkspaceState) returns LspAttachOutcome
+		if not stamp.exists 'noSlot'
+			return LspAttachOutcome.detached
+		end 'noSlot'
+
+		let process = try StreamingSubprocess.spawn(Executable.path(self.slot), arguments: [LspServerCommandName, RelayedFlag]) otherwise (e) 'spawnFailed'
+			self.spawnFailed = stamp
+
+			return LspAttachOutcome.failed("could not start the compiler at {self.slot.path}: {e.displayReason()}")
+		end 'spawnFailed'
+
+		let reader = try process.takeStdout() otherwise panic("LspRelay.attach: the stdout of a child that was just spawned was already out")
+		let errorReader = try process.takeStderr() otherwise panic("LspRelay.attach: the stderr of a child that was just spawned was already out")
+		self.nextGeneration = self.nextGeneration + 1
+		let link = LspChildLink.create(self.nextGeneration, process: process, reader: reader, errorReader: errorReader)
+
+		self.retireCurrent(workspace)
+		self.current = LspRelayChild.running(link)
+		self.attached = stamp
+		workspace.arrivals.push(async nextChildArrival(reader, generation: link.generation))
+		workspace.arrivals.push(async nextChildStderrArrival(errorReader, generation: link.generation))
+		self.replay(link, initial: initial)
+
+		if not initial 'announceTheSwitch'
+			announceLspLog(workspace.writer, sentence: "maxon lsp-server: now served by the compiler at {self.slot.path}")
+		end 'announceTheSwitch'
+
+		return LspAttachOutcome.attached
+	end 'attach'
+
+	function unreadableReason(failure FileInfoError) returns String
+		return "could not read the compiler's file at {self.slot.path}: {failure.name}"
+	end 'unreadableReason'
+
+	function tellUnreadable(failure FileInfoError, workspace LspWorkspaceState)
+		let reason = self.unreadableReason(failure)
+
+		if self.hasTold(reason) 'alreadyTold'
+			return
+		end 'alreadyTold'
+
+		self.unreadableTold = StatedText.stated(reason)
+		self.report(reason, workspace: workspace)
+	end 'tellUnreadable'
+
+	function hasTold(reason String) returns bool
+		return match self.unreadableTold 'told'
+			stated(text) gives text == reason
+			unstated gives false
+		end 'told'
+	end 'hasTold'
+
+	// A replacement child is told the session so far: `initialize`, whose answer is swallowed when the
+	// client already has one, `initialized`, the workspace notices, and every open document at the version
+	// the client last sent, so the client's next versioned edit lines up with what the child holds.
+	function replay(link LspChildLink, initial bool)
+		if initial or self.inFlight.contains(lspRelayIdKey(self.initializeId)) 'forwarded'
+			self.recordInFlight(self.initializeId, method: MethodInitialize)
+		end 'forwarded' else 'swallowed'
+			link.swallowed.insert(lspRelayIdKey(self.initializeId))
+		end 'swallowed'
+
+		link.send(self.initializeBody)
+
+		match self.initializedBody 'initialized'
+			stated(body) then link.send(body)
+			unstated then break
+		end 'initialized'
+
+		for notice in self.stateNotices 'eachNotice'
+			link.send(notice)
+		end 'eachNotice'
+
+		for (uri, document) in self.documents 'eachDocument'
+			link.send(relayDidOpenText(uri, document: document))
+		end 'eachDocument'
+	end 'replay'
+
+	function retireCurrent(workspace LspWorkspaceState)
+		match self.current 'child'
+			running(link) then self.retire(link, workspace: workspace)
+			none then return
+		end 'child'
+	end 'retireCurrent'
+
+	function retire(link LspChildLink, workspace LspWorkspaceState)
+		self.failInFlight(workspace, sparesInitialize: true)
+		self.retireLink(link, workspace: workspace)
+		self.current = LspRelayChild.none
+	end 'retire'
+
+	function currentEnded(link LspChildLink, reason String, workspace LspWorkspaceState)
+		self.report("the compiler at {self.slot.path} ended ({reason}); the checkout is not served until it is rebuilt.", workspace: workspace)
+		self.failInFlight(workspace, sparesInitialize: false)
+		self.current = LspRelayChild.none
+		self.retireLink(link, workspace: workspace)
+	end 'currentEnded'
+
+	function failInFlight(workspace LspWorkspaceState, sparesInitialize bool)
+		let initializeKey = lspRelayIdKey(self.initializeId)
+		var spared = LspRelayInFlightMap.create()
+
+		for (key, request) in self.inFlight 'eachRequest'
+			if sparesInitialize and key == initializeKey 'answeredByTheNextChild'
+				spared.upsert(key, value: request)
+				continue
+			end 'answeredByTheNextChild'
+
+			if request.isShutdown() 'shutdown'
+				respondShutdown(workspace.writer, id: request.id)
+				continue
+			end 'shutdown'
+
+			writeLspError(workspace.writer, id: request.id, code: LspJsonRpcErrorCode.contentModified, message: RelayContentModifiedText)
+		end 'eachRequest'
+
+		self.inFlight = spared
+	end 'failInFlight'
+
+	function forwardStderr(workspace LspWorkspaceState)
+		match self.current 'child'
+			running(link) then self.tellStderr(link, workspace: workspace)
+			none then break
+		end 'child'
+
+		for held in self.retired 'eachRetired'
+			self.tellStderr(held, workspace: workspace)
+		end 'eachRetired'
+	end 'forwardStderr'
+
+	function tellStderr(link LspChildLink, workspace LspWorkspaceState)
+		let text = link.takePendingStderr()
+
+		if text.isEmpty() 'quiet'
+			return
+		end 'quiet'
+
+		self.report("the compiler at {self.slot.path} wrote to its error output:\n{text}", workspace: workspace)
+	end 'tellStderr'
+
+	function rearm(link LspChildLink, workspace LspWorkspaceState)
+		workspace.arrivals.push(async nextChildArrival(link.reader, generation: link.generation))
+	end 'rearm'
+
+	function linkOf(generation LspChildGeneration) returns LspChildLink
+		let live = try self.currentLink() otherwise 'detached'
+			return self.retiredLink(generation)
+		end 'detached'
+
+		if live.generation == generation 'liveOne'
+			return live
+		end 'liveOne'
+
+		return self.retiredLink(generation)
+	end 'linkOf'
+
+	function currentLink() returns LspChildLink throws AbsentError
+		match self.current 'child'
+			running(link) then return link
+			none then throw AbsentError.absent
+		end 'child'
+	end 'currentLink'
+
+	function retiredLink(generation LspChildGeneration) returns LspChildLink
+		for link in self.retired 'eachRetired'
+			if link.generation == generation 'found'
+				return link
+			end 'found'
+		end 'eachRetired'
+
+		panic("LspRelay.retiredLink: an arrival named a child that is neither serving nor retired")
+	end 'retiredLink'
+
+	function serves(link LspChildLink) returns bool
+		return match self.current 'child'
+			running(live) gives live.generation == link.generation
+			none gives false
+		end 'child'
+	end 'serves'
+
+	function relayChildFrame(link LspChildLink, body String, workspace LspWorkspaceState)
+		let doc = try Json.parse(body) otherwise 'notJson'
+			submitToLspWriter(workspace.writer, command: LspWriterCommand.write(body))
+			return
+		end 'notJson'
+
+		if lspMessageIsResponse(doc) 'response'
+			if link.swallowed.remove(lspRelayIdKey(readRequestId(doc))) 'answeredAReplay'
+				return
+			end 'answeredAReplay'
+
+			_ = self.inFlight.remove(lspRelayIdKey(readRequestId(doc)))
+		end 'response'
+
+		submitToLspWriter(workspace.writer, command: LspWriterCommand.write(body))
+	end 'relayChildFrame'
+
+	function forward(body String)
+		match self.current 'child'
+			running(link) then link.send(body)
+			none then return
+		end 'child'
+	end 'forward'
+
+	function forwardTo(link LspChildLink, body String, id LspRequestId, method String)
+		self.recordInFlight(id, method: method)
+		link.send(body)
+	end 'forwardTo'
+
+	function recordInFlight(id LspRequestId, method String)
+		match id 'addressee'
+			absent then return
+			number or
+			text then self.inFlight.upsert(lspRelayIdKey(id), value: LspInFlightRequest.create(id, method: method))
+		end 'addressee'
+	end 'recordInFlight'
+
+	function answerWhileDetached(method String, id LspRequestId, workspace LspWorkspaceState)
+		match id 'addressee'
+			absent then return
+			number or
+			text then self.refuseWhileDetached(method, id: id, workspace: workspace)
+		end 'addressee'
+	end 'answerWhileDetached'
+
+	function refuseWhileDetached(method String, id LspRequestId, workspace LspWorkspaceState)
+		if method == MethodShutdown 'shutdown'
+			respondShutdown(workspace.writer, id: id)
+			return
+		end 'shutdown'
+
+		writeLspError(workspace.writer, id: id, code: LspJsonRpcErrorCode.contentModified, message: RelayDetachedText)
+	end 'refuseWhileDetached'
+
+	function remember(method String, doc JsonDoc, body String, workspace LspWorkspaceState)
+		if method == MethodDidOpen 'opened'
+			try self.rememberOpened(doc) otherwise 'unrecordable'
+				self.reportUnrecordable(method, workspace: workspace)
+			end 'unrecordable'
+		end 'opened' else if method == MethodDidChange 'changed'
+			try self.rememberChanged(doc) otherwise 'unrecordable'
+				self.reportUnrecordable(method, workspace: workspace)
+			end 'unrecordable'
+		end 'changed' else if method == MethodDidClose 'closed'
+			try self.rememberClosed(doc) otherwise 'unrecordable'
+				self.reportUnrecordable(method, workspace: workspace)
+			end 'unrecordable'
+		end 'closed' else if method == RelayInitializedMethod 'initialized'
+			self.initializedBody = StatedText.stated(body)
+		end 'initialized' else if method == MethodDidChangeWorkspaceFolders or method == MethodWorkspaceTrust 'stateful'
+			self.stateNotices.push(body)
+		end 'stateful'
+	end 'remember'
+
+	function reportUnrecordable(method String, workspace LspWorkspaceState)
+		self.report("a {method} notification with malformed params was passed to the compiler but not recorded, so a replacement compiler will not be told of it", workspace: workspace)
+	end 'reportUnrecordable'
+
+	function rememberOpened(doc JsonDoc) throws LspParamsError
+		let (textDocument, uri, text) = try openedDocument(doc)
+		self.documents.upsert(uri, value: LspRelayDocument.create(text, version: clientVersionOf(doc, textDocument: textDocument)))
+	end 'rememberOpened'
+
+	function rememberChanged(doc JsonDoc) throws LspParamsError
+		let (textDocument, uri, text) = try changedDocument(doc)
+		let version = self.versionAfter(clientVersionOf(doc, textDocument: textDocument), uri: uri)
+		self.documents.upsert(uri, value: LspRelayDocument.create(text, version: version))
+	end 'rememberChanged'
+
+	function versionAfter(incoming ClientDocumentVersion, uri String) returns ClientDocumentVersion
+		match incoming 'version'
+			stated then return incoming
+			unstated then break
+		end 'version'
+
+		let known = try self.documents.get(uri) otherwise return ClientDocumentVersion.unstated
+
+		return known.version
+	end 'versionAfter'
+
+	function rememberClosed(doc JsonDoc) throws LspParamsError
+		let (_, _, uri) = try notifiedDocument(doc)
+		_ = self.documents.remove(uri)
+	end 'rememberClosed'
+end 'LspRelay'

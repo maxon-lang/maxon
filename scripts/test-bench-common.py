@@ -2,7 +2,6 @@ import os
 import stat
 import subprocess
 import sys
-import tempfile
 import unittest
 from unittest import mock
 
@@ -58,12 +57,12 @@ def present_entries(out_dir):
 
 class OutputRootTest(unittest.TestCase):
     def setUp(self):
-        self.scratch = tempfile.TemporaryDirectory()
+        self.scratch = bench_common.temp_directory("test-bench-common")
+        self.addCleanup(self.scratch.cleanup)
         self.out_dir = os.path.join(self.scratch.name, "out")
 
     def tearDown(self):
         bench_common.release_output_root(self.out_dir)
-        self.scratch.cleanup()
 
     def test_a_second_run_on_the_same_root_is_refused_naming_the_holder(self):
         code = ("import sys; sys.path.insert(0, sys.argv[1]); import bench_common; "
@@ -109,9 +108,13 @@ class OutputRootTest(unittest.TestCase):
 
         self.assertFalse(os.path.exists(os.path.join(self.out_dir, bench_common.IGNORE_MARKER_NAME)))
         self.assertFalse(os.path.exists(os.path.join(bench_common.REPO, bench_common.LOCK_FILE_NAME)))
-        bench_common.open_output_root(os.path.join(bench_common.REPO, "temp", "bench-common-test-root-is-inside-the-repo"), 8, [])
-        bench_common.release_output_root(os.path.join(bench_common.REPO, "temp", "bench-common-test-root-is-inside-the-repo"))
-        bench_common.remove_tree(os.path.join(bench_common.REPO, "temp", "bench-common-test-root-is-inside-the-repo"))
+        inside_the_repo = os.path.join(bench_common.REPO, "temp", "bench-common-test-root-is-inside-the-repo")
+        try:
+            bench_common.open_output_root(inside_the_repo, 8, [])
+            bench_common.release_output_root(inside_the_repo)
+        finally:
+            if os.path.exists(inside_the_repo):
+                bench_common.remove_tree(inside_the_repo)
 
     def test_a_failed_build_and_a_failed_worktree_removal_are_both_reported(self):
         head = bench_common.git(bench_common.REPO, "rev-parse", "--short", "HEAD")
@@ -155,13 +158,27 @@ class OutputRootTest(unittest.TestCase):
         original = OSError("could not open")
         for failure in (original, (OSError, original, None)):
             with self.assertRaises(OSError) as raised:
-                bench_common.make_writable_and_retry(os.open, victim, failure)
+                bench_common.writable_retry_within(victim)(os.open, victim, failure)
             self.assertIs(raised.exception, original)
 
         original = PermissionError("still refused")
         with self.assertRaises(PermissionError) as raised:
-            bench_common.make_writable_and_retry(os.unlink, os.path.join(victim, "absent"), original)
+            bench_common.writable_retry_within(victim)(os.unlink, os.path.join(victim, "absent"), original)
         self.assertIs(raised.exception, original)
+
+    @unittest.skipIf(os.name == "nt", "POSIX directory modes")
+    def test_remove_tree_never_changes_the_mode_above_its_root(self):
+        parent = os.path.join(self.scratch.name, "shared")
+        victim = os.path.join(parent, "victim")
+        os.makedirs(os.path.join(victim, "sub"))
+        os.chmod(parent, 0o1777)
+        os.chmod(os.path.join(victim, "sub"), stat.S_IRUSR | stat.S_IXUSR)
+        os.chmod(victim, stat.S_IRUSR | stat.S_IXUSR)
+
+        bench_common.remove_tree(victim)
+
+        self.assertFalse(os.path.exists(victim))
+        self.assertEqual(stat.S_IMODE(os.stat(parent).st_mode), 0o1777)
 
     def test_a_new_root_is_marked_and_a_marker_is_kept_as_it_is(self):
         bench_common.open_output_root(self.out_dir, bench_common.DEFAULT_KEEP_REFS, [])

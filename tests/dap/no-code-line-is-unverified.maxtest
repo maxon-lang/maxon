@@ -28,7 +28,7 @@ type NoCodeSession implements DapSession
 end 'NoCodeSession'
 
 test 'a breakpoint on a line that emits no code is unverified and says so'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: NoCodeCaseLabel, fixture: SteppingFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: NoCodeCaseLabel, fixture: SteppingFixtureName)
 	let codeless = declarationLine(staged, needle: TypealiasDeclaration)
 	var session = NoCodeSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), codeless: codeless, anchored: anchorLine(staged.join(StagedProgramFileName), anchor: InnerLoopAnchor))
 	try dapRunSession(session, completing: "complete")
@@ -36,4 +36,6 @@ test 'a breakpoint on a line that emits no code is unverified and says so'
 	try Expect.isFalse(dapBreakpointVerified(session.refused, index: 0), message: "line {codeless} is a `{TypealiasDeclaration}` and emits nothing; a verified breakpoint there is a marker the editor draws over a line the program can never reach")
 	try Expect.isTrue(dapBreakpointHasMessage(session.refused, index: 0), message: "an unverified breakpoint must carry the reason, so the greyed-out marker means something to the person who clicked it; it answered {dapDescribed(session.refused)}")
 	try Expect.isTrue(session.controlVerified, message: "a line of the SAME file that does emit code must verify — otherwise the refusal above is about the file, not about the line")
+
+	discardStagedDir(staged)
 end 'a breakpoint on a line that emits no code is unverified and says so'

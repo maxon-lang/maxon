@@ -27,7 +27,7 @@ physical file. The directory holding the case is resolved first, so a working di
 through a link does not matter.
 ```maxon
 function main() returns ExitCode
-	let base = (FilePath from "temp/resolved-physically-links").resolve(Directory.currentPath())
+	let base = (FilePath from "resolved-physically-links").resolve(Directory.currentPath())
 	let inner = base.join("real").join("inner")
 
 	if not Directory.create(inner) 'noDirectory'
@@ -82,7 +82,7 @@ A Windows directory junction, and a file reached through one, resolve to the one
 a drive letter and no `\\?\` prefix. The junction is made with `mklink /J`, which needs no elevation.
 ```maxon
 function main() returns ExitCode
-	let base = (FilePath from "temp\\resolved-physically-junction").resolve(Directory.currentPath())
+	let base = (FilePath from "resolved-physically-junction").resolve(Directory.currentPath())
 	let inner = base.join("real").join("inner")
 
 	if not Directory.create(inner) 'noDirectory'

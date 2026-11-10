@@ -9,11 +9,11 @@
 // rebuild the tree's compiler as a side effect of running the corpus. The property under test is the
 // OS's, not the build's: rename the image, write another in its place, and ask the process.
 
-let RebuildStagedDirName = "temp/mcp-rebuild"
+let RebuildStagedDirName = "mcp-rebuild"
 let StagedCompilerName = "maxon-under-test"
 
 test 'mcp server keeps answering after its executable is replaced on disk'
-	let dir = stagingDir(RebuildStagedDirName)
+	let dir = stagedInTreeDirNamed(RebuildStagedDirName)
 	let staged = stagedCopyOf(testedCompilerPath(), dir: dir, name: StagedCompilerName)
 
 	var session = StreamingMcpSession.startFrom(staged, devMode: false)
@@ -43,4 +43,6 @@ test 'mcp server keeps answering after its executable is replaced on disk'
 
 	try File.delete(vacated) otherwise ignore
 	try File.delete(replacement) otherwise ignore
+
+	discardStagedDir(dir)
 end 'mcp server keeps answering after its executable is replaced on disk'

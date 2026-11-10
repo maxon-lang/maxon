@@ -75,7 +75,7 @@
 // Where the fixture projects live, relative to the checkout root — see the working-directory contract
 // above. This file sits beside that directory, but a path relative to THIS file is not something a
 // running binary has, so it is spelled from the root like every other path here.
-let FixturesDir = "tests/test-fixtures"
+module let FixturesDir = "tests/test-fixtures"
 
 // The two flags EVERY case is run with, here rather than in each fixture's `argv.txt` so they cannot
 // drift case by case. Both exist to make stdout byte-reproducible: `--no-timing` drops the per-test
@@ -99,7 +99,6 @@ let SubjectFileName = "subject.txt"
 let ProjectDir = "tests/testCommand"
 let SharedHelperFileName = "fixtures.maxtest"
 
-let StagingRootDir = "temp/testCommand"
 let StagedProjectDirName = "proj"
 let StagedCacheDirName = "cache"
 let PassedTestMarker = "✓ "
@@ -201,7 +200,7 @@ export function runManifestBuildIn(project FilePath, caseName String) returns Co
 end 'runManifestBuildIn'
 
 export function stagedCaseProject(caseName String) returns FilePath
-	let caseRoot = freshCaseRoot("{StagingRootDir}/{caseName}")
+	let caseRoot = freshCaseRoot(testScratchDir().join(caseName).toString())
 	stageStoredTree(fixtureDir("{FixturesDir}/{caseName}"), into: caseRoot)
 
 	let project = caseRoot.join(StagedProjectDirName)

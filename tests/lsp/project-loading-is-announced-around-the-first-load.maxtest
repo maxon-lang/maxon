@@ -16,7 +16,7 @@ test 'project loading is announced around the first load'
 
 	if let notices = try noticesAroundTheFirstLoad(client, root: root, uri: fileUriOf(root.join(AnnouncedLoadMainFileName))) 'observed'
 		client.release()
-		discardOutsideCheckoutDir(root)
+		discardStagedDir(root)
 		let (firstLoad, heldProject) = notices
 		requireLoadAnnouncedOnlyAroundTheFirstLoad(firstLoad, heldProject: heldProject)
 	end 'observed' else (e) 'failed'
@@ -40,7 +40,7 @@ function noticesAroundTheFirstLoad(client LspClient, root FilePath, uri String) 
 end 'noticesAroundTheFirstLoad'
 
 function requireLoadAnnouncedOnlyAroundTheFirstLoad(firstLoad ProjectLoadingNoticeArray, heldProject ProjectLoadingNoticeArray) throws TestFailure
-	try requireOneAnnouncedLoad(firstLoad, expectedTail: outsideCheckoutDirName(AnnouncedLoadDirName), note: "a document was opened in a project the server did not yet hold, and a `textDocument/definition` was asked there; the notices were read once its reply had arrived. The open builds the project and the definition is answered out of it.")
+	try requireOneAnnouncedLoad(firstLoad, expectedTail: AnnouncedLoadDirName, note: "a document was opened in a project the server did not yet hold, and a `textDocument/definition` was asked there; the notices were read once its reply had arrived. The open builds the project and the definition is answered out of it.")
 
 	try requireNoAnnouncedLoad(heldProject, note: "the same `textDocument/definition` was repeated against the project the server already holds.")
 end 'requireLoadAnnouncedOnlyAroundTheFirstLoad'

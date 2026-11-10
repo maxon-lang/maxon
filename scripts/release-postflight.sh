@@ -31,6 +31,8 @@ cd "$repo_root"
 . scripts/lib/host-binaries.sh
 # shellcheck disable=SC1091
 . scripts/lib/checksums.sh
+# shellcheck disable=SC1091
+. scripts/lib/system-temp.sh
 
 Repo="maxon-lang/maxon"
 ReleasesUrl="https://github.com/$Repo/releases"
@@ -66,8 +68,8 @@ tag="v$version"
 # version takes dots.
 post_slug="maxon-$(printf '%s' "$version" | tr '.' '-')"
 
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT INT TERM
+temp_make dir release-postflight
+work="$TempMade"
 
 gh_unavailable="$(check_gh_reason)"
 

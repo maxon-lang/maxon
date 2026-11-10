@@ -152,13 +152,14 @@ export type EntryStubCalls
 	export let releasesRegistry as bool
 	export let capturesArguments as bool
 	export let capturesEnvironment as bool
+	export let gatesDescendants as bool
 
 	export static function none() returns EntryStubCalls
-		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false, releasesRegistry: false, capturesArguments: false, capturesEnvironment: false}
+		return Self{runsMainOnAGreenThread: false, checksLeaks: false, bracketsDebugStream: false, dumpsCoverage: false, releasesRegistry: false, capturesArguments: false, capturesEnvironment: false, gatesDescendants: false}
 	end 'none'
 
 	export static function fromUsage(usage RuntimeUsage, target Target) returns EntryStubCalls
-		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage, releasesRegistry: usage.releasesRegistry, capturesArguments: usage.usesCommandLine and argumentsArriveAsHostList(target), capturesEnvironment: usage.usesEnvironment and environmentArrivesAsHostList(target)}
+		return Self{runsMainOnAGreenThread: usage.usesGt, checksLeaks: usage.usesHeap, bracketsDebugStream: usage.usesDebugStream, dumpsCoverage: usage.usesCoverage, releasesRegistry: usage.releasesRegistry, capturesArguments: usage.usesCommandLine and argumentsArriveAsHostList(target), capturesEnvironment: usage.usesEnvironment and environmentArrivesAsHostList(target), gatesDescendants: usage.usesGt and usage.usesProcessDescendants and targetProvidesFacility(target, facility: HostFacility.processDescendants)}
 	end 'fromUsage'
 
 	export function allocatesHostLists() returns bool
@@ -393,6 +394,7 @@ module function compilerOwnedRoots(target Target, stub EntryStubCalls) returns C
 	roots.push(CompilerOwnedRoot.create(AsyncPreemptParkName, isCalledHere: targetStopsThreadsForPreemption(target)))
 	roots.push(CompilerOwnedRoot.create(GtDrainAtExitName, isCalledHere: stub.runsMainOnAGreenThread))
 	roots.push(CompilerOwnedRoot.create(GtRunMainName, isCalledHere: stub.runsMainOnAGreenThread))
+	roots.push(CompilerOwnedRoot.create(ProcessDescendantGateName, isCalledHere: stub.gatesDescendants))
 	roots.push(CompilerOwnedRoot.create(GtPreemptName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(GtStackAllocName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(GtStackFreeName, isCalledHere: true))
@@ -752,6 +754,7 @@ module function stdFunctionReferenceOf(op StdOp, byName FuncIndexByName, into St
 		osNetpoll or
 		cryptoRoutine or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osSocketServe then break
 		call(_, callee, _) then into.resolve(callee, resolvedKind: StdFunctionReferenceKind.directCall, byName: byName)

@@ -1,0 +1,51 @@
+let SpawnFailureCaseDirName = "relay-spawn-failure"
+let SpawnFailureDocumentName = "one.maxon"
+let SpawnFailureDocumentText = "unspawned"
+let SpawnFailureReportNeedle = "could not start the compiler"
+let SpawnFailureQuietMs = 2500
+let SpawnFailureTicksMs = 1500
+
+test 'relay: a compiler that fails to start is reported once and tried again only after its file changes'
+	let caseDir = stagedRelayCase(SpawnFailureCaseDirName)
+	installUnrunnableRelaySlot(caseDir)
+
+	var client = LspClient.start()
+
+	if let observed = try failedToStartThenChanged(client, caseDir: caseDir) 'observed'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.notEqual(observed.0, expected: RelayFakeServerName, message: "a compiler that cannot start answered initialize.")
+		try Expect.equal(observed.1, expected: "{RelayContentModifiedCode}", message: "a request made while no compiler could be started was not refused with the LSP ContentModified code.")
+		try Expect.equal(observed.2, expected: 1, message: "the failure to start was not reported to the client, once, ahead of the first request it made after initialize.")
+		try Expect.equal(observed.3, expected: 0, message: "the same failure to start was reported again.")
+		try Expect.equal(observed.4, expected: "{RelayContentModifiedCode}", message: "a compiler whose file did not change was started again.")
+		try Expect.equal(observed.5, expected: "generation 2 saw: {SpawnFailureDocumentText}", message: "the compiler put in the slot after the failure did not take over the open document.")
+	end 'observed' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a compiler that fails to start is reported once and tried again only after its file changes'
+
+function failedToStartThenChanged(client LspClient, caseDir FilePath) returns (String, String, ElementIndex, ElementIndex, String, String) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(SpawnFailureDocumentName))
+	let advertised = try client.initializeAtRoot(relayCheckout(caseDir))
+	let served = try advertised.serverIdentity.serverName()
+
+	try client.initialized()
+	try client.openDocument(uri, content: SpawnFailureDocumentText)
+
+	let refusal = try relayHoverRefusal(client, uri: uri)
+	let reportedWithTheReply = (try client.takeLogMessages(SpawnFailureReportNeedle)).count()
+	let reportedAgain = try client.countLogMessagesWhilePolling(SpawnFailureReportNeedle, polled: uri, forMs: SpawnFailureQuietMs)
+
+	makeRelaySlotRunnable(caseDir)
+	sleep(SpawnFailureTicksMs)
+
+	let refusalAfterRepair = try relayHoverRefusal(client, uri: uri)
+
+	replaceRelaySlot(caseDir, generation: 2)
+
+	let published = relayFirstMessage(try awaitFakePublish(client, uri: uri, generation: 2, text: SpawnFailureDocumentText))
+
+	return (served, refusal, reportedWithTheReply, reportedAgain, refusalAfterRepair, published)
+end 'failedToStartThenChanged'

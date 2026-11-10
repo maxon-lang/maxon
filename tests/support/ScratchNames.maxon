@@ -1,9 +1,9 @@
 public let ScratchNameProbeFixtureDir = "tests/support/scratch-name"
 public let ScratchNameSourcePaths = ["maxon-bin/Run/ScratchName.maxon", "maxon-bin/Run/HostIdentity.maxon", "maxon-bin/Compiler/Target.maxon"]
-public let ScratchNameProbeStagingDir = "temp/scratch-name"
 public let OwnHostNamespace = "own"
 public let DebugStreamDecoderSourcePath = "maxon-bin/Debug/DebugStreamDecoder.maxon"
 
+let ScratchNameProbeDirName = "scratch-name"
 let ProbeExecuteWord = "execute"
 let ProbeCacheDirName = "cache"
 let ProbeSourcesDirName = "sources"
@@ -15,9 +15,10 @@ let SourceLineSeparator = "\n"
 let QuoteMark = "\""
 
 public function scratchNameProbe(caseLabel String, arguments StringArray) returns CollectedOutput
-	let caseDir = stagingDir("{ScratchNameProbeStagingDir}/{caseLabel}")
-	let sources = freshStagingDir("{ScratchNameProbeStagingDir}/{caseLabel}/{ProbeSourcesDirName}")
-	let cache = stagingDir("{ScratchNameProbeStagingDir}/{caseLabel}/{ProbeCacheDirName}")
+	let probeRoot = projectScratchDir().join("{ScratchNameProbeDirName}-{caseLabel}")
+	let caseDir = stagingDir(probeRoot.toString())
+	let sources = freshStagingDir(probeRoot.join(ProbeSourcesDirName).toString())
+	let cache = stagingDir(probeRoot.join(ProbeCacheDirName).toString())
 
 	stageStoredTree(fixtureDir(ScratchNameProbeFixtureDir), into: sources)
 
@@ -32,7 +33,10 @@ public function scratchNameProbe(caseLabel String, arguments StringArray) return
 	argv.push(sources.toString())
 	argv.append(arguments)
 
-	return spawnCompiler(argv, staged: caseDir, what: "the scratch-name probe", environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()]))
+	let run = spawnCompiler(argv, staged: caseDir, what: "the scratch-name probe", environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()]))
+	discardStagedDir(probeRoot)
+
+	return run
 end 'scratchNameProbe'
 
 public function debugStreamSegmentPrefix() returns String

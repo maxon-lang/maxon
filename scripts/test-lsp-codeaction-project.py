@@ -9,18 +9,17 @@ that:
 
 Exits 0 on success, non-zero on any mismatch."""
 
-import json
+import contextlib
 import os
-import shutil
-import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-ROOT = Path(__file__).resolve().parent.parent
-MAXON_EXE = ROOT / "bin" / "maxon.exe"
+import bench_common
+from lsp_smoke import CODE_ACTION_REQUEST_ID, CODE_ACTION_WAIT_SECONDS, MAXON_EXE, ROOT, await_response, lsp_server, read_message, send, shut_down
+
 
 # A .maxproj file marks where a project begins, so the two .maxon files beside
 # it are one project.
@@ -52,47 +51,17 @@ end 'main'
 """
 
 
-def send(proc, payload):
-  body = json.dumps(payload).encode("utf-8")
-  header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
-  proc.stdin.write(header + body)
-  proc.stdin.flush()
-
-
-def read_message(proc, deadline):
-  header = b""
-  while True:
-    if time.time() > deadline:
-      return None
-    ch = proc.stdout.read(1)
-    if not ch:
-      return None
-    header += ch
-    if header.endswith(b"\r\n\r\n"):
-      break
-  length = 0
-  for line in header.decode("ascii").split("\r\n"):
-    if line.lower().startswith("content-length:"):
-      length = int(line.split(":", 1)[1].strip())
-  body = b""
-  while len(body) < length:
-    chunk = proc.stdout.read(length - len(body))
-    if not chunk:
-      return None
-    body += chunk
-  return json.loads(body.decode("utf-8"))
-
-
 def main():
   if not MAXON_EXE.exists():
     print(f"missing {MAXON_EXE}", file=sys.stderr)
     return 1
 
-  tmp_dir = Path(os.environ.get("TEMP", "/tmp")) / "maxon-lsp-codefix-project-test"
-  if tmp_dir.exists():
-    shutil.rmtree(tmp_dir)
-  tmp_dir.mkdir(parents=True)
+  with contextlib.ExitStack() as stack:
+    tmp_dir = Path(stack.enter_context(bench_common.temp_directory("lsp-codefix-project")).name)
+    return run(tmp_dir, stack)
 
+
+def run(tmp_dir, stack):
   (tmp_dir / "app.maxproj").write_text(PROJECT_MAXON, encoding="utf-8")
   file_a = tmp_dir / "a.maxon"
   file_b = tmp_dir / "b.maxon"
@@ -101,21 +70,7 @@ def main():
   uri_a = file_a.as_uri()
   uri_b = file_b.as_uri()
 
-  proc = subprocess.Popen(
-    [str(MAXON_EXE), "lsp-server"],
-    stdin=subprocess.PIPE,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    cwd=str(ROOT),
-  )
-
-  def drain_stderr():
-    while True:
-      line = proc.stderr.readline()
-      if not line:
-        return
-
-  threading.Thread(target=drain_stderr, daemon=True).start()
+  proc = stack.enter_context(lsp_server(MAXON_EXE, ROOT))
 
   send(proc, {
     "jsonrpc": "2.0",
@@ -194,7 +149,7 @@ def main():
   # b.maxon edits too.
   send(proc, {
     "jsonrpc": "2.0",
-    "id": 2,
+    "id": CODE_ACTION_REQUEST_ID,
     "method": "textDocument/codeAction",
     "params": {
       "textDocument": {"uri": uri_a},
@@ -206,22 +161,8 @@ def main():
     },
   })
 
-  response = None
-  deadline = time.time() + 10
-  while time.time() < deadline:
-    msg = read_message(proc, deadline)
-    if msg is None:
-      break
-    if msg.get("id") == 2:
-      response = msg
-      break
-
-  send(proc, {"jsonrpc": "2.0", "id": 99, "method": "shutdown"})
-  send(proc, {"jsonrpc": "2.0", "method": "exit"})
-  try:
-    proc.wait(timeout=5)
-  except subprocess.TimeoutExpired:
-    proc.terminate()
+  response = await_response(proc, CODE_ACTION_REQUEST_ID, CODE_ACTION_WAIT_SECONDS)
+  shut_down(proc)
 
   if response is None:
     print("no codeAction response", file=sys.stderr)

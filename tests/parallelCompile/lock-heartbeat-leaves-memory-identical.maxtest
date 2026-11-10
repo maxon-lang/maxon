@@ -4,7 +4,7 @@
 	let NoUpkeep = "0"
 
 	test 'a compile that outlasts the lock heartbeat reports the memory of one that does not'
-		let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "lock-heartbeat-leaves-memory-identical", fixture: "uneven-program")
+		let staged = stagedFixtureTree(FixturesDirName, caseLabel: "lock-heartbeat-leaves-memory-identical", fixture: "uneven-program")
 
 		_ = builtMetricsTable(staged, label: "library-cache warm-up")
 
@@ -17,5 +17,7 @@
 		Expect.notEqual(pausedUpkeep, expected: NoUpkeep, message: "the build held up for {HeartbeatPauseSeconds} s reported no lock upkeep, so no refresh happened inside it and the two builds would agree whatever the accounting does.")
 
 		requireIdenticalMemory(prompt, second: paused, kind: "paused")
+
+		discardStagedDir(staged)
 	end 'a compile that outlasts the lock heartbeat reports the memory of one that does not'
 #endif

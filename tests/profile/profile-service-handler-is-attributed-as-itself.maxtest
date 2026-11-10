@@ -18,7 +18,7 @@ let ProfileServiceHandlerIsAttributedAsItselfMaxRuntimeShareDivisor = 2
 let SyntheticFramePrefix = "["
 
 test 'a service handler inlined into its synthesized loop is attributed as itself and a switch is not a stack of its own'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-service-handler-is-attributed-as-itself", fixture: ServiceLoopFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-service-handler-is-attributed-as-itself", fixture: ServiceLoopFixtureName)
 	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: ServiceLoopFixtureName)
 
 	let run = runProfiler(staged, extraArguments: profilerArguments(false))
@@ -42,6 +42,8 @@ test 'a service handler inlined into its synthesized loop is attributed as itsel
 
 	let rootless = runtimeOnlyFoldedLines(folded.stdout, runtimeOwned: runtimeOwnedNames(staged))
 	Expect.isTrue(rootless.isEmpty(), message: "`{FoldedFlag}` printed {rootless.count()} collapsed stack(s) rooted in the runtime that carry no frame of the program. A walk that stopped inside the runtime — inside a context switch, between its stack-pointer switch and its frame-pointer restore — has lost the stack it belongs to, and its sample belongs on the '{RuntimeLinePrefix}' line, not on a stack of its own. They were:{LineFeed}{terminatedLines(rootless)}{LineFeed}The whole output was:{LineFeed}{folded.stdout}")
+
+	discardStagedDir(staged)
 end 'a service handler inlined into its synthesized loop is attributed as itself and a switch is not a stack of its own'
 
 function profilerArguments(folded bool) returns StringArray

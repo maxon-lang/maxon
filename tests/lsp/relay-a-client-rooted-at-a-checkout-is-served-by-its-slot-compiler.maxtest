@@ -1,0 +1,45 @@
+let ServedCaseDirName = "relay-served"
+let ServedDocumentName = "one.maxon"
+let ServedDocumentText = "alpha"
+let ServedExpectedMessage = "generation 1 saw: alpha"
+let ServedCleanExitText = "0"
+
+test 'relay: a client rooted at a checkout is served by that checkouts slot compiler'
+	let caseDir = stagedRelayCase(ServedCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	var client = LspClient.start()
+
+	if let observed = try servedBySlotCompiler(client, caseDir: caseDir) 'served'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.equal(observed.0, expected: RelayFakeServerName, message: "the initialize reply came from the compiler that was launched, not from the compiler the checkout's slot holds.")
+		try Expect.equal(observed.1, expected: ServedExpectedMessage, message: "an open document was checked by the compiler that was launched, not by the compiler the checkout's slot holds.")
+		try Expect.equal(observed.2, expected: ServedCleanExitText, message: "a session that asked for shutdown and exit did not end with code 0.")
+	end 'served' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a client rooted at a checkout is served by that checkouts slot compiler'
+
+function servedBySlotCompiler(client LspClient, caseDir FilePath) returns (String, String, String) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(ServedDocumentName))
+	let advertised = try client.initializeAtRoot(relayCheckout(caseDir))
+	let served = try advertised.serverIdentity.serverName()
+
+	if served != RelayFakeServerName 'notTheSlot'
+		return (served, "", "")
+	end 'notTheSlot'
+
+	try client.initialized()
+	try client.openDocument(uri, content: ServedDocumentText)
+
+	let message = relayFirstMessage(try awaitFakePublish(client, uri: uri, generation: 1, text: ServedDocumentText))
+
+	try client.shutdown()
+	try client.exit()
+
+	let code = try client.waitForExit()
+
+	return (served, message, "{code}")
+end 'servedBySlotCompiler'

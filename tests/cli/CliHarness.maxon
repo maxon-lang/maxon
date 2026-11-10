@@ -94,10 +94,6 @@ export let DryRunFlag = "--dry-run"
 export let McpServerCommandWord = "mcp-server"
 export let DevFlag = "--dev"
 
-// Where a case places a copy of the compiler, relative to the checkout root: gitignored, and one
-// directory per case under it, because `maxon test` runs files concurrently.
-let StagingRootDirName = "temp/cli"
-
 // The directory a script install keeps its binary in - `<root>/bin/maxon` beside `<root>/stdlib` - and the
 // spelling a staging call uses for the case's own directory. Respelled from the install script, which this
 // corpus cannot read.
@@ -240,10 +236,29 @@ end 'stageCompiler'
 export function freshCaseDir(caseDirName String) returns FilePath
 	requireOneDirectoryName(caseDirName)
 
-	let dir = stagingDir(caseRelative(caseDirName, relative: CaseDirItself))
+	let dir = stagedCaseDir(caseDirName)
 	clearStagedTree(dir)
 	return dir
 end 'freshCaseDir'
+
+export function stagedCaseDir(caseDirName String) returns FilePath
+	return stagingDir(caseRelative(caseDirName, relative: CaseDirItself))
+end 'stagedCaseDir'
+
+function freshCaseDirBelowTheCheckout(caseDirName String) returns FilePath
+	requireOneDirectoryName(caseDirName)
+
+	let dir = stagingDir("{CheckoutStagingRootDirName}{PortablePathSeparator}{caseDirectoryName(caseDirName)}")
+	clearStagedTree(dir)
+
+	return dir
+end 'freshCaseDirBelowTheCheckout'
+
+export function freshCaseDirInTree(caseDirName String) returns FilePath
+	requireOneDirectoryName(caseDirName)
+
+	return stagingDir("{projectScratchDir().toString()}{PortablePathSeparator}{caseDirectoryName(caseDirName)}")
+end 'freshCaseDirInTree'
 
 let BesideAProgramMainSource = "function main() returns ExitCode\n\tlet started = WallClock.nowUnixSeconds()\n\treturn 0 if started > 0 else 1\nend 'main'\n"
 let BesideAProgramOutputStem = "program"
@@ -256,10 +271,15 @@ export type ProgramBuiltBesideALibraryFile
 	static function create(executable FilePath, build CollectedOutput) returns ProgramBuiltBesideALibraryFile
 		return Self{executable: executable, build: build}
 	end 'create'
+
+	export function discard()
+		let dir = try self.executable.parent() otherwise panic("CliHarness: the program built beside a library file has no directory.")
+		discardStagedDir(dir)
+	end 'discard'
 end 'ProgramBuiltBesideALibraryFile'
 
 export function buildAProgramBesideALibraryFile(caseDirName String, libraryFile String, options StringArray) returns ProgramBuiltBesideALibraryFile
-	let dir = freshCaseDir(caseDirName)
+	let dir = freshCaseDirBelowTheCheckout(caseDirName)
 	let main = dir.join(StagedProgramFileName)
 	writeStagedFile(main, content: BesideAProgramMainSource)
 
@@ -285,6 +305,8 @@ export function expectALibraryFileBesideAProgramIsReadOnce(caseDirName String, l
 	try Expect.isFalse(build.stderr.contains(DuplicateDefinitionCode), message: "`{libraryFile}` was named on the command line and is also {whoseFile}, so the build loaded it twice and every declaration in it collided with itself. {said}")
 	try Expect.equal(build.exitCode(), expected: 0, message: "a program built together with `{libraryFile}` did not build. The file is {whoseFile} whether or not a command line names it, and a build that reads it once compiles clean. {said}")
 	try Expect.isTrue(File.exists(built.executable), message: "the build exited 0 and wrote no executable. {said}")
+
+	built.discard()
 end 'expectALibraryFileBesideAProgramIsReadOnce'
 
 // An interface rather than a closure, because a closure may not throw a `TestFailure` (E3101).
@@ -334,11 +356,11 @@ end 'freshOutsideCheckoutDirWithoutVendor'
 
 function requireHeldThenDiscard(dir FilePath, check OutsideCheckoutCase) throws TestFailure
 	try check.requireHeldIn(dir) otherwise (failure) 'failed'
-		discardOutsideCheckoutDir(dir)
+		discardStagedDir(dir)
 		throw failure
 	end 'failed'
 
-	discardOutsideCheckoutDir(dir)
+	discardStagedDir(dir)
 end 'requireHeldThenDiscard'
 
 // The cache root a case hands the driver: a directory under the case's own staging directory, so nothing
@@ -555,6 +577,58 @@ end 'publishCachedBuild'
 
 // The same build published under the cache a HOME directory names — the only way to fill a candidate the
 // override outranks, and what a clear must reach as well as the one in use.
+let CacheLinkOutsideDirName = "not-the-caches"
+let CacheLinkName = "planted-link"
+let OutsideFileContent = "a file in a directory a link planted in the cache points at"
+let OutsideFileNames = ["not-maxons.txt", "also-not-maxons.txt", "nor-these.txt"]
+
+export type PlantedCacheLink
+	export let link as FilePath
+	export let outside as FilePath
+	export let outsideFiles as FilePathArray
+
+	static function create(link FilePath, outside FilePath, outsideFiles FilePathArray) returns PlantedCacheLink
+		return Self{link: link, outside: outside, outsideFiles: outsideFiles}
+	end 'create'
+
+	export function survivingOutsideFiles() returns ReportedTally
+		var surviving = 0 as ReportedTally
+
+		for file in self.outsideFiles 'eachFile'
+			if File.exists(file) and (try File.readText(file) otherwise "") == OutsideFileContent 'intact'
+				surviving = surviving + 1
+			end 'intact'
+		end 'eachFile'
+
+		return surviving
+	end 'survivingOutsideFiles'
+end 'PlantedCacheLink'
+
+export function plantedLinkInTheLibraryCache(dir FilePath, linkName String = CacheLinkName) returns PlantedCacheLink
+	let outside = dir.join(CacheLinkOutsideDirName)
+	let library = libraryCacheDirIn(dir)
+	let link = library.join(linkName)
+	var outsideFiles = FilePathArray.create(0)
+
+	if not Directory.create(outside) 'noOutside'
+		panic("CliHarness: the gate could not create {outside.toString()}")
+	end 'noOutside'
+
+	for name in OutsideFileNames 'eachName'
+		let file = outside.join(name)
+		writeStagedFile(file, content: OutsideFileContent)
+		outsideFiles.push(file)
+	end 'eachName'
+
+	if not Directory.create(library) 'noLibrary'
+		panic("CliHarness: the gate could not create {library.toString()}")
+	end 'noLibrary'
+
+	plantedDirectoryLink(link, target: outside.toString())
+
+	return PlantedCacheLink.create(link, outside: outside, outsideFiles: outsideFiles)
+end 'plantedLinkInTheLibraryCache'
+
 export function publishCachedBuildInHome(dir FilePath, home FilePath)
 	var naming = EnvMap.create()
 	naming.upsert(HomeDirectoryVariable, value: home.toString())
@@ -667,7 +741,7 @@ end 'copyFile'
 
 // A case's staging directory, or a directory under it, spelled from the checkout root.
 function caseRelative(caseDirName String, relative String) returns String
-	let caseDir = "{StagingRootDirName}{PortablePathSeparator}{caseDirectoryName(caseDirName)}"
+	let caseDir = "{testScratchDir().toString()}{PortablePathSeparator}{caseDirectoryName(caseDirName)}"
 	return caseDir if relative.isEmpty() else "{caseDir}{PortablePathSeparator}{relative}"
 end 'caseRelative'
 
@@ -1889,6 +1963,8 @@ export function requireDeclarationRefused(caseDirName String, source String, ref
 	try Expect.equal(run.exitCode(), expected: 1, message: "a declaration of {DeclaredMemberCount} members ({caseDirName}) was not refused. It said: {run.stdout}{run.stderr}")
 	try Expect.isFalse(run.stderr.contains(CompilerPanicPhrase), message: "a declaration of {DeclaredMemberCount} members ({caseDirName}) panicked the compiler. It said: {run.stderr}")
 	try Expect.contains(run.stderr, needle: refusal, message: "a declaration of {DeclaredMemberCount} members ({caseDirName}) is not refused as `{refusal}`. It said: {run.stderr}")
+
+	discardStagedDir(dir)
 end 'requireDeclarationRefused'
 
 export function requireScratchNameCheckPasses(check String) throws TestFailure

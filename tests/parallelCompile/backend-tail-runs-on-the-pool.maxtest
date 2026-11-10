@@ -13,7 +13,7 @@ let EncodePhase = "encode"
 typealias RuleTally = int(0 to u64.max)
 
 test 'the backend tail is timed on the pool'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "backend-tail-runs-on-the-pool", fixture: "pool-program")
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "backend-tail-runs-on-the-pool", fixture: "pool-program")
 
 	var arguments = StringArray.create(0)
 	arguments.push(CompilerDebugLogFlag)
@@ -37,6 +37,8 @@ test 'the backend tail is timed on the pool'
 	end 'eachPhase'
 
 	Expect.isEmpty(listedLines(missing), message: "the compile-timings table has no POOL row for these phases of the backend tail, so they still run on the main thread after the allocator's pool rather than inside each function's pool job:{listedLines(missing)}{LineFeed}Its phase rows were:{listedLines(rows)}")
+
+	discardStagedDir(staged)
 end 'the backend tail is timed on the pool'
 
 function backendTailPhases() returns StringArray

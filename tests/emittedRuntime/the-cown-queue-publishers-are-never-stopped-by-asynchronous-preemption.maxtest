@@ -12,7 +12,7 @@ let ExecutableSuffix = ".exe"
 let TheCownQueuePublishersAreNeverStoppedReason = "A publisher swaps itself in as the cown's tail and then stores the previous tail's `next`. A runner or a multi-cown release that lost its release CAS spins on that `next` with no way to yield, so a publisher stopped between the swap and the store would hold it there until the publisher is resumed. `__symtable` carries one safe-point byte per symbol, so no publisher may be a symbol asynchronous preemption can stop; the runner's own finish claim publishes through `__cown_enqueue_finish` for that reason."
 
 test 'every cown queue publisher is a symbol asynchronous preemption never stops'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TheCownQueuePublishersAreNeverStoppedCaseLabel, fixture: CownFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: TheCownQueuePublishersAreNeverStoppedCaseLabel, fixture: CownFixtureName)
 
 	var findings = StringArray.create(0)
 
@@ -21,6 +21,8 @@ test 'every cown queue publisher is a symbol asynchronous preemption never stops
 	end 'eachTarget'
 
 	Expect.isTrue(findings.isEmpty(), message: "a cown queue publisher can be stopped between its tail swap and its link:{renderedFindings(findings)}\n\n  {TheCownQueuePublishersAreNeverStoppedReason}")
+
+	discardStagedDir(staged)
 end 'every cown queue publisher is a symbol asynchronous preemption never stops'
 
 function notePublishersOf(findings StringArray, staged FilePath, target String)

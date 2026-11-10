@@ -39,7 +39,7 @@ type ExitSession implements DapSession
 end 'ExitSession'
 
 test 'a program continued to completion reports its exit code and then terminates the session'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ExitCaseLabel, fixture: HeaplessFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ExitCaseLabel, fixture: HeaplessFixtureName)
 	var session = ExitSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: HotAnchor))
 	try dapRunSession(session, completing: "run the program to its own exit")
 
@@ -47,4 +47,6 @@ test 'a program continued to completion reports its exit code and then terminate
 	try Expect.isTrue(session.continued, message: "`{ContinueCommand}` must answer its own request successfully")
 	try Expect.equal(session.exitCode, expected: HeaplessExitCode, message: "the `{ExitedEvent}` event must carry the program's OWN exit code — the fixture returns {HeaplessExitCode} — not the adapter's or the driver's; it reported {session.exitCode}")
 	try Expect.isTrue(session.sawTerminated, message: "`{TerminatedEvent}` must follow `{ExitedEvent}`; without it an editor leaves the debug session showing as live after the program is gone")
+
+	discardStagedDir(staged)
 end 'a program continued to completion reports its exit code and then terminates the session'

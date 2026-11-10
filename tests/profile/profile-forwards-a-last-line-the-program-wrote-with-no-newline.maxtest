@@ -2,11 +2,13 @@ let UnterminatedTailFixtureName = "unterminatedtail"
 let UnterminatedTailWords = "unterminatedtail: the last words, with no newline"
 
 test 'a profile forwards the last line its program wrote with no newline'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-forwards-a-last-line", fixture: UnterminatedTailFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-forwards-a-last-line", fixture: UnterminatedTailFixtureName)
 	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: UnterminatedTailFixtureName)
 
 	let run = runProfiler(staged, extraArguments: StringArray.create(0))
 
 	Expect.equal(run.exitCode(), expected: 0, message: "the profile of a program that exited 0 did not complete. It wrote to stderr: {run.stderr}")
 	Expect.contains(run.stderr, needle: UnterminatedTailWords, message: "the profiled program's last line, written with no newline, was not forwarded to stderr. It wrote to stderr: {run.stderr}")
+
+	discardStagedDir(staged)
 end 'a profile forwards the last line its program wrote with no newline'

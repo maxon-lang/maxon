@@ -169,7 +169,7 @@ end 'linuxUsesHostSurface'
 // states: its resolver opens `/etc/hosts` through `mrt_host_file_open`, whose failure arm stashes an errno
 // nothing in a socket program will ever read back.
 function linuxTouchesErrnoWord(usage RuntimeUsage) returns bool
-	return linuxUsesHostSurface(usage) or usage.usesGt or usage.usesManagedSocket or linuxUsesTraceBand(usage)
+	return linuxUsesHostSurface(usage) or usage.usesGt or usage.usesManagedSocket or linuxUsesTraceBand(usage) or usage.usesProcessDescendants
 end 'linuxTouchesErrnoWord'
 
 // Where errno lives, fixed per program at emit time. A program carrying the host lock gives every OS thread
@@ -473,18 +473,29 @@ export let LinuxDirentRecordLengthMask = 0xFFFF as Imm32
 
 export let LinuxProcDirectoryWord = 0x636F72702F as MachineWord
 export let LinuxProcStatSuffixWord = 0x746174732F as MachineWord
-export let LinuxProcDirentBytes = 256
+export let LinuxProcPidPathPrefixWord = 0x2F636F72702F as MachineWord
+export let LinuxProcPidPathPrefixBytes = 6
+export let LinuxProcDirentBytes = 128
 export let LinuxProcStatBytes = 128
+export let LinuxProcStateProbeBytes = 64
 export let LinuxProcPathBytes = 32
 export let LinuxProcPidDigitsMax = 10
 export let LinuxProcFirstPidDigit = 0x31
 export let LinuxProcPidLeadSpan = 8
 export let LinuxMremapMayMove = 1
-export let LinuxProcDigitZero = 0x30
+export let LinuxProcDigitZero = AsciiDigitZero
 export let LinuxProcDigitSpan = 9
 export let LinuxProcClosingParenthesis = 0x29
 export let LinuxProcStatStateToPpid = 4
-export let LinuxProcDecimalBase = 10
+export let LinuxProcDecimalBase = PosixDecimalBase
+export let LinuxProcOpeningParenthesis = 0x28
+export let LinuxProcStatParenToState = 2
+export let LinuxProcStateZombie = 0x5A
+export let LinuxProcStateDead = 0x58
+export let LinuxProcStateDeadLegacy = 0x78
+// Set by the descendants `track` verb: a descendant whose parent ends is reparented to this process
+// rather than to init, so the parent-link walk from this process still reaches it.
+export let LinuxPrSetChildSubreaper = 36
 
 // ⭐ **THE SEARCH PAGE'S THREE REGIONS MUST EACH HOLD WHAT IS WRITTEN INTO THEM, AND NOTHING ELSE CHECKS.**
 // The pattern copy and the directory prefix are bounded by `PosixPathStringCapacity` at their copy sites, and

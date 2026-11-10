@@ -30,7 +30,7 @@ let SingleThreadedStackCount = 1
 let InteriorFunctionName = "work"
 
 test 'the profiler ranks the busier function first in every section it reports'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-hot-ordering", fixture: HotWarmFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-hot-ordering", fixture: HotWarmFixtureName)
 	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
 
 	let run = runProfiler(staged, extraArguments: StringArray.create(0))
@@ -76,6 +76,8 @@ test 'the profiler ranks the busier function first in every section it reports'
 	Expect.equal(stackNames.count(), expected: SingleThreadedStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor for a program that spawns nothing. One row per stack that RAN is what this section means, so a count above one is either a thread the fixture does not have or a stack keyed on something other than the stack. It listed:{LineFeed}{terminatedLines(stackNames)}")
 	Expect.isFalse(stackNames.contains(HotFunctionName), message: "a stack is named `{HotFunctionName}`, which is a LEAF the sampler landed in rather than the frame a stack bottoms out at. A section keyed on the sampled frame would mirror the self-time table exactly, and every ordering asserted above would still be green. It listed:{LineFeed}{terminatedLines(stackNames)}")
 	Expect.isFalse(stackNames.contains(WarmFunctionName), message: "a stack is named `{WarmFunctionName}`, which is a LEAF the sampler landed in rather than the frame a stack bottoms out at. It listed:{LineFeed}{terminatedLines(stackNames)}")
+
+	discardStagedDir(staged)
 end 'the profiler ranks the busier function first in every section it reports'
 
 // `hot` present, `warm` present, and `hot` first — asked of two sections, so it is written once.

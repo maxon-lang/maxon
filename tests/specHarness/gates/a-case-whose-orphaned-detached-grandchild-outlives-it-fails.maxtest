@@ -1,0 +1,18 @@
+let OrphanedGrandchildCaseLabel = "orphaned-grandchild/orphaned-grandchild.leaves-one"
+
+test 'a case whose detached grandchild outlives the only process that was its parent fails, naming the grandchild'
+	let staged = stagedGateFixture()
+	let run = runSpecTest(staged, includeNetwork: false)
+	let said = everythingSaid(run)
+	let leaker = recordedProcessId(staged.join(LeakerProcessIdFileName))
+	var broken = StringArray.create(0)
+
+	collectLeakNotReported(said, label: OrphanedGrandchildCaseLabel, leaker: leaker, broken: broken)
+
+	if run.exitCode() == SuccessExitCode 'exitWrong'
+		broken.push("the run exited {SuccessExitCode} with a case whose orphaned grandchild was still running. It said:\n{said}\n")
+	end 'exitWrong'
+
+	discardStagedDir(staged)
+	requireNothingBroken(broken, headline: "an orphaned grandchild left running by a case fails that case")
+end 'a case whose detached grandchild outlives the only process that was its parent fails, naming the grandchild'

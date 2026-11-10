@@ -1,0 +1,33 @@
+let NestedRunCaseLabel = "nests-a-run/nests-a-run.the-inner-run-has-a-directory-of-its-own"
+let NestedInnerDirName = "nested-inner-spec"
+let NestedInnerSpecFileName = "inner.md"
+let NestedCompilerVariable = "NESTED_COMPILER"
+let NestedSpecDirVariable = "NESTED_SPEC_DIR"
+
+let NestedInnerSpec = "---\nfeature: harness-gate-the-inner-run\n---\n# The inner run\n\nOne case that fails when it runs in the directory the outer case runs in.\n\n## Tests\n\n<!-- test: inner.not-the-outer-directory -->\n\n```maxon\nfunction main() returns ExitCode\n\tlet outer = try Process.environmentVariable(\"OUTER_RUN_DIR\") otherwise return 1\n\n\tif Directory.currentPath().filename() == outer 'sameDirectory'\n\t\tprint(\"shared\\n\")\n\t\treturn 0\n\tend 'sameDirectory'\n\n\tprint(\"separate\\n\")\n\treturn 0\nend 'main'\n```\n\n```exitcode\n0\n```\n\n```stdout\nseparate\n```\n"
+
+test 'a spec-test run by a case gets a working directory of its own, not the one the case runs in'
+	let staged = stagedGateFixture()
+	let inner = freshOutsideCheckoutDir(NestedInnerDirName)
+	writeStagedFile(inner.join(NestedInnerSpecFileName), content: NestedInnerSpec)
+
+	var overrides = EnvMap.create()
+	overrides.upsert(NestedCompilerVariable, value: testedCompilerPath().toString())
+	overrides.upsert(NestedSpecDirVariable, value: inner.toString())
+
+	let run = runSpecTest(staged, includeNetwork: false, environment: Environment.inheritUpdating(overrides))
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	if not said.contains(passVerdictLine(NestedRunCaseLabel)) 'nestedRunShared'
+		broken.push("the run inside the case did not run its case in a directory of its own. Expected '{passVerdictLine(NestedRunCaseLabel)}', and the run said:\n{said}\n")
+	end 'nestedRunShared'
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	discardStagedDir(inner)
+	discardStagedDir(staged)
+	requireNothingBroken(broken, headline: "a run started by a case shares the working directory of the run that started it")
+end 'a spec-test run by a case gets a working directory of its own, not the one the case runs in'

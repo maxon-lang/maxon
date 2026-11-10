@@ -3,7 +3,7 @@ let FaultIsTerminalText = "fault-is-terminal"
 let RefusedWalks = 4
 
 test 'finish, next, until and step at a fault stop are each refused and the stop stays'
-	let staged = builtLibraryTierFixture(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: FaultWalksCaseLabel, fixture: FaultCalleeFixtureName)
+	let staged = builtLibraryTierFixture(FixturesDirName, caseLabel: FaultWalksCaseLabel, fixture: FaultCalleeFixtureName)
 	let commands = debugCommandLine([RunCommand, FinishCommand, NextCommand, UntilCommand, StepCommand, BacktraceCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
@@ -25,6 +25,8 @@ test 'finish, next, until and step at a fault stop are each refused and the stop
 
 	try Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count(), expected: 1, message: "the refused walks moved nothing, so `{BacktraceCommand}` still walks the fault. {said}")
 	try Expect.isFalse(crashedBeforeTheWalk(kinds), message: "the program must not have crashed before the `{BacktraceCommand}` that follows the refusals. It printed: {listedLines(kinds)}. {said}")
+
+	discardStagedDir(staged)
 end 'finish, next, until and step at a fault stop are each refused and the stop stays'
 
 function crashedBeforeTheWalk(kinds StringArray) returns bool

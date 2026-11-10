@@ -39,7 +39,7 @@ type WalkingSession implements DapSession
 end 'WalkingSession'
 
 test 'a next sent while a next still walks answers failure, and the first next still lands'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: WalkingCaseLabel, fixture: LongCallFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: WalkingCaseLabel, fixture: LongCallFixtureName)
 	var session = WalkingSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: LongCallAnchor))
 	try dapRunSession(session, completing: "refuse the second next and land the first")
 
@@ -47,4 +47,6 @@ test 'a next sent while a next still walks answers failure, and the first next s
 	try Expect.isFalse(session.secondAnswered, message: "a `{NextCommand}` while the first one's walk is still running must answer `success: false`: it cannot be started, and a success leaves the client waiting on a stop of its own")
 	try Expect.isFalse(session.refusal.isEmpty(), message: "the refused `{NextCommand}` must say why in its `message`")
 	try Expect.equal(session.landedReason, expected: StepReason, message: "the refusal must not disturb the walk already under way, which lands as a `{StepReason}` stop; it said `{session.landedReason}`")
+
+	discardStagedDir(staged)
 end 'a next sent while a next still walks answers failure, and the first next still lands'

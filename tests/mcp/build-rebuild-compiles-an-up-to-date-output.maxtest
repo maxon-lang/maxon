@@ -1,5 +1,5 @@
-let RebuildProgramStagingDir = "temp/mcp-build-rebuild"
-let RebuildCacheStagingDir = "temp/mcp-build-rebuild-cache"
+let RebuildProgramStagingDir = "mcp-build-rebuild"
+let RebuildCacheStagingDir = "mcp-build-rebuild-cache"
 let RebuildOutputStem = "program"
 let RebuildProgramLine = "rebuilt"
 let RebuildMember = "\"rebuild\":true"
@@ -12,8 +12,8 @@ let RebuildReason = "--rebuild was requested"
 test 'the build tool given rebuild compiles a program its last build left up to date'
 	let program = stagedProgram(RebuildProgramStagingDir, fileName: StagedProgramFileName, source: printingProgramSource(RebuildProgramLine))
 	let directory = try program.parent() otherwise panic("build-rebuild-compiles-an-up-to-date-output: {program.path} has no directory to build into")
-	let cacheRoot = stagingDir(RebuildCacheStagingDir)
-	clearStagedFiles(cacheRoot)
+	let cacheRoot = stagedDirNamed(RebuildCacheStagingDir)
+	clearStagedTree(cacheRoot)
 
 	var environment = EnvMap.create()
 	environment.upsert(CacheRootVariable, value: cacheRoot.toString())
@@ -38,4 +38,7 @@ test 'the build tool given rebuild compiles a program its last build left up to 
 
 	Expect.contains(stdout, needle: RebuildCompiledPrefix, message: "`{BuildTool}` given `rebuild` did not compile the program its last call left up to date: {toolCallText(rebuilt)}")
 	Expect.contains(stderr, needle: RebuildReason, message: "`{BuildTool}` given `rebuild` did not compile because a rebuild was requested: {toolCallText(rebuilt)}")
+
+	discardStagedDir(stagedDirNamed(RebuildProgramStagingDir))
+	discardStagedDir(stagedDirNamed(RebuildCacheStagingDir))
 end 'the build tool given rebuild compiles a program its last build left up to date'

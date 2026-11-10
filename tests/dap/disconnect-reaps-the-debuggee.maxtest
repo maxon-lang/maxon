@@ -24,7 +24,7 @@ type DisconnectSession implements DapSession
 end 'DisconnectSession'
 
 test 'disconnect reaps a stopped debuggee, so its image can be deleted'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: DisconnectCaseLabel, fixture: SteppingFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: DisconnectCaseLabel, fixture: SteppingFixtureName)
 	let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged)
 	var session = DisconnectSession.create(executable, source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: InnerLoopAnchor))
 	try dapRunSession(session, completing: "reach a stop")
@@ -38,4 +38,6 @@ test 'disconnect reaps a stopped debuggee, so its image can be deleted'
 	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the program must be STOPPED and therefore ALIVE when `{DisconnectCommand}` arrives, or the delete below proves nothing; the stop said `{session.stopReason}`")
 	try Expect.isTrue(session.disconnected, message: "`{DisconnectCommand}` must succeed")
 	try Expect.isTrue(deletable, message: "the debuggee's image is still held. That is a stopped process this adapter left behind, which no later message would ever mention and which fails the next build over that path")
+
+	discardStagedDir(staged)
 end 'disconnect reaps a stopped debuggee, so its image can be deleted'

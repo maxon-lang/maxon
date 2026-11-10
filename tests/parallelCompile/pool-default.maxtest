@@ -6,7 +6,7 @@
 // with more processors than the fixture declares functions, where W = min(P, F) is not knowable from here.
 
 test 'the pool is one worker per processor at the default'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "pool-default", fixture: "pool-program")
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "pool-default", fixture: "pool-program")
 
 	var arguments = StringArray.create(0)
 	arguments.push(CodegenDebugLogFlag)
@@ -17,4 +17,6 @@ test 'the pool is one worker per processor at the default'
 
 	let needle = defaultPoolNeedle(staged)
 	Expect.contains(run.stderr, needle: needle, message: "`{CodegenDebugLogFlag}` did not report a pool of one worker per processor over the machine's processors. The report is the only thing that says the allocator ran in PARALLEL rather than merely correctly; the two byte-identity cases beside this one cannot tell a pool of one from a pool of sixteen. It wrote to stderr: {run.stderr}")
+
+	discardStagedDir(staged)
 end 'the pool is one worker per processor at the default'

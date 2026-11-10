@@ -24,7 +24,7 @@ test 'run_spec_test runs the specs of one shard and the shards add up to the who
 	let wholeTotal = payloadInt(whole, key: "total")
 	let firstTotal = shardedTotal(dir, shard: "1/2")
 	let secondTotal = shardedTotal(dir, shard: "2/2")
-	discardOutsideCheckoutDir(dir)
+	discardStagedDir(dir)
 
 	Expect.equal(wholeTotal, expected: 6, message: "the staged directory holds six one-case specs. It answered: {toolCallText(whole)}")
 	Expect.equal(firstTotal + secondTotal, expected: wholeTotal, message: "`shard: 1/2` ran {firstTotal} cases and `shard: 2/2` ran {secondTotal}; together they must run each of the {wholeTotal} cases once")
@@ -35,7 +35,7 @@ test 'run_spec_test refuses a malformed shard'
 
 	stageSpecFile(dir, specName: "alpha", cases: [failingSpecCase("alpha.selected")])
 	let answer = shardedAnswer(dir, shard: MalformedShard)
-	discardOutsideCheckoutDir(dir)
+	discardStagedDir(dir)
 
 	Expect.isFalse(hasChildKey(answer, parent: answer.root, key: "error"), message: "`run_spec_test` rejected the `shard` argument itself, not its value: {Json.stringify(answer)}")
 	Expect.isTrue(toolCallIsError(answer), message: "`run_spec_test` ran with `shard: {MalformedShard}`, which is not a shard of any run: {toolCallText(answer)}")

@@ -4,7 +4,7 @@ let EchoedLinePrefix = "echoed"
 let BurnedLinePrefix = "burned"
 
 test 'a service that never yields is still preempted for the whole of a profile'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-leaves-asynchronous-preemption-working", fixture: PreemptionFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-leaves-asynchronous-preemption-working", fixture: PreemptionFixtureName)
 	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: PreemptionFixtureName)
 
 	var arguments = StringArray.create(0)
@@ -16,6 +16,8 @@ test 'a service that never yields is still preempted for the whole of a profile'
 
 	let finished = firstFinisher(outputLines(run.stderr))
 	Expect.equal(finished, expected: EchoedLinePrefix, message: "the burner finished before the echo service had answered its messages, though the fixture lets the echo service run only when the burner is preempted off the one processor `{OneProcessor}` leaves. A profile that stops the burner's thread to sample it must still deliver the preemption signal the runtime sent it; one that discards the signal leaves that machine un-preemptable for the rest of the run. The program wrote to stderr:{LineFeed}{run.stderr}")
+
+	discardStagedDir(staged)
 end 'a service that never yields is still preempted for the whole of a profile'
 
 function firstFinisher(lines StringArray) returns String

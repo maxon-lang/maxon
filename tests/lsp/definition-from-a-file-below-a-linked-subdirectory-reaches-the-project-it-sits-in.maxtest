@@ -17,7 +17,7 @@
 		writeCorpusFile(target, fileName: LinkedSubdirectoryLeafFileName, content: LinkedSubdirectoryLeafSource)
 
 		let link = root.join(LinkedSubdirectoryLinkName)
-		_ = runSystemTool("ln", arguments: ["-s", target.toString(), link.toString()], what: "`ln -s` making a link to a directory outside the staged project")
+		plantedDirectoryLink(link, target: target.toString())
 
 		var client = LspClient.start()
 
@@ -26,8 +26,8 @@
 
 			try File.delete(link) otherwise panic("the gate could not run — could not remove the link {link.toString()}.")
 
-			discardOutsideCheckoutDir(target)
-			discardOutsideCheckoutDir(root)
+			discardStagedDir(target)
+			discardStagedDir(root)
 
 			try Expect.isTrue(answered.isPresent, message: "a call to an `export`ed declaration in the project's root, from a file that sits below a symbolic link inside the project, did not resolve.")
 			try Expect.equal(answered.uri, expected: fileUriOf(root.join(LinkedSubdirectoryRootFileName)), message: "the declaration was answered under a spelling other than the one the project's folder was opened with.")

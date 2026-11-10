@@ -10,7 +10,7 @@ let OneProcessorLabel = "one processor"
 let PooledLabel = "four processors"
 
 test 'the front end copies no part of the signature index per worker or per file'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "front-end-copies-do-not-grow-with-workers", fixture: "shared-index-program")
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "front-end-copies-do-not-grow-with-workers", fixture: "shared-index-program")
 
 	var arguments = StringArray.create(0)
 	arguments.push(CompilerDebugLogFlag)
@@ -44,6 +44,8 @@ test 'the front end copies no part of the signature index per worker or per file
 	let workerBound = copyAllocations / WorkerCopyDivisor
 
 	Expect.lessThan(perAdoption, than: workerBound, message: "the `{PhaseRowKind} {FrontEndPoolPhaseName}` row allocated {pooledAllocations} times with {pooledAdoptions} worker(s) adopting the index under MAXON_MAX_PROCS={PooledProcessors}, and {singleAllocations} times with {singleAdoptions} under one processor: {growth} more, {perAdoption} per extra adopting worker. A whole copy of this fixture's signature index allocates {copyAllocations}, and an extra worker may cost at most 1/{WorkerCopyDivisor} of it, {workerBound}, for its own state — every worker reads the one published index and each parse writes only its own overlay, so neither the main thread nor a worker copies the index.")
+
+	discardStagedDir(staged)
 end 'the front end copies no part of the signature index per worker or per file'
 
 function frontEndPoolAllocations(table MetricsTable) returns ReportedPoolCount

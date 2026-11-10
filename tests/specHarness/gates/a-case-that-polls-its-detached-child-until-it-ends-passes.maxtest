@@ -1,0 +1,21 @@
+let PollsUntilEndedCaseLabel = "polls-until-ended/polls-until-ended.waits"
+
+test 'a case that polls its detached child until it has ended passes'
+	let run = runGateFixtureOnce(StringArray.create(0))
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	if not said.contains(passVerdictLine(PollsUntilEndedCaseLabel)) 'caseDidNotPass'
+		broken.push("the case waits for the process it started and was meant to PASS. Expected '{passVerdictLine(PollsUntilEndedCaseLabel)}', and the run said:\n{said}\n")
+	end 'caseDidNotPass'
+
+	if said.contains(LeakAdviceText) 'leakReported'
+		broken.push("the run reported a process left running by a case that waited for its only process. It said:\n{said}\n")
+	end 'leakReported'
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a case that waits for its detached child passes")
+end 'a case that polls its detached child until it has ended passes'

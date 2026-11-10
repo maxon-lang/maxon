@@ -1,0 +1,35 @@
+let EndsWithinMs = 30000
+let PollMs = 50
+
+function instantExit() returns Configuration
+	#if os(Windows)
+		var config = Configuration.create(Executable.name("cmd"))
+		config.arguments.push("/c")
+		config.arguments.push("exit")
+		config.arguments.push("0")
+	#else
+		var config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise panic("/bin/sh is not a path")))
+		config.arguments.push("-c")
+		config.arguments.push("exit 0")
+	#endif
+
+	return config
+end 'instantExit'
+
+test 'a test that runs a child to its end passes'
+	let result = instantExit().run()
+
+	Expect.notEqual(result.pid, expected: 0)
+end 'a test that runs a child to its end passes'
+
+test 'a test that polls its detached child until it ends passes'
+	let pid = instantExit().runDetached()
+	var waitedMs = 0 as DurationMs
+
+	while Process.isAlive(pid) and waitedMs < EndsWithinMs 'untilEnded'
+		sleep(PollMs)
+		waitedMs = waitedMs + PollMs
+	end 'untilEnded'
+
+	Expect.isFalse(Process.isAlive(pid))
+end 'a test that polls its detached child until it ends passes'

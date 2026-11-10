@@ -38,7 +38,7 @@ type LaunchSession implements DapSession
 end 'LaunchSession'
 
 test 'a launched executable stops on a source breakpoint at the anchored line'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: LaunchCaseLabel, fixture: SteppingFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: LaunchCaseLabel, fixture: SteppingFixtureName)
 	let anchored = anchorLine(staged.join(StagedProgramFileName), anchor: OuterCallAnchor)
 	var session = LaunchSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchored)
 	try dapRunSession(session, completing: "complete the launch sequence")
@@ -50,4 +50,6 @@ test 'a launched executable stops on a source breakpoint at the anchored line'
 	try Expect.isFalse(session.stopThreadId == 0, message: "a `{StoppedEvent}` must name the thread that stopped, or a client has nothing to ask `stackTrace` about")
 	try Expect.isFalse(session.threadNames.count() == 0, message: "`{ThreadsCommand}` must list at least the thread that stopped; it listed {joined(session.threadNames, separator: Space)}")
 	try Expect.isTrue(session.disconnected, message: "`{DisconnectCommand}` must succeed and end the session")
+
+	discardStagedDir(staged)
 end 'a launched executable stops on a source breakpoint at the anchored line'

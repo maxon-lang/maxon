@@ -489,6 +489,13 @@ module type LspWorkspaceState
 		return await arrival
 	end 'nextArrival'
 
+	module function nextPendingArrival() returns LspArrival
+		let ready = self.arrivals.awaitAny()
+		let arrival = try self.arrivals.remove(ready) otherwise panic("LspWorkspaceState.nextPendingArrival: awaitAny named a slot of the array it was asked about")
+
+		return await arrival
+	end 'nextPendingArrival'
+
 	function requestResolution(dir FilePath) returns ResolutionTicket
 		self.nextResolutionTicket = self.nextResolutionTicket + 1
 		let ticket = self.nextResolutionTicket

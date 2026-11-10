@@ -1,0 +1,34 @@
+let ShutdownCaseDirName = "relay-shutdown"
+let ShutdownLoggedNeedle = "generation 1 shut down"
+
+test 'relay: shutdown is carried out by the compiler serving the checkout'
+	let caseDir = stagedRelayCase(ShutdownCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	var client = LspClient.start()
+
+	if let observed = try shutDownThroughTheCompiler(client, caseDir: caseDir) 'shutDown'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.equal(observed.0, expected: 1, message: "the compiler serving the checkout did not see the shutdown request.")
+		try Expect.equal(observed.1, expected: "0", message: "a session that asked for shutdown and exit did not end with code 0.")
+	end 'shutDown' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: shutdown is carried out by the compiler serving the checkout'
+
+function shutDownThroughTheCompiler(client LspClient, caseDir FilePath) returns (ElementIndex, String) throws LspClientError
+	_ = try client.initializeAtRoot(relayCheckout(caseDir))
+
+	try client.initialized()
+	try client.shutdown()
+
+	let seen = (try client.takeLogMessages(ShutdownLoggedNeedle)).count()
+
+	try client.exit()
+
+	let code = try client.waitForExit()
+
+	return (seen, "{code}")
+end 'shutDownThroughTheCompiler'

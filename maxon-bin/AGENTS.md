@@ -47,9 +47,9 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   an executable named after a source under `maxon-bin/Compiler/`, left the slot EMPTY, and **exited 0** — so the next command is
   a bare `127` about a compiler that was never written. `scripts/build-from-seed.sh` passes `--output=` for this reason;
   `CONTRIBUTING.md` spells it too.
-  A seed build that fails on E6002 (a locked slot, e.g. an editor's language server holding
-  `maxon-bin/.maxon/maxon`) is a lock, not a refusal. A held slot binary can be renamed
-  aside even when it cannot be deleted. A slot binary's version stamp names the last commit, never the
+  A seed build that fails on E6002 (a slot it could not replace: read-only, or held open in a way that
+  forbids a rename) is a lock, not a refusal; the message names which. A slot binary that is only running,
+  an editor's language server for one, is renamed aside and replaced. A slot binary's version stamp names the last commit, never the
   working tree, so a compiler built while uncommitted or stashed edits were applied carries a stamp that
   looks clean: it does not vouch for the source. When a build fails on a name or constant the tree plainly
   declares, rebuild with `scripts/build-from-seed.sh` before believing the diagnostic.
@@ -60,14 +60,15 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   suite is green, suspect a real miscompile first (the suite may not exercise the pattern) and read the
   emitted code with `dump_ir` or a disassembler.
 
-> ### ⭐ A SELF-REBUILD RENAMES ITS RUNNING IMAGE OUT OF THE SLOT, THEN WRITES INTO THE EMPTY SLOT
+> ### ⭐ A SELF-REBUILD RENAMES ITS RUNNING IMAGE OUT OF THE SLOT, THEN RENAMES THE NEW ONE IN
 >
-> A compiler cannot overwrite its own running image (**E6002**), and a half-written slot is a
-> compiler that answers as though it were whole. So a compiler rebuilding its own slot RENAMES its
-> running image to `maxon-bin/.maxon/maxon.previous` — an OS will not let a running executable be
-> deleted, but will let one be renamed — and its `.mxdbg` travels with it. ⭐ **THE RENAME HAPPENS ONLY
-> AFTER THE COMPILE SUCCEEDS**, so a FAILED build (a compile error included) leaves the running compiler
-> in the slot, able to build the fix; a write that fails after the rename moves it back. An older
+> A compiler cannot overwrite its own running image, and a half-written slot is a compiler that answers
+> as though it were whole. So every build writes into `.staging-<hex>/` beside its output, and a compiler
+> rebuilding its own slot RENAMES its running image to `maxon-bin/.maxon/maxon.previous` — an OS will not
+> let a running executable be deleted, but will let one be renamed — and its `.mxdbg` travels with it,
+> then renames the staged image into the empty slot. ⭐ **THE RENAME HAPPENS ONLY AFTER THE COMPILE
+> SUCCEEDS**, so a FAILED build (a compile error included) leaves the running compiler in the slot, able to
+> build the fix; a staged image that cannot be renamed in moves the running one back (E6002). An older
 > `.previous` that another process is still running (an `mcp-server` or `lsp-server` started before the
 > last rebuild) is renamed aside to `maxon.retired.<block>` (`Run/ScratchName.maxon`), and every
 > self-rebuild deletes the retired images nothing holds any longer.
@@ -459,8 +460,9 @@ followed by a suite that runs the stale binary and reads green. A run that died 
 compiler it spawned: the retry meets the tree lock (`error: … is BUSY … Nothing was run.`, non-zero
 exit) — the lock working, not a red gate; wait for the other command.
 
-⚠ **THE SUITE RUNS EVERY TEST BINARY WITH CWD `temp/`**, so that directory is shared with anything
-else you put there. Stage a binary you must keep somewhere else.
+⚠ **THE SUITE RUNS EVERY TEST BINARY WITH CWD `.spec-run-<pid>/`**, a directory of that run's own at the
+checkout root. An entry a case leaves there fails the run (`left .spec-run/<name>`), and so does a
+process a case leaves running ([SPECS.md](../docs/SPECS.md#what-a-case-leaves-behind)).
 
 ⚠ A repeat-run loop counts the iterations that printed that summary line, never the iterations attempted: a
 refused run (stale binary, busy tree) prints none, and a loop over a control that never built reads

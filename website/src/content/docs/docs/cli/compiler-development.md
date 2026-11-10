@@ -55,6 +55,11 @@ isolate the breaking case of within its budget of trial builds, prints a `harnes
 after the report, naming the cases that ran alone. Their own results decide them, and the run
 exits **1** even when every case passed.
 
+Every case's program runs with its working directory in `.spec-run-<pid>/`, a directory of the run's own
+directly under the checkout root, and on a native target a case that leaves a process running fails,
+naming it (`docs/SPECS.md`, "What a case leaves behind"). An entry a case leaves in that
+directory is reported after the summary as `left .spec-run/<name>`, and the run exits **1**.
+
 It refuses to start, with exit **2** and nothing run, when the compiler binary is older than the sources
 it was built from, or when another command holds the checkout's [tree lock](/docs/cli/project-structure/#the-tree-lock).
 
@@ -70,8 +75,8 @@ an accepted shard lists only its own.
 
 `--result-json=<path>` writes `{passed, failed, skipped, notRun, total, cases, harnessErrors}`, where
 `cases` lists every case in run order as `{spec, test, verdict}`, `verdict` is `PASS`, `FAIL`, `SKIP` or
-`NOTRUN`, a `FAIL` also carries its `reason`, and `harnessErrors` holds each `harness error:` line the run
-printed. A relative `<path>` is resolved against the working directory. A
+`NOTRUN`, a `FAIL` also carries its `reason`, and `harnessErrors` holds each `harness error:` and
+`left .spec-run/<name>` line the run printed. A relative `<path>` is resolved against the working directory. A
 `<path>` that is not a valid path exits 1 before any test runs; a document that cannot be written exits
 1 after the report.
 

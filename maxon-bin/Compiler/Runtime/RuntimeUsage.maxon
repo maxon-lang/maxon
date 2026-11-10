@@ -449,6 +449,10 @@ export type RuntimeUsage
 	// carry.
 	export var usesProcessLiveness as bool
 
+	export var usesProcessDescendants as bool
+
+	export var callsEndDescendants as bool
+
 	// The program asks whether its report is going to a terminal that wants colour
 	// (`__Builtins.stdoutWantsAnsiColor` ⇒ `__tty_stdout_wants_color`). Its own bit rather than a corner of
 	// `usesConsoleStdin`, on this file's standing rule: a prefix answers "may this target run it", a bit
@@ -569,7 +573,7 @@ export type RuntimeUsage
 	export var neededInterfaceConversions = InterfaceConversionNameSet.create()
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesReleaseTypeParam: false, usesReclaimTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesEnvironment: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesCpuFeatures: false, usesHardwareAes: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesReleaseTypeParam: false, usesReclaimTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesEnvironment: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesProcessDescendants: false, callsEndDescendants: false, usesTerminalDetection: false, usesCpuCount: false, usesCpuFeatures: false, usesHardwareAes: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -792,6 +796,10 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesChildPipes = true
 	end 'ioread'
 
+	if isSchedulerSpawnDoor(callee) 'startsAProcess'
+		usage.usesProcessDescendants = true
+	end 'startsAProcess'
+
 	// `__mm_is_null` is a heap PREDICATE, not a subprocess entry — it reads a pointer and nothing else — so it
 	// carries only itself. See `usesMmIsNull`.
 	if callee.equals(MmIsNullName) 'mmIsNull'
@@ -814,6 +822,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isSubprocessRuntimeCallee(callee) 'streaming'
 		usage.usesChildPipes = true
 		usage.usesStrCopy = true
+		usage.usesProcessDescendants = true
 
 		// ⭐ **THE ATTACHED HALF ADDS THREE MORE TRANSITIVE BITS**, declared here for `usesStrCopy`'s reason:
 		// this Maxon-module scan sees only the callee the PARSER emitted, never what that entry's hand-built
@@ -959,6 +968,14 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(ProcessAliveName) 'processLiveness'
 		usage.usesProcessLiveness = true
 	end 'processLiveness'
+
+	if isProcessDescendantsRuntimeCallee(callee) 'processDescendants'
+		usage.usesProcessDescendants = true
+		usage.callsEndDescendants = true
+
+		// Tracking is armed at scheduler bring-up, which only a `main` run on a green thread has.
+		recordGtUsage(usage)
+	end 'processDescendants'
 
 	if callee.equals(RandomFillName) 'entropy'
 		usage.usesEntropy = true

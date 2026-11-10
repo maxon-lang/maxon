@@ -1,0 +1,37 @@
+let VersionedCaseDirName = "relay-versioned"
+let VersionedDocumentName = "one.maxon"
+let VersionedFirstText = "one"
+let VersionedCurrentText = "two"
+let VersionedChangedVersion = 5
+
+test 'relay: a document replayed to a replacement compiler carries the version the client last stated'
+	let caseDir = stagedRelayCase(VersionedCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	var client = LspClient.start()
+
+	if let observed = try replacedAfterAVersionedChange(client, caseDir: caseDir) 'replaced'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.isTrue(relayPublishCarries(observed, message: "generation 2 version {VersionedChangedVersion}"), message: "the replacement compiler was told the document is at a version other than the one the client last stated.")
+	end 'replaced' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a document replayed to a replacement compiler carries the version the client last stated'
+
+function replacedAfterAVersionedChange(client LspClient, caseDir FilePath) returns PublishedDiagnostics throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(VersionedDocumentName))
+	_ = try client.initializeAtRoot(relayCheckout(caseDir))
+
+	try client.initialized()
+	try client.openDocument(uri, content: VersionedFirstText)
+	_ = try awaitFakePublish(client, uri: uri, generation: 1, text: VersionedFirstText)
+
+	try client.changeDocument(uri, content: VersionedCurrentText, version: VersionedChangedVersion)
+	_ = try awaitFakeDocumentVersion(client, uri: uri, generation: 1, version: VersionedChangedVersion)
+
+	replaceRelaySlot(caseDir, generation: 2)
+
+	return try awaitFakeDocumentVersion(client, uri: uri, generation: 2, version: VersionedChangedVersion)
+end 'replacedAfterAVersionedChange'

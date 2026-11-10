@@ -1,7 +1,7 @@
 let AFedRunEndsAtItsChildsExitCaseLabel = "fed-held-pipe"
 
 test 'a fed run returns within a bound when its child exits while a process it started holds its output, with all of that output'
-	let staged = stagedHeldPipe(StagingRootDirName, caseLabel: AFedRunEndsAtItsChildsExitCaseLabel)
+	let staged = stagedHeldPipe(AFedRunEndsAtItsChildsExitCaseLabel)
 	let executable = buildStagedForHost(staged, caseLabel: AFedRunEndsAtItsChildsExitCaseLabel)
 
 	let started = Clock.nowMs()
@@ -19,4 +19,6 @@ test 'a fed run returns within a bound when its child exits while a process it s
 
 	Expect.isTrue(missing.isEmpty(), message: "the run did not collect these lines of the program's output: {listedLines(missing)}; it collected `{oneLine(run.stdout)}`")
 	Expect.lessThan(tookMs, than: HeldPipePromptMs, message: "the run took {tookMs} ms to end a program that had already exited: it waited for a process the program started, which still holds the program's output")
+
+	discardStagedDir(staged)
 end 'a fed run returns within a bound when its child exits while a process it started holds its output, with all of that output'

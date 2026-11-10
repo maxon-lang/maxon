@@ -4,7 +4,7 @@ let HeldPipePromptMs = 15000
 
 test 'a profile deadline ends without waiting for a process the target started in a session of its own'
 	#if os(Linux)
-		let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-a-deadline-does-not-wait", fixture: HeldPipeFixtureName)
+		let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-a-deadline-does-not-wait", fixture: HeldPipeFixtureName)
 		_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HeldPipeFixtureName)
 
 		var extra = StringArray.create(0)
@@ -13,5 +13,7 @@ test 'a profile deadline ends without waiting for a process the target started i
 		let run = runProfiler(staged, extraArguments: extra)
 
 		Expect.isTrue(run.durationMs < HeldPipePromptMs, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` took {run.durationMs} ms to end a run whose deadline was {HeldPipeDeadlineSeconds} s: it waited for a process the deadline's kill cannot reach, which holds the target's output. It wrote to stderr: {run.stderr}")
+
+		discardStagedDir(staged)
 	#endif
 end 'a profile deadline ends without waiting for a process the target started in a session of its own'

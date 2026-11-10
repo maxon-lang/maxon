@@ -40,7 +40,7 @@ type StepAfterPauseSession implements DapSession
 end 'StepAfterPauseSession'
 
 test 'next and stepIn from a pause stop each stop as a step in the paused frame'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: StepAfterPauseCaseLabel, fixture: SpinSignalFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: StepAfterPauseCaseLabel, fixture: SpinSignalFixtureName)
 	var session = StepAfterPauseSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged))
 	try dapRunSession(session, completing: "complete the steps after the pause")
 
@@ -49,4 +49,6 @@ test 'next and stepIn from a pause stop each stop as a step in the paused frame'
 	try Expect.equal(dapFrameNameAt(session.framesAfterNext, frame: 0), expected: GrindFunctionName, message: "`{NextCommand}` stays in the loop the pause interrupted; it landed in {joined(session.framesAfterNext, separator: Space)}")
 	try Expect.equal(session.stepInReason, expected: StepReason, message: "a `{StepInCommand}` after it is a step too; the stop said `{session.stepInReason}`")
 	try Expect.equal(dapFrameNameAt(session.framesAfterStepIn, frame: 0), expected: GrindFunctionName, message: "`{StepInCommand}` in a loop that calls nothing stays in it; it landed in {joined(session.framesAfterStepIn, separator: Space)}")
+
+	discardStagedDir(staged)
 end 'next and stepIn from a pause stop each stop as a step in the paused frame'

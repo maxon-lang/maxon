@@ -1,5 +1,5 @@
 test 'profiling a program changes neither its image nor its sidecar'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-leaves-the-profiled-image-unchanged", fixture: HotWarmFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-leaves-the-profiled-image-unchanged", fixture: HotWarmFixtureName)
 	let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
 	let sidecar = sidecarOf(executable)
 
@@ -11,4 +11,6 @@ test 'profiling a program changes neither its image nor its sidecar'
 
 	Expect.isTrue(imageBytes(executable).equals(imageBefore), message: "the program {executable.toString()} differs from what `maxon build` wrote after `{ProfileSubcommandName} {ProfileRunVerb}` ran it. The profiler signs a copy and leaves the original alone.")
 	Expect.isTrue(imageBytes(sidecar).equals(sidecarBefore), message: "the sidecar {sidecar.toString()} differs from what `maxon build` wrote after `{ProfileSubcommandName} {ProfileRunVerb}` read it.")
+
+	discardStagedDir(staged)
 end 'profiling a program changes neither its image nor its sidecar'

@@ -12,7 +12,7 @@
 // calibration rule, and what to do when a pool grows past it, is stated in the fixture's own header.
 
 test 'a register-pressure refusal renders identically at every processor count'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "pressure-refusal", fixture: "pressure-program")
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "pressure-refusal", fixture: "pressure-program")
 	let noArguments = StringArray.create(0)
 
 	let pinnedRun = spawnPinnedBuild(staged, label: "single-processor", extraArguments: noArguments, processors: ProcessorPin.pinned(SingleProcessor))
@@ -28,4 +28,6 @@ test 'a register-pressure refusal renders identically at every processor count'
 	let pinnedStderr = normalizedStderr(pinnedRun, staged: staged)
 	let defaultStderr = normalizedStderr(defaultRun, staged: staged)
 	Expect.equal(defaultStderr, expected: pinnedStderr, message: "the register-pressure refusal reads differently at the default processor count than pinned to one. The message ranks and names every blocking value, so a difference means the pool's worker order reached the diagnostic — the refusal is now a property of the machine rather than of the program.")
+
+	discardStagedDir(staged)
 end 'a register-pressure refusal renders identically at every processor count'

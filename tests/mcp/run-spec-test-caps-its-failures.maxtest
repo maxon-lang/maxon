@@ -7,7 +7,7 @@ test 'run_spec_test answers at most maxFailures failures and counts the rest'
 
 	stageSpecFile(dir, specName: RunSpecTestCapsItsFailuresStagedSpec, cases: cases)
 	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"maxFailures\":2\}", devMode: true)
-	discardOutsideCheckoutDir(dir)
+	discardStagedDir(dir)
 
 	Expect.equal(payloadInt(answer, key: "failed"), expected: 3, message: "the staged spec has three failing cases, whatever the cap lists. It answered: {toolCallText(answer)}")
 	Expect.equal(joined(payloadArrayFields(answer, key: "failures", field: "test"), separator: Space), expected: joined(["first", "second"], separator: Space), message: "`maxFailures: 2` must answer the first two failures. It answered: {toolCallText(answer)}")

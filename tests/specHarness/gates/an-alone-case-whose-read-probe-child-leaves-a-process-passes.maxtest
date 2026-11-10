@@ -1,0 +1,21 @@
+let ReadProbeCaseLabel = "read-probe-ends-its-childs-tree/read-probe-ends-its-childs-tree.reads-a-line"
+
+test 'an alone case whose read probe child leaves a process passes, the probe having ended the child tree'
+	let run = runGateFixtureOnce(StringArray.create(0))
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	if not said.contains(passVerdictLine(ReadProbeCaseLabel)) 'caseDidNotPass'
+		broken.push("'{ReadProbeCaseLabel}' reads one line from a child that starts a process outliving it, and was meant to PASS because the probe ends the child's whole tree. Expected '{passVerdictLine(ReadProbeCaseLabel)}', and the run said:\n{said}\n")
+	end 'caseDidNotPass'
+
+	if said.contains(LeakAdviceText) 'leakReported'
+		broken.push("the run reported a process left running by a case whose only process came from the read probe. It said:\n{said}\n")
+	end 'leakReported'
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a process started under the read probe does not outlive the probe")
+end 'an alone case whose read probe child leaves a process passes, the probe having ended the child tree'

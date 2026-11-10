@@ -4,6 +4,7 @@ public let ScriptlibDirName = "scriptlib"
 public let PortablePathSeparator = "/"
 public let WindowsPathSeparator = "\\"
 public let ProjectProductsDirName = ".maxon"
+public let CheckoutStagingRootDirName = "temp"
 
 public function listing(dir FilePath) returns FilePathArray
 	return try Directory.list(dir) otherwise panic("the gate could not run — could not list {dir.toString()}")
@@ -29,30 +30,27 @@ public function stagingDir(spelled String) returns FilePath
 	return path.resolve(Directory.currentPath())
 end 'stagingDir'
 
-public function clearStagedFiles(dir FilePath)
-	for entry in listing(dir) 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			clearStagedFiles(entry)
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("the gate could not run — could not clear {entry.toString()} from a previous run's staging tree.")
-	end 'eachEntry'
-end 'clearStagedFiles'
-
 // The directories go too: a case asserting a directory is absent holds only if no earlier run left
 // one standing.
 public function clearStagedTree(dir FilePath)
-	for entry in listing(dir) 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			clearStagedTree(entry)
-			try Directory.delete(entry) otherwise panic("the gate could not run — could not clear the staged directory {entry.toString()}.")
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("the gate could not run — could not clear the staged file {entry.toString()}.")
-	end 'eachEntry'
+	requireNothingStays(Directory.removeContents(dir), what: "the staged tree {dir.toString()}")
 end 'clearStagedTree'
+
+public function discardStagedDir(dir FilePath)
+	requireNothingStays(Directory.removeTree(dir), what: "the staged directory {dir.toString()}")
+end 'discardStagedDir'
+
+function requireNothingStays(unremoved FilePathArray, what String)
+	var stuck = StringArray.create(unremoved.count(), zeroed: false)
+
+	for path in unremoved 'eachStuck'
+		stuck.push(path.toString())
+	end 'eachStuck'
+
+	if not stuck.isEmpty() 'somethingStays'
+		panic("the gate could not run — could not remove {what}:{listedLines(stuck)}")
+	end 'somethingStays'
+end 'requireNothingStays'
 
 // ⚠ `tests/fmt/generate-expectations.py`'s `stored_to_real` spells this mapping again, and the two
 // stage the same trees: a disagreement mints expectations for a tree no case stages.
@@ -91,13 +89,13 @@ end 'stageStoredTree'
 
 public function freshStagingDir(spelled String) returns FilePath
 	let staged = stagingDir(spelled)
-	clearStagedFiles(staged)
+	clearStagedTree(staged)
 
 	return staged
 end 'freshStagingDir'
 
-public function stagedFixtureTree(fixturesDir String, stagingRootDir String, caseLabel String, fixture String) returns FilePath
-	let staged = freshStagingDir("{stagingRootDir}/{caseLabel}")
+public function stagedFixtureTree(fixturesDir String, caseLabel String, fixture String) returns FilePath
+	let staged = freshStagingDir(testScratchDir().join(caseLabel).toString())
 	stageStoredTree(fixtureDir("{fixturesDir}/{fixture}"), into: staged)
 
 	return staged

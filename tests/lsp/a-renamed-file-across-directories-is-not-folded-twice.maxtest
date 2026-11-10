@@ -1,6 +1,6 @@
-let CrossDirRootName = "temp/lsp/a-renamed-file-across-directories-is-not-folded-twice"
-let CrossDirBeforeDirName = "temp/lsp/a-renamed-file-across-directories-is-not-folded-twice/alpha"
-let CrossDirAfterDirName = "temp/lsp/a-renamed-file-across-directories-is-not-folded-twice/beta"
+let CrossDirRootName = "a-renamed-file-across-directories-is-not-folded-twice"
+let CrossDirBeforeDirName = "alpha"
+let CrossDirAfterDirName = "beta"
 
 let CrossDirReaderName = "reader.maxon"
 let CrossDirDeclarationName = "thing.maxon"
@@ -22,8 +22,8 @@ let CrossDirPauseMs = 100
 
 test 'stale source: a renamed file across directories is not folded twice'
 	let root = stagedCorpusDirectory(CrossDirRootName)
-	let beforeDirectory = createdStagingDirectory(CrossDirBeforeDirName, under: Directory.currentPath())
-	let afterDirectory = createdStagingDirectory(CrossDirAfterDirName, under: Directory.currentPath())
+	let beforeDirectory = createdStagingDirectory(CrossDirBeforeDirName, under: root)
+	let afterDirectory = createdStagingDirectory(CrossDirAfterDirName, under: root)
 
 	writeCorpusFile(root, fileName: CrossDirReaderName, content: CrossDirReaderSource)
 	writeCorpusFile(root, fileName: CrossDirSteadyName, content: CrossDirSteadySource)
@@ -32,6 +32,8 @@ test 'stale source: a renamed file across directories is not folded twice'
 	let answers = runCorpusStaleSourceSession(crossDirRun(root, afterDirectory: afterDirectory, beforeDirectory: beforeDirectory))
 
 	requireCrossDirAnswerNamesOnlyTheNewDirectory(answers)
+
+	discardStagedDir(root)
 end 'stale source: a renamed file across directories is not folded twice'
 
 function requireCrossDirAnswerNamesOnlyTheNewDirectory(answers CorpusStaleSourceAnswers) throws TestFailure

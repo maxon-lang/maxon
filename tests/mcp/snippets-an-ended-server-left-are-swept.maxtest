@@ -1,4 +1,4 @@
-let SnippetSweepStagingDir = "temp/mcp-snippet-sweep"
+let SnippetSweepStagingDir = "mcp-snippet-sweep"
 let SnippetsAnEndedServerLeftAreSweptPlantedText = "not really a program"
 let StagedSnippetSerial = 1
 let OrphanedSnippetSerial = 2
@@ -18,10 +18,10 @@ function plantedSnippetFileIn(directory FilePath, namespace String, owner Pid, s
 end 'plantedSnippetFileIn'
 
 test 'a server sweeps the snippets and snippet builds whose server has ended, and keeps a live one s'
-	let cacheRoot = stagingDir(SnippetSweepStagingDir)
-	clearStagedFiles(cacheRoot)
-	_ = stagingDir("{SnippetSweepStagingDir}/{CacheVendorDirName}")
-	let snippets = stagingDir("{SnippetSweepStagingDir}/{CacheVendorDirName}/{SnippetDirName}")
+	let cacheRoot = stagedDirNamed(SnippetSweepStagingDir)
+	clearStagedTree(cacheRoot)
+	_ = stagedDirNamed("{SnippetSweepStagingDir}/{CacheVendorDirName}")
+	let snippets = stagedDirNamed("{SnippetSweepStagingDir}/{CacheVendorDirName}/{SnippetDirName}")
 
 	let ended = endedProcessId()
 	let live = Process.id()
@@ -54,4 +54,6 @@ test 'a server sweeps the snippets and snippet builds whose server has ended, an
 	for name in liveFiles 'eachLive'
 		try Expect.isTrue(File.exists(snippets.join(name)), message: "{name} names a server that is still running, another host's, or an older compiler's server (judged only once it is stale); the sweep must leave it")
 	end 'eachLive'
+
+	discardStagedDir(stagedDirNamed(SnippetSweepStagingDir))
 end 'a server sweeps the snippets and snippet builds whose server has ended, and keeps a live one s'

@@ -32,11 +32,13 @@ esac
 unset MAXON_TARGETS_TABLE
 # shellcheck source=scripts/lib/host-binaries.sh
 . scripts/lib/host-binaries.sh || exit "$ExitFailed"
+# shellcheck source=scripts/lib/system-temp.sh
+. scripts/lib/system-temp.sh || exit "$ExitFailed"
 
 rows="$(maxon_table_select target,debugger)" || exit "$ExitFailed"
 
-scratch="$(mktemp -d)"
-trap 'rm -rf "$scratch"' EXIT INT TERM
+temp_make dir targets-generate || exit "$ExitFailed"
+scratch="$TempMade"
 produced="$scratch/TargetsGenerated.maxon"
 
 status=0

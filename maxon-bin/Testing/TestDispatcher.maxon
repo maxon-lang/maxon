@@ -133,8 +133,10 @@ export type StagedTestBuild
 	// `reportFileOrder` instead, so what a transcript says does not depend on the filesystem.
 	export var groups as TestFileGroupArray
 
-	export static function create(buildTargets MaxonSourcePathArray, compilerWrittenSources CompilerWrittenSourceArray, stagedSourceOrigins StagedSourceOriginArray, root FilePath, groups TestFileGroupArray) returns StagedTestBuild
-		return Self{buildTargets: buildTargets, compilerWrittenSources: compilerWrittenSources, stagedSourceOrigins: stagedSourceOrigins, root: root, groups: groups}
+	export let tracksDescendants as bool
+
+	export static function create(buildTargets MaxonSourcePathArray, compilerWrittenSources CompilerWrittenSourceArray, stagedSourceOrigins StagedSourceOriginArray, root FilePath, groups TestFileGroupArray, tracksDescendants bool) returns StagedTestBuild
+		return Self{buildTargets: buildTargets, compilerWrittenSources: compilerWrittenSources, stagedSourceOrigins: stagedSourceOrigins, root: root, groups: groups, tracksDescendants: tracksDescendants}
 	end 'create'
 end 'StagedTestBuild'
 
@@ -267,7 +269,7 @@ end 'groupOfFile'
 // The staging root is RECONSTRUCTED, never inherited: a `.maxon` left behind by an earlier run with a
 // different test set would join this build silently and change what it means. That is the failure
 // `SpecTestRunner.stageSourceFiles` records having had twice.
-export function stageTestBuild(stagingRoot FilePath, subject TestSubject, groups TestFileGroupArray) returns StagedTestBuild throws TestStagingError
+export function stageTestBuild(stagingRoot FilePath, subject TestSubject, groups TestFileGroupArray, tracksDescendants bool) returns StagedTestBuild throws TestStagingError
 	if groups.isEmpty() 'nothingToDispatch'
 		// A caller-contract violation and not a user error: a run with no tests is reported and exited on
 		// BEFORE anything is staged, because the generated entry would otherwise bind a `selection` no
@@ -282,10 +284,10 @@ export function stageTestBuild(stagingRoot FilePath, subject TestSubject, groups
 		singleFile(path) then try stageOneSource(build, source: path, stagedPath: build.root.join(path.filename()), groups: groups)
 	end 'sources'
 
-	try build.addSource(stagingRoot.join("{MaxonTestEntryFileName}"), content: entrySource(groups), mintedNames: mintedNamesForEntry())
+	try build.addSource(stagingRoot.join("{MaxonTestEntryFileName}"), content: entrySource(groups, tracksDescendants: tracksDescendants), mintedNames: mintedNamesForEntry())
 	build.fixRoot()
 
-	return StagedTestBuild.create(build.buildTargets, compilerWrittenSources: build.compilerWrittenSources, stagedSourceOrigins: build.stagedSourceOrigins, root: stagingRoot, groups: groups)
+	return StagedTestBuild.create(build.buildTargets, compilerWrittenSources: build.compilerWrittenSources, stagedSourceOrigins: build.stagedSourceOrigins, root: stagingRoot, groups: groups, tracksDescendants: tracksDescendants)
 end 'stageTestBuild'
 
 function stageProjectSources(build GeneratedBuild, inputs MaxonSourcePathArray, groups TestFileGroupArray) throws TestStagingError
@@ -380,7 +382,7 @@ function fileDispatcherSource(group TestFileGroup) returns String
 	return source
 end 'fileDispatcherSource'
 
-function entrySource(groups TestFileGroupArray) returns String
+function entrySource(groups TestFileGroupArray, tracksDescendants bool) returns String
 	requireTestBinaryExitsAreItsOwn()
 
 	let beganLine = wrapped("{TestProtocolBeganTag}{TestProtocolSeparatorInMaxonSource}\{index\}")
@@ -401,6 +403,7 @@ function entrySource(groups TestFileGroupArray) returns String
 	source.append("\tend 'began'\n\n")
 
 	source.append("\texport static function ended(index {MaxonTestIndexAlias}, outcome String, nanos DurationNanos)\n")
+	source.append(descendantReportSource(tracksDescendants))
 	source.append("\t\tprintError(\"{endedLine}\\n\")\n")
 	source.append("\tend 'ended'\n")
 	source.append("end '{MaxonTestHelperType}'\n\n")
@@ -417,6 +420,17 @@ function entrySource(groups TestFileGroupArray) returns String
 	source.append("end '{MaxonTestEntrySymbol}'\n")
 	return source
 end 'entrySource'
+
+function descendantReportSource(tracksDescendants bool) returns String
+	if not tracksDescendants 'nothingToEnd'
+		return ""
+	end 'nothingToEnd'
+
+	var source = "\t\tfor entry in Process.endDescendants() 'eachDescendant'\n"
+	source.append("\t\t\t{descendantFramePrintSource()}\n")
+	source.append("\t\tend 'eachDescendant'\n\n")
+	return source
+end 'descendantReportSource'
 
 // Bracket a report body the way the protocol requires. One speller, so a line that opens with the wrapper
 // cannot close with something else.

@@ -44,7 +44,7 @@ type IdlePauseSession implements DapSession
 end 'IdlePauseSession'
 
 test 'pause stops a program idle in the scheduler, walks the runtime frames it waits in and refuses to step out of them'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: IdlePauseCaseLabel, fixture: IdleFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: IdlePauseCaseLabel, fixture: IdleFixtureName)
 	var session = IdlePauseSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged))
 	try dapRunSession(session, completing: "complete")
 
@@ -57,6 +57,8 @@ test 'pause stops a program idle in the scheduler, walks the runtime frames it w
 	end 'aWalkableHost'
 
 	try Expect.isFalse(session.stepAnswered, message: "a `next` from a pause that stands in no code of the program's own has no line to step to, and must be refused rather than started")
+
+	discardStagedDir(staged)
 end 'pause stops a program idle in the scheduler, walks the runtime frames it waits in and refuses to step out of them'
 
 let IdleFirstThreadId = 1

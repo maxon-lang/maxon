@@ -10,11 +10,10 @@
 // missing compiler, an unspellable path, a spawn that never happened. A build that exits non-zero is the
 // surface under test, so it is asserted.
 //
-// ⛔ **EVERY CASE STAGES INTO A DIRECTORY NAMED FOR ITSELF**, because `maxon test` runs files concurrently
-// and a manifest's output path is relative to the directory it runs in.
+// ⛔ **EVERY CASE STAGES INTO A DIRECTORY NAMED FOR ITSELF**, because the cases of one process share
+// its test scratch directory and a manifest's output path is relative to the directory it runs in.
 
 let FixturesDirName = "tests/buildManifest/fixtures"
-let StagingRootDirName = "temp/build_manifest"
 
 export let CoverageFlag = "--coverage"
 export let NoDebugInfoFlag = "--no-debug-info"
@@ -102,8 +101,6 @@ let SecondsPerMinute = 60
 	let ChangeModeCommandName = "chmod"
 	let ReadOnlyDirectoryMode = "a-w"
 	let WritableDirectoryMode = "u+w"
-	let ReadOnlyCheckoutsRootStem = "/tmp/maxon-build-manifest"
-	let ReadOnlyCheckoutsRootSeparator = "-"
 	let UserIdCommandName = "id"
 	let UserIdFlag = "-u"
 	let RootUserId = "0"
@@ -203,16 +200,24 @@ export typealias AgeSeconds = int(1 to 3599)
 // builds are confined to. The previous run's files go first, both halves: a stale executable or sidecar
 // would let a build that wrote none be read as though it had.
 export function stagedProject(caseLabel String, fixture String) returns FilePath
-	let staged = emptyCaseProject(caseLabel)
+	return stagedProjectIn(testScratchDir().toString(), caseLabel: caseLabel, fixture: fixture)
+end 'stagedProject'
+
+export function stagedProjectBelowTheCheckout(caseLabel String, fixture String) returns FilePath
+	return stagedProjectIn(CheckoutStagingRootDirName, caseLabel: caseLabel, fixture: fixture)
+end 'stagedProjectBelowTheCheckout'
+
+function stagedProjectIn(root String, caseLabel String, fixture String) returns FilePath
+	let staged = emptyCaseProject(root, caseLabel: caseLabel)
 	stageStoredTree(fixtureDir("{FixturesDirName}{PortablePathSeparator}{fixture}"), into: staged)
 	return staged
-end 'stagedProject'
+end 'stagedProjectIn'
 
 // ⛔ **A CASE'S TREE LOCK IS ITS OWN, NEVER THE REAL CHECKOUT'S**: the `stdlib/` marker at the case
 // root is the nearest one above the project, so a build or a planted lock blocks no other command
 // in this tree.
-function emptyCaseProject(caseLabel String) returns FilePath
-	let caseRoot = "{StagingRootDirName}{PortablePathSeparator}{caseLabel.replace(CaseLabelWordSeparator, with: CaseDirectoryWordSeparator)}"
+function emptyCaseProject(root String, caseLabel String) returns FilePath
+	let caseRoot = "{root}{PortablePathSeparator}{caseLabel.replace(CaseLabelWordSeparator, with: CaseDirectoryWordSeparator)}"
 	_ = freshCaseRoot(caseRoot)
 	return stagingDir("{caseRoot}{PortablePathSeparator}{StagedProjectDirName}")
 end 'emptyCaseProject'
@@ -416,7 +421,7 @@ function ageFile(path FilePath, seconds AgeSeconds)
 end 'ageFile'
 
 export function stagedForeignRecordCheckout(caseLabel String, sleepMs SleepMs) returns FilePath
-	let staged = emptyCaseProject(caseLabel)
+	let staged = emptyCaseProject(testScratchDir().toString(), caseLabel: caseLabel)
 
 	let lock = treeLockOf(staged).toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
 	let program = "\ttry File.writeText(FilePath from \"{lock}\", content: \"{foreignLockRecord().replace("\n", with: "\\n")}\") otherwise return 1\n\tsleep({sleepMs})\n"
@@ -473,10 +478,9 @@ end 'recordOf'
 	end 'spawnManifestBuildUnderARecordOfItsOwnPid'
 
 	export function spawnManifestBuildInAReadOnlyCheckout(caseLabel String) returns CollectedOutput
-		let root = createdDirectory(posixPath(readOnlyCheckoutsRoot()))
-		let caseRoot = createdDirectory(root.join(caseLabel.replace(CaseLabelWordSeparator, with: CaseDirectoryWordSeparator)))
-		changeMode(caseRoot, mode: WritableDirectoryMode)
-		clearStagedTree(caseRoot)
+		requireNotRoot()
+
+		let caseRoot = createdDirectory(testScratchDir().join(caseLabel.replace(CaseLabelWordSeparator, with: CaseDirectoryWordSeparator)))
 		_ = createdDirectory(caseRoot.join(StdlibDirName))
 		_ = createdDirectory(caseRoot.join(StagedCacheDirName))
 		let staged = createdDirectory(caseRoot.join(StagedProjectDirName))
@@ -485,30 +489,22 @@ end 'recordOf'
 		changeMode(caseRoot, mode: ReadOnlyDirectoryMode)
 		let build = spawnManifestBuild(staged, options: StringArray.create(0))
 		changeMode(caseRoot, mode: WritableDirectoryMode)
+		discardStagedDir(caseRoot)
+
 		return build
 	end 'spawnManifestBuildInAReadOnlyCheckout'
 
-	// Keyed by user and checkout: a fixed path is shared by every user and checkout on the host, and
-	// one's read-only leftovers would refuse another's staging.
-	function readOnlyCheckoutsRoot() returns String
-		let userId = thisUserId()
-
-		if userId == RootUserId 'asRoot'
+	function requireNotRoot()
+		if thisUserId() == RootUserId 'asRoot'
 			panic("build-manifest tests: the gate could not run — it is running as root, and root writes a directory whatever its mode, so the read-only checkout a case builds in would refuse nothing. Run this corpus as an ordinary user.")
 		end 'asRoot'
-
-		return "{ReadOnlyCheckoutsRootStem}{ReadOnlyCheckoutsRootSeparator}{userId}{ReadOnlyCheckoutsRootSeparator}{Directory.currentPath().toString().hash()}"
-	end 'readOnlyCheckoutsRoot'
+	end 'requireNotRoot'
 
 	function thisUserId() returns String
 		let ran = runSystemTool(UserIdCommandName, arguments: [UserIdFlag], what: "`{UserIdCommandName} {UserIdFlag}` to learn which user it runs as")
 
 		return ran.stdout.trim()
 	end 'thisUserId'
-
-	function posixPath(spelled String) returns FilePath
-		return try FilePath.from(spelled) otherwise panic("build-manifest tests: the gate could not run — '{spelled}' is not a spellable path")
-	end 'posixPath'
 
 	function createdDirectory(path FilePath) returns FilePath
 		if not Directory.create(path) 'couldNotCreate'
@@ -611,6 +607,8 @@ export function requireRepeatedWithOutput(caseLabel String, option String) throw
 	let record = fileText(marker)
 	let expected = "{SecondStageRecordLine}{ArgumentRecordPrefix}{BuildCommandName}{RecordLineEnd}{ArgumentRecordPrefix}{option}{RecordLineEnd}"
 	try Expect.equal(record, expected: expected, message: "the written program ran with a command line or a MAXON_SECOND_STAGE other than the driver's own invocation, word for word, and `1`. {said}")
+
+	discardStagedDir(caseRootOf(staged))
 end 'requireRepeatedWithOutput'
 
 // Every file in the staged project named for the manifest's output, whatever suffix a target gives it, named

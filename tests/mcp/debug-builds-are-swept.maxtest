@@ -1,4 +1,4 @@
-let SweepStagingDir = "temp/mcp-debug-build-sweep"
+let SweepStagingDir = "mcp-debug-build-sweep"
 let PlantedStem = "planted-main-maxon"
 let ForeignFileName = "notes.txt"
 let PlantedBytes = "not really an image"
@@ -23,10 +23,10 @@ function planted(directory FilePath, name String) returns bool
 end 'planted'
 
 test 'a server sweeps exactly the debug builds whose owner has ended on its own host'
-	let cache = stagingDir("{SweepStagingDir}/{CacheDirName}")
-	clearStagedFiles(cache)
-	_ = stagingDir("{SweepStagingDir}/{CacheDirName}/{CacheVendorDirName}")
-	let builds = stagingDir("{SweepStagingDir}/{CacheDirName}/{CacheVendorDirName}/{DebugBuildDirName}")
+	let cache = stagedDirNamed("{SweepStagingDir}/{CacheDirName}")
+	clearStagedTree(cache)
+	_ = stagedDirNamed("{SweepStagingDir}/{CacheDirName}/{CacheVendorDirName}")
+	let builds = stagedDirNamed("{SweepStagingDir}/{CacheDirName}/{CacheVendorDirName}/{DebugBuildDirName}")
 
 	let live = Process.id()
 	let ended = endedProcessId()
@@ -59,4 +59,6 @@ test 'a server sweeps exactly the debug builds whose owner has ended on its own 
 	try Expect.isTrue(planted(builds, name: liveSidecar), message: "a sidecar whose owner is still running is that session's, even with its image not yet written")
 	try Expect.isTrue(planted(builds, name: elsewhereBuild), message: "a build another host minted names a pid that means nothing here, so the sweep may not judge it by its owner: `{elsewhereBuild}` is gone")
 	try Expect.isTrue(planted(builds, name: ForeignFileName), message: "a file whose name is not a debug build's is never the sweep's to delete")
+
+	discardStagedDir(stagedDirNamed(SweepStagingDir))
 end 'a server sweeps exactly the debug builds whose owner has ended on its own host'

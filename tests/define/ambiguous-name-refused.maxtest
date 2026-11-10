@@ -11,10 +11,12 @@ let AmbiguousCode = "E3150"
 let SubFileName = "Other.maxon"
 
 test 'a define matching two declarations is refused, naming both'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "ambiguous-name", fixture: TwoBannersFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "ambiguous-name", fixture: TwoBannersFixtureName)
 
 	let stderr = requireRefusedBuild(staged, pair: "Banner=x")
 	Expect.isTrue(stderr.contains(AmbiguousCode), message: "the refusal did not carry {AmbiguousCode}. It said: {stderr}")
 	Expect.isTrue(stderr.contains(StagedProgramFileName), message: "the refusal did not name the root-level claimant. It said: {stderr}")
 	Expect.isTrue(stderr.contains(SubFileName), message: "the refusal did not name the subdirectory claimant. It said: {stderr}")
+
+	discardStagedDir(staged)
 end 'a define matching two declarations is refused, naming both'

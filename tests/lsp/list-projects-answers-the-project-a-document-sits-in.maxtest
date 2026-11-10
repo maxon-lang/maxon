@@ -10,7 +10,7 @@ test 'project roots: one document is answered as the project it sits in'
 	let uri = fileUriOf(root.join("{DocumentProjectFileName}"))
 	let probe = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(root)), documents: projectRootsDocument(uri, content: DocumentProjectSource))
 
-	discardOutsideCheckoutDir(root)
+	discardStagedDir(root)
 
 	match probe 'probe'
 		answered(result, _) then requireTheProjectTheDocumentSitsIn(result, uri: uri)
@@ -21,5 +21,5 @@ end 'project roots: one document is answered as the project it sits in'
 function requireTheProjectTheDocumentSitsIn(result ListProjectsResult, uri String) throws TestFailure
 	let project = try soleProject(result, note: "one document ({uri}) was opened inside a staged `.maxproj` root the client also named as its workspace folder.")
 
-	try requireProjectRootedAtADirectory(project, expectedTail: outsideCheckoutDirName(DocumentProjectDirName), note: "one document ({uri}) was opened inside a staged `.maxproj` root.")
+	try requireProjectRootedAtADirectory(project, expectedTail: DocumentProjectDirName, note: "one document ({uri}) was opened inside a staged `.maxproj` root.")
 end 'requireTheProjectTheDocumentSitsIn'

@@ -3,7 +3,7 @@
 // The image is renamed out of the slot only once the compile has succeeded. Emptying the slot on a compile
 // error would leave the tree with no compiler to build the fix.
 
-let RebuildWithACompileErrorStagedDirName = "temp/mcp-rebuild-with-a-compile-error"
+let RebuildWithACompileErrorStagedDirName = "mcp-rebuild-with-a-compile-error"
 let BrokenFileName = "broken.maxon"
 let FixedFileName = "fixed.maxon"
 let BrokenSource = "function main() returns ExitCode\n\treturn undeclaredName\nend 'main'\n"
@@ -12,8 +12,8 @@ let RebuildWithACompileErrorKnownLine = "built after a failed self-rebuild"
 let CompileErrorExit = 1
 
 test 'a self-rebuild that fails to compile leaves the running image in the slot, and it can build again'
-	let dir = stagingDir(RebuildWithACompileErrorStagedDirName)
-	clearStagedFiles(dir)
+	let dir = stagedInTreeDirNamed(RebuildWithACompileErrorStagedDirName)
+	clearStagedTree(dir)
 
 	let imageName = "{CompilerStem}{executableSuffix()}"
 	let compiler = stagedCopyOf(testedCompilerPath(), dir: dir, name: CompilerStem)
@@ -40,4 +40,6 @@ test 'a self-rebuild that fails to compile leaves the running image in the slot,
 
 	let built = spawnCompiler(StringArray.create(0), staged: dir, what: "the rebuilt image", binary: compiler)
 	Expect.equal(built.stdout.trim(), expected: RebuildWithACompileErrorKnownLine, message: "{imageName} should now be the program the second build wrote. It exited {built.exitCode()} and wrote to stderr: {built.stderr}")
+
+	discardStagedDir(dir)
 end 'a self-rebuild that fails to compile leaves the running image in the slot, and it can build again'

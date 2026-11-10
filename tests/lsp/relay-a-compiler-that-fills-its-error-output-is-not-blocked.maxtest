@@ -1,0 +1,44 @@
+let FloodCaseDirName = "relay-flood"
+let FloodDocumentName = "one.maxon"
+let FloodDocumentText = "flooding"
+let FloodLineNeedle = "flood line"
+let FloodFirstLineNeedle = "flood line 0 "
+let FloodOmittedNeedle = "further lines omitted"
+
+test 'relay: a compiler that writes a great deal to its error output is not blocked by the relay'
+	let caseDir = stagedRelayCase(FloodCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	var client = LspClient.start()
+
+	if let observed = try floodedItsErrorOutput(client, caseDir: caseDir) 'observed'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.equal(observed.0, expected: RelayAnsweredText, message: "a request to a compiler writing to its error output was not answered.")
+		try Expect.contains(observed.1, needle: FloodFirstLineNeedle, message: "the client was not given what the compiler wrote to its error output.")
+		try Expect.contains(observed.1, needle: FloodOmittedNeedle, message: "the client was not told how much of the compiler's error output was left out.")
+	end 'observed' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a compiler that writes a great deal to its error output is not blocked by the relay'
+
+function floodedItsErrorOutput(client LspClient, caseDir FilePath) returns (String, String) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(FloodDocumentName))
+	_ = try client.initializeAtRoot(relayCheckout(caseDir))
+
+	try client.initialized()
+	try client.openDocument(uri, content: FloodDocumentText)
+	_ = try awaitFakePublish(client, uri: uri, generation: 1, text: FloodDocumentText)
+
+	armRelayFloodOnHover(caseDir)
+
+	let answer = try relayHoverRefusal(client, uri: uri)
+	var forwarded = ""
+
+	while not (forwarded.contains(FloodFirstLineNeedle) and forwarded.contains(FloodOmittedNeedle)) 'untilBoth'
+		forwarded.append(try client.awaitLogMessage(FloodLineNeedle, polled: uri))
+	end 'untilBoth'
+
+	return (answer, forwarded)
+end 'floodedItsErrorOutput'

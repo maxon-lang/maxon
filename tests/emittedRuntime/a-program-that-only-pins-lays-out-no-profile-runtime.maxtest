@@ -9,7 +9,7 @@ let AProgramThatOnlyPinsLaysOutNoProfileRuntimeRunDeadline = 30000
 let AProgramThatOnlyPinsLaysOutNoProfileRuntimePinReason = "A machine pin is a green-thread object: the destructor that unpins it is in the scheduler's runtime band and its facility is the green-thread floor. A program that only pins must not install the profiler's runtime, whose host-handle close serves processes it samples and has no business in a program that never samples one."
 
 test 'a program that only pins lays out the pin destructor and no profile runtime'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: AProgramThatOnlyPinsLaysOutNoProfileRuntimeCaseLabel, fixture: PinOnlyFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: AProgramThatOnlyPinsLaysOutNoProfileRuntimeCaseLabel, fixture: PinOnlyFixtureName)
 	let executable = buildStagedForHost(staged, caseLabel: AProgramThatOnlyPinsLaysOutNoProfileRuntimeCaseLabel)
 	let run = runStagedForHost(executable, staged: staged, procs: SoleProcessor, deadlineMs: AProgramThatOnlyPinsLaysOutNoProfileRuntimeRunDeadline, standardInput: InputSource.none)
 
@@ -23,6 +23,8 @@ test 'a program that only pins lays out the pin destructor and no profile runtim
 	noteNoProfileRuntime(findings, staged: staged, target: LinuxTargetName)
 
 	Expect.isTrue(findings.isEmpty(), message: "a program that only pins did not lay out the runtime a pin needs and nothing else:{renderedFindings(findings)}\n\n  {AProgramThatOnlyPinsLaysOutNoProfileRuntimePinReason}")
+
+	discardStagedDir(staged)
 end 'a program that only pins lays out the pin destructor and no profile runtime'
 
 function notePinDestructor(findings StringArray, staged FilePath, target String)

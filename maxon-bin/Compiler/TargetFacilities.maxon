@@ -127,6 +127,8 @@ export enum HostFacility
 
 	processNamespace
 
+	processDescendants
+
 	entropy
 
 	// The operating system's certificate store (`__trust_*`): Windows' crypt32 and macOS' Security
@@ -486,7 +488,7 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 
 	// The two subprocess surfaces whose entries live in the SCHEDULER band rather than behind the
 	// `__gt_subp_` prefix, named individually for that reason.
-	if callee.equals(GtProcessRunName) or callee.equals(IoReadName) 'spawnDoors'
+	if isSchedulerSpawnDoor(callee) 'spawnDoors'
 		return CalleeFacility.needs(HostFacility.subprocess)
 	end 'spawnDoors'
 
@@ -583,6 +585,10 @@ function calleeHostFacility(callee ByteArray) returns CalleeFacility
 	if callee.equals(ProcessNamespaceName) 'namespace'
 		return CalleeFacility.needs(HostFacility.processNamespace)
 	end 'namespace'
+
+	if isProcessDescendantsRuntimeCallee(callee) 'descendants'
+		return CalleeFacility.needs(HostFacility.processDescendants)
+	end 'descendants'
 
 	if callee.equals(RandomFillName) 'entropy'
 		return CalleeFacility.needs(HostFacility.entropy)
@@ -692,6 +698,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processPriority or
 			processLiveness or
 			processNamespace or
+			processDescendants or
 			entropy or
 			trustStore or
 			cpuCount or
@@ -749,6 +756,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processPriority or
 			processLiveness or
 			processNamespace or
+			processDescendants or
 			entropy or
 			trustStore or
 			cpuCount or
@@ -838,6 +846,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			faultHandler or
 			uptimeClock or
 			processSampling or
+			processDescendants or
 			microsecondSleep gives true
 
 			processDebug gives true
@@ -895,6 +904,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processPriority or
 			processLiveness or
 			processNamespace or
+			processDescendants or
 			entropy or
 			managedSocket or
 			terminalDetection or
@@ -949,6 +959,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			processPriority or
 			processLiveness or
 			processNamespace or
+			processDescendants or
 			cpuCount or
 			cpuFeatureProbe or
 			threadLocalSlot or

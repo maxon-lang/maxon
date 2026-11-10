@@ -8,13 +8,15 @@ let RenderedFunctionNames = "{RunnerFunctionName}{EmittedNameSeparator}{EnqueueF
 let TheCownRunnerLinksNoQueueNodeReason = "`__cown_run` is stoppable by asynchronous preemption, so it may not hold the window between a tail swap and the store that links the old tail to the new node: a multi-cown release that lost its own CAS spins on that link with no way to yield. Its finish claim publishes through `__cown_enqueue_finish`, which is not stoppable. A release store (`stlr`) in `__cown_run` is that link store inlined back."
 
 test 'the cown runner links no queue node itself'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TheCownRunnerLinksNoQueueNodeCaseLabel, fixture: RunnerFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: TheCownRunnerLinksNoQueueNodeCaseLabel, fixture: RunnerFixtureName)
 
 	var findings = StringArray.create(0)
 	noteRunnerTarget(findings, staged: staged, target: MacosTargetName)
 	noteRunnerTarget(findings, staged: staged, target: LinuxTargetName)
 
 	Expect.isTrue(findings.isEmpty(), message: "the emitted `{RunnerFunctionName}` publishes a queue node itself:{renderedFindings(findings)}\n\n  {TheCownRunnerLinksNoQueueNodeReason}")
+
+	discardStagedDir(staged)
 end 'the cown runner links no queue node itself'
 
 function noteRunnerTarget(findings StringArray, staged FilePath, target String)

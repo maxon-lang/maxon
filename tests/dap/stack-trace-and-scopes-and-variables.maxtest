@@ -38,7 +38,7 @@ type ValuesSession implements DapSession
 end 'ValuesSession'
 
 test 'a stop answers its frames, its scopes and the variables of its Locals scope'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ValuesCaseLabel, fixture: ValuesFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ValuesCaseLabel, fixture: ValuesFixtureName)
 	var session = ValuesSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: RenderedAnchor))
 	try dapRunSession(session, completing: "complete")
 
@@ -46,4 +46,6 @@ test 'a stop answers its frames, its scopes and the variables of its Locals scop
 	try Expect.isTrue(session.scopeNames.contains(LocalsScopeName), message: "an editor's Variables pane is built from the scopes; without a `{LocalsScopeName}` scope it is empty. The scopes were {joined(session.scopeNames, separator: Space)}")
 	try Expect.isTrue(session.variableNames.contains(LabelLocalName), message: "the `{LocalsScopeName}` scope of `{RenderFunctionName}` must name its local `{LabelLocalName}`; it named {joined(session.variableNames, separator: Space)}")
 	try Expect.contains(session.labelValue, needle: LabelLocalText, message: "`{LabelLocalName}` holds `{LabelLocalText}` at that line. A variables list that names the right locals with the WRONG values is what an off-by-one frame chain produces; it said {session.labelValue}")
+
+	discardStagedDir(staged)
 end 'a stop answers its frames, its scopes and the variables of its Locals scope'

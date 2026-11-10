@@ -7,8 +7,8 @@
 // would agree with whatever it does.
 //
 // ⛔ **THE EXAMPLES ARE BUILT WHERE THEY SIT, NEVER COPIED**, because the gate is about the files a reader
-// runs. Only the OUTPUT is staged, into `temp/examples/<source spelling>/`: `maxon test` runs files
-// concurrently, and `--output=` is what keeps a build out of the tree lock. The whole spelling names
+// runs. Only the OUTPUT is staged, into `<test scratch>/<source spelling>/`: `--output=` is what
+// keeps a build out of the tree lock. The whole spelling names
 // the directory because two programs can share a stem, and two builds in one directory overwrite
 // each other. A document's program has no file of its own, so it is cut out of the document as it
 // stands and written into its staging directory, and built there.
@@ -29,7 +29,7 @@
 // directory on POSIX and the parent's on Windows.
 
 let ExamplesDirName = "examples"
-let StagingRootDirName = "temp/examples"
+let StagingSpellingSeparator = "-"
 
 let ConcurrencyBenchmarkDirName = "bench/concurrency"
 let ConcurrencyBenchmarkProcessorCounts = ["1", "4"]
@@ -71,7 +71,7 @@ end 'ExampleRun'
 export function requireExampleBuild(example String, directory String = ExamplesDirName) throws TestFailure
 	let source = examplePath(example, directory: directory)
 	let staging = exampleStagingDir(example, directory: directory)
-	clearStagedFiles(staging)
+	clearStagedTree(staging)
 
 	try requireBuild(source, staging: staging, stem: exampleStem(example), spelling: exampleSpelling(example, directory: directory))
 end 'requireExampleBuild'
@@ -89,6 +89,8 @@ export function requireConcurrencyBenchmarkAnswer(workload String, arguments Str
 		let run = runBuiltExample(program, arguments: arguments, directory: ConcurrencyBenchmarkDirName, environment: [MaxProcsVariableName: processors])
 		try requireAnswer(run, stdout: stdout, exitCode: ConcurrencyBenchmarkExitCode)
 	end 'eachProcessorCount'
+
+	discardStagedDir(exampleStagingDir(program, directory: ConcurrencyBenchmarkDirName))
 end 'requireConcurrencyBenchmarkAnswer'
 
 // Write `content` at `relativePath` inside `example`'s staging directory, which is the working directory
@@ -111,16 +113,19 @@ end 'stageExampleFile'
 export function runExample(example String, arguments StringArray = StringArray.create(0)) returns ExampleRun throws TestFailure
 	try requireExampleBuild(example)
 
-	return runBuiltExample(example, arguments: arguments)
+	let run = runBuiltExample(example, arguments: arguments)
+	discardStagedDir(exampleStagingDir(example))
+
+	return run
 end 'runExample'
 
 // Build the one program in `document` that contains `marker`, staged as `<name>.maxon` in its own directory
-// under `temp/examples/`, and run it once.
+// in the test scratch directory, and run it once.
 export function runDocumentProgram(document String, marker String, name String) returns ExampleRun throws TestFailure
 	let program = documentProgram(document, marker: marker)
 
-	let staged = stagingDir("{StagingRootDirName}{PortablePathSeparator}{document}{PortablePathSeparator}{name}")
-	clearStagedFiles(staged)
+	let staged = stagingDirFor("{document}{PortablePathSeparator}{name}")
+	clearStagedTree(staged)
 
 	let source = staged.join("{name}{MaxonSourceSuffix}")
 	writeStagedFile(source, content: program)
@@ -128,7 +133,10 @@ export function runDocumentProgram(document String, marker String, name String) 
 	let spelling = "{document} ({name})"
 	try requireBuild(source, staging: staged, stem: name, spelling: spelling)
 
-	return runBuilt(staged, stem: name, spelling: spelling, arguments: StringArray.create(0), environment: EnvMap.create())
+	let run = runBuilt(staged, stem: name, spelling: spelling, arguments: StringArray.create(0), environment: EnvMap.create())
+	discardStagedDir(staged)
+
+	return run
 end 'runDocumentProgram'
 
 // Build `source` into `staging` as `stem`; `spelling` is how every report names the program.
@@ -292,6 +300,10 @@ function exampleStem(example String) returns String
 	return example.replace(MaxonSourceSuffix, with: "")
 end 'exampleStem'
 
-function exampleStagingDir(example String, directory String) returns FilePath
-	return stagingDir("{StagingRootDirName}{PortablePathSeparator}{exampleSpelling(example, directory: directory)}")
+export function exampleStagingDir(example String, directory String = ExamplesDirName) returns FilePath
+	return stagingDirFor(exampleSpelling(example, directory: directory))
 end 'exampleStagingDir'
+
+function stagingDirFor(spelling String) returns FilePath
+	return stagingDir("{testScratchDir().toString()}{PortablePathSeparator}{spelling.replace(PortablePathSeparator, with: StagingSpellingSeparator)}")
+end 'stagingDirFor'

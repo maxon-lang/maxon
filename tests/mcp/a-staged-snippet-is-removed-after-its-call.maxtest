@@ -1,4 +1,4 @@
-let SnippetCacheStagingDir = "temp/mcp-snippet-cache-root"
+let SnippetCacheStagingDir = "mcp-snippet-cache-root"
 let ExtensionlessTarget = "x64-linux"
 let PrintingSnippet = "function main() returns ExitCode\n\tprint(\"staged\\n\")\n\n\treturn 0\nend 'main'\n"
 
@@ -18,8 +18,8 @@ function builtFromTheSnippet(files FilePathArray, cacheRoot FilePath) returns Fi
 end 'builtFromTheSnippet'
 
 test 'a snippet staged for a tool call, and everything the call built from it, is gone once the call has answered'
-	let cacheRoot = stagingDir(SnippetCacheStagingDir)
-	clearStagedFiles(cacheRoot)
+	let cacheRoot = stagedDirNamed(SnippetCacheStagingDir)
+	clearStagedTree(cacheRoot)
 
 	var environment = EnvMap.create()
 	environment.upsert(CacheRootVariable, value: cacheRoot.toString())
@@ -43,4 +43,6 @@ test 'a snippet staged for a tool call, and everything the call built from it, i
 	try Expect.isFalse(toolCallIsError(formatted), message: "the control: `{FmtTool}` must format the staged snippet: {toolCallText(formatted)}")
 	try Expect.isFalse(toolCallIsError(crossBuilt), message: "the control: `{BuildTool}` must build the staged snippet for {ExtensionlessTarget}: {toolCallText(crossBuilt)}")
 	try Expect.equal(left.count(), expected: 0, message: "⛔ A SNIPPET'S NAME IS UNIQUE PER CALL, SO NOTHING BUILT FROM IT IS EVER REACHED AGAIN. The staged source, the executable and sidecar `{BuildTool}` wrote beside it and the cached build `{ExecuteTool}` published under {cacheRoot.path} must all be gone once the call answered, or every call leaves a build behind for the life of the install; {left.count()} file(s) remained: {spacedPaths(left)}")
+
+	discardStagedDir(stagedDirNamed(SnippetCacheStagingDir))
 end 'a snippet staged for a tool call, and everything the call built from it, is gone once the call has answered'

@@ -1,0 +1,18 @@
+let LinkSweepCaseDirName = "library-cache-sweep-link"
+let LinkSweepOutputName = "link-sweep-program"
+let LinkSweepOlderFormatName = "v1"
+
+test 'a build that sweeps an older cache format removes a link planted there and leaves what it points at'
+	let dir = freshCaseDir(LinkSweepCaseDirName)
+	let planted = plantedLinkInTheLibraryCache(dir, linkName: LinkSweepOlderFormatName)
+	stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+	let built = runLibraryCacheBuild(dir, program: ProgramDirName, output: LinkSweepOutputName, options: StringArray.create(0))
+	let said = "It wrote to stdout: {built.stdout} and to stderr: {built.stderr}"
+	Expect.equal(built.exitCode(), expected: 0, message: "the build did not succeed. {said}")
+
+	Expect.isFalse(Directory.exists(planted.link), message: "the build left {planted.link.toString()}, a link in an older cache format's place, so it swept nothing and this case says nothing about what a sweep follows. {said}")
+	Expect.equal(planted.survivingOutsideFiles(), expected: planted.outsideFiles.count() as ReportedTally, message: "the build deleted or changed files in {planted.outside.toString()}, which the link at {planted.link.toString()} points at: the sweep of an older cache format followed the link out of the cache. {said}")
+
+	discardStagedDir(dir)
+end 'a build that sweeps an older cache format removes a link planted there and leaves what it points at'

@@ -1,7 +1,7 @@
 let CrashCaseLabel = "crash-exits-nonzero"
 
 test 'a debuggee that faults is reported as a crash and the driver exits nonzero'
-	let staged = builtLibraryTierFixture(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: CrashCaseLabel, fixture: CrashFixtureName)
+	let staged = builtLibraryTierFixture(FixturesDirName, caseLabel: CrashCaseLabel, fixture: CrashFixtureName)
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: debugCommandLine([RunCommand, ContinueCommand]), extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
@@ -16,4 +16,6 @@ test 'a debuggee that faults is reported as a crash and the driver exits nonzero
 	Expect.equal(crashes.count(), expected: 1, message: "a program that faulted printed {crashes.count()} `{CrashEventName}` events. A fault is not an exit, so it must not be reported as one. It printed: {listedLines(eventKinds(events))}. {said}")
 	Expect.equal(eventsOfKind(events, kind: ExitEventName).count(), expected: 0, message: "a program that faulted was also reported as having exited, so a reader cannot tell a clean end from a fault. {said}")
 	Expect.equal(session.exitCode(), expected: FaultedSessionExitCode, message: "a debuggee crash is a failed session, so the driver must exit {FaultedSessionExitCode}. {said}")
+
+	discardStagedDir(staged)
 end 'a debuggee that faults is reported as a crash and the driver exits nonzero'

@@ -11,7 +11,10 @@ category: concurrency
 
 `spawnReadLine(cmd)` spawns the child named by the command String with its **stdout redirected to a
 fresh pipe**, issues a **yielding** read of that pipe (an overlapped `ReadFile` on x64-windows), and returns
-the number of bytes read once the read completes. It is the risky core of async-subprocess-stdio: the read PARKS the green
+the number of bytes read once the read completes. The read is the call's whole interest in the child, so it
+**ends the child's whole process tree** (the processes the child started included) and reaps the child
+before it returns: a child that prints its line and keeps running does not hold the call, and nothing the
+call started is left running. It is the risky core of async-subprocess-stdio: the read PARKS the green
 thread and is resumed — by the scheduler's own **poller**, which is what the completion is delivered to —
 when the read finishes, so the M is free to run other green threads while the read is in flight.
 
@@ -82,6 +85,78 @@ line reaches the child through `/bin/sh -c`, exactly as `__Builtins.runProcess`'
 ```maxon
 function main() returns ExitCode
 	let n = spawnReadLine("echo hello")
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: spawn-read-line.the-child-has-exited-when-the-probe-returns -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+The child writes its line and would keep running for two seconds more. The probe returns the byte count
+with that child's tree ended, so the case ends with no process of its own left running, which the harness
+checks at the case's end.
+```maxon
+function main() returns ExitCode
+	let n = spawnReadLine("cmd /c echo hello& ping -n 3 127.0.0.1 >nul")
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: spawn-read-line.posix-the-child-has-exited-when-the-probe-returns -->
+<!-- unsupported-targets: x64-windows -->
+`the-child-has-exited-when-the-probe-returns`'s subject on the POSIX lane: the shell writes `hello\n`, six
+bytes, and the `sleep` it forks would keep the child's tree running for a second more.
+```maxon
+function main() returns ExitCode
+	let n = spawnReadLine("echo hello; sleep 1")
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: spawn-read-line.a-child-that-keeps-running-after-its-line-does-not-hold-the-probe -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+The child writes its line and then runs for a minute. The probe returns the byte count as soon as the line
+is read, having ended the child's tree (`cmd` and the `ping` it started), so the call takes a fraction of
+the minute and the harness finds nothing of the case's left running. Thirty seconds is the bound: half the
+child's life, so a probe that waits for the child to exit overshoots it.
+```maxon
+function main() returns ExitCode
+	let started = Clock.nowMs()
+	let n = spawnReadLine("cmd /c echo hello& ping -n 60 127.0.0.1 >nul")
+
+	if Clock.elapsedMs(started) >= 30000 'waitedForTheChild'
+		return 1
+	end 'waitedForTheChild'
+
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: spawn-read-line.posix-a-child-that-keeps-running-after-its-line-does-not-hold-the-probe -->
+<!-- unsupported-targets: x64-windows -->
+`a-child-that-keeps-running-after-its-line-does-not-hold-the-probe`'s subject on the POSIX lane: the shell
+writes `hello\n`, six bytes, and the `sleep` it forks would keep running for a minute. The
+kill reaches the group the child leads, including a `sleep` the shell was still forking when the read ended.
+```maxon
+function main() returns ExitCode
+	let started = Clock.nowMs()
+	let n = spawnReadLine("echo hello; sleep 60")
+
+	if Clock.elapsedMs(started) >= 30000 'waitedForTheChild'
+		return 1
+	end 'waitedForTheChild'
+
 	return n as ExitCode
 end 'main'
 ```

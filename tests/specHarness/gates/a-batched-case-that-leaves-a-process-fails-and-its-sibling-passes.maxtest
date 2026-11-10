@@ -1,0 +1,24 @@
+let BatchedLeakSpecName = "batched-leak"
+let BatchedLeakCase = "batched-leak.leaves-one"
+
+test 'a batched case that leaves a process running fails, naming it, and the cases beside it pass'
+	let staged = stagedGateFixture()
+	let run = runSpecTest(staged, includeNetwork: false)
+	let said = everythingSaid(run)
+	let leaker = recordedProcessId(staged.join(LeakerProcessIdFileName))
+	var broken = StringArray.create(0)
+
+	collectLeakNotReported(said, label: testLabel(BatchedLeakSpecName, testName: BatchedLeakCase), leaker: leaker, broken: broken)
+	collectNotPassed(said, specName: BatchedLeakSpecName, testNames: ["batched-leak.before", "batched-leak.after"], broken: broken)
+
+	if not said.contains("ran batched in 1 program(s)") 'notBatched'
+		broken.push("the cases did not run batched in one program, so the gate does not exercise the batch entry's audit. It said:\n{said}\n")
+	end 'notBatched'
+
+	if run.exitCode() == SuccessExitCode 'exitWrong'
+		broken.push("the run exited {SuccessExitCode} with a case that left a process running in it. It said:\n{said}\n")
+	end 'exitWrong'
+
+	discardStagedDir(staged)
+	requireNothingBroken(broken, headline: "a batched case that leaves a process running fails alone")
+end 'a batched case that leaves a process running fails, naming it, and the cases beside it pass'

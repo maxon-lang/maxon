@@ -25,7 +25,7 @@ let GtSpOffset = 144 as FieldOffset
 let SeedReason = "A green thread's saved registers live in its GT record, so `__gt_context_switch` never reads a frame off the stack it enters. A new thread's first resume therefore needs nothing below its stack top: `__gt_spawn` seeds the record's saved stack pointer with the top itself and keeps the trampoline and the initial frame pointer in record fields. A seed frame carved below the top is stack the thread never gets back, and a switch that still reads one reads registers the record already holds."
 
 test 'a new green thread is seeded with its stack top and no frame below it'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ANewGreenThreadsSavedContextLivesInItsRecordNotOnItsStackCaseLabel, fixture: PinnedMachineBlockedFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ANewGreenThreadsSavedContextLivesInItsRecordNotOnItsStackCaseLabel, fixture: PinnedMachineBlockedFixtureName)
 
 	var findings = StringArray.create(0)
 	noteContextTarget(findings, staged: staged, target: MacosTargetName, isa: Arm64InstructionPrefix)
@@ -34,6 +34,8 @@ test 'a new green thread is seeded with its stack top and no frame below it'
 	noteContextTarget(findings, staged: staged, target: X64WindowsTargetName, isa: X64InstructionPrefix)
 
 	Expect.isTrue(findings.isEmpty(), message: "the emitted `{SpawnFunctionName}` still carves a seed frame below a new green thread's stack top:{renderedFindings(findings)}\n\n  {SeedReason}")
+
+	discardStagedDir(staged)
 end 'a new green thread is seeded with its stack top and no frame below it'
 
 function noteContextTarget(findings StringArray, staged FilePath, target String, isa String)

@@ -8,6 +8,16 @@ let PosixTouchName = "touch"
 let PosixTouchTimeFlag = "-t"
 let PosixYear2000Stamp = "200001010000"
 
+#if os(Windows)
+	let WindowsLinkToolName = "cmd"
+	let WindowsLinkToolRunFlag = "/c"
+	let WindowsLinkToolCommand = "mklink"
+	let WindowsJunctionFlag = "/J"
+#else
+	let PosixLinkToolName = "ln"
+	let PosixSymbolicFlag = "-s"
+#endif
+
 #if not os(Windows)
 	public let PosixShellPath = "/bin/sh"
 #endif
@@ -40,6 +50,14 @@ public function runSystemTool(tool String, arguments StringArray, what String) r
 
 	return ran
 end 'runSystemTool'
+
+public function plantedDirectoryLink(link FilePath, target String)
+	#if os(Windows)
+		_ = runSystemTool(WindowsLinkToolName, arguments: [WindowsLinkToolRunFlag, WindowsLinkToolCommand, WindowsJunctionFlag, link.toString(), target], what: "linking {link.toString()} to {target}")
+	#else
+		_ = runSystemTool(PosixLinkToolName, arguments: [PosixSymbolicFlag, target, link.toString()], what: "linking {link.toString()} to {target}")
+	#endif
+end 'plantedDirectoryLink'
 
 public function backdatedToTheYear2000(path FilePath)
 	#if os(Windows)

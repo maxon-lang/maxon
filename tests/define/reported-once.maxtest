@@ -7,10 +7,12 @@
 let InferredFixtureName = "inferred"
 
 test 'a define naming nothing is reported once when a parse settles the index again'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "reported-once", fixture: InferredFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "reported-once", fixture: InferredFixtureName)
 
 	let stderr = requireRefusedBuild(staged, pair: "{UnknownName}=x")
 	let reports = stderr.split(UnknownCode).count() - 1
 	Expect.equal(reports, expected: 1, message: "the refusal carried {UnknownCode} {reports} time(s), expected once. It said: {stderr}")
 	Expect.isTrue(stderr.contains(UnknownName), message: "the refusal did not name the define that could not bind. It said: {stderr}")
+
+	discardStagedDir(staged)
 end 'a define naming nothing is reported once when a parse settles the index again'

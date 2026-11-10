@@ -1,0 +1,44 @@
+let RunningOutputCaseDirName = "build-over-a-running-output"
+let RunningOutputStem = "program"
+let RunningOutputHeldSource = "function main() returns ExitCode\n\tsleep(30000)\n\treturn 3\nend 'main'\n"
+let RunningOutputReplacementSource = "function main() returns ExitCode\n\treturn 4\nend 'main'\n"
+let RunningOutputReplacementExit = 4
+let RunningOutputPollMs = 20
+let RunningOutputStartBoundMs = 10000
+let RunningOutputLeftoverWarning = "could not be removed from the staging directory"
+
+test 'a build into an output that is a running program succeeds and leaves the new program in place'
+	let dir = freshCaseDir(RunningOutputCaseDirName)
+	let output = dir.join("{RunningOutputStem}{executableSuffix()}")
+	let source = dir.join(StagedProgramFileName)
+
+	writeStagedFile(source, content: RunningOutputHeldSource)
+	let first = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"])
+	Expect.equal(first.exitCode(), expected: 0, message: "the first build of a program that waits did not succeed. It said: {first.stdout}{first.stderr}")
+
+	let holder = try StreamingSubprocess.spawn(Executable.path(output), arguments: StringArray.create(0)) otherwise (e) 'spawnFailed'
+		panic("the gate could not run — could not run {output.toString()} ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	let holderId = try holder.processId() otherwise (e) 'noId'
+		panic("the gate could not run — the program at {output.toString()} has no process id ({e.displayReason()}).")
+	end 'noId'
+
+	let begun = Clock.nowMs()
+
+	while not Process.isAlive(holderId) and Clock.elapsedMs(begun) < RunningOutputStartBoundMs 'starting'
+		sleep(RunningOutputPollMs)
+	end 'starting'
+
+	writeStagedFile(source, content: RunningOutputReplacementSource)
+	let rebuilt = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"])
+	let replacement = spawnCompiler(StringArray.create(0), staged: dir, what: "the program the second build wrote", binary: output)
+
+	requireTreeEnded(holder, what: "the program whose image the second build replaced")
+
+	Expect.equal(rebuilt.exitCode(), expected: 0, message: "a build into an output that is a running program did not succeed. It said: {rebuilt.stdout}{rebuilt.stderr}")
+	Expect.equal(replacement.exitCode(), expected: RunningOutputReplacementExit, message: "{output.toString()} is not the program the second build wrote. It exited {replacement.exitCode()} and said: {replacement.stdout}{replacement.stderr}")
+	Expect.isFalse(rebuilt.stderr.contains(RunningOutputLeftoverWarning), message: "the build warned of the running program's image it left in the staging directory, which is no leftover to remove by hand. It said: {rebuilt.stdout}{rebuilt.stderr}")
+
+	discardStagedDir(dir)
+end 'a build into an output that is a running program succeeds and leaves the new program in place'

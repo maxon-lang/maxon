@@ -1366,6 +1366,34 @@ function appendToken(out ByteArray, token String)
 	out.push(0)
 end 'appendToken'
 
+typealias PidArray = Array with Pid
+
+let endsWithinMs = 30000
+let pollMs = 50
+
+function allEnded(pids PidArray) returns bool
+	var waited = 0 as DurationMs
+
+	while waited < endsWithinMs 'poll'
+		var alive = 0 as Count
+
+		for pid in pids 'eachPid'
+			if Process.isAlive(pid) 'stillThere'
+				alive = alive + 1
+			end 'stillThere'
+		end 'eachPid'
+
+		if alive == 0 'none'
+			return true
+		end 'none'
+
+		sleep(pollMs)
+		waited = waited + pollMs
+	end 'poll'
+
+	return false
+end 'allEnded'
+
 function main() returns ExitCode
 	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
@@ -1375,6 +1403,16 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 	print("positive={pid > 0}")
+	var pids = PidArray.create(0)
+
+	if pid > 0 'started'
+		pids.push(pid as Pid)
+	end 'started'
+
+	if not allEnded(pids) 'lingers'
+		return 4
+	end 'lingers'
+
 	return 0
 end 'main'
 ```
@@ -1408,6 +1446,34 @@ function appendToken(out ByteArray, token String)
 	out.push(0)
 end 'appendToken'
 
+typealias PidArray = Array with Pid
+
+let endsWithinMs = 30000
+let pollMs = 50
+
+function allEnded(pids PidArray) returns bool
+	var waited = 0 as DurationMs
+
+	while waited < endsWithinMs 'poll'
+		var alive = 0 as Count
+
+		for pid in pids 'eachPid'
+			if Process.isAlive(pid) 'stillThere'
+				alive = alive + 1
+			end 'stillThere'
+		end 'eachPid'
+
+		if alive == 0 'none'
+			return true
+		end 'none'
+
+		sleep(pollMs)
+		waited = waited + pollMs
+	end 'poll'
+
+	return false
+end 'allEnded'
+
 function main() returns ExitCode
 	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/usr/bin/true")
@@ -1415,6 +1481,16 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 	print("positive={pid > 0}")
+	var pids = PidArray.create(0)
+
+	if pid > 0 'started'
+		pids.push(pid as Pid)
+	end 'started'
+
+	if not allEnded(pids) 'lingers'
+		return 4
+	end 'lingers'
+
 	return 0
 end 'main'
 ```
@@ -1448,6 +1524,34 @@ function appendToken(out ByteArray, token String)
 	out.push(0)
 end 'appendToken'
 
+typealias PidArray = Array with Pid
+
+let endsWithinMs = 30000
+let pollMs = 50
+
+function allEnded(pids PidArray) returns bool
+	var waited = 0 as DurationMs
+
+	while waited < endsWithinMs 'poll'
+		var alive = 0 as Count
+
+		for pid in pids 'eachPid'
+			if Process.isAlive(pid) 'stillThere'
+				alive = alive + 1
+			end 'stillThere'
+		end 'eachPid'
+
+		if alive == 0 'none'
+			return true
+		end 'none'
+
+		sleep(pollMs)
+		waited = waited + pollMs
+	end 'poll'
+
+	return false
+end 'allEnded'
+
 function main() returns ExitCode
 	var argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
@@ -1457,10 +1561,12 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	var spawned = 0 as Count
 	var firstFailure = -1 as FullRangeInt
+	var pids = PidArray.create(0)
 	for i in 0 upto 65 'detachLoop'
 		let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 		if pid > 0 'counted'
 			spawned = spawned + 1
+			pids.push(pid as Pid)
 		end 'counted' else 'failed'
 			if firstFailure < 0 'firstOnly'
 				firstFailure = i
@@ -1468,6 +1574,11 @@ function main() returns ExitCode
 		end 'failed'
 	end 'detachLoop'
 	print("spawned={spawned} firstFailure={firstFailure}\n")
+
+	if not allEnded(pids) 'lingers'
+		return 4
+	end 'lingers'
+
 	return 0
 end 'main'
 ```
@@ -1497,6 +1608,34 @@ function appendToken(out ByteArray, token String)
 	out.push(0)
 end 'appendToken'
 
+typealias PidArray = Array with Pid
+
+let endsWithinMs = 30000
+let pollMs = 50
+
+function allEnded(pids PidArray) returns bool
+	var waited = 0 as DurationMs
+
+	while waited < endsWithinMs 'poll'
+		var alive = 0 as Count
+
+		for pid in pids 'eachPid'
+			if Process.isAlive(pid) 'stillThere'
+				alive = alive + 1
+			end 'stillThere'
+		end 'eachPid'
+
+		if alive == 0 'none'
+			return true
+		end 'none'
+
+		sleep(pollMs)
+		waited = waited + pollMs
+	end 'poll'
+
+	return false
+end 'allEnded'
+
 function main() returns ExitCode
 	var argv = ByteArray.create(0)
 	appendToken(argv, token: "/usr/bin/true")
@@ -1504,10 +1643,12 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	var spawned = 0 as Count
 	var firstFailure = -1 as FullRangeInt
+	var pids = PidArray.create(0)
 	for i in 0 upto 65 'detachLoop'
 		let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 		if pid > 0 'counted'
 			spawned = spawned + 1
+			pids.push(pid as Pid)
 		end 'counted' else 'failed'
 			if firstFailure < 0 'firstOnly'
 				firstFailure = i
@@ -1515,6 +1656,11 @@ function main() returns ExitCode
 		end 'failed'
 	end 'detachLoop'
 	print("spawned={spawned} firstFailure={firstFailure}\n")
+
+	if not allEnded(pids) 'lingers'
+		return 4
+	end 'lingers'
+
 	return 0
 end 'main'
 ```
@@ -1539,7 +1685,7 @@ those two cases demand, and would still die with the parent's terminal.
 ⚠ **THE SESSION IS READ FROM INSIDE THE CHILD, BECAUSE NO BUILTIN EXPOSES IT.** The detached shell asks
 `getsid` for its own session id and for its PARENT's — which is this program, since the spawn is one
 `clone` or `posix_spawn` deep and nothing double-forks — and writes the verdict to a file named for this case
-alone, the suite's `temp/` cwd being shared by twelve workers. A second, ORDINARY child reads that file
+alone, the suite's cwd being shared by twelve workers. A second, ORDINARY child reads that file
 back: an ordinary child inherits the parent's session, so the same route that would be the wrong
 answer here is what makes the file readable at all.
 
@@ -1559,6 +1705,34 @@ function appendToken(out ByteArray, token String)
 	end 'byteLoop'
 	out.push(0)
 end 'appendToken'
+
+typealias PidArray = Array with Pid
+
+let endsWithinMs = 30000
+let pollMs = 50
+
+function allEnded(pids PidArray) returns bool
+	var waited = 0 as DurationMs
+
+	while waited < endsWithinMs 'poll'
+		var alive = 0 as Count
+
+		for pid in pids 'eachPid'
+			if Process.isAlive(pid) 'stillThere'
+				alive = alive + 1
+			end 'stillThere'
+		end 'eachPid'
+
+		if alive == 0 'none'
+			return true
+		end 'none'
+
+		sleep(pollMs)
+		waited = waited + pollMs
+	end 'poll'
+
+	return false
+end 'allEnded'
 
 function main() returns ExitCode
 	let empty = ""
@@ -1590,6 +1764,16 @@ function main() returns ExitCode
 	print("detached={pid > 0} newSession={newSession}\n")
 	__Builtins.subprocessResultRelease(readerResult)
 	__Builtins.subprocessReleaseHandle(readerHandle)
+	var pids = PidArray.create(0)
+
+	if pid > 0 'started'
+		pids.push(pid as Pid)
+	end 'started'
+
+	if not allEnded(pids) 'lingers'
+		return 4
+	end 'lingers'
+
 	return 0
 end 'main'
 ```

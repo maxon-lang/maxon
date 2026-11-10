@@ -101,7 +101,7 @@ test 'a dense match keeps its fused bounds check and its indirect jump each insi
 
 		checkedTargets = checkedTargets + 1
 
-		let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "{JumpTableWindowCaseLabel}-{target}", fixture: JumpTablesFixtureName)
+		let staged = stagedFixtureTree(FixturesDirName, caseLabel: "{JumpTableWindowCaseLabel}-{target}", fixture: JumpTablesFixtureName)
 		let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: "{JumpTablesFixtureName} for {target}", extraArguments: ["{TargetOptionPrefix}{target}"])
 		let image = fileBytes(executable)
 		let text = imageText(image, target: target)
@@ -129,6 +129,8 @@ test 'a dense match keeps its fused bounds check and its indirect jump each insi
 		if tables < MinimumTablesPerImage 'tooFew'
 			findings.push("{target}: the scan found {tables} jump-table sequences in the image, fewer than the {MinimumTablesPerImage} the fixture's matches alone lay out, so the byte pattern it looks for no longer matches what the encoder emits")
 		end 'tooFew'
+
+		discardStagedDir(staged)
 	end 'eachTarget'
 
 	try Expect.notEqual(checkedTargets, expected: 0, message: "{TargetsTablePath} lists no x64 target, so this case would assert nothing.")

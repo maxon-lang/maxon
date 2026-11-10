@@ -1,0 +1,17 @@
+public let ImageStagingDirPrefix = ".staging-"
+
+let StagingNameDigestBytes = 6
+
+public function stagingDirectoryOf(output FilePath) returns FilePath
+	var digits = ""
+
+	for (position, byte) in sha256(output.filename().toByteArray()).withIterator() 'eachByte'
+		if position.index() < StagingNameDigestBytes 'inTheName'
+			digits.append("{byte:02x}")
+		end 'inTheName'
+	end 'eachByte'
+
+	let beside = try output.parent() otherwise panic("the gate could not run — {output.toString()} has no directory to stage beside")
+
+	return beside.join("{ImageStagingDirPrefix}{digits}")
+end 'stagingDirectoryOf'

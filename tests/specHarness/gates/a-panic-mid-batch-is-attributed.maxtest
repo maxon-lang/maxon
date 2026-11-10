@@ -22,14 +22,14 @@ test 'a wrong expectation after a crash mid-batch fails only its own case'
 	let text = withoutCarriageReturns(fileText(specPath))
 
 	if not text.contains(ThirdExitCodeBlock) 'fixtureMoved'
-		discardOutsideCheckoutDir(staged)
+		discardStagedDir(staged)
 		panic("spec-harness tests: the gate could not run - {PanicMidBatchSpecFileName} no longer holds the third case's exit-code block it plants a wrong one over.")
 	end 'fixtureMoved'
 
 	writeStagedFile(specPath, content: text.replace(ThirdExitCodeBlock, with: WrongThirdExitCodeBlock))
 
 	let run = runSpecTest(staged, includeNetwork: false)
-	discardOutsideCheckoutDir(staged)
+	discardStagedDir(staged)
 
 	let said = everythingSaid(run)
 	let thirdFailed = failVerdictPrefix(testLabel(PanicMidBatchSpecName, testName: PanicMidBatchThree))

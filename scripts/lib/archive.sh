@@ -8,6 +8,7 @@
 # `scripts/fetch-seed.sh` and `scripts/fetch-vendor.sh`, which unpack.
 
 . scripts/lib/host-binaries.sh
+. scripts/lib/system-temp.sh
 
 # ⛔ THE EXECUTABLE BIT HAS TO BE PUT INTO THE ARCHIVE, NOT ASSUMED FROM THE FILE. A tar records the
 # mode it reads off disk, and on Windows there is no POSIX mode to read — `chmod +x` in Git Bash
@@ -26,7 +27,8 @@
 # is not a property of the OS.
 tar_supports_mode() {
 	local probe rc
-	probe="$(mktemp -d)"
+	temp_make dir tar-probe
+	probe="$TempMade"
 	: > "$probe/f"
 	if tar -cf /dev/null -C "$probe" --mode=0755 f >/dev/null 2>&1; then
 		rc=0

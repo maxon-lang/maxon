@@ -131,6 +131,8 @@ let SubprocessStdlibFileName = "Subprocess.maxon"
 // killed process conventionally reports.
 let SubpKilledExitCode = 1
 
+export let ProcessEndBoundMs = 5000
+
 // `WaitForSingleObject`'s answer for an object that became signalled. Named because a bare `0` at a
 // compare says nothing about which.
 let WaitObjectSignalled = 0
@@ -1351,14 +1353,19 @@ end 'buildSubpReadBytes'
 // is the kill's. A refused terminate is confirmed by a wait that does not block, so a child the
 // terminate never reached goes to `unconfirmed` rather than hanging the caller. A tree the kill
 // could not fully end goes to `treeUnended`, once the child itself is gone.
-function emitSubpTerminateChild(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, handle ValueId, unconfirmed IrBlock, treeUnended IrBlock, target Target) returns IrBlock
+function emitSubpTerminateChild(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, handle ValueId, unconfirmed IrBlock, treeUnended IrBlock) returns IrBlock
+	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
+	let tree = emitLoadField(module, block: cur, record: slot, offset: SubpSlotProcessTree, ids: ids)
+	let hProcess = emitLoadField(module, block: cur, record: slot, offset: SubpSlotHProcess, ids: ids)
+
+	return emitSubpTerminateTree(module, func: func, cur: cur, ids: ids, tree: tree, hProcess: hProcess, unconfirmed: unconfirmed, treeUnended: treeUnended)
+end 'emitSubpTerminateChild'
+
+export function emitSubpTerminateTree(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, tree ValueId, hProcess ValueId, unconfirmed IrBlock, treeUnended IrBlock) returns IrBlock
 	var awaitTheEnd = module.addBlock(func, label: b"subpkillwait", heat: BlockHeat.normal)
 	var endedAlready = module.addBlock(func, label: b"subpkillgone", heat: BlockHeat.normal)
 	var gone = module.addBlock(func, label: b"subpkilled", heat: BlockHeat.normal)
 
-	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
-	let tree = emitLoadField(module, block: cur, record: slot, offset: SubpSlotProcessTree, ids: ids)
-	let hProcess = emitLoadField(module, block: cur, record: slot, offset: SubpSlotHProcess, ids: ids)
 	let killCode = emitConst(module, block: cur, value: SubpKilledExitCode, ids: ids)
 	let delivered = ids.mint()
 	module.appendOp(cur, op: StdOp.osProcessTerminate(delivered, handleId: tree, exitCodeId: killCode))
@@ -1367,21 +1374,12 @@ function emitSubpTerminateChild(module StdModule, func IrFunction, cur IrBlock, 
 	emitSubpWaitForTheChild(module, block: awaitTheEnd, hProcess: hProcess, timeoutMs: SubpWaitInfinite, ended: gone, stillRunning: unconfirmed, ids: ids)
 	emitSubpWaitForTheChild(module, block: endedAlready, hProcess: hProcess, timeoutMs: SubpNoWaitMs, ended: gone, stillRunning: unconfirmed, ids: ids)
 
-	return emitSubpBranchOnTreeVerdict(module, func: func, gone: gone, delivered: delivered, treeUnended: treeUnended, target: target, ids: ids)
-end 'emitSubpTerminateChild'
-
-// Windows' `TerminateJobObject` ends the whole tree in one call and answers a plain `BOOL`, whose
-// TRUE may have any bit set, so only the POSIX answer is read for `PosixTerminateTreeIncomplete`.
-function emitSubpBranchOnTreeVerdict(module StdModule, func IrFunction, gone IrBlock, delivered ValueId, treeUnended IrBlock, target Target, ids ValueMinter) returns IrBlock
-	return match ioCompletionShape(target) 'verdict'
-		completionPort gives gone
-		inlineCompletion gives emitSubpBranchOnTreeBit(module, func: func, gone: gone, delivered: delivered, treeUnended: treeUnended, ids: ids)
-	end 'verdict'
-end 'emitSubpBranchOnTreeVerdict'
+	return emitSubpBranchOnTreeBit(module, func: func, gone: gone, delivered: delivered, treeUnended: treeUnended, ids: ids)
+end 'emitSubpTerminateTree'
 
 function emitSubpBranchOnTreeBit(module StdModule, func IrFunction, gone IrBlock, delivered ValueId, treeUnended IrBlock, ids ValueMinter) returns IrBlock
 	var ended = module.addBlock(func, label: b"subpkilledtree", heat: BlockHeat.normal)
-	let bit = emitConst(module, block: gone, value: PosixTerminateTreeIncomplete, ids: ids)
+	let bit = emitConst(module, block: gone, value: TerminateTreeIncomplete, ids: ids)
 	let flag = emitBin(module, block: gone, a: delivered, b: bit, opcode: StdBinOpcode.bitAnd, ids: ids)
 	emitBranchOnCompare(module, block: gone, value: flag, pred: StdCmpPred.ne, against: 0, whenTrue: treeUnended, whenFalse: ended, ids: ids)
 	return ended
@@ -1497,7 +1495,7 @@ function buildSubpWaitExit(module StdModule, target Target)
 	let deadlineS = emitLoadField(module, block: deadlineSet, record: state, offset: WcDeadline, ids: ids)
 	emitBranchOnCompareValues(module, block: deadlineSet, a: nowMs, pred: StdCmpPred.ge, b: deadlineS, whenTrue: killIt, whenFalse: idle, ids: ids)
 
-	var killed = emitSubpTerminateChild(module, func: func, cur: killIt, ids: ids, handle: emitLoadField(module, block: killIt, record: state, offset: WcHandle, ids: ids), unconfirmed: killUnconfirmed, treeUnended: treeUnended, target: target)
+	var killed = emitSubpTerminateChild(module, func: func, cur: killIt, ids: ids, handle: emitLoadField(module, block: killIt, record: state, offset: WcHandle, ids: ids), unconfirmed: killUnconfirmed, treeUnended: treeUnended)
 	module.setTerminator(killed, op: StdOp.branch(timedOut.id))
 
 	emitSubpAbandonWait(module, func: func, ids: ids, entry: treeUnended, abandon: treeUnendedFree, target: target, state: state, answer: SubpTreeSurvivedRc)
@@ -1531,7 +1529,7 @@ end 'buildSubpWaitExit'
 // `__gt_subp_end_tree(handle) -> 0 | -3 (child gone, tree not ended) | -1 (bad handle, or no kill
 // confirmed)` — `__Builtins.subprocessEndTree`. The kill a `__gt_subp_wait_exit` deadline sends, with no
 // deadline to wait for.
-function buildSubpEndTree(module StdModule, target Target)
+function buildSubpEndTree(module StdModule)
 	var func = IrFunction.createFromStd(SubpEndTreeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
@@ -1547,7 +1545,7 @@ function buildSubpEndTree(module StdModule, target Target)
 	module.setTerminator(bad, op: StdOp.ret(failure))
 
 	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
-	var ended = emitSubpTerminateChild(module, func: func, cur: good, ids: ids, handle: handle, unconfirmed: unconfirmed, treeUnended: treeUnended, target: target)
+	var ended = emitSubpTerminateChild(module, func: func, cur: good, ids: ids, handle: handle, unconfirmed: unconfirmed, treeUnended: treeUnended)
 	module.setTerminator(ended, op: StdOp.ret(emitConst(module, block: ended, value: SubpTreeEndedRc, ids: ids)))
 
 	emitSubpRecordLastError(module, block: unconfirmed, ids: ids)
@@ -1814,7 +1812,7 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let deadlineS = emitLoadField(module, block: deadlineSet, record: state, offset: WcDeadline, ids: ids)
 	emitBranchOnCompareValues(module, block: deadlineSet, a: nowMs, pred: StdCmpPred.ge, b: deadlineS, whenTrue: killIt, whenFalse: idleCheck, ids: ids)
 
-	var killed = emitSubpTerminateChild(module, func: func, cur: killIt, ids: ids, handle: emitLoadField(module, block: killIt, record: state, offset: WcHandle, ids: ids), unconfirmed: killUnconfirmed, treeUnended: treeUnended, target: target)
+	var killed = emitSubpTerminateChild(module, func: func, cur: killIt, ids: ids, handle: emitLoadField(module, block: killIt, record: state, offset: WcHandle, ids: ids), unconfirmed: killUnconfirmed, treeUnended: treeUnended)
 	let timedOutStatus = emitConst(module, block: killed, value: SubpStatusTimedOut, ids: ids)
 	emitStoreField(module, block: killed, record: state, offset: WcStatus, value: timedOutStatus)
 	module.setTerminator(killed, op: StdOp.branch(finish.id))
@@ -3293,7 +3291,7 @@ export function installSubprocessRuntime(module StdModule, target Target)
 	buildSubpReadBytes(module, name: SubpTryReadOutBytesName, readerName: SubpTryReadLineName)
 	buildSubpReadBytes(module, name: SubpTryReadErrBytesName, readerName: SubpTryReadErrLineName)
 	buildSubpWaitExit(module, target: target)
-	buildSubpEndTree(module, target: target)
+	buildSubpEndTree(module)
 	buildSubpExitPoll(module, tail: SubpExitTail.exitCode)
 	buildSubpExitPoll(module, tail: SubpExitTail.exitSignal)
 	buildSubpWaitCollect(module, target: target)

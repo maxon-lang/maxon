@@ -35,6 +35,41 @@ public type __TestReport
 	end 'threw'
 end '__TestReport'
 
+/// Raised by `TestScratch` in a process `maxon test` did not start.
+public enum TestScratchError implements Error
+	unavailable
+end 'TestScratchError'
+
+/// The two scratch directories `maxon test` makes for each test process, empty when the process starts.
+/// The runner removes them when the process ends, and a process that passes but leaves an entry in
+/// either fails, naming the entry.
+public type TestScratch
+	public static let outsideCheckoutVariable = "MAXON_TEST_SCRATCH"
+	public static let insideProjectVariable = "MAXON_TEST_PROJECT_SCRATCH"
+
+	/// A directory in the system temp area, outside every checkout and project.
+	public static function outsideCheckout() returns FilePath throws TestScratchError
+		return try TestScratch.namedBy(TestScratch.outsideCheckoutVariable)
+	end 'outsideCheckout'
+
+	/// A directory under the project's `.maxon/test/`, for what must sit inside the tree, such as a
+	/// compiler copy that finds `stdlib/` by walking up from itself. A `.maxproj` staged here is refused
+	/// (E2074, a project inside a project); stage a project in `outsideCheckout()`.
+	public static function insideProject() returns FilePath throws TestScratchError
+		return try TestScratch.namedBy(TestScratch.insideProjectVariable)
+	end 'insideProject'
+
+	static function namedBy(variable String) returns FilePath throws TestScratchError
+		let spelled = try Process.environmentVariable(variable) otherwise throw TestScratchError.unavailable
+
+		if spelled.isEmpty() 'namesNowhere'
+			throw TestScratchError.unavailable
+		end 'namesNowhere'
+
+		return try FilePath.from(spelled) otherwise throw TestScratchError.unavailable
+	end 'namedBy'
+end 'TestScratch'
+
 public typealias CownTortureSize = int(1 to u32.max)
 
 public typealias CownTortureViolations = int(0 to u64.max)

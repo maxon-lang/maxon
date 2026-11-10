@@ -49,6 +49,8 @@ test 'a step main posted, overtaken by a service hitting its breakpoint, still r
 	end 'eachStop'
 
 	try Expect.equal(renderedOffsets(reached), expected: renderedOffsets(armed), message: "⛔ A STEP THAT LANDS ON AN ARMED INSTRUCTION IS THAT INSTRUCTION'S BREAKPOINT, EVEN AFTER ANOTHER MACHINE'S STOP ENDED THE WALK THAT POSTED IT. Main is stopped at each armed instruction it executes, in order, once each; the `{NextCommand}` races the service's hit on its hot loop, and when the service wins, main's single-step is still outstanding when the session continues and lands on the next armed instruction. A filter that drops that landing as a step nobody waits for loses the hit, and main is next reported one instruction further on. {said}")
+
+	discardStagedDir(staged)
 end 'a step main posted, overtaken by a service hitting its breakpoint, still reports the armed instruction it lands on'
 
 function renderedOffsets(offsets SidecarNumberArray) returns String

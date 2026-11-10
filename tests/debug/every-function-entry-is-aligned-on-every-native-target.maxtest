@@ -33,7 +33,7 @@ test 'every function the sidecar lists starts on the entry boundary of its targe
 
 	for target in targets 'eachTarget'
 		let alignment = entryAlignmentOf(target)
-		let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "{AlignmentCaseLabel}-{target}", fixture: SpansFixtureName)
+		let staged = stagedFixtureTree(FixturesDirName, caseLabel: "{AlignmentCaseLabel}-{target}", fixture: SpansFixtureName)
 		let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: "{SpansFixtureName} for {target}", extraArguments: ["{TargetOptionPrefix}{target}"])
 		let dumpRun = spawnDumpInfo(executable, staged: staged, sections: [FunctionsSection])
 
@@ -63,6 +63,8 @@ test 'every function the sidecar lists starts on the entry boundary of its targe
 		if (textBase and (alignment - 1)) != 0 'textBaseOff'
 			findings.push("{target}: .text starts at 0x{textBase:x}, off the {alignment}-byte boundary its functions are laid out on")
 		end 'textBaseOff'
+
+		discardStagedDir(staged)
 	end 'eachTarget'
 
 	try Expect.isEmpty(joined(unchecked, separator: Space), message: "these targets' sidecars listed no function row, so nothing was checked for them.")

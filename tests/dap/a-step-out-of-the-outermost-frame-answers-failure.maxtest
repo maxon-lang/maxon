@@ -38,7 +38,7 @@ type OutermostSession implements DapSession
 end 'OutermostSession'
 
 test 'a stepOut from the outermost frame answers failure, and the session goes on'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: OutermostCaseLabel, fixture: SteppingFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: OutermostCaseLabel, fixture: SteppingFixtureName)
 	var session = OutermostSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: MainPrintAnchor))
 	try dapRunSession(session, completing: "refuse the stepOut and run the program to its exit")
 
@@ -46,4 +46,6 @@ test 'a stepOut from the outermost frame answers failure, and the session goes o
 	try Expect.isFalse(session.refusal.isEmpty(), message: "a refused `{StepOutCommand}` must say why in its `message`")
 	try Expect.isTrue(session.continueAnswered, message: "the refusal left the program stopped where it was, so `{ContinueCommand}` from there must be accepted")
 	try Expect.isTrue(session.exitedAfterwards, message: "`{ContinueCommand}` after the refusal runs the program to its exit")
+
+	discardStagedDir(staged)
 end 'a stepOut from the outermost frame answers failure, and the session goes on'

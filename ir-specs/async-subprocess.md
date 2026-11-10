@@ -112,21 +112,22 @@ data {
   __np_pd_mcap@480 = i64 0
   __sched_num_procs@488 = i64 0
   __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_tls_next_key@584 = i64 0
-  __slab_arena_list@592 = i64 0
-  __slab_arena_map_l1@600 = i64 0
-  __slab_state@608 = i64 0
-  __mrt_program_started@616 = i8 0
+  __sched_descendants_armed@504 = i64 0
+  __sched_shutdown_flag@512 = i64 0
+  __sched_lock@520 = i64 0
+  __sched_lock_depth_sink@528 = i64 0
+  __sched_nmspinning@536 = i64 0
+  __sched_needspinning@544 = i64 0
+  __sched_sysmon_event@552 = i64 0
+  __sched_sysmon_wait@560 = i64 0
+  __sched_timer_starts@568 = i64 0
+  __mrt_envp@576 = i64 0
+  __mrt_signal_stack_bytes@584 = i64 0
+  __mrt_tls_next_key@592 = i64 0
+  __slab_arena_list@600 = i64 0
+  __slab_arena_map_l1@608 = i64 0
+  __slab_state@616 = i64 0
+  __mrt_program_started@624 = i8 0
 }
 
 func @main {
@@ -295,18 +296,20 @@ data {
   __np_orphan_exited@440 = i64 0
   __sched_num_procs@448 = i64 0
   __sched_ncpu@456 = i64 0
-  __sched_shutdown_flag@464 = i64 0
-  __sched_lock@472 = i64 0
-  __sched_lock_depth_sink@480 = i64 0
-  __sched_nmspinning@488 = i64 0
-  __sched_needspinning@496 = i64 0
-  __sched_sysmon_event@504 = i64 0
-  __sched_sysmon_wait@512 = i64 0
-  __sched_timer_starts@520 = i64 0
-  __slab_arena_list@528 = i64 0
-  __slab_arena_map_l1@536 = i64 0
-  __slab_state@544 = i64 0
-  __mrt_program_started@552 = i8 0
+  __sched_descendants_armed@464 = i64 0
+  __sched_shutdown_flag@472 = i64 0
+  __sched_lock@480 = i64 0
+  __sched_descendant_ledger@488 = i64 0
+  __sched_lock_depth_sink@496 = i64 0
+  __sched_nmspinning@504 = i64 0
+  __sched_needspinning@512 = i64 0
+  __sched_sysmon_event@520 = i64 0
+  __sched_sysmon_wait@528 = i64 0
+  __sched_timer_starts@536 = i64 0
+  __slab_arena_list@544 = i64 0
+  __slab_arena_map_l1@552 = i64 0
+  __slab_state@560 = i64 0
+  __mrt_program_started@568 = i8 0
 }
 
 func @main {
@@ -447,22 +450,23 @@ data {
   __np_pd_mcap@480 = i64 0
   __sched_num_procs@488 = i64 0
   __sched_ncpu@496 = i64 0
-  __sched_shutdown_flag@504 = i64 0
-  __sched_lock@512 = i64 0
-  __sched_lock_depth_sink@520 = i64 0
-  __sched_nmspinning@528 = i64 0
-  __sched_needspinning@536 = i64 0
-  __sched_sysmon_event@544 = i64 0
-  __sched_sysmon_wait@552 = i64 0
-  __sched_timer_starts@560 = i64 0
-  __mrt_envp@568 = i64 0
-  __mrt_signal_stack_bytes@576 = i64 0
-  __mrt_hwcap_atomics@584 = i64 0
-  __mrt_tls_next_key@592 = i64 0
-  __slab_arena_list@600 = i64 0
-  __slab_arena_map_l1@608 = i64 0
-  __slab_state@616 = i64 0
-  __mrt_program_started@624 = i8 0
+  __sched_descendants_armed@504 = i64 0
+  __sched_shutdown_flag@512 = i64 0
+  __sched_lock@520 = i64 0
+  __sched_lock_depth_sink@528 = i64 0
+  __sched_nmspinning@536 = i64 0
+  __sched_needspinning@544 = i64 0
+  __sched_sysmon_event@552 = i64 0
+  __sched_sysmon_wait@560 = i64 0
+  __sched_timer_starts@568 = i64 0
+  __mrt_envp@576 = i64 0
+  __mrt_signal_stack_bytes@584 = i64 0
+  __mrt_hwcap_atomics@592 = i64 0
+  __mrt_tls_next_key@600 = i64 0
+  __slab_arena_list@608 = i64 0
+  __slab_arena_map_l1@616 = i64 0
+  __slab_state@624 = i64 0
+  __mrt_program_started@632 = i8 0
 }
 
 func @main {

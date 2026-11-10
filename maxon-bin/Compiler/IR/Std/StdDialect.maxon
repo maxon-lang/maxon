@@ -2426,7 +2426,7 @@ export union StdOp
 	// `osProcessTerminate(result, tree, exitCode)`. Two value operands; the result is a Win32 `BOOL`
 	// on every lane, and `FALSE` — a kill the host refused — is read by the timeout path as a tree
 	// that had already ended, which it polls for rather than waiting on. A POSIX lane ORs
-	// `PosixTerminateTreeIncomplete` into a TRUE when it could not end every descendant.
+	// `TerminateTreeIncomplete` into a TRUE when it could not end every descendant.
 	//
 	// ⚠ The first operand is the child's PROCESS TREE and not a process handle: the job object the
 	// spawn put the child in on Windows (`TerminateJobObject`), the wait object whose pid is also its
@@ -3232,6 +3232,14 @@ export union StdOp
 	// executable search in `SubprocessRuntime`; `openForResolve` and `finalPath` are `__md_resolve_path`'s
 	// on every native lane.
 	osPathQuery(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `osDescendants(result, verb, buf, cap)`, one host chunk per lane (`mrt_host_proc_descendants` on
+	// POSIX). `track` arms this process to find its descendants and answers 0 or a refusal. `end` ends
+	// every live descendant, writes `<pid> <name>\n` lines into `buf`, and answers the bytes the report
+	// needs, more than `cap` meaning it was cut short, or `-DescendantsEnumerationFailed`. `seal`
+	// (Windows) stores the inert arming token through the host, with the variable name in `buf` and its
+	// value in `cap`.
+	osDescendants(resultId ValueId, verbId ValueId, bufId ValueId, capId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 // ==========================================================================
@@ -3350,6 +3358,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		// across a window that accepts four connections.
 		osSocketServe or
 		osPathQuery or
+		osDescendants or
 
 		// The page band: bounded, and every one of them is reachable under `__slab_lock`.
 		osAllocPages or
@@ -3596,6 +3605,7 @@ export function stdOpLabelKindOf(op StdOp) returns StdOpLabelKind
 		osSocketRecv or
 		osSocketClose or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osSocketServe or
 		osCpuCount or
@@ -4072,6 +4082,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		osNetpoll or
 		cryptoRoutine or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osSocketServe then operands.recordNeither()
 		binOp(resultId, lhs, rhs, opcode, operandType) then operands.recordBinOp(resultId, left: lhs, right: rhs, binOpcode: opcode, readType: operandType)
@@ -4328,6 +4339,7 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 		osNetpoll or
 		cryptoRoutine or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osSocketServe then access.recordNeither()
 	end 'a'
@@ -4657,6 +4669,7 @@ export function classifyCallOperands(op StdOp, call StdCallOperands)
 		osNetpoll or
 		cryptoRoutine or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osSocketServe then call.recordOther()
 		call(resultId, callee, args) then call.recordCall(resultId, name: callee, arguments: args)
@@ -4833,6 +4846,7 @@ module function classifyWitnessOperands(op StdOp, w StdWitnessOperands)
 		osNetpoll or
 		cryptoRoutine or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osSocketServe then w.recordOther()
 		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then w.recordDispatch(StdWitnessShape.dispatch, defined: resultId, flag: 0, table: witnessAddr, method: methodIndex, returned: resultType, floatMask: argFloatMask, arguments: args)
@@ -5433,6 +5447,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		cryptoRoutine(_, _, a0, a1, a2, a3) then insertUseQuad(referenced, a: a0, b: a1, c: a2, d: a3)
 		osSocketServe(_, _, a0, a1, a2) then insertUseTriple(referenced, a: a0, b: a1, c: a2)
 		osPathQuery(_, _, a0, a1, a2) then insertUseTriple(referenced, a: a0, b: a1, c: a2)
+		osDescendants(_, verb, buf, cap) then insertUseTriple(referenced, a: verb, b: buf, c: cap)
 		osOpenNamedSegment(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
 		osEnvRead(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
 		osSocketResolve(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
@@ -5602,6 +5617,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		cryptoRoutine(resultId, _, _, _, _, _) then def.recordOne(resultId)
 		osSocketServe(resultId, _, _, _, _) then def.recordOne(resultId)
 		osPathQuery(resultId, _, _, _, _) then def.recordOne(resultId)
+		osDescendants(resultId, _, _, _) then def.recordOne(resultId)
 		osFileSize(resultId, _, _) then def.recordOne(resultId)
 		osFileDelete(resultId, _) then def.recordOne(resultId)
 		osFileRename(resultId, _, _) then def.recordOne(resultId)
@@ -5880,6 +5896,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		cryptoRoutine(resultId, routine, a0, a1, a2, a3) gives StdOp.cryptoRoutine(resultId, routine: routine, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst), a3Id: remappedValue(a3, subst: subst))
 		osSocketServe(resultId, verb, a0, a1, a2) gives StdOp.osSocketServe(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst))
 		osPathQuery(resultId, verb, a0, a1, a2) gives StdOp.osPathQuery(resultId, verb: verb, a0Id: remappedValue(a0, subst: subst), a1Id: remappedValue(a1, subst: subst), a2Id: remappedValue(a2, subst: subst))
+		osDescendants(resultId, verb, buf, cap) gives StdOp.osDescendants(resultId, verbId: remappedValue(verb, subst: subst), bufId: remappedValue(buf, subst: subst), capId: remappedValue(cap, subst: subst))
 		osFileSize(resultId, handle, sizeOutPtr) gives StdOp.osFileSize(resultId, handleId: remappedValue(handle, subst: subst), sizeOutPtrId: remappedValue(sizeOutPtr, subst: subst))
 		osFileDelete(resultId, pathPtr) gives StdOp.osFileDelete(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		osFileRename(resultId, oldPathPtr, newPathPtr) gives StdOp.osFileRename(resultId, oldPathPtrId: remappedValue(oldPathPtr, subst: subst), newPathPtrId: remappedValue(newPathPtr, subst: subst))
@@ -6222,6 +6239,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		osNetpoll or
 		cryptoRoutine or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osSocketServe gives refuseUnclonable(op)
 		rdataAddr(resultId, label) gives StdOp.rdataAddr(clonedValue(resultId, subst: valueSubst), label: label)
@@ -6778,6 +6796,7 @@ export function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		osNetpoll or
 		cryptoRoutine or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osSocketServe then break
 		condBranch(_, thenBlockId, elseBlockId) then pushBothTargets(out, thenBlockId: thenBlockId, elseBlockId: elseBlockId)
@@ -7005,6 +7024,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 		osNetpoll or
 		cryptoRoutine or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osSocketServe then out.recordOther()
 		condBranch(condId, thenBlockId, elseBlockId) then out.recordCondBranch(condId, thenTarget: thenBlockId, elseTarget: elseBlockId)

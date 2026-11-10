@@ -8,7 +8,7 @@ test 'run_spec_test does not read a verdict a program printed as a result'
 	stageSpecFile(dir, specName: StagedSpec, cases: [printingSpecCase(FailingCase, mainBody: mainBody, expectedStdout: "quiet")])
 
 	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())}\}", devMode: true)
-	discardOutsideCheckoutDir(dir)
+	discardStagedDir(dir)
 
 	Expect.equal(payloadInt(answer, key: "failed"), expected: 1, message: "one case ran and failed. It answered: {toolCallText(answer)}")
 	Expect.equal(joined(payloadArrayFields(answer, key: "failures", field: "test"), separator: Space), expected: joined([FailingCase], separator: Space), message: "`failures` must name only the case that ran. It answered: {toolCallText(answer)}")

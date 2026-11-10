@@ -13,7 +13,7 @@ test 'project roots: a .maxproj declaring a name its project also declares still
 	let uri = fileUriOf(root.join(ClashProjectFileName))
 	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(uri, content: ClashProjectFileSource))
 
-	discardOutsideCheckoutDir(root)
+	discardStagedDir(root)
 
 	match probe 'probe'
 		answered(projects, _) then requireTheClashingProjectSwept(projects)
@@ -25,6 +25,6 @@ function requireTheClashingProjectSwept(projects ListProjectsResult) throws Test
 	let note = "`{ClashProjectFileName}` declares a target `app`, and the project's `{ClashMainFileName}` declares a function `app` of its own. The project file is a program of its own, so the two never meet in any build, and opening the project file loads the project it marks."
 	let project = try soleProject(projects, note: note)
 
-	try requireProjectRootedAtADirectory(project, expectedTail: outsideCheckoutDirName(ClashRootDirName), note: note)
+	try requireProjectRootedAtADirectory(project, expectedTail: ClashRootDirName, note: note)
 	try Expect.equal(project.fileCount, expected: ClashSourceCount, message: "{note} The project reported {project.fileCount} sources: a count of 0 is a project the server announced and never held.")
 end 'requireTheClashingProjectSwept'

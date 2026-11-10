@@ -16896,10 +16896,46 @@ let ElementCauseField = b"element"
 
 typealias WalkedTupleNameSet = Set with TypeNameId
 
+module union OwnedDeclarations
+	held(declarations SettledDeclarations)
+	readsPublished
+end 'OwnedDeclarations'
+
+// @generated library-cache begin
+function cacheWriteOwnedDeclarations(writer LibraryCacheWriter, value OwnedDeclarations)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		held(a0) then cacheWriteOwnedDeclarationsHeld(writer, a0: a0)
+		readsPublished then break
+	end 'payload'
+end 'cacheWriteOwnedDeclarations'
+
+function cacheWriteOwnedDeclarationsHeld(writer LibraryCacheWriter, a0 SettledDeclarations)
+	a0.cacheWrite(writer)
+end 'cacheWriteOwnedDeclarationsHeld'
+
+function cacheReadOwnedDeclarations(reader LibraryCacheReader) returns OwnedDeclarations throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadOwnedDeclarationsHeld(reader)
+		1 gives OwnedDeclarations.readsPublished
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadOwnedDeclarations'
+
+function cacheReadOwnedDeclarationsHeld(reader LibraryCacheReader) returns OwnedDeclarations throws LibraryCacheDamage
+	let a0 = try SettledDeclarations.cacheRead(reader)
+
+	return OwnedDeclarations.held(a0)
+end 'cacheReadOwnedDeclarationsHeld'
+
+// @generated library-cache end
+
 export type ProgramSignatures
-	var ownSettled as SettledDeclarations
+	var ownSettled as OwnedDeclarations
 	module let sharedSettled as immutable SettledDeclarations
-	module let readsPublishedView as bool
 	var structSlots = StructSlotMap.create()
 	var mintedTupleLayouts = StructLayoutArray.create(0)
 	var published = SettledCellArray.create(0)
@@ -17214,23 +17250,21 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{ownSettled: SettledDeclarations.create(os), sharedSettled: freeze SettledDeclarations.unused(), readsPublishedView: false, genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, sawManagedHostResourceProducer: false, divergedGenericAliasDecl: AliasCycleResult.none, cascadeWalkRoots: NameRoster.create(0), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), uniqueTypeAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, typeNames: TypeNameInterner.createForSource(0), crossFileConstantReads: NameInFileArray.create(0), byRefNamesPublished: false, deepCloneAnswers: DeepCloneAnswerMap.create(), soleWalkAnswers: DeepCloneAnswerMap.create(), shareWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, sawGlobalNameReturn: false, globalAliasReturnsClosed: false, freshReturnForwardsClosed: false, forwardedStoresClosed: false, hash: Hasher.empty(), hashSource: HashEventSource.whole, authorChainState: Hasher.empty(), libraryChainState: Hasher.empty(), wholeChainState: Hasher.empty(), libraryHash: Hasher.empty(), libraryParseSharing: LibraryParseSharing.undecided, authorNameMeantByTheLibrary: false, storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, projectRootModuleDirectory: "", arrayByteInstance: 0, arrayByteInstanceComputed: false, hasNonCorpusArrayConformer: false, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
+		return Self{ownSettled: OwnedDeclarations.held(SettledDeclarations.create(os)), sharedSettled: freeze SettledDeclarations.unused(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), tupleAliases: DeclaredTupleAliasMap.create(), multiplyDeclaredTupleAliases: MultiplyDeclaredTupleAliasMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, sawManagedSocketProducer: false, sawManagedHostResourceProducer: false, divergedGenericAliasDecl: AliasCycleResult.none, cascadeWalkRoots: NameRoster.create(0), cascadeBreakReached: CascadeWalkBreak.nothingBroke(), interfaceCloneAnswers: DeepCloneAnswerMap.create(), uniqueTypeAnswers: DeepCloneAnswerMap.create(), someRecordHoldsAnInterfaceValue: false, recordsHoldingAnInterfaceValueCounted: false, typeNames: TypeNameInterner.createForSource(0), crossFileConstantReads: NameInFileArray.create(0), byRefNamesPublished: false, deepCloneAnswers: DeepCloneAnswerMap.create(), soleWalkAnswers: DeepCloneAnswerMap.create(), shareWalkAnswers: DeepCloneAnswerMap.create(), deepCloneWalkReadInstances: false, sawGlobalNameReturn: false, globalAliasReturnsClosed: false, freshReturnForwardsClosed: false, forwardedStoresClosed: false, hash: Hasher.empty(), hashSource: HashEventSource.whole, authorChainState: Hasher.empty(), libraryChainState: Hasher.empty(), wholeChainState: Hasher.empty(), libraryHash: Hasher.empty(), libraryParseSharing: LibraryParseSharing.undecided, authorNameMeantByTheLibrary: false, storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, projectRootModuleDirectory: "", arrayByteInstance: 0, arrayByteInstanceComputed: false, hasNonCorpusArrayConformer: false, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed()}
 	end 'freshIndexes'
 
 	module function settledDeclarations() returns SettledDeclarations
-		if self.readsPublishedView 'workerView'
-			return self.sharedSettled
-		end 'workerView'
-
-		return self.ownSettled
+		return match self.ownSettled 'source'
+			held(declarations) gives declarations
+			readsPublished gives self.sharedSettled
+		end 'source'
 	end 'settledDeclarations'
 
 	module function mainThreadSettled() returns SettledDeclarations
-		if self.readsPublishedView 'aWorkersView'
-			panic("ProgramSignatures: a front-end worker reads the published declarations and has no declarations of its own to read or add to")
-		end 'aWorkersView'
-
-		return self.ownSettled
+		return match self.ownSettled 'source'
+			held(declarations) gives declarations
+			readsPublished panic("ProgramSignatures: a front-end worker reads the published declarations and has no declarations of its own to read or add to")
+		end 'source'
 	end 'mainThreadSettled'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision ---
@@ -43352,7 +43386,7 @@ export type ProgramSignatures
 	export function workerTemplate(os Os) returns IndexTemplateCell
 		self.releaseTypeNameViews()
 
-		return IndexTemplateCell.create(IndexTemplate.create(ProgramSignatures.reassembled(self, tables: IndexTables.fresh(TypeNameInterner.createForSource(0), liveDefaultKeyNames: self.liveDefaultKeyNames), baseline: self.baseline, own: SettledDeclarations.create(os), shared: freeze SettledDeclarations.unused(), readsPublishedView: false).clone(), base: IndexBase.create(self.aliasedTables().clone(), names: self.typeNames.frozenNames())))
+		return IndexTemplateCell.create(IndexTemplate.create(ProgramSignatures.reassembled(self, tables: IndexTables.fresh(TypeNameInterner.createForSource(0), liveDefaultKeyNames: self.liveDefaultKeyNames), baseline: self.baseline, own: OwnedDeclarations.held(SettledDeclarations.create(os)), shared: freeze SettledDeclarations.unused()).clone(), base: IndexBase.create(self.aliasedTables().clone(), names: self.typeNames.frozenNames())))
 	end 'workerTemplate'
 
 	export static function overlayAllocations(declarations SettledDeclarationsCell, template IndexTemplateCell) returns AllocCount
@@ -43373,7 +43407,7 @@ export type ProgramSignatures
 		let shared = template.current()
 		let baseline = IndexBaseline.overlaying(shared.signatures.baseline, base: shared.base)
 
-		return Self.reassembled(shared.signatures, tables: Self.overlayTables(shared), baseline: baseline, own: SettledDeclarations.unused(), shared: declarations.current().declarations, readsPublishedView: true)
+		return Self.reassembled(shared.signatures, tables: Self.overlayTables(shared), baseline: baseline, own: OwnedDeclarations.readsPublished, shared: declarations.current().declarations)
 	end 'overlaying'
 
 	static function overlayTables(shared immutable IndexTemplate) returns IndexTables
@@ -43384,8 +43418,8 @@ export type ProgramSignatures
 		return IndexTables.create(self.structSlots, mintedTupleLayouts: self.mintedTupleLayouts, published: self.published, genericInstances: self.genericInstances, compiledInstanceNames: self.compiledInstanceNames, canonicalInstanceNames: self.canonicalInstanceNames, substitutedInstanceOrigins: self.substitutedInstanceOrigins, canonicalInstanceNameIndex: self.canonicalInstanceNameIndex, tupleCanonicalNames: self.tupleCanonicalNames, tupleElementTokens: self.tupleElementTokens, tupleElementTokenOwners: self.tupleElementTokenOwners, tupleAliases: self.tupleAliases, multiplyDeclaredTupleAliases: self.multiplyDeclaredTupleAliases, cascadeWalkRoots: self.cascadeWalkRoots, cascadeBreakReached: self.cascadeBreakReached, interfaceCloneAnswers: self.interfaceCloneAnswers, uniqueTypeAnswers: self.uniqueTypeAnswers, typeNames: self.typeNames, crossFileConstantReads: self.crossFileConstantReads, deepCloneAnswers: self.deepCloneAnswers, soleWalkAnswers: self.soleWalkAnswers, shareWalkAnswers: self.shareWalkAnswers, witnessByRefMasks: self.witnessByRefMasks, functionValuedFieldNames: self.functionValuedFieldNames, liveDefaultKeyNames: self.liveDefaultKeyNames)
 	end 'aliasedTables'
 
-	static function reassembled(template ProgramSignatures, tables IndexTables, baseline IndexBaseline, own SettledDeclarations, shared immutable SettledDeclarations, readsPublishedView bool) returns ProgramSignatures
-		return Self{ownSettled: own, sharedSettled: shared, readsPublishedView: readsPublishedView, structSlots: tables.structSlots, mintedTupleLayouts: tables.mintedTupleLayouts, published: tables.published, genericInstances: tables.genericInstances, compiledInstanceNames: tables.compiledInstanceNames, canonicalInstanceNames: tables.canonicalInstanceNames, substitutedInstanceOrigins: tables.substitutedInstanceOrigins, canonicalInstanceNameIndex: tables.canonicalInstanceNameIndex, canonicalNamesIndexedThrough: template.canonicalNamesIndexedThrough, tupleCanonicalNames: tables.tupleCanonicalNames, tupleElementTokens: tables.tupleElementTokens, tupleElementTokenOwners: tables.tupleElementTokenOwners, tupleAliases: tables.tupleAliases, multiplyDeclaredTupleAliases: tables.multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: template.sawAggregateArrayLiteral, sawListFromConstruction: template.sawListFromConstruction, sawEnumAllCasesAccess: template.sawEnumAllCasesAccess, sawIntArrayLiteral: template.sawIntArrayLiteral, sawByteStringLiteral: template.sawByteStringLiteral, sawStringArrayLiteral: template.sawStringArrayLiteral, sawSetFromConstruction: template.sawSetFromConstruction, sawManagedFileProducer: template.sawManagedFileProducer, sawManagedDirectoryProducer: template.sawManagedDirectoryProducer, sawManagedSocketProducer: template.sawManagedSocketProducer, sawManagedHostResourceProducer: template.sawManagedHostResourceProducer, divergedGenericAliasDecl: template.divergedGenericAliasDecl.clone(), cascadeWalkRoots: tables.cascadeWalkRoots, cascadeBreakReached: tables.cascadeBreakReached, interfaceCloneAnswers: tables.interfaceCloneAnswers, uniqueTypeAnswers: tables.uniqueTypeAnswers, someRecordHoldsAnInterfaceValue: template.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: template.recordsHoldingAnInterfaceValueCounted, typeNames: tables.typeNames, crossFileConstantReads: tables.crossFileConstantReads, byRefNamesPublished: template.byRefNamesPublished, sawGlobalNameReturn: template.sawGlobalNameReturn, globalAliasReturnsClosed: template.globalAliasReturnsClosed, deepCloneAnswers: tables.deepCloneAnswers, deepCloneWalkReadInstances: template.deepCloneWalkReadInstances, soleWalkAnswers: tables.soleWalkAnswers, shareWalkAnswers: tables.shareWalkAnswers, freshReturnForwardsClosed: template.freshReturnForwardsClosed, forwardedStoresClosed: template.forwardedStoresClosed, hash: template.hash, hashSource: template.hashSource, authorChainState: template.authorChainState, libraryChainState: template.libraryChainState, wholeChainState: template.wholeChainState, libraryHash: template.libraryHash, libraryParseSharing: template.libraryParseSharing, authorNameMeantByTheLibrary: template.authorNameMeantByTheLibrary, storedGlobalCount: template.storedGlobalCount, allFilesFolded: template.allFilesFolded, inlineGeometrySettled: template.inlineGeometrySettled, rangeContestsSettled: template.rangeContestsSettled, rootIsUnderStdlibDirectory: template.rootIsUnderStdlibDirectory, projectRootModuleDirectory: template.projectRootModuleDirectory.clone(), arrayByteInstance: template.arrayByteInstance, arrayByteInstanceComputed: template.arrayByteInstanceComputed, spawnsAnyServiceSettled: template.spawnsAnyServiceSettled, spawnsAnyServiceAnswer: template.spawnsAnyServiceAnswer, byRefMasksSettled: template.byRefMasksSettled, witnessByRefMasks: tables.witnessByRefMasks, byRefConventionDigestAnswer: template.byRefConventionDigestAnswer, functionValuedFieldNames: tables.functionValuedFieldNames, liveDefaultKeyNames: tables.liveDefaultKeyNames, liveKeyAdoptions: template.liveKeyAdoptions, hasNonCorpusArrayConformer: template.hasNonCorpusArrayConformer, recordsTypeClaims: template.recordsTypeClaims, baseline: baseline, journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: template.holdsAMerge, genericInstancesDigest: template.genericInstancesDigest}
+	static function reassembled(template ProgramSignatures, tables IndexTables, baseline IndexBaseline, own OwnedDeclarations, shared immutable SettledDeclarations) returns ProgramSignatures
+		return Self{ownSettled: own, sharedSettled: shared, structSlots: tables.structSlots, mintedTupleLayouts: tables.mintedTupleLayouts, published: tables.published, genericInstances: tables.genericInstances, compiledInstanceNames: tables.compiledInstanceNames, canonicalInstanceNames: tables.canonicalInstanceNames, substitutedInstanceOrigins: tables.substitutedInstanceOrigins, canonicalInstanceNameIndex: tables.canonicalInstanceNameIndex, canonicalNamesIndexedThrough: template.canonicalNamesIndexedThrough, tupleCanonicalNames: tables.tupleCanonicalNames, tupleElementTokens: tables.tupleElementTokens, tupleElementTokenOwners: tables.tupleElementTokenOwners, tupleAliases: tables.tupleAliases, multiplyDeclaredTupleAliases: tables.multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: template.sawAggregateArrayLiteral, sawListFromConstruction: template.sawListFromConstruction, sawEnumAllCasesAccess: template.sawEnumAllCasesAccess, sawIntArrayLiteral: template.sawIntArrayLiteral, sawByteStringLiteral: template.sawByteStringLiteral, sawStringArrayLiteral: template.sawStringArrayLiteral, sawSetFromConstruction: template.sawSetFromConstruction, sawManagedFileProducer: template.sawManagedFileProducer, sawManagedDirectoryProducer: template.sawManagedDirectoryProducer, sawManagedSocketProducer: template.sawManagedSocketProducer, sawManagedHostResourceProducer: template.sawManagedHostResourceProducer, divergedGenericAliasDecl: template.divergedGenericAliasDecl.clone(), cascadeWalkRoots: tables.cascadeWalkRoots, cascadeBreakReached: tables.cascadeBreakReached, interfaceCloneAnswers: tables.interfaceCloneAnswers, uniqueTypeAnswers: tables.uniqueTypeAnswers, someRecordHoldsAnInterfaceValue: template.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: template.recordsHoldingAnInterfaceValueCounted, typeNames: tables.typeNames, crossFileConstantReads: tables.crossFileConstantReads, byRefNamesPublished: template.byRefNamesPublished, sawGlobalNameReturn: template.sawGlobalNameReturn, globalAliasReturnsClosed: template.globalAliasReturnsClosed, deepCloneAnswers: tables.deepCloneAnswers, deepCloneWalkReadInstances: template.deepCloneWalkReadInstances, soleWalkAnswers: tables.soleWalkAnswers, shareWalkAnswers: tables.shareWalkAnswers, freshReturnForwardsClosed: template.freshReturnForwardsClosed, forwardedStoresClosed: template.forwardedStoresClosed, hash: template.hash, hashSource: template.hashSource, authorChainState: template.authorChainState, libraryChainState: template.libraryChainState, wholeChainState: template.wholeChainState, libraryHash: template.libraryHash, libraryParseSharing: template.libraryParseSharing, authorNameMeantByTheLibrary: template.authorNameMeantByTheLibrary, storedGlobalCount: template.storedGlobalCount, allFilesFolded: template.allFilesFolded, inlineGeometrySettled: template.inlineGeometrySettled, rangeContestsSettled: template.rangeContestsSettled, rootIsUnderStdlibDirectory: template.rootIsUnderStdlibDirectory, projectRootModuleDirectory: template.projectRootModuleDirectory.clone(), arrayByteInstance: template.arrayByteInstance, arrayByteInstanceComputed: template.arrayByteInstanceComputed, spawnsAnyServiceSettled: template.spawnsAnyServiceSettled, spawnsAnyServiceAnswer: template.spawnsAnyServiceAnswer, byRefMasksSettled: template.byRefMasksSettled, witnessByRefMasks: tables.witnessByRefMasks, byRefConventionDigestAnswer: template.byRefConventionDigestAnswer, functionValuedFieldNames: tables.functionValuedFieldNames, liveDefaultKeyNames: tables.liveDefaultKeyNames, liveKeyAdoptions: template.liveKeyAdoptions, hasNonCorpusArrayConformer: template.hasNonCorpusArrayConformer, recordsTypeClaims: template.recordsTypeClaims, baseline: baseline, journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: template.holdsAMerge, genericInstancesDigest: template.genericInstancesDigest}
 	end 'reassembled'
 
 	export function releaseTypeNameViews()
@@ -44782,7 +44816,7 @@ export type ProgramSignatures
 
 	// @generated library-cache begin
 	module function cacheWrite(writer LibraryCacheWriter)
-		self.ownSettled.cacheWrite(writer)
+		cacheWriteOwnedDeclarations(writer, value: self.ownSettled)
 		cacheWriteStructSlotMap(writer, value: self.structSlots)
 		self.genericInstances.cacheWrite(writer)
 		cacheWriteCompiledInstanceNameMap(writer, value: self.compiledInstanceNames)
@@ -44857,7 +44891,7 @@ export type ProgramSignatures
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns ProgramSignatures throws LibraryCacheDamage
-		let f_ownSettled = try SettledDeclarations.cacheRead(reader)
+		let f_ownSettled = try cacheReadOwnedDeclarations(reader)
 		let f_structSlots = try cacheReadStructSlotMap(reader)
 		let f_genericInstances = try GenericInstanceRegistry.cacheRead(reader)
 		let f_compiledInstanceNames = try cacheReadCompiledInstanceNameMap(reader)
@@ -44930,11 +44964,11 @@ export type ProgramSignatures
 		let f_holdsAMerge = try reader.flag()
 		let f_genericInstancesDigest = (try reader.unsigned()) as HashDigest
 
-		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), readsPublishedView: false, structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, soleWalkAnswers: f_soleWalkAnswers, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
+		return Self{ownSettled: f_ownSettled, sharedSettled: freeze SettledDeclarations.unused(), structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(0), published: SettledCellArray.create(0), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, uniqueTypeAnswers: f_uniqueTypeAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, byRefNamesPublished: f_byRefNamesPublished, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, soleWalkAnswers: f_soleWalkAnswers, shareWalkAnswers: f_shareWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, forwardedStoresClosed: f_forwardedStoresClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, corpusByRefConventionDigestAnswer: f_corpusByRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveSpawnedTypeNames: f_liveSpawnedTypeNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize632
-		return sizeof(ProgramSignatures) as CacheSize632
+	static function cacheLayoutBytes() returns CacheSize624
+		return sizeof(ProgramSignatures) as CacheSize624
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

@@ -41,6 +41,9 @@ test 'a read the stub advertises a packet size too small for is split into reque
 		Expect.contains(rows, needle: "{AdvertisedSizeLocalName}=\"{expectedText}\" (len={expectedText.byteLength()})", message: "a String longer than the stub's buffer must be read in pieces and rendered whole. The locals were: {rows}. {said}")
 		Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count(), expected: 1, message: "`{BacktraceCommand}` at a stop printed no `{BacktraceEventName}` event. It printed: {listedLines(kinds)}. {said}")
 		Expect.isFalse(traced.contains(ProxyRefusedMarker), message: "⭐ A PACKET SIZE THE STUB ADVERTISES IS THE MOST A REQUEST OR ITS REPLY MAY CARRY. The debugger sent the stub, whose buffer holds {AdvertisedPacketBytes} bytes, a request it had to refuse. Its trace: {traced}")
+
+		discardStagedDir(staged)
+		discardStagedDir(proxies)
 	#else
 		Expect.isFalse(hostTargetTriple() == AdvertisedSizeLaneTriple, message: "only the arm64-macos lane drives a program through a stub it can be put in front of, and runs the case above.")
 	#endif

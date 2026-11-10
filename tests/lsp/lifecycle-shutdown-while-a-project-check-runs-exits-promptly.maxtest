@@ -13,7 +13,7 @@ test 'shutdown while a project check runs exits promptly and clean'
 
 	if let code = try shutDownDuringTheCheck(client, root: root) 'exited'
 		client.release()
-		discardOutsideCheckoutDir(root)
+		discardStagedDir(root)
 		Expect.equal(code, expected: BusyCheckCleanExitCode, message: "the server did not exit 0 after `shutdown` then `exit` sent while its project check of {BusyCheckSiblingFileCount} sibling files was running.")
 	end 'exited' else (e) 'failed'
 		abandonedStagedSession(client, staged: root, failure: e, doing: "the shutdown sequence did not complete while a project check was running", afterwards: ". `waitForExit` gives the server {ServerExitDeadlineMs} ms, far less than the check takes, so a server that waits the check out before exiting fails here.")

@@ -49,7 +49,7 @@ type InlinedFrameSession implements DapSession
 end 'InlinedFrameSession'
 
 test 'a spliced frame lists its own variables, and its caller stands at the call'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: InlinedFrameCaseLabel, fixture: SplicedFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: InlinedFrameCaseLabel, fixture: SplicedFixtureName)
 	let printedAt = anchorLine(staged.join(StagedProgramFileName), anchor: InlinedPrintAnchor)
 	let calledAt = anchorLine(staged.join(StagedProgramFileName), anchor: InlinedCallAnchor)
 	let callColumn = sourceColumnOf(staged, line: calledAt, spelling: InlinedCallSpelling) as DapNumber
@@ -64,4 +64,6 @@ test 'a spliced frame lists its own variables, and its caller stands at the call
 	try Expect.equal(dapFrameNumberAt(session.frameColumns, frame: CallerFrame), expected: callColumn, message: "the caller frame's column is where its call of `{InlinedCalleeName}` begins")
 	try Expect.isTrue(session.variableNames.contains(InlinedLabelName), message: "the `{LocalsScopeName}` scope of the spliced `{InlinedCalleeName}` must name its own local `{InlinedLabelName}`; it named {joined(session.variableNames, separator: Space)}")
 	try Expect.contains(session.labelValue, needle: InlinedLabelText, message: "`{InlinedLabelName}` holds `{InlinedLabelText}` at that line; it said {session.labelValue}")
+
+	discardStagedDir(staged)
 end 'a spliced frame lists its own variables, and its caller stands at the call'

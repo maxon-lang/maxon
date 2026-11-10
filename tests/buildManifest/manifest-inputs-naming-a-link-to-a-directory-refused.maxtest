@@ -7,10 +7,12 @@
 	test 'a manifest input that is a link to a directory is refused'
 		let staged = stagedProject("inputs-naming-a-link-to-a-directory-refused", fixture: InputsNamingALinkFixtureName)
 		let target = freshOutsideCheckoutDir(LinkTargetDirName)
-		_ = runSystemTool("ln", arguments: ["-s", target.toString(), staged.join(LinkName).toString()], what: "`ln -s` making a link to a directory in the staged project")
+		plantedDirectoryLink(staged.join(LinkName), target: target.toString())
 
 		requireRefused(staged, options: StringArray.create(0), exitCode: RefusedExitCode, wordings: [LinkRefusalWording], what: "maxon build")
 
-		discardOutsideCheckoutDir(target)
+		discardStagedDir(target)
+
+		discardStagedDir(caseRootOf(staged))
 	end 'a manifest input that is a link to a directory is refused'
 #endif

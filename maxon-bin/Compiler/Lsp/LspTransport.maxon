@@ -20,6 +20,10 @@ let ContentLengthHeaderName = "content-length"
 
 let HeaderFieldSeparator = ":"
 
+// A child's frame is read into memory whole, so a garbled `Content-Length` from it ends the child here
+// rather than sizing an allocation.
+let ChildFrameByteCap = 64 * 1024 * 1024
+
 // How a message can fail to arrive. Both arms are raised.
 enum LspFramingError implements Error
 	streamEnded
@@ -35,32 +39,67 @@ export union LspIncoming
 	framingError(detail String)
 end 'LspIncoming'
 
+union LspHeaderStep
+	more
+	complete(length LspContentLength)
+	malformed(detail String)
+end 'LspHeaderStep'
+
+type LspFrameHeaders
+	var statedLength = StatedFrameLength.unstated
+
+	static function create() returns LspFrameHeaders
+		return Self{}
+	end 'create'
+
+	function absorb(line String) returns LspHeaderStep
+		if line.isEmpty() 'blankLine'
+			return self.endOfHeaders()
+		end 'blankLine'
+
+		let parts = line.split(HeaderFieldSeparator)
+		let name = (try parts.get(0) otherwise "").toLower()
+
+		// Every other header is ignored, as the protocol requires of a header a peer does not know.
+		if name != ContentLengthHeaderName 'otherHeader'
+			return LspHeaderStep.more
+		end 'otherHeader'
+
+		let raw = (try parts.get(1) otherwise "").trim()
+		self.statedLength = StatedFrameLength.stated(try parseContentLength(raw) otherwise return LspHeaderStep.malformed("Content-Length is not a byte count: '{raw}'"))
+
+		return LspHeaderStep.more
+	end 'absorb'
+
+	function endOfHeaders() returns LspHeaderStep
+		return match self.statedLength 'length'
+			unstated gives LspHeaderStep.malformed("message header carries no Content-Length")
+			stated(count) gives LspHeaderStep.complete(count)
+		end 'length'
+	end 'endOfHeaders'
+end 'LspFrameHeaders'
+
 // Read the next framed message off standard input.
 export function readLspMessage(stdin Stdin) returns isolated LspIncoming
-	var statedLength = StatedFrameLength.unstated
-	var inHeaders = true
+	var headers = LspFrameHeaders.create()
 
-	while inHeaders 'headers'
+	while true 'headers'
 		// EOF anywhere before a complete message is the same event however far in it lands: the client is
 		// gone and there is nothing left to frame.
 		let line = try readHeaderLine(stdin) otherwise return LspIncoming.endOfStream
 
-		if line.isEmpty() 'blankLine'
-			inHeaders = false
-		end 'blankLine' else 'headerField'
-			let parts = line.split(HeaderFieldSeparator)
-			let name = (try parts.get(0) otherwise "").toLower()
-
-			// Every other header is ignored, as the protocol requires of a header a peer does not know.
-			if name == ContentLengthHeaderName 'contentLengthField'
-				let raw = (try parts.get(1) otherwise "").trim()
-				statedLength = StatedFrameLength.stated(try parseContentLength(raw) otherwise return LspIncoming.framingError("Content-Length is not a byte count: '{raw}'"))
-			end 'contentLengthField'
-		end 'headerField'
+		match headers.absorb(line) 'step'
+			more then continue
+			complete(length) then return readLspBody(stdin, length: length)
+			malformed(detail) then return LspIncoming.framingError(detail)
+		end 'step'
 	end 'headers'
 
-	let contentLength = (try statedLength.count() otherwise return LspIncoming.framingError("message header carries no Content-Length")) as ElementIndex
+	panic("readLspMessage: the header loop is left only by a return")
+end 'readLspMessage'
 
+function readLspBody(stdin Stdin, length LspContentLength) returns isolated LspIncoming
+	let contentLength = length as ElementIndex
 	var body = ByteArray.create(0)
 
 	while body.count() < contentLength 'fill'
@@ -74,7 +113,49 @@ export function readLspMessage(stdin Stdin) returns isolated LspIncoming
 	end 'fill'
 
 	return LspIncoming.message(String.from(body))
-end 'readLspMessage'
+end 'readLspBody'
+
+module function readChildMessage(reader StdoutReader) returns LspIncoming
+	var headers = LspFrameHeaders.create()
+
+	while true 'headers'
+		let line = try reader.readLine() otherwise (e) 'unread'
+			return childReadOutcome(e)
+		end 'unread'
+
+		match headers.absorb(line) 'step'
+			more then continue
+			complete(length) then return readChildBody(reader, length: length)
+			malformed(detail) then return LspIncoming.framingError(detail)
+		end 'step'
+	end 'headers'
+
+	panic("readChildMessage: the header loop is left only by a return")
+end 'readChildMessage'
+
+function childReadOutcome(failure SubprocessError) returns LspIncoming
+	if failure.endedTheStream() 'ended'
+		return LspIncoming.endOfStream
+	end 'ended'
+
+	return LspIncoming.framingError("reading the compiler's output failed: {failure.displayReason()}")
+end 'childReadOutcome'
+
+function readChildBody(reader StdoutReader, length LspContentLength) returns LspIncoming
+	if length > ChildFrameByteCap 'tooLarge'
+		return LspIncoming.framingError("the compiler announced a {length}-byte message, past the {ChildFrameByteCap}-byte limit on one")
+	end 'tooLarge'
+
+	let body = try reader.readBytes(length as ByteLimit) otherwise (e) 'unread'
+		return childReadOutcome(e)
+	end 'unread'
+
+	if (body.byteLength() as ByteLimit) != (length as ByteLimit) 'truncated'
+		return LspIncoming.framingError("stream ended after {body.byteLength()} of {length} body bytes")
+	end 'truncated'
+
+	return LspIncoming.message(body)
+end 'readChildBody'
 
 // Frame `body` and write it to standard output.
 export function writeLspMessage(body String)
@@ -111,13 +192,6 @@ end 'readHeaderLine'
 union StatedFrameLength
 	unstated
 	stated(count LspContentLength)
-
-	function count() returns LspContentLength throws AbsentError
-		match self 'length'
-			unstated then throw AbsentError.absent
-			stated(count) then return count
-		end 'length'
-	end 'count'
 end 'StatedFrameLength'
 
 // ⚠ `parseInt` reads whatever digits it finds and ignores every other byte, so it answers 40 for `4x0`

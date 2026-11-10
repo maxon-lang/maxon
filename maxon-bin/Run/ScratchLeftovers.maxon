@@ -1,0 +1,34 @@
+let LeftoverEntryPrefix = "left "
+
+function entryNamesIn(dir FilePath) returns StringArray throws DirectoryListError
+	let entries = try Directory.list(dir)
+	let names = StringArray.create(entries.count(), zeroed: false)
+
+	for entry in entries 'eachEntry'
+		names.push(entry.filename())
+	end 'eachEntry'
+
+	names.sort()
+
+	return names
+end 'entryNamesIn'
+
+export function leftoversIn(directory FilePath, label String) returns StringArray
+	let lines = StringArray.create(0)
+
+	let present = try entryNamesIn(directory) otherwise (e) 'unlistable'
+		match e 'why'
+			notFound then return lines
+			accessDenied then lines.push("could not list {directory.toString()}: access was denied")
+			listFailed then lines.push("could not list {directory.toString()}: the operating system failed the listing")
+		end 'why'
+
+		return lines
+	end 'unlistable'
+
+	for name in present 'eachEntry'
+		lines.push("{LeftoverEntryPrefix}{label}{PortablePathSeparator}{name}")
+	end 'eachEntry'
+
+	return lines
+end 'leftoversIn'

@@ -1,3 +1,5 @@
+. scripts/lib/system-temp.sh
+
 DocsClosureShippedKind="shipped"
 DocsClosureOutsideKind="outside"
 
@@ -109,28 +111,23 @@ stage_docs_closure() {
 	local docs_dir="$1" seed="$2" stage_docs="$3"
 	local closure_file kind first second tab=$'\t'
 
-	closure_file="$(mktemp)"
-	if ! docs_link_closure "$docs_dir" "$seed" > "$closure_file"; then
-		rm -f "$closure_file"
-		return 1
-	fi
+	temp_make file docs-closure
+	closure_file="$TempMade"
+	docs_link_closure "$docs_dir" "$seed" > "$closure_file" || return 1
 
 	while IFS="$tab" read -r kind first second; do
 		case "$kind" in
 			"$DocsClosureShippedKind")
 				mkdir -p "$stage_docs/$(dirname "$first")"
 				cp "$docs_dir/$first" "$stage_docs/$first" \
-					|| { echo "release.sh: $docs_dir/$first is reachable from $docs_dir/$seed and cannot be copied into the archive" >&2; rm -f "$closure_file"; return 1; }
+					|| { echo "release.sh: $docs_dir/$first is reachable from $docs_dir/$seed and cannot be copied into the archive" >&2; return 1; }
 				;;
 			"$DocsClosureOutsideKind")
 				echo "release.sh: $docs_dir/$first links outside $docs_dir/, which the archive does not carry: $second" >&2
 				;;
 			*)
 				echo "release.sh: unknown docs closure line kind: $kind" >&2
-				rm -f "$closure_file"
 				return 1 ;;
 		esac
 	done < "$closure_file"
-
-	rm -f "$closure_file"
 }

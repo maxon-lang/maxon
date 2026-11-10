@@ -1,4 +1,4 @@
-let HttpDebugStagingDir = "temp/mcp-http-debug"
+let HttpDebugStagingDir = "mcp-http-debug"
 
 test 'a debug session over http survives from one request to the next'
 	let program = stagedProgram(HttpDebugStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
@@ -29,6 +29,8 @@ test 'a debug session over http survives from one request to the next'
 	try Expect.isTrue(debugLocalNames(locals).contains(DebuggableProgramLocalName), message: "a fifth request, on a fifth connection, must reach the SAME stopped program and name its local `{DebuggableProgramLocalName}`; it named {joined(debugLocalNames(locals), separator: Space)}")
 
 	try Expect.isFalse(toolCallIsError(stopped), message: "`{DebugStopTool}` refused to end the session: {toolCallText(stopped)}")
+
+	discardStagedDir(stagedDirNamed(HttpDebugStagingDir))
 end 'a debug session over http survives from one request to the next'
 
 test 'debug_stop reaps the debuggee, so its image can be deleted'
@@ -57,4 +59,7 @@ test 'debug_stop reaps the debuggee, so its image can be deleted'
 	try Expect.equal(debugToolState(continued), expected: DebugStoppedState, message: "the program must be STOPPED and therefore alive before `{DebugStopTool}`, or the delete below proves nothing")
 	try Expect.isFalse(toolCallIsError(stopped), message: "`{DebugStopTool}` refused to end the session: {toolCallText(stopped)}")
 	try Expect.isTrue(deletable, message: "`{DebugStopTool}` must reap the debuggee. Its image is still held, which is a process this server left running after it said the session had ended")
+
+	discardStagedDir(stagedDirNamed(HttpDebugStagingDir))
+	discardStagedDir(stagedDirNamed("{HttpDebugStagingDir}-reap"))
 end 'debug_stop reaps the debuggee, so its image can be deleted'

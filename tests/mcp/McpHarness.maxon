@@ -38,11 +38,19 @@ export function stagedCopyOf(binary FilePath, dir FilePath, name String) returns
 	return target
 end 'stagedCopyOf'
 
-// A staging directory under `temp/` holding ONE program, the previous run's files cleared, so every file a
-// tool call leaves there afterwards is one the call wrote.
+export function stagedDirNamed(name String) returns FilePath
+	return stagingDir("{testScratchDir().toString()}{PortablePathSeparator}{name}")
+end 'stagedDirNamed'
+
+export function stagedInTreeDirNamed(name String) returns FilePath
+	return stagingDir("{projectScratchDir().toString()}{PortablePathSeparator}{name}")
+end 'stagedInTreeDirNamed'
+
+// A staging directory in the test scratch directory holding ONE program, the previous run's files
+// cleared, so every file a tool call leaves there afterwards is one the call wrote.
 export function stagedProgram(dirName String, fileName String, source String) returns FilePath
-	let dir = stagingDir(dirName)
-	clearStagedFiles(dir)
+	let dir = stagedDirNamed(dirName)
+	clearStagedTree(dir)
 
 	let program = dir.join(fileName)
 	writeStagedFile(program, content: source)
@@ -68,8 +76,8 @@ export function filesWrittenBeside(kept FilePath, dir FilePath) returns String
 	return spacedPaths(written)
 end 'filesWrittenBeside'
 
-// A program that prints `line` and exits 0, written into `temp/` by a case so no live `.maxon` sits under
-// `tests/`.
+// A program that prints `line` and exits 0, written into the test scratch directory by a case so no live
+// `.maxon` sits under `tests/`.
 export function printingProgramSource(line String) returns String
 	return "function main() returns ExitCode\n\tprint(\"{line}\\n\")\n\treturn 0\nend 'main'\n"
 end 'printingProgramSource'
@@ -566,7 +574,7 @@ function drainedStderr(child StreamingSubprocess) returns String
 	var reads = 0 as Count
 
 	while reads < StderrDrainBudget 'drain'
-		match child.tryReadStderrLine() 'polled'
+		match try child.tryReadStderrLine() otherwise panic("the server's stderr is out with a StderrReader") 'polled'
 			line(text) then said.append("{text} ")
 			none then break
 		end 'polled'

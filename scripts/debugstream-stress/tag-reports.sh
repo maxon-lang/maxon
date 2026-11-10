@@ -20,10 +20,7 @@ pass() { echo "  PASS: $1"; }
 bad()  { echo "  FAIL: $1"; FAILED=1; }
 hdr()  { echo; echo "== $1 =="; }
 
-finish() {
-	rm -rf "$WORK"
-	exit "$FAILED"
-}
+trap 'rm -rf "$WORK"' EXIT
 
 if [ ! -x "$MAXON" ]; then
 	echo "FAIL: no compiler at $MAXON"
@@ -39,7 +36,7 @@ if ! (cd "$TREE" && "$MAXON" build maxon-bin --debugstream --output="$TRACED") >
 	echo "FAIL: the --debugstream build of the compiler errored"
 	cat "$WORK/build.log"
 	FAILED=1
-	finish
+	exit "$FAILED"
 fi
 pass "built $TRACED"
 
@@ -144,4 +141,4 @@ else
 	echo "SOME CHECKS FAILED"
 fi
 
-finish
+exit "$FAILED"

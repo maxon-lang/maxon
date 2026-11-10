@@ -185,11 +185,13 @@ Output: `main.maxon main .maxon src`, `true true false true`, `main.txt`.
 
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `Directory.list(path FilePath)` | `FilePathArray` | `DirectoryListError` | The entries of a directory, each joined onto `path`. |
+| `Directory.list(path FilePath)` | `FilePathArray` | `DirectoryListError` | The entries of a directory, each joined onto `path`. Throws `notFound` for a directory that does not exist, `accessDenied` for one the process may not list, and `listFailed` for any other failure. |
 | `Directory.exists(path FilePath)` | `bool` | — | True when `path` is an existing directory. |
 | `Directory.isDirectory(path FilePath)` | `bool` | — | The same as `exists`. |
 | `Directory.create(path FilePath)` | `bool` | — | Create the directory and any missing parents. True when the directory exists afterwards. |
 | `Directory.delete(path FilePath)` | — | `DirectoryDeleteError` | Remove an empty directory. A directory that still holds an entry is refused, not emptied. |
+| `Directory.removeTree(path FilePath)` | `FilePathArray` | — | Remove `path` and everything below it, and answer the entries that could not be removed; an empty answer means nothing is left, and a path that does not exist answers empty. A symbolic link or junction is removed as one entry, and what it points at stays as it was. |
+| `Directory.removeContents(path FilePath)` | `FilePathArray` | — | Remove everything inside the directory `path` and keep the directory, answering what could not be removed as `removeTree` does. |
 | `Directory.currentPath()` | `FilePath` | — | The working directory. |
 
 ```maxon
@@ -532,7 +534,8 @@ and WASI, matching what each platform can report.
 | `Process.executablePath()` | `FilePath` | `ProcessIntrospectionError.pathUnavailable` | Absolute path of the running executable. |
 | `Process.id()` | `Pid` | — | This process's id. |
 | `Process.namespace()` | `String` | — | The pid space this process belongs to: the `/proc/self/ns/pid` link target on Linux, the boot-session UUID on macOS, the machine's `MachineGuid` on Windows; `""` when the host withholds it. Two processes may probe each other's ids when their namespaces are equal. |
-| `Process.isAlive(pid Pid)` | `bool` | — | True while a process with id `pid` exists; `false` once it has ended and been reaped, and for an id no host hands out (0, or one past 32 bits). |
+| `Process.isAlive(pid Pid)` | `bool` | — | True while the process with id `pid` is running; `false` once it has ended, whether or not its parent has reaped it, and for an id no host hands out (0, or one past 32 bits). |
+| `Process.endDescendants()` | `DescendantProcessArray` | — | End every process descended from this one that is still running, detached ones included, wait until each has ended, and answer them; a descendant that has already ended is left out. Panics when the host cannot list every descendant or one has not ended five seconds after its kill, and when the answer needs more than 64 KiB, which it reports after ending them all. `maxon test` and `spec-test` call it at the end of each test and case (see [Processes a test leaves](/docs/cli/#maxon-test)). A program that calls it tracks its descendants from startup, so the first call also finds the processes started before it. |
 | `Process.enterBackgroundPriority()` | `BackgroundPriority` | — | Put this process at background scheduling priority and answer the priority the OS reports afterwards: a priority class on Windows (`BELOW_NORMAL_PRIORITY_CLASS`, 16384), a nice value under POSIX (10). Children spawned afterwards inherit it. `BackgroundPriority` is `int(i64.min to i64.max)`. |
 | `Process.environmentVariable(name String)` | `String` | `ProcessIntrospectionError.variableUnset`, `.environmentUnreadable` | The variable's value. Names are case-insensitive on Windows (`Path` answers to `PATH`) and exact elsewhere. An unset variable throws; a variable set to `""` returns `""`. |
 | `Process.currentEnvironmentEntries()` | `StringArray` | `ProcessIntrospectionError.environmentUnreadable` | Every `NAME=VALUE` entry, in the order the OS reports them. Throws when the OS fails to hand the environment over. |
@@ -560,6 +563,10 @@ end 'main'
 ```
 
 Output: `true unset` and `A b=c`.
+
+`DescendantProcess` is one process `Process.endDescendants()` ended: `pid` (`Pid`) and `name` (`String`),
+the name the host gives its executable with every byte outside printable ASCII shown as `?`.
+`DescendantProcess.create(pid, name:)` makes one. `DescendantProcessArray` is `Array with DescendantProcess`.
 
 ## Subprocess
 
@@ -833,13 +840,15 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline, NUL bytes included. Throws on a broken pipe. |
 | `takeStdout()` | `StdoutReader` | `SubprocessError` | Take the child's stdout side out as a `StdoutReader`, which a coroutine can drain beside the child's owner. While the reader is out, the child's own stdout reads (`readStdoutLine`, `readStdoutLineCapped`, `readStdoutBytes`, `tryReadStdoutLine`) throw `ioFailed`. Throws `ioFailed` when the stdout side is already out, and once the handle is released. |
 | `reclaimStdout()` | — | `SubprocessError` | Make the stdout side the child's again, once the coroutine that held the `StdoutReader` has ended. Throws `ioFailed` when the stdout side is not out. |
+| `takeStderr()` | `StderrReader` | `SubprocessError` | As `takeStdout()`, for the child's stderr side: while the `StderrReader` is out, `readStderrLine`, `readStderrLineCapped` and `tryReadStderrLine` throw `ioFailed`. Throws `ioFailed` when the stderr side is already out, and once the handle is released. |
+| `reclaimStderr()` | — | `SubprocessError` | Make the stderr side the child's again, once the coroutine that held the `StderrReader` has ended. Throws `ioFailed` when the stderr side is not out. |
 | `readStdoutLine()` | `String` | `SubprocessError` | The next line without its terminator (CRLF or LF); `""` is a blank line. Throws `endOfStream` when the stream has ended. Lines over 1 MiB arrive in pieces. |
 | `readStdoutLineCapped(maxBytes)` | `String` | `SubprocessError` | With an explicit per-call cap. |
 | `readStdoutBytes(count)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; nothing is stripped. For length-framed protocols. Shares a buffer with the line readers. |
 | `readStderrLine()` | `String` | `SubprocessError` | As `readStdoutLine`, for stderr. |
 | `readStderrLineCapped(maxBytes)` | `String` | `SubprocessError` | With a cap. |
 | `tryReadStdoutLine()` | `LinePoll` | `SubprocessError` | A line if one is already buffered; never blocks. Throws `ioFailed` while the stdout side is out with a `StdoutReader`. |
-| `tryReadStderrLine()` | `LinePoll` | — | As above, for stderr. |
+| `tryReadStderrLine()` | `LinePoll` | `SubprocessError` | As above, for stderr. Throws `ioFailed` while the stderr side is out with a `StderrReader`. |
 | `pollExit()` | `ExitPoll` | — | Whether the child has exited, without blocking or killing it. A released handle answers `running`. On Linux and macOS a child a signal killed reports `exited(128 + signal)`. |
 | `isReapedElsewhere()` | `bool` | — | Whether another process has taken the child's exit status, so that `pollExit()` answers `running` for ever. Whether a status is available depends on whether the child finished dying before the process holding it, such as a debugger's stub, let it go. `false` on Windows and for a released handle. Answers at once. |
 | `pollTermination()` | `TerminationPoll` | — | As `pollExit()`, answering how the child ended: `signalled(signal)` for a child a signal killed on Linux and macOS, `exited(code)` otherwise. |
@@ -848,8 +857,8 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
 | `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
 | `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes, or `treeNotEnded` when that tree cannot be fully ended; `0` waits forever. A child whose exit status went to another process throws `statusLost`. Both deadline errors carry empty output fields — a streaming child's bytes belong to the caller draining the streams. |
-| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no wait to expire, and returns once the child itself is gone. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended, and `unconfirmed(reason)` when no kill was confirmed or the handle is released. |
-| `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader`: `reclaimStdout()` first. |
+| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no wait to expire, and returns once every process it killed has ended, waiting at most five seconds for them. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended or had not ended within those five seconds, and `unconfirmed(reason)` when no kill was confirmed or the handle is released. |
+| `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader` or the stderr side with a `StderrReader`: `reclaimStdout()` or `reclaimStderr()` first. |
 | `handle`, `released` | fields | — | The raw handle and whether it has been released. |
 
 ```maxon
@@ -897,6 +906,7 @@ the child follows.
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `readLine()` | `String` | `SubprocessError` | The next line without its terminator; the contract of `StreamingSubprocess.readStdoutLine`, including `endOfStream` when the stream has ended. |
+| `readBytes(count ByteLimit)` | `String` | `SubprocessError` | Exactly `count` bytes, fewer only at end of stream; the contract of `StreamingSubprocess.readStdoutBytes`, for a length-framed protocol read in a coroutine. |
 
 `specs/subprocess.md` pins the flow: `subprocess-take-stdout-moves-the-stdout-side-out-of-the-child`,
 `subprocess-release-while-the-stdout-reader-is-out-is-refused` and
@@ -931,6 +941,17 @@ end 'main'
 ```
 
 With `git` on `PATH`, it prints `true 0 exited 0`.
+
+### StderrReader
+
+The stderr side of a `StreamingSubprocess`, taken out with `takeStderr()`, on the terms `StdoutReader` has
+for stdout: it reads lines and owns nothing else, a coroutine can drain it beside the child's owner, and
+`reclaimStderr()` makes the stderr side the child's again once that coroutine has ended. Draining stderr
+in its own coroutine keeps a child that writes a lot of it from blocking on a full pipe.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `readLine()` | `String` | `SubprocessError` | The next line without its terminator; the contract of `StreamingSubprocess.readStderrLine`, including `endOfStream` when the stream has ended. |
 
 ## SharedMemory
 

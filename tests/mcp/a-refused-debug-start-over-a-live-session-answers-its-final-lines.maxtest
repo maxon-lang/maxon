@@ -1,5 +1,5 @@
-let LiveSessionStagingDir = "temp/mcp-refused-start-live-session"
-let UnusableImageStagingDir = "temp/mcp-refused-start-unusable-image"
+let LiveSessionStagingDir = "mcp-refused-start-live-session"
+let UnusableImageStagingDir = "mcp-refused-start-unusable-image"
 let UnusableImageName = "not-a-program.bin"
 let UnusableImageContent = "this file is not a program, and carries no `.mxdbg` sidecar\n"
 let KilledSessionLine = "the killed session's last words"
@@ -41,4 +41,7 @@ test 'a refused debug_start over a live session answers the lines the session it
 	try Expect.isTrue(toolCallIsError(refused), message: "the control: {UnusableImageName} carries no debug information, so the second `{DebugStartTool}` must be refused: {toolCallText(refused)}")
 	try Expect.isTrue(debugOutputLines(refused).contains(KilledSessionLine), message: "⛔ A REFUSED `{DebugStartTool}` HAS ALREADY REAPED THE LIVE SESSION, AND WHAT THAT PROGRAM WROTE IS ANSWERED IN THE REFUSAL OR NOWHERE. The refusal must carry `{KilledSessionLine}`; it answered {toolCallText(refused)}")
 	try Expect.isTrue(toolCallText(afterwards).contains(NoSessionError), message: "the refused `{DebugStartTool}` reaped the live session, so the next `{DebugContinueTool}` must report that there is none: {toolCallText(afterwards)}")
+
+	discardStagedDir(stagedDirNamed(LiveSessionStagingDir))
+	discardStagedDir(stagedDirNamed(UnusableImageStagingDir))
 end 'a refused debug_start over a live session answers the lines the session it killed had written'

@@ -1,0 +1,28 @@
+let RunProcessCaseLabel = "run-process-leak/run-process-leak.runs-a-command"
+let LeftOneProcessText = "the case left 1 process running: "
+
+test 'an alone case that leaves a process started by runProcess fails, naming the process'
+	let staged = stagedGateFixture()
+	let run = runSpecTest(staged, includeNetwork: false)
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	if not said.contains(failVerdictPrefix(RunProcessCaseLabel)) 'caseDidNotFail'
+		broken.push("'{RunProcessCaseLabel}' ran in a process of its own, left the process runProcess's command started running and did not FAIL. Expected '{failVerdictPrefix(RunProcessCaseLabel)}', and the run said:\n{said}\n")
+	end 'caseDidNotFail'
+
+	if not said.contains(LeftOneProcessText) 'leakerUnnamed'
+		broken.push("the failure of '{RunProcessCaseLabel}' does not name the process it left. Expected '{LeftOneProcessText}' followed by its id and image name, and the run said:\n{said}\n")
+	end 'leakerUnnamed'
+
+	if not said.contains(LeakAdviceText) 'adviceMissing'
+		broken.push("the failure of '{RunProcessCaseLabel}' does not say how to fix it. Expected '{LeakAdviceText}', and the run said:\n{said}\n")
+	end 'adviceMissing'
+
+	if run.exitCode() == SuccessExitCode 'exitWrong'
+		broken.push("the run exited {SuccessExitCode} with a case that left a process running in it. It said:\n{said}\n")
+	end 'exitWrong'
+
+	discardStagedDir(staged)
+	requireNothingBroken(broken, headline: "a process left running by an alone case through runProcess fails that case")
+end 'an alone case that leaves a process started by runProcess fails, naming the process'

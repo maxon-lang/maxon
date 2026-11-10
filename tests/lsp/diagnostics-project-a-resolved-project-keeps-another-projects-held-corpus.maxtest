@@ -33,7 +33,7 @@ test 'project diagnostics: resolving one project keeps the corpus another projec
 
 	if let afterResolution = try noticesAfterResolving(client, workspace: workspace, held: held, resolved: resolved) 'observed'
 		client.release()
-		discardOutsideCheckoutDir(workspace)
+		discardStagedDir(workspace)
 		requireOnlyTheResolvedProjectReloaded(afterResolution)
 	end 'observed' else (e) 'failed'
 		abandonedStagedSession(client, staged: workspace, failure: e, doing: "the session did not complete")
@@ -44,7 +44,7 @@ function noticesNaming(notices ProjectLoadingNoticeArray, dirName String) return
 	var named = ProjectLoadingNoticeArray.create(0)
 
 	for notice in notices 'eachNotice'
-		if foldedRootPath(notice.rootPath).endsWith("{outsideCheckoutDirName(KeptWorkspaceDirName)}/{dirName}") 'aNoticeForIt'
+		if foldedRootPath(notice.rootPath).endsWith("{KeptWorkspaceDirName}/{dirName}") 'aNoticeForIt'
 			named.push(notice.clone())
 		end 'aNoticeForIt'
 	end 'eachNotice'

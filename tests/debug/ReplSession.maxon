@@ -100,7 +100,7 @@ export type ReplSession
 	end 'absorbStdoutLine'
 
 	function absorbStderrLine() returns bool
-		match self.child.tryReadStderrLine() 'polled'
+		match try self.child.tryReadStderrLine() otherwise panic("the debug REPL's stderr is out with a StderrReader") 'polled'
 			none then return false
 			line(text) then self.transcript.append("{text}{LineFeed}")
 		end 'polled'

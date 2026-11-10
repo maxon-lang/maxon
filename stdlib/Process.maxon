@@ -41,6 +41,25 @@ let EnvironmentUnreadableByte = 0
 
 public typealias BackgroundPriority = int(i64.min to i64.max)
 
+let DescendantReportBytes = 65536
+let DescendantSpace = 32
+let DescendantNewline = 10
+let DescendantDigitZero = 48
+let DescendantDecimalBase = 10
+
+/// One process `Process.endDescendants` found running and ended: its id and the name the host gives
+/// its executable, with every byte outside printable ASCII shown as `?`.
+public type DescendantProcess
+	public let pid as Pid
+	public let name as String
+
+	public static function create(pid Pid, name String) returns DescendantProcess
+		return DescendantProcess{pid: pid, name: name}
+	end 'create'
+end 'DescendantProcess'
+
+public typealias DescendantProcessArray = Array with DescendantProcess
+
 /// Information about the currently-running process.
 public type Process
 	/// Returns the absolute path to the current executable.
@@ -62,10 +81,73 @@ public type Process
 		return String.init(__Builtins.processNamespace())
 	end 'namespace'
 
-	/// True while a process with id `pid` exists, false once it has ended and been reaped.
+	/// True while the process with id `pid` is running, false once it has ended, whether or not its parent
+	/// has reaped it, and false for an id no host hands out.
 	public static function isAlive(pid Pid) returns bool
 		return __Builtins.processIsAlive(pid)
 	end 'isAlive'
+
+	/// End every process descended from this one that is still running, detached ones included, wait
+	/// until each has ended, and answer them. A descendant that has exited, reaped or not, is not
+	/// answered. Panics when the host cannot list every descendant or one does not end within five
+	/// seconds of its kill, and when the answer does not fit 64 KiB, which it reports after ending them
+	/// all.
+	public static function endDescendants() returns DescendantProcessArray
+		let report = ByteArray.create(DescendantReportBytes)
+		let needed = __Builtins.processEndDescendants(report.managed.toCString(), DescendantReportBytes)
+
+		if needed < 0 'unlisted'
+			panic("Process.endDescendants: the host could not list every descendant of this process, or one of them did not end after being killed")
+		end 'unlisted'
+
+		if needed > DescendantReportBytes 'truncated'
+			panic("Process.endDescendants: the report needs {needed} bytes and holds {DescendantReportBytes}; every descendant has been ended")
+		end 'truncated'
+
+		return descendantsIn(report, byteCount: needed as ElementIndex)
+	end 'endDescendants'
+
+	static function descendantsIn(report ByteArray, byteCount ElementIndex) returns DescendantProcessArray
+		var found = DescendantProcessArray.create(0)
+		var lineStart = 0 as ElementIndex
+
+		for index in 0 upto byteCount 'eachByte'
+			let byte = try report.get(index) otherwise panic("Process.endDescendants: byte {index} of a {byteCount}-byte report is inside the buffer")
+
+			if byte == DescendantNewline 'endOfLine'
+				found.push(descendantOf(report, from: lineStart, to: index))
+				lineStart = index + 1
+			end 'endOfLine'
+		end 'eachByte'
+
+		return found
+	end 'descendantsIn'
+
+	static function descendantOf(report ByteArray, from ElementIndex, to ElementIndex) returns DescendantProcess
+		var pid = 0 as Pid
+		var at = from
+
+		while at < to 'digits'
+			let byte = try report.get(at) otherwise panic("Process.endDescendants: byte {at} of a report line is inside the buffer")
+
+			at = at + 1
+
+			if byte == DescendantSpace 'pidEnds'
+				break
+			end 'pidEnds'
+
+			pid = pid * DescendantDecimalBase + (byte as Pid) - DescendantDigitZero
+		end 'digits'
+
+		var name = ByteArray.create(0)
+
+		while at < to 'name'
+			name.push(try report.get(at) otherwise panic("Process.endDescendants: byte {at} of a report line is inside the buffer"))
+			at = at + 1
+		end 'name'
+
+		return DescendantProcess.create(pid, name: String.from(name))
+	end 'descendantOf'
 
 	/// Put this process at background scheduling priority and answer the priority the OS then
 	/// reports: a priority class on Windows, a nice value under POSIX. Processes spawned afterwards

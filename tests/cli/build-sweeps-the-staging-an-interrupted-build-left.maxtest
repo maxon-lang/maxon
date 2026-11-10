@@ -1,0 +1,26 @@
+let InterruptedBuildCaseDirName = "build-sweeps-an-interrupted-staging"
+let InterruptedBuildStem = "program"
+let InterruptedBuildSource = "function main() returns ExitCode\n\treturn 3\nend 'main'\n"
+let InterruptedBuildDebris = "half of an image an interrupted build left\n"
+let InterruptedBuildDebrisSuffix = ".debris"
+
+test 'a build sweeps the staging directory an interrupted build of the same output left, and leaves none of its own'
+	let dir = freshCaseDir(InterruptedBuildCaseDirName)
+	let output = dir.join("{InterruptedBuildStem}{executableSuffix()}")
+	let staging = stagingDirectoryOf(output)
+	let stagedImage = staging.join(output.filename())
+	let strayInStaging = staging.join("{output.filename()}{InterruptedBuildDebrisSuffix}")
+	let source = dir.join(StagedProgramFileName)
+
+	writeStagedFile(source, content: InterruptedBuildSource)
+	Expect.isTrue(Directory.create(staging), message: "could not create {staging.toString()} to stand for an interrupted build's.")
+	writeStagedFile(stagedImage, content: InterruptedBuildDebris)
+	writeStagedFile(strayInStaging, content: InterruptedBuildDebris)
+
+	let build = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"])
+	Expect.equal(build.exitCode(), expected: 0, message: "a build beside the staging directory of an interrupted build did not succeed. It said: {build.stdout}{build.stderr}")
+	Expect.isTrue(File.exists(output), message: "the build wrote no {output.toString()}.")
+	Expect.isFalse(Directory.exists(staging), message: "the build left {staging.toString()} behind.")
+
+	discardStagedDir(dir)
+end 'a build sweeps the staging directory an interrupted build of the same output left, and leaves none of its own'

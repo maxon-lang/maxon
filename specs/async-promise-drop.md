@@ -342,6 +342,11 @@ function main() returns ExitCode
 	clearFlag()
 	let code = parkAndDrop()
 	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+
+	while File.exists(flagPath()) 'childRemovesFlag'
+		sleep(20)
+	end 'childRemovesFlag'
+
 	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -393,6 +398,11 @@ function main() returns ExitCode
 	clearFlag()
 	let code = parkAndDrop()
 	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+
+	while File.exists(flagPath()) 'childRemovesFlag'
+		sleep(20)
+	end 'childRemovesFlag'
+
 	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -453,6 +463,11 @@ function main() returns ExitCode
 	clearFlag()
 	let code = parkAndDrop()
 	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+
+	while File.exists(flagPath()) 'childRemovesFlag'
+		sleep(20)
+	end 'childRemovesFlag'
+
 	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -509,6 +524,11 @@ function main() returns ExitCode
 	clearFlag()
 	let code = parkAndDrop()
 	try File.writeText(flagPath(), content: "go") otherwise panic("the flag file cannot be written")
+
+	while File.exists(flagPath()) 'childRemovesFlag'
+		sleep(20)
+	end 'childRemovesFlag'
+
 	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)

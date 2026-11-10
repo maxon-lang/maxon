@@ -63,7 +63,7 @@ type ClearedReturnSession implements DapSession
 end 'ClearedReturnSession'
 
 test 'a breakpoint the console clears at the address a next walk returns to leaves no trap behind it'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ClearedReturnCaseLabel, fixture: ClearedReturnFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ClearedReturnCaseLabel, fixture: ClearedReturnFixtureName)
 	let program = staged.join(StagedProgramFileName)
 	let executable = buildStagedSource(program, staged: staged)
 	let gate = staged.join(GateFileName)
@@ -78,4 +78,6 @@ test 'a breakpoint the console clears at the address a next walk returns to leav
 	try Expect.equal(session.landedLine, expected: afterLine as DapNumber, message: "`{NextCommand}` lands on the line after the call")
 	try Expect.isTrue(session.ranToItsEnd, message: "after the landing, `{ContinueCommand}` runs the program to its exit with no trap left at the cleared address")
 	try Expect.isTrue(session.finalOutput.contains(ProgramDoneLine), message: "the program finishes and prints `{ProgramDoneLine}`; it printed `{session.finalOutput}`")
+
+	discardStagedDir(staged)
 end 'a breakpoint the console clears at the address a next walk returns to leaves no trap behind it'

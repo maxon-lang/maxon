@@ -1,0 +1,17 @@
+typealias RanCell = SharedValue with bool
+
+let firstHasRun = RanCell.create(false)
+let StrayFileName = "stray-after-the-first.txt"
+
+test 'the first test leaves nothing in its scratch directories'
+	firstHasRun.publish(true)
+end 'the first test leaves nothing in its scratch directories'
+
+test 'the second test removes its scratch file unless the first test ran before it'
+	let stray = TestScratch.outsideCheckout().join(StrayFileName)
+	File.writeText(stray, content: "left behind\n")
+
+	if not firstHasRun.current() 'ranAlone'
+		File.delete(stray)
+	end 'ranAlone'
+end 'the second test removes its scratch file unless the first test ran before it'

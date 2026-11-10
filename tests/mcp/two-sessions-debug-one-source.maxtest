@@ -1,4 +1,4 @@
-let TwoSessionsStagingDir = "temp/mcp-two-sessions"
+let TwoSessionsStagingDir = "mcp-two-sessions"
 let SessionsDebuggingOneSource = 2
 
 #if os(Macos)
@@ -10,7 +10,7 @@ let SessionsDebuggingOneSource = 2
 test 'two debug sessions of one source each stop in their own build, and closing one removes its build'
 	let program = stagedProgram(TwoSessionsStagingDir, fileName: "main.maxon", source: debuggableProgramSource())
 	let anchored = anchorLine(program, anchor: DebuggableProgramAnchor)
-	let cache = stagingDir("{TwoSessionsStagingDir}/{CacheDirName}")
+	let cache = stagedDirNamed("{TwoSessionsStagingDir}/{CacheDirName}")
 	let builds = cache.join(CacheVendorDirName).join(DebugBuildDirName)
 
 	var server = StreamingHttpMcpServer.start(StringArray.create(0), environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()]))
@@ -41,6 +41,8 @@ test 'two debug sessions of one source each stop in their own build, and closing
 	try Expect.equal(imagesWhileLive.count(), expected: SessionsDebuggingOneSource * ImagesPerLiveSession, message: "each live session debugs a build of its own, and on macOS the signed copy of it that it launches; {builds.toString()} held{joined(imagesWhileLive, separator: Space)}")
 	try Expect.equal(imagesAfterFirst.count(), expected: (SessionsDebuggingOneSource - 1) * ImagesPerLiveSession, message: "`{DebugStopTool}` removes the images its session held and no other's; {builds.toString()} held{joined(imagesAfterFirst, separator: Space)}")
 	try Expect.isEmpty(joined(leftAfterBoth, separator: Space), message: "once both sessions have ended nothing they built is left in {builds.toString()}; it held {joined(leftAfterBoth, separator: Space)}")
+
+	discardStagedDir(stagedDirNamed(TwoSessionsStagingDir))
 end 'two debug sessions of one source each stop in their own build, and closing one removes its build'
 
 function imagesIn(directory FilePath) returns StringArray

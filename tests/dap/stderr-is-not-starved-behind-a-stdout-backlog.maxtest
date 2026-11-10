@@ -53,7 +53,7 @@ function arrivalOf(arrivals DapOutputPieceArray, category String, text String) r
 end 'arrivalOf'
 
 test 'a stderr line written behind a stdout backlog arrives before the stdout written after it'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: BacklogCaseLabel, fixture: BacklogFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: BacklogCaseLabel, fixture: BacklogFixtureName)
 	var session = BacklogSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged))
 	try dapRunSession(session, completing: "run the backlog program to its exit")
 
@@ -64,4 +64,6 @@ test 'a stderr line written behind a stdout backlog arrives before the stdout wr
 
 	try Expect.lessThan(errorAt, than: tailEnd, message: "`{ErrorLine}` is written after a stdout backlog ending at `{LastBacklogLine}` (arrival {backlogEnd}) and before `{LastTailLine}`, which the program writes a fifth of a second later; a reader that drains stdout before it looks at stderr holds the stderr line until stdout closes")
 	try Expect.lessThan(backlogEnd, than: tailEnd, message: "one stream's lines keep their own order")
+
+	discardStagedDir(staged)
 end 'a stderr line written behind a stdout backlog arrives before the stdout written after it'

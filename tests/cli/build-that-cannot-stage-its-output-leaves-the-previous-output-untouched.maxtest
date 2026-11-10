@@ -1,0 +1,44 @@
+let UnstageableBuildCaseDirName = "build-that-cannot-stage-its-output"
+let UnstageableBuildStem = "program"
+let UnstageableBuildOriginalSource = "function main() returns ExitCode\n\treturn 3\nend 'main'\n"
+let UnstageableBuildReplacementSource = "function main() returns ExitCode\n\treturn 4\nend 'main'\n"
+let UnstageableBuildOccupiedContent = "a file where the staging directory goes\n"
+let UnstageableBuildRefusedExit = 1
+let UnstageableBuildNotReplaceableCode = "E6002"
+let UnstageableBuildStillInPlaceWording = "still in place"
+
+test 'a build that cannot stage its output refuses before compiling and leaves the previous output and its sidecar untouched'
+	let dir = freshCaseDir(UnstageableBuildCaseDirName)
+	let output = dir.join("{UnstageableBuildStem}{executableSuffix()}")
+	let sidecar = sidecarBeside(output)
+	let source = dir.join(StagedProgramFileName)
+
+	writeStagedFile(source, content: UnstageableBuildOriginalSource)
+	let first = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"])
+	Expect.equal(first.exitCode(), expected: 0, message: "the first build of a one-line program did not succeed. It said: {first.stdout}{first.stderr}")
+	Expect.isTrue(File.exists(output), message: "the first build wrote no {output.toString()}.")
+
+	let originalBytes = fileBytes(output)
+	let originalSidecar = fileBytes(sidecar)
+
+	let staging = stagingDirectoryOf(output)
+	writeStagedFile(staging, content: UnstageableBuildOccupiedContent)
+	writeStagedFile(source, content: UnstageableBuildReplacementSource)
+
+	let refused = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"])
+	Expect.equal(refused.exitCode(), expected: UnstageableBuildRefusedExit, message: "a build with a file where its staging directory goes did not exit {UnstageableBuildRefusedExit}. It said: {refused.stdout}{refused.stderr}")
+	Expect.contains(refused.stderr, needle: UnstageableBuildNotReplaceableCode, message: "the refusal does not carry {UnstageableBuildNotReplaceableCode}. It said: {refused.stderr}")
+	Expect.contains(refused.stderr, needle: UnstageableBuildStillInPlaceWording, message: "the refusal does not say the previous build is still in place. It said: {refused.stderr}")
+
+	Expect.isTrue(File.exists(output), message: "a build refused before it compiled deleted {output.toString()}.")
+	Expect.isTrue(fileBytes(output).equals(originalBytes), message: "a build refused before it compiled changed {output.toString()}.")
+	Expect.isTrue(File.exists(sidecar), message: "a build refused before it compiled deleted {sidecar.toString()}.")
+	Expect.isTrue(fileBytes(sidecar).equals(originalSidecar), message: "a build refused before it compiled changed {sidecar.toString()}.")
+	Expect.equal(fileText(staging), expected: UnstageableBuildOccupiedContent, message: "the refused build touched the file that occupies {staging.toString()}.")
+
+	discardStagedDir(dir)
+end 'a build that cannot stage its output refuses before compiling and leaves the previous output and its sidecar untouched'
+
+function sidecarBeside(output FilePath) returns FilePath
+	return try FilePath.from("{output.toString()}{SidecarSuffix}") otherwise panic("a sidecar beside a valid path is a valid path")
+end 'sidecarBeside'

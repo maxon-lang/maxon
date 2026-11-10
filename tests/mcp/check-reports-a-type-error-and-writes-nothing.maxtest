@@ -6,8 +6,8 @@
 // writing and also reports the diagnostic. The gate compiles the program several times over to prove the
 // query cache, and its verdict is not the question `check` answers, so the answer is held to not being it.
 
-let TypeErrorDirName = "temp/mcp-check-reports-a-type-error"
-let WellFormedDirName = "temp/mcp-check-well-formed"
+let TypeErrorDirName = "mcp-check-reports-a-type-error"
+let WellFormedDirName = "mcp-check-well-formed"
 
 let TypeErrorSource = "typealias Byte = int(0 to u8.max)\n\nfunction main() returns ExitCode\n\tlet x = 256 as Byte\n\treturn 0\nend 'main'\n"
 let TypeErrorCode = "E3005"
@@ -38,4 +38,7 @@ test 'check answers a type error with its code, and writes nothing'
 	Expect.equal(payloadString(brokenAnswer, key: "executable"), expected: testedCompilerPath().toString())
 	Expect.isTrue(payloadString(wellFormedAnswer, key: "stdlibRoot").endsWith(StdlibDirName), message: "`check` did not name the stdlib root it compiled against: {wellFormedText}")
 	Expect.isTrue(payloadString(brokenAnswer, key: "stdlibRoot").endsWith(StdlibDirName), message: "a REFUSED `check` did not name the stdlib root it compiled against: {brokenText}")
+
+	discardStagedDir(stagedDirNamed(TypeErrorDirName))
+	discardStagedDir(stagedDirNamed(WellFormedDirName))
 end 'check answers a type error with its code, and writes nothing'

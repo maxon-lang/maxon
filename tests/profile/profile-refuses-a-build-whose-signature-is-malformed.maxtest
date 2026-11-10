@@ -1,7 +1,7 @@
 let MalformedWord = "malformed"
 
 test 'the profiler says a macOS program carries a malformed code signature and does not launch it'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-refuses-a-build-whose-signature-is-malformed", fixture: HotWarmFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-refuses-a-build-whose-signature-is-malformed", fixture: HotWarmFixtureName)
 	let image = macosImageOf(staged.join(StagedProgramFileName), staged: staged)
 
 	Expect.isTrue(carriesBlob(image, magic: SuperBlobMagic), message: "the arm64-macos image {image.toString()} carries no embedded code signature, so there is none to spoil.")
@@ -17,4 +17,6 @@ test 'the profiler says a macOS program carries a malformed code signature and d
 		Expect.notEqual(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb}` completed a measurement of a program whose code signature is malformed. It printed:{LineFeed}{run.stdout}")
 		Expect.isTrue(run.stderr.contains(MalformedWord), message: "the refusal does not say the code signature is {MalformedWord}. It wrote to stderr: {run.stderr}")
 	#endif
+
+	discardStagedDir(staged)
 end 'the profiler says a macOS program carries a malformed code signature and does not launch it'

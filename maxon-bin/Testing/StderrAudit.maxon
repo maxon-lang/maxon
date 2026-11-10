@@ -1,0 +1,68 @@
+let DescendantEntrySeparator = ", "
+let DescendantEntryEnd = "\n"
+let LeakVerdictAdvice = "wait for every process it starts before it ends"
+let CaseSubject = "case"
+module let TestReportSubject = "test"
+
+module type StderrAudit
+	export let text as String
+	export let leaked as StringArray
+
+	module static function separating(stderr String) returns StderrAudit
+		let pieces = stderr.split(descendantsFramePrefix())
+		var kept = StringBuilder.create()
+		var leaked = StringArray.create(0)
+
+		for (iter, piece) in pieces.withIterator() 'eachPiece'
+			if iter.index() == 0 'beforeTheFirstFrame'
+				kept.append(piece)
+				continue
+			end 'beforeTheFirstFrame'
+
+			let lineEnd = try piece.findFirst(DescendantEntryEnd) otherwise 'unterminated'
+				leaked.push(piece.trim())
+				continue
+			end 'unterminated'
+
+			leaked.push(piece.slice(piece.startIndex(), endIndex: lineEnd).trim())
+
+			let after = try piece.indexAfter(lineEnd) otherwise 'nothingAfter'
+				continue
+			end 'nothingAfter'
+
+			kept.append(piece.slice(after, endIndex: piece.endIndex()))
+		end 'eachPiece'
+
+		return Self{text: kept.build(), leaked: leaked}
+	end 'separating'
+
+	module function verdictOver(outcome TestOutcome) returns TestOutcome
+		if self.leaked.isEmpty() 'nothingLeft'
+			return outcome
+		end 'nothingLeft'
+
+		let report = leftRunningReport(CaseSubject, entries: self.leaked)
+
+		return match outcome 'verdict'
+			pass gives TestOutcome.fail(report)
+			fail(reason) gives TestOutcome.fail("{reason}\n{report}")
+			skipped or
+			notRunHere gives outcome
+		end 'verdict'
+	end 'verdictOver'
+end 'StderrAudit'
+
+module function leftRunningReport(subject String, entries StringArray) returns String
+	let count = entries.count()
+	let noun = "process" if count == 1 else "processes"
+
+	return "the {subject} left {count} {noun} running: {joinedWith(entries, separator: DescendantEntrySeparator)}; {LeakVerdictAdvice}"
+end 'leftRunningReport'
+
+module function descendantFramePrintSource() returns String
+	return "printError(\"{descendantsFramePrefix()}\{entry.pid\} \{entry.name\}\\n\")"
+end 'descendantFramePrintSource'
+
+module function descendantTrackingValue(serial ElementIndex) returns String
+	return armedDescendantsValue("{Process.id()}-{serial}")
+end 'descendantTrackingValue'

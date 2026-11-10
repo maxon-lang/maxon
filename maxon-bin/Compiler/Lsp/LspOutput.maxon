@@ -123,13 +123,21 @@ export type LspStdoutWriter
 end 'LspStdoutWriter'
 
 function projectCheckLogText(uri String, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome) returns String
+	return lspLogMessageText("{ProjectCheckLogLead} {uri} {ProjectCheckLogVersionWord} {clientVersionText(clientVersion)} {outcome.rawValue}")
+end 'projectCheckLogText'
+
+function lspLogMessageText(sentence String) returns String
 	var doc = JsonDoc.create()
 	var params = LspJsonObject.create(doc)
 	params.put(LogMessageTypeKey, value: JsonNode.numberNode(LogMessageTypeLog as JsonFloat))
-	params.put(LogMessageTextKey, value: JsonNode.stringNode("{ProjectCheckLogLead} {uri} {ProjectCheckLogVersionWord} {clientVersionText(clientVersion)} {outcome.rawValue}"))
+	params.put(LogMessageTextKey, value: JsonNode.stringNode(sentence))
 
 	return lspNotificationText(doc, method: LogMessageMethod, params: params.finish())
-end 'projectCheckLogText'
+end 'lspLogMessageText'
+
+module function announceLspLog(writer LspStdoutWriter.handle, sentence String)
+	submitToLspWriter(writer, command: LspWriterCommand.write(lspLogMessageText(sentence)))
+end 'announceLspLog'
 
 function clientVersionText(clientVersion ClientDocumentVersion) returns String
 	return match clientVersion 'version'

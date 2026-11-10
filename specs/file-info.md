@@ -141,12 +141,15 @@ not found
 ```maxon
 function main() returns ExitCode
 	let path = FilePath from "test_fi_dir"
-	// Create directory (may already exist from prior run — ignore result)
-	_ = Directory.create(path)
+	if not Directory.create(path) 'created'
+		return 1
+	end 'created'
 	let fi = try File.info(path) otherwise 'e'
+		try Directory.delete(path) otherwise ignore
 		print("info failed")
 		return 2
 	end 'e'
+	try Directory.delete(path) otherwise return 4
 	if fi.isDirectory == false 'dc'
 		print("expected directory")
 		return 3

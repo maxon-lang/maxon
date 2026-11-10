@@ -42,7 +42,7 @@ type StepSession implements DapSession
 end 'StepSession'
 
 test 'next answers at once and stops on the next line, and stepOut lands in the caller'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: StepCaseLabel, fixture: SteppingFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: StepCaseLabel, fixture: SteppingFixtureName)
 	var session = StepSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: InnerLoopAnchor))
 	try dapRunSession(session, completing: "complete the stepping")
 
@@ -53,4 +53,6 @@ test 'next answers at once and stops on the next line, and stepOut lands in the 
 	try Expect.isTrue(session.stepOutAnswered, message: "`{StepOutCommand}` must answer its own request successfully, before the stop arrives")
 	try Expect.equal(session.stepOutReason, expected: StepReason, message: "`{StepOutCommand}`'s stop must say `{StepReason}`; it said `{session.stepOutReason}`")
 	try Expect.equal(dapFrameNameAt(session.framesAfterStepOut, frame: 0), expected: OuterFunctionName, message: "`{StepOutCommand}` from `{InnerFunctionName}` lands in its caller `{OuterFunctionName}`; it landed in {joined(session.framesAfterStepOut, separator: Space)}")
+
+	discardStagedDir(staged)
 end 'next answers at once and stops on the next line, and stepOut lands in the caller'

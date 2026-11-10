@@ -5,12 +5,12 @@
 // Windows a running image can be renamed but not deleted — so the build has to move the held one aside,
 // and a later rebuild has to clear what it moved once nothing holds it.
 
-let StagedDirName = "temp/mcp-rebuild-over-a-running-previous"
+let StagedDirName = "mcp-rebuild-over-a-running-previous"
 let KnownLine = "built over a running previous"
 
 test 'a self-rebuild succeeds while another process runs the previous image, and the next one clears what it moved aside'
-	let dir = stagingDir(StagedDirName)
-	clearStagedFiles(dir)
+	let dir = stagedInTreeDirNamed(StagedDirName)
+	clearStagedTree(dir)
 
 	let imageName = "{CompilerStem}{executableSuffix()}"
 	let previousName = "{CompilerStem}{PreviousInfix}{executableSuffix()}"
@@ -56,4 +56,6 @@ test 'a self-rebuild succeeds while another process runs the previous image, and
 	end 'eachEntry'
 
 	Expect.isEmpty(leftovers, message: "after a self-rebuild with nothing held, {dir.path} may hold only {ProgramFileName}, {imageName}, {imageName}{SidecarSuffix}, {previousName} and {previousName}{SidecarSuffix}. A previous image an earlier build moved aside and nothing holds any longer is the rebuild's to delete; it left:{leftovers}")
+
+	discardStagedDir(dir)
 end 'a self-rebuild succeeds while another process runs the previous image, and the next one clears what it moved aside'

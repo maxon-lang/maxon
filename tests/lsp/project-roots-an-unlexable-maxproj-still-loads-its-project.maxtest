@@ -12,7 +12,7 @@ test 'project roots: a .maxproj the lexer refuses still loads the project it mar
 
 	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(fileUriOf(root.join(UnlexableProjectFileName)), content: UnlexableProjectFileSource))
 
-	discardOutsideCheckoutDir(root)
+	discardStagedDir(root)
 
 	match probe 'probe'
 		answered(projects, _) then requireTheProjectSwept(projects)
@@ -24,6 +24,6 @@ function requireTheProjectSwept(projects ListProjectsResult) throws TestFailure
 	let note = "`{UnlexableProjectFileName}` holds an unterminated string, beside a clean `{UnlexableMainFileName}`. The project file is a program of its own and none of the project's sources, so its text cannot stop the project it marks from loading."
 	let project = try soleProject(projects, note: note)
 
-	try requireProjectRootedAtADirectory(project, expectedTail: outsideCheckoutDirName(UnlexableDirName), note: note)
+	try requireProjectRootedAtADirectory(project, expectedTail: UnlexableDirName, note: note)
 	try Expect.equal(project.fileCount, expected: UnlexableSourceCount, message: "{note} The project reported {project.fileCount} sources: a count of 0 is a project the server announced and never held.")
 end 'requireTheProjectSwept'

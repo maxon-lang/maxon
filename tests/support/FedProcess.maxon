@@ -59,7 +59,7 @@ type FedChild
 	end 'absorbStdoutLine'
 
 	function absorbStderrLine() returns bool
-		match self.child.tryReadStderrLine() 'polled'
+		match try self.child.tryReadStderrLine() otherwise panic("the child's stderr is out with a StderrReader") 'polled'
 			none then return false
 			line(text) then self.stderr.append("{text}{FedLineEnd}")
 		end 'polled'

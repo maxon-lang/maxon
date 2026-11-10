@@ -42,7 +42,6 @@ import platform
 import shlex
 import subprocess
 import sys
-import tempfile
 import time
 
 import bench_common
@@ -568,7 +567,7 @@ def check_rows(rows, expected_arms):
 
 
 def fetch_mac_rows(session, expected_arms):
-    with tempfile.TemporaryDirectory(prefix=MAC_SESSION_PREFIX) as scratch:
+    with bench_common.temp_directory("bench-aes-mac-rows") as scratch:
         destination = pathlib.Path(scratch, pathlib.PurePosixPath(MAC_ROWS_FILE).name)
         mac_script("fetch", session, MAC_ROWS_FILE, destination.as_posix())
         try:

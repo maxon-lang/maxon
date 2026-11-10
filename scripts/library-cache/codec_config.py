@@ -31,7 +31,6 @@ SKIPPED_FIELDS = {
     ("ProgramSignatures", "mintedTupleLayouts"): "StructLayoutArray.create(0)",
     ("ProgramSignatures", "published"): "SettledCellArray.create(0)",
     ("ProgramSignatures", "sharedSettled"): "freeze SettledDeclarations.unused()",
-    ("ProgramSignatures", "readsPublishedView"): "false",
     ("SettledDeclarations", "genericInstanceNameMarker"): "genericInstanceNameMarker()",
     ("SettledDeclarations", "declTokenStreams"): "DeclTokenStreamMap.create()",
     ("VarInfo", "isEnrolled"): "false",

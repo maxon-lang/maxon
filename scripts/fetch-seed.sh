@@ -45,6 +45,7 @@ cd "$repo_root"
 . scripts/lib/archive.sh
 . scripts/lib/checksums.sh
 . scripts/lib/seed.sh
+. scripts/lib/system-temp.sh
 
 tag=""
 target=""
@@ -111,8 +112,8 @@ copy_local_release() {
 	cp "$archive" "$from/$ChecksumsAsset" "$work"
 }
 
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+temp_make dir fetch-seed
+work="$TempMade"
 
 if [ -n "$from" ]; then
 	copy_local_release
@@ -144,6 +145,7 @@ host_target="$(maxon_host_target)"
 
 # Replaced by rename, so a failed copy never leaves a truncated seed where a working one stood.
 mkdir -p "$(dirname "$seed")"
+temp_register "$seed.partial"
 cp "$found" "$seed.partial"
 chmod +x "$seed.partial"
 mv -f "$seed.partial" "$seed"

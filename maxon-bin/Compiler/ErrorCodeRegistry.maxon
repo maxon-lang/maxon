@@ -2697,24 +2697,30 @@ export enum ErrorCode
 	// function pointer returns holding.
 	callRequiresRuntimeLockHeld = "E5006"
 
-	// The previous build output at this path could not be cleared, so this build cannot replace it.
-	// Refused ahead of the write, because the write is logged and swallowed: carrying on would print
-	// "Wrote N bytes" and exit 0 over an untouched STALE binary. Every message states that the previous
-	// binary SURVIVED, so a `;`-chained build-then-test runs the stale one. Two roads reach it, each
-	// naming its own likely cause, because the compiler cannot identify the holder (that would need
-	// RestartManager/NtQuerySystemInformation, imported nowhere here):
-	//   * An ordinary output that is locked (on Windows a RUNNING executable cannot be deleted) or
-	//     read-only. The holder is usually a spec-test or a build of this tree that has not exited; the
-	//     wait-or-kill deadline quoted is `WedgeWatchdogMs` (maxon-bin/Testing/SpecWorkerPool.maxon).
-	//   * A compiler rebuilding its OWN running image that could not RENAME it, or the older `.previous`
-	//     it could neither delete nor rename, out of the way. The message names that file; running it
-	//     does not block a rename, so the holder is something with the file open or a refusing directory.
+	// The build could not replace the previous output at this path. A build writes its output into a
+	// `.staging-<hex>` directory beside it and publishes it by renaming the previous output aside, then
+	// renaming the new one into place; renaming a running program is permitted, so a program still
+	// running from the output is replaced as any other. The message names the road that refused, and
+	// except for the last one below it states that the previous binary is still in place, so a
+	// `;`-chained build-then-test runs the stale one:
+	//   * The output is read-only. Clear its read-only flag and build again.
+	//   * The staging directory could not be created, or an image an interrupted build left in it could
+	//     not be removed. Check that the output's directory is writable and that no file occupies the
+	//     staging directory's path.
+	//   * The previous output could not be renamed aside, or the new build could not be renamed into
+	//     place and the previous output was put back. Something holds the file or its directory open in
+	//     a way that forbids a rename: a program reading, scanning or debugging it.
+	//   * A compiler rebuilding its OWN running image could not rename it, or the older `.previous` it
+	//     could neither delete nor rename, out of the way. The message names that file.
+	//   * The new build could not be renamed into place and the previous output could not be put back.
+	//     The output path holds nothing; the message names where the previous output and the new build
+	//     are, and moving either to the output path by hand restores it.
 	binaryOutputNotReplaceable = "E6002"
 
-	// The backend reported no failure, yet nothing exists at the output path after the write. The
-	// build removed that path before the write, so its ABSENCE afterwards means the writer did not
+	// The backend reported no failure, yet nothing exists at the staged output path after the write.
+	// The staged path is emptied before the write, so its ABSENCE afterwards means the writer did not
 	// produce it -- a swallowed IO failure. A build that cannot say where its output is must not
-	// report success.
+	// report success. The message names the staged path it checked and the output it was for.
 	binaryOutputNotWritten = "E6003"
 
 	// The directory the output goes in does not exist and could not be created. The backend writes the

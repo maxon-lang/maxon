@@ -1,0 +1,38 @@
+let CacheReportLinkCaseDirName = "cache-report-link"
+let LibraryEntriesLinePrefix = "library cache:"
+
+function libraryEntriesReported(report String) returns ReportedTally
+	for line in report.split("\n") 'eachLine'
+		let trimmed = line.trim()
+
+		if not trimmed.startsWith(LibraryEntriesLinePrefix) 'notTheLibraryLine'
+			continue
+		end 'notTheLibraryLine'
+
+		return try reportedTally(trimmed) otherwise panic("{CacheReportLinkCaseDirName}: the library line '{trimmed}' states no count")
+	end 'eachLine'
+
+	panic("{CacheReportLinkCaseDirName}: the report has no '{LibraryEntriesLinePrefix}' line: {report}")
+end 'libraryEntriesReported'
+
+test 'bare cache counts a link planted in the library cache as one entry and not the files it points at'
+	let dir = freshCaseDir(CacheReportLinkCaseDirName)
+	let cacheRoot = cacheRootIn(dir)
+
+	publishCachedBuild(dir, cacheRoot: cacheRoot)
+
+	let before = runWithCacheRoot([CacheCommandWord], cacheRoot: cacheRoot, workingDirectory: dir)
+	let entriesBefore = libraryEntriesReported(before.stdout)
+	Expect.greaterThan(entriesBefore, than: 0, message: "the gate could not run - the cache holds no library entries before the link is planted, so this case cannot tell a counted link from a counted directory. It wrote to stdout: {before.stdout}")
+
+	let planted = plantedLinkInTheLibraryCache(dir)
+
+	let after = runWithCacheRoot([CacheCommandWord], cacheRoot: cacheRoot, workingDirectory: dir)
+	let said = "It wrote to stdout: {after.stdout} and to stderr: {after.stderr}"
+
+	Expect.equal(after.exitCode(), expected: 0, message: "`maxon {CacheCommandWord}` did not succeed over a cache holding a link. {said}")
+	Expect.equal(libraryEntriesReported(after.stdout), expected: entriesBefore + 1, message: "`maxon {CacheCommandWord}` did not count {planted.link.toString()} as the one entry it is: it counted the {planted.outsideFiles.count()} files in {planted.outside.toString()}, which the link points at, instead. {said}")
+	Expect.equal(planted.survivingOutsideFiles(), expected: planted.outsideFiles.count() as ReportedTally, message: "`maxon {CacheCommandWord}` changed the files in {planted.outside.toString()}. {said}")
+
+	discardStagedDir(dir)
+end 'bare cache counts a link planted in the library cache as one entry and not the files it points at'

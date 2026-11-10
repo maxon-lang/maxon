@@ -7,7 +7,7 @@ test 'run_spec_test lists every case it ran, with its status, when cases is true
 	stageSpecFile(dir, specName: RunSpecTestListsCasesOnRequestStagedSpec, cases: cases)
 
 	let answer = callTool("run_spec_test", argumentsJson: "\{\"directory\":{Json.quote(dir.toString())},\"cases\":true,\"maxFailures\":0\}", devMode: true)
-	discardOutsideCheckoutDir(dir)
+	discardStagedDir(dir)
 
 	Expect.equal(joined(payloadArrayFields(answer, key: "cases", field: "spec"), separator: Space), expected: joined([RunSpecTestListsCasesOnRequestStagedSpec, RunSpecTestListsCasesOnRequestStagedSpec, RunSpecTestListsCasesOnRequestStagedSpec], separator: Space), message: "`cases` names the spec of every case it ran. It answered: {toolCallText(answer)}")
 	Expect.equal(joined(payloadArrayFields(answer, key: "cases", field: "test"), separator: Space), expected: joined(["kept", "broken", "also-kept"], separator: Space), message: "`cases` lists every case in run order, whatever `maxFailures` caps. It answered: {toolCallText(answer)}")

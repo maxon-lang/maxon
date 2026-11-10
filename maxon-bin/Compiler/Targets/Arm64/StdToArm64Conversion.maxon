@@ -73,7 +73,7 @@ export let Arm64FlagReturnReg = Arm64Register.x9
 // HERE because x64 never targets macOS, so arm64 is the only backend that needs it; the Linux word is
 // shared. A blanket value would map a FILE on one OS and hand the slab a mapping that is neither
 // anonymous nor zeroed.
-let MmapAnonPrivateMacos = 0x1002  // Darwin: MAP_ANON (0x1000) | MAP_PRIVATE (0x2). arm64-macOS only.
+module let MmapAnonPrivateMacos = 0x1002  // Darwin: MAP_ANON (0x1000) | MAP_PRIVATE (0x2). arm64-macOS only.
 
 // ⭐ **THE ONE PLACE THE `_SC_` NUMBER IS WRITTEN, AND WHY THERE IS NO SECOND ONE.**
 // `_SC_NPROCESSORS_ONLN`, the `sysconf` parameter naming "logical processors currently online", read from
@@ -742,6 +742,7 @@ export type StdToArm64Lowering
 			covPoint or
 			osHostProcess or
 			osPathQuery or
+			osDescendants or
 			osNetpoll or
 			cryptoRoutine or
 			osSocketOverlapped gives 0
@@ -1047,6 +1048,7 @@ export type StdToArm64Lowering
 			cryptoRoutine(resultId, routine, a0Id, a1Id, a2Id, a3Id) then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(cryptoChunkName(routine)), args: fourArgs(a0Id, second: a1Id, third: a2Id, fourth: a3Id), dstRef: dstRef)
 			osCallerJobLimits then panic("StdToArm64Lowering: `osCallerJobLimits` queries the Win32 job the spawning process belongs to and this lane has no job objects — `GtRuntime` emits it only where host text is wide")
 			osSocketOverlapped then panic("StdToArm64Lowering: `osSocketOverlapped` is an OVERLAPPED Winsock transfer and this lane has no Winsock — its sockets are driven by readiness, so `ManagedSocketRuntime.socketWaitShape` answers `polled` and emits none")
+			osDescendants(resultId, verbId, bufId, capId) then self.lowerOsDescendants(resultId, verbId: verbId, bufId: bufId, capId: capId, dstRef: dstRef)
 			osPathQuery(resultId, verb, a0Id, a1Id, a2Id) then self.lowerOsPathQuery(resultId, verb: verb, a0Id: a0Id, a1Id: a1Id, a2Id: a2Id, dstRef: dstRef)
 
 			// One op, no operand, no register: the encoder reaches the counter through the reserved x16/x17
@@ -1279,6 +1281,7 @@ export type StdToArm64Lowering
 			osNetpoll then panic("StdToArm64Lowering: an `osNetpoll` appeared as a block terminator (lowering bug — a poller call produces a value and does not terminate)")
 			cryptoRoutine then panic("StdToArm64Lowering: a `cryptoRoutine` appeared as a block terminator (lowering bug — a crypto routine produces a value and does not terminate)")
 			osSocketOverlapped then panic("StdToArm64Lowering: an `osSocketOverlapped` appeared as a block terminator (lowering bug — a socket transfer produces a value and does not terminate)")
+			osDescendants then panic("StdToArm64Lowering: an `osDescendants` op appeared as a block terminator (lowering bug — a descendant sweep produces a value and does not terminate)")
 			osPathQuery then panic("StdToArm64Lowering: an `osPathQuery` appeared as a block terminator (lowering bug — a path query produces a value and does not terminate)")
 		end 'lower'
 	end 'lowerTerminatorOp'
@@ -2437,6 +2440,10 @@ export type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: mode))
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostFileOpenName), args: ValueIdArray.create(0), dstRef: dstRef)
 	end 'lowerOsFileOpen'
+
+	function lowerOsDescendants(resultId ValueId, verbId ValueId, bufId ValueId, capId ValueId, dstRef ElementIndex)
+		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostProcDescendantsName), args: threeArgs(verbId, second: bufId, third: capId), dstRef: dstRef)
+	end 'lowerOsDescendants'
 
 	function lowerOsPathQuery(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId, dstRef ElementIndex)
 		match verb 'v'

@@ -1,4 +1,4 @@
-let CaseDirName = "temp/mcp-breaking-changes-answers-the-changes-since-a-release"
+let CaseDirName = "mcp-breaking-changes-answers-the-changes-since-a-release"
 let ProjectDirName = "project"
 let CacheRootDirName = "cache"
 let ManifestFileName = "app.maxproj"
@@ -9,8 +9,8 @@ let SinceRelease = "0.1.0"
 let ChangesKey = "changes"
 
 test 'breaking_changes answers the changes since a release, and writes no record'
-	let caseDir = stagingDir(CaseDirName)
-	clearStagedFiles(caseDir)
+	let caseDir = stagedDirNamed(CaseDirName)
+	clearStagedTree(caseDir)
 
 	let project = stagingDir(caseDir.join(ProjectDirName).toString())
 	writeStagedFile(project.join(ManifestFileName), content: ManifestSource)
@@ -42,4 +42,6 @@ test 'breaking_changes answers the changes since a release, and writes no record
 
 	let records = spacedPaths(filesUnderEndingWith(caseDir, suffix: VersionRecordSuffix))
 	Expect.isEmpty(records, message: "`{BreakingChangesTool}` wrote a compiler-version record: {records}")
+
+	discardStagedDir(stagedDirNamed(CaseDirName))
 end 'breaking_changes answers the changes since a release, and writes no record'

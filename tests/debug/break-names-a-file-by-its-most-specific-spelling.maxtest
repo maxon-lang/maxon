@@ -9,7 +9,7 @@ let RoundsTheProgramRuns = 2
 let BreakNamesAFileByItsMostSpecificSpellingContinuesPastEveryStop = 5
 
 test 'a break target names a file by the most specific spelling it was given'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: FileSpellingCaseLabel, fixture: TwoDirsFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: FileSpellingCaseLabel, fixture: TwoDirsFixtureName)
 	let build = spawnBuild(staged, staged: staged, output: staged.join(OutputFileStem), label: TwoDirsFixtureName, extraArguments: StringArray.create(0))
 
 	if build.exitCode() != 0 'didNotBuild'
@@ -44,6 +44,8 @@ test 'a break target names a file by the most specific spelling it was given'
 	let cleared = runSession(executable, staged: staged, commands: appendedCommands(["{BreakCommand} {FirstUtilFile}:{firstLine}", "{BreakCommand} {SecondUtilFile}:{secondLine}", "{ClearCommand} {FirstUtilFile}:{firstLine}", RunCommand], rest: repeatedCommand(ContinueCommand, times: BreakNamesAFileByItsMostSpecificSpellingContinuesPastEveryStop)))
 	try Expect.isEmpty(listedLines(stopsOutside(cleared, expected: SecondFunctionName)), message: "`{ClearCommand} {FirstUtilFile}:{firstLine}` clears `{FirstFunctionName}`'s breakpoint and no other, so every stop is in `{SecondFunctionName}`; the stops outside it were:{listedLines(stopsOutside(cleared, expected: SecondFunctionName))}")
 	try Expect.equal(stopsAtLine(cleared, line: secondLine), expected: RoundsTheProgramRuns, message: "`{SecondFunctionName}`'s breakpoint survives the clear of the other file's and stops {RoundsTheProgramRuns} times. It printed: {listedLines(eventKinds(cleared))}")
+
+	discardStagedDir(staged)
 end 'a break target names a file by the most specific spelling it was given'
 
 function runSession(executable FilePath, staged FilePath, commands StringArray) returns JsonDocArray

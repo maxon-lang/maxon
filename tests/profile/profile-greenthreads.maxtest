@@ -51,7 +51,7 @@ let GreenThreadStackCount = 2
 let MaxRuntimeShareDivisor = 4
 
 test 'two green threads are profiled as themselves and the scheduler is not'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-greenthreads", fixture: GreenThreadsFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-greenthreads", fixture: GreenThreadsFixtureName)
 	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: GreenThreadsFixtureName)
 
 	var pinned = StringArray.create(0)
@@ -92,6 +92,8 @@ test 'two green threads are profiled as themselves and the scheduler is not'
 	Expect.isTrue(reportHasLineStartingWith(lines, prefix: RuntimeLinePrefix), message: "the report carries no '{RuntimeLinePrefix}' line, which states how many samples fell in the runtime's own machinery — a line that is always printed, as zero when there were none. It printed:{LineFeed}{run.stdout}")
 	let counted = runtimeSamples(run.stdout, profilerLabel: TestedCompilerStem)
 	Expect.isTrue(counted * MaxRuntimeShareDivisor <= samples, message: "the report counts {counted} of its {samples} samples in the runtime's own machinery, more than one in {MaxRuntimeShareDivisor}. The fixture's two tasks do arithmetic for the whole run and the scheduler only dispatches between them, so a larger share means the profiler folded the tasks' own samples into the runtime. It printed:{LineFeed}{run.stdout}")
+
+	discardStagedDir(staged)
 end 'two green threads are profiled as themselves and the scheduler is not'
 
 // Both tasks present, and the busier one first — asked of two sections, so it is written once.

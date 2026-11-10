@@ -55,7 +55,7 @@ let InteriorFrameName = "work"
 typealias FoldedPathPosition = int(0 to 1)
 
 test 'collapsed stacks carry every path the fixture runs, whatever floor the tool was given'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-folded", fixture: HotWarmFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-folded", fixture: HotWarmFixtureName)
 	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
 
 	var arguments = profileRunArguments(executableIn(staged, stem: OutputFileStem).toString())
@@ -79,6 +79,8 @@ test 'collapsed stacks carry every path the fixture runs, whatever floor the too
 	let hottest = try paths.get(HottestPathPosition) otherwise panic("profile-folded.test: a list whose count was just asserted has a first element")
 	let root = try hottest.split(FoldedFrameSeparator).get(0) otherwise panic("profile-folded.test: a split always has a first element")
 	Expect.notEqual(root, expected: ProgramEntryFrameName, message: "the collapsed path `{hottest}` opens at `{ProgramEntryFrameName}`, the program's own entry point. Every stack bottoms out in runtime code below it, so a path that starts there has lost the frames the walker had to cross to reach it.")
+
+	discardStagedDir(staged)
 end 'collapsed stacks carry every path the fixture runs, whatever floor the tool was given'
 
 // One path's tail, which is the part of it the FIXTURE decides: `…;main;work;<leaf>`.

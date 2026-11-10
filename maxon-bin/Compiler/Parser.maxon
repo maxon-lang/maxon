@@ -8739,6 +8739,7 @@ let BuiltinsTrustStoreCloseName = b"__Builtins.trustStoreClose"
 // one step less harmful, a clean refusal rather than a panic. See `ProcessRuntime.ProcessCurrentPidName`.
 let BuiltinsCurrentProcessIdName = b"__Builtins.currentProcessId"
 let BuiltinsProcessIsAliveName = b"__Builtins.processIsAlive"
+let BuiltinsProcessEndDescendantsName = b"__Builtins.processEndDescendants"
 
 // ⭐⭐ **`__Builtins.gtIsComplete(gt)` — THE NON-BLOCKING PEEK AT A GREEN THREAD'S STATUS.** `await`
 // drives the scheduler until ONE named promise finishes, so a dispatcher holding N of them cannot
@@ -9171,6 +9172,7 @@ let TrustStoreCursorArity = 2
 // the shape is the fact.)
 let CurrentProcessIdArity = 0
 let ProcessIsAliveArity = 1
+let ProcessEndDescendantsArity = 2
 
 // `gtIsComplete(gt)` takes exactly one machine word — the green-thread handle. Stated here for
 // `CommandLineArgArity`'s reason, and as its own constant for `CurrentProcessIdArity`'s.
@@ -97340,6 +97342,10 @@ export type Parser
 				return self.emitRuntimeCall(ProcessAliveName, args: argsOf(probed), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
 			end 'processIsAlive'
 
+			if callee.equals(BuiltinsProcessEndDescendantsName) 'processEndDescendants'
+				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: ProcessEndDescendantsTextName, arity: ProcessEndDescendantsArity, shape: IntrinsicArgShape.cstringFirst, resultTag: ValueTypeTag.integer, resultAlias: FullRangeIntAliasName, resultUsed: resultUsed, calleeTok: anchor, resultIsMachineWord: true)
+			end 'processEndDescendants'
+
 			// ⭐ **THE TWO CPU-PARALLEL QUERIES**, beside the checkpoint they share a family with. Both answer
 			// an `int` and take nothing, so both take the argumentless-integer emit above — the same door the
 			// pid takes, and the reason that door exists. What differs between them is not visible here and
@@ -98141,7 +98147,12 @@ export type Parser
 				continue
 			end 'compileTimeConstant'
 
-			try self.requireIntrinsicMachineWordArg(arg, callee: callee, calleeTok: calleeTok)
+			if rawArgumentIsTheBuffer(shape, position: position as ParamCount) 'bufferAddress'
+				try self.requireRawBufferAddressArg(arg, callee: callee, calleeTok: calleeTok)
+			end 'bufferAddress' else 'machineWord'
+				try self.requireIntrinsicMachineWordArg(arg, callee: callee, calleeTok: calleeTok)
+			end 'machineWord'
+
 			words.push(arg)
 		end 'eachArgument'
 
@@ -98184,6 +98195,7 @@ export type Parser
 			osGetPid or
 			osEnterBackgroundPriority or
 			osProcessProbe or
+			osDescendants or
 			osWaitHandle or
 			osCloseHandle or
 			osExit or
@@ -99082,6 +99094,14 @@ export type Parser
 			throw SourceParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(arg), line: calleeTok.line, column: calleeTok.column)
 		end 'notAMachineWord'
 	end 'requireIntrinsicMachineWordArg'
+
+	function requireRawBufferAddressArg(arg ValueId, callee ByteArray, calleeTok Token) throws SourceParseError
+		if self.tagOf(arg) == ValueTypeTag.cstring 'aCString'
+			return
+		end 'aCString'
+
+		try self.requireIntrinsicMachineWordArg(arg, callee: callee, calleeTok: calleeTok)
+	end 'requireRawBufferAddressArg'
 
 	// ⭐⭐ **`__Builtins.awaitAny(promises)` — DRIVE THE SCHEDULER UNTIL ANY OF THEM HAS COMPLETED, AND ANSWER
 	// WHICH.** It emits no `MaxonOp.call` to a user function: it routes to `__gt_await_any`, the shared

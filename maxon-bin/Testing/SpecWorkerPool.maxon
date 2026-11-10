@@ -266,9 +266,7 @@ let JobKillGraceMs = 50
 // The headroom the pool's idleness bound keeps over the interval it measures. The two guards are
 // disjoint: a busy slot still inside its progress bound resets the idleness clock (see the dispatch
 // loop), so this grace covers only the interval after every outstanding job has been given up on,
-// an EOF propagating back through the runtime and a drain completing, which is milliseconds. It is
-// three minutes because `E6002` also quotes the number at an operator, where wide is the safe
-// direction.
+// an EOF propagating back through the runtime and a drain completing, which is milliseconds.
 let WedgeWatchdogGraceMs = 180 * MillisecondsPerSecond
 
 // ⭐ **HOW LONG THIS SLOT'S WORKER MAY STAY SILENT — the step bound, plus whatever this LANE makes one
@@ -337,12 +335,7 @@ end 'progressDeadlineMs'
 // making progress does not deadlock loudly, it re-scans forever, and an unattended gate is then
 // indistinguishable from a slow one. A loud failure is retryable and diagnosable; a silent hang is
 // neither, whatever caused the wedge.
-//
-// Exported because it is also the only bound on an abandoned run's lifetime, so it is the number
-// `E6002` quotes when it tells an operator whether to wait or to kill (see
-// `Compiler.discardPreviousOutput`). Quoted, not re-spelled: a prose "~5 min" there would be a
-// second copy of this sum, free to drift.
-export let WedgeWatchdogMs = SpecSpawnTimeoutMs + WedgeWatchdogGraceMs
+let WedgeWatchdogMs = SpecSpawnTimeoutMs + WedgeWatchdogGraceMs
 
 // How long a worker gets to exit after it has been sent EXIT and had its stdin closed. By the time
 // `shutdownPool` runs, every worker has already printed its last WORKER_READY and is parked on a
@@ -660,7 +653,7 @@ end 'popHeaviestJob'
 // job included. Print none and the parent waits forever on a line that is never coming; print two
 // and the next job's drain ends early, with that job's records read as the job after it. A blank
 // line, which consumed no job, therefore owes no READY. All three READY sites are below.
-export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns ExitCode
+export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, runWorkingDir FilePath) returns ExitCode
 	silenceCompilerLogging()
 
 	var stdin = Console.stdin()
@@ -691,7 +684,7 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 			let prefix = jobPrefixOf(runs)
 
 			if job.startsWith(prefix) 'thisKind'
-				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos)
+				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos, runWorkingDir: runWorkingDir)
 				ran = true
 				break
 			end 'thisKind'
@@ -745,8 +738,8 @@ end 'silenceCompilerLogging'
 // when it dies, so panicking routes this diagnostic through `abortOnDeadWorker`, which prints it.
 // Returning quietly instead would leave the parent to notice a missing record and abort with no
 // idea why.
-function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap)
-	let run = try runOneSpec(specDir, specName: specName, runs: runs, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos) otherwise (e) 'specFailed'
+function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap, runWorkingDir FilePath)
+	let run = try runOneSpec(specDir, specName: specName, runs: runs, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos, runWorkingDir: runWorkingDir) otherwise (e) 'specFailed'
 		reportCompileError(e)
 		panic("spec worker: could not run spec '{specName}' — see the error above")
 	end 'specFailed'
@@ -913,7 +906,7 @@ end 'decodeRecordPayload'
 //
 // It deliberately does NOT trim: what follows a FAIL record's markers is the failure reason
 // VERBATIM, and trimming it would quietly rewrite the text a spec author reads.
-function sliceAfterPrefix(line String, prefix String) returns String
+module function sliceAfterPrefix(line String, prefix String) returns String
 	var pos = line.startIndex()
 
 	for _ in 0 upto prefix.byteLength() 'skipPrefix'
@@ -1343,6 +1336,8 @@ type PersistentWorkerHandle
 		if targetToString(effectiveTarget) != targetToString(detectHostTarget()) 'nonHostTarget'
 			argv.push("{TargetFlagPrefix}{targetToString(effectiveTarget)}")
 		end 'nonHostTarget'
+
+		argv.push("{WorkerRunDirFlagPrefix}{specRunWorkingDir().filename()}")
 
 		let child = try StreamingSubprocess.spawn(Executable.path(harnessExe), arguments: argv)
 		return Self{child: child, workerId: workerId}
@@ -1824,8 +1819,8 @@ end 'reportDeadWorker'
 
 // `1234` as `1.2 s`. The wedge report's numbers span three orders of magnitude — a slot re-dispatched
 // milliseconds ago sits beside one outstanding for two minutes — and a raw millisecond count buries
-// the only digit that separates them. Exported for the same reason `WedgeWatchdogMs` is: `E6002`
-// quotes that deadline at an operator, and an operator-facing duration has exactly one spelling here.
+// the only digit that separates them. Exported so the compiler's own operator-facing durations have
+// this one spelling.
 export function formatSeconds(ms DurationMs) returns String
 	let whole = ms / MillisecondsPerSecond
 
@@ -2270,6 +2265,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	let failedWorkers = shutdownPool(workers) + deadWorkers
 	let results = concatBuckets(buckets)
 	let harnessErrors = concatHarnessErrors(harnessBuckets)
+	settleRunWorkingDir(harnessErrors)
 
 	// The indicator covers EVERY test this run reported, or it is not an indicator of this run. Each
 	// test contributes exactly one reading (`SpecTestRunner.TestRun` carries the verdict and the cost
@@ -2326,10 +2322,51 @@ function prepareSharedDirs(specDir FilePath) throws CompileError
 	// nobody chose.
 	let runWorkingDir = specRunWorkingDir()
 
+	let endedRuns = try endedRunDirectories(Directory.currentPath(), prefix: RunWorkingDirOwnedPrefix, own: specRunWorkingDir().filename()) otherwise (e) 'checkoutUnlistable'
+		printError("error: could not list {Directory.currentPath().toString()} to find the working directories that spec runs which have ended left there: {e.name}\n")
+		throw CompileError.directoryNotFound(Directory.currentPath().path)
+	end 'checkoutUnlistable'
+
+	for ended in endedRuns 'eachEndedRun'
+		for stuck in Directory.removeTree(ended) 'eachEndedStuck'
+			printError("warning: could not remove {stuck.toString()}, which a spec run that has ended left in the checkout\n")
+		end 'eachEndedStuck'
+	end 'eachEndedRun'
+
+	let stale = Directory.removeContents(runWorkingDir)
+
+	for stuck in stale 'eachStuck'
+		printError("error: could not remove {stuck.toString()}, which an earlier run left in the cases' working directory\n")
+	end 'eachStuck'
+
+	if not stale.isEmpty() 'staleStays'
+		throw CompileError.directoryNotFound(runWorkingDir.path)
+	end 'staleStays'
+
 	if not Directory.create(runWorkingDir) 'noRunWorkingDir'
 		throw CompileError.directoryNotFound(runWorkingDir.path)
 	end 'noRunWorkingDir'
 end 'prepareSharedDirs'
+
+function settleRunWorkingDir(harnessErrors StringArray)
+	let runWorkingDir = specRunWorkingDir()
+
+	for leftover in leftoversIn(runWorkingDir, label: RunWorkingDirPrefix) 'eachLeftover'
+		harnessErrors.push(leftover)
+	end 'eachLeftover'
+
+	for stuck in Directory.removeContents(runWorkingDir) 'eachStuck'
+		harnessErrors.push("could not remove {stuck.toString()}")
+	end 'eachStuck'
+
+	try Directory.delete(runWorkingDir) otherwise (refusal) 'stillHeld'
+		match refusal 'why'
+			notFound then return
+			notEmpty or
+			deleteFailed then harnessErrors.push("could not remove {runWorkingDir.toString()}, the cases' working directory, after emptying it: {refusal.name}")
+		end 'why'
+	end 'stillHeld'
+end 'settleRunWorkingDir'
 
 // Two-phase startup: fire all N spawns back to back, THEN drain the N hellos.
 //

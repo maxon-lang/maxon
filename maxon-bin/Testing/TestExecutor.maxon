@@ -22,6 +22,16 @@
 // What a test that was still running when its process hit the deadline reports.
 let KilledByDeadlineText = "still running when the process hit its deadline, and was killed"
 
+let LeftAloneText = "the test passed but its scratch directories were not left clean; remove what a test creates there before it ends:"
+
+let LeftTogetherText = "these tests passed, but the process that ran them left entries in its scratch directories, and no single test left them when run alone; look for a test whose cleanup depends on what another test in the process did:"
+
+let RunningTogetherText = "these tests passed, but the process that ran them left processes running after its last test ended, and no single test left them when run alone; look for a test whose processes outlive it, and wait for every process a test starts before it ends:"
+
+let LeakedTogetherText = "these tests passed, but the process that ran them reported a memory leak, and no single test leaked when run alone; look for a test whose cleanup depends on what another test in the process did"
+
+let TestsInProcessPrefix = "tests in that process: "
+
 // What a re-run reports when a process died before reaching any test at all.
 let NothingStartedText = "the process died before this test began, and re-running the remainder made no progress"
 
@@ -51,10 +61,15 @@ export type TestLaunchPlan
 	// SHARD — which by default is a whole file — so it is a budget a file's tests share, and `--isolate`
 	// is what gives every test the full budget to itself.
 	export let timeoutMs as DurationMs
+	export let tracksDescendants as bool
 
-	export static function create(binary FilePath, timeoutMs DurationMs) returns TestLaunchPlan
-		return Self{binary: binary, timeoutMs: timeoutMs}
+	export static function create(binary FilePath, timeoutMs DurationMs, tracksDescendants bool) returns TestLaunchPlan
+		return Self{binary: binary, timeoutMs: timeoutMs, tracksDescendants: tracksDescendants}
 	end 'create'
+
+	module function buildDirectory() returns FilePath
+		return try self.binary.parent() otherwise panic("TestLaunchPlan: the test binary {self.binary.toString()} has no directory, and it is built inside one")
+	end 'buildDirectory'
 end 'TestLaunchPlan'
 
 // How many failures `--bail` allows before the run stops claiming work. A UNION and not a count with
@@ -115,7 +130,7 @@ end 'TestRunProgress'
 // runs it by hand. Nothing in this command changes directory. `tests/testCommand/` locates its
 // fixtures relative to the checkout root and breaks silently if this changes.
 function launchTests(plan TestLaunchPlan, indices TestRunIndexArray) returns SelectedLaunch
-	return launchSelected(Executable.path(plan.binary), leadingArguments: StringArray.create(0), indices: indices, timeoutMs: plan.timeoutMs, workingDirectory: inheritedWorkingDirectory())
+	return launchSelected(Executable.path(plan.binary), leadingArguments: StringArray.create(0), indices: indices, timeoutMs: plan.timeoutMs, workingDirectory: inheritedWorkingDirectory(), projectScratchRoot: plan.buildDirectory(), tracksDescendants: plan.tracksDescendants)
 end 'launchTests'
 
 // The two facts attribution reads off a launch that actually produced a stream.
@@ -131,16 +146,18 @@ type AttributableLaunch
 	// What to say when the LAUNCH itself was the failure.
 	export let launchProblem as StatedText
 
-	static function create(stderr String, leaked bool, launchProblem StatedText) returns AttributableLaunch
-		return Self{stderr: stderr, leaked: leaked, launchProblem: launchProblem}
+	export let leftovers as StringArray
+
+	static function create(stderr String, leaked bool, launchProblem StatedText, leftovers StringArray) returns AttributableLaunch
+		return Self{stderr: stderr, leaked: leaked, launchProblem: launchProblem, leftovers: leftovers}
 	end 'create'
 end 'AttributableLaunch'
 
 function attributableLaunch(launch SelectedLaunch) returns AttributableLaunch
 	match launch 'how'
-		ran(exitCode, _, stderr) then return AttributableLaunch.create(stderr, leaked: isLeakDetectedExit(exitCode as ExitCode), launchProblem: StatedText.unstated)
+		ran(exitCode, _, stderr, leftovers) then return AttributableLaunch.create(stderr, leaked: isLeakDetectedExit(exitCode as ExitCode), launchProblem: StatedText.unstated, leftovers: leftovers)
 		deadlineExpired then panic("attributableLaunch: a launch killed at its deadline never reaches attribution — `executeShard` answers that arm first, which never attributes a killed process's partial stream")
-		couldNotStart(reason) then return AttributableLaunch.create("", leaked: false, launchProblem: StatedText.stated("{CouldNotLaunchPrefix}{reason}"))
+		couldNotStart(reason) then return AttributableLaunch.create("", leaked: false, launchProblem: StatedText.stated("{CouldNotLaunchPrefix}{reason}"), leftovers: StringArray.create(0))
 	end 'how'
 end 'attributableLaunch'
 
@@ -168,9 +185,10 @@ type ObservedTest
 	export let thrown as ThrownReport
 	export let output as String
 	export let wroteOutput as bool
+	export let leftRunning as StringArray
 
-	static function create(index ElementIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output String, wroteOutput bool) returns ObservedTest
-		return Self{index: index, ended: ended, passed: passed, nanos: nanos, thrown: thrown, output: output, wroteOutput: wroteOutput}
+	static function create(index ElementIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output String, wroteOutput bool, leftRunning StringArray) returns ObservedTest
+		return Self{index: index, ended: ended, passed: passed, nanos: nanos, thrown: thrown, output: output, wroteOutput: wroteOutput, leftRunning: leftRunning}
 	end 'create'
 end 'ObservedTest'
 
@@ -195,9 +213,12 @@ type TestStreamWalk
 	var inFlightNanos as DurationNanos
 	var inFlightThrown as ThrownReport
 	var inFlightOutput as StreamLines
+	var inFlightLeft as StringArray
+
+	var leftAtExit as StringArray
 
 	static function create() returns TestStreamWalk
-		return Self{stray: StreamLines.create(), inFlight: false, inFlightIndex: 0, inFlightEnded: false, inFlightPassed: false, inFlightNanos: 0, inFlightThrown: ThrownReport.absent, inFlightOutput: StreamLines.create()}
+		return Self{stray: StreamLines.create(), inFlight: false, inFlightIndex: 0, inFlightEnded: false, inFlightPassed: false, inFlightNanos: 0, inFlightThrown: ThrownReport.absent, inFlightOutput: StreamLines.create(), inFlightLeft: StringArray.create(0), leftAtExit: StringArray.create(0)}
 	end 'create'
 
 	// A begin marker. Whatever was already running is closed first — a begin with no matching end is
@@ -212,6 +233,7 @@ type TestStreamWalk
 		inFlightNanos = 0
 		inFlightThrown = ThrownReport.absent
 		inFlightOutput = StreamLines.create()
+		inFlightLeft = StringArray.create(0)
 	end 'began'
 
 	// An end marker. One for a test that did not begin — or for the wrong one — is IGNORED: the
@@ -238,12 +260,26 @@ type TestStreamWalk
 	end 'threw'
 
 	function wrote(text String)
+		let audit = StderrAudit.separating(text)
+
+		for entry in audit.leaked 'eachLeftRunning'
+			if inFlight 'aTestLeftIt'
+				inFlightLeft.push(entry)
+			end 'aTestLeftIt' else 'theProcessLeftIt'
+				leftAtExit.push(entry)
+			end 'theProcessLeftIt'
+		end 'eachLeftRunning'
+
+		if not audit.leaked.isEmpty() and audit.text.isEmpty() 'onlyAFrame'
+			return
+		end 'onlyAFrame'
+
 		if not inFlight 'belongsToNoTest'
-			stray.add(text)
+			stray.add(audit.text)
 			return
 		end 'belongsToNoTest'
 
-		inFlightOutput.add(text)
+		inFlightOutput.add(audit.text)
 	end 'wrote'
 
 	// The stream ended, and this is the walk's PRODUCT. Whatever was still running is closed
@@ -251,7 +287,7 @@ type TestStreamWalk
 	function finish(observed ObservedTestArray) returns TestStreamResult
 		closeInFlight(observed)
 
-		return TestStreamResult.create(observed, stray: stray.text())
+		return TestStreamResult.create(observed, stray: stray.text(), leftAtExit: leftAtExit)
 	end 'finish'
 
 	function closeInFlight(observed ObservedTestArray)
@@ -259,7 +295,7 @@ type TestStreamWalk
 			return
 		end 'nothingRunning'
 
-		observed.push(ObservedTest.create(inFlightIndex, ended: inFlightEnded, passed: inFlightPassed, nanos: inFlightNanos, thrown: inFlightThrown, output: inFlightOutput.text(), wroteOutput: inFlightOutput.wroteAny()))
+		observed.push(ObservedTest.create(inFlightIndex, ended: inFlightEnded, passed: inFlightPassed, nanos: inFlightNanos, thrown: inFlightThrown, output: inFlightOutput.text(), wroteOutput: inFlightOutput.wroteAny(), leftRunning: inFlightLeft))
 		inFlight = false
 	end 'closeInFlight'
 end 'TestStreamWalk'
@@ -291,9 +327,10 @@ end 'StreamLines'
 type TestStreamResult
 	export let observed as ObservedTestArray
 	export let stray as String
+	export let leftAtExit as StringArray
 
-	static function create(observed ObservedTestArray, stray String) returns TestStreamResult
-		return Self{observed: observed, stray: stray}
+	static function create(observed ObservedTestArray, stray String, leftAtExit StringArray) returns TestStreamResult
+		return Self{observed: observed, stray: stray, leftAtExit: leftAtExit}
 	end 'create'
 end 'TestStreamResult'
 
@@ -368,8 +405,10 @@ function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected Test
 	end 'eachExpectedTest'
 
 	let attributed = withLeakAttribution(plan, results: settled, leaked: attributable.leaked)
+	let scratched = withUnattributedEntries(plan, results: attributed, found: attributable.leftovers, fault: ProcessFault.leftEntries(attributable.leftovers), everyTestObserved: unobserved.isEmpty())
+	let unreaped = withUnattributedEntries(plan, results: scratched, found: observed.leftAtExit, fault: ProcessFault.leftProcesses(observed.leftAtExit), everyTestObserved: unobserved.isEmpty())
 
-	return ShardStep.create(attributed, unobserved: unobserved, stray: stray)
+	return ShardStep.create(unreaped, unobserved: unobserved, stray: stray)
 end 'attributeLaunch'
 
 // ⭐ **ONE TEST'S VERDICT, FROM ITS MARKERS.** A test that ended reports what it said; one that began
@@ -379,6 +418,11 @@ function resultFor(group TestFileGroup, observation ObservedTest, stray String) 
 
 	if observation.ended 'finishedUnderItsOwnPower'
 		let outcome = UnitTestOutcome.passed if observation.passed else UnitTestOutcome.failed
+
+		if not observation.leftRunning.isEmpty() 'itLeftProcesses'
+			return UnitTestResult.create(observation.index, test: test, outcome: UnitTestOutcome.failed, nanos: observation.nanos, thrown: observation.thrown, output: withLeftRunningReported(observation))
+		end 'itLeftProcesses'
+
 		return UnitTestResult.create(observation.index, test: test, outcome: outcome, nanos: observation.nanos, thrown: observation.thrown, output: observation.output)
 	end 'finishedUnderItsOwnPower'
 
@@ -389,52 +433,188 @@ function resultFor(group TestFileGroup, observation ObservedTest, stray String) 
 	return UnitTestResult.create(observation.index, test: test, outcome: UnitTestOutcome.crashed, nanos: 0, thrown: observation.thrown, output: output)
 end 'resultFor'
 
-// ⭐⭐ **A LEAK IS DETECTED PROCESS-GLOBALLY AND NAMES NOBODY**, so with more than one test in the
-// process there is no evidence to reason from and each PASSING test is re-run alone — the only thing
-// that turns a process-global signal into a test-level one. A test that already FAILED keeps its
-// failure: the assertion is the actionable report, and a leak on the way out of a failing test is a
-// consequence of it.
+function withLeftRunningReported(observation ObservedTest) returns String
+	let report = leftRunningReport(TestReportSubject, entries: observation.leftRunning)
+
+	if observation.output.isEmpty() 'nothingElseToShow'
+		return report
+	end 'nothingElseToShow'
+
+	return "{observation.output}\n{report}"
+end 'withLeftRunningReported'
+
 function withLeakAttribution(plan TestLaunchPlan, results UnitTestResultArray, leaked bool) returns UnitTestResultArray
+	if not leaked 'nothingLeaked'
+		return results
+	end 'nothingLeaked'
+
+	return withProcessFaultAttribution(plan, results: results, fault: ProcessFault.leaked)
+end 'withLeakAttribution'
+
+function withUnattributedEntries(plan TestLaunchPlan, results UnitTestResultArray, found StringArray, fault ProcessFault, everyTestObserved bool) returns UnitTestResultArray
+	if found.isEmpty() or not everyTestObserved or not everyResultPassed(results) 'nothingToAttribute'
+		return results
+	end 'nothingToAttribute'
+
+	return withProcessFaultAttribution(plan, results: results, fault: fault)
+end 'withUnattributedEntries'
+
+union ProcessFault
+	leaked
+	leftEntries(leftovers StringArray)
+	leftProcesses(running StringArray)
+end 'ProcessFault'
+
+union AloneRun
+	clean
+	reproduced(fault ProcessFault)
+end 'AloneRun'
+
+// ⭐⭐ **A LEAK, A SCRATCH LEFTOVER OR A PROCESS LEFT AT EXIT IS DETECTED PROCESS-GLOBALLY AND NAMES
+// NOBODY**, so with more than one test in the process there is no evidence to reason from and each
+// PASSING test is re-run alone — the only thing that turns a process-global signal into a test-level
+// one. A test that already FAILED keeps its failure: the assertion is the actionable report, and a fault
+// on the way out of a failing test is a consequence of it. When no test reproduces the fault alone,
+// every test of the process fails together: the fault is real, so passing them all would hide it.
+function withProcessFaultAttribution(plan TestLaunchPlan, results UnitTestResultArray, fault ProcessFault) returns UnitTestResultArray
 	let onlyCandidate = results.count() == 1
+	var reproducedAlone = false
 
 	var updated = UnitTestResultArray.create(results.count(), zeroed: false)
 
 	for result in results 'eachResult'
-		if not leaked or result.outcome != UnitTestOutcome.passed 'keepsItsVerdict'
+		if result.outcome != UnitTestOutcome.passed 'keepsItsVerdict'
 			updated.push(result)
 			continue
 		end 'keepsItsVerdict'
 
 		if onlyCandidate 'theOnlyTestInThatProcess'
-			updated.push(asLeaked(result))
+			updated.push(withFault(result, fault: fault))
 			continue
 		end 'theOnlyTestInThatProcess'
 
-		if leakedAlone(plan, index: result.index) 'leakedOnItsOwn'
-			updated.push(asLeaked(result))
-			continue
-		end 'leakedOnItsOwn'
-
-		updated.push(result)
+		let alone = faultWhenRunAlone(plan, index: result.index, fault: fault)
+		reproducedAlone = reproducedAlone or reproduces(alone)
+		updated.push(resultAfter(result, alone: alone))
 	end 'eachResult'
 
+	if blamesTheProcess(results, reproducedAlone: reproducedAlone) 'noTestToBlame'
+		return failedTogether(results, fault: fault)
+	end 'noTestToBlame'
+
 	return updated
-end 'withLeakAttribution'
+end 'withProcessFaultAttribution'
 
-function asLeaked(result UnitTestResult) returns UnitTestResult
-	return UnitTestResult.create(result.index, test: result.test, outcome: UnitTestOutcome.leaked, nanos: result.nanos, thrown: result.thrown, output: result.output)
-end 'asLeaked'
+function blamesTheProcess(results UnitTestResultArray, reproducedAlone bool) returns bool
+	return not reproducedAlone and results.count() > 1 and everyResultPassed(results)
+end 'blamesTheProcess'
 
-function leakedAlone(plan TestLaunchPlan, index ElementIndex) returns bool
+function failedTogether(results UnitTestResultArray, fault ProcessFault) returns UnitTestResultArray
+	let outcome = togetherOutcome(fault)
+	let report = togetherReport(fault, results: results)
+	var failed = UnitTestResultArray.create(results.count(), zeroed: false)
+
+	for result in results 'eachResult'
+		failed.push(UnitTestResult.create(result.index, test: result.test, outcome: outcome, nanos: result.nanos, thrown: result.thrown, output: report))
+	end 'eachResult'
+
+	return failed
+end 'failedTogether'
+
+function togetherOutcome(fault ProcessFault) returns UnitTestOutcome
+	return match fault 'which'
+		leaked gives UnitTestOutcome.leaked
+		leftEntries or
+		leftProcesses gives UnitTestOutcome.failed
+	end 'which'
+end 'togetherOutcome'
+
+function togetherReport(fault ProcessFault, results UnitTestResultArray) returns String
+	return match fault 'which'
+		leaked gives withTestsListed(LeakedTogetherText, results: results)
+		leftEntries(leftovers) gives scratchLeftoverReport(withTestsListed(LeftTogetherText, results: results), leftovers: leftovers)
+		leftProcesses(running) gives scratchLeftoverReport(withTestsListed(RunningTogetherText, results: results), leftovers: running)
+	end 'which'
+end 'togetherReport'
+
+function testNamesOf(results UnitTestResultArray) returns StringArray
+	var names = StringArray.create(results.count(), zeroed: false)
+
+	for result in results 'eachResult'
+		names.push(result.test.displayName)
+	end 'eachResult'
+
+	return names
+end 'testNamesOf'
+
+function withTestsListed(headline String, results UnitTestResultArray) returns String
+	return "{headline}\n{TestsInProcessPrefix}{joinedWith(testNamesOf(results), separator: ListSeparator)}"
+end 'withTestsListed'
+
+function withFault(result UnitTestResult, fault ProcessFault) returns UnitTestResult
+	return match fault 'which'
+		leaked gives UnitTestResult.create(result.index, test: result.test, outcome: UnitTestOutcome.leaked, nanos: result.nanos, thrown: result.thrown, output: result.output)
+		leftEntries(leftovers) gives UnitTestResult.create(result.index, test: result.test, outcome: UnitTestOutcome.failed, nanos: result.nanos, thrown: result.thrown, output: scratchLeftoverReport(LeftAloneText, leftovers: leftovers))
+		leftProcesses(running) gives UnitTestResult.create(result.index, test: result.test, outcome: UnitTestOutcome.failed, nanos: result.nanos, thrown: result.thrown, output: leftRunningReport(TestReportSubject, entries: running))
+	end 'which'
+end 'withFault'
+
+function reproduces(alone AloneRun) returns bool
+	return match alone 'verdict'
+		clean gives false
+		reproduced gives true
+	end 'verdict'
+end 'reproduces'
+
+function resultAfter(result UnitTestResult, alone AloneRun) returns UnitTestResult
+	return match alone 'verdict'
+		clean gives result
+		reproduced(fault) gives withFault(result, fault: fault)
+	end 'verdict'
+end 'resultAfter'
+
+function everyResultPassed(results UnitTestResultArray) returns bool
+	for result in results 'eachResult'
+		if result.isFailure() 'notGreen'
+			return false
+		end 'notGreen'
+	end 'eachResult'
+
+	return true
+end 'everyResultPassed'
+
+function faultWhenRunAlone(plan TestLaunchPlan, index ElementIndex, fault ProcessFault) returns AloneRun
 	return match launchTests(plan, indices: soleIndex(index)) 'how'
-		ran(exitCode, _, _) gives isLeakDetectedExit(exitCode as ExitCode)
+		ran(exitCode, _, stderr, leftovers) gives faultOfAloneRun(fault, exitCode: exitCode as ExitCode, stderr: stderr, leftovers: leftovers)
 
-		// A test that hangs or cannot start when run alone showed no leak; whatever verdict the shard
+		// A test that hangs or cannot start when run alone showed no fault; whatever verdict the shard
 		// gave it stands.
 		deadlineExpired or
-		couldNotStart gives false
+		couldNotStart gives AloneRun.clean
 	end 'how'
-end 'leakedAlone'
+end 'faultWhenRunAlone'
+
+function faultOfAloneRun(fault ProcessFault, exitCode ExitCode, stderr String, leftovers StringArray) returns AloneRun
+	return match fault 'which'
+		leaked gives AloneRun.reproduced(ProcessFault.leaked) if isLeakDetectedExit(exitCode) else AloneRun.clean
+		leftEntries gives reproducedOnSuccess(ProcessFault.leftEntries(leftovers), exitCode: exitCode)
+		leftProcesses gives reproducedOnSuccess(ProcessFault.leftProcesses(StderrAudit.separating(stderr).leaked), exitCode: exitCode)
+	end 'which'
+end 'faultOfAloneRun'
+
+function reproducedOnSuccess(fault ProcessFault, exitCode ExitCode) returns AloneRun
+	let found = match fault 'which'
+		leftEntries(leftovers) gives leftovers
+		leftProcesses(running) gives running
+		leaked panic("reproducedOnSuccess: a leak is read off the exit code, not off what the run left")
+	end 'which'
+
+	if exitSucceeded(exitCode) and not found.isEmpty() 'reproduced'
+		return AloneRun.reproduced(fault)
+	end 'reproduced'
+
+	return AloneRun.clean
+end 'reproducedOnSuccess'
 
 // ============================================================================================
 // SHARDS

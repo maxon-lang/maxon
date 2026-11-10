@@ -1,0 +1,44 @@
+let CrashCaseDirName = "relay-crash"
+let CrashDocumentName = "one.maxon"
+let CrashDocumentText = "crashing"
+let CrashReportNeedle = "is not served until it is rebuilt"
+
+test 'relay: a compiler that crashes mid-session leaves the checkout unserved until its slot changes'
+	let caseDir = stagedRelayCase(CrashCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	var client = LspClient.start()
+
+	if let observed = try crashedThenReplaced(client, caseDir: caseDir) 'observed'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.equal(observed.0, expected: "{RelayContentModifiedCode}", message: "the request in flight when the compiler crashed was not refused with the LSP ContentModified code.")
+		try Expect.contains(observed.1, needle: CrashReportNeedle, message: "the client was not told the compiler had ended.")
+		try Expect.equal(observed.2, expected: "{RelayContentModifiedCode}", message: "a request made after the compiler crashed was not refused with the LSP ContentModified code.")
+		try Expect.equal(observed.3, expected: "generation 2 saw: {CrashDocumentText}", message: "the compiler put in the slot after the crash did not take over the open document.")
+	end 'observed' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a compiler that crashes mid-session leaves the checkout unserved until its slot changes'
+
+function crashedThenReplaced(client LspClient, caseDir FilePath) returns (String, String, String, String) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(CrashDocumentName))
+	_ = try client.initializeAtRoot(relayCheckout(caseDir))
+
+	try client.initialized()
+	try client.openDocument(uri, content: CrashDocumentText)
+	_ = try awaitFakePublish(client, uri: uri, generation: 1, text: CrashDocumentText)
+
+	armRelayCrashOnHover(caseDir)
+
+	let inFlight = try relayHoverRefusal(client, uri: uri)
+	let report = try client.awaitLogMessage(CrashReportNeedle, polled: uri)
+	let afterwards = try relayHoverRefusal(client, uri: uri)
+
+	replaceRelaySlot(caseDir, generation: 2)
+
+	let recovered = relayFirstMessage(try awaitFakePublish(client, uri: uri, generation: 2, text: CrashDocumentText))
+
+	return (inFlight, report, afterwards, recovered)
+end 'crashedThenReplaced'

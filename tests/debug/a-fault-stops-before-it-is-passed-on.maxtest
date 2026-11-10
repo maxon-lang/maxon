@@ -1,7 +1,7 @@
 let FaultStopsFirstCaseLabel = "a-fault-stops-before-it-is-passed-on"
 
 test 'a fault stops the debugger first and, resumed, reaches the program with the status the program answers undebugged'
-	let staged = builtLibraryTierFixture(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: FaultStopsFirstCaseLabel, fixture: CrashFixtureName)
+	let staged = builtLibraryTierFixture(FixturesDirName, caseLabel: FaultStopsFirstCaseLabel, fixture: CrashFixtureName)
 	let undebugged = runBuiltProgram(staged)
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: debugCommandLine([RunCommand, ContinueCommand]), extraOptions: StringArray.create(0))
 	let events = batchEvents(session.stdout)
@@ -20,4 +20,6 @@ test 'a fault stops the debugger first and, resumed, reaches the program with th
 	let crashed = eventAt(crashes, index: 0)
 	Expect.equal(hexValue(textOf(crashed, node: crashed.root, key: StatusKey)), expected: undebugged.exitCode() as PrintedNumber, message: "⭐⭐ THE SECOND HALF, AND THE ONE THAT SAYS THE FAULT WAS ONLY BORROWED. Once the debugger resumes, the fault must arrive at the program exactly as it would have with nothing attached — so the status reported here is the status the same image answers undebugged. A different status means the debugger swallowed the fault and reported an ending of its own devising, and the program's own handler never ran. {said}")
 	Expect.equal(session.exitCode(), expected: FaultedSessionExitCode, message: "a debuggee crash is a failed session, so the driver must exit {FaultedSessionExitCode}. {said}")
+
+	discardStagedDir(staged)
 end 'a fault stops the debugger first and, resumed, reaches the program with the status the program answers undebugged'

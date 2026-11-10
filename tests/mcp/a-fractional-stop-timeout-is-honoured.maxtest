@@ -1,4 +1,4 @@
-let FractionalStagingDir = "temp/mcp-fractional-stop-timeout"
+let FractionalStagingDir = "mcp-fractional-stop-timeout"
 let HalfASecond = "0.5"
 let UnderAMillisecond = "0.0005"
 
@@ -23,4 +23,6 @@ test 'a stop timeout of a fraction of a second is accepted, and one under a mill
 	try Expect.isFalse(toolCallIsError(half), message: "`{StopTimeoutArgument}: {HalfASecond}` is the number of seconds the CLI's `--stop-timeout=` accepts, so `{DebugStartTool}` must accept it too: {toolCallText(half)}")
 	try Expect.equal(rpcErrorCode(tiny), expected: RpcInvalidParamsCode, message: "`{StopTimeoutArgument}: {UnderAMillisecond}` is under the one-millisecond resolution a stop wait has, so the roster must refuse it as invalid params rather than read it as no wait at all")
 	try Expect.contains(rpcErrorMessage(tiny), needle: StopTimeoutArgument, message: "the refusal must name the argument it refused; it said: {rpcErrorMessage(tiny)}")
+
+	discardStagedDir(stagedDirNamed(FractionalStagingDir))
 end 'a stop timeout of a fraction of a second is accepted, and one under a millisecond is refused by name'

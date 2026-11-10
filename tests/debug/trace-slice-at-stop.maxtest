@@ -3,7 +3,7 @@ let TraceSliceCaseLabel = "trace-slice-at-stop"
 let TraceSliceAtStopAnchorName = "after-await"
 
 test 'trace at a stop shows the scheduler events the program committed before it'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TraceSliceCaseLabel, fixture: TracedFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: TraceSliceCaseLabel, fixture: TracedFixtureName)
 	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join(OutputFileStem), label: TracedBuildLabel, extraArguments: [DebugStreamBuildOption])
 
 	if build.exitCode() != 0 'didNotBuild'
@@ -35,4 +35,6 @@ test 'trace at a stop shows the scheduler events the program committed before it
 
 	let exited = eventAt(exits, index: 0)
 	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "the traced, debugged program answered a different exit code than the same program run with nothing attached. {said}")
+
+	discardStagedDir(staged)
 end 'trace at a stop shows the scheduler events the program committed before it'

@@ -33,12 +33,12 @@ let SpecFileExtension = ".md"
 let MaxonFragmentExtension = ".test"
 export let SpecScratchDirName = ".spec-tmp"
 
-// ⭐⭐ **THE DIRECTORY EVERY TEST BINARY IS RUN FROM — `<checkoutRoot>/temp/` — AND IT IS A CONTRACT
-// WITH THE CORPUS, NOT A SCRATCH LOCATION THIS RUNNER IS FREE TO PICK.**
+// ⭐⭐ **THE DIRECTORY EVERY TEST BINARY IS RUN FROM — `<checkoutRoot>/.spec-run-<pid>/` — AND ITS
+// DEPTH IS A CONTRACT WITH THE CORPUS, NOT A SCRATCH LOCATION THIS RUNNER IS FREE TO PICK.**
 //
 // A spec case's relative paths are resolved by the OS against whatever cwd the harness gave the
-// process, so the cwd is part of what a `/specs` case ASSERTS, and the corpus is written against
-// `<checkoutRoot>/temp/`. ⇒ **The name and the depth are both load bearing**:
+// process, so the cwd is part of what a `/specs` case ASSERTS, and the corpus is written against a
+// direct child of the checkout root. ⇒ **The depth is load bearing**:
 // `specs/directory.md` reads `Directory.list(FilePath from "../bin")` to find the compiler's
 // own `bin/`, which resolves only from a DIRECT CHILD of the checkout root.
 //
@@ -48,11 +48,12 @@ export let SpecScratchDirName = ".spec-tmp"
 // OTHER filesystem case, which only writes and reads paths it made itself and is self-consistent
 // from ANY cwd.
 //
-// ⚠ A shared `temp/` rather than a private scratch directory, deliberately: a second gitignored
-// scratch child of the root would be a second answer to a question the corpus asks once. Nothing
-// else runs a suite in the same checkout at the same time (`TreeLock`), which is what makes sharing
-// it safe.
-let RunWorkingSubdirName = "temp"
+// ⚠ One directory per run, named for the run's process: the tree lock is keyed by the spec
+// directory's tree and this directory by the working directory, so two runs of different spec
+// directories from one checkout share no lock, and a shared directory would be emptied and removed
+// under the cases of the one still running.
+module let RunWorkingDirPrefix = ".spec-run"
+module let RunWorkingDirOwnedPrefix = ".spec-run-"
 
 // A multi-file test's staged source DIRECTORY hangs off `<tempDir>/<name>.src`, NOT `<tempDir>/<name>`
 // — because `<tempDir>/<name>` is exactly the output base (`exeBase`, prepareOneTest). With no suffix
@@ -290,7 +291,7 @@ let WslExecFlag = "-e"
 // ⭐⭐ **THE SCRIPT ANCHORS ITS PATHS AT `$R`, THEN STEPS INTO THE RUN DIRECTORY — because where the
 // guest finds the binaries and the cwd every test program inherits have different right answers.**
 // The binaries live in the spec's scratch directory, and a test program must stand in
-// `specRunWorkingDir()` — `<checkoutRoot>/temp/` — like every program the other lanes spawn
+// `specRunWorkingDir()` — `<checkoutRoot>/.spec-run-<pid>/` — like every program the other lanes spawn
 // (`spawnExecution` passes it as `workingDirectory`). Under WSL `$R` is the checkout root `--cd`
 // names; under `orb` it is the scratch directory itself (`guestBasePrologue`).
 //
@@ -456,6 +457,12 @@ let BatchExeShellName = "f"
 function batchExeShellVar() returns String
 	return "${BatchExeShellName}"
 end 'batchExeShellVar'
+
+let BatchTrackShellName = "t"
+
+function batchTrackShellVar() returns String
+	return "${BatchTrackShellName}"
+end 'batchTrackShellVar'
 
 // ⭐ **THE CASE'S `<!-- procs: N -->` COUNT, CARRIED INTO THE BATCH AS THE FIRST ARGUMENT OF EVERY CALL.**
 // The batched lane runs a whole spec's programs inside ONE `wsl` entry, so the per-child environment the
@@ -765,7 +772,7 @@ let SpecSpawnTimeoutSeconds = 120
 export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisecondsPerSecond
 
 // `workingDirectory` is required: a working directory is a fact only the caller knows, and a spawn
-// that states none starts its child somewhere nobody chose (see `RunWorkingSubdirName`).
+// that states none starts its child somewhere nobody chose (see `RunWorkingDirPrefix`).
 //
 // `timeoutMs`, `environment` and `standardInput` default because every spawn but one wants the same
 // value, so the one that differs is the one that states it: `runGuestBatch` for the deadline, since
@@ -960,7 +967,7 @@ end 'TestRun'
 // `prepared` and `observations` hold exactly one entry per selected test in declaration order, a
 // `notRequired` observation included, so the third pass pairs them by index; a length that disagrees
 // panics rather than misattributing a result.
-export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap) returns SpecRun throws CompileError
+export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap, runWorkingDir FilePath) returns SpecRun throws CompileError
 	var cpu = SuiteCpuTally.zero()
 
 	let specPath = specDir.join("{specName}{SpecFileExtension}")
@@ -980,7 +987,6 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 
 	clearSharedTiers(tempDir, tests: tests)
 
-	let runWorkingDir = specRunWorkingDir()
 	let exeExtension = executableExtension(effectiveTarget.os)
 	let specDirName = specDir.filename()
 	let actions = irActionsFor(tests, holdsPins: specHoldsAnyPin(parsed.tests), mode: mode, effectiveTarget: effectiveTarget)
@@ -1830,20 +1836,34 @@ export function specTempRootDir(specDir FilePath) returns FilePath
 	return specDir.joinPath(tempSub)
 end 'specTempRootDir'
 
-// The cwd every test binary is spawned with — `<checkoutRoot>/temp/`. See `RunWorkingSubdirName` for
-// why the corpus, and not this runner, decides where that is.
+// The cwd every test binary is spawned with — `<checkoutRoot>/.spec-run-<pid>/`. See
+// `RunWorkingDirPrefix` for why the corpus, and not this runner, decides where that is.
 //
 // The checkout root is the process cwd, the contract `Main.DefaultSpecDir` is built on too. It is
 // not `specDir.parent()`: `spec-test <dir>` may name any directory, and a run's spec directory says
 // which specs to read, not which tree it stands in.
 //
-// Exported because both halves of the pool ask it, in different processes: the parent creates it
-// once (`prepareSharedDirs`) and each worker spawns into it. A second copy could disagree silently,
-// as a wrong answer from a test rather than a missing directory.
+// ⚠ Named for the CALLING process, so only the pool's parent asks it: a worker that did would name a
+// directory nobody created. The parent passes the name to each worker as `--run-dir`
+// (`runWorkingDirNamed`), and a flag rather than an environment variable, so a spec-test a case runs
+// names its own.
 export function specRunWorkingDir() returns FilePath
-	let runSub = try FilePath.from(RunWorkingSubdirName) otherwise panic("SpecTestRunner: RunWorkingSubdirName '{RunWorkingSubdirName}' must be a valid relative path")
-	return Directory.currentPath().joinPath(runSub)
+	return runWorkingDirNamed("{RunWorkingDirOwnedPrefix}{Process.id()}")
 end 'specRunWorkingDir'
+
+export function isRunWorkingDirName(name String) returns bool
+	return name.startsWith(RunWorkingDirOwnedPrefix) and name.byteLength() > RunWorkingDirOwnedPrefix.byteLength() and not name.contains(PortablePathSeparator) and not name.contains(WindowsPathSeparator)
+end 'isRunWorkingDirName'
+
+export function runWorkingDirNamed(name String) returns FilePath
+	if not isRunWorkingDirName(name) 'notOneRunDirectory'
+		panic("SpecTestRunner: '{name}' is not one directory name beginning '{RunWorkingDirOwnedPrefix}'")
+	end 'notOneRunDirectory'
+
+	let runSub = try FilePath.from(name) otherwise panic("SpecTestRunner: the run working directory name '{name}' must be a valid relative path")
+
+	return Directory.currentPath().joinPath(runSub)
+end 'runWorkingDirNamed'
 
 module typealias PatternMatch = function(String) returns bool
 
@@ -2082,9 +2102,10 @@ end 'StagingResult'
 // spec, for `.ir`, `.metrics`, `.test`, `.src` or `.stdlib`. Named here because the census is the whole
 // guarantee and it dates from outside the compiler.
 //
-// ⚠ `Compiler.discardPreviousOutput` still deletes `<exeBase>.ir` ahead of every compile, and must:
-// this harness writes none, but a sidecar left behind by an ordinary `build --emit-ir` beside
-// the same output name would otherwise outlive the run that made it.
+// ⚠ The compiler still deletes `<exeBase>.ir` when it publishes a build or abandons one
+// (`Compiler.discardStaleSideOutputs`), and must: this harness writes none, but a sidecar left behind
+// by an ordinary `build --emit-ir` beside the same output name would otherwise outlive the run that
+// made it.
 type CompiledTest
 	export let test as SpecTest
 	export let staged as StagedTest
@@ -3018,7 +3039,7 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, specDirName String) r
 		return StagingResult.failed("could not create source directory {testDir.toString()}")
 	end 'noTestDir'
 
-	purgeFilesIn(testDir)
+	emptyScratchDirectory(testDir)
 
 	// Separate from `written` on purpose: tier staging appends its own files to that list below, and a
 	// case's private stdlib is not one of the units the program is built FROM. `staged` is separate
@@ -3259,7 +3280,7 @@ end 'stageSharedTiers'
 function clearSharedTiers(tempDir FilePath, tests SpecTestArray)
 	for test in tests 'eachTest'
 		if test.compilesAsLibrary() 'aCaseSharesTheTiers'
-			purgeFilesIn(sharedTierRoot(tempDir))
+			emptyScratchDirectory(sharedTierRoot(tempDir))
 
 			return
 		end 'aCaseSharesTheTiers'
@@ -3379,19 +3400,11 @@ end 'applyOverlaySections'
 // rather than silently stacked on top of the first. A Set because membership is the only question.
 typealias StagedSectionNameSet = Set with String
 
-// Empty subdirectories survive, which is harmless: no caller reads a directory's existence, only
-// its files.
-export function purgeFilesIn(dir FilePath)
-	let entries = try Directory.list(dir) otherwise return
-
-	for entry in entries 'each'
-		if Directory.isDirectory(entry) 'isSubdir'
-			purgeFilesIn(entry)
-		end 'isSubdir' else 'isFile'
-			try File.delete(entry) otherwise ignore
-		end 'isFile'
-	end 'each'
-end 'purgeFilesIn'
+module function emptyScratchDirectory(dir FilePath)
+	for stuck in Directory.removeContents(dir) 'eachStuck'
+		printError("error: could not remove {stuck.toString()}, which is in the scratch directory {dir.toString()} a spec run stages into\n")
+	end 'eachStuck'
+end 'emptyScratchDirectory'
 
 // Would writing this `// --- file:` name stay inside the test's scratch directory? Enforced at the
 // WRITE rather than at the parse, because the write is where the escape would actually happen.
@@ -4083,7 +4096,7 @@ type GuestSuiteCapture
 	end 'replay'
 
 	function discard()
-		purgeFilesIn(self.directory)
+		emptyScratchDirectory(self.directory)
 		try Directory.delete(self.directory) otherwise ignore
 	end 'discard'
 end 'GuestSuiteCapture'
@@ -4286,9 +4299,10 @@ type RunLane
 	export let tempDir as FilePath
 	export let runWorkingDir as FilePath
 	export let effectiveTarget as Target
+	var executionsStarted as ElementIndex
 
 	static function create(strategy RunStrategy, specName String, tempDir FilePath, runWorkingDir FilePath, effectiveTarget Target) returns RunLane
-		return Self{strategy: strategy, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget}
+		return Self{strategy: strategy, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, executionsStarted: 0}
 	end 'create'
 
 	function perform(executions ExecutionArray) returns RunObservationArray
@@ -4296,10 +4310,14 @@ type RunLane
 			return RunObservationArray.create(0)
 		end 'nothingToRun'
 
+		let firstSerial = self.executionsStarted
+
+		self.executionsStarted = firstSerial + executions.count()
+
 		return match self.strategy 'strategy'
-			individually gives spawnEach(executions, runWorkingDir: self.runWorkingDir, effectiveTarget: self.effectiveTarget)
-			wslBatch gives runGuestBatch(executions, launcher: BatchLauncher.wsl, specName: self.specName, tempDir: self.tempDir, runWorkingDir: self.runWorkingDir)
-			orbBatch gives runGuestBatch(executions, launcher: BatchLauncher.orb, specName: self.specName, tempDir: self.tempDir, runWorkingDir: self.runWorkingDir)
+			individually gives spawnEach(executions, runWorkingDir: self.runWorkingDir, effectiveTarget: self.effectiveTarget, firstSerial: firstSerial)
+			wslBatch gives runGuestBatch(executions, launcher: BatchLauncher.wsl, specName: self.specName, tempDir: self.tempDir, runWorkingDir: self.runWorkingDir, effectiveTarget: self.effectiveTarget, firstSerial: firstSerial)
+			orbBatch gives runGuestBatch(executions, launcher: BatchLauncher.orb, specName: self.specName, tempDir: self.tempDir, runWorkingDir: self.runWorkingDir, effectiveTarget: self.effectiveTarget, firstSerial: firstSerial)
 			noneHere gives notRunnableHereFor(executions.count())
 			inGuest panic("SpecTestRunner: the {targetToString(self.effectiveTarget)} suite runs inside the {OrbMachineName} machine (see runSuiteInGuest), so nothing is staged on this host to execute — `runStrategyFor` and `Main.runSpecTest` disagree about this target")
 		end 'strategy'
@@ -4502,17 +4520,17 @@ function placeBatched(pending PendingRun, at ElementIndex, ordinal ElementIndex,
 end 'placeBatched'
 
 // One spawn per test — the host's own binaries, and the two external runners that are not batched.
-function spawnEach(executions ExecutionArray, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
+function spawnEach(executions ExecutionArray, runWorkingDir FilePath, effectiveTarget Target, firstSerial ElementIndex) returns RunObservationArray
 	var observations = RunObservationArray.create(executions.count(), zeroed: false)
 
-	for execution in executions 'eachExecution'
-		observations.push(spawnExecution(execution, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget))
+	for (iter, execution) in executions.withIterator() 'eachExecution'
+		observations.push(spawnExecution(execution, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, serial: firstSerial + iter.index()))
 	end 'eachExecution'
 
 	return observations
 end 'spawnEach'
 
-function spawnExecution(execution Execution, runWorkingDir FilePath, effectiveTarget Target) returns RunObservation
+function spawnExecution(execution Execution, runWorkingDir FilePath, effectiveTarget Target, serial ElementIndex) returns RunObservation
 	// ⭐ THE BREADCRUMB FOR THIS STEP, IMMEDIATELY BEFORE THE SPAWN, and it is emitted HERE rather than
 	// in the loop above so that the tests that need NO execution emit none: a step line is a claim that
 	// something is about to take time, and a `finished` test takes none.
@@ -4532,8 +4550,8 @@ function spawnExecution(execution Execution, runWorkingDir FilePath, effectiveTa
 
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
-	// `RunWorkingSubdirName`.
-	let spawned = try runWithStdin(runCommand.exe.clone(), argv: runCommand.argv.clone(), workingDirectory: runWorkingDir, environment: runEnvironmentFor(execution.procs, preempt: execution.preempt), stdin: execution.stdin) otherwise (e) 'runSpawnFailed'
+	// `RunWorkingDirPrefix`.
+	let spawned = try runWithStdin(runCommand.exe.clone(), argv: runCommand.argv.clone(), workingDirectory: runWorkingDir, environment: runEnvironmentFor(execution.procs, preempt: execution.preempt, effectiveTarget: effectiveTarget, serial: serial), stdin: execution.stdin) otherwise (e) 'runSpawnFailed'
 		return RunObservation.failed(runFailureReason(e))
 	end 'runSpawnFailed'
 
@@ -4575,16 +4593,24 @@ end 'partialOutputBeforeTheKill'
 // no other spawn of this process ever races the assignment). `Environment.inheritUpdating` states the fact
 // where it is true: in the environment block of the one child that is about to be created.
 //
-// ⚠ Each variable is spelled from the `SchedRuntime` constant the emitted scheduler reads it back through
-// (`MaxProcsEnvName`, `PreemptEnvName`/`PreemptEnvOffValue`), because a marker set under one name and read
-// under another is accepted, ignored and silent.
+// `MAXON_TRACK_DESCENDANTS` rides the same block for every execution on a lane that can track
+// descendants, carrying a token of this worker's pid and the execution's serial, so no two executions
+// share one.
+//
+// ⚠ Each variable is spelled from the runtime constant the emitted program reads it back through
+// (`MaxProcsEnvName`, `PreemptEnvName`/`PreemptEnvOffValue`, `DescendantsEnvName`), because a marker set
+// under one name and read under another is accepted, ignored and silent.
 //
 // ⚠ Nothing here forwards the variables across a launcher, because no lane hands this environment
 // to one. A batched lane carries them in its script, which exports them inside the guest per case
 // (`batchScript`), so `orb run`'s `ORBENV` filter never sees them; the delegated lane's compiler
 // spawns its own children in the machine and reaches this same block (`runSuiteInGuest`).
-function runEnvironmentFor(procs SpecProcs, preempt SpecPreempt) returns Environment
+function runEnvironmentFor(procs SpecProcs, preempt SpecPreempt, effectiveTarget Target, serial ElementIndex) returns Environment
 	var overrides = EnvMap.create()
+
+	if targetProvidesFacility(effectiveTarget, facility: HostFacility.processDescendants) 'tracksDescendants'
+		overrides.upsert(String.from(DescendantsEnvName), value: descendantTrackingValue(serial))
+	end 'tracksDescendants'
 
 	match procs 'p'
 		unset then break
@@ -4654,7 +4680,7 @@ end 'BatchLaunch'
 // `orb run -m <machine> /bin/sh -s` with the script on standard input
 // (`BatchLauncher.readsScriptFromFile`). Either way the script sets the working directory itself
 // (`GuestBaseShellName`).
-function runGuestBatch(executions ExecutionArray, launcher BatchLauncher, specName String, tempDir FilePath, runWorkingDir FilePath) returns RunObservationArray
+function runGuestBatch(executions ExecutionArray, launcher BatchLauncher, specName String, tempDir FilePath, runWorkingDir FilePath, effectiveTarget Target, firstSerial ElementIndex) returns RunObservationArray
 	let batchSubdir = batchSubdirPath()
 	let batchDir = tempDir.joinPath(batchSubdir)
 
@@ -4664,7 +4690,7 @@ function runGuestBatch(executions ExecutionArray, launcher BatchLauncher, specNa
 	// "terminated while running <spec>: 40 executions" is read against the number that allowed it.
 	emitWorkerStep(WorkerStep.run, label: "{specName}: {executions.count()} execution(s) in one {launcher.executableName()} entry")
 
-	let launch = launchBatch(executions, launcher: launcher, tempDir: tempDir, batchDir: batchDir, runWorkingDir: runWorkingDir)
+	let launch = launchBatch(executions, launcher: launcher, tempDir: tempDir, batchDir: batchDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, firstSerial: firstSerial)
 
 	var observations = RunObservationArray.create(executions.count(), zeroed: false)
 
@@ -4675,7 +4701,7 @@ function runGuestBatch(executions ExecutionArray, launcher BatchLauncher, specNa
 	// The captures have been read into the observations, so what is on disk is spent. Removed for
 	// `cleanup`'s reason and with the same best-effort rule: nothing downstream depends on it, but a
 	// suite that leaves three files per test behind is a suite whose scratch tree grows without bound.
-	purgeFilesIn(batchDir)
+	emptyScratchDirectory(batchDir)
 
 	return observations
 end 'runGuestBatch'
@@ -4724,7 +4750,7 @@ end 'batchScriptInput'
 
 // Write the script and run it. Everything that can go wrong BEFORE the guest starts is one reason,
 // carried to every test the batch was to have run.
-function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir FilePath, batchDir FilePath, runWorkingDir FilePath) returns BatchLaunch
+function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir FilePath, batchDir FilePath, runWorkingDir FilePath, effectiveTarget Target, firstSerial ElementIndex) returns BatchLaunch
 	if executions.isEmpty() 'nothingToRun'
 		// A spec of nothing but `maxoncstderr` cases runs no program at all, and must not pay a guest
 		// entry to prove it. Every observation this launch is read for is `notRequired` anyway.
@@ -4750,7 +4776,7 @@ function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir 
 		return BatchLaunch.failed("could not write the batch stdin file {stdinPath.toString()}")
 	end 'noStdinFile'
 
-	let script = batchScript(executions, launcher: launcher, tempDir: tempDir, runWorkingDir: runWorkingDir)
+	let script = batchScript(executions, launcher: launcher, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, firstSerial: firstSerial)
 
 	if launcher.readsScriptFromFile() 'scriptFile'
 		let scriptPath = batchDir.join("{BatchScriptName}")
@@ -4887,7 +4913,7 @@ end 'batchStderrNote'
 //
 // ⭐ **THE FUNCTION BODY IS A SUBSHELL `( … )` RATHER THAN A BRACE BLOCK.** POSIX allows either, and
 // `{`/`}` would have to be escaped in every Maxon string literal that spells this script.
-function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir FilePath, runWorkingDir FilePath) returns String
+function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir FilePath, runWorkingDir FilePath, effectiveTarget Target, firstSerial ElementIndex) returns String
 	var out = StringBuilder.create()
 	let scratch = guestScratchExpression(launcher, tempDir: tempDir)
 
@@ -4907,13 +4933,15 @@ function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	out.append("\t{BatchStdinShellName}=$4\n")
 	out.append("\t{BatchStdinAnchorShellName}=$5\n")
 	out.append("\t{BatchExeShellName}=$6\n")
-	out.append("\tshift 6\n")
+	out.append("\t{BatchTrackShellName}=$7\n")
+	out.append("\tshift 7\n")
 
 	// ⭐ THE CASE'S OWN PROCESSOR COUNT AND PREEMPTION SWITCH, EXPORTED INTO THIS EXECUTION'S ENVIRONMENT AND
 	// NOWHERE ELSE. The function body is a SUBSHELL (see this function's header), so the exports die with the
 	// execution and the next test in the batch starts from the batch's own environment however this one ended.
 	out.append("\t[ -z \"{batchProcsShellVar()}\" ] || export {String.from(MaxProcsEnvName)}=\"{batchProcsShellVar()}\"\n")
 	out.append("\t[ -z \"{batchPreemptShellVar()}\" ] || export {String.from(PreemptEnvName)}=\"{batchPreemptShellVar()}\"\n")
+	out.append("\t[ -z \"{batchTrackShellVar()}\" ] || export {String.from(DescendantsEnvName)}=\"{batchTrackShellVar()}\"\n")
 	out.append("\tc=\"{guestCapturePath(scratch, extension: BatchStatusExtension)}\"\n")
 	out.append("\ta=\"{scratch}{PortablePathSeparator}{batchExeShellVar()}\"\n")
 	out.append("\to=\"{guestCapturePath(scratch, extension: BatchStdoutExtension)}\"\n")
@@ -4932,8 +4960,8 @@ function batchScript(executions ExecutionArray, launcher BatchLauncher, tempDir 
 	out.append("\t[ -f \"$c\" ] || printf %s {BatchTimedOutToken} > \"$c\"\n")
 	out.append(")\n")
 
-	for execution in executions 'eachExecution'
-		out.append(batchCallLine(execution))
+	for (iter, execution) in executions.withIterator() 'eachExecution'
+		out.append(batchCallLine(execution, serial: firstSerial + iter.index(), tracksDescendants: targetProvidesFacility(effectiveTarget, facility: HostFacility.processDescendants)))
 	end 'eachExecution'
 
 	return out.build()
@@ -4968,7 +4996,7 @@ end 'guestScratchExpression'
 // nothing in the machine.
 function guestBasePrologue(launcher BatchLauncher, tempDir FilePath, runWorkingDir FilePath) returns String
 	return match launcher 'launcher'
-		wsl gives "{GuestBaseShellName}=$(pwd)\ncd {RunWorkingSubdirName} || exit 1\n"
+		wsl gives "{GuestBaseShellName}=$(pwd)\ncd {runWorkingDir.filename()} || exit 1\n"
 		orb gives "cd {shQuoted(hostPhysicalDirectory(tempDir).toString())} || exit 1\n{GuestBaseShellName}=$({PhysicalPwdCommand} {PhysicalPwdFlag})\ncd {shQuoted(hostPhysicalDirectory(runWorkingDir).toString())} || exit 1\n"
 	end 'launcher'
 end 'guestBasePrologue'
@@ -5032,15 +5060,16 @@ function guestSpecTempPrefix(tempDir FilePath) returns String
 	return relative.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
 end 'guestSpecTempPrefix'
 
-// One test's line: the function, the case's processor count, its preemption switch, the binary's own
-// filename, the stdin token and the line an `after` token waits for, then the case's own `Args:`.
+// One test's line: the function, the case's processor count, its preemption switch, its key, the stdin
+// token and the line an `after` token waits for, the binary's own filename, the descendant-tracking
+// token, then the case's own `Args:`.
 //
 // ⭐ THE PROGRAM'S OWN ARGUMENTS GO LAST, exactly as they do behind every other runner
 // (`buildRunCommand`): the shell function forwards whatever follows its own positionals straight to the
-// binary, so `Args:` reaches the same argv[1..] a direct spawn would have given it. The environment tokens go
-// FIRST, before the key, because they are the script's own business and never the program's — the shell
-// function shifts them off before anything reaches the binary.
-function batchCallLine(execution Execution) returns String
+// binary, so `Args:` reaches the same argv[1..] a direct spawn would have given it. The environment tokens
+// precede them because they are the script's own business and never the program's — the shell function
+// shifts them off before anything reaches the binary.
+function batchCallLine(execution Execution, serial ElementIndex, tracksDescendants bool) returns String
 	var line = StringBuilder.create()
 	line.append(BatchRunFunctionName)
 	line.append(" ")
@@ -5063,6 +5092,8 @@ function batchCallLine(execution Execution) returns String
 	line.append(shQuoted(batchStdinAnchor(execution.stdin)))
 	line.append(" ")
 	line.append(shQuoted(execution.exePath.filename()))
+	line.append(" ")
+	line.append(shQuoted(descendantTrackingValue(serial) if tracksDescendants else ""))
 
 	for arg in execution.arguments 'eachArg'
 		line.append(" ")
@@ -5289,9 +5320,16 @@ export function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdou
 		notRequired panic("checkObservedRun: a pending run was handed the 'no execution needed' observation — `executeRuns` answers one observation per PREPARED test and mints that arm only for a test that finished at its compile")
 		failed(reason) gives TestOutcome.fail(reason)
 		notRunnableHere gives TestOutcome.notRunHere
-		completed(capture) gives runAssertions(expected, stderr: stderr, stdout: stdout, run: capture, traceCapture: traceCapture, asyncTrace: asyncTrace)
+		completed(capture) gives auditedRunAssertions(expected, stderr: stderr, stdout: stdout, run: capture, traceCapture: traceCapture, asyncTrace: asyncTrace)
 	end 'observed'
 end 'checkObservedRun'
+
+function auditedRunAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, run ProcessCapture, traceCapture SpecTraceCapture, asyncTrace bool) returns TestOutcome
+	let audit = StderrAudit.separating(run.stderr)
+	let outcome = runAssertions(expected, stderr: stderr, stdout: stdout, run: ProcessCapture.create(run.exitCode, stdout: run.stdout, stderr: audit.text), traceCapture: traceCapture, asyncTrace: asyncTrace)
+
+	return audit.verdictOver(outcome)
+end 'auditedRunAssertions'
 
 // EVERY half the spec pinned, checked against that ONE execution.
 function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, run ProcessCapture, traceCapture SpecTraceCapture, asyncTrace bool) returns TestOutcome
@@ -5783,8 +5821,8 @@ end 'referenceFragmentPath'
 // Best-effort removal of everything this test wrote: its staged source file(s) and the produced exe.
 // A delete failure — e.g. the exe was never produced because the compile failed — is ignored.
 // Correctness does not rest on this succeeding: a multi-file test's directory is PURGED before it is
-// written (`stageSourceFiles`) and `Compiler.discardPreviousOutput` clears the output ahead of every
-// compile, so a leftover can never join a later build.
+// written (`stageSourceFiles`) and a compile that fails takes the previous output out of the slot
+// (`Compiler.discardPreviousOutput`), so a leftover can never join a later build.
 //
 // ⚠ The IR comes back as a VALUE and the CPU total with it (see `CompiledTest`), so this run writes no
 // `<name>.ir` and no `<name>.metrics`. A `<!-- DebugInfo -->` case DOES write a `<name>.exe.mxdbg`, and it

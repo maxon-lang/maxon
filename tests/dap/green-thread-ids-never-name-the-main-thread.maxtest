@@ -37,11 +37,11 @@ type StoppedThreadsSession implements DapSession
 end 'StoppedThreadsSession'
 
 test 'the id of a program with no scheduler is never the id of a green thread, and every green thread id walks'
-	let plain = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: MainThreadCaseLabel, fixture: HeaplessFixtureName)
+	let plain = stagedFixtureTree(FixturesDirName, caseLabel: MainThreadCaseLabel, fixture: HeaplessFixtureName)
 	var mainOnly = StoppedThreadsSession.create(dapLaunchArguments(buildStagedSource(plain.join(StagedProgramFileName), staged: plain)), source: plain.join(StagedProgramFileName), anchored: anchorLine(plain.join(StagedProgramFileName), anchor: HotAnchor))
 	try dapRunSession(mainOnly, completing: "stop the program with no scheduler")
 
-	let green = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: GreenThreadsCaseLabel, fixture: WorkersFixtureName)
+	let green = stagedFixtureTree(FixturesDirName, caseLabel: GreenThreadsCaseLabel, fixture: WorkersFixtureName)
 	var workers = StoppedThreadsSession.create(dapLaunchArgumentsWithEnv(buildStagedSource(green.join(StagedProgramFileName), staged: green), envJson: SingleProcessorEnv), source: green.join(StagedProgramFileName), anchored: anchorLine(green.join(StagedProgramFileName), anchor: WorkerLoopAnchor))
 	try dapRunSession(workers, completing: "stop the program with green threads")
 
@@ -58,4 +58,7 @@ test 'the id of a program with no scheduler is never the id of a green thread, a
 	for stack in workers.otherStacks 'eachOtherThread'
 		try Expect.isTrue(dapSuccess(stack), message: "every green thread the listing names must walk under the id it was listed with; one answered {dapDescribed(stack)}")
 	end 'eachOtherThread'
+
+	discardStagedDir(plain)
+	discardStagedDir(green)
 end 'the id of a program with no scheduler is never the id of a green thread, and every green thread id walks'

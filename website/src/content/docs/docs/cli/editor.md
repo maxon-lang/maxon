@@ -31,6 +31,9 @@ Explorer, a Test Explorer and, on every native target, debugging. `.maxon` sourc
    script's default location);
 5. `maxon-bin/.maxon/maxon` in the checkout the extension itself is part of, when it runs from source.
 
+In a trusted workspace, a compiler found by a later step that opens a Maxon source checkout hands the
+session to that checkout's own build once there is one ([Serving a checkout](#maxon-lsp-server)).
+
 If none is found, the extension offers to **Install** Maxon with the install script or to **Locate…** a
 compiler, which it saves to `maxon.serverPath`. Before offering, the extension asks the install script
 for its directory (`--print-root`, `-PrintRoot`), and names that directory in the prompt, the progress
@@ -118,7 +121,9 @@ offer. To install it yourself, from Claude Code:
 or from a shell: `claude plugin install maxon-lsp --marketplace maxon-lang/maxon`.
 
 The plugin runs `maxon lsp-server` from `PATH`, for `.maxon`, `.maxproj`, `.maxtasks`, `.maxtest` and
-`.test` files. The MCP tools are configured separately (see [MCP Server](/docs/cli/mcp-server/)).
+`.test` files. In a Maxon source checkout that server hands the session to the checkout's own build, and
+to each rebuild of it ([Serving a checkout](#maxon-lsp-server)). The MCP tools are configured separately
+(see [MCP Server](/docs/cli/mcp-server/)).
 
 ## `maxon lsp-server`
 
@@ -134,6 +139,19 @@ headers. Its one option is [`--log=`](/docs/cli/#logging), and it is normally st
 answers `null`, and `exit` ends the process with code **0** after a `shutdown` and **1** otherwise (as
 it does when stdin closes or a message cannot be framed). The process ends at once, stopping any
 project check still running.
+
+**Serving a checkout.** When `initialize` names a workspace root that is a Maxon source checkout (it holds
+`stdlib/`, `runtime/` and `maxon-bin/`) and the client trusts the workspace, any server other than that
+checkout's own build passes the session to it: it starts `maxon-bin/.maxon/maxon lsp-server` and relays
+every message both ways, so the checkout is served by the compiler built from it. The server looks at that
+binary twice a second. Once a rebuilt one has stayed unchanged across two looks, the server starts it and
+replays the session to it: `initialize`, `initialized`, the workspace notifications, and every open
+document at the version the client last sent. Each request still waiting for an answer is answered with
+error `-32801` (ContentModified), so the client asks again, and a `shutdown` with `null`. While no compiler
+is built into the checkout, requests are answered `-32801` too, and the server answers `initialize`
+itself. A compiler that cannot be started is reported once, in a `window/logMessage`, and started again
+when the binary changes; what the relayed compiler writes to its stderr is passed on the same way. A
+message from it longer than 64 MiB ends it.
 
 **Documents.** Text synchronization is **full**: every `textDocument/didChange` carries the whole
 document. The server handles `didOpen`, `didChange` and `didClose`. Each buffer is analysed from its

@@ -2662,7 +2662,7 @@ export function emitGtZeroOverlapped(module StdModule, block IrBlock, overlapped
 	end 'eachWord'
 end 'emitGtZeroOverlapped'
 
-export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, releasesRegistry bool, releasesGlobals bool, requestStagingBytes ByteOffset)
+export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, releasesRegistry bool, releasesGlobals bool, descendantArming DescendantArming, requestStagingBytes ByteOffset)
 	requireGtRecordLayout()
 
 	// The first function index this install owns — the range `assertCompletedPublicationIsOrdered` checks at
@@ -2739,7 +2739,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAwaitAny(module)
 	buildGtDrainAtExit(module, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals)
 	buildGtQuiesce(module)
-	buildGtRunMain(module, target: target)
+	buildGtRunMain(module, target: target, descendantArming: descendantArming)
 	buildGtAwait(module, name: GtAwaitName, throwing: false, arrival: GtAwaitArrival.inTheAwait, tracing: tracing)
 	buildGtAwait(module, name: GtTryAwaitName, throwing: true, arrival: GtAwaitArrival.inTheAwait, tracing: tracing)
 	buildGtAwait(module, name: GtTryAwaitHoldingName, throwing: true, arrival: GtAwaitArrival.inReplyWitness, tracing: tracing)
@@ -5248,15 +5248,16 @@ function emitOwnerReleaseCalls(module StdModule, block IrBlock, releasesRegistry
 end 'emitOwnerReleaseCalls'
 
 // `__gt_run_main(entry) -> ExitCode` — see `GtRunMainName`. In order: bring the scheduler up; create `main`'s
-// green thread and ready it onto this machine's ring; start the system monitor; run the scheduler loop until
-// `main` has completed; take its ExitCode; and arrive as its consumer.
+// green thread and ready it onto this machine's ring; arm descendant tracking, before `main` can
+// start a process; start the system monitor; run the scheduler loop until `main` has completed;
+// take its ExitCode; and arrive as its consumer.
 //
 // ⚠ **THE READY OWES A WAKE THAT IS NOT PAID**: the machine about to search is this one, and a wake would start
 // a worker for a token this machine takes at once.
 //
 // ⚠ **THE RESULT IS READ BEFORE THE ARRIVAL.** The second of the two parties puts the struct on a free list,
 // where the next spawn may zero it (`emitGtTeardownArrive`).
-function buildGtRunMain(module StdModule, target Target)
+function buildGtRunMain(module StdModule, target Target, descendantArming DescendantArming)
 	var func = IrFunction.createFromStd(GtRunMainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
@@ -5272,7 +5273,8 @@ function buildGtRunMain(module StdModule, target Target)
 	let mainGt = ids.mint()
 	module.appendOp(entry, op: StdOp.call(mainGt, callee: GtSpawnMainName, args: argsOf(mainEntry)))
 	_ = emitGtReady(module, block: entry, gt: mainGt, gate: GtReadyGate.alreadyRunnable, hold: SchedLockHold.free, ids: ids)
-	emitSchedSysmonStart(module, func: func, cur: entry, cont: running, target: target, ids: ids)
+	let armed = emitArmDescendantTracking(module, func: func, cur: entry, target: target, arming: descendantArming, ids: ids)
+	emitSchedSysmonStart(module, func: func, cur: armed, cont: running, target: target, ids: ids)
 	emitSchedMainLoop(module, block: running, until: SchedMainLoopUntil.mainCompleted, ids: ids)
 
 	// ⛔ The loop leaves only once `main`'s completion has moved the phase on; anything else would hand the exit
@@ -8772,26 +8774,28 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	// reads.
 	let probeTreeObject = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(probeTreeObject, addrId: procInfoPtr, offset: ProcInfoTreeObjectOffset, valueType: StdType.i64))
+	let probeTreeAssigned = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.loadIndirect(probeTreeAssigned, addrId: procInfoPtr, offset: ProcInfoTreeAssignedOffset, valueType: StdType.i64))
 	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: probeCommand, encoding: module.hostText)
 	emitSlabFree(module, block: afterCopy, ptr: cmBuf, kind: SlabBufferKind.subprocessState, ids: ids)
 	afterCopy = emitSubpReleaseSpawnAttributeList(module, func: func, ids: ids, cur: afterCopy, startupPtr: startupPtr)
 	emitSubpFreeLaunchRecords(module, block: afterCopy, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
-	afterCopy = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: afterCopy, treeObject: probeTreeObject)
+	let probeTree = emitSubpTreeToTerminate(module, block: afterCopy, treeObject: probeTreeObject, assigned: probeTreeAssigned, hProcess: hProcess, ids: ids)
 	let spawnFailed = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.cmp(spawnFailed, lhs: hProcess, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(afterCopy, op: StdOp.condBranch(spawnFailed, thenBlockId: spawnFail.id, elseBlockId: spawnOk.id))
 
 	// spawnFail: the command names no runnable executable — close BOTH pipe ends and return 0.
-	module.appendOp(spawnFail, op: StdOp.osCloseHandle(readEnd))
-	module.appendOp(spawnFail, op: StdOp.osCloseHandle(writeEnd))
-	module.setTerminator(spawnFail, op: StdOp.ret(zeroConst))
+	let failedAndClosed = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: spawnFail, treeObject: probeTreeObject)
+	module.appendOp(failedAndClosed, op: StdOp.osCloseHandle(readEnd))
+	module.appendOp(failedAndClosed, op: StdOp.osCloseHandle(writeEnd))
+	module.setTerminator(failedAndClosed, op: StdOp.ret(zeroConst))
 
-	// spawnOk: close the child thread handle, the process handle (we do not reap — we read its stdout), and the
-	// PARENT's copy of the write end (so the pipe reaches EOF once the child's inherited copy closes). Then issue the
+	// spawnOk: close the child thread handle and the PARENT's copy of the write end (so the pipe reaches EOF
+	// once the child's inherited copy closes). Then issue the
 	// overlapped read against the OVERLAPPED embedded in the GT struct (zeroed first — a dirty hEvent low bit would
 	// suppress the completion packet).
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
-	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hProcess))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(writeEnd))
 
 	// The ONE region that outlives this function's straight-line code: the read buffer the kernel writes into
@@ -8820,8 +8824,17 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	module.appendOp(spawnOk, op: StdOp.call(ids.mint(), callee: NetpollPipeCloseName, args: argsOf(readEnd)))
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(readEnd))
 
+	// The line is all `spawnReadLine` wants, so the child's tree is ended once it arrives, and the process
+	// handle is held until then: a child left running past the read would outlive the call that started it.
+	var treeEnded = module.addBlock(func, label: b"ioreadtreeended", heat: BlockHeat.normal)
+	let endedTree = emitSubpTerminateTree(module, func: func, cur: spawnOk, ids: ids, tree: probeTree, hProcess: hProcess, unconfirmed: treeEnded, treeUnended: treeEnded)
+	module.setTerminator(endedTree, op: StdOp.branch(treeEnded.id))
+
+	module.appendOp(treeEnded, op: StdOp.osCloseHandle(hProcess))
+	treeEnded = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: treeEnded, treeObject: probeTreeObject)
+
 	// The read is over — the pipe is closed and the kernel is done with the buffer, so it goes back.
-	emitSlabFree(module, block: spawnOk, ptr: scratch, kind: SlabBufferKind.subprocessState, ids: ids)
+	emitSlabFree(module, block: treeEnded, ptr: scratch, kind: SlabBufferKind.subprocessState, ids: ids)
 
 	// ⭐ **THE PROBE ANSWERS A COUNT, SO A FAILED READ IS 0 HERE.** `spawnReadLine(cmd)`'s whole contract is
 	// *"an environment error reads as EOF"*, and it has nowhere to carry the difference; the STREAMING API
@@ -8829,7 +8842,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	// and this one site, which owns the contract, folds them back together.
 	var readOk = module.addBlock(func, label: b"ioreadok", heat: BlockHeat.normal)
 	var readRefused = module.addBlock(func, label: b"ioreadrefused", heat: BlockHeat.normal)
-	emitBranchOnCompare(module, block: spawnOk, value: rawRead, pred: StdCmpPred.lt, against: 0, whenTrue: readRefused, whenFalse: readOk, ids: ids)
+	emitBranchOnCompare(module, block: treeEnded, value: rawRead, pred: StdCmpPred.lt, against: 0, whenTrue: readRefused, whenFalse: readOk, ids: ids)
 
 	let noBytes = emitConst(module, block: readRefused, value: 0, ids: ids)
 	module.setTerminator(readRefused, op: StdOp.ret(noBytes))
@@ -9071,6 +9084,10 @@ let SubpCalleePrefix = b"__gt_subp_"
 export function isSubprocessRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: SubpCalleePrefix)
 end 'isSubprocessRuntimeCallee'
+
+export function isSchedulerSpawnDoor(callee ByteArray) returns bool
+	return callee.equals(GtProcessRunName) or callee.equals(IoReadName)
+end 'isSchedulerSpawnDoor'
 
 // The `.data` slots the streaming runtime owns, each laid out where a surviving body names it
 // (`DataReach.walked`). Just the table pointer and the last error; the table itself and every buffer are
@@ -10140,10 +10157,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	// A job the child was not assigned to cannot end it, so the tree a deadline kills falls back to
 	// the child itself; the job is still owned and closed at release.
-	let adoptingTree = emitBin(module, block: spawnOk, a: treeObject, b: assigned, opcode: StdBinOpcode.mul, ids: ids)
-	let noTreeObject = emitCompareWithConstant(module, block: spawnOk, value: adoptingTree, pred: StdCmpPred.eq, against: 0, ids: ids)
-	let childItself = emitBin(module, block: spawnOk, a: noTreeObject, b: hProcess, opcode: StdBinOpcode.mul, ids: ids)
-	let processTree = emitBin(module, block: spawnOk, a: adoptingTree, b: childItself, opcode: StdBinOpcode.add, ids: ids)
+	let processTree = emitSubpTreeToTerminate(module, block: spawnOk, treeObject: treeObject, assigned: assigned, hProcess: hProcess, ids: ids)
 	emitStoreField(module, block: spawnOk, record: slot, offset: SubpSlotProcessTree, value: processTree)
 	let zeroB = emitConst(module, block: spawnOk, value: 0, ids: ids)
 
@@ -10586,6 +10600,14 @@ function emitSubpCloseOwnedChildEnds(module StdModule, block IrBlock, ids ValueM
 	let ownedStderr = emitLoadField(module, block: block, record: childScratch, offset: SubpOwnedStderrOff, ids: ids)
 	module.appendOp(block, op: StdOp.osCloseHandle(ownedStderr))
 end 'emitSubpCloseOwnedChildEnds'
+
+function emitSubpTreeToTerminate(module StdModule, block IrBlock, treeObject ValueId, assigned ValueId, hProcess ValueId, ids ValueMinter) returns ValueId
+	let adoptingTree = emitBin(module, block: block, a: treeObject, b: assigned, opcode: StdBinOpcode.mul, ids: ids)
+	let noTreeObject = emitCompareWithConstant(module, block: block, value: adoptingTree, pred: StdCmpPred.eq, against: 0, ids: ids)
+	let childItself = emitBin(module, block: block, a: noTreeObject, b: hProcess, opcode: StdBinOpcode.mul, ids: ids)
+
+	return emitBin(module, block: block, a: adoptingTree, b: childItself, opcode: StdBinOpcode.add, ids: ids)
+end 'emitSubpTreeToTerminate'
 
 function emitSubpCloseTreeObject(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, treeObject ValueId) returns IrBlock
 	var doClose = module.addBlock(func, label: b"subptreec", heat: BlockHeat.normal)

@@ -165,7 +165,7 @@ cleanup() {
 	return 0
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
 
 # BEFORE the wipe, not after: `$WORK` is where a previous run's pristine mtimes are recorded, and
 # `rm -rf` would take them with it — leaving this run's own `cp -p` to record an AGED mtime as the

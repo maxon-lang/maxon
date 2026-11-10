@@ -1,5 +1,5 @@
 let EngineCasesDirName = "tests/fmt/engine-cases"
-let EngineStagingDirName = "temp/fmt-engine-cases"
+let EngineStagingDirName = "fmt-engine-cases"
 
 let EngineSpawnName = "the engine corpus"
 let EngineTreeDescription = "the engine corpus's staged copies"
@@ -105,7 +105,7 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 	let corpus = EngineCorpus.read()
 	let staged = stageEngineCases(corpus)
 
-	let firstRun = spawnFmtOverStagedTree(EngineStagingDirName, what: EngineSpawnName)
+	let firstRun = spawnFmtOverStagedTree(engineStagingPath(), what: EngineSpawnName)
 	requireFmtRunSucceeded(firstRun, runLabel: FirstRunLabel, over: EngineTreeDescription)
 
 	var firstPass = FormattedTextMap.create()
@@ -130,7 +130,7 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 		end 'verdict'
 	end 'eachCase'
 
-	let secondRun = spawnFmtOverStagedTree(EngineStagingDirName, what: EngineSpawnName)
+	let secondRun = spawnFmtOverStagedTree(engineStagingPath(), what: EngineSpawnName)
 	requireFmtRunSucceeded(secondRun, runLabel: SecondRunLabel, over: EngineTreeDescription)
 
 	var movedAgain = StringArray.create(0)
@@ -151,6 +151,8 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 
 	Expect.isEmpty(report, message: "`fmt` over {EngineTreeDescription} broke the engine corpus. PARITY compares against the committed oracle; CONTENT requires every comment line of the source to survive as that same line, and every code token to survive, so a DUPLICATED, MOVED, JOINED or REORDERED comment is as red as a lost one; IDEMPOTENCE holds whoever re-mints an oracle.")
 	requireSecondRunFoundNothingToDo(secondRun, stagedCount: staged.count() as FileTally, over: EngineTreeDescription)
+
+	discardStagedDir(stagingDir(engineStagingPath()))
 end 'formatting the engine corpus reproduces every oracle, keeps every comment and is a fixed point'
 
 function negativeControlCases() returns StringArray
@@ -182,8 +184,12 @@ function quotedLine(line String) returns String
 	return "\"{line}\""
 end 'quotedLine'
 
+function engineStagingPath() returns String
+	return "{testScratchDir().toString()}{PortablePathSeparator}{EngineStagingDirName}"
+end 'engineStagingPath'
+
 function stageEngineCases(corpus EngineCorpus) returns StagedEngineCaseArray
-	let stagingDir = freshStagingDir(EngineStagingDirName)
+	let stagingDir = freshStagingDir(engineStagingPath())
 	var staged = StagedEngineCaseArray.create(0)
 
 	for caseName in corpus.sources 'eachSource'

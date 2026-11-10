@@ -485,6 +485,26 @@ a case in `specs/arrays.md` named `push`, `specs/arrays/push.maxon:3:5` — or b
 output to one form before comparing, so the path decides nothing. A multi-file case keeps the directory
 prefix of each file ahead of the name (`app/specs/arrays/push.maxon:10:13`).
 
+### What a case leaves behind
+
+A case's program runs with its working directory in `.spec-run-<pid>/`, a directory of the run's own
+directly under the checkout root, so a relative path resolves the same way on every lane: `../bin` names
+the checkout's `bin/`. The parent names it to its workers with `--run-dir`, so a `spec-test` a case starts
+names one of its own. A run removes the directories that runs whose process has ended left, and starts
+from an empty one of its own. Every entry still in it when the run ends is reported after the summary as
+`left .spec-run/<name>`, and the run exits 1.
+
+On every native lane a case that leaves a process running FAILS, naming each one as `<pid> <name>`, and
+the process is ended. The harness sets `MAXON_TRACK_DESCENDANTS` for every execution; the program's runtime
+arms itself from it, and at the end of the case, after `main` returns and its green threads have finished,
+ends each descendant still running and names it on a stderr line of its own, which the harness takes out of
+the stderr the case is compared against. A process the case waited for has ended by then; a case that
+starts a detached child polls `Process.isAlive` until it answers `false`. A host that refuses the tracking
+ends the program with the fatal `the host refused to track this process's descendants`. On macOS a
+descendant is found through the process tree, through the token in its environment, and through the
+spawns the program recorded; an Apple platform binary two or more generations below a recorded spawn,
+whose ancestors in between all ended before the check ran, escapes it.
+
 ### Workers start warm
 
 Every worker compiles its cases inside one process and starts from the
@@ -510,7 +530,10 @@ sits in its own directory, so its file-private names stay its own, with its `mai
 between begin and end markers carrying each case's exit code. After each case's `main` returns and before
 its end marker, the entry calls `Scheduler.quiesce()`, which waits for every service and coroutine the
 case left running, so their output lands between the markers, and the end marker carries the count that is
-still outstanding. On wasm32-wasi the entry skips that call and the end marker carries 0. A case's stdout and
+still outstanding. It then ends every process the case left running and carries their count too, naming
+each on its own stderr line ([What a case leaves behind](#what-a-case-leaves-behind)), so that case fails
+and its siblings keep their own verdicts. On wasm32-wasi the entry skips both and the end marker carries 0
+for each. A case's stdout and
 stderr are the bytes between its markers. A case whose end marker is missing or reports work still
 outstanding (a service the runtime owns for the whole program, such as the default log sink, counts), and
 every case of a program that exited non-zero (a panic, a crash, a leak at exit 101 or 75), runs

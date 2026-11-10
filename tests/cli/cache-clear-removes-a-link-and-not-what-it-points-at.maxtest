@@ -1,0 +1,24 @@
+let CacheClearLinkCaseDirName = "cache-clear-link"
+
+test 'cache clear removes a link planted in the cache, counts it as itself, and leaves what it points at'
+	let dir = freshCaseDir(CacheClearLinkCaseDirName)
+	let cacheRoot = cacheRootIn(dir)
+
+	publishCachedBuild(dir, cacheRoot: cacheRoot)
+
+	let owned = cacheRoot.join(CacheVendorDirName)
+	let cachedFiles = filesUnder(owned).count()
+	let planted = plantedLinkInTheLibraryCache(dir)
+
+	let cleared = runWithCacheRoot([CacheCommandWord, CacheClearVerb], cacheRoot: cacheRoot, workingDirectory: dir)
+	let said = "It wrote to stdout: {cleared.stdout} and to stderr: {cleared.stderr}"
+
+	Expect.equal(cleared.exitCode(), expected: 0, message: "`maxon {CacheCommandWord} {CacheClearVerb}` did not succeed over a cache holding a link. {said}")
+	Expect.isFalse(Directory.exists(planted.link), message: "`maxon {CacheCommandWord} {CacheClearVerb}` left {planted.link.toString()} standing, so it removed nothing of what it was asked to and this case says nothing about what a clear follows. {said}")
+	Expect.equal(planted.survivingOutsideFiles(), expected: planted.outsideFiles.count() as ReportedTally, message: "`maxon {CacheCommandWord} {CacheClearVerb}` deleted files in {planted.outside.toString()}, a directory the link at {planted.link.toString()} points at: the clear followed the link out of the cache. {said}")
+
+	let removed = try reportedTally(cleared.stdout) otherwise panic("{CacheClearLinkCaseDirName}: `maxon {CacheCommandWord} {CacheClearVerb}` stated no count of what it removed. {said}")
+	Expect.equal(removed, expected: (cachedFiles + 1) as ReportedTally, message: "`maxon {CacheCommandWord} {CacheClearVerb}` reported removing {removed} files where {cachedFiles} files and one link were in the cache: a link is one entry, counted as itself. {said}")
+
+	discardStagedDir(dir)
+end 'cache clear removes a link planted in the cache, counts it as itself, and leaves what it points at'

@@ -9,13 +9,15 @@ let OrderedAccessesPerBody = 1 as LineTally
 let OrderingReason = "A shared segment is the one memory two PROCESSES both map, and a word in it is how one of them tells the other that the bytes it covers are ready. No lock spans the two processes, so the edge has to travel on the accesses themselves. A plain `ldr` orders nothing after itself and a plain `str` nothing before itself, so armv8 may serve the reader bytes older than the word that announced them. The read is `StdOp.loadAcquire`, which is `ldar` on both arm64 lanes, and the write `StdOp.storeRelease`, which is `stlr`; both are the same plain `mov` on x64."
 
 test 'a shared segment word is read with an acquire and written with a release'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ASharedSegmentWordIsReadWithAnAcquireAndWrittenWithAReleaseCaseLabel, fixture: SharedSegmentFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ASharedSegmentWordIsReadWithAnAcquireAndWrittenWithAReleaseCaseLabel, fixture: SharedSegmentFixtureName)
 
 	var findings = StringArray.create(0)
 	noteSegmentAccessors(findings, staged: staged, target: MacosTargetName)
 	noteSegmentAccessors(findings, staged: staged, target: LinuxTargetName)
 
 	Expect.isTrue(findings.isEmpty(), message: "an emitted shared-segment accessor reaches a word another process reads or writes without the ordering that word is published with:{renderedFindings(findings)}\n\n  {OrderingReason}")
+
+	discardStagedDir(staged)
 end 'a shared segment word is read with an acquire and written with a release'
 
 function noteSegmentAccessors(findings StringArray, staged FilePath, target String)

@@ -61,6 +61,30 @@ export let ProcessBackgroundPriorityName = b"__proc_bg_priority"
 
 export let ProcessAliveName = b"__proc_alive"
 
+let ProcessDescendantsVerbTrack = 0
+export let ProcessDescendantsVerbEnd = 1
+export let ProcessDescendantsVerbSeal = 2
+
+export let ProcessEndDescendantsTextName = b"__proc_end_descendants_text"
+
+export let DescendantsEnvName = b"MAXON_TRACK_DESCENDANTS"
+export let SpecMarkerWrapper = "@@maxon-spec@@"
+export let DescendantsFrameTag = "!"
+export let ProcessDescendantGateName = b"__proc_descendant_gate"
+
+let DescendantsEnvValueUnits = 32
+let DescendantsArmedMark = 0x41
+export let DescendantsInertMark = 0x44
+export let EnvEntrySeparator = 0x3D
+
+// A descendant's name is the host's, and every byte outside this range becomes `?`: a newline in it
+// would end the framed report line early and hand the rest to the case's own stderr.
+export let DescendantsNameFirstPrintable = 0x20
+export let DescendantsNameLastPrintable = 0x7E
+export let DescendantsNameReplacement = 0x3F
+let DescendantGateReportBytes = 65536
+let DescendantGateLineEnd = 10
+
 // `__proc_exe_path() -> arrRec`: a fresh owned `__ManagedMemory` holding the running image's
 // absolute path, which the caller frees.
 //
@@ -104,7 +128,7 @@ end 'buildProcessFill'
 // `usesHeap` AND `usesManagedMemory`, i.e. the whole managed-memory runtime installed as one closure, so a
 // program whose only introspection is a pid must not reach it. The other two entries need no guard here at
 // all — their bodies are tier source, and dead-function elimination decides whether each survives.
-export function installProcessRuntime(module StdModule, usage RuntimeUsage)
+export function installProcessRuntime(module StdModule, usage RuntimeUsage, gatesDescendants bool)
 	if usage.usesExecutablePath 'executablePath'
 		buildProcessFill(module, name: ProcessExecutablePathName, fill: PathFill.executablePath)
 	end 'executablePath'
@@ -112,7 +136,252 @@ export function installProcessRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesProcessNamespace 'processNamespace'
 		buildProcessFill(module, name: ProcessNamespaceName, fill: PathFill.processNamespace)
 	end 'processNamespace'
+
+	if gatesDescendants 'descendantGate'
+		buildProcessDescendantGate(module)
+	end 'descendantGate'
 end 'installProcessRuntime'
+
+// A program that calls `Process.endDescendants` tracks from bring-up whatever the variable holds,
+// so its first call also finds the processes it started before that call.
+export enum DescendantArming
+	untracked
+	trackedOnToken
+	trackedFromStart
+end 'DescendantArming'
+
+export function descendantArmingOf(usage RuntimeUsage) returns DescendantArming
+	if usage.callsEndDescendants 'callsTheApi'
+		return DescendantArming.trackedFromStart
+	end 'callsTheApi'
+
+	return DescendantArming.trackedOnToken if usage.usesProcessDescendants else DescendantArming.untracked
+end 'descendantArmingOf'
+
+// Only a value starting `A` arms the gate, and the seal flips that `A` to `D` in place: children
+// inherit the variable, which the macOS audit looks for in their environments, and do not arm a
+// tracker of their own.
+export function emitArmDescendantTracking(module StdModule, func IrFunction, cur IrBlock, target Target, arming DescendantArming, ids ValueMinter) returns IrBlock
+	if arming == DescendantArming.untracked 'nothingCanBeLeft'
+		return cur
+	end 'nothingCanBeLeft'
+
+	var read = module.addBlock(func, label: b"descread", heat: BlockHeat.normal)
+	var grow = module.addBlock(func, label: b"descgrow", heat: BlockHeat.cold)
+	var inspect = module.addBlock(func, label: b"descinspect", heat: BlockHeat.normal)
+	var readFirst = module.addBlock(func, label: b"descreadfirst", heat: BlockHeat.normal)
+	var unmarked = module.addBlock(func, label: b"descunmarked", heat: BlockHeat.normal)
+	var armed = module.addBlock(func, label: b"descarmed", heat: BlockHeat.normal)
+	var release = module.addBlock(func, label: b"descrelease", heat: BlockHeat.normal)
+
+	let firstCapacity = emitConst(module, block: cur, value: DescendantsEnvValueUnits, ids: ids)
+	let name = emitLiteralHostString(module, block: cur, ids: ids, text: DescendantsEnvName)
+	let firstValue = emitSlabAlloc(module, block: cur, bytes: emitByteCountOfUnits(module, block: cur, units: firstCapacity, encoding: module.hostText, ids: ids), kind: SlabBufferKind.environmentValue, ids: ids)
+	let value = ids.mint()
+	let capacity = ids.mint()
+	read.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
+	read.blockArgs.push(IrBlockArg.create(capacity, argType: StdType.i64))
+	emitBranchCarrying(module, from: cur, to: read, values: twoArgs(firstValue, second: firstCapacity))
+
+	let written = ids.mint()
+	module.appendOp(read, op: StdOp.osEnvRead(written, namePtrId: name, bufPtrId: value, bufLenId: capacity))
+	emitBranchOnCompareValues(module, block: read, a: written, pred: StdCmpPred.lt, b: capacity, whenTrue: inspect, whenFalse: grow, ids: ids)
+
+	emitSlabFree(module, block: grow, ptr: value, kind: SlabBufferKind.environmentValue, ids: ids)
+	let grown = emitSlabAlloc(module, block: grow, bytes: emitByteCountOfUnits(module, block: grow, units: written, encoding: module.hostText, ids: ids), kind: SlabBufferKind.environmentValue, ids: ids)
+	emitBranchCarrying(module, from: grow, to: read, values: twoArgs(grown, second: written))
+
+	emitBranchOnCompare(module, block: inspect, value: written, pred: StdCmpPred.ne, against: 0, whenTrue: readFirst, whenFalse: unmarked, ids: ids)
+
+	let zero = emitConst(module, block: readFirst, value: 0, ids: ids)
+	let first = emitHostUnit(module, block: readFirst, base: value, unitIndex: zero, ids: ids)
+	let marked = emitCompareWithConstant(module, block: readFirst, value: first, pred: StdCmpPred.eq, against: DescendantsArmedMark, ids: ids)
+	module.setTerminator(readFirst, op: StdOp.condBranch(marked, thenBlockId: armed.id, elseBlockId: unmarked.id))
+
+	emitArmAction(module, func: func, cur: armed, target: target, name: name, value: value, release: release, sealsToken: true, ids: ids)
+
+	match arming 'withoutToken'
+		trackedFromStart then emitArmAction(module, func: func, cur: unmarked, target: target, name: name, value: value, release: release, sealsToken: false, ids: ids)
+		trackedOnToken then module.setTerminator(unmarked, op: StdOp.branch(release.id))
+		untracked then panic("emitArmDescendantTracking: an untracked program emits no arming")
+	end 'withoutToken'
+
+	emitSlabFree(module, block: release, ptr: value, kind: SlabBufferKind.environmentValue, ids: ids)
+	emitSlabFree(module, block: release, ptr: name, kind: SlabBufferKind.hostText, ids: ids)
+
+	return release
+end 'emitArmDescendantTracking'
+
+function emitArmAction(module StdModule, func IrFunction, cur IrBlock, target Target, name ValueId, value ValueId, release IrBlock, sealsToken bool, ids ValueMinter)
+	if not targetProvidesFacility(target, facility: HostFacility.processDescendants) 'noFacility'
+		emitRuntimeFatal(module, func: func, block: cur, fatal: RuntimeFatal.descendantTrackingUnavailable, ids: ids)
+		return
+	end 'noFacility'
+
+	var tracked = module.addBlock(func, label: b"desctracked", heat: BlockHeat.normal)
+	var trackRefused = module.addBlock(func, label: b"desctrackrefused", heat: BlockHeat.cold)
+
+	let verb = emitConst(module, block: cur, value: ProcessDescendantsVerbTrack, ids: ids)
+	let nothing = emitConst(module, block: cur, value: 0, ids: ids)
+	let answer = ids.mint()
+	module.appendOp(cur, op: StdOp.osDescendants(answer, verbId: verb, bufId: nothing, capId: nothing))
+	emitBranchOnCompare(module, block: cur, value: answer, pred: StdCmpPred.ne, against: 0, whenTrue: trackRefused, whenFalse: tracked, ids: ids)
+	emitRuntimeFatal(module, func: func, block: trackRefused, fatal: RuntimeFatal.descendantTrackingUnavailable, ids: ids)
+
+	if not sealsToken 'noTokenToSeal'
+		module.setTerminator(tracked, op: StdOp.branch(release.id))
+		return
+	end 'noTokenToSeal'
+
+	var sealed = module.addBlock(func, label: b"descsealed", heat: BlockHeat.normal)
+
+	match environmentSnapshotShape(target) 'seal'
+		nulSeparatedBlock then emitSealThroughHostCall(module, func: func, cur: tracked, name: name, value: value, sealed: sealed, ids: ids)
+		pointerVector then emitSealInEnvironmentVector(module, func: func, cur: tracked, sealed: sealed, ids: ids)
+		hostEntryList then panic("emitArmAction: a lane that receives its environment as a host list provides no descendant tracking, so it has no token to seal")
+	end 'seal'
+
+	let armedWord = emitConst(module, block: sealed, value: 1, ids: ids)
+	emitStoreGlobalWord(module, block: sealed, label: SchedDescendantsArmedLabel, value: armedWord, ids: ids)
+	module.setTerminator(sealed, op: StdOp.branch(release.id))
+end 'emitArmAction'
+
+function emitSealThroughHostCall(module StdModule, func IrFunction, cur IrBlock, name ValueId, value ValueId, sealed IrBlock, ids ValueMinter)
+	var refused = module.addBlock(func, label: b"descsealrefused", heat: BlockHeat.cold)
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let inert = emitConst(module, block: cur, value: DescendantsInertMark, ids: ids)
+	emitStoreByte(module, block: cur, base: value, index: zero, value: inert, ids: ids)
+
+	let verb = emitConst(module, block: cur, value: ProcessDescendantsVerbSeal, ids: ids)
+	let answer = ids.mint()
+	module.appendOp(cur, op: StdOp.osDescendants(answer, verbId: verb, bufId: name, capId: value))
+	emitBranchOnCompare(module, block: cur, value: answer, pred: StdCmpPred.ne, against: 0, whenTrue: refused, whenFalse: sealed, ids: ids)
+	emitRuntimeFatal(module, func: func, block: refused, fatal: RuntimeFatal.descendantTokenUnsealable, ids: ids)
+end 'emitSealThroughHostCall'
+
+function emitSealInEnvironmentVector(module StdModule, func IrFunction, cur IrBlock, sealed IrBlock, ids ValueMinter)
+	var scan = module.addBlock(func, label: b"descenvscan", heat: BlockHeat.normal)
+	var inspect = module.addBlock(func, label: b"descenvinspect", heat: BlockHeat.normal)
+	var matched = module.addBlock(func, label: b"descenvmatched", heat: BlockHeat.normal)
+	var advance = module.addBlock(func, label: b"descenvnext", heat: BlockHeat.normal)
+	var missing = module.addBlock(func, label: b"descenvmissing", heat: BlockHeat.cold)
+
+	let vector = ids.mint()
+	module.appendOp(cur, op: StdOp.osEnvBlock(vector))
+	let firstIndex = emitConst(module, block: cur, value: 0, ids: ids)
+	let index = ids.mint()
+	scan.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
+	emitBranchOnCompare(module, block: cur, value: vector, pred: StdCmpPred.eq, against: 0, whenTrue: missing, whenFalse: scan, ids: ids)
+	pushBranchEdge(cur, to: scan, values: argsOf(firstIndex))
+
+	let stride = emitConst(module, block: scan, value: EnvPointerStride, ids: ids)
+	let displacement = emitBin(module, block: scan, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids)
+	let slot = emitBin(module, block: scan, a: vector, b: displacement, opcode: StdBinOpcode.add, ids: ids)
+	let entry = emitLoadField(module, block: scan, record: slot, offset: 0, ids: ids)
+	emitBranchOnCompare(module, block: scan, value: entry, pred: StdCmpPred.eq, against: 0, whenTrue: missing, whenFalse: inspect, ids: ids)
+
+	let sameName = emitCStringStartsWithLiteral(module, block: inspect, cstr: entry, literal: DescendantsEnvName, ids: ids)
+	let separated = emitByteAtEquals(module, block: inspect, cstr: entry, index: DescendantsEnvName.count() as FullRangeInt, expected: EnvEntrySeparator, ids: ids)
+	let isOurs = emitBin(module, block: inspect, a: sameName, b: separated, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(inspect, op: StdOp.condBranch(isOurs, thenBlockId: matched.id, elseBlockId: advance.id))
+
+	let valueIndex = emitConst(module, block: matched, value: (DescendantsEnvName.count() + 1) as FullRangeInt, ids: ids)
+	let inert = emitConst(module, block: matched, value: DescendantsInertMark, ids: ids)
+	emitStoreByte(module, block: matched, base: entry, index: valueIndex, value: inert, ids: ids)
+	module.setTerminator(matched, op: StdOp.branch(sealed.id))
+
+	let one = emitConst(module, block: advance, value: 1, ids: ids)
+	let next = emitBin(module, block: advance, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitBranchCarrying(module, from: advance, to: scan, values: argsOf(next))
+
+	emitRuntimeFatal(module, func: func, block: missing, fatal: RuntimeFatal.descendantTokenUnsealable, ids: ids)
+end 'emitSealInEnvironmentVector'
+
+export function armedDescendantsValue(token String) returns String
+	var value = token.toByteArray()
+
+	value.insert(0, value: DescendantsArmedMark as Byte)
+
+	return String.from(value)
+end 'armedDescendantsValue'
+
+export function descendantsFramePrefix() returns String
+	return "{SpecMarkerWrapper}{DescendantsFrameTag}"
+end 'descendantsFramePrefix'
+
+// The exit code passes through untouched; the verdict is the framed lines on stderr, which the spec and
+// test harnesses read (`StderrAudit`). The audit follows `gtQuiesce`, so a child a green thread is
+// still awaiting has ended and is not reported.
+function buildProcessDescendantGate(module StdModule)
+	var func = IrFunction.createFromStd(ProcessDescendantGateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var unarmed = module.addBlock(func, label: b"gateunarmed", heat: BlockHeat.normal)
+	var audit = module.addBlock(func, label: b"gateaudit", heat: BlockHeat.normal)
+	var listed = module.addBlock(func, label: b"gatelisted", heat: BlockHeat.normal)
+	var unlisted = module.addBlock(func, label: b"gateunlisted", heat: BlockHeat.cold)
+	var capped = module.addBlock(func, label: b"gatecapped", heat: BlockHeat.cold)
+	var scanStart = module.addBlock(func, label: b"gatescan", heat: BlockHeat.normal)
+	var scanHeader = module.addBlock(func, label: b"gatescanhdr", heat: BlockHeat.normal)
+	var scanLook = module.addBlock(func, label: b"gatescanlook", heat: BlockHeat.normal)
+	var scanByte = module.addBlock(func, label: b"gatescanbyte", heat: BlockHeat.normal)
+	var scanLine = module.addBlock(func, label: b"gatescanline", heat: BlockHeat.normal)
+	var scanStep = module.addBlock(func, label: b"gatescanstep", heat: BlockHeat.normal)
+	var finished = module.addBlock(func, label: b"gatedone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let code = 0 as ValueId
+	let armed = emitLoadGlobalWord(module, block: entry, label: SchedDescendantsArmedLabel, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: armed, pred: StdCmpPred.eq, against: 0, whenTrue: unarmed, whenFalse: audit, ids: ids)
+	module.setTerminator(unarmed, op: StdOp.ret(code))
+
+	module.appendOp(audit, op: StdOp.call(ids.mint(), callee: GtQuiesceName, args: ValueIdArray.create(0)))
+	let capacity = emitConst(module, block: audit, value: DescendantGateReportBytes, ids: ids)
+	let report = emitSlabAlloc(module, block: audit, bytes: capacity, kind: SlabBufferKind.hostText, ids: ids)
+	let framePrefix = descendantsFramePrefix().toByteArray()
+	let prefix = emitLiteralCString(module, block: audit, ids: ids, text: framePrefix)
+	let verb = emitConst(module, block: audit, value: ProcessDescendantsVerbEnd, ids: ids)
+	let needed = ids.mint()
+	module.appendOp(audit, op: StdOp.osDescendants(needed, verbId: verb, bufId: report, capId: capacity))
+	emitBranchOnCompare(module, block: audit, value: needed, pred: StdCmpPred.lt, against: 0, whenTrue: unlisted, whenFalse: listed, ids: ids)
+	emitRuntimeFatal(module, func: func, block: unlisted, fatal: RuntimeFatal.descendantListingFailed, ids: ids)
+
+	emitBranchOnCompareValues(module, block: listed, a: needed, pred: StdCmpPred.gt, b: capacity, whenTrue: capped, whenFalse: scanStart, ids: ids)
+	emitRuntimeFatal(module, func: func, block: capped, fatal: RuntimeFatal.descendantReportTruncated, ids: ids)
+
+	let index = ids.mint()
+	let lineStart = ids.mint()
+	scanHeader.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
+	scanHeader.blockArgs.push(IrBlockArg.create(lineStart, argType: StdType.i64))
+	let origin = emitConst(module, block: scanStart, value: 0, ids: ids)
+	emitBranchCarrying(module, from: scanStart, to: scanHeader, values: twoArgs(origin, second: origin))
+
+	emitBranchOnCompareValues(module, block: scanHeader, a: index, pred: StdCmpPred.ge, b: needed, whenTrue: finished, whenFalse: scanLook, ids: ids)
+	let byte = emitLoadByteIndexed(module, block: scanLook, base: report, index: index, ids: ids)
+	emitBranchOnCompare(module, block: scanLook, value: byte, pred: StdCmpPred.eq, against: 0, whenTrue: finished, whenFalse: scanByte, ids: ids)
+	emitBranchOnCompare(module, block: scanByte, value: byte, pred: StdCmpPred.eq, against: DescendantGateLineEnd, whenTrue: scanLine, whenFalse: scanStep, ids: ids)
+
+	let prefixLength = emitConst(module, block: scanLine, value: framePrefix.count() as FullRangeInt, ids: ids)
+	module.appendOp(scanLine, op: StdOp.osWriteStderr(ids.mint(), bufId: prefix, lenId: prefixLength))
+	let one = emitConst(module, block: scanLine, value: 1, ids: ids)
+	let lineEnd = emitBin(module, block: scanLine, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let lineAddress = emitBin(module, block: scanLine, a: report, b: lineStart, opcode: StdBinOpcode.add, ids: ids)
+	let lineLength = emitBin(module, block: scanLine, a: lineEnd, b: lineStart, opcode: StdBinOpcode.sub, ids: ids)
+	module.appendOp(scanLine, op: StdOp.osWriteStderr(ids.mint(), bufId: lineAddress, lenId: lineLength))
+	emitBranchCarrying(module, from: scanLine, to: scanHeader, values: twoArgs(lineEnd, second: lineEnd))
+
+	let stepOne = emitConst(module, block: scanStep, value: 1, ids: ids)
+	let nextIndex = emitBin(module, block: scanStep, a: index, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
+	emitBranchCarrying(module, from: scanStep, to: scanHeader, values: twoArgs(nextIndex, second: lineStart))
+
+	emitSlabFree(module, block: finished, ptr: report, kind: SlabBufferKind.hostText, ids: ids)
+	emitSlabFree(module, block: finished, ptr: prefix, kind: SlabBufferKind.hostText, ids: ids)
+	module.setTerminator(finished, op: StdOp.ret(code))
+
+	module.functions.push(func)
+end 'buildProcessDescendantGate'
 
 // ⭐ **THE FAMILY'S BAND, AND IT ANSWERS FOR THE `processInfo` HALF.** `calleeHostFacility` reads it AFTER
 // its by-name test for the priority write, so the write never reaches here. A PREFIX test rather than an
@@ -126,3 +395,15 @@ end 'installProcessRuntime'
 export function isProcessRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ProcessRuntimePrefix)
 end 'isProcessRuntimeCallee'
+
+export let ProcessTierFileName = "Process.maxon"
+
+export function checkProcessDescendantsVerbs(signatures ProgramSignatures, tierPath FilePath)
+	var pins = TierGeometryPinArray.create(0)
+	pins.push(TierGeometryPin.create("the end verb", here: ProcessDescendantsVerbEnd, named: "DescendantsVerbEnd"))
+	requireTierGeometryAgrees(pins, signatures: signatures, tierPath: tierPath, emitterFile: "Compiler/Runtime/ProcessRuntime.maxon", layer: "checkProcessDescendantsVerbs")
+end 'checkProcessDescendantsVerbs'
+
+export function isProcessDescendantsRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(ProcessEndDescendantsTextName)
+end 'isProcessDescendantsRuntimeCallee'

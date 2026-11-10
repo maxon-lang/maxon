@@ -115,7 +115,7 @@ export let HostTlsAllocName = b"mrt_host_tls_alloc"
 // instruction set, exactly as `LinuxRuntime`'s four gates record for their bands. A copy beside one
 // assembler is a producer added to one lane's gate and not the others'.
 export function posixUsesHostObjects(usage RuntimeUsage) returns bool
-	return usage.usesGt or usage.usesDebugStream or usage.usesSharedMemory
+	return usage.usesGt or usage.usesDebugStream or usage.usesSharedMemory or usage.usesProcessDescendants
 end 'posixUsesHostObjects'
 
 // Who reaches `mrt_host_file_open`: a `File`, a `Directory` resolving a path physically
@@ -167,10 +167,32 @@ export let HostProcTerminateName = b"mrt_host_proc_terminate"
 export let HostProcProbeName = b"mrt_host_proc_probe"
 export let HostProcTreeKillName = b"mrt_host_proc_tree_kill"
 export let HostProcTreeAdoptName = b"mrt_host_proc_tree_adopt"
+export let HostProcDescendantsName = b"mrt_host_proc_descendants"
+export let HostProcDescendantsAdoptName = b"mrt_host_proc_descendants_adopt"
+export let HostProcAwaitEndedName = b"mrt_host_proc_await_ended"
+export let HostProcStopConfirmName = b"mrt_host_proc_stop_confirm"
 export let PosixErrnoNoMemory = 12
+
+export enum PosixProcWalkKind
+	sessionTree
+	descendants
+end 'PosixProcWalkKind'
+
+export let DescendantsLineBytes = 32
+export let DescendantsLineLast = DescendantsLineBytes - 1
+export let DescendantsCommShift = 4 as ShiftCount
+let DescendantsCommBytes = 1 shl DescendantsCommShift
+export let DescendantsCommMax = DescendantsCommBytes - 1
+export let DescendantsMapBytes = PosixTreeInitialBytes + PosixTreeInitialEntries * DescendantsCommBytes
+export let DescendantsEnumerationFailed = 1
+export let AsciiNewline = 10
+export let AsciiSpace = 32
+export let AsciiDigitZero = 0x30
+export let PosixDecimalBase = 10
+
 export let PosixTreeInitialEntries = 1024
 export let PosixTreeEntryShift = 2 as ShiftCount
-let PosixTreeEntryBytes = 1 shl PosixTreeEntryShift
+export let PosixTreeEntryBytes = 1 shl PosixTreeEntryShift
 export let PosixTreeInitialBytes = PosixTreeInitialEntries * PosixTreeEntryBytes
 export let PosixTreeStateWords = 5
 export let PosixTreeFieldList = 0
@@ -185,9 +207,10 @@ export let PosixTreeStateStatus = (PosixTreeFieldStatus * SpillSlotBytes) as Imm
 export let PosixTreeStateSession = (PosixTreeFieldSession * SpillSlotBytes) as Imm32
 export let PosixTreeStatusComplete = 0
 export let PosixTreeStatusFailed = 1
+export let PosixTreeSessionUnknown = 0xFFFFFFFFFFFFFFFF as MachineWord
 
 // ORed into `mrt_host_proc_terminate`'s TRUE, so it must not share a bit with `Win32True`.
-export let PosixTerminateTreeIncomplete = 2
+export let TerminateTreeIncomplete = 2
 export let HostTickMsName = b"mrt_host_tick_ms"
 
 // --- The PROCESS-TRACE band ---
@@ -790,6 +813,7 @@ export function posixFaultSignal(kind HardwareFaultKind, on Os) returns MachineW
 end 'posixFaultSignal'
 
 export let PosixProbeSignal = 0
+export let PosixProbeEndedAnswer = 0xFFFFFFFFFFFFFFFD as MachineWord
 export let PosixShutdownWrite = 1
 
 // The two answers the reap gives, named because a bare 0/1 at four call sites says nothing about which
@@ -804,6 +828,12 @@ export let PosixChildPidMask = 0xFFFFFFFF
 // How long a BOUNDED child wait sleeps between scans — `mrt_host_proc_await`'s deadline road, which runs
 // where the M is meant to be idle, so a millisecond is a poll rate rather than a spin.
 export let PosixChildPollMs = 1
+
+export let PosixEndedPolls = ProcessEndBoundMs / PosixChildPollMs
+
+export function posixUsesProcessEndWait(usage RuntimeUsage) returns bool
+	return usage.usesChildPipes or usage.usesProcessDescendants
+end 'posixUsesProcessEndWait'
 
 // The child's three standard descriptors, named because a bare 0/1/2 in an argument position says nothing.
 export let PosixChildStdinFd = 0

@@ -240,7 +240,7 @@ def measure_posix(command, env, cwd):
     settled = threading.Lock()
     exited = threading.Event()
     killed = threading.Event()
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err, tempfile.TemporaryDirectory() as scratch:
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err, bench_common.temp_directory("bench-concurrency") as scratch:
         peak_path = os.path.join(scratch, "peak")
         start = time.perf_counter()
         # The peak comes from /usr/bin/time: wait4's ru_maxrss would carry this Python parent's resident

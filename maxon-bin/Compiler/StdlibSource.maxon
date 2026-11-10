@@ -659,6 +659,18 @@ export function librarySourcePath(project Project, fileName String) returns File
 	panic("librarySourcePath: no library source is named '{fileName}' — `StdlibLoader.loadLibrarySources` loads the whole of `stdlib/` and `runtime/` before anything reads them, and refuses a root that contributes nothing")
 end 'librarySourcePath'
 
+export function runtimeSourcePath(project Project, fileName String) returns FilePath
+	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
+		let path = try project.librarySourcePaths.get(fileIndex) otherwise panic("runtimeSourcePath: fileIndex {fileIndex} is below project.librarySourcePaths.count()")
+
+		if path.filename() == fileName and isRuntimeSourceFile(project, path: path) 'itIsTheTierFile'
+			return path
+		end 'itIsTheTierFile'
+	end 'eachFile'
+
+	panic("runtimeSourcePath: no `runtime/` source is named '{fileName}' — `StdlibLoader.loadLibrarySources` loads the whole of `runtime/` before anything reads it")
+end 'runtimeSourcePath'
+
 // The two answers `classifyLibraryReach` splits one walk into. One record because they partition one
 // question over one roster, and separate derivations could come to disagree about which names each holds.
 type LibraryReachSplit

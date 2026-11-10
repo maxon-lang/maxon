@@ -1279,6 +1279,9 @@ export let SchedNumProcsLabel = b"__sched_num_procs"
 // while it exceeds 1, so a program capped at one processor on a multicore host still spins.
 export let SchedNcpuLabel = b"__sched_ncpu"
 
+export let SchedDescendantsArmedLabel = b"__sched_descendants_armed"
+export let SchedDescendantLedgerLabel = b"__sched_descendant_ledger"
+
 // ⭐⭐ **HOW MANY MACHINES ARE ON `__sched_midle` — Go's `sched.nmidle`.** Stepped by the list's two doors
 // (`emitSchedMidlePutLocked`, `emitSchedMidleUnlinkLocked`), so it is the list's length by construction;
 // `__sched_checkdead` subtracts it from `__sched_mcount`.
@@ -2439,6 +2442,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	// the `.data` order: moving it would re-lay every green-thread program's section to say nothing new.
 	pushRuntimeGlobal(out, label: SchedNumProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedNcpuLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedDescendantsArmedLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 
 	// ⚠ `__sched_shutdown_flag`'s one writer is the teardown and therefore runs AFTER the workers — see
 	// its own declaration for why that makes it `lastWriterWins` rather than sealed.
@@ -2447,6 +2451,10 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	if usage.usesGt 'schedLock'
 		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.declared)
 	end 'schedLock'
+
+	if usage.usesProcessDescendants and target.os == Os.macos 'descendantLedger'
+		pushRuntimeGlobal(out, label: SchedDescendantLedgerLabel, sharing: MultiMSharing.publishedAtomically, reach: DataReach.declared)
+	end 'descendantLedger'
 
 	pushRuntimeGlobal(out, label: SchedLockDepthSinkLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 
@@ -3433,6 +3441,12 @@ end 'emitReadSchedEnvValue'
 // PLUS the terminator, so a longer value with `literal` as its prefix answers 0. Reads `literal.count() + 1`
 // bytes, which a caller keeps in bounds by handing it a buffer of at least that many.
 function emitCStringEqualsLiteral(module StdModule, block IrBlock, cstr ValueId, literal ByteArray, ids ValueMinter) returns ValueId
+	let equal = emitCStringStartsWithLiteral(module, block: block, cstr: cstr, literal: literal, ids: ids)
+	let terminated = emitByteAtEquals(module, block: block, cstr: cstr, index: literal.count() as FullRangeInt, expected: 0, ids: ids)
+	return emitBin(module, block: block, a: equal, b: terminated, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitCStringEqualsLiteral'
+
+export function emitCStringStartsWithLiteral(module StdModule, block IrBlock, cstr ValueId, literal ByteArray, ids ValueMinter) returns ValueId
 	var equal = emitConst(module, block: block, value: 1, ids: ids)
 
 	for (iter, expected) in literal.withIterator() 'eachByte'
@@ -3440,12 +3454,11 @@ function emitCStringEqualsLiteral(module StdModule, block IrBlock, cstr ValueId,
 		equal = emitBin(module, block: block, a: equal, b: same, opcode: StdBinOpcode.bitAnd, ids: ids)
 	end 'eachByte'
 
-	let terminated = emitByteAtEquals(module, block: block, cstr: cstr, index: literal.count() as FullRangeInt, expected: 0, ids: ids)
-	return emitBin(module, block: block, a: equal, b: terminated, opcode: StdBinOpcode.bitAnd, ids: ids)
-end 'emitCStringEqualsLiteral'
+	return equal
+end 'emitCStringStartsWithLiteral'
 
 // 1 when the byte at `cstr[index]` is `expected`, else 0.
-function emitByteAtEquals(module StdModule, block IrBlock, cstr ValueId, index FullRangeInt, expected FullRangeInt, ids ValueMinter) returns ValueId
+export function emitByteAtEquals(module StdModule, block IrBlock, cstr ValueId, index FullRangeInt, expected FullRangeInt, ids ValueMinter) returns ValueId
 	let indexConst = emitConst(module, block: block, value: index, ids: ids)
 	let actual = emitLoadByteIndexed(module, block: block, base: cstr, index: indexConst, ids: ids)
 	return emitCompareWithConstant(module, block: block, value: actual, pred: StdCmpPred.eq, against: expected, ids: ids)
@@ -4574,6 +4587,7 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 		osNetpoll or
 		cryptoRoutine or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osThreadToken or
 		osSocketServe then return false

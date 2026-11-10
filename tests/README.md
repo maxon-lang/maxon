@@ -64,14 +64,15 @@ them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 tests/
   support/                       not a corpus: the helpers every corpus shares, all `public`, listed by each `<corpus>.maxproj`
     Host.maxon                   the compiler under test (`TestedCompilerStem`, `testedCompilerPath`), the host's suffix and temp area
-    Staging.maxon                `stagingDir`, `clearStagedFiles`/`clearStagedTree`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`, `filesUnderEndingWith`
+    Staging.maxon                `stagingDir`, `clearStagedTree`, `discardStagedDir`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`, `filesUnderEndingWith`
     Spawn.maxon                  `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `requireTreeEnded`, `endedProcessId`, `backdatedToTheYear2000`
     FedProcess.maxon             `runFedAfterLine`, `FedRun`, `StagedRunEnd`: a child fed after it prints a line, pumped without blocking, its exit followed by a tail drain bounded by silence and by a cap
     HeldPipe.maxon               `stagedHeldPipe`, `heldPipeLinesMissingFrom`, `endHeldPipeHolder`: the program that exits while a process it started holds its output, and the cleanup of that process
     fixtures/heldpipe/main.maxon.fixture   the held-pipe program: it prints a line, starts a holder that prints eight lines 400 ms apart and then holds the pipe until told to stop - stored name only, see rule 1
     ScratchNames.maxon           `scratchNameProbe`, `mintedScratchName`, `debugStreamSegmentPrefix`: the scratch-name probe below, built from the checkout's `maxon-bin/Run/ScratchName.maxon`
     scratch-name/main.maxon.fixture   the probe program: `mint` prints a name for given fields, any other word runs one check - stored name only, see rule 1
-    OutsideCheckout.maxon        directories under the host's temp area, outside any checkout
+    OutsideCheckout.maxon        `testScratchDir`, `projectScratchDir`: the process's two `maxon test` scratch directories, and `freshOutsideCheckoutDir` in the first
+    ImageStaging.maxon           `ImageStagingDirPrefix`, `stagingDirectoryOf`: the `.staging-<hex>` directory a build of an output writes into
     TargetsTable.maxon           `tableTargets`, `nativeTargets`: the columns of `maxon-bin/targets.tsv`, read by header name
     LibraryTier.maxon            `stagedLibraryTierCompiler`, `builtLibraryTierFixture`
     Text.maxon                   the folds of a captured stream and the readers of a printed number, `joined`, `compareBytes`, `checkoutDocumentText`, `sectionOf`
@@ -91,7 +92,7 @@ tests/
       expected-tree/             stored names only  — see rule 1
       expected-stdout.txt  expected-stderr.txt  expected-exit.txt  argv.txt?
   testCommand/
-    fixtures.maxtest             the shared half: paths, argv, the staging under `temp/testCommand/`, the flag spellings (`--list`, `--build`, `--json`), the `binary` key, the clean exit, the two corpus guards
+    fixtures.maxtest             the shared half: paths, argv, the staging in the test scratch directory, the flag spellings (`--list`, `--build`, `--json`), the `binary` key, the clean exit, the two corpus guards
     <case>.maxtest               ONE spawning `test` per file - see rule 5
     duplicate-private-functions-refused.maxtest      a free function declared twice in one directory is a compile error naming each later declaration, never a crash
     list-build.maxtest           `--list --build --json` names an absolute binary with its sidecar; each listed `select` runs one test
@@ -101,7 +102,7 @@ tests/
   test-fixtures/<case>/
     <name>.maxtest               a LIVE source: `maxon test` is what compiles it
     expected.txt  expected-exit.txt  argv.txt?
-  test-fixtures/<staged case>/   the two `.maxproj` cases above: stored names only (rule 1), staged into `temp/testCommand/<case>/`
+  test-fixtures/<staged case>/   the two `.maxproj` cases above: stored names only (rule 1), staged into `<test scratch>/<case>/`
     proj/<name>.fixture  <sibling>/<name>.fixture
   specHarness/
     SpecHarness.maxon            the shared half: the staging outside the checkout, the spawn, the report literals
@@ -112,6 +113,9 @@ tests/
     gates/<case>/                the gate's one or two `.md`, or the program it runs as `main.maxon.fixture` (stored name only - see rule 1)
   lsp/
     LspClient.maxon              a live JSON-RPC client the tests import - see rule 1; `abandonedSession` and `abandonedStagedSession` release a session that failed, then fail the test naming what it was doing; `start` takes the server's environment; `stageRecordedProject`, `startedOverRecordedCache` and `recordedManifestDiagnostics` build a project into a private cache, rewrite its compiler-version record and read its `.maxproj` diagnostics, `buildRecordedProject` builds it again, and `expectBreakingChangeNotices` checks those diagnostics carry the record's notices
+    RelayHarness.maxon           the shared half of the `relay-*` cases: a checkout staged around a fake slot compiler, and the swap, crash, flood and oversize triggers it obeys
+    fixtures/slotcompiler/main.maxon.fixture   the fake slot compiler: an `lsp-server` stand-in that reports its generation and whether it was started `--relayed`, and does what a trigger file names - stored name only, see rule 1
+    relay-<case>.maxtest         one case of `lsp-server` serving a checkout through its slot compiler, one file each
     <area>.maxtest               one LSP method area per file
     diagnostics-project-declared-inputs-probe.maxtest   the shared half of the declared-input cases: a project file whose sources come from a file it reads, declared in `inputs` or not, delegating or with two targets, and a gate that holds its run until released
     diagnostics-project-<change>.maxtest   the cases built on it, one each: which change to a declared input, a delegated `.maxproj` or an undeclared read runs the project file again, and which keeps the held answer
@@ -432,6 +436,14 @@ tests/
     wasm-build-without-tools-is-an-error-not-a-panic.maxtest        an install-shaped copy outside the checkout, with no `vendor/`: exit 1 naming `wasm-tools`, no panic
     wasm-build-reports-the-module-size.maxtest              a wasm32-wasi build's `Wrote N bytes of code` has N > 0
     build-refuses-a-runtime-tier-file-by-name.maxtest       `build runtime/<file>` exits 1 with an error naming the runtime tier, ahead of any diagnostic inside the file
+    build-over-an-output-that-is-a-running-program-replaces-it.maxtest   a build over an output a program is still running from succeeds and replaces it
+    build-that-fails-to-compile-removes-the-previous-output.maxtest      a failed compile leaves nothing at the output path
+    build-that-cannot-stage-its-output-leaves-the-previous-output-untouched.maxtest   a file where the staging directory goes refuses the build with E6002 and leaves the previous output as it was
+    build-sweeps-the-staging-an-interrupted-build-left.maxtest           the next build of an output removes what an interrupted one left in its staging directory
+    build-warns-of-a-staging-leftover-whose-removal-is-refused.maxtest   a staging leftover that cannot be removed is named in a warning, and the build succeeds
+    cache-reports-a-link-as-one-entry-and-not-what-it-points-at.maxtest  bare `cache` counts nothing behind a link under a cache root
+    cache-clear-removes-a-link-and-not-what-it-points-at.maxtest         `cache clear` removes a link under a cache root and leaves its target as it was
+    library-cache-sweep-removes-a-link-and-not-what-it-points-at.maxtest the library cache's sweep removes a link and leaves its target as it was
     cache-does-not-count-a-staged-snippet.maxtest           a snippet the MCP server staged under the cache root is left out of bare `cache`'s build count
     cache-clear-keeps-a-live-debug-sessions-build.maxtest   `cache clear` keeps the debug build of a session still running, and says so
     cache-clear-keeps-a-live-build-lock.maxtest             `cache clear` keeps the lock of an output a running build holds, removes an ended holder's lock and claim, keeps the locks directory, and says so
@@ -576,7 +588,7 @@ tests/
     fixtures/pinned-machine-blocked/main.maxon.fixture   stored name only - see rule 1
     fixtures/pin-only/main.maxon.fixture    stored name only - see rule 1
   examples/
-    ExamplesHarness.maxon                   the shared half: build one example, bench/concurrency/ or bench/aes/ program or document's program into temp/examples/<source spelling>/, run it, check its answer
+    ExamplesHarness.maxon                   the shared half: build one example, bench/concurrency/ or bench/aes/ program or document's program into `<test scratch>/<source spelling>/`, run it, check its answer
     basic.maxtest                           exits 42, the value its `main` returns
     hello.maxtest                           prints `Hello, world!` and exits 0
     binary-trees.maxtest                    the published n=10 checks, exit 0
@@ -622,6 +634,7 @@ tests/
     rebuild.maxtest                         a running server survives its image being replaced on disk
     rebuild-over-a-running-previous.maxtest      a self-rebuild succeeds while a server runs its `.previous`
     rebuild-with-a-compile-error.maxtest         a self-rebuild that fails to compile leaves the slot untouched
+    rebuild-that-cannot-stage-its-image-leaves-the-slot-untouched.maxtest   a self-rebuild with nowhere to stage its new image refuses and leaves the slot, its sidecar and an older `.previous` untouched
     rebuild-sweeps-retired-images.maxtest        a self-rebuild deletes retired images and sidecars of both spellings, and keeps every other file sharing the stem
     reference-documents-every-tool.maxtest       docs/CLI_REFERENCE.md's `## MCP Server` section names every tool and argument `--dev` advertises
     reference-documents-the-agent-instructions.maxtest       `initialize`'s `instructions` are docs/WRITING_MAXON_CODE.md's preamble and its `## Scripts and scriptlib` section
@@ -786,10 +799,9 @@ two `fmt` runs, and two spawns fit the deadline where a test per property would 
 The engine file declares no staging, spawning or run check of its own: it calls the ones
 `fixtures.maxtest` exports and the ones `support/` holds.
 
-`maxon test` runs files concurrently, and every spawned run purges and re-stages
-`<fixture>/.maxon/test/staged/`. Two tests naming one fixture from two files are two processes racing on one
-directory, which reads as a rare red with no diagnosis. One fixture, one file: give a new spawning case its own
-fixture and its own file.
+Every `maxon test` spawned at a live fixture purges and re-stages `<fixture>/.maxon/test/staged/`.
+One run takes its files one after another, so two tests naming one fixture take turns; two
+`maxon test` runs at once over the same corpus race on that directory.
 
 ### 6. Expectations are GENERATED, never hand-written
 
@@ -821,18 +833,22 @@ Written down because a limit nobody states gets mistaken for coverage.
   reaches this, and it is why that case stages **live compiler sources** rather than a
   committed copy — a committed copy would drift from the original and end up measuring
   a file the compiler no longer has.
-## Staging outside the checkout — `specHarness/`, `cli/` and `lsp/`
+## Staging — the two test scratch directories
 
-Three corpora stage under the host temp area (`TEMP` on Windows; `TMPDIR`, else `/tmp`, elsewhere),
-outside `temp/`, each for a premise the checkout would falsify: `specHarness/` runs
-`spec-test` where no tree lock is taken, `cli/` needs a working directory with no `vendor/` above it,
-and `lsp/` a tree with no `.maxproj` file above it.
+Every corpus stages in the scratch directories `maxon test` gives each test process
+([`maxon test`](../docs/CLI_REFERENCE.md#maxon-test)), through `support/OutsideCheckout.maxon`:
+`testScratchDir()` (`MAXON_TEST_SCRATCH`, `maxon-test-<runner pid>` in the host temp area) for a case's
+tree, and `projectScratchDir()` (`MAXON_TEST_PROJECT_SCRATCH`, under the corpus's `.maxon/test/`) for what
+must sit inside the checkout, such as a copy of the compiler that finds `stdlib/` by walking up from
+itself. A staged `.maxproj` goes outside: inside the checkout it would sit below another project (E2074).
+Outside the checkout is also where three corpora find a premise the checkout would falsify:
+`specHarness/` runs `spec-test` where no tree lock is taken, `cli/` needs a working directory with no
+`vendor/` above it, and `lsp/` a tree with no `.maxproj` file above it.
 
-⛔ **A CASE STAGES INTO ONE FLAT DIRECTORY NAMED `<prefix>-<pid>-<case>`** (`Process.id()`),
-cleared first and removed when the case finishes, pass or fail. A name without the pid would let two runs
-on one machine — two checkouts, or two sessions — delete each other's directories mid-run: in-tree
-staging is covered by the checkout's tree lock, and the host temp area has nothing of the kind. A case
-that panics or times out still leaves its `<pid>` directory behind.
+⛔ **A CASE REMOVES WHAT IT STAGED BEFORE IT ENDS** (`discardStagedDir`). The runner removes both
+directories when the process ends, and a process that passes but leaves an entry in either fails,
+naming it; when no single test of the process leaves it alone, every test of the process fails together.
+A case stages into a directory named for itself, so each case of a process has a tree of its own.
 
 In `cli/` the removal lives once, in `CliHarness.maxon`: a case is an `OutsideCheckoutCase` handed to
 `requireHeldOutsideCheckout` (or `requireHeldInAnInstallOutsideCheckout`), which removes the directory
@@ -888,9 +904,9 @@ exit code and output. The shared half is `SpecHarness.maxon`.
 the wrong fixture.
 
 ⛔ **EVERY FIXTURE IS COPIED UNDER THE HOST TEMP AREA BEFORE IT RUNS.** `TreeLock` takes no lock for a
-spec directory with no `stdlib/` above it, so concurrent test files and a developer's own `spec-test`
-never contend, the compiler needs no exemption for these runs, and nothing a run writes — `.spec-tmp/`,
-`temp/` — lands in `tests/`. `SpecHarness` refuses to stage anywhere a `stdlib/` sits
+spec directory with no `stdlib/` above it, so a test's `spec-test` and a developer's own never
+contend, the compiler needs no exemption for these runs, and nothing a run writes — `.spec-tmp/`,
+`.spec-run-<pid>/` — lands in `tests/`. `SpecHarness` refuses to stage anywhere a `stdlib/` sits
 above, and refuses a fixture holding a subdirectory, so every run starts from the fixture's spec files
 and nothing else.
 
@@ -932,9 +948,9 @@ and for the backend pool's jobs:
 
 `fixtures/<program>/` holds the programs, each as `<name>.maxon.fixture`. It applies
 rule 1's `.fixture` half only (no `dot-` names), rule 4 (the child runs in its staging directory),
-and departs from rule 5 on rule 5's own terms: most contracts need more than one compile, and `maxon
-test` runs files concurrently, so every case stages into a directory named for ITSELF under
-`temp/parallelCompile/`. Its expectations are not generated — they are properties (a pinned
+and departs from rule 5 on rule 5's own terms: most contracts need more than one compile. Every case
+stages into a directory named for ITSELF in the test scratch directory, which every case of one
+process shares. Its expectations are not generated — they are properties (a pinned
 report prefix, byte identity, stderr equality between two runs, equal memory rows between two
 runs), each guarded by a positive
 control so two runs that both failed to build cannot read as agreement.
@@ -1125,8 +1141,8 @@ it goes stale silently — it still names a line, just not the one the case is a
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
 directory), and it keeps rule 5: one spawning `test`, one file. Every case stages into a directory named
-for ITSELF under `temp/coverage/`, and a case needing two programs takes two staging labels — `maxon
-test` runs files concurrently, and a tree is what an output path lives in.
+for ITSELF in the test scratch directory, and a case needing two programs takes two staging labels,
+because a tree is what an output path lives in.
 
 ## `profile/` — where a program's CPU time went, measured from outside it
 
@@ -1167,7 +1183,7 @@ two tasks are deliberately 2:1 and not 1:1 — with equal work their order is a 
 stacks and both tasks ranked, not their names in the stacks table.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
-directory under `temp/profile/`), and it keeps rule 5: one spawning `test`, one file.
+directory in the test scratch directory), and it keeps rule 5: one spawning `test`, one file.
 
 ## `execute/` — compile a program and run it, and do not compile it again
 
@@ -1177,8 +1193,9 @@ the staging, the per-case cache root, the two spawners and the slot readers — 
 `ExecuteHarness.maxon`, and the rest in `support/`; see the note under `debug/`.
 
 ⭐⭐ **EVERY CASE POINTS THE DRIVER AT A CACHE OF ITS OWN**, through `MAXON_RUN_CACHE_ROOT` in the child's
-environment, and that is two facts at once: `maxon test` runs files CONCURRENTLY, so two cases sharing a
-cache would race over one slot; and the cache the command reaches for by default is the developer's own
+environment, and that is two facts at once: a case requires its cache to hold exactly one build
+(below), which a cache another case built into would not; and the cache the command reaches for by
+default is the developer's own
 temp area, which a test must neither write into nor read a previous run out of. A case finds its slot by
 listing `<cache>/maxon/run/` and requiring EXACTLY ONE entry — which both locates it and checks that the
 driver put its build where its own layout says — rather than by respelling the key rule.
@@ -1228,7 +1245,7 @@ six children reddened it about one attempt in three, with `could not create <slo
 which is why `slotDirectory` asks whether the directory is THERE rather than whether this run made it.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in its staging
-directory under `temp/execute/`), and it keeps rule 5: one spawning `test`, one file. `corpus.maxtest` is
+directory in the test scratch directory), and it keeps rule 5: one spawning `test`, one file. `corpus.maxtest` is
 the exception and spawns nothing — it holds the two guards that are about the corpus rather than about the
 driver: every fixture directory is one the harness's roster names and every name in that roster is a
 directory, and no ordinary `.maxon` sits beside the case files nor any live one under `fixtures/`.
@@ -1251,7 +1268,7 @@ subdirectories, which is how the nested-project cases stage a project inside ano
 with no coverage-point table is the artifact the refusal exists to prevent.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in its staging
-directory under `temp/build_manifest/`, which is also what makes the build path-less), and it keeps rule 5:
+directory in the test scratch directory, which is also what makes the build path-less), and it keeps rule 5:
 one spawning `test`, one file. Each case root holds an empty `stdlib/` directory, so the tree lock a staged
 build takes is the case's own and never the real checkout's; the tree-lock cases plant their records,
 claims and leftovers there.
@@ -1289,7 +1306,7 @@ collects its findings and fails once, listing every one. Its own red output is w
 works in both directions: a name that IS imported is found, and one that is not is not.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (the child runs in a staging
-directory under `temp/consoleWrite/`), and it keeps rule 5: one spawning `test`, one file, one compile.
+directory in the test scratch directory), and it keeps rule 5: one spawning `test`, one file, one compile.
 
 ## `emittedRuntime/` — the ORDERING an emitted runtime body reads another thread's word with, and the machine a pinned green thread runs on
 
@@ -1444,8 +1461,9 @@ corpora. The arm64 cases cross-build with `--target=`, so every host reads the s
 pinned-machine cases build and run for the host, so each lane's own scheduler is what they test.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
-directory under `temp/emittedRuntime/`, named for the CASE, because `maxon test` runs files
-concurrently and one fixture staged twice would be two runs over one tree), and it keeps rule 5 at the
+directory in the test scratch directory, named for the CASE, because the cases of one process
+share that directory and one fixture staged twice would be two runs over one tree), and it keeps
+rule 5 at the
 budget `parallelCompile/` prices: one spawning `test` per file, then one compile per BODY per lane for
 the two cases that ask for one body at a time — two for the steal case, four for the relist doors —
 against one compile per LANE for the published words, whose fifteen bodies are named in a single
@@ -1490,11 +1508,11 @@ steps; spectral-norm n=5500). Each case passes the size
 the Benchmarks Game's reference output was produced at, and expects that output byte for byte.
 
 ⛔ **THE EXAMPLES ARE BUILT WHERE THEY SIT, NEVER COPIED** — the gate is about the files a reader runs.
-Only the output is staged, into `temp/examples/<source spelling>/` (`temp/examples/examples/wc.maxon/`);
-`maxon test` runs files concurrently, and `--output=` keeps each build out of the tree lock. The whole
+Only the output is staged, into `<test scratch>/<source spelling>/` (`<test scratch>/examples-wc.maxon/`);
+`--output=` keeps each build out of the tree lock. The whole
 spelling names the directory because two programs can share a stem. A document's program has no file of
 its own, so it is cut out of the document as it stands and written into
-`temp/examples/<document>/<name>/`, and built there. It keeps rule 5: one `test` per file, and no case compiles
+`<test scratch>/<document>-<name>/`, and built there. It keeps rule 5: one `test` per file, and no case compiles
 more than once. It runs at the default deadline.
 
 ⭐ **AN EXAMPLE THAT READS THE FILESYSTEM IS GIVEN ITS INPUT BY `stageExampleFile(example, relativePath:,
@@ -1542,7 +1560,7 @@ per-case directories, which `stdlib/Sleep.maxon` also declares, and its case ass
 (`library parsed cold (namesOverlap)`).
 
 The driver compiles the program several times. It applies rule 1's `.fixture` half only and rule 4 (the child runs in a staging
-directory under `temp/warmRebuild/`).
+directory in the test scratch directory).
 
 ## `mcp/` — JSON-RPC MCP server for end users and compiler contributors
 
@@ -1590,12 +1608,16 @@ as an MCP server on either transport, exchanging JSON-RPC messages, and inspecti
   image while a server runs the `.previous` that image would replace. On Windows a running image cannot
   be deleted, so the build must move the held one aside and still succeed, and the next self-rebuild,
   with nothing held, must leave no moved-aside image behind. A program source it builds is written into
-  `temp/` from a string, so no live `.maxon` sits under `tests/`.
+  the test scratch directory from a string, so no live `.maxon` sits under `tests/`.
 - `rebuild-with-a-compile-error.maxtest` gates the failure half: a self-rebuild whose program does
   not compile leaves the running image in the slot, byte for byte, and moves nothing to `.previous` —
   and that image then builds a good program over itself.
+- `rebuild-that-cannot-stage-its-image-leaves-the-slot-untouched.maxtest` gates the staging half: a
+  self-rebuild writes its new image into a `.staging-<hex>` directory beside the slot and swaps it in only
+  once it is complete. A file occupying that directory's path makes the rebuild refuse (`E6002`) before anything is
+  vacated, and the slot, its `.mxdbg` sidecar and an older `.previous` are untouched.
 - `check-reports-a-type-error-and-writes-nothing.maxtest` stages a type error and a well-formed program
-  under `temp/`: the first is answered as an error carrying `E3005`, the second as a success, neither
+  in the test scratch directory: the first is answered as an error carrying `E3005`, the second as a success, neither
   answer is the warm-rebuild gate's run (which also compiles without writing, so files alone cannot tell
   them apart), and nothing but the source is left in either directory.
 - `dump-ir-answers-the-ir-text.maxtest` stages a well-formed program: the answer carries `func @main`,

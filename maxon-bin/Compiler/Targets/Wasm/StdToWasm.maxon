@@ -1392,6 +1392,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osNetpoll or
 		cryptoRoutine or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		osSocketServe then break
 		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count() as ParamCount, isThrowing: false)
@@ -2007,6 +2008,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		covPoint or
 		osHostProcess or
 		osPathQuery or
+		osDescendants or
 		osSocketOverlapped or
 		cryptoRoutine or
 		osSocketServe then break
@@ -2576,6 +2578,7 @@ type WasmFuncEmitter
 			storeRelease then panic("emitTerminator: an ordered load or store is a body op, never a terminator")
 			osHandleFileType then panic("emitTerminator: `osHandleFileType` is a body op, never a terminator")
 			osProcessProbe then panic("emitTerminator: `osProcessProbe` is a body op, never a terminator")
+			osDescendants then panic("emitTerminator: `osDescendants` is a body op, never a terminator")
 			osProcessExitSignal then panic("emitTerminator: `osProcessExitSignal` is a body op, never a terminator")
 			osCreateNamedSegment or
 			osAdoptNamedSegment or
@@ -2810,6 +2813,7 @@ type WasmFuncEmitter
 			// `false` without asking, so the op is never emitted on it and there is nothing for a gate to reject.
 			osHandleFileType then panic("emitBodyOp: `osHandleFileType` has no WASI spelling and is never emitted on this lane — `installTerminalRuntime` reads `HostFacility.terminalDetection` and builds the fallback `__tty_stdout_wants_color` body (answering `false`) instead of asking. Reaching here is a compiler bug, not a program this lane should have rejected")
 			osProcessProbe then panic("emitBodyOp: `osProcessProbe` has no wasm32-wasi lowering — a WASI component can name no other process, and SemanticCheck refuses such a program at its own source span (E3104)")
+			osDescendants then panic("emitBodyOp: `osDescendants` has no wasm32-wasi lowering — a WASI component can name no other process, and SemanticCheck refuses such a program at its own source span (E3104)")
 			osProcessExitSignal then panic("emitBodyOp: `osProcessExitSignal` has no wasm32-wasi lowering — a WASI component spawns no child, and SemanticCheck refuses the subprocess family at its own source span (E3104)")
 			osCreateNamedSegment or
 			osAdoptNamedSegment or

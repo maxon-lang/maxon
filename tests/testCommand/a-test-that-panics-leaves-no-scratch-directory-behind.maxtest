@@ -1,0 +1,37 @@
+let PanickingScratchCase = "a-test-that-panics-leaves-no-scratch-directory-behind"
+let OutsideScratchLinePrefix = "outside-scratch: "
+let ProjectScratchLinePrefix = "project-scratch: "
+let CrashedLabel = "CRASHED"
+
+test 'a test that panics holding scratch files leaves no scratch directory behind'
+	let run = runFixture(PanickingScratchCase)
+	let report = withoutCarriageReturns("{run.stdout}{run.stderr}")
+
+	Expect.contains(report, needle: CrashedLabel, message: "the fixture's test panics, so the run reports it {CrashedLabel}. It printed: {report}")
+
+	for prefix in [OutsideScratchLinePrefix, ProjectScratchLinePrefix] 'eachScratch'
+		let scratch = printedDirectory(report, prefix: prefix)
+
+		Expect.isFalse(Directory.exists(scratch), message: "the runner removes a test process's scratch directories however the process ended, and {scratch.toString()} survived a panic.")
+	end 'eachScratch'
+end 'a test that panics holding scratch files leaves no scratch directory behind'
+
+function printedDirectory(report String, prefix String) returns FilePath
+	var named = StringArray.create(0)
+
+	for line in report.split("\n") 'eachLine'
+		let trimmed = line.trim()
+
+		if trimmed.startsWith(prefix) 'namesTheScratch'
+			named.push(trimmed.replaceFirst(prefix, with: ""))
+		end 'namesTheScratch'
+	end 'eachLine'
+
+	if named.count() != 1 'notOnce'
+		panic("the gate could not run — the panicking test prints one `{prefix}` line, and it printed {named.count()}: {report}")
+	end 'notOnce'
+
+	let spelled = try named.get(0) otherwise panic("the gate could not run — the `{prefix}` line was counted once and is gone")
+
+	return try FilePath.from(spelled) otherwise panic("the gate could not run — the directory the test printed after `{prefix}` is not a path: {report}")
+end 'printedDirectory'

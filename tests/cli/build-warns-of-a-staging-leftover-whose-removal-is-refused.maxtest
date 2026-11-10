@@ -1,0 +1,62 @@
+let RefusedLeftoverCaseDirName = "build-warns-of-a-refused-staging-leftover"
+let RefusedLeftoverStem = "program"
+let RefusedLeftoverSource = "function main() returns ExitCode\n\treturn 3\nend 'main'\n"
+let RefusedLeftoverHeldDirName = "held"
+let RefusedLeftoverName = "stray.debris"
+let RefusedLeftoverContent = "a file whose removal the host refuses\n"
+let RefusedLeftoverWarning = "could not be removed from the staging directory"
+
+#if os(Windows)
+	let EveryoneSid = "*S-1-1-0"
+	let AclDenyFlag = "/deny"
+	let AclResetFlag = "/reset"
+	let AclRecurseFlag = "/T"
+	let AclContinueFlag = "/C"
+	let AclDenyDeleteChild = "{EveryoneSid}:(DC)"
+	let AclDenyDelete = "{EveryoneSid}:(D)"
+#else
+	let RemoveWriteWords = "a-w"
+	let RestoreWriteWords = "u+w"
+#endif
+
+test 'a build warns of a staging leftover whose removal is refused when it is no image the build moved aside'
+	let dir = freshCaseDir(RefusedLeftoverCaseDirName)
+	let output = dir.join("{RefusedLeftoverStem}{executableSuffix()}")
+	let staging = stagingDirectoryOf(output)
+	let held = staging.join(RefusedLeftoverHeldDirName)
+	let stray = held.join(RefusedLeftoverName)
+	let source = dir.join(StagedProgramFileName)
+
+	writeStagedFile(source, content: RefusedLeftoverSource)
+	Expect.isTrue(Directory.create(staging), message: "could not create {staging.toString()} to stand for an interrupted build's.")
+	Expect.isTrue(Directory.create(held), message: "could not create {held.toString()}.")
+	writeStagedFile(stray, content: RefusedLeftoverContent)
+	refuseRemovalOf(stray, inside: held)
+
+	let build = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"])
+
+	allowRemovalOf(held)
+
+	Expect.equal(build.exitCode(), expected: 0, message: "a build beside a staging leftover whose removal the host refuses did not succeed. It said: {build.stdout}{build.stderr}")
+	Expect.contains(build.stderr, needle: RefusedLeftoverWarning, message: "the build did not warn that a staging leftover could not be removed. It said: {build.stdout}{build.stderr}")
+	Expect.contains(build.stderr, needle: RefusedLeftoverName, message: "the build did not name the leftover {stray.toString()}. It said: {build.stdout}{build.stderr}")
+
+	discardStagedDir(dir)
+end 'a build warns of a staging leftover whose removal is refused when it is no image the build moved aside'
+
+function refuseRemovalOf(stray FilePath, inside FilePath)
+	#if os(Windows)
+		_ = runSystemTool("icacls", arguments: [inside.toString(), AclDenyFlag, AclDenyDeleteChild], what: "denying the removal of the entries of {inside.toString()}")
+		_ = runSystemTool("icacls", arguments: [stray.toString(), AclDenyFlag, AclDenyDelete], what: "denying the removal of {stray.toString()}")
+	#else
+		_ = runSystemTool("chmod", arguments: [RemoveWriteWords, inside.toString()], what: "making {inside.toString()} unwritable")
+	#endif
+end 'refuseRemovalOf'
+
+function allowRemovalOf(held FilePath)
+	#if os(Windows)
+		_ = runSystemTool("icacls", arguments: [held.toString(), AclResetFlag, AclRecurseFlag, AclContinueFlag], what: "restoring the access to {held.toString()}")
+	#else
+		_ = runSystemTool("chmod", arguments: [RestoreWriteWords, held.toString()], what: "making {held.toString()} writable")
+	#endif
+end 'allowRemovalOf'

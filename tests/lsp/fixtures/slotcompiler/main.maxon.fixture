@@ -1,0 +1,334 @@
+typealias Generation = int(0 to u64.max)
+typealias DocumentTexts = Map with (String, String)
+typealias DocumentVersions = Map with (String, JsonInt)
+
+let GenerationFileName = "generation"
+let PreviousImageName = "previous.image"
+let SwapMarkerName = "swap-on-hover"
+let SwapOnShutdownMarkerName = "swap-on-shutdown"
+let SwapOnInitializeMarkerName = "swap-on-initialize"
+let CrashMarkerName = "crash-on-hover"
+let FloodMarkerName = "flood-stderr-on-hover"
+let OversizeMarkerName = "oversize-on-hover"
+let RelayedFlag = "--relayed"
+let RelayedVersionSuffix = " relayed"
+let CrashExit = 3
+let FloodLineCount = 400
+let FloodPaddingBytes = 4000
+let OversizeHeader = "Content-Length: 4294967296\r\n\r\n"
+let FakeServerName = "fake-slot-compiler"
+let HeaderSeparator = ":"
+let ContentLengthHeaderName = "content-length"
+let CleanExit = 0
+let AbnormalExit = 1
+let SetupFailedExit = 2
+
+let MethodInitialize = "initialize"
+let MethodShutdown = "shutdown"
+let MethodExit = "exit"
+let MethodDidOpen = "textDocument/didOpen"
+let MethodDidChange = "textDocument/didChange"
+let MethodDidClose = "textDocument/didClose"
+let MethodHover = "textDocument/hover"
+let MethodDocumentSymbol = "textDocument/documentSymbol"
+
+union Frame
+	body(text String)
+	ended
+end 'Frame'
+
+function readFrame(stdin Stdin) returns Frame
+	var length = 0 as ByteLimit
+	var inHeaders = true
+
+	while inHeaders 'headers'
+		let line = try stdin.readLine() otherwise return Frame.ended
+
+		if line.isEmpty() 'blank'
+			inHeaders = false
+		end 'blank' else 'field'
+			let parts = line.split(HeaderSeparator)
+
+			if (try parts.get(0) otherwise "").toLower() == ContentLengthHeaderName 'lengthField'
+				length = (try int.fromString((try parts.get(1) otherwise "").trim()) otherwise return Frame.ended) as ByteLimit
+			end 'lengthField'
+		end 'field'
+	end 'headers'
+
+	let wanted = length as ElementIndex
+	var collected = ByteArray.create(0)
+
+	while collected.count() < wanted 'fill'
+		let chunk = stdin.readBytes((wanted - collected.count()) as BytePos)
+
+		if chunk.count() == 0 'truncated'
+			return Frame.ended
+		end 'truncated'
+
+		collected.append(chunk)
+	end 'fill'
+
+	return Frame.body(String.from(collected))
+end 'readFrame'
+
+function send(message String)
+	print("Content-Length: {message.byteLength()}\r\n\r\n{message}")
+end 'send'
+
+function quoted(text String) returns String
+	var doc = JsonDoc.create()
+	doc.root = doc.add(JsonNode.stringNode(text))
+
+	return Json.stringify(doc)
+end 'quoted'
+
+function respond(id JsonInt, result String)
+	send("\{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{result}\}")
+end 'respond'
+
+function refuse(id JsonInt, code JsonInt, text String)
+	send("\{\"jsonrpc\":\"2.0\",\"id\":{id},\"error\":\{\"code\":{code},\"message\":{quoted(text)}\}\}")
+end 'refuse'
+
+function publish(uri String, diagnostics String)
+	send("\{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":\{\"uri\":{quoted(uri)},\"diagnostics\":{diagnostics}\}\}")
+end 'publish'
+
+function diagnostic(message String) returns String
+	return "\{\"range\":\{\"start\":\{\"line\":0,\"character\":0\},\"end\":\{\"line\":0,\"character\":1\}\},\"severity\":1,\"source\":\"fake-slot\",\"message\":{quoted(message)}\}"
+end 'diagnostic'
+
+function log(message String)
+	send("\{\"jsonrpc\":\"2.0\",\"method\":\"window/logMessage\",\"params\":\{\"type\":4,\"message\":{quoted(message)}\}\}")
+end 'log'
+
+type FakeSlot
+	let generation as Generation
+	let directory as FilePath
+	let relayed as bool
+	var documents as DocumentTexts
+	var versions as DocumentVersions
+	var shutdownSeen = false
+	var crashed = false
+	var stopped = false
+
+	static function create(generation Generation, directory FilePath, relayed bool) returns FakeSlot
+		return Self{generation: generation, directory: directory, relayed: relayed, documents: DocumentTexts.create(), versions: DocumentVersions.create()}
+	end 'create'
+
+	function exitCode() returns ExitCode
+		if self.crashed 'crashed'
+			return CrashExit
+		end 'crashed'
+
+		return CleanExit if self.shutdownSeen else AbnormalExit
+	end 'exitCode'
+
+	function consumeMarker(name String) returns bool
+		let marker = self.directory.join(name)
+
+		if not File.exists(marker) 'unarmed'
+			return false
+		end 'unarmed'
+
+		try File.delete(marker) otherwise panic("the fake slot compiler cannot remove its marker {name}")
+
+		return true
+	end 'consumeMarker'
+
+	function isStopped() returns bool
+		return self.stopped
+	end 'isStopped'
+
+	function stop()
+		self.stopped = true
+	end 'stop'
+
+	function handle(text String)
+		let doc = try Json.parse(text) otherwise return
+		let method = try doc.getString(doc.root, key: "method") otherwise return
+		let id = try doc.getInt(doc.root, key: "id") otherwise 'notification'
+			self.notified(method, doc: doc)
+			return
+		end 'notification'
+
+		self.requested(method, id: id, doc: doc)
+	end 'handle'
+
+	function requested(method String, id JsonInt, doc JsonDoc)
+		if method == MethodInitialize 'initialize'
+			self.initialized(id)
+		end 'initialize' else if method == MethodShutdown 'shutdown'
+			self.shutDown(id)
+		end 'shutdown' else if method == MethodHover 'hover'
+			self.hovered(id)
+		end 'hover' else if method == MethodDocumentSymbol 'symbols'
+			self.documentSymbolled(id, doc: doc)
+		end 'symbols' else 'unknown'
+			refuse(id, code: -32601, text: "Method not found - {method}")
+		end 'unknown'
+	end 'requested'
+
+	function initialized(id JsonInt)
+		if self.consumeMarker(SwapOnInitializeMarkerName) 'swapping'
+			self.replaceOwnImage()
+			return
+		end 'swapping'
+
+		let version = "generation {self.generation}{RelayedVersionSuffix if self.relayed else ""}"
+		respond(id, result: "\{\"capabilities\":\{\"textDocumentSync\":1,\"hoverProvider\":true,\"documentSymbolProvider\":true\},\"serverInfo\":\{\"name\":{quoted(FakeServerName)},\"version\":{quoted(version)}\}\}")
+	end 'initialized'
+
+	function shutDown(id JsonInt)
+		if self.consumeMarker(SwapOnShutdownMarkerName) 'swapping'
+			self.replaceOwnImage()
+			return
+		end 'swapping'
+
+		self.shutdownSeen = true
+		log("generation {self.generation} shut down")
+		respond(id, result: "null")
+	end 'shutDown'
+
+	function notified(method String, doc JsonDoc)
+		if method == MethodExit 'exit'
+			self.stop()
+		end 'exit' else if method == MethodDidOpen 'open'
+			self.opened(doc)
+		end 'open' else if method == MethodDidChange 'change'
+			self.changed(doc)
+		end 'change' else if method == MethodDidClose 'close'
+			self.closed(doc)
+		end 'close'
+	end 'notified'
+
+	function opened(doc JsonDoc)
+		let params = try doc.getChild(doc.root, key: "params") otherwise return
+		let item = try doc.getChild(params, key: "textDocument") otherwise return
+		let uri = try doc.getString(item, key: "uri") otherwise return
+		let text = try doc.getString(item, key: "text") otherwise return
+
+		self.documents.upsert(uri, value: text)
+		self.recordVersion(uri, item: item, doc: doc)
+		self.publishFor(uri)
+	end 'opened'
+
+	function recordVersion(uri String, item JsonNodeId, doc JsonDoc)
+		let version = try doc.getInt(item, key: "version") otherwise return
+
+		self.versions.upsert(uri, value: version)
+	end 'recordVersion'
+
+	function changed(doc JsonDoc)
+		let params = try doc.getChild(doc.root, key: "params") otherwise return
+		let item = try doc.getChild(params, key: "textDocument") otherwise return
+		let uri = try doc.getString(item, key: "uri") otherwise return
+		let changes = try doc.getChild(params, key: "contentChanges") otherwise return
+		let changeCount = try doc.arrayLength(changes) otherwise return
+
+		if changeCount == 0 'noChanges'
+			return
+		end 'noChanges'
+
+		let latest = try doc.arrayAt(changes, index: (changeCount - 1) as ElementIndex) otherwise return
+		let text = try doc.getString(latest, key: "text") otherwise return
+
+		self.documents.upsert(uri, value: text)
+		self.recordVersion(uri, item: item, doc: doc)
+		self.publishFor(uri)
+	end 'changed'
+
+	function closed(doc JsonDoc)
+		let params = try doc.getChild(doc.root, key: "params") otherwise return
+		let item = try doc.getChild(params, key: "textDocument") otherwise return
+		let uri = try doc.getString(item, key: "uri") otherwise return
+
+		_ = self.documents.remove(uri)
+		_ = self.versions.remove(uri)
+		publish(uri, diagnostics: "[]")
+	end 'closed'
+
+	function documentSymbolled(id JsonInt, doc JsonDoc)
+		let params = try doc.getChild(doc.root, key: "params") otherwise return
+		let item = try doc.getChild(params, key: "textDocument") otherwise return
+		let uri = try doc.getString(item, key: "uri") otherwise return
+
+		self.publishFor(uri)
+		respond(id, result: "[]")
+	end 'documentSymbolled'
+
+	function publishFor(uri String)
+		let text = try self.documents.get(uri) otherwise 'unknown'
+			publish(uri, diagnostics: "[{diagnostic("generation {self.generation} holds no document")}]")
+			return
+		end 'unknown'
+
+		let version = try self.versions.get(uri) otherwise -1
+
+		publish(uri, diagnostics: "[{diagnostic("generation {self.generation} saw: {text}")},{diagnostic("generation {self.generation} version {version}")}]")
+	end 'publishFor'
+
+	function hovered(id JsonInt)
+		if self.consumeMarker(SwapMarkerName) 'swapping'
+			self.replaceOwnImage()
+			return
+		end 'swapping'
+
+		if self.consumeMarker(CrashMarkerName) 'crashing'
+			self.crashed = true
+			self.stop()
+			return
+		end 'crashing'
+
+		if self.consumeMarker(FloodMarkerName) 'flooding'
+			self.floodStandardError()
+		end 'flooding'
+
+		if self.consumeMarker(OversizeMarkerName) 'oversize'
+			print(OversizeHeader)
+			return
+		end 'oversize'
+
+		respond(id, result: "null")
+	end 'hovered'
+
+	function floodStandardError()
+		var padding = ""
+
+		for _ in 0 upto FloodPaddingBytes 'eachByte'
+			padding.append(".")
+		end 'eachByte'
+
+		for line in 0 upto FloodLineCount 'eachLine'
+			printError("flood line {line} {padding}\n")
+		end 'eachLine'
+	end 'floodStandardError'
+
+	function replaceOwnImage()
+		let image = try Process.executablePath() otherwise panic("the fake slot compiler cannot name its own image")
+		let bytes = try File.readBinary(image) otherwise panic("the fake slot compiler cannot read its own image")
+
+		try File.writeText(self.directory.join(GenerationFileName), content: "{self.generation + 1}") otherwise panic("the fake slot compiler cannot write the next generation")
+		try File.rename(image, to: self.directory.join(PreviousImageName)) otherwise panic("the fake slot compiler cannot move its own image aside")
+		try File.writeBinary(image, content: bytes, mode: FilePermission.executable) otherwise panic("the fake slot compiler cannot write its replacement")
+	end 'replaceOwnImage'
+end 'FakeSlot'
+
+function main() returns ExitCode
+	let image = try Process.executablePath() otherwise return SetupFailedExit
+	let directory = try image.parent() otherwise return SetupFailedExit
+	let stated = try File.readText(directory.join(GenerationFileName)) otherwise return SetupFailedExit
+	let generation = (try int.fromString(stated.trim()) otherwise return SetupFailedExit) as Generation
+
+	let stdin = Console.stdin()
+	var slot = FakeSlot.create(generation, directory: directory, relayed: CommandLine.args().contains(RelayedFlag))
+
+	while not slot.isStopped() 'serve'
+		match readFrame(stdin) 'frame'
+			ended then slot.stop()
+			body(text) then slot.handle(text)
+		end 'frame'
+	end 'serve'
+
+	return slot.exitCode()
+end 'main'

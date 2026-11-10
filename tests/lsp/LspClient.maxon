@@ -97,7 +97,7 @@ end 'abandonedSession'
 
 public function abandonedStagedSession(client LspClient, staged FilePath, failure LspClientError, doing String, afterwards String = "") throws TestFailure
 	client.release()
-	discardOutsideCheckoutDir(staged)
+	discardStagedDir(staged)
 
 	try failedWith(failure, doing: doing, afterwards: afterwards)
 end 'abandonedStagedSession'
@@ -537,9 +537,13 @@ public type LspClient
 	//
 	// ⛔ Everything that would stop the session happening at all PANICS rather than throwing: neither a
 	// missing binary nor a refused spawn is the server answering wrongly.
-	public static function start(binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit) returns LspClient
+	public static function start(binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit, extraArguments StringArray = StringArray.create(0)) returns LspClient
 		var argv = StringArray.create(0)
 		argv.push(LspServerCommandName)
+
+		for extra in extraArguments 'eachExtra'
+			argv.push(extra.clone())
+		end 'eachExtra'
 
 		let spawned = try StreamingSubprocess.spawnWithEnvironment(Executable.path(binary), arguments: argv, workingDirectory: Directory.currentPath(), environment: environment) otherwise (e) 'spawnFailed'
 			panic("LspClient: the test could not run — `{binary.toString()} {LspServerCommandName}` did not spawn ({e.displayReason()}).")
@@ -857,6 +861,54 @@ public type LspClient
 
 		return notices
 	end 'takeProjectLoadingNotices'
+
+	public function takeLogMessages(needle String) returns StringArray throws LspClientError
+		var messages = StringArray.create(0)
+
+		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isLogMessageContaining(candidate, needle: needle), take: StashTake.every) 'eachLog'
+			messages.push(try stringMember(doc, of: try memberNode(doc, of: doc.root, key: JsonRpcParamsKey), key: MessageKey))
+		end 'eachLog'
+
+		return messages
+	end 'takeLogMessages'
+
+	public function awaitLogMessage(needle String, polled String) returns String throws LspClientError
+		let started = Clock.nowMs()
+
+		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilLogged'
+			for message in try self.takeLogMessages(needle) 'eachMessage'
+				return message
+			end 'eachMessage'
+
+			try self.pollForNotifications(polled)
+			sleep(ProjectCheckPollPauseMs)
+		end 'untilLogged'
+
+		throw LspClientError.transportFailed("no log message containing `{needle}` arrived within {ProjectCheckPublishFailureBoundMs} ms")
+	end 'awaitLogMessage'
+
+	public function countLogMessagesWhilePolling(needle String, polled String, forMs DurationMs) returns ElementIndex throws LspClientError
+		let started = Clock.nowMs()
+		var seen = 0 as ElementIndex
+
+		while Clock.elapsedMs(started) < forMs 'untilTime'
+			seen = seen + (try self.takeLogMessages(needle)).count()
+			try self.pollForNotifications(polled)
+			sleep(ProjectCheckPollPauseMs)
+		end 'untilTime'
+
+		return seen + (try self.takeLogMessages(needle)).count()
+	end 'countLogMessagesWhilePolling'
+
+	function pollForNotifications(polled String) throws LspClientError
+		_ = try self.documentSymbols(polled) otherwise (e) 'answered'
+			match e 'reason'
+				serverRefused then return
+				transportFailed or
+				malformedResponse then throw e
+			end 'reason'
+		end 'answered'
+	end 'pollForNotifications'
 
 	public function discardPublishes(uri String) throws LspClientError
 		_ = try self.takeStashedWhere(function(candidate JsonDoc) gives publishesFor(candidate, uri: uri), take: StashTake.every)
@@ -1718,6 +1770,17 @@ end 'isNotificationOf'
 function projectCheckReportPrefix(uri String) returns String
 	return "{ProjectCheckReportLead} {uri} {ProjectCheckReportVersionWord} "
 end 'projectCheckReportPrefix'
+
+function isLogMessageContaining(doc JsonDoc, needle String) returns bool
+	if not isNotificationOf(doc, method: MethodLogMessage) 'otherNotification'
+		return false
+	end 'otherNotification'
+
+	let params = try memberNode(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return false
+	let message = try doc.getString(params, key: MessageKey) otherwise return false
+
+	return message.contains(needle)
+end 'isLogMessageContaining'
 
 function isProjectCheckReport(doc JsonDoc, prefix String) returns bool
 	if not isNotificationOf(doc, method: MethodLogMessage) 'otherNotification'

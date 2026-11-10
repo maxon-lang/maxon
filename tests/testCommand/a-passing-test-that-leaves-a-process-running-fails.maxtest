@@ -1,0 +1,31 @@
+let LeavesProcessCase = "a-passing-test-that-leaves-a-process-running-fails"
+let SleeperLinePrefix = "sleeper="
+let LeakedTestName = "a test that passes but leaves a detached sleeper running"
+let SiblingTestName = "a sibling test that leaves nothing running"
+let LeftRunningHeadline = "the test left 1 process running: "
+
+test 'a test that passes but leaves a detached process running fails, naming the process, and its sibling still passes'
+	let run = runFixture(LeavesProcessCase)
+	let report = withoutCarriageReturns("{run.stdout}{run.stderr}")
+
+	Expect.equal(run.exitCode(), expected: 1, message: "the fixture's first test leaves a process running, so its run exits 1. It printed: {report}")
+	Expect.contains(report, needle: "✗ {LeakedTestName}", message: "the test that left the process fails. It printed: {report}")
+	Expect.contains(report, needle: "✓ {SiblingTestName}", message: "the sibling test left nothing and passes. It printed: {report}")
+
+	let sleeper = printedSleeperPid(report)
+
+	Expect.contains(report, needle: "{LeftRunningHeadline}{sleeper} ", message: "the failure names the process the test left, by its id. It printed: {report}")
+	Expect.contains(report, needle: " 1 pass\n 1 fail\n", message: "exactly the leaking test fails. It printed: {report}")
+end 'a test that passes but leaves a detached process running fails, naming the process, and its sibling still passes'
+
+function printedSleeperPid(report String) returns String
+	for line in report.split("\n") 'eachLine'
+		let trimmed = line.trim()
+
+		if trimmed.startsWith(SleeperLinePrefix) 'namesTheSleeper'
+			return trimmed.replaceFirst(SleeperLinePrefix, with: "")
+		end 'namesTheSleeper'
+	end 'eachLine'
+
+	panic("the gate could not run — the fixture printed no `{SleeperLinePrefix}` line: {report}")
+end 'printedSleeperPid'

@@ -28,23 +28,23 @@ let FullTextDocumentSync = 1
 let LspCleanExitCode = 0
 let LspAbnormalExitCode = 1
 
-let MethodInitialize = "initialize"
-let MethodShutdown = "shutdown"
+module let MethodInitialize = "initialize"
+module let MethodShutdown = "shutdown"
 let MethodExit = "exit"
-let MethodDidOpen = "textDocument/didOpen"
-let MethodDidChange = "textDocument/didChange"
-let MethodDidClose = "textDocument/didClose"
-let MethodDidChangeWorkspaceFolders = "workspace/didChangeWorkspaceFolders"
-let MethodWorkspaceTrust = "maxon/workspaceTrust"
+module let MethodDidOpen = "textDocument/didOpen"
+module let MethodDidChange = "textDocument/didChange"
+module let MethodDidClose = "textDocument/didClose"
+module let MethodDidChangeWorkspaceFolders = "workspace/didChangeWorkspaceFolders"
+module let MethodWorkspaceTrust = "maxon/workspaceTrust"
 
 let CapabilitiesKey = "capabilities"
 let ServerInfoKey = "serverInfo"
 let ServerNameKey = "name"
 let TextDocumentSyncKey = "textDocumentSync"
-let TextDocumentKey = "textDocument"
+module let TextDocumentKey = "textDocument"
 let ContentChangesKey = "contentChanges"
-let TextKey = "text"
-let VersionKey = "version"
+module let TextKey = "text"
+module let VersionKey = "version"
 let RootUriKey = "rootUri"
 let WorkspaceKey = "workspace"
 let WorkspaceFoldersKey = "workspaceFolders"
@@ -62,9 +62,18 @@ export function runLspServer(args MaxonArgs) returns ExitCode
 	_ = quietTheBuildChatter(args.logOverridden)
 	let writer = spawn LspStdoutWriter.create()
 	let stdinReader = spawn LspStdinReader.create()
-	var session = LspSession.create(writer, stdinReader: stdinReader)
+	let mode = LspSessionMode.served if args.relayed else LspSessionMode.unrouted
+	var session = LspSession.create(writer, stdinReader: stdinReader, mode: mode)
 	return session.run()
 end 'runLspServer'
+
+// A `--relayed` session starts `served`, so the child a relay spawns answers for itself and never relays
+// to another compiler in turn.
+union LspSessionMode
+	unrouted
+	served
+	relaying(relay LspRelay)
+end 'LspSessionMode'
 
 type LspSession
 	var documents as LspDocumentTextMap
@@ -74,13 +83,14 @@ type LspSession
 	var streamBroken = false
 	let stdinReader as LspStdinReader.handle
 	var workspace as LspWorkspaceState
+	var mode as LspSessionMode
 
 	// Minted here rather than read from the client, which may state no `version`: every arrival needs
 	// one of its own for a project check to learn it was superseded.
 	var nextDocumentVersion as LspDocumentVersion
 
-	static function create(writer LspStdoutWriter.handle, stdinReader LspStdinReader.handle) returns LspSession
-		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create(), stdinReader: stdinReader, workspace: LspWorkspaceState.create(writer), nextDocumentVersion: 0}
+	static function create(writer LspStdoutWriter.handle, stdinReader LspStdinReader.handle, mode LspSessionMode) returns LspSession
+		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create(), stdinReader: stdinReader, workspace: LspWorkspaceState.create(writer), mode: mode, nextDocumentVersion: 0}
 	end 'create'
 
 	// The message pump. One turn reads one framed message; the session ends when the client says so
@@ -92,10 +102,19 @@ type LspSession
 			self.dispatch(self.workspace.nextArrival())
 		end 'pump'
 
+		self.finishRelay()
 		submitToLspWriter(self.workspace.writer, command: LspWriterCommand.endSession)
 
 		return exitCode()
 	end 'run'
+
+	function finishRelay()
+		match self.mode 'mode'
+			relaying(relay) then relay.shutDown(self.workspace)
+			unrouted or
+			served then return
+		end 'mode'
+	end 'finishRelay'
 
 	function awaitNextFrame()
 		self.workspace.arrivals.insert(LspFrameSlot, value: try self.stdinReader.next(sendTimeout: ForeverMs) otherwise panic("LspSession.awaitNextFrame: a send that waits forever for room, to a reader this session holds, was refused"))
@@ -107,8 +126,22 @@ type LspSession
 			endOfStream then self.stopped = true
 			framingError(detail) then self.failOnBrokenStream(detail)
 			projectResolved(dir, answer, ticket) then self.projectResolved(dir, answer: answer, ticket: ticket)
+			childFramed or
+			childEnded or
+			childStderr or
+			childStderrEnded or
+			childStderrFailed then self.relayOrPanic().childArrived(arrival, workspace: self.workspace)
+			slotTick then self.relayOrPanic().slotTicked(self.workspace)
 		end 'arrival'
 	end 'dispatch'
+
+	function relayOrPanic() returns LspRelay
+		return match self.mode 'mode'
+			relaying(relay) gives relay
+			unrouted or
+			served panic("LspSession.relayOrPanic: a child compiler's arrival reached a session that relays to none")
+		end 'mode'
+	end 'relayOrPanic'
 
 	function frameArrived(body String)
 		let doc = try Json.parse(body) otherwise 'notJson'
@@ -117,14 +150,89 @@ type LspSession
 			return
 		end 'notJson'
 
+		match self.mode 'mode'
+			relaying(relay) then self.relayFrameArrived(relay, body: body, doc: doc)
+			unrouted or
+			served then self.servedFrameArrived(body, doc: doc)
+		end 'mode'
+	end 'frameArrived'
+
+	function servedFrameArrived(body String, doc JsonDoc)
 		if endsTheSession(doc) 'exit'
 			self.stopped = true
 			return
 		end 'exit'
 
 		self.awaitNextFrame()
+
+		if self.awaitsInitialize() and isRequestNamed(doc, method: MethodInitialize) 'initialize'
+			self.routeInitialize(body, doc: doc)
+			return
+		end 'initialize'
+
 		self.handleMessage(doc)
-	end 'frameArrived'
+	end 'servedFrameArrived'
+
+	function awaitsInitialize() returns bool
+		return match self.mode 'mode'
+			unrouted gives true
+			served or
+			relaying gives false
+		end 'mode'
+	end 'awaitsInitialize'
+
+	function routeInitialize(body String, doc JsonDoc)
+		let route = try lspRelayRoute(doc) otherwise (e) 'unidentifiable'
+			self.serveInitializeInProcess(doc)
+			announceLspLog(self.workspace.writer, sentence: "maxon lsp-server: could not tell whether this server is its checkout's compiler ({e.sentence()}); it answers for itself.")
+			return
+		end 'unidentifiable'
+
+		match route 'route'
+			stay then self.serveInitializeInProcess(doc)
+			slot(path) then self.becomeRelay(path, body: body, doc: doc)
+		end 'route'
+	end 'routeInitialize'
+
+	function serveInitializeInProcess(doc JsonDoc)
+		self.mode = LspSessionMode.served
+		self.handleMessage(doc)
+	end 'serveInitializeInProcess'
+
+	function becomeRelay(slot FilePath, body String, doc JsonDoc)
+		let relay = LspRelay.create(slot, initializeBody: body, initializeId: readRequestId(doc))
+		self.mode = LspSessionMode.relaying(relay)
+		relay.armTick(self.workspace)
+
+		match relay.attachInitial(self.workspace) 'attachment'
+			attached then return
+			detached then respondInitialize(self.workspace, id: readRequestId(doc), doc: doc)
+			failed(reason) then self.answerInitializeThenReport(relay, reason: reason, doc: doc)
+		end 'attachment'
+	end 'becomeRelay'
+
+	function answerInitializeThenReport(relay LspRelay, reason String, doc JsonDoc)
+		respondInitialize(self.workspace, id: readRequestId(doc), doc: doc)
+		relay.report(reason, workspace: self.workspace)
+	end 'answerInitializeThenReport'
+
+	function relayFrameArrived(relay LspRelay, body String, doc JsonDoc)
+		let ends = endsTheSession(doc)
+
+		if not ends 'moreToCome'
+			self.awaitNextFrame()
+		end 'moreToCome'
+
+		if isRequestNamed(doc, method: MethodShutdown) 'shutdown'
+			self.shutdownRequested = true
+		end 'shutdown'
+
+		relay.clientFrame(body, doc: doc, workspace: self.workspace)
+
+		if ends 'sessionOver'
+			self.stopped = true
+		end 'sessionOver'
+	end 'relayFrameArrived'
 
 	function projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket)
 		match self.workspace.projectResolved(dir, answer: answer, ticket: ticket) 'resolution'
@@ -361,23 +469,12 @@ type LspSession
 	end 'changeWorkspaceTrust'
 
 	function openDocument(doc JsonDoc) throws LspParamsError
-		let (_, textDocument, uri) = try notifiedDocument(doc)
-		let text = try lspMemberText(doc, of: textDocument, key: TextKey)
+		let (textDocument, uri, text) = try openedDocument(doc)
 		self.documentArrived(uri, text: text, arrival: BufferArrival.opened, clientVersion: clientVersionOf(doc, textDocument: textDocument))
 	end 'openDocument'
 
 	function changeDocument(doc JsonDoc) throws LspParamsError
-		let (params, textDocument, uri) = try notifiedDocument(doc)
-		let changes = try lspMember(doc, of: params, key: ContentChangesKey)
-		let changeCount = try doc.arrayLength(changes) otherwise throw LspParamsError.malformed
-
-		if changeCount == 0 'noChanges'
-			throw LspParamsError.malformed
-		end 'noChanges'
-
-		// Under FULL sync every entry is a whole-document replacement, so the LAST one is the document.
-		let latest = try doc.arrayAt(changes, index: (changeCount - 1) as ElementIndex) otherwise throw LspParamsError.malformed
-		let text = try lspMemberText(doc, of: latest, key: TextKey)
+		let (textDocument, uri, text) = try changedDocument(doc)
 		self.documentArrived(uri, text: text, arrival: BufferArrival.edited, clientVersion: clientVersionOf(doc, textDocument: textDocument))
 	end 'changeDocument'
 
@@ -414,6 +511,18 @@ function endsTheSession(doc JsonDoc) returns bool
 	return method == MethodExit
 end 'endsTheSession'
 
+function isRequestNamed(doc JsonDoc, method String) returns bool
+	match readRequestId(doc) 'addressee'
+		absent then return false
+		number or
+		text then break
+	end 'addressee'
+
+	let named = try doc.getString(doc.root, key: JsonRpcMethodKey) otherwise return false
+
+	return named == method
+end 'isRequestNamed'
+
 // ⭐⭐ **EXACTLY WHAT THIS SERVER SERVES — THE SAME `servedMethods` THE DISPATCHER ROUTES ON, AND
 // NOTHING ELSE NARROWING IT.** A capability is a promise an editor acts on, and the two ways to break it
 // are symmetric: advertising a method that answers `-32601`, and answering one that was never advertised.
@@ -445,7 +554,7 @@ end 'respondInitialize'
 
 // A client that states no trust is trusted: the option is sent by a client with a trust model of
 // its own, the VS Code extension, and any other client runs a `.maxproj` as `maxon build` would.
-function trustedByInitializationOptions(doc JsonDoc) returns bool
+module function trustedByInitializationOptions(doc JsonDoc) returns bool
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return true
 	let options = try lspMember(doc, of: params, key: InitializationOptionsKey) otherwise return true
 
@@ -463,7 +572,7 @@ end 'serverInfoNode'
 // LSP 3.6, and a client written since sends `rootUri: null` and names the root in the folders. The
 // folders settle it alone where there are any: `rootUri` carries one root and a multi-root window has
 // several, so consulting it first would leave the rest of the window out of the workspace entirely.
-function clientRootsOf(doc JsonDoc) returns LspClientRootArray
+module function clientRootsOf(doc JsonDoc) returns LspClientRootArray
 	var roots = LspClientRootArray.create(0)
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return roots
 
@@ -595,7 +704,7 @@ function areaServedMethods(area LspArea) returns LspMethodArray
 end 'areaServedMethods'
 
 // LSP defines shutdown's result as null.
-function respondShutdown(writer LspStdoutWriter.handle, id LspRequestId)
+module function respondShutdown(writer LspStdoutWriter.handle, id LspRequestId)
 	var doc = JsonDoc.create()
 	writeLspResult(writer, doc: doc, id: id, result: doc.add(JsonNode.nullNode()))
 end 'respondShutdown'
@@ -603,13 +712,34 @@ end 'respondShutdown'
 // `params`, `params.textDocument` and its `uri` — the walk every `textDocument/*` notification begins
 // with. All three are handed back because `didOpen` reads its text out of `textDocument` while
 // `didChange` reads its own out of `params.contentChanges`.
-function notifiedDocument(doc JsonDoc) returns (JsonNodeId, JsonNodeId, String) throws LspParamsError
+module function notifiedDocument(doc JsonDoc) returns (JsonNodeId, JsonNodeId, String) throws LspParamsError
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
 	let textDocument = try lspMember(doc, of: params, key: TextDocumentKey)
 	return (params, textDocument, try lspMemberText(doc, of: textDocument, key: LspUriKey))
 end 'notifiedDocument'
 
-function clientVersionOf(doc JsonDoc, textDocument JsonNodeId) returns ClientDocumentVersion
+module function openedDocument(doc JsonDoc) returns (JsonNodeId, String, String) throws LspParamsError
+	let (_, textDocument, uri) = try notifiedDocument(doc)
+
+	return (textDocument, uri, try lspMemberText(doc, of: textDocument, key: TextKey))
+end 'openedDocument'
+
+module function changedDocument(doc JsonDoc) returns (JsonNodeId, String, String) throws LspParamsError
+	let (params, textDocument, uri) = try notifiedDocument(doc)
+	let changes = try lspMember(doc, of: params, key: ContentChangesKey)
+	let changeCount = try doc.arrayLength(changes) otherwise throw LspParamsError.malformed
+
+	if changeCount == 0 'noChanges'
+		throw LspParamsError.malformed
+	end 'noChanges'
+
+	// Under FULL sync every entry is a whole-document replacement, so the LAST one is the document.
+	let latest = try doc.arrayAt(changes, index: (changeCount - 1) as ElementIndex) otherwise throw LspParamsError.malformed
+
+	return (textDocument, uri, try lspMemberText(doc, of: latest, key: TextKey))
+end 'changedDocument'
+
+module function clientVersionOf(doc JsonDoc, textDocument JsonNodeId) returns ClientDocumentVersion
 	let stated = try doc.getInt(textDocument, key: VersionKey) otherwise return ClientDocumentVersion.unstated
 
 	return ClientDocumentVersion.stated(stated)

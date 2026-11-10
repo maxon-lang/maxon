@@ -527,6 +527,24 @@ release's version as its heading when the release is cut.
   out.
   Fix: call it with `try`, as in `match try child.tryReadStdoutLine() otherwise …`; call `reclaimStdout()`
   before `release()` where `takeStdout()` was used.
+- `StreamingSubprocess.tryReadStderrLine()` throws `SubprocessError.ioFailed` while the child's stderr is out
+  with a `StderrReader` (`takeStderr()`), so it is a throwing call, and `release()` panics while that reader is
+  out.
+  Fix: call it with `try`, as in `match try child.tryReadStderrLine() otherwise …`; call `reclaimStderr()`
+  before `release()` where `takeStderr()` was used.
+- `maxon test` fails a test that passes but leaves a process running when it ends, naming the process, on
+  Windows, Linux and macOS; when no single test of a process leaves it alone, every test of that process
+  fails, naming them. `spec-test` fails a case the same way.
+  Fix: wait for every process a test starts before it ends: `Subprocess.run`, `wait()` on a
+  `StreamingSubprocess`, or a poll of `Process.isAlive` until a detached child has ended.
+- `Process.isAlive(pid)` answers `false` for a process that has ended and not been reaped, on Linux and macOS
+  as on Windows.
+  Fix: wait on a child with `wait()` where the program needs to know it was reaped; a loop that polls
+  `isAlive` until it answers `false` needs no change.
+- `Directory.list` throws `DirectoryListError.accessDenied` for a directory the process may not list and
+  `listFailed` for any other failure, where it threw `notFound` for both.
+  Fix: handle `accessDenied` and `listFailed` beside `notFound` where a `notFound` arm stood for every
+  failure to list.
 - A module-level or `static` `var` is removed: `var` at file scope, in a `module` or `export` declaration, or
   after `static` is a syntax error, where it declared one word shared by every function. `let` stays, at file
   scope and after `static`.

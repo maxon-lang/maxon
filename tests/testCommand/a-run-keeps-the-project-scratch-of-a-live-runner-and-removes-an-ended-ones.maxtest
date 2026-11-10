@@ -1,0 +1,52 @@
+let RunnerScratchCase = "a-run-keeps-the-project-scratch-of-a-live-runner-and-removes-an-ended-ones"
+let RunnerScratchLinePrefix = "project-scratch: "
+let RunnerScratchDirPrefix = "scratch-"
+let RunnerScratchBuildDirName = "test"
+let RunnerScratchHeldName = "held.txt"
+
+test 'a run names its project scratch for its own process, keeps the scratch of a runner still going and removes that of one that ended'
+	let buildDir = fixtureDir("{FixturesDir}/{RunnerScratchCase}").join(ProjectProductsDirName).join(RunnerScratchBuildDirName)
+	let live = buildDir.join("{RunnerScratchDirPrefix}{Process.id()}")
+	let ended = buildDir.join("{RunnerScratchDirPrefix}{endedProcessId()}")
+
+	for planted in [live, ended] 'eachPlanted'
+		Expect.isTrue(Directory.create(planted), message: "the gate could not create {planted.toString()}")
+		File.writeText(planted.join(RunnerScratchHeldName), content: "left by another runner\n")
+	end 'eachPlanted'
+
+	let run = runFixture(RunnerScratchCase)
+	let report = withoutCarriageReturns("{run.stdout}{run.stderr}")
+	let liveKept = File.exists(live.join(RunnerScratchHeldName))
+	let endedRemoved = not Directory.exists(ended)
+
+	discardStagedDir(live)
+
+	if not endedRemoved 'endedStays'
+		discardStagedDir(ended)
+	end 'endedStays'
+
+	Expect.equal(run.exitCode(), expected: 1, message: "the fixture's one test fails by design, so its run exits 1. It printed: {report}")
+	Expect.equal(projectScratchPrinted(report).filename(), expected: "{RunnerScratchDirPrefix}{run.pid}", message: "the run's project scratch directory is named for the process that ran the tests, so no other run of the project shares it. It printed: {report}")
+	Expect.isTrue(liveKept, message: "the run removed or emptied {live.toString()}, the scratch directory of a runner whose process is still going")
+	Expect.isTrue(endedRemoved, message: "the run left {ended.toString()}, the scratch directory of a runner whose process has ended")
+end 'a run names its project scratch for its own process, keeps the scratch of a runner still going and removes that of one that ended'
+
+function projectScratchPrinted(report String) returns FilePath
+	var named = StringArray.create(0)
+
+	for line in report.split("\n") 'eachLine'
+		let trimmed = line.trim()
+
+		if trimmed.contains(RunnerScratchLinePrefix) 'namesTheScratch'
+			named.push(try trimmed.split(RunnerScratchLinePrefix).get(1) otherwise panic("the gate could not run — the `{RunnerScratchLinePrefix}` line names nothing: {trimmed}"))
+		end 'namesTheScratch'
+	end 'eachLine'
+
+	if named.isEmpty() 'notOnce'
+		panic("the gate could not run — the fixture printed no `{RunnerScratchLinePrefix}` line: {report}")
+	end 'notOnce'
+
+	let spelled = try named.get(0) otherwise panic("the gate could not run — the `{RunnerScratchLinePrefix}` line was counted once and is gone")
+
+	return try FilePath.from(spelled) otherwise panic("the gate could not run — the path the fixture printed after `{RunnerScratchLinePrefix}` is not a path: {report}")
+end 'projectScratchPrinted'

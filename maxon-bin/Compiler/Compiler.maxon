@@ -205,9 +205,8 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// stay a disjoint partition of the compile.
 	recordPhaseExcluding(project, phase: CompilePhase.load, probe: whole, inner: CompilePhase.loadRuntime)
 
-	// ⭐ RESOLVED BEFORE THE PIPELINE, AND THAT ORDER IS THE WHOLE POINT: the previous build's
-	// artifacts are removed HERE, ahead of every step that can fail. See `discardPreviousOutput`.
-	// A compiler rebuilding its own image is the one exception — see `vacateRunningImage`.
+	// Resolved before the pipeline, so an output that cannot be staged refuses the build before it
+	// compiles (`requireOutputStageable`).
 	//
 	// Bracketed as its own phase rather than left in `load`'s: these touch the OUTPUT, `load`
 	// reads the SOURCES, and a phase that absorbs a neighbour's cost is the defect CompileTimings'
@@ -231,12 +230,60 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 		throw unidentifiablePathFailure(e)
 	end 'unidentifiableImage'
 
-	if not rebuildsItself 'discardAheadOfThePipeline'
-		try discardPreviousOutput(project, outputPath: outputPath)
-	end 'discardAheadOfThePipeline'
+	let imagePath = stagedImagePath(outputPath)
+	try requireOutputStageable(project, staged: imagePath, outputPath: outputPath, rebuildsItself: rebuildsItself)
 
 	recordPhase(project, phase: CompilePhase.prepareOutput, probe: outputProbe)
 
+	let built = try buildStagedImage(project, tools: writerTools, staged: imagePath, outputPath: outputPath, emitIr: emitIr, debugInfo: debugInfo) otherwise (e) 'buildFailed'
+		abandonStagedBuild(imagePath, outputPath: outputPath, rebuildsItself: rebuildsItself)
+		throw e
+	end 'buildFailed'
+
+	let publishProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
+	let sidecar = try publishStagedImage(project, staged: imagePath, outputPath: outputPath, rebuildsItself: rebuildsItself, stagedSidecar: built.sidecar)
+	recordPhaseWithItsLog(project, phase: CompilePhase.prepareOutput, probe: publishProbe)
+
+	// Stamp the totals BEFORE anything reads them (every share divides by them, and both
+	// reconciliation panics compare against them), and build the tables lazily behind
+	// `compilerLogEnabled` so a build without `--log=compiler:debug` pays only for the handful of
+	// counter reads, never for formatting a row.
+	flushCompilerLog()
+
+	let total = whole.elapsed()
+	project.timings.total = PhaseCost.create(total.nanos, cpuTicks: total.cpuTicks)
+	project.memory.total = total.minus(project.session.treeLock.upkeep())
+	project.retiredWorkers.release()
+
+	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+		let log = compilerLogger(CompilerLogGroup.compiler)
+		log.debug(compileTimingsReport(project.timings))
+		log.debug(compileMemoryReport(project.memory, timings: project.timings))
+	end 'debugging'
+
+	// `--metrics=<path>`: the machine-readable twin of those two tables. Written last, so
+	// it can report the code size the degeneracy self-check needs (see MetricsEmit).
+	match metrics 'metrics'
+		unstated then break
+		stated(path) then writeMetrics(project, metricsPath: path, codeBytes: built.codeBytes)
+	end 'metrics'
+
+	compilerLogger(CompilerLogGroup.compiler).info("Wrote {built.codeBytes} bytes of code to {outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
+	return CompileProduct.create(outputPath, irText: built.irText, codeBytes: built.codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks, sidecar: sidecar, drivesOtherProcesses: built.drivesOtherProcesses)
+end 'compileMeasured'
+
+type StagedBuild
+	module let irText as TargetIrText
+	module let codeBytes as CodeByteCount
+	module let sidecar as SidecarOutcome
+	module let drivesOtherProcesses as bool
+
+	static function create(irText TargetIrText, codeBytes CodeByteCount, sidecar SidecarOutcome, drivesOtherProcesses bool) returns StagedBuild
+		return Self{irText: irText, codeBytes: codeBytes, sidecar: sidecar, drivesOtherProcesses: drivesOtherProcesses}
+	end 'create'
+end 'StagedBuild'
+
+function buildStagedImage(project Project, tools ExecutableWriterTools, staged FilePath, outputPath FilePath, emitIr bool, debugInfo bool) returns StagedBuild throws CompileError
 	var codeResult = try compileToCodeResult(project)
 
 	// ⭐ **THE BRACKET KEEPS THE RENDER, WHICH IS THE COST — the WRITE is the command line's and is
@@ -269,15 +316,8 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
 	end 'emitIr'
 
-	if rebuildsItself 'vacateForTheWrite'
-		let vacateProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
-		try vacateRunningImage(project, outputPath: outputPath)
-		try discardPreviousOutput(project, outputPath: outputPath)
-		recordPhaseWithItsLog(project, phase: CompilePhase.prepareOutput, probe: vacateProbe)
-	end 'vacateForTheWrite'
-
 	let writeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeExe)
-	codeResult.imagePlacement = try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: outputPath, tools: writerTools, rebuildsItself: rebuildsItself)
+	codeResult.imagePlacement = try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: staged, tools: tools)
 
 	// ⭐⭐ **AN INSTRUMENTED IMAGE IS PUBLISHED TWICE, AND THE SECOND PASS IS WHAT GIVES ITS `.mxcov` THE SAME
 	// BUILD-ID THE SIDECAR RECORDS.** The id is a plain fold of the `.text` a driver reads back OUT OF THE
@@ -291,18 +331,12 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 	// first byte for byte apart from those eight.
 	if project.coverage 'stampTheCounterImage'
 		stampCoverageImage(project, codeResult: codeResult)
-		codeResult.imagePlacement = try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: outputPath, tools: writerTools, rebuildsItself: rebuildsItself)
+		codeResult.imagePlacement = try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: staged, tools: tools)
 	end 'stampTheCounterImage'
 
 	recordPhaseWithItsLog(project, phase: CompilePhase.writeExe, probe: writeProbe)
 
-	try requireOutputWritten(project, outputPath: outputPath) otherwise 'notWritten'
-		if rebuildsItself 'putTheCompilerBack'
-			restoreVacatedImage(outputPath)
-		end 'putTheCompilerBack'
-
-		throw CompileError.compileError
-	end 'notWritten'
+	try requireOutputWritten(project, staged: staged, outputPath: outputPath)
 
 	// ⭐ **AFTER THE EXECUTABLE IS PROVEN WRITTEN, because the sidecar describes THAT file** — its
 	// build-id is the fold of the very bytes just published, and a driver recomputes it from the binary
@@ -312,41 +346,12 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	if debugInfo 'writeDebugInfo'
 		let debugProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeDebugInfo)
-		sidecar = writeDebugInfoSidecar(project, codeResult: codeResult, outputPath: outputPath)
+		sidecar = writeDebugInfoSidecar(project, codeResult: codeResult, outputPath: staged)
 		recordPhaseWithItsLog(project, phase: CompilePhase.writeDebugInfo, probe: debugProbe)
 	end 'writeDebugInfo'
 
-	// Stamp the totals BEFORE anything reads them (every share divides by them, and both
-	// reconciliation panics compare against them), and build the tables lazily behind
-	// `compilerLogEnabled` so a build without `--log=compiler:debug` pays only for the handful of
-	// counter reads, never for formatting a row.
-	flushCompilerLog()
-
-	let total = whole.elapsed()
-	project.timings.total = PhaseCost.create(total.nanos, cpuTicks: total.cpuTicks)
-	project.memory.total = total.minus(project.session.treeLock.upkeep())
-	project.retiredWorkers.release()
-
-	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		let log = compilerLogger(CompilerLogGroup.compiler)
-		log.debug(compileTimingsReport(project.timings))
-		log.debug(compileMemoryReport(project.memory, timings: project.timings))
-	end 'debugging'
-
-	// Read ONCE, for the three readers below — `--metrics`, the log line and the product. It is one
-	// fact about this build, and three calls are three places a later change could make it two.
-	let codeBytes = codeResult.emittedCodeBytes()
-
-	// `--metrics=<path>`: the machine-readable twin of those two tables. Written last, so
-	// it can report the code size the degeneracy self-check needs (see MetricsEmit).
-	match metrics 'metrics'
-		unstated then break
-		stated(path) then writeMetrics(project, metricsPath: path, codeBytes: codeBytes)
-	end 'metrics'
-
-	compilerLogger(CompilerLogGroup.compiler).info("Wrote {codeBytes} bytes of code to {outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
-	return CompileProduct.create(outputPath, irText: irText, codeBytes: codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks, sidecar: sidecar, drivesOtherProcesses: codeResult.stdModule.usesMachTaskPorts)
-end 'compileMeasured'
+	return StagedBuild.create(irText, codeBytes: codeResult.emittedCodeBytes(), sidecar: sidecar, drivesOtherProcesses: codeResult.stdModule.usesMachTaskPorts)
+end 'buildStagedImage'
 
 // For a bracket whose code logs: the flush keeps the handling of its records inside it (see
 // `flushCompilerLog`).
@@ -379,7 +384,8 @@ end 'siblingImagePath'
 export function outputIsRunningImage(outputIdentity FilePath) returns bool throws RunCacheError
 	let running = try Process.executablePath() otherwise 'noIntrospection'
 		// A host that will not say what it is running cannot be asked this question. A self-rebuild on
-		// such a host is refused with E6002 by `discardPreviousOutput`, which cannot delete a running image.
+		// such a host is staged as any other output, so a failed compile moves the running image out of
+		// the slot.
 		return false
 	end 'noIntrospection'
 
@@ -390,22 +396,19 @@ end 'outputIsRunningImage'
 
 // ⭐⭐ **A COMPILER REBUILDING ITSELF WRITES OVER THE IMAGE IT IS EXECUTING, AND NO OS ALLOWS THAT.**
 // Windows refuses to DELETE a running executable and permits RENAMING one, so the image is moved to
-// `<stem>.previous<ext>` and every step after this — the `discardPreviousOutput` check, the writer, the
-// "did anything actually appear" verification — runs exactly as it does for any other program, over a
-// path nothing holds open.
+// `<stem>.previous<ext>`, beside the slot rather than into the staging directory, where it stays as the
+// recovery.
 //
 // ⛔ **IT RUNS ONLY ONCE THE COMPILE HAS SUCCEEDED, SO A FAILED SELF-REBUILD LEAVES THE RUNNING COMPILER
 // IN THE SLOT.** That compiler is the only thing that can build the fix; a slot emptied by a compile error
-// leaves the tree with nothing to compile it. Every other output is discarded ahead of the pipeline
-// instead, because a stale PROGRAM would answer a `;`-chained run as though it were current.
+// leaves the tree with nothing to compile it. Every other output is moved out of the slot when its compile
+// fails (`abandonStagedBuild`), because a stale PROGRAM would answer a `;`-chained run as though it were
+// current.
 //
 // ⚠ **AN OLDER `.previous` MAY ITSELF BE RUNNING** — an `mcp-server` or `lsp-server` started before the
 // last rebuild — and then it cannot be deleted either. It is renamed aside to a unique
 // `<stem>.retired.<scratch block><ext>` instead, and every self-rebuild first sweeps the retired images
 // nothing holds any longer.
-//
-// When the image cannot be vacated the refusal is made HERE: `discardPreviousOutput`'s would blame a
-// spec-test.
 function vacateRunningImage(project Project, outputPath FilePath) throws CompileError
 	sweepRetiredImages(outputPath.anchoredAt(Directory.currentPath()))
 
@@ -420,25 +423,233 @@ function vacateRunningImage(project Project, outputPath FilePath) throws Compile
 	try File.rename(outputPath, to: previous) otherwise 'unmovable'
 		try refuseUnvacatedImage(project, outputPath: outputPath, held: outputPath)
 	end 'unmovable'
-
-	moveDebugSidecar(outputPath, to: previous)
-
-	compilerLogger(CompilerLogGroup.compiler).info("rebuilding this compiler: moved the running image to {previous.toString()}")
 end 'vacateRunningImage'
 
-// The write failed after `vacateRunningImage` emptied the slot; the image this process runs goes back, for
-// the reason a failed compile never vacates it.
-function restoreVacatedImage(outputPath FilePath)
-	let previous = siblingImagePath(outputPath, infix: PreviousImageSuffix)
+union VacatedOutput
+	nothingThere
+	movedTo(location FilePath)
+end 'VacatedOutput'
 
-	try File.rename(previous, to: outputPath) otherwise 'unmovable'
-		compilerLogger(CompilerLogGroup.compiler).error("could not move the running compiler back from {previous.toString()} to {outputPath.toString()}; move it back by hand")
-		return
+function publishStagedImage(project Project, staged FilePath, outputPath FilePath, rebuildsItself bool, stagedSidecar SidecarOutcome) returns SidecarOutcome throws CompileError
+	let vacated = try vacateOutput(project, staged: staged, outputPath: outputPath, rebuildsItself: rebuildsItself)
+
+	try File.rename(staged, to: outputPath) otherwise 'unplaceable'
+		try refuseUnplaceableImage(project, staged: staged, outputPath: outputPath, vacated: vacated)
+	end 'unplaceable'
+
+	if rebuildsItself 'keepThePreviousSidecar'
+		let previous = siblingImagePath(outputPath, infix: PreviousImageSuffix)
+
+		moveDebugSidecar(outputPath, to: previous)
+		compilerLogger(CompilerLogGroup.compiler).info("rebuilding this compiler: moved the running image to {previous.toString()}")
+	end 'keepThePreviousSidecar'
+
+	let sidecar = publishDebugSidecar(staged, outputPath: outputPath, stagedSidecar: stagedSidecar)
+	discardStaleSideOutputs(outputPath)
+	discardStagingDirectory(staged)
+
+	return sidecar
+end 'publishStagedImage'
+
+function publishDebugSidecar(staged FilePath, outputPath FilePath, stagedSidecar SidecarOutcome) returns SidecarOutcome
+	discardDebugInfoSidecar(outputPath)
+
+	if stagedSidecar != SidecarOutcome.written 'nothingToPlace'
+		return stagedSidecar
+	end 'nothingToPlace'
+
+	let placed = sidecarPathOf(outputPath)
+
+	try File.rename(sidecarPathOf(staged), to: placed) otherwise 'unplaced'
+		compilerLogger(CompilerLogGroup.compiler).error("Failed to move the debug-info sidecar to {placed.toString()}")
+		return SidecarOutcome.failed
+	end 'unplaced'
+
+	return SidecarOutcome.written
+end 'publishDebugSidecar'
+
+function vacateOutput(project Project, staged FilePath, outputPath FilePath, rebuildsItself bool) returns VacatedOutput throws CompileError
+	if rebuildsItself 'running'
+		try vacateRunningImage(project, outputPath: outputPath) otherwise (e) 'unvacated'
+			discardStagingDirectory(staged)
+			throw e
+		end 'unvacated'
+
+		return VacatedOutput.movedTo(siblingImagePath(outputPath, infix: PreviousImageSuffix))
+	end 'running'
+
+	return try moveOutputAside(staged, outputPath: outputPath) otherwise 'unmovable'
+		discardStagingDirectory(staged)
+
+		reportUnreplaceableOutput(project, outputPath: outputPath, reason: "it could not be moved aside to make way for the new build", likelyCause: MovedAsideRefusedCause)
+		try refuseCompile(project)
+	end 'unmovable'
+end 'vacateOutput'
+
+// A rename rather than a delete: Windows lets a running executable be renamed, so an output that is
+// still running does not refuse the build. The aside image stays in the staging directory until
+// nothing runs it, and a later build's sweep removes it.
+function moveOutputAside(staged FilePath, outputPath FilePath) returns VacatedOutput throws FileRenameError
+	if not File.exists(outputPath) 'nothingThere'
+		return VacatedOutput.nothingThere
+	end 'nothingThere'
+
+	let stagingDirectory = try staged.parent() otherwise panic("moveOutputAside: a staged image path always has a directory")
+	let aside = stagingDirectory.join(siblingImagePath(outputPath, infix: scratchNameFor(RetiredImageInfix)).filename())
+
+	try File.rename(outputPath, to: aside)
+
+	return VacatedOutput.movedTo(aside)
+end 'moveOutputAside'
+
+function refuseUnplaceableImage(project Project, staged FilePath, outputPath FilePath, vacated VacatedOutput) throws CompileError
+	if restoreVacatedImage(outputPath, vacated: vacated) 'restored'
+		discardStagingDirectory(staged)
+
+		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "the new build could not be moved into place", likelyCause: PlacementRefusedCause)
+	end 'restored'
+
+	match vacated 'where'
+		nothingThere then panic("refuseUnplaceableImage: a restore that has nothing to move back always succeeds")
+		movedTo(location) then try refuseOutputLeftAside(project, staged: staged, outputPath: outputPath, location: location)
+	end 'where'
+end 'refuseUnplaceableImage'
+
+function refuseOutputLeftAside(project Project, staged FilePath, outputPath FilePath, location FilePath) throws CompileError
+	reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.binaryOutputNotReplaceable, message: "could not replace the build output at {outputPath} — the new build could not be moved into place and the previous output could not be moved back, so {outputPath} holds nothing. The previous output is at {location.toString()} and the new build at {staged.toString()}: move either to {outputPath.toString()} by hand."))
+	try refuseCompile(project)
+end 'refuseOutputLeftAside'
+
+function restoreVacatedImage(outputPath FilePath, vacated VacatedOutput) returns bool
+	match vacated 'where'
+		nothingThere then return true
+		movedTo(location) then return restoreImageFrom(location, outputPath: outputPath)
+	end 'where'
+end 'restoreVacatedImage'
+
+function restoreImageFrom(location FilePath, outputPath FilePath) returns bool
+	try File.rename(location, to: outputPath) otherwise 'unmovable'
+		compilerLogger(CompilerLogGroup.compiler).error("could not move the previous output back from {location.toString()} to {outputPath.toString()}")
+		return false
 	end 'unmovable'
 
-	moveDebugSidecar(previous, to: outputPath)
-	compilerLogger(CompilerLogGroup.compiler).info("the build failed: moved the running compiler back to {outputPath.toString()}")
-end 'restoreVacatedImage'
+	compilerLogger(CompilerLogGroup.compiler).info("the new build could not be placed: moved the previous output back to {outputPath.toString()}")
+
+	return true
+end 'restoreImageFrom'
+
+// Named after the output, so the next build of the same output finds and sweeps what an interrupted
+// one left there.
+function stagedImagePath(outputPath FilePath) returns FilePath
+	let name = outputPath.filename()
+	let stagingName = "{ImageStagingPrefix}{hexOfLeadingBytes(sha256(name.toByteArray()), count: StagingNameDigestBytes)}"
+
+	let beside = try outputPath.parent() otherwise 'noDirectoryPart'
+		let staging = try FilePath.from(stagingName) otherwise panic("stagedImagePath: a staging directory name beside a valid path is valid")
+
+		return staging.join(name)
+	end 'noDirectoryPart'
+
+	return beside.join(stagingName).join(name)
+end 'stagedImagePath'
+
+function requireOutputStageable(project Project, staged FilePath, outputPath FilePath, rebuildsItself bool) throws CompileError
+	let stagingDirectory = try staged.parent() otherwise panic("requireOutputStageable: a staged image path always has a directory")
+
+	if not rebuildsItself and fileIsReadOnly(outputPath) 'readOnly'
+		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "it is read-only", likelyCause: ReadOnlyOutputCause)
+	end 'readOnly'
+
+	if Directory.exists(stagingDirectory) 'leftover'
+		discardStagingDirectory(staged)
+	end 'leftover'
+
+	if not Directory.create(stagingDirectory) 'uncreatable'
+		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "the directory {stagingDirectory.toString()} that stages its replacement could not be created", likelyCause: StagingDirectoryCause)
+	end 'uncreatable'
+
+	if File.exists(staged) 'stagedImageStays'
+		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "the image {staged.toString()} an interrupted build left could not be removed", likelyCause: StagingDirectoryCause)
+	end 'stagedImageStays'
+end 'requireOutputStageable'
+
+function fileIsReadOnly(path FilePath) returns bool
+	let info = try File.info(path) otherwise 'unreadable'
+		return false
+	end 'unreadable'
+
+	return info.isReadOnly
+end 'fileIsReadOnly'
+
+function hostRefusesToDeleteRunningImages() returns bool
+	return match detectHostTarget().os 'os'
+		windows gives true
+		linux or
+		macos or
+		wasi gives false
+	end 'os'
+end 'hostRefusesToDeleteRunningImages'
+
+function abandonStagedBuild(staged FilePath, outputPath FilePath, rebuildsItself bool)
+	if not rebuildsItself 'previousProgramIsStale'
+		discardPreviousOutput(staged, outputPath: outputPath)
+	end 'previousProgramIsStale'
+
+	discardStagingDirectory(staged)
+end 'abandonStagedBuild'
+
+function discardStagingDirectory(staged FilePath)
+	let stagingDirectory = try staged.parent() otherwise panic("discardStagingDirectory: a staged image path always has a directory")
+
+	for leftover in Directory.removeTree(stagingDirectory) 'eachLeftover'
+		reportLeftoverInStaging(leftover, staged: staged)
+	end 'eachLeftover'
+end 'discardStagingDirectory'
+
+function reportLeftoverInStaging(leftover FilePath, staged FilePath)
+	try File.delete(leftover) otherwise (why) 'stays'
+		reportLeftoverThatStays(leftover, why: why, staged: staged)
+	end 'stays'
+end 'reportLeftoverInStaging'
+
+function reportLeftoverThatStays(leftover FilePath, why FileDeleteError, staged FilePath)
+	match why 'why'
+		notFound then return
+		busy then reportLeftoverInUse(leftover)
+		accessDenied then reportLeftoverDeniedRemoval(leftover, staged: staged)
+		failed then compilerLogger(CompilerLogGroup.compiler).warn("{leftover.toString()} could not be removed from the staging directory: remove it by hand")
+	end 'why'
+end 'reportLeftoverThatStays'
+
+function isAsideImage(leftover FilePath, staged FilePath) returns bool
+	let stagingDirectory = try staged.parent() otherwise panic("isAsideImage: a staged image path always has a directory")
+	let directory = try leftover.parent() otherwise panic("isAsideImage: a leftover of the staging directory always has a directory")
+	let name = leftover.filename()
+
+	if not directory.equals(stagingDirectory) 'nested'
+		return false
+	end 'nested'
+
+	match parsedScratchName(name, family: retiredImageFamily(staged.stem())) 'parsed'
+		minted(retiredStem, _) then return name.replaceFirst(retiredStem, with: "") == staged.fileExtension()
+		unminted then return false
+	end 'parsed'
+end 'isAsideImage'
+
+// Windows denies deleting a running image and a read-only file alike; the read-only test keeps the
+// second from being reported as in use and so never named to the user.
+function reportLeftoverDeniedRemoval(leftover FilePath, staged FilePath)
+	if hostRefusesToDeleteRunningImages() and isAsideImage(leftover, staged: staged) and not fileIsReadOnly(leftover) 'runningImage'
+		reportLeftoverInUse(leftover)
+		return
+	end 'runningImage'
+
+	compilerLogger(CompilerLogGroup.compiler).warn("{leftover.toString()} could not be removed from the staging directory and is no output this build moved aside: remove it by hand, and clear its read-only flag or the directory's permissions first if they forbid it")
+end 'reportLeftoverDeniedRemoval'
+
+function reportLeftoverInUse(leftover FilePath)
+	compilerLogger(CompilerLogGroup.compiler).debug("{leftover.toString()} is still in use; the next build of this output removes it")
+end 'reportLeftoverInUse'
 
 function retireHeldImage(project Project, held FilePath, outputPath FilePath) throws CompileError
 	let retired = siblingImagePath(outputPath, infix: scratchNameFor(RetiredImageInfix))
@@ -468,11 +679,15 @@ end 'sweepRetiredImages'
 function isRetiredImage(entry FilePath, stem String, ext String) returns bool
 	let name = entry.filename()
 
-	match parsedScratchName(name, family: ScratchFamily.afterBase("{stem}{RetiredImageInfix}")) 'parsed'
+	match parsedScratchName(name, family: retiredImageFamily(stem)) 'parsed'
 		minted(retiredStem, _) then return isImageSuffixOrItsSidecar(name.replaceFirst(retiredStem, with: ""), image: ext)
 		unminted then return isNumberedRetiredImage(name, stem: stem, ext: ext)
 	end 'parsed'
 end 'isRetiredImage'
+
+function retiredImageFamily(stem String) returns ScratchFamily
+	return ScratchFamily.afterBase("{stem}{RetiredImageInfix}")
+end 'retiredImageFamily'
 
 // `<stem>.retired-<digits><ext>` or its sidecar, the name an older compiler retires an image under.
 // ASCII digits only: `decimalDigits()` would admit every Unicode Nd.
@@ -528,62 +743,37 @@ function moveDebugSidecar(binary FilePath, to FilePath)
 	end 'unmovable'
 end 'moveDebugSidecar'
 
-// ⭐ **EVERYTHING THIS BUILD WOULD PUBLISH IS REMOVED BEFORE THE FIRST STEP THAT CAN FAIL.**
-//
-// Truncate-on-open does NOT cover this, and believing it does is the trap. `File.writeBinary` opens
-// `CREATE_ALWAYS`, which truncates — but only at the instant the WRITER runs, and the writer is the
-// LAST step of a SUCCESSFUL compile. A parse error, a semantic error, an E5001 register overflow or
-// an encoder fault never reaches it, so the previous build's bytes survive untouched and keep
-// answering. Anything that checks the BINARY rather than the build's exit code then gets a confident
-// wrong answer from stale code, which is the one thing this compiler must never hand anybody.
-//
+// A failed compile takes the previous output out of the slot. Anything that checks the BINARY rather
+// than the build's exit code would otherwise get a confident wrong answer from stale code, which is the
+// one thing this compiler must never hand anybody.
+function discardPreviousOutput(staged FilePath, outputPath FilePath)
+	discardStaleSideOutputs(outputPath)
+	discardDebugInfoSidecar(outputPath)
+
+	_ = try moveOutputAside(staged, outputPath: outputPath) otherwise 'stays'
+		compilerLogger(CompilerLogGroup.compiler).error("the build failed and the previous output {outputPath.toString()} could not be moved out of the way, so it is stale and will answer anything you run next")
+		return
+	end 'stays'
+end 'discardPreviousOutput'
+
 // The `.ir` sidecar goes UNCONDITIONALLY, not only under `--emit-ir`: a build that does not produce
 // one must not leave the previous one behind either, or dropping the flag silently preserves a stale
 // answer beside a fresh exe — a mismatched pair that reads as a matched one.
-//
-// ⚠ AN OUTPUT THAT SURVIVES THE DELETE IS A HARD FAILURE, and that is what makes
-// `requireOutputWritten` exact. On Windows a running (or read-only) executable cannot be removed,
-// and the write that follows would fail for the same reason — which `writePe`/`writeElf`/`writeMachO`
-// LOG AND SWALLOW, so the compile would go on to print "Wrote N bytes" and exit 0 over the stale
-// binary. Refusing here means that once this returns, NOTHING is at `outputPath`; so its presence
-// afterwards is proof the writer put it there, and its absence is proof the writer did not.
-function discardPreviousOutput(project Project, outputPath FilePath) throws CompileError
-	// Absence is the ordinary case (a first build), and `File.delete` signals it by throwing — so the
-	// throw carries no information here. The existence re-check below is the only test that can tell
-	// "it was not there" from "it would not go", which is the distinction that matters.
+function discardStaleSideOutputs(outputPath FilePath)
 	try File.delete(outputPath.changeExtension(IrFileExtension)) otherwise ignore
-
-	// UNCONDITIONALLY, for the `.ir` sidecar's reason exactly: ADDING `--no-debug-info` must not leave the
-	// previous build's debug info beside a fresh executable. The build-id would refuse that stale pair — but
-	// only at the moment somebody tried to debug it, which is the worst moment to find out.
-	discardDebugInfoSidecar(outputPath)
-
-	// And the counter file, for the sidecar's reason and under the same rule — see `discardCoverageData`.
 	discardCoverageData(outputPath)
-	try File.delete(outputPath) otherwise ignore
+end 'discardStaleSideOutputs'
 
-	if File.exists(outputPath) 'undeletable'
-		// ⭐ **IT NAMES THE LIKELY CAUSE, BECAUSE THE MECHANICAL ONE IS NOT ACTIONABLE.** "Locked or
-		// read-only" is true and reads exactly like a broken build. In this tree the holder is a
-		// `spec-test` or a `build` still running its own image. The compiler cannot NAME it (that needs
-		// `RestartManager`/`NtQuerySystemInformation`, imported nowhere here), but it can say which way
-		// to look.
-		//
-		// ⚠ The deadline is QUOTED from `WedgeWatchdogMs` so the message and the watchdog cannot
-		// disagree, and it is attached only to the holder it bounds: `WedgeWatchdogMs` bounds the spec
-		// pool's dispatch loop and nothing bounds a stalled `build`, so a deadline stated over both
-		// would tell the reader to wait for something that may never end.
-		let likelyCause = "The likeliest cause is that it is still running — a spec-test or an earlier build in this tree that has not exited. A spec-test that has stopped making progress aborts itself after {formatSeconds(WedgeWatchdogMs)} and releases the file; a stalled build is bounded by nothing and has to be ended by hand. If no process holds it, clear the read-only flag."
-		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "it is locked or read-only and could not be removed", likelyCause: likelyCause)
-	end 'undeletable'
-end 'discardPreviousOutput'
-
-// ⚠ EVERY E6002 SAYS THE STALE BINARY SURVIVED. A build refused here leaves the previous binary at
+// ⚠ EVERY REFUSAL HERE SAYS THE STALE BINARY SURVIVED. A build refused here leaves the previous binary at
 // `outputPath`, so a `;`-chained `build; suite` runs it and reports a false red or a false green.
 function refuseUnreplaceableOutput(project Project, outputPath FilePath, reason String, likelyCause String) throws CompileError
-	reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.binaryOutputNotReplaceable, message: "could not replace the build output at {outputPath} — {reason}, so the PREVIOUS build's binary is still in place and will answer anything you run next. {likelyCause}"))
+	reportUnreplaceableOutput(project, outputPath: outputPath, reason: reason, likelyCause: likelyCause)
 	try refuseCompile(project)
 end 'refuseUnreplaceableOutput'
+
+function reportUnreplaceableOutput(project Project, outputPath FilePath, reason String, likelyCause String)
+	reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.binaryOutputNotReplaceable, message: "could not replace the build output at {outputPath} — {reason}, so the PREVIOUS build's binary is still in place and will answer anything you run next. {likelyCause}"))
+end 'reportUnreplaceableOutput'
 
 // ⛔ THE BACKEND WRITES THE FILE AND DOES NOT CREATE THE PATH TO IT, so an output directory that does
 // not exist yet is the build's problem to solve and not the writer's to discover. Without this the
@@ -610,18 +800,8 @@ function ensureOutputDirectory(project Project, outputPath FilePath) throws Comp
 	try refuseCompile(project)
 end 'ensureOutputDirectory'
 
-// The backend claimed to have written the executable; check that something is actually there.
-//
-// `discardPreviousOutput` emptied this path before the write, so this is not a heuristic — it is an
-// exact reading of whether the writer produced a file. It exists because the four backend writers
-// report a failed `File.writeBinary` by LOGGING it and returning, which would otherwise leave `compile`
-// free to announce "Wrote N bytes" and exit 0 while nothing has been written.
-function writeExecutableOrRefuse(project Project, codeResult CodeResult, outputPath FilePath, tools ExecutableWriterTools, rebuildsItself bool) returns ImagePlacement throws CompileError
+function writeExecutableOrRefuse(project Project, codeResult CodeResult, outputPath FilePath, tools ExecutableWriterTools) returns ImagePlacement throws CompileError
 	return try writeExecutable(codeResult, target: project.target, outputPath: outputPath, productVersion: project.productVersion, tools: tools) otherwise (e) 'writeFailed'
-		if rebuildsItself 'putTheCompilerBack'
-			restoreVacatedImage(outputPath)
-		end 'putTheCompilerBack'
-
 		reportDiagnostic(project, diagnostic: wasmComponentDiagnostic(e))
 		try refuseCompile(project)
 	end 'writeFailed'
@@ -631,12 +811,18 @@ function wasmComponentDiagnostic(error WasmComponentError) returns Diagnostic
 	return Diagnostic.programWide(ErrorCode.binaryWasmComponentNotProduced, message: wasmComponentProblem(error))
 end 'wasmComponentDiagnostic'
 
-function requireOutputWritten(project Project, outputPath FilePath) throws CompileError
-	if File.exists(outputPath) 'written'
+// The backend claimed to have written the executable; check that something is actually there.
+//
+// `requireOutputStageable` emptied the staged path before the write, so this is not a heuristic — it is
+// an exact reading of whether the writer produced a file. It exists because the four backend writers
+// report a failed `File.writeBinary` by LOGGING it and returning, which would otherwise leave `compile`
+// free to announce "Wrote N bytes" and exit 0 while nothing has been written.
+function requireOutputWritten(project Project, staged FilePath, outputPath FilePath) throws CompileError
+	if File.exists(staged) 'written'
 		return
 	end 'written'
 
-	reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.binaryOutputNotWritten, message: "the backend produced no file at {outputPath} — the write failed (the writer logged the reason above)"))
+	reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.binaryOutputNotWritten, message: "the backend produced no file at the staging path {staged}, so the output {outputPath} was not built — the write failed (the writer logged the reason above)"))
 	try refuseCompile(project)
 end 'requireOutputWritten'
 
@@ -1554,6 +1740,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// the end of kernel32's run.
 	pipeline.stdModule.usesBackgroundPriority = usage.usesBackgroundPriority
 	pipeline.stdModule.usesProcessLiveness = usage.usesProcessLiveness
+	pipeline.stdModule.usesProcessDescendants = usage.usesProcessDescendants
 	pipeline.stdModule.usesProcessNamespace = usage.usesProcessNamespace
 	pipeline.stdModule.usesEntropy = usage.usesEntropy
 	pipeline.stdModule.usesTrustStore = usage.usesTrustStore
@@ -1676,6 +1863,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	checkSharedMemoryAnswers(signatures, stdlibPath: librarySourcePath(project, fileName: sharedMemoryStdlibFileName()))
 	checkSubprocessAnswers(signatures, stdlibPath: librarySourcePath(project, fileName: subprocessStdlibFileName()))
 	checkHeapStatsBuckets(signatures, stdlibPath: librarySourcePath(project, fileName: HeapStatsStdlibFileName))
+	checkProcessDescendantsVerbs(signatures, tierPath: runtimeSourcePath(project, fileName: ProcessTierFileName))
 
 	// The slab's OBJECT LAYER (`__slab_alloc`/`__slab_free`, the size classes, the spans and the mcache) —
 	// the allocator `__mm_alloc` takes its boxes from. Called unconditionally and gated inside, because it
@@ -1689,7 +1877,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// what runs over the appended band). Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, target: project.target, streamState: subprocessStreamStateEnum, releasesRegistry: usage.releasesRegistry, releasesGlobals: usage.usesManagedGlobals, requestStagingBytes: serviceRequestStagingBytes(signatures))
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, target: project.target, streamState: subprocessStreamStateEnum, releasesRegistry: usage.releasesRegistry, releasesGlobals: usage.usesManagedGlobals, descendantArming: descendantArmingOf(usage), requestStagingBytes: serviceRequestStagingBytes(signatures))
 	end 'installGt'
 
 	installInterfaceHandleConversions(pipeline.stdModule, globalData: project.globalData, usage: usage, signatures: signatures)
@@ -1782,7 +1970,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// below for the reason stated there. The process family's other two entries are runtime source and are
 	// installed by nothing here.
 	installConsoleRuntime(pipeline.stdModule, usage: usage)
-	installProcessRuntime(pipeline.stdModule, usage: usage)
+	installProcessRuntime(pipeline.stdModule, usage: usage, gatesDescendants: project.entryStubCalls.gatesDescendants)
 	installRandomRuntime(pipeline.stdModule, usage: usage)
 	installCryptoRuntime(pipeline.stdModule, usage: usage)
 	installTrustStoreRuntime(pipeline.stdModule, usage: usage, target: project.target)
@@ -2471,6 +2659,12 @@ end 'stampRegisteredSource'
 // Where a self-rebuild parks the image it is running from, and where it moves an older one another
 // process is still running. See `vacateRunningImage`.
 let PreviousImageSuffix = ".previous"
+let ImageStagingPrefix = ".staging-"
+let StagingNameDigestBytes = 6
+let StagingDirectoryCause = "Nothing was touched. Check that the output's directory is writable and that no file occupies the staging directory's path, then build again."
+let ReadOnlyOutputCause = "Clear its read-only flag (attrib -R on Windows, chmod u+w elsewhere) and build again."
+let MovedAsideRefusedCause = "Something holds it open in a way that forbids a rename, or its directory refuses the change. Close whatever holds it and build again."
+let PlacementRefusedCause = "The previous output was put back. Something holds the output's directory or the staged image open in a way that forbids the rename. Close whatever holds it and build again."
 let RetiredImageInfix = ".retired"
 let NumberedRetiredImageInfix = ".retired-"
 

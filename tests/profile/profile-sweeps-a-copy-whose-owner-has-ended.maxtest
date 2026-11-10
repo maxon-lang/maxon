@@ -6,7 +6,7 @@ function plantedCopyName(base String, owner Pid, serial Count) returns String
 end 'plantedCopyName'
 
 test 'a profile run removes the attachable copies whose owners have ended and keeps a live one and a stranger'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ProbeLabel, fixture: HotWarmFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ProbeLabel, fixture: HotWarmFixtureName)
 	let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
 
 	let ended = staged.join(plantedCopyName(executable.filename(), owner: endedProcessId(), serial: 1))
@@ -26,4 +26,6 @@ test 'a profile run removes the attachable copies whose owners have ended and ke
 		Expect.isTrue(File.exists(live), message: "the profiler removed {live.toString()}, an attachable copy whose owner is still running.")
 		Expect.isTrue(File.exists(stranger), message: "the profiler removed {stranger.toString()}, a file it did not make.")
 	#endif
+
+	discardStagedDir(staged)
 end 'a profile run removes the attachable copies whose owners have ended and keeps a live one and a stranger'

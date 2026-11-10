@@ -1,4 +1,4 @@
-let ServiceHandleDirName = "temp/lsp/receiver-type-a-service-handle"
+let ServiceHandleDirName = "receiver-type-a-service-handle"
 let ServiceHandleHelperFileName = "helper.maxon"
 let ServiceHandleMainFileName = "main.maxon"
 let ServiceHandleParameterLine = 6
@@ -10,7 +10,8 @@ let ServiceHandleElementListCharacter = 27
 let ServiceHandleElementNameCharacter = 28
 
 test 'receiver type: a service handle offers its services messages'
-	let uri = stagedServiceHandleProject()
+	let directory = stagedServiceHandleProject()
+	let uri = fileUriOf(directory.join(ServiceHandleMainFileName))
 
 	let declared = completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleParameterListCharacter, after: "`counter.`, a parameter declared `Counter.handle`, whose service is declared by the sibling file")
 	assertHandleSurface(declared, shape: "a parameter declared `Counter.handle`")
@@ -23,16 +24,21 @@ test 'receiver type: a service handle offers its services messages'
 	let insideTheWord = completionLabelsForAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleInsideReceiverCharacter, after: "a position INSIDE the receiver word `counter`, three characters before its dot")
 
 	Expect.isTrue(insideTheWord.isEmpty(), message: "completion offered {insideTheWord.count()} member(s) at a position inside the bare word `counter`, before its `.`. This server completes a MEMBER of something and never an identifier prefix in open code, so the only position that offers a surface is the one after the dot — and a reading taken inside the receiver word is a reading of a different question.")
+
+	discardStagedDir(directory)
 end 'receiver type: a service handle offers its services messages'
 
 test 'receiver type: a message on a service handle hovers'
-	let uri = stagedServiceHandleProject()
+	let directory = stagedServiceHandleProject()
+	let uri = fileUriOf(directory.join(ServiceHandleMainFileName))
 
 	let declared = hoverRenderingAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleParameterLine, character: ServiceHandleParameterNameCharacter)
 	Expect.contains(declared, needle: "export function bump(by Tally)", message: "hovering `bump` on a parameter declared `Counter.handle` did not render the declaration `helper.maxon` holds for it. The compiler resolves a message to `Counter.bump`, so that is the declaration under the cursor. It rendered: {declared}")
 
 	let element = hoverRenderingAtUri(uri, source: serviceHandleMainSource(), line: ServiceHandleElementLine, character: ServiceHandleElementNameCharacter)
 	Expect.contains(element, needle: "export function total() returns Tally", message: "hovering `total` on a handle taken OUT OF A CONTAINER did not render its declaration, though the same message hovers on a handle-typed parameter. A container element and a declared parameter are the same type reached two ways, and a road that answers for one and not the other is the two walks coming apart. It rendered: {element}")
+
+	discardStagedDir(directory)
 end 'receiver type: a message on a service handle hovers'
 
 function assertHandleSurface(labels StringArray, shape String) throws TestFailure
@@ -45,12 +51,12 @@ function assertHandleSurface(labels StringArray, shape String) throws TestFailur
 	try Expect.isFalse(completionOffersLabel(labels, label: "create"), message: "completion on {shape} offered `create`, a STATIC of `Counter`. `ServiceCompanions` excludes a static from the roster structurally — it has no `self` — so no handle takes it as a message.")
 end 'assertHandleSurface'
 
-function stagedServiceHandleProject() returns String
+function stagedServiceHandleProject() returns FilePath
 	let directory = stagedCorpusDirectory(ServiceHandleDirName)
 	writeCorpusFile(directory, fileName: ServiceHandleHelperFileName, content: serviceHandleHelperSource())
 	writeCorpusFile(directory, fileName: ServiceHandleMainFileName, content: serviceHandleMainSource())
 
-	return fileUriOf(directory.join(ServiceHandleMainFileName))
+	return directory
 end 'stagedServiceHandleProject'
 
 function serviceHandleHelperSource() returns String

@@ -1,0 +1,49 @@
+let SelfServedCaseDirName = "relay-self-served"
+let SelfServedSettleMs = 3000
+let SelfServedServerName = "maxon"
+let SelfServedDocumentName = "served.maxon"
+let SelfServedSymbolName = "selfServed"
+let SelfServedSource = "function selfServed() returns ExitCode\n\treturn 0\nend 'selfServed'\n"
+
+test 'relay: a server that is its checkouts own slot compiler serves in process and is not swapped'
+	let caseDir = stagedRelayCase(SelfServedCaseDirName)
+	let slot = installRealCompilerAsRelaySlot(caseDir)
+
+	var client = LspClient.start(slot)
+
+	if let observed = try servedByItselfAcrossAReplacement(client, caseDir: caseDir) 'served'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.equal(observed.0, expected: SelfServedServerName, message: "a server launched as its checkout's slot compiler did not identify itself as the compiler that was launched.")
+		try Expect.isTrue(outlineNames(observed.1, symbol: SelfServedSymbolName), message: "after the slot was replaced, the server launched as that slot's compiler did not outline `{SelfServedSymbolName}` itself: the replacement answered, or nothing did.")
+	end 'served' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a server that is its checkouts own slot compiler serves in process and is not swapped'
+
+function servedByItselfAcrossAReplacement(client LspClient, caseDir FilePath) returns (String, DocumentSymbolArray) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(SelfServedDocumentName))
+	let advertised = try client.initializeAtRoot(relayCheckout(caseDir))
+	let served = try advertised.serverIdentity.serverName()
+
+	try client.initialized()
+	try client.openDocument(uri, content: SelfServedSource)
+
+	replaceRelaySlot(caseDir, generation: 1)
+	sleep(SelfServedSettleMs)
+
+	let outline = try client.documentSymbols(uri)
+
+	return (served, outline.symbols)
+end 'servedByItselfAcrossAReplacement'
+
+function outlineNames(symbols DocumentSymbolArray, symbol String) returns bool
+	for candidate in symbols 'eachSymbol'
+		if candidate.name == symbol 'found'
+			return true
+		end 'found'
+	end 'eachSymbol'
+
+	return false
+end 'outlineNames'

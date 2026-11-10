@@ -3,6 +3,12 @@ module union LspArrival
 	endOfStream
 	framingError(detail String)
 	projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket)
+	childFramed(generation LspChildGeneration, body String)
+	childEnded(generation LspChildGeneration, reason String)
+	childStderr(generation LspChildGeneration, line String)
+	childStderrEnded(generation LspChildGeneration)
+	childStderrFailed(generation LspChildGeneration, reason String)
+	slotTick
 end 'LspArrival'
 
 module typealias LspArrivalPromise = Promise with LspArrival
@@ -28,6 +34,28 @@ module type LspStdinReader
 		end 'incoming'
 	end 'next'
 end 'LspStdinReader'
+
+module function nextChildArrival(reader StdoutReader, generation LspChildGeneration) returns LspArrival
+	return match readChildMessage(reader) 'incoming'
+		message(body) gives LspArrival.childFramed(generation, body: body)
+		endOfStream gives LspArrival.childEnded(generation, reason: "its output ended")
+		framingError(detail) gives LspArrival.childEnded(generation, reason: detail)
+	end 'incoming'
+end 'nextChildArrival'
+
+module function nextChildStderrArrival(reader StderrReader, generation LspChildGeneration) returns LspArrival
+	let line = try reader.readLine() otherwise (e) 'unread'
+		return LspArrival.childStderrEnded(generation) if e.endedTheStream() else LspArrival.childStderrFailed(generation, reason: e.displayReason())
+	end 'unread'
+
+	return LspArrival.childStderr(generation, line: line)
+end 'nextChildStderrArrival'
+
+module function slotTickAfter(pauseMs Milliseconds) returns LspArrival
+	sleep(pauseMs)
+
+	return LspArrival.slotTick
+end 'slotTickAfter'
 
 // Runs a `.maxproj` off the session loop, which answers every other request while a manifest
 // compiles and runs. ⚠ Each held project has its own (`HeldRoot.resolver`), which serves that

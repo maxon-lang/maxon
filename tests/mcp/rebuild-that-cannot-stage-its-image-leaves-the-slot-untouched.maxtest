@@ -1,0 +1,49 @@
+// A compiler rebuilding its own image that cannot stage the new image leaves the slot, its sidecar and an
+// older previous image exactly as they were.
+//
+// The new image is written beside the slot and swapped in only once it is complete, so an interrupted or
+// refused rebuild never leaves the slot without a compiler.
+
+let UnstageableRebuildDirName = "mcp-rebuild-that-cannot-stage-its-image"
+let UnstageableRebuildLine = "built after a refused staging"
+let UnstageableOlderPreviousContent = "an older previous image\n"
+let UnstageableOccupiedContent = "a file where the staging directory goes\n"
+let UnstageableSlotSidecarContent = "the slot's debug info\n"
+let UnstageableRebuildExit = 1
+let UnstageableNotReplaceableCode = "E6002"
+
+test 'a self-rebuild that cannot stage its new image leaves the slot, its sidecar and the older previous image untouched'
+	let dir = stagedInTreeDirNamed(UnstageableRebuildDirName)
+	clearStagedTree(dir)
+
+	let imageName = "{CompilerStem}{executableSuffix()}"
+	let previousName = "{CompilerStem}{PreviousInfix}{executableSuffix()}"
+
+	let compiler = stagedCopyOf(testedCompilerPath(), dir: dir, name: CompilerStem)
+	let originalBytes = fileBytes(compiler)
+
+	let slotSidecar = dir.join("{imageName}{SidecarSuffix}")
+	writeStagedFile(slotSidecar, content: UnstageableSlotSidecarContent)
+
+	let previous = dir.join(previousName)
+	writeStagedFile(previous, content: UnstageableOlderPreviousContent)
+
+	let staging = stagingDirectoryOf(compiler)
+	writeStagedFile(staging, content: UnstageableOccupiedContent)
+
+	let program = dir.join(ProgramFileName)
+	writeStagedFile(program, content: printingProgramSource(UnstageableRebuildLine))
+
+	let refused = rebuildOwnImage(dir, compiler: compiler, program: program)
+	Expect.equal(refused.exitCode(), expected: UnstageableRebuildExit, message: "`{BuildCommandName} {ProgramFileName} {OutputOptionPrefix}{imageName}` had no directory to stage the new image in, so it must refuse before touching {imageName}. It exited {refused.exitCode()} and said: {refused.stderr}")
+	Expect.isTrue(refused.stderr.contains(UnstageableNotReplaceableCode), message: "the refusal should carry {UnstageableNotReplaceableCode}. It said: {refused.stderr}")
+
+	Expect.isTrue(File.exists(compiler), message: "a self-rebuild that could not stage its image left no {imageName} in the slot.")
+	let keptBytes = fileBytes(compiler)
+	Expect.isTrue(keptBytes.equals(originalBytes), message: "{imageName} should still be the running compiler ({originalBytes.count()} bytes) after a refused self-rebuild; it holds {keptBytes.count()} bytes that differ.")
+
+	Expect.equal(fileText(slotSidecar), expected: UnstageableSlotSidecarContent, message: "the slot's sidecar should survive a refused self-rebuild unchanged.")
+	Expect.equal(fileText(previous), expected: UnstageableOlderPreviousContent, message: "{previousName} should survive a refused self-rebuild unchanged: nothing is vacated before the new image is staged.")
+
+	discardStagedDir(dir)
+end 'a self-rebuild that cannot stage its new image leaves the slot, its sidecar and the older previous image untouched'

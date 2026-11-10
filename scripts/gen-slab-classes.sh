@@ -21,6 +21,8 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
+TempNamesTable="$root/scripts/lib/temp-names.tsv"
+. "$root/scripts/lib/system-temp.sh"
 src="$root/vendor/go/src/internal/runtime/gc/sizeclasses.go"
 out="$root/maxon-bin/Compiler/Runtime/SlabClasses.maxon"
 
@@ -48,18 +50,19 @@ gs2c128="$(pull SizeToSizeClass128)"
 
 # Verify the derivations BEFORE writing. A generator that emits a table it has not checked is just a
 # slower way to be wrong.
-echo "$sizes" > /tmp/.sc_sizes.$$; echo "$gs2c8" > /tmp/.sc_g8.$$; echo "$gs2c128" > /tmp/.sc_g128.$$
+temp_make dir slab-classes
+scratch="$TempMade"
+echo "$sizes" > "$scratch/sizes"; echo "$gs2c8" > "$scratch/g8"; echo "$gs2c128" > "$scratch/g128"
 awk -F, '
-FILENAME ~ /sizes/ { n=NF; for(i=1;i<=NF;i++) sz[i-1]=$i+0; next }
-FILENAME ~ /g8/    { n8=NF; for(i=1;i<=NF;i++) g8[i-1]=$i+0; next }
-FILENAME ~ /g128/  { n128=NF; for(i=1;i<=NF;i++) g128[i-1]=$i+0; next }
+FILENAME ~ /sizes$/ { n=NF; for(i=1;i<=NF;i++) sz[i-1]=$i+0; next }
+FILENAME ~ /g8$/    { n8=NF; for(i=1;i<=NF;i++) g8[i-1]=$i+0; next }
+FILENAME ~ /g128$/  { n128=NF; for(i=1;i<=NF;i++) g128[i-1]=$i+0; next }
 END{
   bad=0
   for (i=0;i<n8;i++){ want=i*8; c=0; if(i>0){ for(k=1;k<n;k++) if(sz[k]>=want){c=k;break} } if(c!=g8[i]) bad++ }
   for (i=0;i<n128;i++){ want=1024+i*128; c=0; for(k=1;k<n;k++) if(sz[k]>=want){c=k;break} if(c!=g128[i]) bad++ }
   if (bad>0) { printf "gen-slab-classes: reverse-lookup derivation does not reproduce Go (%d mismatches)\n", bad > "/dev/stderr"; exit 1 }
-}' /tmp/.sc_sizes.$$ /tmp/.sc_g8.$$ /tmp/.sc_g128.$$
-rm -f /tmp/.sc_sizes.$$ /tmp/.sc_g8.$$ /tmp/.sc_g128.$$
+}' "$scratch/sizes" "$scratch/g8" "$scratch/g128"
 
 # Emit the separator BEFORE each element, never after.
 # ⚠ The obvious form — print "N, " per element and strip the trailing comma with `sed 's/, $//'` —
@@ -70,7 +73,7 @@ wrap() { printf '%s' "$1" | tr ',' '\n' | awk 'BEGIN{ORS=""} { if (NR>1) printf 
 gover="$(sed -n 's/^go \([0-9.]*\)$/\1/p' "$root/vendor/go/go.env" 2>/dev/null | head -1)"
 [ -n "$gover" ] || gover="(version unrecorded)"
 
-tmp="$(mktemp)"
+tmp="$scratch/table"
 {
 cat <<'HDR'
 // ⭐⭐ **GO'S SIZE-CLASS TABLE. GENERATED — DO NOT EDIT BY HAND.**
@@ -144,8 +147,8 @@ printf "end 'slabClassPages'\n"
 } > "$tmp"
 
 if [ "${1:-}" = "--check" ]; then
-	if cmp -s "$tmp" "$out"; then echo "slab-classes: OK - checked-in table matches vendored Go"; rm -f "$tmp"; exit 0
-	else echo "slab-classes: STALE - $out differs from vendored Go; run scripts/gen-slab-classes.sh" >&2; rm -f "$tmp"; exit 1; fi
+	if cmp -s "$tmp" "$out"; then echo "slab-classes: OK - checked-in table matches vendored Go"; exit 0
+	else echo "slab-classes: STALE - $out differs from vendored Go; run scripts/gen-slab-classes.sh" >&2; exit 1; fi
 fi
 mv "$tmp" "$out"
 echo "slab-classes: wrote $out"

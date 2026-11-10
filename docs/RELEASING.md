@@ -34,7 +34,8 @@ the tree is the one the seed does not contain yet. Whoever lands such a commit h
 built from `HEAD`, so the commit and the seed frozen from it are published and pinned together.
 
 **The seed chain is how a refusal is found:** `scripts/build-from-seed.sh` in a clean clone with the pinned
-seed. Any failure there is a refusal, except E6002, which is a locked slot.
+seed. Any failure there is a refusal, except E6002, which is a slot the build could not replace: its
+message names what stood in the way.
 
 **A refused commit is pushed by `scripts/pin-seed.sh`.** It runs in the main checkout,
 after the landing gates and the commit, and freezes `HEAD`:

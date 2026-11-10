@@ -16,7 +16,7 @@ test 'project roots: a .maxproj and a source beside it are one project, loaded o
 	let rooted = listProjectsIn(ProjectRootsSession.atFolders(projectRootsFolders(root)), documents: documents)
 	let unrooted = listProjectsIn(ProjectRootsSession.unrooted, documents: documents)
 
-	discardOutsideCheckoutDir(root)
+	discardStagedDir(root)
 
 	try requireOneProjectLoadedOnce(rooted, session: "a session rooted at that folder")
 	try requireOneProjectLoadedOnce(unrooted, session: "a session that named no workspace folder")
@@ -24,7 +24,7 @@ end 'project roots: a .maxproj and a source beside it are one project, loaded on
 
 function requireOneProjectLoadedOnce(probe ListProjectsProbe, session String) throws TestFailure
 	let note = "`{OneLoadProjectFileName}` and then `{OneLoadMainFileName}` beside it were opened, in {session}. Both belong to the project the `.maxproj` marks, so the server builds that one project once and lists it once."
-	let expectedTail = outsideCheckoutDirName(OneLoadDirName)
+	let expectedTail = OneLoadDirName
 
 	match probe 'probe'
 		answered(projects, notices) then try requireTheOneProject(projects, notices: notices, expectedTail: expectedTail, note: note)

@@ -101,6 +101,10 @@ module let RunCacheRootVariable = "MAXON_RUN_CACHE_ROOT"
 
 module let WorkerPersistentFlag = "--worker-persistent"
 
+module let WorkerRunDirFlagPrefix = "--run-dir="
+
+module let RelayedFlag = "--relayed"
+
 module let FilterFlagPrefix = "--filter="
 
 // `module` because `SpecTestRunner.pinComparedRun` names this flag as the remedy.
@@ -1075,11 +1079,17 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	let effectiveTarget = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
 
 	// A worker speaks the job protocol on stdout, so this is checked before anything is printed.
+	if args.workerPersistent != args.workerRunDir.isStated() 'workerFlagsDisagree'
+		printError("error: {WorkerPersistentFlag} and {WorkerRunDirFlagPrefix}<name> are taken together or not at all\n")
+		return OwnFailureExit
+	end 'workerFlagsDisagree'
+
 	if args.workerPersistent 'isPoolWorker'
 		// A worker asks nothing before it starts.
 		let filterPatterns = args.filterPatterns
+		let runDirName = try args.workerRunDir.text() otherwise panic("main: the flags were checked to agree above, so a worker states its run directory")
 
-		return runPersistentWorker(specDir, filterPatterns: filterPatterns, mode: args.specRunMode(), effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork)
+		return runPersistentWorker(specDir, filterPatterns: filterPatterns, mode: args.specRunMode(), effectiveTarget: effectiveTarget, includeNetwork: args.includeNetwork, runWorkingDir: runWorkingDirNamed(runDirName))
 	end 'isPoolWorker'
 
 	// Below-normal priority, so a foreground process preempts the pool, which otherwise saturates
@@ -2037,6 +2047,8 @@ enum HelpOption
 	mcpMaxSessions
 	mcpExitOnStdinEof
 	workerPersistent
+	workerRunDir
+	relayed
 	log
 end 'HelpOption'
 
@@ -2134,6 +2146,8 @@ function optionReference(option HelpOption) returns OptionReference
 		mcpMaxSessions gives OptionReference.create("{McpMaxSessionsFlagPrefix}<n>", description: "How many HTTP sessions may be live at once (default {DefaultMcpMaxSessions}); an `initialize` past the cap is answered 429.", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.prefixed(McpMaxSessionsFlagPrefix)])
 		mcpExitOnStdinEof gives OptionReference.create(McpExitOnStdinEofFlag, description: "With {McpHttpFlag}, close the listener and end every session once this process's stdin reaches end of file, so a server a parent started ends with that parent. Refused without {McpHttpFlag}: over stdio the end of input already ends the server.", commands: [MaxonCommand.mcpServer], arrivals: [OptionArrival.exactly(McpExitOnStdinEofFlag)])
 		workerPersistent gives OptionReference.unlisted(WorkerPersistentFlag, commands: [MaxonCommand.specTest], arrivals: [OptionArrival.exactly(WorkerPersistentFlag)])
+		workerRunDir gives OptionReference.unlisted("{WorkerRunDirFlagPrefix}<name>", commands: [MaxonCommand.specTest], arrivals: [OptionArrival.prefixed(WorkerRunDirFlagPrefix)])
+		relayed gives OptionReference.unlisted(RelayedFlag, commands: [MaxonCommand.lspServer], arrivals: [OptionArrival.exactly(RelayedFlag)])
 		log gives OptionReference.unlisted("{LogFlagPrefix}<spec>", commands: namedCommandsExcept([MaxonCommand.cache, MaxonCommand.dapServer, MaxonCommand.fmt, MaxonCommand.help, MaxonCommand.mcpServer, MaxonCommand.upgrade]), arrivals: [OptionArrival.prefixed(LogFlagPrefix)])
 	end 'whichOption'
 end 'optionReference'
@@ -2466,6 +2480,11 @@ export type MaxonArgs
 	// parsed because an unrecognized flag aborts the run.
 	export var workerPersistent as bool
 
+	// Set by the parent beside `workerPersistent`: the directory name the worker runs its cases in.
+	export var workerRunDir as StatedText
+
+	export var relayed as bool
+
 	// An array, not a map: two defines of one name is a thing to notice, and a map would silently keep
 	// the last.
 	export var defines as DefineArray
@@ -2535,7 +2554,7 @@ export type MaxonArgs
 	// its note), and a default at the declaration is one no arm can forget. Every field is `var` for
 	// `parse`; nothing else can mutate a `MaxonArgs` through the `let` binding `main` holds (E3063).
 	module static function create() returns MaxonArgs
-		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, shard: ShardSelection.wholeSuite(), workerPersistent: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
+		return Self{command: MaxonCommand.unknown, paths: SourcePathSpellingArray.create(0), outputOverride: StatedText.unstated, emitIr: false, asyncTrace: false, poisonFreed: false, debugStream: false, censusByTag: false, censusPhase: TagCensusPhases.everyPhase, allocationsByTag: false, allocationsPhase: TagCensusPhases.everyPhase, debugInfo: true, coverage: false, rebuildRequested: false, runtimeIrNames: RuntimeFunctionNameArray.create(0), filterPatterns: FilterPatternArray.create(0), updateRequired: false, batchRuns: true, workers: defaultWorkerCount(), workersOverridden: false, shard: ShardSelection.wholeSuite(), workerPersistent: false, workerRunDir: StatedText.unstated, relayed: false, metrics: StatedText.unstated, defines: DefineArray.create(0), emitCorpus: StatedText.unstated, rungs: DefaultRungCount, repeat: DefaultRepeatCount, note: StatedText.unstated, resultJson: StatedText.unstated, targetSpec: StatedText.unstated, includeNetwork: false, listOnly: false, buildTestBinary: false, jsonReport: false, showTiming: true, colorMode: ReportColorMode.auto, isolate: false, bail: BailPolicy.never, testTimeoutMs: DefaultTestTimeoutMs, logOverridden: false, optionsSeen: SourcePathSpellingArray.create(0), refusedOptions: OptionRefusalArray.create(0), dryRun: false, devMode: false}
 	end 'create'
 
 	// `runFmt` refuses by this, `fmt` being exempt from `main`'s unknown-option gate.
@@ -2788,7 +2807,17 @@ export type MaxonArgs
 				end 'shardArg'
 			end 'shardFlag' else if arg == WorkerPersistentFlag 'workerPersistentFlag'
 				parsed.workerPersistent = true
-			end 'workerPersistentFlag' else if arg.startsWith(MetricsFlagPrefix) 'metricsFlag'
+			end 'workerPersistentFlag' else if arg.startsWith(WorkerRunDirFlagPrefix) 'workerRunDirFlag'
+				let runDirName = optionValueOf(arg)
+
+				if isRunWorkingDirName(runDirName) 'aRunDirectoryName'
+					parsed.workerRunDir = StatedText.stated(runDirName)
+				end 'aRunDirectoryName' else 'notARunDirectoryName'
+					parsed.refusedOptions.push(OptionRefusal.badValue(arg))
+				end 'notARunDirectoryName'
+			end 'workerRunDirFlag' else if arg == RelayedFlag 'relayedFlag'
+				parsed.relayed = true
+			end 'relayedFlag' else if arg.startsWith(MetricsFlagPrefix) 'metricsFlag'
 				parsed.metrics = parsed.statedValueOf(arg)
 			end 'metricsFlag' else if arg.startsWith(DefineFlagPrefix) 'defineFlag'
 				let pair = optionValueOf(arg)

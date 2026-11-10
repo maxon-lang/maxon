@@ -1,0 +1,17 @@
+let OwnsItsDirectoryCaseLabel = "owns-its-directory/owns-its-directory.is-named-for-the-run"
+
+test 'a run gives its cases a working directory named for the run, so two runs from one checkout never share one'
+	let run = runGateFixtureOnce(StringArray.create(0))
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	if not said.contains(passVerdictLine(OwnsItsDirectoryCaseLabel)) 'directoryShared'
+		broken.push("the case did not find its working directory named for its run. Expected '{passVerdictLine(OwnsItsDirectoryCaseLabel)}', and the run said:\n{said}\n")
+	end 'directoryShared'
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a run's cases share their working directory with other runs")
+end 'a run gives its cases a working directory named for the run, so two runs from one checkout never share one'

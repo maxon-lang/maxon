@@ -14,7 +14,7 @@ test 'project roots: a document below a .maxproj is rooted at the directory hold
 	let uri = fileUriOf(sources.join("{MaxprojDocumentFileName}"))
 	let probe = listProjectsIn(ProjectRootsSession.unrooted, documents: projectRootsDocument(uri, content: MaxprojDocumentSource))
 
-	discardOutsideCheckoutDir(root)
+	discardStagedDir(root)
 
 	match probe 'probe'
 		answered(result, _) then requireRootedAtTheMaxproj(result, uri: uri)
@@ -25,5 +25,5 @@ end 'project roots: a document below a .maxproj is rooted at the directory holdi
 function requireRootedAtTheMaxproj(result ListProjectsResult, uri String) throws TestFailure
 	let project = try soleProject(result, note: "one document ({uri}) was opened, in a session that named no root, one directory below `{MaxprojFileName}`.")
 
-	try requireProjectRootedAtADirectory(project, expectedTail: outsideCheckoutDirName(MaxprojRootDirName), note: "one document ({uri}) sits in `{MaxprojSourceDirName}/` below `{MaxprojFileName}`, which is the only thing that says where its project begins.")
+	try requireProjectRootedAtADirectory(project, expectedTail: MaxprojRootDirName, note: "one document ({uri}) sits in `{MaxprojSourceDirName}/` below `{MaxprojFileName}`, which is the only thing that says where its project begins.")
 end 'requireRootedAtTheMaxproj'

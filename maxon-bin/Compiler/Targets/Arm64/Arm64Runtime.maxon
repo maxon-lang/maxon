@@ -293,11 +293,16 @@ end 'arm64EmitMainCall'
 // saves x30 because it calls, and it NEVER WRITES x29: a fresh green thread's zero stays in place,
 // so `main`'s saved x29 ends the walk right after the return address into this chunk — which
 // carries no symbol and so prints `in mrt_start`, the line a program without green threads prints.
-export function buildArm64MainThreadEntryChunk(initGlobals bool, entryFunction ByteArray) returns FunctionCodeChunk
+export function buildArm64MainThreadEntryChunk(initGlobals bool, gatesDescendants bool, entryFunction ByteArray) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 
 	arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))
 	arm64EmitMainCall(asm.code, callFixups: asm.callFixups, initGlobals: initGlobals, releasesGlobals: false, entryFunction: entryFunction)
+
+	if gatesDescendants 'descendantGate'
+		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: ProcessDescendantGateName)
+	end 'descendantGate'
+
 	arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))
 	arm64EmitRet(asm.code)
 

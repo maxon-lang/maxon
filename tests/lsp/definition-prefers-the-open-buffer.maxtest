@@ -4,7 +4,7 @@
 // ⚠ GREEN TODAY: the server walks only the open buffer and writes only the request's own uri. It is the
 // regression guard for that rule surviving cross-file resolution.
 
-let OpenBufferDirName = "temp/lsp/definition-prefers-the-open-buffer"
+let OpenBufferDirName = "definition-prefers-the-open-buffer"
 let OpenBufferHelperFileName = "helper.maxon"
 let OpenBufferMainFileName = "main.maxon"
 let OpenBufferHelperSource = "function unrelatedPadding() returns ExitCode\n\treturn 0\nend 'unrelatedPadding'\n\nexport function bothDeclareThis() returns ExitCode\n\treturn 0\nend 'bothDeclareThis'\n"
@@ -21,4 +21,6 @@ test 'definition prefers the open buffer'
 	let probe = probeCorpusDefinition(directory, fileName: OpenBufferMainFileName, content: OpenBufferMainSource, line: OpenBufferCallLine, character: OpenBufferCallCharacter)
 
 	expectDefinitionInFile(probe, fileTail: OpenBufferMainTail, startLine: OpenBufferDeclarationLine, note: "the open document declares the name it calls, and the answer named a sibling file's `export`ed copy instead.")
+
+	discardStagedDir(directory)
 end 'definition prefers the open buffer'

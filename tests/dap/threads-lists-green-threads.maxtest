@@ -29,7 +29,7 @@ type ThreadsSession implements DapSession
 end 'ThreadsSession'
 
 test 'threads lists the fixtures green threads at a stop, under one processor'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ThreadsCaseLabel, fixture: WorkersFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ThreadsCaseLabel, fixture: WorkersFixtureName)
 	var session = ThreadsSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: WorkerLoopAnchor))
 	try dapRunSession(session, completing: "complete")
 
@@ -37,4 +37,6 @@ test 'threads lists the fixtures green threads at a stop, under one processor'
 
 	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the roster is only answerable at a stop, and this stop did not happen: `{session.stopReason}`")
 	try Expect.isTrue(threadCount >= SpawnedWorkerCount, message: "the fixture spawns {SpawnedWorkerCount} workers that outlive the stop, so `{ThreadsCommand}` must list at least that many. It listed {threadCount}: {joined(dapThreadNames(session.threads), separator: Space)}")
+
+	discardStagedDir(staged)
 end 'threads lists the fixtures green threads at a stop, under one processor'

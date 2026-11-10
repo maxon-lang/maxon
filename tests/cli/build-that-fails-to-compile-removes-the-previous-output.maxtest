@@ -1,0 +1,34 @@
+let FailedBuildCaseDirName = "build-that-fails-to-compile"
+let FailedBuildStem = "program"
+let FailedBuildGoodSource = "function main() returns ExitCode\n\treturn 3\nend 'main'\n"
+let FailedBuildBadSource = "function main() returns ExitCode\n\treturn undeclaredName\nend 'main'\n"
+let FailedBuildExit = 1
+
+test 'a build that fails to compile removes the previous output and its sidecar and leaves no staging directory'
+	let dir = freshCaseDir(FailedBuildCaseDirName)
+	let output = dir.join("{FailedBuildStem}{executableSuffix()}")
+	let sidecar = sidecarOf(output)
+	let staging = stagingDirectoryOf(output)
+	let source = dir.join(StagedProgramFileName)
+
+	writeStagedFile(source, content: FailedBuildGoodSource)
+	let good = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"])
+	Expect.equal(good.exitCode(), expected: 0, message: "the first build of a one-line program did not succeed. It said: {good.stdout}{good.stderr}")
+	Expect.isTrue(File.exists(output), message: "the first build wrote no {output.toString()}.")
+	Expect.isTrue(File.exists(sidecar), message: "the first build wrote no {sidecar.toString()}.")
+	Expect.isFalse(Directory.exists(staging), message: "a successful build left {staging.toString()} behind.")
+
+	writeStagedFile(source, content: FailedBuildBadSource)
+	let bad = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"])
+	Expect.equal(bad.exitCode(), expected: FailedBuildExit, message: "a program naming an undeclared value did not exit {FailedBuildExit}. It said: {bad.stdout}{bad.stderr}")
+
+	Expect.isFalse(File.exists(output), message: "a build that failed to compile left the previous {output.toString()} to answer as though it were current.")
+	Expect.isFalse(File.exists(sidecar), message: "a build that failed to compile left the previous {sidecar.toString()} beside no executable.")
+	Expect.isFalse(Directory.exists(staging), message: "a build that failed to compile left {staging.toString()} behind.")
+
+	discardStagedDir(dir)
+end 'a build that fails to compile removes the previous output and its sidecar and leaves no staging directory'
+
+function sidecarOf(output FilePath) returns FilePath
+	return try FilePath.from("{output.toString()}{SidecarSuffix}") otherwise panic("a sidecar beside a valid path is a valid path")
+end 'sidecarOf'

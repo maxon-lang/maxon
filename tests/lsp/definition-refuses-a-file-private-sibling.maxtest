@@ -4,7 +4,7 @@
 // control for the finished resolver — it stays green only if that resolver consults Maxon's visibility
 // rules, and goes red the moment it matches a name across files instead.
 
-let PrivateSiblingDirName = "temp/lsp/definition-refuses-a-file-private-sibling"
+let PrivateSiblingDirName = "definition-refuses-a-file-private-sibling"
 let PrivateSiblingHiddenFileName = "private.maxon"
 let PrivateSiblingMainFileName = "main.maxon"
 let PrivateSiblingHiddenSource = "function hiddenHelper() returns ExitCode\n\treturn 0\nend 'hiddenHelper'\n"
@@ -19,4 +19,6 @@ test 'definition refuses a file-private sibling'
 	let probe = probeCorpusDefinition(directory, fileName: PrivateSiblingMainFileName, content: PrivateSiblingMainSource, line: PrivateSiblingCallLine, character: PrivateSiblingCallCharacter)
 
 	expectNoDefinitionInProject(probe, note: "a call named a sibling's file-private declaration, which nothing outside that file may see, and the server jumped to it anyway.")
+
+	discardStagedDir(directory)
 end 'definition refuses a file-private sibling'

@@ -22,7 +22,7 @@ let FactoryCall = ".create("
 let SidecarLocalTypesTypeSeparatorToken = ":"
 
 test 'every local of a two-file program names the type its own file declared it with'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: LocalTypesCaseLabel, fixture: TwoFilesFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: LocalTypesCaseLabel, fixture: TwoFilesFixtureName)
 	let build = spawnBuild(staged, staged: staged, output: staged.join(OutputFileStem), label: LocalTypesBuildLabel, extraArguments: StringArray.create(0))
 
 	if build.exitCode() != 0 'didNotBuild'
@@ -56,6 +56,8 @@ test 'every local of a two-file program names the type its own file declared it 
 
 	Expect.notEqual(asked, expected: 0, message: "sidecar-local-types.test: no `{BindingPrefix}<name>{BindingInitializer}<Type>{FactoryCall}` binding was found in the staged fixture, so this case would assert nothing at all.")
 	Expect.isEmpty(listedLines(wrong), message: "these locals are described under a type their declaration does not name — a debugger would print one type's fields over another's bytes. The functions section held: {listedLines(functionRows)}")
+
+	discardStagedDir(staged)
 end 'every local of a two-file program names the type its own file declared it with'
 
 // The type a local row names: its last word, which follows a lone `:`. EMPTY when no local row carries the

@@ -20,13 +20,15 @@ let AddImmediatePrefix = "arm64.add "
 let TheDebugStreamRingIsPublishedWithAReleaseAndItsReadCursorLoadedWithAnAcquireOrderingReason = "The monitor is another PROCESS, and it shares no lock with the producer: `__ds_lock` orders producers against each other and nothing against the reader. `__ds_reserve` writes an entry's header and then advances `write_cursor` to make it reachable, and `__ds_commit` sets the header's commit bit once the payload is written — so each of those stores ANNOUNCES bytes written before it, and a plain `str` orders nothing before itself: armv8 may make the cursor or the bit visible ahead of the bytes, and the monitor decodes an entry that is not there yet. `read_cursor` is the monitor's announcement that it has consumed the space behind it, and a plain `ldr` of it orders nothing after itself, so the producer may overwrite bytes the monitor is still reading. The stores are `StdOp.storeRelease`, which is `stlr` on both arm64 lanes, and the load `StdOp.loadAcquire`, which is `ldar`; both are the same plain `mov` on x64."
 
 test 'the debug stream ring is published with a release and its read cursor loaded with an acquire'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TheDebugStreamRingIsPublishedWithAReleaseAndItsReadCursorLoadedWithAnAcquireCaseLabel, fixture: HeapFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: TheDebugStreamRingIsPublishedWithAReleaseAndItsReadCursorLoadedWithAnAcquireCaseLabel, fixture: HeapFixtureName)
 
 	var findings = StringArray.create(0)
 	noteRingOrdering(findings, staged: staged, target: MacosTargetName)
 	noteRingOrdering(findings, staged: staged, target: LinuxTargetName)
 
 	Expect.isTrue(findings.isEmpty(), message: "an emitted DebugStream producer body reaches a ring word the monitor process reads or writes without the ordering that word is published with:{renderedFindings(findings)}\n\n  {TheDebugStreamRingIsPublishedWithAReleaseAndItsReadCursorLoadedWithAnAcquireOrderingReason}")
+
+	discardStagedDir(staged)
 end 'the debug stream ring is published with a release and its read cursor loaded with an acquire'
 
 function noteRingOrdering(findings StringArray, staged FilePath, target String)

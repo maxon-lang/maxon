@@ -1,0 +1,138 @@
+let OutsideScratchDirPrefix = "maxon-test-"
+let ProjectScratchDirPrefix = "scratch-"
+
+#if not os(Windows)
+	let PosixLastResortTempArea = "/tmp"
+#endif
+
+let ReportLineSeparator = "\n"
+
+module type TestProcessScratch
+	let outside as FilePath
+	let inProject as FilePath
+
+	module static function create(projectScratchRoot FilePath) returns TestProcessScratch throws TestStagingError
+		let area = try hostTempArea()
+		let outside = try freshScratchDirectory(area.join(runnerScratchName(OutsideScratchDirPrefix)))
+
+		let inProject = try freshScratchDirectory(projectScratchRoot.anchoredAt(Directory.currentPath()).join(runnerScratchName(ProjectScratchDirPrefix))) otherwise (refusal) 'noProjectScratch'
+			let stuck = Directory.removeTree(outside)
+
+			if not stuck.isEmpty() 'outsideStays'
+				throw TestStagingError.refused("{stagingRefusalReason(refusal)}; {outside.toString()} could not be removed either: {joinedWith(spelledOut(stuck), separator: ListSeparator)}")
+			end 'outsideStays'
+
+			throw TestStagingError.refused(stagingRefusalReason(refusal))
+		end 'noProjectScratch'
+
+		return Self{outside: outside, inProject: inProject}
+	end 'create'
+
+	module function environment(tracksDescendants bool) returns Environment
+		var overrides = EnvMap.create()
+		overrides.upsert(TestScratch.outsideCheckoutVariable, value: self.outside.toString())
+		overrides.upsert(TestScratch.insideProjectVariable, value: self.inProject.toString())
+
+		if tracksDescendants 'armed'
+			overrides.upsert(String.from(DescendantsEnvName), value: descendantTrackingValue(Clock.nowMs() as ElementIndex))
+		end 'armed'
+
+		return Environment.inheritUpdating(overrides)
+	end 'environment'
+
+	module function discard() returns StringArray
+		var left = StringArray.create(0)
+		discardScratchDirectory(self.outside, variable: TestScratch.outsideCheckoutVariable, left: left)
+		discardScratchDirectory(self.inProject, variable: TestScratch.insideProjectVariable, left: left)
+
+		return left
+	end 'discard'
+end 'TestProcessScratch'
+
+module function removeEndedRunsScratch(projectScratchRoot FilePath)
+	removeEndedScratchIn(projectScratchRoot.anchoredAt(Directory.currentPath()), prefix: ProjectScratchDirPrefix)
+
+	let area = try hostTempArea() otherwise return
+	removeEndedScratchIn(area, prefix: OutsideScratchDirPrefix)
+end 'removeEndedRunsScratch'
+
+module function scratchLeftoverReport(headline String, leftovers StringArray) returns String
+	var lines = StringArray.create(leftovers.count() + 1, zeroed: false)
+	lines.push(headline)
+
+	for entry in leftovers 'eachEntry'
+		lines.push(entry)
+	end 'eachEntry'
+
+	return joinedWith(lines, separator: ReportLineSeparator)
+end 'scratchLeftoverReport'
+
+function runnerScratchName(prefix String) returns String
+	return "{prefix}{Process.id()}"
+end 'runnerScratchName'
+
+function spelledOut(paths FilePathArray) returns StringArray
+	var spellings = StringArray.create(paths.count(), zeroed: false)
+
+	for path in paths 'eachPath'
+		spellings.push(path.toString())
+	end 'eachPath'
+
+	return spellings
+end 'spelledOut'
+
+function removeEndedScratchIn(parent FilePath, prefix String)
+	let ended = try endedRunDirectories(parent, prefix: prefix, own: runnerScratchName(prefix)) otherwise (e) 'unlistable'
+		match e 'why'
+			notFound then return
+			accessDenied or
+			listFailed then printError("{TestCommandName}: could not list {parent.toString()} to find the scratch directories that test runs which have ended left there\n")
+		end 'why'
+
+		return
+	end 'unlistable'
+
+	for directory in ended 'eachEndedRun'
+		for stuck in Directory.removeTree(directory) 'eachStuck'
+			printError("{TestCommandName}: could not remove {stuck.toString()}, which a test run that has ended left in its scratch directory\n")
+		end 'eachStuck'
+	end 'eachEndedRun'
+end 'removeEndedScratchIn'
+
+function freshScratchDirectory(directory FilePath) returns FilePath throws TestStagingError
+	let stale = Directory.removeTree(directory)
+
+	if not stale.isEmpty() 'staleStays'
+		throw TestStagingError.refused("could not clear the scratch directory {directory.toString()} an earlier process left: {joinedWith(spelledOut(stale), separator: ListSeparator)}")
+	end 'staleStays'
+
+	if not Directory.create(directory) 'noScratch'
+		throw TestStagingError.refused("could not create the scratch directory {directory.toString()}")
+	end 'noScratch'
+
+	return directory
+end 'freshScratchDirectory'
+
+function discardScratchDirectory(directory FilePath, variable String, left StringArray)
+	for leftover in leftoversIn(directory, label: variable) 'eachLeftover'
+		left.push(leftover)
+	end 'eachLeftover'
+
+	for stuck in Directory.removeTree(directory) 'eachStuck'
+		printError("{TestCommandName}: could not remove {stuck.toString()}, in a test's scratch directory\n")
+	end 'eachStuck'
+end 'discardScratchDirectory'
+
+function hostTempArea() returns FilePath throws TestStagingError
+	#if os(Windows)
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise throw TestStagingError.refused("{HostTempVariable} is not set, and it names the system temp area a test's scratch directory is made in")
+	#else
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise PosixLastResortTempArea
+	#endif
+
+	if spelled.isEmpty() 'namesNowhere'
+		throw TestStagingError.refused("{HostTempVariable} is empty, and it names the system temp area a test's scratch directory is made in")
+	end 'namesNowhere'
+
+	return try FilePath.from(spelled) otherwise throw TestStagingError.refused("{HostTempVariable} names '{spelled}', which is not a path")
+end 'hostTempArea'

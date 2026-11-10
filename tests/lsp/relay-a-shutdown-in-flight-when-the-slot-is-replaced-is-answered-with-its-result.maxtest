@@ -1,0 +1,32 @@
+let ShutdownSwapCaseDirName = "relay-shutdown-swap"
+
+test 'relay: a shutdown in flight when the slot compiler is replaced is answered with its result'
+	let caseDir = stagedRelayCase(ShutdownSwapCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	var client = LspClient.start()
+
+	if let observed = try shutDownAcrossAReplacement(client, caseDir: caseDir) 'shutDown'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.equal(observed, expected: "0", message: "a session whose shutdown request outlived the compiler it was sent to did not end with code 0.")
+	end 'shutDown' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the shutdown request was not answered with its result")
+	end 'failed'
+end 'relay: a shutdown in flight when the slot compiler is replaced is answered with its result'
+
+function shutDownAcrossAReplacement(client LspClient, caseDir FilePath) returns String throws LspClientError
+	_ = try client.initializeAtRoot(relayCheckout(caseDir))
+
+	try client.initialized()
+
+	armRelaySwapOnShutdown(caseDir)
+
+	try client.shutdown()
+	try client.exit()
+
+	let code = try client.waitForExit()
+
+	return "{code}"
+end 'shutDownAcrossAReplacement'

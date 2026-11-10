@@ -1,0 +1,43 @@
+let InFlightCaseDirName = "relay-in-flight"
+let InFlightDocumentName = "one.maxon"
+let InFlightDocumentText = "held"
+
+test 'relay: a request in flight when the slot compiler is replaced is answered ContentModified'
+	let caseDir = stagedRelayCase(InFlightCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	var client = LspClient.start()
+
+	if let observed = try replacedWithARequestInFlight(client, caseDir: caseDir) 'replaced'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.equal(observed.0, expected: RelayFakeServerName, message: "the initialize reply came from the compiler that was launched, not from the compiler the checkout's slot holds.")
+		try Expect.equal(observed.1, expected: "{RelayContentModifiedCode}", message: "the hover the replaced compiler never answered was not refused with the LSP ContentModified code.")
+	end 'replaced' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a request in flight when the slot compiler is replaced is answered ContentModified'
+
+function replacedWithARequestInFlight(client LspClient, caseDir FilePath) returns (String, String) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(InFlightDocumentName))
+	let advertised = try client.initializeAtRoot(relayCheckout(caseDir))
+	let served = try advertised.serverIdentity.serverName()
+
+	if served != RelayFakeServerName 'notTheSlot'
+		return (served, "")
+	end 'notTheSlot'
+
+	try client.initialized()
+	try client.openDocument(uri, content: InFlightDocumentText)
+	_ = try awaitFakePublish(client, uri: uri, generation: 1, text: InFlightDocumentText)
+
+	armRelaySwapOnHover(caseDir)
+
+	let refusal = try relayHoverRefusal(client, uri: uri)
+
+	_ = try awaitFakePublish(client, uri: uri, generation: 2, text: InFlightDocumentText)
+	_ = try client.documentSymbols(uri)
+
+	return (served, refusal)
+end 'replacedWithARequestInFlight'

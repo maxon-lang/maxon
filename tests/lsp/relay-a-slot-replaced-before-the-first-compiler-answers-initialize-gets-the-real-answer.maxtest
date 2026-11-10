@@ -1,0 +1,37 @@
+let EarlySwapCaseDirName = "relay-early-swap"
+let EarlySwapDocumentName = "one.maxon"
+let EarlySwapDocumentText = "early"
+let EarlySwapExpectedVersion = "generation 2 relayed"
+
+test 'relay: a slot compiler replaced before the first one answers initialize gives the client the real answer'
+	let caseDir = stagedRelayCase(EarlySwapCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+	armRelaySwapOnInitialize(caseDir)
+
+	var client = LspClient.start()
+
+	if let observed = try initializedAcrossAReplacement(client, caseDir: caseDir) 'initialized'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.equal(observed.0, expected: RelayFakeServerName, message: "the initialize reply did not come from the compiler the checkout's slot holds.")
+		try Expect.equal(observed.1, expected: EarlySwapExpectedVersion, message: "the initialize reply did not come from the replacement compiler that was asked it.")
+		try Expect.equal(observed.2, expected: "generation 2 saw: {EarlySwapDocumentText}", message: "the replacement compiler did not take over the document opened after initialize.")
+	end 'initialized' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a slot compiler replaced before the first one answers initialize gives the client the real answer'
+
+function initializedAcrossAReplacement(client LspClient, caseDir FilePath) returns (String, String, String) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(EarlySwapDocumentName))
+	let advertised = try client.initializeAtRoot(relayCheckout(caseDir))
+	let served = try advertised.serverIdentity.serverName()
+	let version = try advertised.serverIdentity.version()
+
+	try client.initialized()
+	try client.openDocument(uri, content: EarlySwapDocumentText)
+
+	let message = relayFirstMessage(try awaitFakePublish(client, uri: uri, generation: 2, text: EarlySwapDocumentText))
+
+	return (served, version, message)
+end 'initializedAcrossAReplacement'

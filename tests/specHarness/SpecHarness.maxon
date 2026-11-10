@@ -16,8 +16,6 @@ module let TrialBudgetSpentText = "trial builds without isolating"
 
 let IgnoredWrapperDirName = "ignored"
 let LinkedSpecDirSuffix = "-linked"
-let SymlinkToolName = "ln"
-let SymlinkFlag = "-s"
 let RunCacheRootDirName = "run-cache"
 let IgnoredWrapperInnerDirName = "spec"
 let IgnoreMarkerFileName = ".maxonignore"
@@ -74,11 +72,11 @@ module function runGateFixtureThroughASymlink(extraArguments StringArray, caller
 	let staged = stagedGateFixture(caller)
 	let link = try FilePath.from("{staged.toString()}{LinkedSpecDirSuffix}") otherwise panic("spec-harness tests: the gate could not run - '{staged.toString()}{LinkedSpecDirSuffix}' is not a spellable path")
 
-	_ = runSystemTool(SymlinkToolName, arguments: [SymlinkFlag, staged.toString(), link.toString()], what: "linking {link.toString()} to {staged.toString()}")
+	plantedDirectoryLink(link, target: staged.toString())
 
 	let run = runSpecTest(link, includeNetwork: false, extraArguments: extraArguments)
 	try File.delete(link) otherwise panic("spec-harness tests: the gate could not remove the link {link.toString()}")
-	discardOutsideCheckoutDir(staged)
+	discardStagedDir(staged)
 
 	return run
 end 'runGateFixtureThroughASymlink'
@@ -86,7 +84,7 @@ end 'runGateFixtureThroughASymlink'
 module function runGateFixtureOnceFromTheCheckout(extraArguments StringArray, caller String = __file__) returns CollectedOutput
 	let staged = stagedGateFixture(caller)
 	let run = runSpecTest(staged, includeNetwork: false, extraArguments: extraArguments, fromTheCheckout: true)
-	discardOutsideCheckoutDir(staged)
+	discardStagedDir(staged)
 	return run
 end 'runGateFixtureOnceFromTheCheckout'
 
@@ -118,7 +116,7 @@ end 'runSpecTest'
 
 function runOnceThenDiscard(staged FilePath, extraArguments StringArray = StringArray.create(0), environment Environment = Environment.inherit) returns CollectedOutput
 	let run = runSpecTest(staged, includeNetwork: false, extraArguments: extraArguments, environment: environment)
-	discardOutsideCheckoutDir(staged)
+	discardStagedDir(staged)
 	return run
 end 'runOnceThenDiscard'
 
@@ -256,6 +254,34 @@ module function collectMissingSummary(said String, expected String, broken Strin
 	end 'summaryAbsent'
 end 'collectMissingSummary'
 
+module let LeakerProcessIdFileName = "leaker.pid"
+let LeakedOneProcessText = "the case left 1 process running: "
+module let LeakAdviceText = "wait for every process it starts before it ends"
+
+module function recordedProcessId(file FilePath) returns Pid
+	let spelled = try File.readText(file) otherwise panic("spec-harness tests: the gate could not run - the case did not record the id of the process it started in {file.toString()}")
+
+	return (try int.fromString(spelled.trim()) otherwise panic("spec-harness tests: the gate could not run - {file.toString()} holds '{spelled}', which is not a process id")) as Pid
+end 'recordedProcessId'
+
+module function collectLeakNotReported(said String, label String, leaker Pid, broken StringArray)
+	if not said.contains(failVerdictPrefix(label)) 'caseDidNotFail'
+		broken.push("'{label}' left process {leaker} running and did not FAIL. Expected '{failVerdictPrefix(label)}', and the run said:\n{said}\n")
+	end 'caseDidNotFail'
+
+	if not said.contains("{LeakedOneProcessText}{leaker} ") 'leakerUnnamed'
+		broken.push("the failure of '{label}' does not name the process it left. Expected '{LeakedOneProcessText}{leaker} ' followed by its image name, and the run said:\n{said}\n")
+	end 'leakerUnnamed'
+
+	if not said.contains(LeakAdviceText) 'adviceMissing'
+		broken.push("the failure of '{label}' does not say how to fix it. Expected '{LeakAdviceText}', and the run said:\n{said}\n")
+	end 'adviceMissing'
+
+	if Process.isAlive(leaker) 'leakerStays'
+		broken.push("the process the case left (id {leaker}) was still running when the run ended, so the harness did not end it")
+	end 'leakerStays'
+end 'collectLeakNotReported'
+
 module function resultNoteEntry(label String) returns String
 	return "{ResultNoteIndent}{label}{LineFeed}"
 end 'resultNoteEntry'
@@ -372,7 +398,7 @@ module function runGateFixtureBelowAnIgnoredDirectory(caller String = __file__) 
 	copyFixtureInto(fixture, staged: staged)
 
 	let run = runSpecTest(staged, includeNetwork: false)
-	discardOutsideCheckoutDir(wrapper)
+	discardStagedDir(wrapper)
 	return run
 end 'runGateFixtureBelowAnIgnoredDirectory'
 
@@ -384,7 +410,7 @@ module function runGateFixtureBesideAStagedScriptlib(package String, fileName St
 	writeScriptlibPackageFile(tier, package: package, fileName: fileName, content: content)
 
 	let run = runSpecTest(staged, includeNetwork: false, binary: tierCompiler)
-	discardOutsideCheckoutDir(staged)
-	discardOutsideCheckoutDir(tier)
+	discardStagedDir(staged)
+	discardStagedDir(tier)
 	return run
 end 'runGateFixtureBesideAStagedScriptlib'

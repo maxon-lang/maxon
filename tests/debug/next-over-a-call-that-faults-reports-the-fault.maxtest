@@ -1,7 +1,7 @@
 let FaultingCallCaseLabel = "next-over-a-call-that-faults-reports-the-fault"
 
 test 'a next over a call that faults stops at the fault'
-	let staged = builtLibraryTierFixture(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: FaultingCallCaseLabel, fixture: CrashFixtureName)
+	let staged = builtLibraryTierFixture(FixturesDirName, caseLabel: FaultingCallCaseLabel, fixture: CrashFixtureName)
 	let faultLine = anchorLine(staged.join(libraryTierProgramFile()), anchor: "force-fault")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(faultLine)}", RunCommand, NextCommand, BacktraceCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create(0))
@@ -15,4 +15,6 @@ test 'a next over a call that faults stops at the fault'
 	let landed = eventAt(stops, index: 1)
 	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: FaultStopReason, message: "the walk's landing is the fault, reported as `{FaultStopReason}`. {said}")
 	try Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count(), expected: 1, message: "the fault is a stop the session can still walk. {said}")
+
+	discardStagedDir(staged)
 end 'a next over a call that faults stops at the fault'

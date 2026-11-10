@@ -1,0 +1,22 @@
+let LeavingCaseLabel = "leaves-a-file/leaves-a-file.writes"
+let LeftBehindLine = "left .spec-run/stray-file.txt"
+
+test 'a case that passes but leaves a file in its working directory fails the run, naming the file'
+	let run = runGateFixtureOnce(StringArray.create(0))
+	let said = everythingSaid(run)
+	var broken = StringArray.create(0)
+
+	if not said.contains(passVerdictLine(LeavingCaseLabel)) 'caseDidNotRun'
+		broken.push("the case itself was meant to PASS, so that only the file it left can fail the run. Expected '{passVerdictLine(LeavingCaseLabel)}', and the run said:\n{said}\n")
+	end 'caseDidNotRun'
+
+	if not said.contains(LeftBehindLine) 'fileUnnamed'
+		broken.push("the run does not name the file the case left. Expected a line '{LeftBehindLine}', and the run said:\n{said}\n")
+	end 'fileUnnamed'
+
+	if run.exitCode() == SuccessExitCode 'leftoverDidNotCount'
+		broken.push("the run exited {SuccessExitCode} with a file left in the cases' working directory. It said:\n{said}\n")
+	end 'leftoverDidNotCount'
+
+	requireNothingBroken(broken, headline: "a file left in a case's working directory fails the run")
+end 'a case that passes but leaves a file in its working directory fails the run, naming the file'

@@ -27,11 +27,13 @@ type ConditionSession implements DapSession
 end 'ConditionSession'
 
 test 'a condition on a String local is unverified and says why, and the same line without one verifies'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ConditionCaseLabel, fixture: ConditionFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ConditionCaseLabel, fixture: ConditionFixtureName)
 	var session = ConditionSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: HitBodyAnchor))
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.isFalse(dapBreakpointVerified(session.refused, index: 0), message: "`{StringLocalCondition}` compares a String local, which the driver refuses to evaluate. Verifying it would arm an UNCONDITIONAL breakpoint under a conditional marker")
 	try Expect.isTrue(dapBreakpointHasMessage(session.refused, index: 0), message: "an unverified breakpoint must carry the reason: it is the only text the editor has to show beside the greyed-out marker; it answered {dapDescribed(session.refused)}")
 	try Expect.isTrue(session.controlVerified, message: "the SAME line with no condition must verify — otherwise the refusal above says nothing about conditions and everything about the line")
+
+	discardStagedDir(staged)
 end 'a condition on a String local is unverified and says why, and the same line without one verifies'

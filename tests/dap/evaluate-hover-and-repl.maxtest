@@ -31,10 +31,12 @@ type EvaluateSession implements DapSession
 end 'EvaluateSession'
 
 test 'evaluate answers a local in hover context and a debugger word in repl context'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: EvaluateCaseLabel, fixture: ValuesFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: EvaluateCaseLabel, fixture: ValuesFixtureName)
 	var session = EvaluateSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: RenderedAnchor))
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.contains(session.hovered, needle: LabelLocalText, message: "hovering `{LabelLocalName}` must show its value, which is `{LabelLocalText}` at that line; it showed {session.hovered}")
 	try Expect.contains(session.replied, needle: RenderFunctionName, message: "`{BacktraceWord}` in the Debug Console must answer the stack as TEXT, naming the function the program is stopped in; it answered {session.replied}")
+
+	discardStagedDir(staged)
 end 'evaluate answers a local in hover context and a debugger word in repl context'

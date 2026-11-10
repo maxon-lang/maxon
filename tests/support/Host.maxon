@@ -4,7 +4,6 @@ public let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 	public let HostTempVariable = "TEMP"
 #else
 	public let HostTempVariable = "TMPDIR"
-	public let PosixLastResortTempDir = "/tmp"
 #endif
 
 public function executableSuffix() returns String
@@ -53,16 +52,6 @@ public function testedCompilerPath() returns FilePath
 
 	return binary
 end 'testedCompilerPath'
-
-public function hostTempDir() returns FilePath
-	#if os(Windows)
-		let spelled = try Process.environmentVariable(HostTempVariable) otherwise panic("the gate could not run — {HostTempVariable} is not set, and it names the only temp area outside the checkout a case can stage in.")
-	#else
-		let spelled = try Process.environmentVariable(HostTempVariable) otherwise PosixLastResortTempDir
-	#endif
-
-	return try FilePath.from(spelled) otherwise panic("the gate could not run — the host temp area '{spelled}' is not a spellable path")
-end 'hostTempDir'
 
 public function requireNoCheckoutAbove(dir FilePath)
 	var level = dir

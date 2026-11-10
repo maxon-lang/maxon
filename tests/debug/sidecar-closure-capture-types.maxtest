@@ -7,7 +7,7 @@ let CapturedGaugeDescription = "gauge is described as Gauge"
 let CapturedProbeDescription = "probe is described as Probe"
 
 test 'every value a closure of a later file captures is described under the type its own file declared it with'
-	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ClosureCapturesCaseLabel, fixture: ClosureCapturesFixtureName)
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: ClosureCapturesCaseLabel, fixture: ClosureCapturesFixtureName)
 	let build = spawnBuild(staged, staged: staged, output: staged.join(OutputFileStem), label: ClosureCapturesBuildLabel, extraArguments: StringArray.create(0))
 
 	if build.exitCode() != 0 'didNotBuild'
@@ -24,6 +24,8 @@ test 'every value a closure of a later file captures is described under the type
 	Expect.equal(captures.count(), expected: 2, message: "the closure `{CapturingClosureTypeName}` captures two values, and the sidecar describes {captures.count()} captures under it, so this case would ask nothing of them. The types section held: {listedLines(typeRows)}")
 	Expect.contains(described, needle: CapturedGaugeDescription, message: "the closure captures `gauge`, declared `Gauge` in a file read after the first, and the sidecar describes it as another type: a debugger would print one type's fields over another's bytes. The captures were: {described}")
 	Expect.contains(described, needle: CapturedProbeDescription, message: "the closure captures `probe`, declared `Probe` in a file read after the first, and the sidecar describes it as another type: a debugger would print one type's fields over another's bytes. The captures were: {described}")
+
+	discardStagedDir(staged)
 end 'every value a closure of a later file captures is described under the type its own file declared it with'
 
 // A capture row is `+0x08  <name> : <type>`; each is restated as `<name> is described as <type>`.
