@@ -10,7 +10,6 @@ export enum ReadOnlyRootKind
 	ifLetBinding
 	matchBinding
 	letField
-	letPayload
 	readOnlyElement
 	frozenElement
 	storedMapKey
@@ -23,7 +22,7 @@ export enum ReadOnlyRootKind
 end 'ReadOnlyRootKind'
 
 // @generated library-cache begin
-let CacheCasesReadOnlyRootKind = [ReadOnlyRootKind.letBinding, ReadOnlyRootKind.forElement, ReadOnlyRootKind.loopVariable, ReadOnlyRootKind.ifLetBinding, ReadOnlyRootKind.matchBinding, ReadOnlyRootKind.letField, ReadOnlyRootKind.letPayload, ReadOnlyRootKind.readOnlyElement, ReadOnlyRootKind.frozenElement, ReadOnlyRootKind.storedMapKey, ReadOnlyRootKind.storedSetElement, ReadOnlyRootKind.moduleLet, ReadOnlyRootKind.sharedView, ReadOnlyRootKind.view, ReadOnlyRootKind.destructuredTuple, ReadOnlyRootKind.heldPromise]
+let CacheCasesReadOnlyRootKind = [ReadOnlyRootKind.letBinding, ReadOnlyRootKind.forElement, ReadOnlyRootKind.loopVariable, ReadOnlyRootKind.ifLetBinding, ReadOnlyRootKind.matchBinding, ReadOnlyRootKind.letField, ReadOnlyRootKind.readOnlyElement, ReadOnlyRootKind.frozenElement, ReadOnlyRootKind.storedMapKey, ReadOnlyRootKind.storedSetElement, ReadOnlyRootKind.moduleLet, ReadOnlyRootKind.sharedView, ReadOnlyRootKind.view, ReadOnlyRootKind.destructuredTuple, ReadOnlyRootKind.heldPromise]
 
 module function cacheReadReadOnlyRootKind(reader LibraryCacheReader) returns ReadOnlyRootKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -60,7 +59,6 @@ export function readOnlyRootDescription(root ReadOnlyRootKind) returns String
 		ifLetBinding gives "an `if let` binding"
 		matchBinding gives "a `match` binding"
 		letField gives "a `let` field"
-		letPayload gives "a `let` payload"
 		readOnlyElement gives "a `readonly` element"
 		frozenElement gives "an `immutable` element"
 		storedMapKey gives "a stored Map key"
@@ -197,7 +195,6 @@ export function deepLetStoredRootSubject(name String, kind ReadOnlyRootKind) ret
 		ifLetBinding or
 		matchBinding or
 		letField or
-		letPayload or
 		readOnlyElement or
 		frozenElement or
 		storedMapKey or
@@ -229,10 +226,6 @@ module function handOffRefusalCode(kind MoveDestinationKind) returns ErrorCode
 		sentMessage gives ErrorCode.semanticServiceArgumentNotUnique
 		publishedValue gives ErrorCode.registryPublishedValueNotSolelyOwned
 		mutableName or
-		letField or
-		letFieldValue or
-		letPayload or
-		letPayloadValue or
 		readOnlyElement or
 		readOnlyElementValue or
 		keptArgument or
@@ -301,7 +294,6 @@ export function rootKindOfHolder(holder WriteBlameHolder) returns ReadOnlyRootKi
 		ifLetBinding gives ReadOnlyRootKind.ifLetBinding
 		matchBinding gives ReadOnlyRootKind.matchBinding
 		letField gives ReadOnlyRootKind.letField
-		letPayload gives ReadOnlyRootKind.letPayload
 		readOnlyElement gives ReadOnlyRootKind.readOnlyElement
 		frozenElement gives ReadOnlyRootKind.frozenElement
 		storedMapKey gives ReadOnlyRootKind.storedMapKey
@@ -321,7 +313,6 @@ export function holderOfRootKind(kind ReadOnlyRootKind) returns WriteBlameHolder
 		ifLetBinding gives WriteBlameHolder.ifLetBinding
 		matchBinding gives WriteBlameHolder.matchBinding
 		letField gives WriteBlameHolder.letField
-		letPayload gives WriteBlameHolder.letPayload
 		readOnlyElement gives WriteBlameHolder.readOnlyElement
 		frozenElement gives WriteBlameHolder.frozenElement
 		storedMapKey gives WriteBlameHolder.storedMapKey
@@ -334,26 +325,6 @@ export function holderOfRootKind(kind ReadOnlyRootKind) returns WriteBlameHolder
 	end 'kind'
 end 'holderOfRootKind'
 
-export function moveDestinationOfLetSlot(slot ReadOnlyRootKind, movesAVar bool) returns MoveDestinationKind
-	return match slot 'slot'
-		letField gives MoveDestinationKind.letField if movesAVar else MoveDestinationKind.letFieldValue
-		letPayload gives MoveDestinationKind.letPayload if movesAVar else MoveDestinationKind.letPayloadValue
-		readOnlyElement gives MoveDestinationKind.readOnlyElement if movesAVar else MoveDestinationKind.readOnlyElementValue
-		letBinding or
-		forElement or
-		loopVariable or
-		ifLetBinding or
-		matchBinding or
-		frozenElement or
-		storedMapKey or
-		storedSetElement or
-		moduleLet or
-		sharedView or
-		destructuredTuple or
-		heldPromise or
-		view panic("moveDestinationOfLetSlot: '{slot.name}' is not a place a store keeps a value in")
-	end 'slot'
-end 'moveDestinationOfLetSlot'
 
 export function holderIsPermanent(holder WriteBlameHolder) returns bool
 	return match holder 'holder'
@@ -365,7 +336,6 @@ export function holderIsPermanent(holder WriteBlameHolder) returns bool
 		matchBinding or
 		view gives false
 		letField or
-		letPayload or
 		readOnlyElement or
 		frozenElement or
 		storedMapKey or

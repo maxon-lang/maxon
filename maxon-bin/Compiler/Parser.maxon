@@ -4772,10 +4772,8 @@ end 'OperandSuccession'
 
 enum ReadOnlyMark
 	immutableGlobal
-	field
 	element
 	frozenElement
-	letPayload
 	storedMapKey
 	storedSetElement
 	sharedView
@@ -4787,9 +4785,7 @@ enum ReadOnlyMark
 
 	function isIn(class ReadOnlyClass) returns bool
 		return match self 'mark'
-			field or
-			element or
-			letPayload gives true
+			element gives true
 			immutableGlobal gives class != ReadOnlyClass.fieldRead
 			sharedView gives class == ReadOnlyClass.permanent
 			frozenElement or
@@ -4806,7 +4802,7 @@ enum ReadOnlyClass
 	permanent
 end 'ReadOnlyClass'
 
-let ReadOnlyMarkRoster = [ReadOnlyMark.immutableGlobal, ReadOnlyMark.field, ReadOnlyMark.element, ReadOnlyMark.frozenElement, ReadOnlyMark.letPayload, ReadOnlyMark.storedMapKey, ReadOnlyMark.storedSetElement, ReadOnlyMark.sharedView, ReadOnlyMark.imageRecord]
+let ReadOnlyMarkRoster = [ReadOnlyMark.immutableGlobal, ReadOnlyMark.element, ReadOnlyMark.frozenElement, ReadOnlyMark.storedMapKey, ReadOnlyMark.storedSetElement, ReadOnlyMark.sharedView, ReadOnlyMark.imageRecord]
 
 function readOnlyRosterAgrees() returns bool
 	let declared = ReadOnlyMark.allCases
@@ -4830,10 +4826,8 @@ end 'readOnlyRosterAgrees'
 function readOnlyMarkColumnIn(body FunctionBodyState, mark ReadOnlyMark) returns ValueMarkColumn
 	return match mark 'mark'
 		immutableGlobal gives body.immutableGlobalReads
-		field gives body.readOnlyFieldReads
 		element gives body.readOnlyElementReads
 		frozenElement gives body.frozenElementReads
-		letPayload gives body.letPayloadReads
 		storedMapKey gives body.storedMapKeyReads
 		storedSetElement gives body.storedSetElementReads
 		sharedView gives body.sharedViewReads
@@ -18868,12 +18862,10 @@ type FunctionBodyState
 	export var immutableGlobalReads as ValueMarkColumn
 	export var derivedImmutableGlobalReads as ValueMarkColumn
 	export var imageRecordReads as ValueMarkColumn
-	export var readOnlyFieldReads as ValueMarkColumn
 	export var readOnlyElementReads as ValueMarkColumn
 	export var frozenElementReads as ValueMarkColumn
 	export var storedMapKeyReads as ValueMarkColumn
 	export var storedSetElementReads as ValueMarkColumn
-	export var letPayloadReads as ValueMarkColumn
 	export var sharedViewReads as ValueMarkColumn
 	export var temporaryFieldReads as ValueMarkColumn
 	export var immortalFunctionValues as ValueMarkColumn
@@ -19449,13 +19441,11 @@ type FunctionBodyState
 			foldedIndexCallSites: noFoldedIndexCallSites,
 			immutableGlobalReads: noValueMarks,
 			derivedImmutableGlobalReads: noValueMarks,
-			readOnlyFieldReads: noValueMarks,
 			imageRecordReads: noValueMarks,
 			readOnlyElementReads: noValueMarks,
 			frozenElementReads: noValueMarks,
 			storedMapKeyReads: noValueMarks,
 			storedSetElementReads: noValueMarks,
-			letPayloadReads: noValueMarks,
 			sharedViewReads: noValueMarks,
 			temporaryFieldReads: noValueMarks,
 			immortalFunctionValues: noValueMarks,
@@ -41130,10 +41120,8 @@ export type Parser
 	function installReadOnlyMarkColumn(mark ReadOnlyMark, column ValueMarkColumn)
 		match mark 'mark'
 			immutableGlobal then self.bodyState.immutableGlobalReads = column
-			field then self.bodyState.readOnlyFieldReads = column
 			element then self.bodyState.readOnlyElementReads = column
 			frozenElement then self.bodyState.frozenElementReads = column
-			letPayload then self.bodyState.letPayloadReads = column
 			storedMapKey then self.bodyState.storedMapKeyReads = column
 			storedSetElement then self.bodyState.storedSetElementReads = column
 			sharedView then self.bodyState.sharedViewReads = column
@@ -71818,7 +71806,7 @@ export type Parser
 		return not self.recordNeverMeetsADoor(value) and not tagIsByteRecord(self.tagOf(value))
 	end 'valueIsARecordAStoreAliases'
 
-	function requireValueMeetsLetFieldRules(value ValueId, valueStart ElementIndex, place String, into ReadOnlyRootKind, anchor Token) throws SourceParseError
+	function requireValueMeetsReadOnlyElementRules(value ValueId, valueStart ElementIndex, place String, anchor Token) throws SourceParseError
 		if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly) or self.valueIsAnImmortalImageRecord(value) or self.effectiveCapabilityOf(value) == ValueCapability.immutable 'readOnlyIntoALetField'
 			return
 		end 'readOnlyIntoALetField'
@@ -71829,12 +71817,12 @@ export type Parser
 			var binding = self.bodyState.scope.getInfo(localName)
 
 			if binding.isSelfField and self.valueIsOpaque(value) 'decidedWhereItIsInstantiated'
-				self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: false)
+				self.noteReadOnlyElementValueSite(value, destination: place, anchor: anchor, freshAtTheTop: false)
 				return
 			end 'decidedWhereItIsInstantiated'
 
 			if binding.isSelfField 'aFieldOfTheReceiver'
-				try self.refuseStoreIntoALetField(place, into: into, subject: readOutOfPlaceSubject("the field '{String.from(localName)}'"), anchor: anchor)
+				try self.refuseStoreIntoAReadOnlyElement(place, subject: readOutOfPlaceSubject("the field '{String.from(localName)}'"), anchor: anchor)
 				return
 			end 'aFieldOfTheReceiver'
 
@@ -71843,12 +71831,12 @@ export type Parser
 			end 'aParameter'
 
 			if not binding.isMutable() and not binding.elementWritable 'aLocalLet'
-				self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: false)
+				self.noteReadOnlyElementValueSite(value, destination: place, anchor: anchor, freshAtTheTop: false)
 				return
 			end 'aLocalLet'
 
-			self.noteLetFieldMove(value, binding: binding, destination: place, into: into, anchor: anchor)
-			self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: false)
+			self.noteReadOnlyElementMove(value, binding: binding, destination: place, anchor: anchor)
+			self.noteReadOnlyElementValueSite(value, destination: place, anchor: anchor, freshAtTheTop: false)
 			return
 		end 'aBareLocal'
 
@@ -71858,22 +71846,22 @@ export type Parser
 
 		if self.valueIsSolelyOwnedHere(value) 'freshAtTheTop'
 			if not self.valueHoldsNoWritableRecordWithin(value) 'contentsToJudge'
-				self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: true)
+				self.noteReadOnlyElementValueSite(value, destination: place, anchor: anchor, freshAtTheTop: true)
 			end 'contentsToJudge'
 
 			return
 		end 'freshAtTheTop'
 
 		if self.valueIsOwnedHeap(value) or self.valueIsOpaque(value) 'judgedOnceEveryBodyIsParsed'
-			self.noteLetFieldValueSite(value, destination: place, into: into, anchor: anchor, freshAtTheTop: false)
+			self.noteReadOnlyElementValueSite(value, destination: place, anchor: anchor, freshAtTheTop: false)
 			return
 		end 'judgedOnceEveryBodyIsParsed'
 
-		try self.refuseStoreIntoALetField(place, into: into, subject: "a value other names may still write", anchor: anchor)
-	end 'requireValueMeetsLetFieldRules'
+		try self.refuseStoreIntoAReadOnlyElement(place, subject: "a value other names may still write", anchor: anchor)
+	end 'requireValueMeetsReadOnlyElementRules'
 
-	// `merge x` re-enters the bare local or parameter `x` into this region, so the let-field door judges `x`
-	// itself, as `parseMerge` does.
+	// `merge x` re-enters the bare local or parameter `x` into this region, so the read-only-element door
+	// judges `x` itself, as `parseMerge` does.
 	function startPastMerge(valueStart ElementIndex) returns ElementIndex
 		if regionOperatorAt(self.tokens, index: valueStart) and self.tokenAt(valueStart).value.equals(MergeOperatorWord) 'aMerge'
 			return valueStart + 1
@@ -71886,16 +71874,16 @@ export type Parser
 		return self.tagOf(value) == ValueTypeTag.typeParameter
 	end 'valueIsOpaque'
 
-	function noteLetFieldValueSite(value ValueId, destination String, into ReadOnlyRootKind, anchor Token, freshAtTheTop bool)
+	function noteReadOnlyElementValueSite(value ValueId, destination String, anchor Token, freshAtTheTop bool)
 		if self.bodyState.deferredProvenance is self.anchors.noDeferredProvenance 'noBody'
 			return
 		end 'noBody'
 
 		var site = MoveSite.create(value, source: EmptySourceText, sourceValue: value, sourceIsMutable: false, destination: freeze destination.toByteArray(), line: anchor.line, column: anchor.column, token: self.pos)
-		site.destinationKind = moveDestinationOfLetSlot(into, movesAVar: false)
+		site.destinationKind = MoveDestinationKind.readOnlyElementValue
 		site.freshAtTheTop = freshAtTheTop
 		self.bodyState.deferredProvenance.noteMoveSite(site)
-	end 'noteLetFieldValueSite'
+	end 'noteReadOnlyElementValueSite'
 
 	function storeMayReachAnImmutableName(value ValueId, valueStart ElementIndex) returns bool
 		if not self.valueIsARecordAStoreAliases(value) or self.valueIsOpaque(value) 'nothingASharedRecordReaches'
@@ -71926,9 +71914,9 @@ export type Parser
 		self.bodyState.deferredProvenance.noteMoveSite(site)
 	end 'fileMutablePlaceSite'
 
-	function noteLetFieldMove(value ValueId, binding VarInfo, destination String, into ReadOnlyRootKind, anchor Token)
+	function noteReadOnlyElementMove(value ValueId, binding VarInfo, destination String, anchor Token)
 		var site = MoveSite.create(value, source: binding.name, sourceValue: binding.boundValue, sourceIsMutable: binding.isMutable(), destination: freeze destination.toByteArray(), line: anchor.line, column: anchor.column, token: self.pos)
-		site.destinationKind = moveDestinationOfLetSlot(into, movesAVar: true)
+		site.destinationKind = MoveDestinationKind.readOnlyElement
 
 		if self.bodyState.deferredProvenance is self.anchors.noDeferredProvenance 'noBody'
 			return
@@ -71936,16 +71924,16 @@ export type Parser
 
 		self.bodyState.deferredProvenance.noteMoveSite(site)
 		self.awaitReadAfterDoor(binding, site: site)
-	end 'noteLetFieldMove'
+	end 'noteReadOnlyElementMove'
 
 	function refuseStoreOfReadOnly(value ValueId, place String, anchor Token) throws SourceParseError
 		let kind = ReadOnlyRootKind.moduleLet if self.valueMayAliasAnImmutableGlobal(value) else rootKindOfHolder(self.readOnlyFieldHolderOf(value))
 		throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetStoreMessage(readOutOfSubject(kind), place: place), line: anchor.line, column: anchor.column)
 	end 'refuseStoreOfReadOnly'
 
-	function refuseStoreIntoALetField(place String, into ReadOnlyRootKind, subject String, anchor Token) throws SourceParseError
-		throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetKeptStoreMessage(into, subject: subject, place: place), line: anchor.line, column: anchor.column)
-	end 'refuseStoreIntoALetField'
+	function refuseStoreIntoAReadOnlyElement(place String, subject String, anchor Token) throws SourceParseError
+		throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetKeptStoreMessage(ReadOnlyRootKind.readOnlyElement, subject: subject, place: place), line: anchor.line, column: anchor.column)
+	end 'refuseStoreIntoAReadOnlyElement'
 
 	function recordFieldRangeChecks(value ValueId, stored ValueId, valueStart ElementIndex, layout StructLayout, index FieldIndex, storedType MaxonType, anchor Token)
 		if let declaredName = try self.signatures.declaredFieldTypeName(layout, index: index) 'theFieldNamesItsType'
@@ -88590,7 +88578,7 @@ export type Parser
 
 		if not self.signatures.containerElementIsFrozen(giid) 'anElementThatIsNotFrozen'
 			if self.signatures.containerElementIsReadOnly(giid) and self.valueIsARecordAStoreAliases(value) 'storesIntoAReadOnlyElementType'
-				try self.requireValueMeetsLetFieldRules(value, valueStart: valueStart, place: String.from(methodTok.value), into: ReadOnlyRootKind.readOnlyElement, anchor: methodTok)
+				try self.requireValueMeetsReadOnlyElementRules(value, valueStart: valueStart, place: String.from(methodTok.value), anchor: methodTok)
 			end 'storesIntoAReadOnlyElementType' else if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly) and not self.valueMayAliasAnImmutableGlobal(value) and self.valueIsARecordAStoreAliases(value) and not self.valueIsOpaque(value) 'aReadOnlyElement'
 				try self.refuseStoreOfReadOnly(value, place: place, anchor: methodTok)
 			end 'aReadOnlyElement' else 'aWritableElement'

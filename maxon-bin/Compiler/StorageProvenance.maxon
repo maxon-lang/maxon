@@ -330,16 +330,12 @@ end 'MoveDoor'
 
 function moveDoorOf(kind MoveDestinationKind) returns MoveDoor
 	return match kind 'kind'
-		letField or
-		letPayload or
 		readOnlyElement gives MoveDoor.handsTheVarOver
 		keptArgument or
 		uniqueArgument or
 		uniqueSubject or
 		uniqueSlot gives MoveDoor.argument
 		mutableName or
-		letFieldValue or
-		letPayloadValue or
 		readOnlyElementValue or
 		serviceReply or
 		sharedSend or
@@ -369,8 +365,8 @@ let RootBitIndexMask = 63 as ElementIndex
 let ParameterTraceWritableRank = RootBitIndexMask + 1
 
 // The bits of a summary's `moduleLets` word, two per read-only kind of record — a module-level
-// `let`'s, a shared view's, a `let` field's, a `let` payload's, a `readonly` element's: the result
-// may be or lie within one, and it may hold one. Above them, per field, payload and element kind: a
+// `let`'s, a shared view's, a `readonly` element's, an `immutable` element's: the result
+// may be or lie within one, and it may hold one. Above them, per element kind: a
 // tuple holding one, then a result that may be one; from `TupleColumnSummaryFirstBit`, one bit per
 // marked tuple column.
 let ResultLiesWithinAModuleLet = 1 as ParamPositionMask
@@ -389,7 +385,7 @@ let LetReachColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside, Prove
 let StoredContentsColumns = [ProvenanceColumn.holds, ProvenanceColumn.storedHolds, ProvenanceColumn.deepHolds, ProvenanceColumn.holdsWithin]
 let ModuleVariableSubject = "a module variable"
 let MaxFreshRounds = 16
-let ReadOnlySlotKindCount = 4
+let ReadOnlySlotKindCount = 2
 let ResultProvenViewBitCount = 12
 let ResultTupleKindFirstBit = ResultProvenViewBitCount
 let ResultMayBeKindFirstBit = ResultTupleKindFirstBit + ReadOnlySlotKindCount
@@ -474,8 +470,6 @@ end 'TupleColumnReach'
 enum PermanentView
 	none
 	sharedView
-	letField
-	letPayload
 	readOnlyElement
 	frozenElement
 end 'PermanentView'
@@ -3084,11 +3078,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
 			if maskHasParam(reach, param: ResultTupleKindFirstBit + kind as ParamCount) 'aTupleWithAKind'
-				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleLetFieldRank() + kind)
+				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.tupleReadOnlySlotRank() + kind)
 			end 'aTupleWithAKind'
 
 			if maskHasParam(reach, param: ResultMayBeKindFirstBit + kind as ParamCount) 'mayBeOfAKind'
-				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.maybeLetFieldRank() + kind)
+				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.maybeReadOnlySlotRank() + kind)
 			end 'mayBeOfAKind'
 		end 'eachSlotKind'
 
@@ -3113,7 +3107,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	// The ranks past `moduleLetRank` stand for the records of each read-only kind that no root value
 	// names, and for a tuple's marks over them; `isPermanentViewRank` and `permanentViewOf` list them.
-	// `unionMaskWithoutLetFields` skips `HiddenViewRankCount` ranks as one run from `letFieldRank`, so
+	// `unionMaskWithoutLetFields` skips `HiddenViewRankCount` ranks as one run from `readOnlySlotRank`, so
 	// every rank from there through the last tuple column stays consecutive.
 	function sharedViewRank() returns ElementIndex
 		return self.writableRank + 2
@@ -3127,28 +3121,28 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'kind'
 	end 'opReadsASharedView'
 
-	function letFieldRank() returns ElementIndex
+	function readOnlySlotRank() returns ElementIndex
 		return self.writableRank + 3
-	end 'letFieldRank'
+	end 'readOnlySlotRank'
 
 	function readOnlyElementRank() returns ElementIndex
-		return self.letFieldRank() + 2
+		return self.readOnlySlotRank()
 	end 'readOnlyElementRank'
 
 	function frozenElementRank() returns ElementIndex
-		return self.letFieldRank() + 3
+		return self.readOnlySlotRank() + 1
 	end 'frozenElementRank'
 
-	function maybeLetFieldRank() returns ElementIndex
-		return self.letFieldRank() + ReadOnlySlotKindCount
-	end 'maybeLetFieldRank'
+	function maybeReadOnlySlotRank() returns ElementIndex
+		return self.readOnlySlotRank() + ReadOnlySlotKindCount
+	end 'maybeReadOnlySlotRank'
 
-	function tupleLetFieldRank() returns ElementIndex
-		return self.maybeLetFieldRank() + ReadOnlySlotKindCount
-	end 'tupleLetFieldRank'
+	function tupleReadOnlySlotRank() returns ElementIndex
+		return self.maybeReadOnlySlotRank() + ReadOnlySlotKindCount
+	end 'tupleReadOnlySlotRank'
 
 	function tupleColumnRank(column ElementIndex) returns ElementIndex
-		return self.tupleLetFieldRank() + ReadOnlySlotKindCount + column
+		return self.tupleReadOnlySlotRank() + ReadOnlySlotKindCount + column
 	end 'tupleColumnRank'
 
 	// Columns past the last share its rank, which can only refuse more, never less.
@@ -3158,7 +3152,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'tupleColumnOfOffset'
 
 	function isPermanentViewRank(rank ElementIndex) returns bool
-		return rank == self.moduleLetRank() or rank == self.sharedViewRank() or (rank >= self.letFieldRank() and rank < self.letFieldRank() + HiddenViewRankCount)
+		return rank == self.moduleLetRank() or rank == self.sharedViewRank() or (rank >= self.readOnlySlotRank() and rank < self.readOnlySlotRank() + HiddenViewRankCount)
 	end 'isPermanentViewRank'
 
 	function permanentViewOf(value ValueId) returns PermanentView
@@ -3166,7 +3160,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return PermanentView.sharedView
 		end 'aSharedView'
 
-		return self.readOnlySlotViewOf(value, firstRank: self.letFieldRank(), lyingWithin: true)
+		return self.readOnlySlotViewOf(value, firstRank: self.readOnlySlotRank(), lyingWithin: true)
 	end 'permanentViewOf'
 
 	function maybePermanentViewOf(value ValueId) returns PermanentView
@@ -3176,13 +3170,13 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return proven
 		end 'provenReadOnly'
 
-		let element = self.readOnlySlotViewOf(value, firstRank: self.maybeLetFieldRank(), lyingWithin: true)
+		let element = self.readOnlySlotViewOf(value, firstRank: self.maybeReadOnlySlotRank(), lyingWithin: true)
 
 		if element != PermanentView.none 'anElementThatMayBeReadOnly'
 			return element
 		end 'anElementThatMayBeReadOnly'
 
-		return self.readOnlySlotViewOf(value, firstRank: self.tupleLetFieldRank(), lyingWithin: false)
+		return self.readOnlySlotViewOf(value, firstRank: self.tupleReadOnlySlotRank(), lyingWithin: false)
 	end 'maybePermanentViewOf'
 
 	function readOnlySlotViewOf(value ValueId, firstRank ElementIndex, lyingWithin bool) returns PermanentView
@@ -3449,7 +3443,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	// The tuple and column ranks stay on identity: in `inside` they would make every element and field
 	// below the tuple read as read-only, refusing a store into a writable column.
 	function unionInsideOfIdentity(to ValueId, source ValueId, reach TupleColumnReach)
-		if self.sets.unionWithoutRanks(self.setOf(ProvenanceColumn.inside, value: to), from: self.setOf(ProvenanceColumn.identity, value: source), firstSkipped: self.tupleLetFieldRank(), skippedCount: TupleMarkRankCount) 'grew'
+		if self.sets.unionWithoutRanks(self.setOf(ProvenanceColumn.inside, value: to), from: self.setOf(ProvenanceColumn.identity, value: source), firstSkipped: self.tupleReadOnlySlotRank(), skippedCount: TupleMarkRankCount) 'grew'
 			self.changed = true
 		end 'grew'
 
@@ -3459,7 +3453,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'unionInsideOfIdentity'
 
 	function valueIsReadOnlyOfKind(value ValueId, kind ElementIndex) returns bool
-		return self.valueIsOrLiesWithin(value, rank: self.letFieldRank() + kind) or self.valueIsOrLiesWithin(value, rank: self.maybeLetFieldRank() + kind) or self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleLetFieldRank() + kind)
+		return self.valueIsOrLiesWithin(value, rank: self.readOnlySlotRank() + kind) or self.valueIsOrLiesWithin(value, rank: self.maybeReadOnlySlotRank() + kind) or self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleReadOnlySlotRank() + kind)
 	end 'valueIsReadOnlyOfKind'
 
 	function valueMayBeReadOnly(value ValueId) returns bool
@@ -3474,7 +3468,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function valueMarksSomeTupleColumn(value ValueId) returns bool
 		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
-			if self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleLetFieldRank() + kind) 'marked'
+			if self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleReadOnlySlotRank() + kind) 'marked'
 				return true
 			end 'marked'
 		end 'eachSlotKind'
@@ -3485,7 +3479,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	function markTupleColumn(tuple ValueId, offset ByteOffset, from ValueId)
 		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
 			if self.valueIsReadOnlyOfKind(from, kind: kind) 'readOnly'
-				self.seedBit(ProvenanceColumn.identity, value: tuple, rank: self.tupleLetFieldRank() + kind)
+				self.seedBit(ProvenanceColumn.identity, value: tuple, rank: self.tupleReadOnlySlotRank() + kind)
 				self.seedBit(ProvenanceColumn.identity, value: tuple, rank: self.tupleColumnRank(self.tupleColumnOfOffset(offset)))
 			end 'readOnly'
 		end 'eachSlotKind'
@@ -3510,8 +3504,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 
 	function markFromTupleKinds(result ValueId, tuple ValueId)
 		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
-			if self.setHasRank(ProvenanceColumn.identity, value: tuple, rank: self.tupleLetFieldRank() + kind) 'aKindThisTupleHolds'
-				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.maybeLetFieldRank() + kind)
+			if self.setHasRank(ProvenanceColumn.identity, value: tuple, rank: self.tupleReadOnlySlotRank() + kind) 'aKindThisTupleHolds'
+				self.seedBit(ProvenanceColumn.identity, value: result, rank: self.maybeReadOnlySlotRank() + kind)
 			end 'aKindThisTupleHolds'
 		end 'eachSlotKind'
 	end 'markFromTupleKinds'
@@ -4282,7 +4276,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'unionHeldAsIdentity'
 
 	function unionMaskWithoutLetFields(column ProvenanceColumn, to ValueId, from ProvenanceColumn, source ValueId)
-		if self.sets.unionWithoutRanks(self.setOf(column, value: to), from: self.setOf(from, value: source), firstSkipped: self.letFieldRank(), skippedCount: HiddenViewRankCount) 'grew'
+		if self.sets.unionWithoutRanks(self.setOf(column, value: to), from: self.setOf(from, value: source), firstSkipped: self.readOnlySlotRank(), skippedCount: HiddenViewRankCount) 'grew'
 			self.changed = true
 		end 'grew'
 	end 'unionMaskWithoutLetFields'
@@ -4386,11 +4380,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'holdsAFrozenElement'
 
 		for kind in 0 upto ReadOnlySlotKindCount 'eachSlotKind'
-			if self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleLetFieldRank() + kind) 'aTupleWithAKind'
+			if self.setHasRank(ProvenanceColumn.identity, value: value, rank: self.tupleReadOnlySlotRank() + kind) 'aTupleWithAKind'
 				self.returnedModuleLets = maskWithParam(self.returnedModuleLets, param: ResultTupleKindFirstBit + kind as ParamCount)
 			end 'aTupleWithAKind'
 
-			if self.valueIsOrLiesWithin(value, rank: self.maybeLetFieldRank() + kind) 'mayBeOfAKind'
+			if self.valueIsOrLiesWithin(value, rank: self.maybeReadOnlySlotRank() + kind) 'mayBeOfAKind'
 				self.returnedModuleLets = maskWithParam(self.returnedModuleLets, param: ResultMayBeKindFirstBit + kind as ParamCount)
 			end 'mayBeOfAKind'
 		end 'eachSlotKind'
@@ -4817,10 +4811,6 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				sharedSend then self.decideSharedSend(func, site: site, mutationSummary: mutationSummary)
 				sentMessage or
 				publishedValue then self.decideHandedOff(func, index: index, site: site)
-				letField or
-				letFieldValue or
-				letPayload or
-				letPayloadValue or
 				mutablePlace then self.decideMutablePlaceStore(func, index: index, site: site)
 				returnedValue then self.decideReturnedValue(func, index: index, site: site)
 				mutableName or
@@ -10919,10 +10909,8 @@ end 'moduleGlobalTypesOf'
 
 function readOnlySlotViewOfKind(kind ElementIndex) returns PermanentView
 	return match kind 'kind'
-		0 gives PermanentView.letField
-		1 gives PermanentView.letPayload
-		2 gives PermanentView.readOnlyElement
-		3 gives PermanentView.frozenElement
+		0 gives PermanentView.readOnlyElement
+		1 gives PermanentView.frozenElement
 		default panic("readOnlySlotViewOfKind: {kind} is not one of the {ReadOnlySlotKindCount} read-only slot kinds")
 	end 'kind'
 end 'readOnlySlotViewOfKind'
@@ -10931,8 +10919,6 @@ function viewRootKind(view PermanentView) returns ReadOnlyRootKind
 	return match view 'view'
 		none panic("viewRootKind: a value that reaches no permanent view has no root kind")
 		sharedView gives ReadOnlyRootKind.sharedView
-		letField gives ReadOnlyRootKind.letField
-		letPayload gives ReadOnlyRootKind.letPayload
 		readOnlyElement gives ReadOnlyRootKind.readOnlyElement
 		frozenElement gives ReadOnlyRootKind.frozenElement
 	end 'view'
@@ -10942,8 +10928,6 @@ function writeThroughViewMessage(view PermanentView, place String) returns Strin
 	return match view 'view'
 		none panic("writeThroughViewMessage: a value that reaches no permanent view is not refused here")
 		sharedView gives writeThroughSharedViewMessage(place)
-		letField gives "cannot write through '{place}', which may be a record read out of a `let` field that a call or a merge handed back; nothing reachable through a `let` field may be written; use clone()"
-		letPayload gives "cannot write through '{place}', which may be a record read out of a `let` payload that a call or a merge handed back; nothing reachable through a `let` payload may be written; use clone()"
 		readOnlyElement gives "cannot write through '{place}', which may be a record read out of a `readonly` element that a call or a merge handed back; nothing reachable through a `readonly` element may be written; use clone()"
 		frozenElement gives "cannot write through '{place}', which may be a record read out of an `immutable` element that a call or a merge handed back; nothing reachable through an `immutable` element may be written; use clone()"
 	end 'view'
