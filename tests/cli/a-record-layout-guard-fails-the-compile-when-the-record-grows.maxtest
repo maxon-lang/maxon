@@ -11,7 +11,7 @@ test 'a record guarded by its byte size stops compiling when a field is added wi
 end 'a record guarded by its byte size stops compiling when a field is added without the guard being updated'
 
 function guardedProgramSource(size GuardBytes) returns String
-	return "typealias Slot = int(0 to 1000)\ntypealias GuardedSize = int({size} to {size})\n\ntype Pair\n\texport var left as Slot\n\texport var right as Slot\n\n\tstatic function guardedBytes() returns GuardedSize\n\t\treturn sizeof(Pair) as GuardedSize\n\tend 'guardedBytes'\nend 'Pair'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+	return "typealias Slot = int(0 to 1000)\ntypealias GuardedSize = int({size} to {size})\n\ntype Pair\n\texport var left as Slot\n\texport var right as Slot\n\n\tstatic function guardedBytes() returns GuardedSize\n\t\treturn sizeof(Pair) as GuardedSize\n\tend 'guardedBytes'\nend 'Pair'\n\nfunction main() returns ExitCode\n\tif Pair.guardedBytes() > 0 'built'\n\t\treturn 0\n\tend 'built'\n\n\treturn 1\nend 'main'\n"
 end 'guardedProgramSource'
 
 type LayoutGuardFailsTheCompile implements OutsideCheckoutCase

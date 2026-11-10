@@ -1,5 +1,5 @@
 // an-integer-table-adds-bounded-signature-allocations-per-element.maxtest - a top-level table of integer
-// literals costs a bounded number of `signatures` allocations per element, though nothing reads it:
+// literals costs a bounded number of `signatures` allocations per element, though only one element is read:
 // every compile parses a top-level initializer in full.
 //
 // Two fixture sizes rather than one budget: an absolute count drifts with every unrelated change, while
@@ -16,7 +16,7 @@ let LargeElements = 4500
 let SignaturesPhaseName = "signatures"
 let MetricsPhaseKind = "phase"
 
-let MainDeclaration = "function main() returns ExitCode\n\tprint(\"a table nothing reads\\n\")\n\treturn 0\nend 'main'\n\n"
+let MainDeclaration = "function main() returns ExitCode\n\tif table.count() > 0 'read'\n\t\treturn 0\n\tend 'read'\n\n\treturn 1\nend 'main'\n\n"
 let AliasPreamble = "typealias Limb = int(0 to 4294967295)\ntypealias Limbs = Array with Limb\n\n"
 let AliasOpening = "let table = Limbs from ["
 let PlainOpening = "let table = ["
@@ -63,9 +63,9 @@ function signaturesAllocationsFor(dir FilePath, appDirName String, shape TableSh
 	return metricsCell(table, kind: MetricsPhaseKind, name: SignaturesPhaseName, field: MetricsAllocsField)
 end 'signaturesAllocationsFor'
 
-test 'a table of integer literals nothing reads adds a bounded number of signature allocations per element'
+test 'a table of integer literals adds a bounded number of signature allocations per element'
 	requireHeldOutsideCheckout(AnIntegerTableAddsBoundedSignatureAllocationsPerElementCaseDirName, check: IntegerTableAllocatesBoundedlyPerElement.create())
-end 'a table of integer literals nothing reads adds a bounded number of signature allocations per element'
+end 'a table of integer literals adds a bounded number of signature allocations per element'
 
 type IntegerTableAllocatesBoundedlyPerElement implements OutsideCheckoutCase
 	static function create() returns IntegerTableAllocatesBoundedlyPerElement
@@ -83,7 +83,7 @@ type IntegerTableAllocatesBoundedlyPerElement implements OutsideCheckoutCase
 			let addedAllocs = largeAllocs - smallAllocs
 			let bound = MostAllocationsPerElement * addedElements
 
-			try Expect.isTrue(addedAllocs <= bound, message: "the `{MetricsPhaseKind} {SignaturesPhaseName}` row allocated {smallAllocs} times with a {SmallElements}-element {shape.name} table nothing reads and {largeAllocs} times with {LargeElements}: {addedElements} more elements cost {addedAllocs} more allocations, over the {bound} that {MostAllocationsPerElement} per element allows. The record probe admits every element of an integer-literal run the slot provably holds without the element rule's conversion, so an element must cost a bounded handful of allocations.")
+			try Expect.isTrue(addedAllocs <= bound, message: "the `{MetricsPhaseKind} {SignaturesPhaseName}` row allocated {smallAllocs} times with a {SmallElements}-element {shape.name} table and {largeAllocs} times with {LargeElements}: {addedElements} more elements cost {addedAllocs} more allocations, over the {bound} that {MostAllocationsPerElement} per element allows. The record probe admits every element of an integer-literal run the slot provably holds without the element rule's conversion, so an element must cost a bounded handful of allocations.")
 		end 'eachShape'
 	end 'requireHeldIn'
 end 'IntegerTableAllocatesBoundedlyPerElement'
