@@ -24,109 +24,68 @@ be deleted or superseded without breaking the build of any commit. A seed pre-re
 frozen; a different compiler is a different `seed-*` tag. `fetch-seed.sh` refuses an archive that does not
 match the release's `SHA256SUMS`.
 
-### Freezing a new seed
+### ⛔ A commit the pinned seed refuses lands with its own seed
 
-A tree needs a new seed when it uses something the pinned one does not accept — a declaration, a language
-form, a rule. Until one is pinned, a `scripts/seed-shim/` patch (below) is what lets the pinned seed build the
-tree, so **a tree that carries a patch is owed a new seed, and CI freezes and pins it**:
+`stdlib/` and the compiler's own sources are compiled by the seed on every CI lane and every release runner,
+none of which has another compiler to reach for. A tree that uses something the pinned seed does not accept —
+a `__Managed*` entry (E2015), a `__Builtins` intrinsic (E3004), a language form, a rule that widens a tier
+(E3092) — fails the seed's first build, and nothing later on `main` can fix that: the compiler that accepts
+the tree is the one the seed does not contain yet. Whoever lands such a commit has that compiler, the slot
+built from `HEAD`, so the commit and the seed frozen from it are published and pinned together.
 
-1. **`freeze`.** On every push to `main` that runs CI, the job looks for a `scripts/seed-shim/*.patch`. When it
-   finds one — or when `ci.yml` is dispatched on `main` with `freeze_seed` set; on any other ref that input
-   fails the run — it builds the tree from the pinned seed with the shim and runs `scripts/freeze-seed.sh`.
-2. **`prove`.** Each archive is installed on its own target's runner
-   (`scripts/fetch-seed.sh <tag> <target> --from=temp/seed/dist`) and must build the tree with
-   `scripts/build-from-seed.sh --unshimmed`, which fails at the first refusal: the new seed builds the tree
-   with no patch, on all four architectures, before anything is published. The compiler it built then runs
-   `spec-test ir-specs` on that runner.
-3. **`pin`**, once `freeze` and `prove` are green, whatever the lane jobs (`corpora`, `tools`, `suite`, `cross-suite`) report: a seed only has to build
-   the tree. `scripts/pin-seed.sh` publishes the pre-release
-   at the frozen commit, fetches every archive back from it with `scripts/fetch-seed.sh`, then commits the tag
-   to `scripts/seed-tag` with every `scripts/seed-shim/*.patch` deleted and pushes that commit to `main` as
-   `github-actions[bot]`. GitHub starts no workflow for a push made with `GITHUB_TOKEN`. A pin on the frozen
-   commit needs none — its tree is the one `prove` built, and the download from the release is the one step
-   of CI's seed path `prove` does not take — so CI is dispatched on `main` only when the pin landed over later
-   commits, which no run has built with the new seed.
+**The seed chain is how a refusal is found:** `scripts/build-from-seed.sh` in a clean clone with the pinned
+seed. Any failure there is a refusal, except E6002, which is a locked slot.
 
-⚠ **A pin is superseded when `main` has moved past the frozen commit and changed `scripts/seed-shim/` or
-`scripts/seed-tag`.** The patches it would delete were judged against the older tree, so it writes a notice
-and exits 0 unpublished, and the later commit's run decides the next seed. A pin refuses a tag or release that
-already exists, so a pin that fails after publishing — its release does not fetch back, or `main` refuses the
-push — leaves the release orphaned: delete the release and its tag before re-running the `pin` job.
-
-`scripts/freeze-seed.sh` builds `maxon-bin` for every native target in `maxon-bin/targets.tsv`
-with the slot compiler (`maxon run build --target=<t> --output=<stage>/maxon`, the way
-`release.sh --package --target=` cross-builds), packages each as `maxon-<tag>-<target>` (in the table's `archive` format, the
-binary alone), writes `SHA256SUMS` and the notes into `temp/seed/dist/`, and
-**prints the `gh release create` command without running it**:
+**A refused commit is pushed by `scripts/pin-seed.sh`.** It runs in the main checkout,
+after the landing gates and the commit, and freezes `HEAD`:
 
 ```bash
-scripts/freeze-seed.sh        # tag seed-<today>-<first 12 hex digits of HEAD>; --date=YYYY-MM-DD names another day
+scripts/pin-seed.sh [--date=YYYY-MM-DD] [--prove=<lane>]...
 ```
 
-The commit in the tag keeps two freezes on one day apart and names the commit the seed was frozen from.
+1. **Preconditions.** `origin/main` is an ancestor of `HEAD`, `scripts/seed-tag` has no uncommitted change,
+   and the tag `seed-<date>-<first 12 hex digits of HEAD>` exists neither as a tag nor as a release.
+2. **Freeze.** `scripts/freeze-seed.sh` builds `maxon-bin` for every native target in
+   `maxon-bin/targets.tsv` with the slot compiler (`maxon run build --target=<t> --output=<stage>/maxon`, the
+   way `release.sh --package --target=` cross-builds), and packages each as `maxon-<tag>-<target>` (in the
+   table's `archive` format, the binary alone) with `SHA256SUMS` and the notes in `temp/seed/dist/`. It
+   refuses an uncommitted change under `maxon-bin/`, `stdlib/` or `runtime/`, and a slot older than any of
+   their sources.
+3. **Prove, before anything is published.** The host's lane is always proved: a throwaway clone of `HEAD` at
+   `temp/seed/prove-<lane>` runs `scripts/fetch-seed.sh <tag> <lane> --from=../dist`, then one self-compile
+   of `maxon-bin` with the frozen seed: a seed has to build the tree and nothing more. Each `--prove=<lane>`
+   that is reachable is proved the same way: x64-linux through WSL from Windows; arm64-macos on the shared
+   Mac through `scripts/mac-host.sh`, with the seed tag pushed first so the Mac can clone the commit, and
+   the local archive installed there; any lane natively on its own host. An unreachable lane is skipped with
+   a notice; the Mac probe is a connect test bounded to a few seconds.
+4. **Publish.** The tag is pushed, `gh release create --verify-tag` publishes the pre-release, and every
+   target is fetched back from it against its `SHA256SUMS`.
+5. **Pin.** The tag is committed to `scripts/seed-tag` as the user, and `git push origin HEAD:main` sends the
+   frozen commit and the pin together. CI runs once, on the pin, with the new seed, so `main` is never red in
+   between, and its four lanes are the proof of every lane not proved locally.
 
-⛔ **CI freezes only a tree the pinned seed builds, with or without the shim.** For a refusal no patch covers,
-either write the patch (below) and let CI freeze, or freeze by hand: run `scripts/freeze-seed.sh` in a
-checkout whose slot compiler was built from `HEAD`, push that commit so `--target` names a commit the remote
-has, run the printed command, and commit the tag to `scripts/seed-tag` with every `scripts/seed-shim/*.patch`
-deleted. Prove it first in a fresh clone at a short path with no patch left:
-`scripts/fetch-seed.sh <tag> --from=<the dist directory>` then `scripts/build-from-seed.sh --unshimmed`. The
-arm64 archives run only on arm64, so on an x64 host their first run is CI's seed step on the commit that
-moves the pin.
+⚠ **A failure after anything left the machine retracts it.** A rejected push, a failed proof after the tag
+was pushed, or a failed publish deletes the tag and the release, which nothing pins, and undoes the pin
+commit. Rebase onto `origin/main`, re-run the landing gates and re-run the script.
 
-### ⛔ A tree can declare something its own seed refuses, and a shim is how it is still built
+#### Which lanes to prove
 
-`stdlib/` is parsed by every compile, so a `__Managed*` entry the pinned seed has never heard of fails the
-seed's FIRST build with E2015 — not only in this tree but on every CI lane and every release runner, none
-of which has another compiler to reach for. Nothing later on `main` can fix that: the compiler that accepts
-the entry is the one the seed does not contain yet. The cure is a new seed (above). A shim covers the window
-before one exists.
+The landing agent decides; there is no automatic rule. Name `--prove=<lane>` when the change since the pinned
+seed's commit alters code that only that lane compiles or runs:
 
-`scripts/seed-shim/` closes it. Each patch there withdraws one thing the seed refuses, and
-`scripts/build-from-seed.sh` stages them only when a plain seed build has already been refused, then
-restores every file before `C1` builds `C2`. The commit that pins the next seed deletes every patch.
+- anything under `maxon-bin/Compiler/Targets/` for its architecture (`X64/`, `Arm64/`) or its OS (`Windows/`,
+  `Linux/`, `Macos/`);
+- lines inside an `#if os(...)` or `arch(...)` block in `stdlib/`, `runtime/` or `maxon-bin/` that selects
+  that lane but not every lane;
+- its object writer (PE, ELF or Mach-O), its emitted runtime tier, or its calling convention or syscall
+  layer.
 
-⭐ **A patch never withdraws the tables that teach `C1` the entry**, which is what makes this sound rather
-than a way of shipping a hobbled compiler: the seed accepts the compiler's own parser arm, runtime
-installer and name constants, so `C1` knows the builtin and compiles the unshimmed tree.
+Shared code is covered by the host's proof and CI. When in doubt, name the lane: an unreachable one costs
+only a notice.
 
-Six of the things a patch may withdraw or rewrite are these; `scripts/seed-shim/README.md` lists every case.
-One is a `stdlib/` or `runtime/` declaration the seed refuses
-outright; only `C1`'s own copy of that function is then stubbed, and nothing in a build calls it. Another
-is a CALL SITE in the compiler's own source — the compiler is a Maxon program too, so it can call
-an intrinsic this tree adds and the seed refuses it there with E3004 rather than at the declaration.
-Withdrawing the call leaves every table standing, and the first build is merely one whose instrument
-reports nothing. Keep such a patch to the single function that calls, so what the shimmed build loses is
-stated by the patch itself.
-
-The third is a VISIBILITY MODIFIER, and it is the one that spans many declarations rather than one site. A
-rule about what a signature may name decides a declaration's tier, so a seed that predates the rule audits
-those tiers by the older one and reports E3092/E3093/E3094 at every declaration the new rule widened.
-Withdrawing the modifier leaves the declaration, its body and every table standing, so `C1` is unaffected
-and compiles the unshimmed tree; what the first build loses is the wider tier and no code.
-
-The fourth is a LANGUAGE FORM the seed cannot parse, such as a `readonly` element type
-(`Array with readonly T`) or a `let` union payload (`case(let name T)`), or a form the seed reads by an older
-rule: a bare payload, which the patch writes `let` for a seed that reads a bare one as reassignable. The patch withdraws the form and
-writes whatever the seed's older rules then demand in its place (a `.clone()` where the seed still holds a
-borrow across a mutation, an index loop where it will not let a loop element be assigned through, a `let`
-where it sees no assignment to a `var`), leaving every table standing. The sites are found by building with the
-seed for each native target until every build is clean, so that patch is generated
-(`scripts/seed-shim/generate-seed-language-shim.py`) and regenerated whenever the sources it touches move,
-and after the comments of the change have been written.
-
-The fifth is the LIBRARY linked into `C1`: a `stdlib/` body that names a type or an intrinsic the seed does not
-know is rewritten to calls it does, for the first build only. Only `C1`'s own behaviour is weaker, because the
-restore runs before `C1` builds `C2` against the unshimmed library.
-
-The sixth is the RUNTIME TIER's GEOMETRY: the seed pins the layout `runtime/SlabRuntime.maxon` restates and emits
-the allocator lock it was built with, so a tree that changes either has its tier written back to the seed's
-geometry for the first build, and `C1` builds `C2` from the tree's.
-
-⛔ **The commit that pins a new seed deletes every patch**, by `pin-seed.sh` or by hand, once that seed
-has built the tree with none. A patch is inert from that moment — the plain build succeeds before the
-directory is read — and one left to rot stops applying, turning the next genuine refusal into a confusing
-failure.
+⛔ **Old seeds stay published.** Every `seed-*` release is pinned by some commit, and bisecting and a
+benchmark's control arm build from them. A release nothing pins is a retracted one, and `pin-seed.sh`
+deletes it itself.
 
 ---
 

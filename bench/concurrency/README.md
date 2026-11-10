@@ -156,8 +156,8 @@ The script runs on Python 3.9 or newer and needs only the standard library.
   holding `.git`) or this repository's root or one of its parents. A ref is built the way CI builds it,
   from the seed its `scripts/seed-tag` pins. When the invoking tree pins the same seed, its `.bootstrap/maxon` is copied
   into the worktree; otherwise the worktree's own `scripts/fetch-seed.sh` downloads it, which needs an
-  authenticated `gh`. The worktree's own `scripts/build-from-seed.sh` then builds `C1` (staging its
-  `scripts/seed-shim/` if the seed refuses the tree) and then `C2`, so the control carries its own runtime.
+  authenticated `gh`. The worktree's own `scripts/build-from-seed.sh` then builds `C1` and then `C2`, so
+  the control carries its own runtime.
   It is always built on the host the harness runs on — Windows for `--host wsl`, the Mac for `--host orb` —
   with Git for Windows' `bash` on Windows, and any failure is a build failure (exit 2).
 - **Each arm compiles its own commit's programs.** A `--ref` arm compiles the workloads as its

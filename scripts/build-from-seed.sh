@@ -21,109 +21,21 @@
 #
 # ⛔ **A TREE DECLARING WHAT THE PINNED SEED DOES NOT KNOW CANNOT BE BUILT BY IT**, and the seed is the one
 # compiler nothing here can regenerate — every CI lane and every release runner starts with this script,
-# so a refusal is four red lanes that no later commit can fix. The cure is a new seed.
-# `scripts/seed-shim/` is where a patch withdrawing such a declaration lives until a seed that accepts it
-# is pinned; patches there are staged only after a plain build has been tried and refused. A patch there is what makes CI
-# freeze and pin the next seed, and the pin deletes every patch (`docs/RELEASING.md`).
-#
-# ⛔ **THE SHIM IS WITHDRAWN BEFORE `C1` BUILDS `C2`, AND THAT IS WHAT MAKES IT SOUND.** A patch
-# withdraws a DECLARATION the seed refuses, a CALL SITE in compiler source the seed refuses the tree at,
-# a VISIBILITY MODIFIER an older audit reads as an unused export, a LANGUAGE FORM the seed cannot parse
-# (with the rewrites its older rules then demand), a LIBRARY BODY naming what the seed has never heard of,
-# or a CONSTRUCT the seed miscompiles — never the tables that teach `C1` the entry. `C1` therefore knows the entry and compiles the unshimmed
-# tree. Left in place for the second build it would ship a compiler built from the stubbed source.
-# `scripts/seed-shim/README.md` owns the rule.
-#
-# Usage:
-#   scripts/build-from-seed.sh
-#   scripts/build-from-seed.sh --unshimmed       # a refusal fails the build: proves a seed
-#                                                # accepts the tree with no patch, before the
-#                                                # pin deletes them
+# so a refusal is four red lanes that no later commit can fix. The cure is a new seed frozen from the refused
+# commit, which lands with it through `scripts/pin-seed.sh`.
 
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 . scripts/lib/host-binaries.sh
-. scripts/lib/seed.sh
-
-unshimmed=0
-
-for argument in "$@"; do
-	case "$argument" in
-		--unshimmed) unshimmed=1 ;;
-		*) echo "build-from-seed.sh: unknown argument: $argument" >&2; exit 2 ;;
-	esac
-done
 
 seed="$(maxon_downloaded_path)"
 built="$(maxon_compiler_path)"
 
 [ -x "$seed" ] || { echo "build-from-seed.sh: no seed at $seed — run scripts/fetch-seed.sh" >&2; exit 1; }
 
-shim_staged=""
-
-withdraw_shim() {
-	[ -n "$shim_staged" ] || return 0
-
-	local staged="$shim_staged"
-	local file
-	shim_staged=""
-
-	while IFS= read -r file; do
-		[ -n "$file" ] || continue
-		git checkout -- "$file"
-	done < <(printf '%s' "$staged")
-}
-
-trap withdraw_shim EXIT
-
-stage_shim() {
-	local patches
-	local patch
-	local file
-	local touched=""
-
-	patches="$(seed_shim_patches)"
-
-	if [ -z "$patches" ]; then
-		echo "build-from-seed.sh: the seed refused this tree and $SeedShimDirectory holds no patch withdrawing what it does not know — add one and CI freezes a new seed from main, or freeze one by hand with scripts/freeze-seed.sh" >&2
-		exit 1
-	fi
-
-	while IFS= read -r patch; do
-		[ -n "$patch" ] || continue
-
-		while IFS= read -r file; do
-			[ -n "$file" ] || continue
-
-			if ! git diff --quiet -- "$file"; then
-				echo "build-from-seed.sh: $file is modified — a seed shim is staged over a clean file and withdrawn by restoring it" >&2
-				exit 1
-			fi
-
-			touched="$touched$file"$'\n'
-		done < <(git apply --numstat -- "$patch" | cut -f3)
-	done < <(printf '%s\n' "$patches")
-
-	echo "build-from-seed.sh: the seed refused this tree — staging $SeedShimDirectory over the first build only" >&2
-
-	# Set before the first apply, so the EXIT trap withdraws every patch already applied when a later one
-	# fails. The checks above proved every touched path clean, so restoring one not yet patched is harmless.
-	shim_staged="$touched"
-
-	while IFS= read -r patch; do
-		[ -n "$patch" ] || continue
-		git apply -- "$patch"
-	done < <(printf '%s\n' "$patches")
-}
-
-if ! "$seed" build maxon-bin --output="$built"; then
-	[ "$unshimmed" = 0 ] || { echo "build-from-seed.sh: the seed refused this tree and --unshimmed forbids staging $SeedShimDirectory" >&2; exit 1; }
-	stage_shim
-	"$seed" build maxon-bin --output="$built"
-	withdraw_shim
-fi
+"$seed" build maxon-bin --output="$built"
 
 # `C1` was compiled from this tree, so the `C2` it writes already carries the tree's runtime; `C1`
 # stamps no commit, so its manifest would otherwise ask for a third build.

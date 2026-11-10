@@ -19,11 +19,11 @@ case "$(uname -s)" in
 esac
 
 # The compiler in <tree> — the one everything here runs. Gitignored; `./maxon-bin/.maxon/maxon run build` at the root makes it.
-maxon_compiler_path() { printf '%s/maxon-bin/.maxon/maxon%s' "${1:-.}" "$MAXON_EXE_EXT"; }
+maxon_compiler_path() { printf '%s/maxon-bin/.maxon/maxon%s' "${1:-.}" "${2-$MAXON_EXE_EXT}"; }
 
 # The pinned seed compiler, placed here by scripts/fetch-seed.sh, used to build the tree when the slot above is
 # empty. It is a previous build of THIS compiler and not a second implementation.
-maxon_downloaded_path() { printf '%s/.bootstrap/maxon%s' "${1:-.}" "$MAXON_EXE_EXT"; }
+maxon_downloaded_path() { printf '%s/.bootstrap/maxon%s' "${1:-.}" "${2-$MAXON_EXE_EXT}"; }
 
 # ⛔ THE HOST'S `<arch>-<os>` TARGET KEY, DERIVED ONCE. Release archives, the vendored toolchain and
 #    `--target=` all name a platform the same way, so the mapping from `uname` to that spelling is one

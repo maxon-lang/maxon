@@ -37,7 +37,14 @@ readonly LoginHostPattern='^[A-Za-z0-9.:%-]+$'
 readonly Ipv4Pattern='^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
 readonly ResolveAttempts=6
 readonly ResolveRetrySeconds=5
+readonly ProbeResolveAttempts=1
+readonly ProbeConnectSeconds=3
+readonly ProbeConnectionAttempts=1
 readonly ResolveIpv4Script='(Resolve-DnsName $env:MAXON_MAC_RESOLVE_NAME -ErrorAction Stop | Where-Object { $_.IPAddress -match "^\d+\.\d+\.\d+\.\d+$" } | Select-Object -First 1).IPAddress'
+readonly JobAlive=alive
+readonly JobFinished=finished
+readonly JobGone=gone
+readonly JobUnstarted=unstarted
 readonly ExitSuccess=0
 readonly ExitFailure=1
 readonly ExitUsage=2
@@ -61,21 +68,30 @@ usage() {
 		"  break [--force] <reason...>        release a STALE lock, logging who held it, since when, and the" \
 		"                                     reason in ~/.maxon-host.lock.log on the Mac; --force also releases" \
 		"                                     one that is not stale, but never one whose job is alive" \
-		"  clone <session> <commit> [--seed[=TAG]]" \
+		"  ping                               test that the Mac answers ssh, bounded to a few seconds: exits 0 if it" \
+		"                                     does, non-zero if it does not (a Mac that is not configured prints the" \
+		"                                     skipped line and exits $ExitSuccess); needs no lock" \
+		"  clone <session> <commit> [--seed[=TAG]] [--seed-from=DIR]" \
 		"                                     a fresh clone at <commit> in ~/Dev/agents/<session>/maxon, which" \
-		"                                     must not exist yet; prints session-key=<KEY>, which drop asks for;" \
+		"                                     must not exist yet; <commit> must be reachable from a branch or tag" \
+		"                                     of origin; prints session-key=<KEY>, which drop asks for;" \
 		"                                     a failed clone leaves nothing behind. --seed" \
 		"                                     also places the $MacTarget compiler of release TAG (default: the" \
 		"                                     seed scripts/seed-tag pins, the one CI builds with) at .bootstrap/maxon, fetched" \
-		"                                     here with gh into a temporary directory" \
+		"                                     here with gh into a temporary directory. --seed-from=DIR needs" \
+		"                                     --seed=TAG and installs the seed from DIR (a directory holding the" \
+		"                                     $MacTarget archive and SHA256SUMS that freeze-seed.sh writes) instead: both files are" \
+		"                                     copied to the Mac and scripts/fetch-seed.sh checks and unpacks them there," \
+		"                                     so TAG need not be published" \
 		"  run <session> <token> <program> [arguments...]" \
 		"                                     run <program> detached in the session's clone under a login bash;" \
 		"                                     one job per lock, and the lock is released when it exits. Every" \
 		"                                     argument reaches <program> exactly as given and no shell re-reads" \
 		"                                     it, so a shell line is passed as: bash -c '<line>'." \
 		"                                     Prints job=<ID>, pid=<PID> and log=<PATH>" \
-		"  job <session>                      the session's newest job (alive, finished with its exit code, or" \
-		"                                     gone) and the last $JobLogLines lines of its log" \
+		"  job <session>                      the session's newest job: its JOB line, then" \
+		"                                     state=<$JobAlive|$JobFinished|$JobGone|$JobUnstarted>, then exit=<CODE> when it" \
+		"                                     finished, then its log's path and the last $JobLogLines lines of the log" \
 		"  fetch <session> <path> <destination>" \
 		"                                     copy the file <path>, relative to the session's clone, to" \
 		"                                     <destination> on this machine; nothing is left at <destination>" \
@@ -137,12 +153,12 @@ check_single_line() {
 }
 
 resolve_address() {
-	local address attempt
+	local attempts="$1" address attempt
 
 	case "$mac_name" in
 		*.local)
 			if command -v powershell.exe >/dev/null 2>&1; then
-				for ((attempt = 1; attempt <= ResolveAttempts; attempt++)); do
+				for ((attempt = 1; attempt <= attempts; attempt++)); do
 					address="$(MAXON_MAC_RESOLVE_NAME="$mac_name" powershell.exe -NoProfile -NonInteractive -Command "$ResolveIpv4Script" 2>/dev/null | tr -d '\r')" || address=""
 
 					if [[ "$address" =~ $Ipv4Pattern ]]; then
@@ -150,12 +166,12 @@ resolve_address() {
 						return
 					fi
 
-					if ((attempt < ResolveAttempts)); then
+					if ((attempt < attempts)); then
 						sleep "$ResolveRetrySeconds"
 					fi
 				done
 
-				die "cannot resolve $mac_name to an IPv4 address after $ResolveAttempts attempts (is the Mac awake?)"
+				die "cannot resolve $mac_name to an IPv4 address after $attempts attempts (is the Mac awake?)"
 			fi
 			;;
 	esac
@@ -202,6 +218,8 @@ load_env() {
 }
 
 connect() {
+	local resolve_attempts="${1:-$ResolveAttempts}"
+
 	load_env
 
 	if [ -z "${MAXON_MAC_HOST:-}" ]; then
@@ -215,7 +233,7 @@ connect() {
 	[[ "$mac_user" =~ $LoginUserPattern ]] || die "MAXON_MAC_HOST has an unusable user '$mac_user'"
 	[[ "$mac_name" =~ $LoginHostPattern ]] || die "MAXON_MAC_HOST has an unusable host '$mac_name'"
 
-	mac_address="$(resolve_address)"
+	mac_address="$(resolve_address "$resolve_attempts")"
 	mac_login="$mac_user@$mac_address"
 
 	case "$mac_address" in
@@ -596,31 +614,38 @@ r_new_token() {
 r_job_state() {
 	local base="$1" pid
 
+	job_exit=""
+
 	# `.exit` is read before `kill -0`: macOS reuses pids, so a finished job's pid can name a live
 	# stranger.
 	if [ -f "$base.exit" ]; then
-		echo "finished (exit $(cat "$base.exit"))"
+		job_exit="$(cat "$base.exit")"
+		job_state="$JobFinished"
+		job_detail="$JobFinished (exit $job_exit)"
 		return 1
 	fi
 
 	if [ ! -f "$base.pid" ]; then
-		echo "not started (no pid recorded)"
+		job_state="$JobUnstarted"
+		job_detail="$JobUnstarted (no pid recorded)"
 		return 1
 	fi
 
 	pid="$(cat "$base.pid")"
 
 	if kill -0 "$pid" 2>/dev/null; then
-		echo "alive (pid $pid)"
+		job_state="$JobAlive"
+		job_detail="$JobAlive (pid $pid)"
 		return 0
 	fi
 
-	echo "gone (pid $pid, no exit code recorded)"
+	job_state="$JobGone"
+	job_detail="$JobGone (pid $pid, no exit code recorded)"
 	return 1
 }
 
 r_lock_job_alive() {
-	local id state
+	local id alive=0
 
 	if [ ! -f "$lock_dir/job.$1" ]; then
 		echo "no job was started under the lock"
@@ -641,18 +666,23 @@ r_lock_job_alive() {
 		return 1
 	fi
 
-	if state="$(r_job_state "$logs_dir/$id")"; then
-		echo "job $id: $state"
-		return 0
-	fi
-
-	echo "job $id: $state"
-	return 1
+	r_job_state "$logs_dir/$id" || alive=$?
+	echo "job $id: $job_detail"
+	return "$alive"
 }
 
 r_seed_paths() {
 	seed_path="$clone_dir/.bootstrap/maxon"
 	seed_staging="$seed_path.partial"
+	seed_dist="$session_root/seed-dist"
+}
+
+r_open_seed_session() {
+	r_session_paths "$1" || exit "$ExitFailure"
+	[ -d "$clone_dir" ] || r_fail "no clone at $clone_dir"
+	r_require_session_key "$2"
+	r_beat_for_session "$1"
+	r_seed_paths
 }
 
 r_job_main() {
@@ -825,22 +855,34 @@ r_cmd_clone() {
 }
 
 r_cmd_seed_staging() {
-	r_session_paths "$1" || exit "$ExitFailure"
-	[ -d "$clone_dir" ] || r_fail "no clone at $clone_dir"
-	r_require_session_key "$2"
-	r_beat_for_session "$1"
-	r_seed_paths
+	r_open_seed_session "$1" "$2"
 	mkdir -p "${seed_path%/*}"
 	printf 'staging=%s\n' "$seed_staging"
+}
+
+r_cmd_seed_dist_staging() {
+	r_open_seed_session "$1" "$2"
+	rm -rf "$seed_dist"
+	mkdir -p "$seed_dist"
+	printf 'staging=%s\n' "$seed_dist"
+}
+
+r_cmd_seed_dist_install() {
+	local tag="$3" version status=0
+
+	r_open_seed_session "$1" "$2"
+	[ -d "$seed_dist" ] || r_fail "no seed archives were copied to $seed_dist"
+	(cd "$clone_dir" && bash scripts/fetch-seed.sh "$tag" "$MacTarget" --from="$seed_dist") || status=$?
+	rm -rf "$seed_dist"
+	[ "$status" -eq 0 ] || r_fail "fetch-seed.sh could not install $tag from the copied archives (exit $status)"
+	version="$("$seed_path" version)" || r_fail "the seed at $seed_path does not run"
+	echo "mac-host.sh: $seed_path is $version"
 }
 
 r_cmd_seed_install() {
 	local version
 
-	r_session_paths "$1" || exit "$ExitFailure"
-	r_require_session_key "$2"
-	r_beat_for_session "$1"
-	r_seed_paths
+	r_open_seed_session "$1" "$2"
 	[ -f "$seed_staging" ] || r_fail "no seed was copied to $seed_staging"
 	chmod +x "$seed_staging"
 	version="$("$seed_staging" version)" || r_fail "the seed at $seed_staging does not run"
@@ -873,7 +915,7 @@ r_cmd_run() {
 }
 
 r_cmd_job() {
-	local session="$1" path newest="" base state
+	local session="$1" path newest="" base
 
 	r_session_paths "$session" || exit "$ExitFailure"
 
@@ -885,8 +927,14 @@ r_cmd_job() {
 
 	[ -n "$newest" ] || r_fail "no job log for $session"
 	base="${newest%.log}"
-	state="$(r_job_state "$base")" || true
-	echo "JOB ${base##*/}: $state"
+	r_job_state "$base" || true
+	echo "JOB ${base##*/}: $job_detail"
+	echo "state=$job_state"
+
+	if [ -n "$job_exit" ]; then
+		echo "exit=$job_exit"
+	fi
+
 	echo "log: $newest"
 	tail -n "$JobLogLines" "$newest"
 }
@@ -915,7 +963,7 @@ r_cmd_fetch() {
 }
 
 r_cmd_drop() {
-	local session="$1" credential="$2" path state key="" holds=""
+	local session="$1" credential="$2" path key="" holds=""
 
 	r_session_paths "$session" || exit "$ExitFailure"
 	[ -d "$session_root" ] || r_fail "there is no $session_root"
@@ -927,8 +975,8 @@ r_cmd_drop() {
 	r_op_enter
 
 	for path in "$logs_dir"/*.pid; do
-		if [ -e "$path" ] && state="$(r_job_state "${path%.pid}")"; then
-			r_fail "refusing: job $(basename "${path%.pid}") is $state"
+		if [ -e "$path" ] && r_job_state "${path%.pid}"; then
+			r_fail "refusing: job $(basename "${path%.pid}") is $job_detail"
 		fi
 	done
 
@@ -1052,27 +1100,62 @@ cmd_break() {
 	remote r_cmd_break "$force" "$from" "$reason"
 }
 
+seed_dist_names() {
+	(cd "$repo_root" && . scripts/lib/seed.sh && printf '%s\n%s\n' "$(maxon_archive_file "$1" "$MacTarget")" "$ChecksumsAsset")
+}
+
+require_seed_dist() {
+	local directory="$1" name
+
+	[ -d "$directory" ] || die "--seed-from=$directory is not a directory"
+	shift
+
+	for name in "$@"; do
+		[ -f "$directory/$name" ] || die "--seed-from=$directory holds no $name"
+	done
+}
+
+ship_seed_dist() {
+	local session="$1" key="$2" tag="$3" directory="$4" archive_name="$5" checksums_name="$6" staging
+
+	staging="$(marked_value staging "$(remote r_cmd_seed_dist_staging "$session" "$key")")"
+	(cd "$directory" && MSYS_NO_PATHCONV=1 scp -q "${ssh_options[@]}" "$archive_name" "$checksums_name" "$scp_login:$staging/")
+	remote r_cmd_seed_dist_install "$session" "$key" "$tag"
+}
+
 cmd_clone() {
-	[ $# -eq 2 ] || [ $# -eq 3 ] || usage
-	local session="$1" commit="$2" option="${3:-}" seeding="" tag="" origin output key staging
+	[ $# -ge 2 ] || usage
+	local session="$1" commit="$2" seeding="" tag="" seed_from="" argument origin output key staging names archive_name="" checksums_name=""
+	shift 2
 	check_session "$session"
 	[[ "$commit" != -* && "$commit" != *[[:space:][:cntrl:]]* && -n "$commit" ]] || die "not a commit: '$commit'"
 
-	case "$option" in
-		"") ;;
-		--seed) seeding=yes ;;
-		--seed=*)
-			seeding=yes
-			tag="${option#--seed=}"
-			[[ "$tag" =~ $SeedTagPattern ]] || die "a seed is a release tag such as seed-2026-10-14 or v0.2.2; got '$tag'"
-			;;
-		*) usage ;;
-	esac
+	for argument in "$@"; do
+		case "$argument" in
+			--seed) seeding=yes ;;
+			--seed=*)
+				seeding=yes
+				tag="${argument#--seed=}"
+				[[ "$tag" =~ $SeedTagPattern ]] || die "a seed is a release tag such as seed-2026-10-14 or v0.2.2; got '$tag'"
+				;;
+			--seed-from=?*) seed_from="${argument#--seed-from=}" ;;
+			*) usage ;;
+		esac
+	done
+
+	[ -z "$seed_from" ] || [ -n "$tag" ] || die "--seed-from installs the archives frozen as one tag: pass --seed=TAG with it"
+
+	if [ -n "$seed_from" ]; then
+		names="$(seed_dist_names "$tag")"
+		archive_name="${names%%$'\n'*}"
+		checksums_name="${names#*$'\n'}"
+		require_seed_dist "$seed_from" "$archive_name" "$checksums_name"
+	fi
 
 	connect
 	origin="$(git -C "$repo_root" remote get-url origin)"
 
-	if [ -n "$seeding" ]; then
+	if [ -n "$seeding" ] && [ -z "$seed_from" ]; then
 		seed_dir="$(mktemp -d)"
 		trap 'rm -rf "$seed_dir"' EXIT
 		local fetch_arguments=("$MacTarget" "--output=$seed_dir/maxon")
@@ -1085,10 +1168,29 @@ cmd_clone() {
 
 	if [ -n "$seeding" ]; then
 		key="$(marked_value session-key "$output")"
-		staging="$(marked_value staging "$(remote r_cmd_seed_staging "$session" "$key")")"
-		(cd "$seed_dir" && MSYS_NO_PATHCONV=1 scp -q "${ssh_options[@]}" maxon "$scp_login:$staging")
-		remote r_cmd_seed_install "$session" "$key"
+
+		if [ -n "$seed_from" ]; then
+			ship_seed_dist "$session" "$key" "$tag" "$seed_from" "$archive_name" "$checksums_name"
+		else
+			staging="$(marked_value staging "$(remote r_cmd_seed_staging "$session" "$key")")"
+			(cd "$seed_dir" && MSYS_NO_PATHCONV=1 scp -q "${ssh_options[@]}" maxon "$scp_login:$staging")
+			remote r_cmd_seed_install "$session" "$key"
+		fi
 	fi
+}
+
+cmd_ping() {
+	[ $# -eq 0 ] || usage
+	local status=0
+	connect "$ProbeResolveAttempts"
+	ssh -o "ConnectTimeout=$ProbeConnectSeconds" -o "ConnectionAttempts=$ProbeConnectionAttempts" "${ssh_options[@]}" "$mac_login" true || status=$?
+
+	if [ "$status" -ne "$ExitSuccess" ]; then
+		echo "mac-host.sh: $mac_login does not answer" >&2
+		exit "$status"
+	fi
+
+	echo "mac-host.sh: $mac_login answers"
 }
 
 cmd_run() {
@@ -1141,6 +1243,7 @@ shift
 
 case "$command" in
 	status)    cmd_status "$@" ;;
+	ping)      cmd_ping "$@" ;;
 	lock)      cmd_lock "$@" ;;
 	heartbeat) cmd_holder r_cmd_heartbeat "$@" ;;
 	unlock)    cmd_holder r_cmd_unlock "$@" ;;

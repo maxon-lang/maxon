@@ -1,6 +1,6 @@
 ---
 name: compiler-workflow
-description: Procedures for measuring and host-testing the Maxon compiler that are too long to keep always-loaded — the `run_scale_test` doubling ladder and how to read it, `scripts/fixpoint.sh` (does the compiler reproduce itself byte for byte), hosting the x64-linux lane locally under WSL, hosting the arm64-macos lane on the shared Mac through `scripts/mac-host.sh`, resolving a CI fault's rip on a local build, freezing a new bootstrap seed with `scripts/freeze-seed.sh`, and staging `vendor/`. Load when running or interpreting the scale ladder, when checking that the compiler is a fixed point of itself, when a defect might be specific to a host rather than a target, when anything must run on the Mac, when the pinned seed no longer accepts the tree, or when `vendor/wasmtime` is missing.
+description: Procedures for measuring and host-testing the Maxon compiler that are too long to keep always-loaded — the `run_scale_test` doubling ladder and how to read it, `scripts/fixpoint.sh` (does the compiler reproduce itself byte for byte), hosting the x64-linux lane locally under WSL, hosting the arm64-macos lane on the shared Mac through `scripts/mac-host.sh`, resolving a CI fault's rip on a local build, landing a commit the pinned seed refuses with its own seed through `scripts/pin-seed.sh`, and staging `vendor/`. Load when running or interpreting the scale ladder, when checking that the compiler is a fixed point of itself, when a defect might be specific to a host rather than a target, when anything must run on the Mac, when the pinned seed no longer accepts the tree, or when `vendor/wasmtime` is missing.
 ---
 
 # Compiler workflow — instruments and host lanes
@@ -85,17 +85,20 @@ the timing-sensitive specs. `scripts/mac-host.sh` with no arguments prints the f
 
 ```
 scripts/mac-host.sh status
+scripts/mac-host.sh ping                                        # connect test, a few seconds; exit 0 if the Mac answers
 scripts/mac-host.sh clone <session> <commit> --seed             # prints session-key=<KEY>
 scripts/mac-host.sh lock <session> --wait=1800 <purpose>        # prints token=<TOKEN>
 scripts/mac-host.sh run <session> <TOKEN> bash -c '<line>'      # prints job=, pid=, log=
-scripts/mac-host.sh job <session>                               # alive / finished (exit N) + log tail
+scripts/mac-host.sh job <session>                               # state=<alive|finished|gone|unstarted>, exit=<code> once finished, log tail
 scripts/mac-host.sh fetch <session> <path> <destination>        # copy a file out of the clone
 scripts/mac-host.sh unlock <session> <TOKEN>                    # only while no job runs
 scripts/mac-host.sh drop <session> <KEY>
 ```
 
-- `<commit>` must be pushed: the clone is made from `origin`. `--seed` places the pinned seed's
-  arm64-macos compiler at `.bootstrap/maxon`. Clone before locking — a clone needs no lock and does
+- `<commit>` must be reachable on `origin` through a branch or a pushed tag: the clone is made from
+  `origin`. `--seed` places the pinned seed's arm64-macos compiler at `.bootstrap/maxon`; `--seed=TAG
+  --seed-from=DIR` installs that tag's archive and `SHA256SUMS` from a local `DIR` instead and checks them
+  with `fetch-seed.sh` on the Mac, which is how an unpublished seed is proved there. Clone before locking — a clone needs no lock and does
   not refresh one.
 - **A lock runs one job, and the job's exit releases it.** Watch the job with a Monitor that polls
   `job <session>`; while the lock is held with no job running, the same poll calls `heartbeat <session>
@@ -144,30 +147,23 @@ is filled with `0x3F` to the end of its slot and stays mapped, so a read through
 freed box returns poison without faulting — only a pointer read OUT of poison faults, on `0x3F3F3F3F3F3F3F3F`. A true nil
 faults on the first load.
 
-## Freezing a bootstrap seed
+## Landing a commit with its own seed
 
-The seed that builds every commit is the `seed-*` pre-release `scripts/seed-tag` pins (`docs/RELEASING.md`
-owns the rule). ⭐ **CI freezes, proves and pins it**, whatever the lane jobs (`corpora`, `tools`, `suite`, `cross-suite`) report, on a `main` push whose tree carries a
-`scripts/seed-shim/*.patch`, so the usual cure for E2015 or E3004 from `build-from-seed.sh` is a shim patch
-landed with the change. Freeze by hand only when the pinned seed refuses the tree and no patch covers it.
+The seed that builds every commit is the `seed-*` pre-release `scripts/seed-tag` pins. A commit it refuses
+(E2015 or E3004 from `build-from-seed.sh`, or any other failure there but E6002) is pushed with a seed frozen
+from it, after the landing gates and the commit, from the main checkout:
 
 ```
-./maxon-bin/.maxon/maxon run build        # the slot must be built from HEAD; the script refuses a stale one
-scripts/freeze-seed.sh                    # four builds, serial, below-normal priority; ~1 minute each
+./maxon-bin/.maxon/maxon run build        # the slot must be built from HEAD; freeze-seed.sh refuses a stale one
+scripts/pin-seed.sh [--prove=<lane>]...   # freeze, prove, publish, pin and push
 ```
 
-It writes `temp/seed/dist/` (four archives, `SHA256SUMS`, `NOTES.md`) and `temp/seed/publish.txt`, and prints
-the `gh release create` command **without running it**. Publishing, tagging and moving the pin are the
-user's. Before the pin moves, prove the seed accepts the tree with NO shim:
-
-- **Windows:** a fresh clone of `HEAD` at a short path (`git clone --no-hardlinks . /c/s1`), every
-  `scripts/seed-shim/*.patch` deleted, then in the clone
-  `bash scripts/fetch-seed.sh <tag> x64-windows --from=<the dist directory>` and
-  `bash scripts/build-from-seed.sh --unshimmed`: exit 0. `--from` reads the unpublished archives.
-- **x64-linux:** the same clone, run under WSL as in the section above
-  (`wsl -- bash scripts/fetch-seed.sh <tag> x64-linux --from=…`, then `wsl -- bash scripts/build-from-seed.sh --unshimmed`).
-- The arm64 archives run only on arm64, so from an x64 host their proof is CI's seed step on the commit that
-  moves the pin.
+`scripts/freeze-seed.sh` makes four builds, serial, at below-normal priority, about a minute each, into
+`temp/seed/dist/`. The host's lane is always proved in `temp/seed/prove-<lane>`; x64-linux is proved
+through WSL as in the section above, and arm64-macos on the Mac through `scripts/mac-host.sh` (the script
+pushes the seed tag first, so `clone` can reach the commit, and installs the archive with `--seed-from`).
+An unreachable lane is skipped with a notice, and CI's lane on the pushed pin proves it.
+`docs/RELEASING.md` owns the procedure, the retraction on a failure and which lanes to name.
 
 ## Staging `vendor/`
 

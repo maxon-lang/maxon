@@ -1,16 +1,11 @@
 #!/usr/bin/env bash
 #
-# Freeze this tree's compiler as the bootstrap seed: build it for the four native targets, package each
-# like a release archive, write SHA256SUMS and the release notes, and PRINT the `gh release create`
-# command that publishes them as a `seed-*` pre-release. It publishes nothing and does not move the pin:
-# in CI, `scripts/pin-seed.sh` does both once every archive has built the tree with no shim; a seed
-# frozen by hand is published with the printed command and pinned in the commit that relies on it.
+# Freeze this tree's compiler as a bootstrap seed: build it for the four native targets, package each
+# like a release archive, and write SHA256SUMS and the release notes. It publishes nothing and does not
+# move the pin: `scripts/pin-seed.sh` runs it, then proves, publishes and pins what it wrote.
 #
 # ⭐ A SEED IS A COMPILER THAT ACCEPTS THE TREE IT BUILDS. `scripts/fetch-seed.sh` downloads the tag
-# `scripts/seed-tag` names, and `scripts/build-from-seed.sh` builds the tree with it. CI's `freeze`
-# job runs this on `main` whenever the tree carries a `scripts/seed-shim/` patch. Run it by hand
-# when the pinned seed refuses the tree and no patch covers the refusal, since CI then builds no
-# compiler to freeze.
+# `scripts/seed-tag` names, and `scripts/build-from-seed.sh` builds the tree with it.
 #
 # ⛔ THE SEED IS THE BINARY ALONE. Each archive holds one directory with `maxon` (`maxon.exe` for
 # x64-windows) and nothing else: the compiler resolves `stdlib/` and `runtime/` by walking up from its own
@@ -35,7 +30,7 @@
 #   scripts/freeze-seed.sh --date=2026-10-14     # tag seed-2026-10-14-<first 12 of HEAD>
 #
 # Writes under `temp/seed/`: `dist/` (the four archives, SHA256SUMS, NOTES.md), `stage/` (scratch),
-# `build-<target>.log` and `publish.txt` (the command this script prints).
+# and `build-<target>.log`.
 
 set -euo pipefail
 
@@ -48,14 +43,13 @@ cd "$repo_root"
 
 CompilerSourceDirectories="maxon-bin stdlib runtime"
 StageDirectory="$SeedWorkDirectory/stage"
-PublishFile="$SeedWorkDirectory/publish.txt"
 BuildNice=10
 
-date_stamp="$(date +%Y-%m-%d)"
+date_stamp="$(date +"$SeedDateFormat")"
 
 for argument in "$@"; do
 	case "$argument" in
-		--date=[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) date_stamp="${argument#--date=}" ;;
+		--date=$SeedDatePattern) date_stamp="${argument#--date=}" ;;
 		*) echo "freeze-seed.sh: unknown argument: $argument" >&2; exit 2 ;;
 	esac
 done
@@ -129,24 +123,6 @@ seed_version="$("$host_binary" version)"
 	printf '`%s` lists the archives.\n' "$ChecksumsAsset"
 } > "$SeedNotesFile"
 
-seed_release_create_command "$tag" "$commit"
-
-{
-	printf '%q' "${seed_release_create[0]}"
-	printf ' %q' "${seed_release_create[@]:1}"
-	printf '\n'
-} > "$PublishFile"
-
 echo
 echo "freeze-seed.sh: $tag is ready and NOT published. Compiler: $seed_version"
 sed 's/^/  /' "$SeedChecksumsFile"
-echo
-echo "To publish (after $commit is on the remote, since --target names it):"
-sed 's/^/  /' "$PublishFile"
-echo
-echo "Then pin it, in the commit that relies on it:"
-echo "  printf '%s\\n' $tag > $SeedPinFile"
-
-if [ -n "${GITHUB_OUTPUT:-}" ]; then
-	printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
-fi

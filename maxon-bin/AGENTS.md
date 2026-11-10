@@ -36,10 +36,8 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   implementation here — a previous build of this compiler is the only thing that can build it.
   ⛔ **A TREE THAT DECLARES WHAT THE PINNED SEED DOES NOT KNOW IS REFUSED BY THE SEED** — E2015 on a
   `__Managed*` entry this tree adds, or E3004 on a `__Builtins` intrinsic the stdlib calls, which no
-  re-fetch can cure. The cure is a new seed, and CI makes it from a `scripts/seed-shim/` patch landed
-  with the change: `scripts/build-from-seed.sh` stages the shim over the first build when a plain build is
-  refused, and a `main` push that carries a patch makes CI freeze, prove and pin a new seed, deleting every
-  patch. A refusal no patch covers needs `scripts/freeze-seed.sh` by hand; `docs/RELEASING.md` owns the rule.
+  re-fetch can cure. The cure is a new seed frozen from the refused commit, which lands with it through
+  `scripts/pin-seed.sh` instead of `git push`; `docs/RELEASING.md` owns the procedure.
   ⛔ **NAME THE OUTPUT WHEN YOU BUILD WITH THE SEED, ALWAYS:**
   ```
   ./.bootstrap/maxon.exe build maxon-bin --output=maxon-bin/.maxon/maxon
@@ -49,9 +47,8 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
   an executable named after a source under `maxon-bin/Compiler/`, left the slot EMPTY, and **exited 0** — so the next command is
   a bare `127` about a compiler that was never written. `scripts/build-from-seed.sh` passes `--output=` for this reason;
   `CONTRIBUTING.md` spells it too.
-  `scripts/build-from-seed.sh` treats ANY failed seed build as a seed refusal and stages
-  `scripts/seed-shim/`, so a locked slot (E6002, e.g. an editor's language server holding
-  `maxon-bin/.maxon/maxon`) reads as a seed wall: read the E6002 itself. A held slot binary can be renamed
+  A seed build that fails on E6002 (a locked slot, e.g. an editor's language server holding
+  `maxon-bin/.maxon/maxon`) is a lock, not a refusal. A held slot binary can be renamed
   aside even when it cannot be deleted. A slot binary's version stamp names the last commit, never the
   working tree, so a compiler built while uncommitted or stashed edits were applied carries a stamp that
   looks clean: it does not vouch for the source. When a build fails on a name or constant the tree plainly
@@ -127,8 +124,8 @@ program then panics; a runtime probe fires in every later build. Keep probe buil
 a real program (`examples/fannkuch-redux.maxon`) before trusting a filtered green.
 
 ⛔ **THE SEED ALSO JUDGES THE COMPILER'S OWN SOURCES BY ITS OLDER RULES.** A language form newer than the seed
-is refused there unless a shim withdraws it, and a tier the seed cannot credit fails too: an `export` that only
-a rule in this tree makes used is E3092 to the seed, on every lane, with `scripts/seed-shim/` empty. When an
+is refused there, and a tier the seed cannot credit fails too: an `export` that only a rule in this tree makes
+used is E3092 to the seed, on every lane. Either is a refusal, so the commit lands with its own seed. When an
 editor's lock stops `build-from-seed.sh`, prove the chain by hand into `temp/<task>/`:
 `.bootstrap/maxon.exe build maxon-bin --output=temp/<task>/c1.exe`, then
 `temp/<task>/c1.exe build maxon-bin --output=temp/<task>/c2.exe`.

@@ -108,8 +108,10 @@ MAC_LOCK_WAIT_SECONDS = 1800
 MAC_POLL_SECONDS = 30
 MAC_SKIPPED_MARKER = "mac-host.sh: skipped"
 MAC_JOB_PREFIX = "JOB "
-MAC_JOB_FINISHED = "finished (exit "
-MAC_JOB_ALIVE = ": alive (pid "
+MAC_JOB_STATE_KEY = "state="
+MAC_JOB_EXIT_KEY = "exit="
+MAC_JOB_FINISHED = "finished"
+MAC_JOB_ALIVE = "alive"
 MAC_ROWS_FILE = "bench/aes/out/arm64-rows.json"
 ROWS_STAGING_SUFFIX = ".partial"
 
@@ -498,6 +500,12 @@ def mac_script(*arguments, timeout=bench_common.BUILD_TIMEOUT_S):
     return answer.stdout
 
 
+# The first match, not the only one: `mac-host.sh job` prints its log's tail after the header, and the
+# job's own output may repeat a marker.
+def first_marked_value(output, prefix):
+    return next((line[len(prefix):].strip() for line in output.splitlines() if line.startswith(prefix)), "")
+
+
 def marked_value(output, key):
     prefix = key + "="
     values = [line[len(prefix):].strip() for line in output.splitlines() if line.startswith(prefix)]
@@ -532,14 +540,14 @@ def mac_job_line(args, shas):
 def await_mac_job(session):
     while True:
         report = mac_script("job", session)
-        state = next((line for line in report.splitlines() if line.startswith(MAC_JOB_PREFIX)), "")
-        print(f"  {state}", flush=True)
-        if MAC_JOB_FINISHED in state:
-            code = state.split(MAC_JOB_FINISHED, 1)[1].rstrip(")")
+        print(f"  {first_marked_value(report, MAC_JOB_PREFIX)}", flush=True)
+        state = first_marked_value(report, MAC_JOB_STATE_KEY)
+        if state == MAC_JOB_FINISHED:
+            code = first_marked_value(report, MAC_JOB_EXIT_KEY)
             if not code.isdigit():
-                raise bench_common.BuildFailure(f"the Mac job finished with no readable exit code: {state!r}\n{report}")
+                raise bench_common.BuildFailure(f"the Mac job finished with no readable exit code: {code!r}\n{report}")
             return report, int(code)
-        if MAC_JOB_ALIVE not in state:
+        if state != MAC_JOB_ALIVE:
             raise bench_common.BuildFailure(f"the Mac job is neither alive nor finished: {state!r}\n{report}")
         time.sleep(MAC_POLL_SECONDS)
 

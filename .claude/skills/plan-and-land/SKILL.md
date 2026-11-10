@@ -275,8 +275,8 @@ approach; do not rewrite it by reflex.
 > ## ⭐ THE ONLY TEST: **stage N+1's code CANNOT BE WRITTEN until stage N's commit exists.**
 > Not "easier", not "cleaner" — **cannot**. Only three things make it true, and a staging plan must NAME
 > which and show the evidence: **the SEED WALL** (a declaration the pinned seed does not know is refused by
-> it, E2015 — ⚠ state why `scripts/freeze-seed.sh` and `scripts/build-from-seed.sh` with `scripts/seed-shim/`,
-> which exist for exactly that, do not cover it; they usually do) · **a PRE-EXISTING RED you did not cause** (`/land` licenses it as its
+> it, E2015 — ⚠ state why `scripts/pin-seed.sh`, which lands a refused commit with its own seed, does not
+> cover it; it usually does) · **a PRE-EXISTING RED you did not cause** (`/land` licenses it as its
 > own commit first — name it **stage 0**) · **a USER RULING** that the halves are two deliverables.
 > ⚠ The two-self-compiles rule is NOT on this list — both happen inside one `/land`, no commit between.
 >
