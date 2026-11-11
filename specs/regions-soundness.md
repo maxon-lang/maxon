@@ -682,7 +682,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:33:15: 'adopt' needs 'getPart' frozen (line 21: `self.part = getPart()`); 'function() gives held' is mutable. Freeze it first
+error E3207: <fragment>:33:15: 'adopt' needs 'getPart' frozen (line 21: `self.part = getPart()`); the closure at <fragment>:33:15 is mutable. Freeze it first
 ```
 
 <!-- test: an-async-over-a-clone-of-mutable-data-is-not-tied -->

@@ -438,7 +438,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:24:15: 'call' writes 'bump' (line 19: it is a function value of 'Bump', which declares `mutates captures`, called here); 'function() gives touch(e)' is immutable
+error E3207: <fragment>:24:15: 'call' writes 'bump' (line 19: it is a function value of 'Bump', which declares `mutates captures`, called here); the closure at <fragment>:24:15 is immutable
 error E3197: <fragment>:24:38: cannot write 'e' through the closure that captures it: 'e' is immutable
 ```
 

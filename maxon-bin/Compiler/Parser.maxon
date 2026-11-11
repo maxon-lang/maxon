@@ -5094,6 +5094,23 @@ type GenericBaseName
 	end 'create'
 end 'GenericBaseName'
 
+enum LiteralOperand
+	byteString
+	closure
+end 'LiteralOperand'
+
+function literalOperandOf(first Token, alone bool) returns LiteralOperand throws AbsentError
+	if first.kind == TokenKind.function 'aClosureLiteral'
+		return LiteralOperand.closure
+	end 'aClosureLiteral'
+
+	if first.kind == TokenKind.byteStringLiteral and alone 'aBareByteLiteral'
+		return LiteralOperand.byteString
+	end 'aBareByteLiteral'
+
+	throw AbsentError.absent
+end 'literalOperandOf'
+
 // ⭐ **WHAT A FACTORY'S ARGUMENTS FIX ONE TYPE PARAMETER TO, or nothing.** A verdict rather than a throw
 // because the two roads that read it disagree about what a miss MEANS: a `spawn` has no other source for
 // the instantiation and refuses, while an ordinary static call keeps the base `structRef` it always had.
@@ -30581,16 +30598,9 @@ export type Parser
 		end 'interfaceBase'
 	end 'checkGenericInstance'
 
-	// ⭐ **THE NON-INTERFACE BASE'S CHECK, WHICH USED TO BE THE TAIL `checkGenericInstance` FELL OUT INTO.**
-	//
-	// ⛔ **RETURNING A VOID CALL IS NOT VALID (user ruling, 2026-08-23)**, and the `found` arm above was doing
-	// it — `checkInterfaceGenericArity` declares no return type. The arm was written that way because a
-	// `match` arm is exactly ONE statement, so it could not both check the arity AND leave the function ahead
-	// of this tail. Making the classification TERMINAL is the cure: every arm calls, none falls out, and the
-	// tail takes a name. Second instance of the shape `LowerMaxonToStd`'s residues took, one file over.
 	function checkStructGenericInstance(baseName ByteArray, base GenericBaseName, argCount FieldIndex)
 		match self.signatures.structFor(baseName, readerFilePath: self.job.path) 'declaration'
-			undeclared then self.recordBaseNotGeneric(base)
+			undeclared then self.recordBaseNotGeneric(base, named: baseName)
 			declared(layout) then self.checkGenericInstanceAgainst(layout, base: base, argCount: argCount)
 		end 'declaration'
 	end 'checkStructGenericInstance'
@@ -30604,7 +30614,7 @@ export type Parser
 		let expected = iface.associatedTypeNames.count()
 
 		if expected == 0 'notGeneric'
-			self.recordBaseNotGeneric(base)
+			self.recordBaseNotGeneric(base, named: base.written)
 			return
 		end 'notGeneric'
 
@@ -30617,8 +30627,8 @@ export type Parser
 	// of the base check — a `Base` that is not a declared type at all (`structOf` undeclared) and a `Base`
 	// that is a declared type with an empty `uses` list (`typeParamCount() == 0`) — which are the same
 	// diagnostic. Bound here rather than spelled at each site so the two callers cannot drift the message.
-	function recordBaseNotGeneric(base GenericBaseName)
-		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: baseNotGenericMessage(base.written), range: SourceRange.ofToken(base.anchor))
+	function recordBaseNotGeneric(base GenericBaseName, named ByteArray)
+		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: baseNotGenericMessage(named), range: SourceRange.ofToken(base.anchor))
 	end 'recordBaseNotGeneric'
 
 	// The declared-base half of `checkGenericInstance` — base-is-generic, then arity. No per-argument managed
@@ -30631,7 +30641,7 @@ export type Parser
 	// `PromiseType.maxon`, which is the one place that has to learn a second such base if one ever appears.
 	function checkGenericInstanceAgainst(layout StructLayout, base GenericBaseName, argCount FieldIndex)
 		if layout.typeParamCount() == 0 or not layoutAdmitsTypeArgumentCount(layout, count: argCount) 'wrongArgumentCount'
-			self.recordArtifactDiagnostic(genericArgumentCountCode(layout), message: self.genericArgumentCountMessage(layout, base: base.written, supplied: argCount), range: SourceRange.ofToken(base.anchor))
+			self.recordArtifactDiagnostic(genericArgumentCountCode(layout), message: self.genericArgumentCountMessage(layout, supplied: argCount), range: SourceRange.ofToken(base.anchor))
 		end 'wrongArgumentCount'
 	end 'checkGenericInstanceAgainst'
 
@@ -30642,17 +30652,28 @@ export type Parser
 		return "{most}" if least == most else "{least} or {most}"
 	end 'genericArityPhrase'
 
-	function genericArgumentCountMessage(layout StructLayout, base ByteArray, supplied FieldIndex) returns String
+	function genericArgumentCountMessage(layout StructLayout, supplied FieldIndex) returns String
 		if layout.typeParamCount() == 0 'notGeneric'
-			return baseNotGenericMessage(base)
+			return baseNotGenericMessage(layout.name)
 		end 'notGeneric'
 
-		return "generic type '{String.from(base)}' expects {self.genericArityPhrase(layoutLeastTypeArguments(layout), most: layout.typeParamCount())} type argument(s), but {supplied} were supplied"
+		return "generic type '{String.from(layout.name)}' expects {self.genericArityPhrase(layoutLeastTypeArguments(layout), most: layout.typeParamCount())} type argument(s), but {supplied} were supplied"
 	end 'genericArgumentCountMessage'
 
 	function genericArgumentCountRefusal(layout StructLayout, supplied ElementIndex, baseTok Token) returns SourceParseError
-		return SourceParseError.genericArgumentCountRefused(genericArgumentCountCode(layout), explanation: self.genericArgumentCountMessage(layout, base: layout.name, supplied: supplied as FieldIndex), line: baseTok.line, column: baseTok.column)
+		return self.genericBaseRefusal(genericArgumentCountCode(layout), message: self.genericArgumentCountMessage(layout, supplied: supplied as FieldIndex), tok: baseTok)
 	end 'genericArgumentCountRefusal'
+
+	function undeclaredGenericBaseRefusal(typeName ByteArray, tok Token) returns SourceParseError
+		return self.genericBaseRefusal(ErrorCode.genericBaseNotGeneric, message: baseNotGenericMessage(typeName), tok: tok)
+	end 'undeclaredGenericBaseRefusal'
+
+	// The thrown twin of a recorded E2055 or E2056: `Queries.reportedArityMessages` drops it as a consequence
+	// only when its message equals the recorded one, so `message` must spell the base exactly as the
+	// recorded diagnostic does.
+	function genericBaseRefusal(code ErrorCode, message String, tok Token) returns SourceParseError
+		return SourceParseError.genericArgumentCountRefused(code, explanation: message, line: tok.line, column: tok.column)
+	end 'genericBaseRefusal'
 
 	// Parse `function(paramTypes) [returns T]` on a typealias RHS, the cursor sitting on
 	// `function`. The whole declared SIGNATURE is stored INTERNER-FREE (a tag + a name per parameter and for
@@ -65299,16 +65320,15 @@ export type Parser
 		let receiverTok = self.receiverTokenOf(receiver, fallback: anchor)
 
 		for position in 0 upto argAnchors.count() 'eachWrittenArgument'
-			let spelledTok = receiverTok if receiverFirst and position == 0 else self.tokenAt(try argAnchors.get(position) otherwise panic("fileCallNotes: argAnchors.get OOB at {position} below its own count"))
-			notes.argNameOps.push(opIdx)
-			notes.argNamePositions.push(position as ParamCount)
+			let anchorIndex = try argAnchors.get(position) otherwise panic("fileCallNotes: argAnchors.get OOB at {position} below its own count")
+			let spelledTok = receiverTok if receiverFirst and position == 0 else self.tokenAt(anchorIndex)
 
 			if receiverFirst and position == 0 and self.receiverIsACallResult(receiver) 'aReceiverNoNameCanSpell'
-				notes.argNames.push(EmptySourceText)
+				notes.noteArgumentName(opIdx, position: position as ParamCount, name: EmptySourceText)
 				continue
 			end 'aReceiverNoNameCanSpell'
 
-			notes.argNames.push(self.spelledArgumentName(spelledTok, anchorIndex: try argAnchors.get(position) otherwise panic("fileCallNotes: argAnchors.get OOB at {position} below its own count"), namesItself: receiverFirst and position == 0))
+			notes.noteArgumentName(opIdx, position: position as ParamCount, name: self.spelledArgumentName(spelledTok, anchorIndex: anchorIndex, namesItself: receiverFirst and position == 0))
 		end 'eachWrittenArgument'
 
 		for candidate in stored 'eachStoredSlotArg'
@@ -69857,14 +69877,14 @@ export type Parser
 		if tag == ValueTypeTag.genericInstance 'instance'
 			// ⚠ **AN INSTANCE IS INTERNED FOR WHATEVER A `with` NAMED, SO THE BASE MAY BE NOTHING AT ALL**, and
 			// this fold runs at PARSE time while the E2055 `checkGenericInstance` recorded against that `with` is
-			// drained whole-program — so the user would never see it. `sizeof(IntMap)` for `typealias IntMap =
-			// Map with (Int, Int)` therefore died inside `genericInstanceBoxSize` with a stack trace and no
-			// `error E….` at all. Positioned here instead, carrying the cause itself, exactly as the field-access
-			// door does (`Parser.missingBaseLayout`). A BUILTIN base is NOT refused: its box is the fixed record
+			// drained whole-program — so without a refusal here `sizeof(IntMap)` for `typealias IntMap =
+			// Map with (Int, Int)` reaches `genericInstanceBoxSize` and dies with a stack trace and no
+			// `error E….` at all. The refusal is that E2055's own text, so the drain drops it once the recorded
+			// one is reported (`Parser.missingBaseLayout`). A BUILTIN base is NOT refused: its box is the fixed record
 			// and `sizeof(Array with Int)` is 48 — which is why the gate is `genericInstanceBaseIsKnown` and not
 			// the field walks' `genericInstanceHasBaseLayout`.
 			if not self.signatures.genericInstanceBaseIsKnown(genericInstanceIdOf(t)) 'unknownBase'
-				throw SourceParseError.unsupported("sizeof of a type that instantiates '{String.from(self.signatures.genericInstanceBaseName(genericInstanceIdOf(t)))}', which no file declares as a generic `type`, so it has no box to size — the `with` that names it is the error", line: sizeofTok.line, column: sizeofTok.column)
+				throw self.undeclaredGenericBaseRefusal(self.signatures.genericInstanceBaseName(genericInstanceIdOf(t)), tok: sizeofTok)
 			end 'unknownBase'
 
 			// The instance's box size is THE one authority on ProgramSignatures — the same
@@ -85541,15 +85561,11 @@ export type Parser
 
 	function noteRequirementCallSite(func IrFunction, opIdx ElementIndex, target WitnessDispatchTarget, args ValueIdArray, argLabels NameRoster, argAnchors TokenIndexArray, receiverTok Token)
 		var notes = self.notesForWrite(func)
-		notes.argNameOps.push(opIdx)
-		notes.argNamePositions.push(0)
-		notes.argNames.push(receiverTok.value)
+		notes.noteArgumentName(opIdx, position: 0, name: receiverTok.value)
 
 		for i in 0 upto argAnchors.count() 'eachWrittenArgument'
 			let slot = try argSlotPosition(target.paramNames, argIndex: i as ParamCount, label: try argLabels.get(i) otherwise panic("noteRequirementCallSite: argLabels.get OOB at {i}")) otherwise continue
-			notes.argNameOps.push(opIdx)
-			notes.argNamePositions.push(slot + WitnessReceiverArgCount)
-			notes.argNames.push(self.tokenAt(try argAnchors.get(i) otherwise panic("noteRequirementCallSite: argAnchors.get OOB at {i}")).value)
+			self.noteWrittenArgumentName(notes, opIdx: opIdx, position: slot + WitnessReceiverArgCount, anchorIndex: try argAnchors.get(i) otherwise panic("noteRequirementCallSite: argAnchors.get OOB at {i}"))
 		end 'eachWrittenArgument'
 
 		self.noteWindowCall(func, opIdx: opIdx, args: args)
@@ -87782,8 +87798,7 @@ export type Parser
 			return
 		end 'writable'
 
-		let subjectTok = self.tokenAt(place.1 - 1)
-		let subject = String.from(ByteLiteralSubject) if subjectTok.kind == TokenKind.byteStringLiteral else "'{String.from(subjectTok.value)}'"
+		let subject = self.operandSubject(place.0, alone: place.1 == place.0 + 1, spelled: String.from((self.tokenAt(place.1 - 1)).value))
 		self.deferRegionRefusal(ErrorCode.semanticArgumentCapabilityRefused, message: needsWritableRefusal("'{String.from(calleeTok.value)}' needs a writable {noun}", subject: subject, capability: ValueCapability.immutable), line: calleeTok.line, column: calleeTok.column)
 	end 'requireWrittenOperandNotImmutable'
 
@@ -91767,11 +91782,12 @@ export type Parser
 		end 'aRefusedArgumentCount'
 
 		// The base is not declared AT ALL, so it has no fields and never will under this spelling. The
-		// `with` that named it is the actual error and `checkGenericInstance` records E2055 against it — but
-		// a thrown SourceParseError discards the artifact diagnostics its region recorded, or the whole
-		// file's when no region confines it (`abortedParseArtifact`), so this message has to carry the
-		// cause on its own rather than defer to one the user may never see.
-		return SourceParseError.unsupported("a field access on '{String.from(baseTok.value)}': its type instantiates '{String.from(typeName)}', which no file declares as a generic `type`, so it has no fields — the `with` that names it is the error", line: baseTok.line, column: baseTok.column)
+		// `with` that named it is the actual error and `checkGenericInstance` records E2055 against it. A
+		// thrown SourceParseError discards the artifact diagnostics its region recorded, or the whole file's
+		// when no region confines it (`abortedParseArtifact`), so this refusal carries that E2055's own text:
+		// `Queries.reportedArityMessages` drops it only when a reported message equals it, and otherwise it
+		// is the one the user sees.
+		return self.undeclaredGenericBaseRefusal(typeName, tok: baseTok)
 	end 'missingBaseLayout'
 
 	// The synthesized-record refusal, worded for the access that met it. Two sentences and not one with a noun
@@ -92479,15 +92495,15 @@ export type Parser
 			return
 		end 'staysInsideOrLeavesClean'
 
-		throw self.valueLeavesWindowRefusal(window, text: self.pathTextOf(rhsStart), at: self.tokenAt(rhsStart))
+		throw self.valueLeavesWindowRefusal(window, subject: self.operandSubject(rhsStart, alone: self.statementEndsAt(rhsStart + 1), spelled: self.pathTextOf(rhsStart)), at: self.tokenAt(rhsStart))
 	end 'requireBindingMayLeaveItsStatementWindow'
 
-	function valueLeavesWindowRefusal(window OpenWindow, text String, at Token) returns SourceParseError
+	function valueLeavesWindowRefusal(window OpenWindow, subject String, at Token) returns SourceParseError
 		let label = String.from(window.label)
 
 		return match window.kind 'kind'
-			modify gives self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "'{text}' is mutable and cannot leave '{label}'; a value leaving a modify block must be a value, immutable or a fresh isolated", line: at.line, column: at.column)
-			oneStatement gives self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "'{text}' is mutable and cannot leave the statement that opens '{label}'; a value leaving a one-statement open must be a value, immutable or a fresh isolated", line: at.line, column: at.column)
+			modify gives self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "{subject} is mutable and cannot leave '{label}'; a value leaving a modify block must be a value, immutable or a fresh isolated", line: at.line, column: at.column)
+			oneStatement gives self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "{subject} is mutable and cannot leave the statement that opens '{label}'; a value leaving a one-statement open must be a value, immutable or a fresh isolated", line: at.line, column: at.column)
 		end 'kind'
 	end 'valueLeavesWindowRefusal'
 
@@ -93005,7 +93021,7 @@ export type Parser
 		let alsoLocalData = self.valueHasOtherPath(value) or heldByTheLiteral != NoParamPositions or literalHoldsAResult
 
 		if windowIsOpen(windows) and not self.valueIsCleanInput(value) 'leavesAWindow'
-			throw self.valueLeavesWindowRefusal(innermostWindowOf(windows), text: self.returnedExpressionText(retStart), at: retTok)
+			throw self.valueLeavesWindowRefusal(innermostWindowOf(windows), subject: self.returnedSubject(retStart), at: retTok)
 		end 'leavesAWindow'
 
 		if declared == ResultCapability.isolated 'declaredIsolated'
@@ -93016,7 +93032,7 @@ export type Parser
 			end 'aParametersData' else if self.effectiveCapabilityOf(value) != ValueCapability.immutable and not self.valueIsAnUndecidedResult(value) 'notFrozen'
 				let given = self.effectiveCapabilityOf(value)
 				let word = capabilityWord(given)
-				throw self.regionRefusal(ErrorCode.semanticResultPathsDisagree, message: "a return does not fit the declared result: '{self.returnedExpressionText(retStart)}' is {word}, the result is immutable; freeze it", line: retTok.line, column: retTok.column)
+				throw self.regionRefusal(ErrorCode.semanticResultPathsDisagree, message: "a return does not fit the declared result: {self.returnedSubject(retStart)} is {word}, the result is immutable; freeze it", line: retTok.line, column: retTok.column)
 			end 'notFrozen'
 		end 'declaredImmutable' else if not self.valueIsAValueType(value) and self.effectiveCapabilityOf(value) == ValueCapability.isolated 'anIsolatedRegionForAPlainResult'
 			let text = self.returnedExpressionText(retStart)
@@ -93135,11 +93151,7 @@ export type Parser
 	end 'returnedExpressionText'
 
 	function returnedSubject(retStart ElementIndex) returns String
-		if self.kindAt(retStart) == TokenKind.byteStringLiteral and self.statementEndsAt(retStart + 1) 'aBareLiteral'
-			return String.from(ByteLiteralSubject)
-		end 'aBareLiteral'
-
-		return "'{self.returnedExpressionText(retStart)}'"
+		return self.operandSubject(retStart, alone: self.statementEndsAt(retStart + 1), spelled: self.returnedExpressionText(retStart))
 	end 'returnedSubject'
 
 	function rootValueOf(value ValueId) returns ValueId
@@ -104677,8 +104689,11 @@ export type Parser
 	end 'parseIndirectCall'
 
 	function spelledArgumentName(spelledTok Token, anchorIndex ElementIndex, namesItself bool) returns immutable ByteArray
-		if spelledTok.kind == TokenKind.byteStringLiteral 'aLiteralArgument'
-			return ByteLiteralSubject
+		if let literal = try literalOperandOf(spelledTok, alone: namesItself or self.operandEndsAt(anchorIndex + 1)) 'aLiteralArgument'
+			return match literal 'literal'
+				byteString gives ByteLiteralSubject
+				closure gives ClosureLiteralSubject
+			end 'literal'
 		end 'aLiteralArgument'
 
 		if namesItself or (spelledTok.kind == TokenKind.identifier and not self.argumentIsACall(anchorIndex)) 'aNamedArgument'
@@ -104688,14 +104703,34 @@ export type Parser
 		return freeze self.argumentSpanText(anchorIndex).toByteArray()
 	end 'spelledArgumentName'
 
+	function noteWrittenArgumentName(notes CapabilityNotes, opIdx ElementIndex, position ParamCount, anchorIndex ElementIndex)
+		notes.noteArgumentName(opIdx, position: position, name: self.spelledArgumentName(self.tokenAt(anchorIndex), anchorIndex: anchorIndex, namesItself: false))
+	end 'noteWrittenArgumentName'
+
+	function operandEndsAt(index ElementIndex) returns bool
+		let kind = self.kindAt(index)
+
+		return self.statementEndsAt(index) or kind == TokenKind.comma or kind == TokenKind.rightParen
+	end 'operandEndsAt'
+
+	function operandSubject(startIndex ElementIndex, alone bool, spelled String) returns String
+		let first = self.tokenAt(startIndex)
+
+		if let literal = try literalOperandOf(first, alone: alone) 'aLiteral'
+			return match literal 'literal'
+				byteString gives String.from(ByteLiteralSubject)
+				closure gives closureSiteDisplay(self.job.authoredPath, line: first.line, column: first.column).bare()
+			end 'literal'
+		end 'aLiteral'
+
+		return "'{spelled}'"
+	end 'operandSubject'
+
 	function noteFunctionValueCallSite(func IrFunction, opIdx ElementIndex, args ValueIdArray, argAnchors TokenIndexArray)
 		var notes = self.notesForWrite(func)
 
 		for i in 0 upto argAnchors.count() 'eachWrittenArgument'
-			let anchorIndex = try argAnchors.get(i) otherwise panic("noteFunctionValueCallSite: argAnchors.get OOB at {i}")
-			notes.argNameOps.push(opIdx)
-			notes.argNamePositions.push(i as ParamCount)
-			notes.argNames.push(self.spelledArgumentName(self.tokenAt(anchorIndex), anchorIndex: anchorIndex, namesItself: false))
+			self.noteWrittenArgumentName(notes, opIdx: opIdx, position: i as ParamCount, anchorIndex: try argAnchors.get(i) otherwise panic("noteFunctionValueCallSite: argAnchors.get OOB at {i}"))
 		end 'eachWrittenArgument'
 
 		self.noteWindowCall(func, opIdx: opIdx, args: args)

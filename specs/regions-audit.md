@@ -332,7 +332,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:20:7: 'poke' writes 'getPart' (line 15: `p.n = 1`); 'function() gives frozen' is immutable
+error E3207: <fragment>:20:7: 'poke' writes 'getPart' (line 15: `p.n = 1`); the closure at <fragment>:20:7 is immutable
 ```
 
 
@@ -470,7 +470,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:23:22: 'collect' writes 'getPart' (line 16: `parts.push(getPart())`); 'function() gives frozen' is immutable
+error E3207: <fragment>:23:22: 'collect' writes 'getPart' (line 16: `parts.push(getPart())`); the closure at <fragment>:23:22 is immutable
 ```
 
 <!-- test: a-by-reference-argument-is-not-a-clean-input-to-freeze -->

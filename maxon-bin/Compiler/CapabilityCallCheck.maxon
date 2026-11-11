@@ -102,7 +102,7 @@ function checkCapabilitiesAtOp(project Project, module MaxonModule, signatures P
 	match capabilityDoorOf(op) 'door'
 		inert then return
 		directCall then checkCallSite(project, funcNames: funcNames, provenance: provenance, facts: facts, func: func, funcIndex: funcIndex, opIdx: opIdx, op: op, memo: memo)
-		witnessCall then checkRequirementArguments(project, signatures: signatures, witnessSlots: witnessSlots, func: func, opIdx: opIdx, op: op, memo: memo)
+		witnessCall then checkRequirementArguments(project, signatures: signatures, witnessSlots: witnessSlots, facts: facts, func: func, opIdx: opIdx, op: op, memo: memo)
 		spawn then checkSpawnArguments(project, funcNames: funcNames, provenance: provenance, facts: facts, func: func, opIdx: opIdx, op: op, memo: memo)
 		functionValueCall then checkFunctionValueCall(project, funcNames: funcNames, provenance: provenance, facts: facts, calls: calls, func: func, opIdx: opIdx, op: op, memo: memo)
 		returned then checkReturnedValue(project, module: module, funcNames: funcNames, facts: facts, func: func, opIdx: opIdx, op: op, memo: memo)
@@ -113,7 +113,7 @@ function positionIsTheReceiver(sig FuncSignature, position ParamCount) returns b
 	return sig.takesReceiver() and position == ReceiverParamPosition
 end 'positionIsTheReceiver'
 
-function argumentSubject(func IrFunction, opIdx ElementIndex, argImmutableNames WriteBlameArray, index ParamCount, atTheReceiver bool) returns String
+function argumentSubject(project Project, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, argId ValueId, argImmutableNames WriteBlameArray, index ParamCount, atTheReceiver bool) returns String
 	let blamedName = try immutableArgNameAt(argImmutableNames, index: index).blamedName() otherwise EmptySourceText
 
 	if not blamedName.isEmpty() 'aBlamedBinding'
@@ -121,14 +121,39 @@ function argumentSubject(func IrFunction, opIdx ElementIndex, argImmutableNames 
 	end 'aBlamedBinding'
 
 	let unnamed = "the receiver" if atTheReceiver else "the argument"
-	let spelled = try func.capabilityNotes.argumentNameAt(opIdx, position: index) otherwise return unnamed
+
+	return try spelledArgumentSubject(project, facts: facts, func: func, opIdx: opIdx, position: index, argId: argId) otherwise unnamed
+end 'argumentSubject'
+
+function spelledArgumentSubject(project Project, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, position ParamCount, argId ValueId) returns String throws AbsentError
+	let spelled = try func.capabilityNotes.argumentNameAt(opIdx, position: position)
 
 	if spelled.isEmpty() 'aTokenThatNamesNothing'
-		return unnamed
+		throw AbsentError.absent
 	end 'aTokenThatNamesNothing'
 
-	return subjectOfSpelledName(spelled)
-end 'argumentSubject'
+	if spelled.equals(ClosureLiteralSubject) 'aClosureLiteral'
+		return try closureLiteralDisplay(project, facts: facts, func: func, argId: argId)
+	end 'aClosureLiteral'
+
+	if spelled.equals(ByteLiteralSubject) 'aByteLiteral'
+		return String.from(ByteLiteralSubject)
+	end 'aByteLiteral'
+
+	return "'{String.from(spelled)}'"
+end 'spelledArgumentSubject'
+
+function closureLiteralDisplay(project Project, facts CapabilityFacts, func IrFunction, argId ValueId) returns String throws AbsentError
+	let body = try functionValueBodyOf(project, facts: facts, func: func, value: argId)
+
+	return functionDisplay(project, func: body.1).bare()
+end 'closureLiteralDisplay'
+
+function functionValueBodyOf(project Project, facts CapabilityFacts, func IrFunction, value ValueId) returns (ElementIndex, IrFunction) throws AbsentError
+	let index = try facts.indexOf(functionValueOwnTypeName(project, func: func, value: value))
+
+	return (index, try facts.funcNames.functions.get(index) otherwise panic("functionValueBodyOf: functions.get OOB at {index}"))
+end 'functionValueBodyOf'
 
 function seedOriginSuffix(facts CapabilityFacts, index ElementIndex, position ParamCount, mutable bool) returns String
 	let origin = try facts.seedOriginAt(index, position: position, mutable: mutable) otherwise return ""
@@ -329,16 +354,16 @@ function refuseArgumentAtParameter(project Project, funcNames FunctionNameIndex,
 	end 'theWindowCheckSpeaksForIt'
 
 	if not argumentClassRefuses(paramClass, capability: capability) 'accepted'
-		return refuseReadOnlyIntoABuilder(project, facts: facts, func: func, opIdx: opIdx, memo: memo, calleeFunc: calleeFunc, calleeIndex: calleeIndex, sig: sig, position: position, argIndex: argIndex, argImmutableNames: argImmutableNames, range: range, paramClass: paramClass)
+		return refuseReadOnlyIntoABuilder(project, facts: facts, func: func, opIdx: opIdx, memo: memo, calleeFunc: calleeFunc, calleeIndex: calleeIndex, sig: sig, position: position, argId: argId, argIndex: argIndex, argImmutableNames: argImmutableNames, range: range, paramClass: paramClass)
 	end 'accepted'
 
-	let subject = argumentSubject(func, opIdx: opIdx, argImmutableNames: argImmutableNames, index: argIndex, atTheReceiver: positionIsTheReceiver(sig, position: position))
+	let subject = argumentSubject(project, facts: facts, func: func, opIdx: opIdx, argId: argId, argImmutableNames: argImmutableNames, index: argIndex, atTheReceiver: positionIsTheReceiver(sig, position: position))
 	let message = refusalOfArgument(project, funcNames: funcNames, facts: facts, calleeFunc: calleeFunc, calleeIndex: calleeIndex, position: position, paramClass: paramClass, capability: capability, subject: subject)
 	reportPositioned(project, code: ErrorCode.semanticArgumentCapabilityRefused, message: message, line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIdx))
 	return true
 end 'refuseArgumentAtParameter'
 
-function refuseReadOnlyIntoABuilder(project Project, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, memo SettledMemo, calleeFunc IrFunction, calleeIndex ElementIndex, sig FuncSignature, position ParamCount, argIndex ParamCount, argImmutableNames WriteBlameArray, range SourceRange, paramClass ParamClass) returns bool
+function refuseReadOnlyIntoABuilder(project Project, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, memo SettledMemo, calleeFunc IrFunction, calleeIndex ElementIndex, sig FuncSignature, position ParamCount, argId ValueId, argIndex ParamCount, argImmutableNames WriteBlameArray, range SourceRange, paramClass ParamClass) returns bool
 	if paramClass != ParamClass.anyCapability or not facts.buildsRecordAt(calleeIndex, position: position) 'buildsNothingFromIt'
 		return false
 	end 'buildsNothingFromIt'
@@ -347,7 +372,7 @@ function refuseReadOnlyIntoABuilder(project Project, facts CapabilityFacts, func
 		return false
 	end 'notPausedByAnOpenBlock'
 
-	let subject = argumentSubject(func, opIdx: opIdx, argImmutableNames: argImmutableNames, index: argIndex, atTheReceiver: positionIsTheReceiver(sig, position: position))
+	let subject = argumentSubject(project, facts: facts, func: func, opIdx: opIdx, argId: argId, argImmutableNames: argImmutableNames, index: argIndex, atTheReceiver: positionIsTheReceiver(sig, position: position))
 	let message = "{functionDisplay(project, func: calleeFunc).memberQuoted()} builds a record that holds {paramPhrase(calleeFunc, sig: sig, position: position)}, so it takes no read-only data; {subject} is {capabilityWord(ValueCapability.paused)}"
 	reportPositioned(project, code: ErrorCode.semanticArgumentCapabilityRefused, message: message, line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIdx))
 	return true
@@ -518,7 +543,7 @@ function checkReturnedValue(project Project, module MaxonModule, funcNames Funct
 	checkReturnFitsDeclaredResult(project, module: module, funcNames: funcNames, facts: facts, func: func, opIdx: opIdx, retVal: retVal, memo: memo)
 end 'checkReturnedValue'
 
-function checkRequirementArguments(project Project, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, func IrFunction, opIdx ElementIndex, op MaxonOp, memo SettledMemo)
+function checkRequirementArguments(project Project, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, op MaxonOp, memo SettledMemo)
 	let parts = try witnessCallPartsOf(op) otherwise panic("checkRequirementArguments: handed an op that is not a witness dispatch")
 	let args = parts.0
 	let argImmutableNames = parts.1
@@ -532,13 +557,13 @@ function checkRequirementArguments(project Project, signatures ProgramSignatures
 		let declared = requirementCapabilityAt(slot.method, position: position as ParamCount, first: first)
 		let argId = try args.get(position) otherwise panic("checkRequirementArguments: args.get OOB at {position} below its own count")
 
-		if checkDeclaredArgument(project, func: func, opIdx: opIdx, boundary: requirementName, declared: declared, argId: argId, argIndex: position as ParamCount, argImmutableNames: argImmutableNames, atTheReceiver: position < first, memo: memo) 'refused'
+		if checkDeclaredArgument(project, facts: facts, func: func, opIdx: opIdx, boundary: requirementName, declared: declared, argId: argId, argIndex: position as ParamCount, argImmutableNames: argImmutableNames, atTheReceiver: position < first, memo: memo) 'refused'
 			return
 		end 'refused'
 	end 'eachArg'
 end 'checkRequirementArguments'
 
-function checkDeclaredArgument(project Project, func IrFunction, opIdx ElementIndex, boundary String, declared ParamCapability, argId ValueId, argIndex ParamCount, argImmutableNames WriteBlameArray, atTheReceiver bool, memo SettledMemo) returns bool
+function checkDeclaredArgument(project Project, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, boundary String, declared ParamCapability, argId ValueId, argIndex ParamCount, argImmutableNames WriteBlameArray, atTheReceiver bool, memo SettledMemo) returns bool
 	if declared == ParamCapability.unmarked or (declared != ParamCapability.isolated and memo.isAnUnmarkedParameterValue(project, value: argId)) 'noDemandHere'
 		return false
 	end 'noDemandHere'
@@ -558,7 +583,7 @@ function checkDeclaredArgument(project Project, func IrFunction, opIdx ElementIn
 			return false
 		end 'isolatedEnough'
 
-		reportPositioned(project, code: ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: isolatedRecoveryRefusal(argumentSubject(func, opIdx: opIdx, argImmutableNames: argImmutableNames, index: argIndex, atTheReceiver: atTheReceiver), advice: "; pass a copy"), line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIdx))
+		reportPositioned(project, code: ErrorCode.semanticIsolatedRecoverNeedsCleanInputs, message: isolatedRecoveryRefusal(argumentSubject(project, facts: facts, func: func, opIdx: opIdx, argId: argId, argImmutableNames: argImmutableNames, index: argIndex, atTheReceiver: atTheReceiver), advice: "; pass a copy"), line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIdx))
 		return true
 	end 'anIsolatedPosition'
 
@@ -566,7 +591,7 @@ function checkDeclaredArgument(project Project, func IrFunction, opIdx ElementIn
 		return false
 	end 'accepted'
 
-	let message = refusalOfDeclaredArgument(boundary, declared: declared, capability: capability, subject: argumentSubject(func, opIdx: opIdx, argImmutableNames: argImmutableNames, index: argIndex, atTheReceiver: atTheReceiver), atTheReceiver: atTheReceiver)
+	let message = refusalOfDeclaredArgument(boundary, declared: declared, capability: capability, subject: argumentSubject(project, facts: facts, func: func, opIdx: opIdx, argId: argId, argImmutableNames: argImmutableNames, index: argIndex, atTheReceiver: atTheReceiver), atTheReceiver: atTheReceiver)
 	reportPositioned(project, code: ErrorCode.semanticArgumentCapabilityRefused, message: message, line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIdx))
 	return true
 end 'checkDeclaredArgument'
@@ -603,7 +628,7 @@ function checkFunctionValueCall(project Project, funcNames FunctionNameIndex, pr
 	for position in 0 upto userArityOfIndirectCall(parts.1) 'eachArg'
 		let argId = try parts.1.get(position) otherwise panic("checkFunctionValueCall: args.get OOB at {position} below the supplied count")
 
-		if checkDeclaredArgument(project, func: func, opIdx: opIdx, boundary: alias, declared: declaredCapabilityAt(shape.paramCapabilities, position: position as ParamCount), argId: argId, argIndex: position as ParamCount, argImmutableNames: parts.2, atTheReceiver: false, memo: memo) 'refused'
+		if checkDeclaredArgument(project, facts: facts, func: func, opIdx: opIdx, boundary: alias, declared: declaredCapabilityAt(shape.paramCapabilities, position: position as ParamCount), argId: argId, argIndex: position as ParamCount, argImmutableNames: parts.2, atTheReceiver: false, memo: memo) 'refused'
 			return
 		end 'refused'
 	end 'eachArg'
@@ -1269,8 +1294,8 @@ function checkPausedOperandsAreNotWritten(project Project, module MaxonModule, s
 
 		match capabilityDoorOf(op) 'door'
 			directCall then checkPausedDirectCall(project, funcNames: funcNames, facts: facts, func: func, opIdx: opIdx, op: op, paused: paused, windowLabel: windowLabel)
-			witnessCall then checkPausedRequirementCall(project, signatures: signatures, witnessSlots: witnessSlots, func: func, opIdx: opIdx, op: op, paused: paused, windowLabel: windowLabel)
-			functionValueCall then checkPausedFunctionValueCall(project, func: func, opIdx: opIdx, op: op, paused: paused, windowLabel: windowLabel)
+			witnessCall then checkPausedRequirementCall(project, signatures: signatures, witnessSlots: witnessSlots, facts: facts, func: func, opIdx: opIdx, op: op, paused: paused, windowLabel: windowLabel)
+			functionValueCall then checkPausedFunctionValueCall(project, facts: facts, func: func, opIdx: opIdx, op: op, paused: paused, windowLabel: windowLabel)
 			spawn then continue
 			inert or
 			returned then panic("checkPausedOperandsAreNotWritten: a window call note names an op that is not a call, a dispatch or an indirect call")
@@ -1301,9 +1326,9 @@ function closureCaptureReachOf(project Project, facts CapabilityFacts, func IrFu
 		return CaptureReach.untouched
 	end 'notAFunctionValue'
 
-	let index = try facts.indexOf(functionValueOwnTypeName(project, func: func, value: value)) otherwise return CaptureReach.untouched
+	let body = try functionValueBodyOf(project, facts: facts, func: func, value: value) otherwise return CaptureReach.untouched
 
-	return captureReachOf(facts, index: index, func: try facts.funcNames.functions.get(index) otherwise panic("closureCaptureReachOf: functions.get OOB at {index}"))
+	return captureReachOf(facts, index: body.0, func: body.1)
 end 'closureCaptureReachOf'
 
 function checkPausedClosuresLeaveTheirCaptures(project Project, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, operands ValueIdArray, paused ParamPositionMask, windowLabel String) returns bool
@@ -1312,14 +1337,14 @@ function checkPausedClosuresLeaveTheirCaptures(project Project, facts Capability
 			continue
 		end 'notPaused'
 
-		let reach = closureCaptureReachOf(project, facts: facts, func: func, value: try operands.get(position) otherwise panic("checkPausedClosuresLeaveTheirCaptures: operands.get OOB at {position}"))
+		let operand = try operands.get(position) otherwise panic("checkPausedClosuresLeaveTheirCaptures: operands.get OOB at {position}")
+		let reach = closureCaptureReachOf(project, facts: facts, func: func, value: operand)
 
 		if reach == CaptureReach.untouched 'leavesThemAlone'
 			continue
 		end 'leavesThemAlone'
 
-		let spelled = try func.capabilityNotes.argumentNameAt(opIdx, position: position as ParamCount) otherwise EmptySourceText
-		let subject = "'{String.from(spelled)}'" if not spelled.isEmpty() else "the function value"
+		let subject = try spelledArgumentSubject(project, facts: facts, func: func, opIdx: opIdx, position: position as ParamCount, argId: operand) otherwise "the function value"
 		let range = project.opRanges.get(opIdx)
 		reportPositioned(project, code: ErrorCode.semanticArgumentCapabilityRefused, message: "{subject} {captureReachPhrase(reach)}, and that data is read-only while '{windowLabel}' is open; {captureReachAdvice(reach)} or take the data as a parameter", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIdx))
 		return true
@@ -1330,9 +1355,8 @@ end 'checkPausedClosuresLeaveTheirCaptures'
 
 let UnseenBuilderWanted = "a parameter it may build a record from, since the function behind it is not visible here"
 
-function reportPausedOperandWrite(project Project, func IrFunction, opIdx ElementIndex, argIndex ParamCount, calleeName String, wanted String, windowLabel String, range SourceRange)
-	let spelled = try func.capabilityNotes.argumentNameAt(opIdx, position: argIndex) otherwise EmptySourceText
-	let subject = "'{String.from(spelled)}'" if not spelled.isEmpty() else "the argument"
+function reportPausedOperandWrite(project Project, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, argIndex ParamCount, argId ValueId, calleeName String, wanted String, windowLabel String, range SourceRange)
+	let subject = try spelledArgumentSubject(project, facts: facts, func: func, opIdx: opIdx, position: argIndex, argId: argId) otherwise "the argument"
 	reportPositioned(project, code: ErrorCode.semanticArgumentCapabilityRefused, message: "{calleeName} needs {wanted}; {subject} is read-only while '{windowLabel}' is open", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIdx))
 end 'reportPausedOperandWrite'
 
@@ -1357,12 +1381,12 @@ function checkPausedDirectCall(project Project, funcNames FunctionNameIndex, fac
 		let calleeFunc = try funcNames.functions.get(calleeIndex) otherwise panic("checkPausedDirectCall: functions.get OOB at {calleeIndex}")
 		let wanted = "a writable receiver" if positionIsTheReceiver(sig, position: position) else "a writable parameter '{displayParamName(try sig.paramNames.get(position) otherwise panic("checkPausedDirectCall: paramNames.get OOB at {position}"))}'"
 		let chain = needOriginText(project, funcNames: funcNames, facts: facts, index: calleeIndex, position: position, mutable: true)
-		reportPausedOperandWrite(project, func: func, opIdx: opIdx, argIndex: argIndex as ParamCount, calleeName: functionDisplay(project, func: calleeFunc).memberQuoted(), wanted: "{wanted}{chain}", windowLabel: windowLabel, range: try parts.3.get(argIndex) otherwise panic("checkPausedDirectCall: argRanges.get OOB at {argIndex}"))
+		reportPausedOperandWrite(project, facts: facts, func: func, opIdx: opIdx, argIndex: argIndex as ParamCount, argId: try parts.1.get(argIndex) otherwise panic("checkPausedDirectCall: args.get OOB at {argIndex}"), calleeName: functionDisplay(project, func: calleeFunc).memberQuoted(), wanted: "{wanted}{chain}", windowLabel: windowLabel, range: try parts.3.get(argIndex) otherwise panic("checkPausedDirectCall: argRanges.get OOB at {argIndex}"))
 		return
 	end 'eachArg'
 end 'checkPausedDirectCall'
 
-function checkPausedRequirementCall(project Project, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, func IrFunction, opIdx ElementIndex, op MaxonOp, paused ParamPositionMask, windowLabel String)
+function checkPausedRequirementCall(project Project, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, op MaxonOp, paused ParamPositionMask, windowLabel String)
 	let parts = try witnessCallPartsOf(op) otherwise panic("checkPausedRequirementCall: handed an op that is not a witness dispatch")
 	let argCount = parts.0.count()
 	let methodIndex = parts.2
@@ -1378,12 +1402,12 @@ function checkPausedRequirementCall(project Project, signatures ProgramSignature
 		end 'notWritten'
 
 		let wanted = "a writable receiver" if position < first and declared == ParamCapability.mutable else "a writable parameter '{displayParamName(try slot.method.paramNames.get((position - first) as ParamCount) otherwise panic("checkPausedRequirementCall: paramNames.get OOB at {position - first}"))}'" if declared == ParamCapability.mutable else UnseenBuilderWanted
-		reportPausedOperandWrite(project, func: func, opIdx: opIdx, argIndex: position as ParamCount, calleeName: FunctionDisplay.named("{String.from(slot.sourceInterfaceName)}.{String.from(slot.method.name)}").quoted(), wanted: wanted, windowLabel: windowLabel, range: project.opRanges.get(opIdx))
+		reportPausedOperandWrite(project, facts: facts, func: func, opIdx: opIdx, argIndex: position as ParamCount, argId: try parts.0.get(position) otherwise panic("checkPausedRequirementCall: args.get OOB at {position}"), calleeName: FunctionDisplay.named("{String.from(slot.sourceInterfaceName)}.{String.from(slot.method.name)}").quoted(), wanted: wanted, windowLabel: windowLabel, range: project.opRanges.get(opIdx))
 		return
 	end 'eachArg'
 end 'checkPausedRequirementCall'
 
-function checkPausedFunctionValueCall(project Project, func IrFunction, opIdx ElementIndex, op MaxonOp, paused ParamPositionMask, windowLabel String)
+function checkPausedFunctionValueCall(project Project, facts CapabilityFacts, func IrFunction, opIdx ElementIndex, op MaxonOp, paused ParamPositionMask, windowLabel String)
 	let parts = match op 'op'
 		indirectCall(_, callee, args, _) gives (callee, args)
 		default panic("checkPausedFunctionValueCall: handed an op that is not an indirect call")
@@ -1405,7 +1429,7 @@ function checkPausedFunctionValueCall(project Project, func IrFunction, opIdx El
 			continue
 		end 'notWritten'
 
-		reportPausedOperandWrite(project, func: func, opIdx: opIdx, argIndex: position as ParamCount, calleeName: FunctionDisplay.named(alias).quoted(), wanted: "a writable parameter" if declared == ParamCapability.mutable else UnseenBuilderWanted, windowLabel: windowLabel, range: project.opRanges.get(opIdx))
+		reportPausedOperandWrite(project, facts: facts, func: func, opIdx: opIdx, argIndex: position as ParamCount, argId: try parts.1.get(position) otherwise panic("checkPausedFunctionValueCall: args.get OOB at {position}"), calleeName: FunctionDisplay.named(alias).quoted(), wanted: "a writable parameter" if declared == ParamCapability.mutable else UnseenBuilderWanted, windowLabel: windowLabel, range: project.opRanges.get(opIdx))
 		return
 	end 'eachArg'
 end 'checkPausedFunctionValueCall'

@@ -406,6 +406,35 @@ end 'main'
 error E3202: <fragment>:14:10: 'rows.get(0)' is mutable and cannot leave 'read'; a value leaving a modify block must be a value, immutable or a fresh isolated
 ```
 
+<!-- test: returned-closure-literal-leaving-window-is-named-by-its-site -->
+A closure literal returned from the block captures the region's contents, so it cannot leave the window either. It is
+named as every other closure is, by where it is written.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias LineArray = Array with String
+typealias Thunk = function() returns Tally
+
+function make() returns Thunk
+	var batch = LineArray.create(0) as isolated LineArray
+
+	modify batch 'fill'
+		batch.push("a")
+		return function() gives batch.count()
+	end 'fill'
+
+	return function() gives 0
+end 'make'
+
+function main() returns ExitCode
+	let t = make()
+	return t() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3202: <fragment>:11:10: the closure at <fragment>:11:10 is mutable and cannot leave 'fill'; a value leaving a modify block must be a value, immutable or a fresh isolated
+```
+
 <!-- test: opened-slot-reassigned-inside-window -->
 Only the region's contents are writable inside its block, so the variable holding the opened region cannot be reassigned there.
 
@@ -958,7 +987,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:28:11: 'function() gives row.rename()' writes data it captured, and that data is read-only while 'fill' is open; write it outside the closure or take the data as a parameter
+error E3207: <fragment>:28:11: the closure at <fragment>:28:19 writes data it captured, and that data is read-only while 'fill' is open; write it outside the closure or take the data as a parameter
 ```
 
 <!-- test: one-statement-open-refuses-two-isolated-values-of-different-holders -->

@@ -2388,6 +2388,43 @@ end 'main'
 error E3159: <fragment>:18:27: cannot pass 'n' to a function that writes parameter 'dest' (in the closure at <fragment>:18:10): the closure holds its own copy of 'n', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
+<!-- test: closure-capture.error.a-captured-value-handed-to-a-conformer-that-writes-it-is-refused -->
+A closure that calls through an interface hands the position its conformer writes the closure's own copy of `start`,
+so the write cannot reach the original and the call is refused.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Thunk = function() returns Wide
+
+interface Bumper
+	function bump(n mutable Wide) returns Wide
+end 'Bumper'
+
+type Doubler implements Bumper
+	export let seed as Wide
+
+	static function create(seed Wide) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	function bump(n mutable Wide) returns Wide
+		n = 50
+		return n
+	end 'bump'
+end 'Doubler'
+
+function make(b Bumper, start Wide) returns Thunk
+	return function() gives b.bump(start)
+end 'make'
+
+function main() returns ExitCode
+	let t = make(Doubler.create(1), start: 3)
+	return t() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:23:28: 'Doubler.bump' writes its parameter 'n', but 'bump' passes it the immutable 'start'
+```
+
 ### A captured Promise
 
 <!-- test: closure-capture.a-captured-promise-moves-into-the-closure -->

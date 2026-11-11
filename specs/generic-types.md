@@ -1847,7 +1847,7 @@ error E3018: <fragment>:8:13: type 'Array' has no field named 'value'
 The other way a generic base has no `StructLayout`: nothing declares it. A parameter
 typed by such an alias reaches the same field-access door, and must say what is
 actually wrong — the `with` — rather than crash. (`checkGenericInstance` records E2055
-against that `with`, and the message carries the cause itself.)
+against that `with`, and the field access that follows from it is not reported.)
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntThing = Nonexistent with Int
@@ -1862,7 +1862,54 @@ end 'main'
 ```
 ```maxoncstderr
 error E2055: <fragment>:3:22: Type 'Nonexistent' has no associated types
-error E2015: <fragment>:6:9: Unsupported: a field access on 't': its type instantiates 'Nonexistent', which no file declares as a generic `type`, so it has no fields — the `with` that names it is the error
+```
+
+<!-- test: error.field-reads-of-an-undeclared-generic-base-report-only-the-with -->
+Two reads of a value whose type is the refused alias, in two functions, and a `sizeof` of it: each is a consequence of
+the one E2055 recorded at the `with`, so the `with` is reported once and nothing else is.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntThing = Nonexistent with Int
+
+function readFirst(t IntThing) returns Int
+	return t.foo
+end 'readFirst'
+
+function readSecond(t IntThing) returns Int
+	return t.bar
+end 'readSecond'
+
+function main() returns ExitCode
+	return sizeof(IntThing) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2055: <fragment>:3:22: Type 'Nonexistent' has no associated types
+```
+
+<!-- test: error.field-read-of-a-qualified-undeclared-generic-base-reports-only-the-with -->
+A base written through a directory is judged under that spelling, and the field read that follows is a consequence of
+the one E2055 recorded at the `with`.
+```maxon
+// --- file: alpha/helper.maxon
+export function helper() returns ExitCode
+	return 0
+end 'helper'
+
+// --- file: main.maxon
+typealias Int = int(i64.min to i64.max)
+typealias Thing = alpha.Nonexistent with Int
+
+function readIt(t Thing) returns Int
+	return t.foo
+end 'readIt'
+
+function main() returns ExitCode
+	return alpha.helper()
+end 'main'
+```
+```maxoncstderr
+error E2055: <fragment>:9:19: Type 'alpha.Nonexistent' has no associated types
 ```
 
 <!-- test: error.undeclared-generic-base-reaches-no-layout-query -->
@@ -1974,7 +2021,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E2055: <fragment>:3:20: Type 'Nonexistent' has no associated types
-error E2015: <fragment>:6:9: Unsupported: sizeof of a type that instantiates 'Nonexistent', which no file declares as a generic `type`, so it has no box to size — the `with` that names it is the error
 ```
 
 <!-- test: error.bare-int-type-arg -->
