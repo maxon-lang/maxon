@@ -3,8 +3,10 @@ let ProcessListingMs = 10000
 let ProcessListingColumns = "pid,ppid,pgid,stat,etime,args"
 let ProcessListingOption = "-axo"
 let StubProcessName = "debugserver"
-let ProcessStateColumn = 3
-let DefunctState = "Z"
+let StubAttachOption = "--attach="
+let ProcessIdColumn = 0
+let ParentColumn = 1
+let GroupColumn = 2
 let SamplingTool = "sample"
 let SamplingSeconds = "1"
 let SamplingMs = 30000
@@ -13,52 +15,136 @@ let StateRowSeparator = "; "
 let AliveStateRow = "alive"
 export let GoneStateRow = "gone"
 
-function listedProcesses() returns String throws SubprocessError
-	let listed = try Subprocess.run(Executable.name(ProcessListingTool), arguments: [ProcessListingOption, ProcessListingColumns], timeoutMs: ProcessListingMs)
+typealias ListedProcesses = Array with ListedProcess
 
-	return listed.stdout
+type ListedProcess
+	let line as String
+	let columns as StringArray
+	let id as Pid
+	let parentId as Pid
+	let groupId as Pid
+
+	static function create(line String, columns StringArray, id Pid, parentId Pid, groupId Pid) returns ListedProcess
+		return Self{line: line, columns: columns, id: id, parentId: parentId, groupId: groupId}
+	end 'create'
+
+	function isStub() returns bool
+		return self.line.contains(StubProcessName)
+	end 'isStub'
+
+	function stateColumns() returns String
+		var kept = StringArray.create(0)
+
+		for column in self.columns 'eachColumn'
+			if kept.count() >= StateColumnCount 'enough'
+				break
+			end 'enough'
+
+			kept.push(column)
+		end 'eachColumn'
+
+		return joined(kept, separator: Space)
+	end 'stateColumns'
+
+	function attachesTo(process Pid) returns bool
+		if not self.isStub() 'notAStub'
+			return false
+		end 'notAStub'
+
+		return self.columns.contains("{StubAttachOption}{process}")
+	end 'attachesTo'
+
+	function isAmong(processes ListedProcesses) returns bool
+		for other in processes 'eachProcess'
+			if other.isProcess(self.id) 'thisOne'
+				return true
+			end 'thisOne'
+		end 'eachProcess'
+
+		return false
+	end 'isAmong'
+
+	// The group link holds a zombie reparented to launchd, which keeps its group. It admits only a kept
+	// process's descendants because every child a Maxon program spawns leads a group of its own.
+	function joins(own ListedProcesses, matching String) returns bool
+		if self.line.contains(matching) 'namesTheMatch'
+			return true
+		end 'namesTheMatch'
+
+		for other in own 'eachOwn'
+			if self.parentId == other.id or self.groupId == other.groupId or self.attachesTo(other.id) 'related'
+				return true
+			end 'related'
+		end 'eachOwn'
+
+		return false
+	end 'joins'
+
+	static function familyOf(matching String, listed ListedProcesses) returns StringArray
+		var own = ListedProcesses.create(0)
+		var lines = StringArray.create(0)
+		var grew = true
+
+		while grew 'untilNoneJoins'
+			grew = false
+
+			for candidate in listed 'eachProcess'
+				if not candidate.isAmong(own) and candidate.joins(own, matching: matching) 'theTestsOwn'
+					own.push(candidate)
+					lines.push(candidate.line)
+					grew = true
+				end 'theTestsOwn'
+			end 'eachProcess'
+		end 'untilNoneJoins'
+
+		return lines
+	end 'familyOf'
+
+	function sampled() returns String
+		return "{LineFeed}{self.line}{LineFeed}{sampledStack(self.id)}"
+	end 'sampled'
+
+	function isProcess(process Pid) returns bool
+		return self.id == process
+	end 'isProcess'
+end 'ListedProcess'
+
+function listedProcesses() returns ListedProcesses throws SubprocessError
+	let listed = try Subprocess.run(Executable.name(ProcessListingTool), arguments: [ProcessListingOption, ProcessListingColumns], timeoutMs: ProcessListingMs)
+	var processes = ListedProcesses.create(0)
+
+	for line in outputLines(listed.stdout) 'eachRow'
+		let columns = whitespaceTokens(line)
+		let idText = try columns.get(ProcessIdColumn as ElementIndex) otherwise continue
+		let parentText = try columns.get(ParentColumn as ElementIndex) otherwise continue
+		let groupText = try columns.get(GroupColumn as ElementIndex) otherwise continue
+		let id = try int.fromString(idText) otherwise continue
+		let parentId = try int.fromString(parentText) otherwise continue
+		let groupId = try int.fromString(groupText) otherwise continue
+
+		processes.push(ListedProcess.create(line, columns: columns, id: id as Pid, parentId: parentId as Pid, groupId: groupId as Pid))
+	end 'eachRow'
+
+	return processes
 end 'listedProcesses'
+
+function unlisted(failure SubprocessError) returns String
+	return "(the process listing could not run: {failure.displayReason()})"
+end 'unlisted'
 
 export function processSnapshot(matching String) returns String
 	#if os(Windows)
 		return "(this host has no process listing to search for {matching})"
 	#else
-		let listing = try listedProcesses() otherwise (e) 'noListing'
-			return "(the process listing could not run: {e.displayReason()})"
+		let listed = try listedProcesses() otherwise (e) 'noListing'
+			return unlisted(e)
 		end 'noListing'
 
-		var kept = StringArray.create(0)
+		let family = ListedProcess.familyOf(matching, listed: listed)
 
-		for line in outputLines(listing) 'eachProcess'
-			if line.contains(matching) or line.contains(StubProcessName) or isDefunct(line) 'relevant'
-				kept.push(line)
-			end 'relevant'
-		end 'eachProcess'
-
-		return "{kept.count()} process(es) name {matching} or {StubProcessName}, or are defunct:{LineFeed}{listedLines(kept)}"
+		return "{family.count()} process(es) name {matching}, descend from or share a process group with one that does, or are a {StubProcessName} attached to one:{LineFeed}{listedLines(family)}"
 	#endif
 end 'processSnapshot'
-
-function isDefunct(line String) returns bool
-	let tokens = whitespaceTokens(line)
-	let state = try tokens.get(ProcessStateColumn as ElementIndex) otherwise return false
-
-	return state.startsWith(DefunctState)
-end 'isDefunct'
-
-function leadingColumns(columns StringArray) returns String
-	var kept = StringArray.create(0)
-
-	for column in columns 'eachColumn'
-		if kept.count() >= StateColumnCount 'enough'
-			break
-		end 'enough'
-
-		kept.push(column)
-	end 'eachColumn'
-
-	return joined(kept, separator: Space)
-end 'leadingColumns'
 
 export function stateRowOf(process Pid) returns String
 	if not Process.isAlive(process) 'ended'
@@ -68,22 +154,19 @@ export function stateRowOf(process Pid) returns String
 	#if os(Windows)
 		return AliveStateRow
 	#else
-		let listing = try listedProcesses() otherwise (e) 'noListing'
-			return "(the process listing could not run: {e.displayReason()})"
+		let listed = try listedProcesses() otherwise (e) 'noListing'
+			return unlisted(e)
 		end 'noListing'
 
 		var rows = StringArray.create(0)
 		var listedItself = false
 
-		for line in outputLines(listing) 'eachProcess'
-			let columns = whitespaceTokens(line)
-			let first = try columns.get(0 as ElementIndex) otherwise continue
-
-			if first == "{process}" 'theProcess'
-				rows.push("process {leadingColumns(columns)}")
+		for candidate in listed 'eachProcess'
+			if candidate.isProcess(process) 'theProcess'
+				rows.push("process {candidate.stateColumns()}")
 				listedItself = true
-			end 'theProcess' else if line.contains(StubProcessName) 'aStub'
-				rows.push("stub {leadingColumns(columns)}")
+			end 'theProcess' else if candidate.isStub() 'aStub'
+				rows.push("stub {candidate.stateColumns()}")
 			end 'aStub'
 		end 'eachProcess'
 
@@ -99,22 +182,16 @@ export function sampledStubs() returns String
 	#if os(Windows)
 		return "(this host has no debug stub to sample)"
 	#else
-		let listing = try listedProcesses() otherwise (e) 'noListing'
-			return "(the process listing could not run: {e.displayReason()})"
+		let listed = try listedProcesses() otherwise (e) 'noListing'
+			return unlisted(e)
 		end 'noListing'
 
 		var report = ""
 
-		for line in outputLines(listing) 'eachProcess'
-			if not line.contains(StubProcessName) 'notAStub'
-				continue
-			end 'notAStub'
-
-			let tokens = whitespaceTokens(line)
-			let first = try tokens.get(0 as ElementIndex) otherwise continue
-			let process = try int.fromString(first) otherwise continue
-
-			report.append("{LineFeed}{line}{LineFeed}{sampledStack(process as Pid)}")
+		for candidate in listed 'eachProcess'
+			if candidate.isStub() 'aStub'
+				report.append(candidate.sampled())
+			end 'aStub'
 		end 'eachProcess'
 
 		return report
