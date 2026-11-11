@@ -2087,7 +2087,14 @@ The `runtime:` line counts the samples whose stack, as far as its walk read it, 
 own code, such as the loop a scheduler worker runs between green threads or a context switch. Those
 samples are counted on that line alone. Library code counts toward the program, and code the compiler
 inlined is named as the body it came from, so a service's message handler, inlined into the message
-loop the compiler synthesizes, has rows of its own.
+loop the compiler synthesizes, has rows of its own. On macOS a thread stopped just as a signal reaches it,
+such as the runtime's preemption signal, is sampled as the code the signal interrupted; a sample anywhere
+else in the system's signal trampoline is the runtime delivering the signal and counts on the `runtime:`
+line. A thread that ends while it is being sampled is dropped without a sample for that tick.
+
+The stacks section has one row per stack. Its name is the outermost frame the profile could name; when
+samples of one stack name different frames, the row takes a named frame over a bracketed one, then the
+first in byte order.
 
 `--json` prints one object with `exe`, `targetExitCode`, `runCompleted`, `achievedRateHz`,
 `requestedRateHz`, `samples`, `captures`, `samplesUnsymbolized`, `samplesInRuntime` and related counts, and
@@ -2095,7 +2102,9 @@ the arrays `functions` (`name`, `selfSamples`, `totalSamples`), `tree` and `stac
 
 **Exit codes:** `0` when the measurement completed. `1` for a refusal (no such executable, no sidecar, a
 sidecar from a different build, an `arm64-macos` image it cannot re-sign or a directory it cannot write
-the signed copy into, a host that refuses to let the profiler attach, a program that ended before sampling began)
+the signed copy into, a host that refuses to let the profiler attach, a program whose loaded images cannot
+be listed or, on `arm64-macos`, in whose images the system's signal trampoline cannot be located, a program
+that ended before sampling began)
 and for a run stopped by `--timeout`, whose partial report is still printed. The program's own status is
 the `target exit code` line.
 

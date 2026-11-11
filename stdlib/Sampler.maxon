@@ -12,6 +12,7 @@
 		unknownThread
 		outOfWindow
 		moduleListUnavailable
+		signalTrampolineUnavailable
 		callingThread
 		accessDenied
 		threadNotPinned
@@ -65,6 +66,8 @@
 	#endif
 
 	#if os(Macos)
+		typealias MachUlebShift = int(0 to 63)
+
 		let MachSuccess = 0
 		let MachPortBytes = 4
 		let MachPortBits = 32
@@ -82,7 +85,14 @@
 
 		let MachStateFramePointerOffset = 232
 		let MachStateStackPointerOffset = 248
+		let MachStateLinkRegisterOffset = 240
 		let MachStateProgramCounterOffset = 256
+
+		// The trampoline's entry reaches `__prof_mach_sample` in the state record's trailing word because
+		// `__Builtins.profileMachSample` keeps its arity: the pinned seed refuses a tree that changes it.
+		// `MachNoTrampoline` is that word for "none", and no 4-byte-aligned pc can equal it.
+		let MachStateTrampolineOffset = 272
+		let MachNoTrampoline = 0 - 1
 
 		let MachPortSlot = 0
 		let MachArraySlot = 8
@@ -94,7 +104,9 @@
 		let MachStateSlot = 512
 		let MachStateFramePointerSlot = (MachStateSlot + MachStateFramePointerOffset) as ScratchOffset
 		let MachStateStackPointerSlot = (MachStateSlot + MachStateStackPointerOffset) as ScratchOffset
+		let MachStateLinkRegisterSlot = (MachStateSlot + MachStateLinkRegisterOffset) as ScratchOffset
 		let MachStateProgramCounterSlot = (MachStateSlot + MachStateProgramCounterOffset) as ScratchOffset
+		let MachStateTrampolineSlot = (MachStateSlot + MachStateTrampolineOffset) as ScratchOffset
 
 		let MachNanosPerSecond = 1000000000
 		let MachNanosPerMicro = 1000
@@ -106,13 +118,39 @@
 		let MachHeaderFileTypeWord = 8
 		let MachHeaderBytes = 32
 		let MachLoadCommandSegment64 = 0x19
+		let MachLoadCommandSymbolTable = 0x2
+		let MachLoadCommandFunctionStarts = 0x26
+		let MachFunctionStartsLocationOffset = 8
+		let MachUlebPayloadMask = 0x7F
+		let MachUlebContinuation = 0x80
+		let MachUlebPayloadBits = 7
+		let MachUlebMaxShift = 56
 		let MachSegmentNameOffset = 8
+		let MachSegmentSecondNameOffset = 16
+		let MachSegmentAddressOffset = 24
 		let MachSegmentSizeOffset = 32
+		let MachSegmentFileOffsetOffset = 40
+		let MachSymbolTableLocationOffset = 8
+		let MachSymbolTableStringsOffset = 16
 		let MachTextSegmentNameWord = 0x545845545F5F
+		let MachLinkEditFirstNameWord = 0x44454B4E494C5F5F
+		let MachLinkEditSecondNameWord = 0x5449
+		let MachSignalLibraryName = "libsystem_platform.dylib"
+		let MachSignalTrampolineSymbol = "__sigtramp"
+		let MachSymbolEntryBytes = 16
+		let MachSymbolsPerRead = 256
+		let MachSymbolNameWindowOffset = MachSymbolsPerRead * MachSymbolEntryBytes
+		let MachSymbolTypeShift = 32
+		let MachSymbolTypeMask = 0xEE
+		let MachSymbolInSection = 0x0E
+		let MachSymbolValueOffset = 8
+		let MachByteMask = 0xFF
+		let MachLibSystemFlagsOffset = 24
+		let MachLibSystemInitializedShift = 8
 		let MachMaxCommandBytes = 16384
 		let MachMaxModules = 1024
 		let MachImageInfoBytes = 24
-		let MachImageInfoHeaderBytes = 16
+		let MachImageInfoHeaderBytes = 32
 		let MachImageArrayOffset = 8
 		let MachImagePathOffset = 8
 		let MachPortWordBytes = 8
@@ -339,6 +377,14 @@
 			running
 			idle(cpuNanos SampleCycles)
 			unreadable
+
+			function isRunning() returns bool
+				return match self 'which'
+					running gives true
+					idle or
+					unreadable gives false
+				end 'which'
+			end 'isRunning'
 		end 'ThreadReading'
 
 		enum StopKind
@@ -355,24 +401,25 @@
 			module let programCounter as RegisterWord
 			module let framePointer as RegisterWord
 			module let stackPointer as RegisterWord
+			module let linkRegister as LinkRegister
 			module let copied as RegisterWord
 			module let serial as CaptureSerial
 			module let cycles as SampleCycles
 
 			static function none() returns PendingStop
-				return Self{id: 0, kind: StopKind.nothing, programCounter: 0, framePointer: 0, stackPointer: 0, copied: 0, serial: 0, cycles: 0}
+				return Self{id: 0, kind: StopKind.nothing, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, serial: 0, cycles: 0}
 			end 'none'
 
 			static function unreadable(id SampledThreadId, serial CaptureSerial, cycles SampleCycles) returns PendingStop
-				return Self{id: id, kind: StopKind.unreadable, programCounter: 0, framePointer: 0, stackPointer: 0, copied: 0, serial: serial, cycles: cycles}
+				return Self{id: id, kind: StopKind.unreadable, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, serial: serial, cycles: cycles}
 			end 'unreadable'
 
 			static function lost(id SampledThreadId) returns PendingStop
-				return Self{id: id, kind: StopKind.gone, programCounter: 0, framePointer: 0, stackPointer: 0, copied: 0, serial: 0, cycles: 0}
+				return Self{id: id, kind: StopKind.gone, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, serial: 0, cycles: 0}
 			end 'lost'
 
-			static function of(id SampledThreadId, kind StopKind, programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, copied RegisterWord, serial CaptureSerial, cycles SampleCycles) returns PendingStop
-				return Self{id: id, kind: kind, programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, copied: copied, serial: serial, cycles: cycles}
+			static function of(id SampledThreadId, kind StopKind, programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, linkRegister LinkRegister, copied RegisterWord, serial CaptureSerial, cycles SampleCycles) returns PendingStop
+				return Self{id: id, kind: kind, programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: linkRegister, copied: copied, serial: serial, cycles: cycles}
 			end 'of'
 		end 'PendingStop'
 	#endif
@@ -428,14 +475,79 @@
 		public let programCounter as RegisterWord
 		public let framePointer as RegisterWord
 		public let stackPointer as RegisterWord
+		public let linkRegister as LinkRegister
 		public let reservation as StackReservation
 		public let suspendedCycles as RegisterWord
 		public let window as StackWindow
 
-		static function of(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, reservation StackReservation, suspendedCycles RegisterWord, window StackWindow) returns SampledStack
-			return Self{programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, reservation: reservation, suspendedCycles: suspendedCycles, window: window}
+		static function of(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, linkRegister LinkRegister, reservation StackReservation, suspendedCycles RegisterWord, window StackWindow) returns SampledStack
+			return Self{programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: linkRegister, reservation: reservation, suspendedCycles: suspendedCycles, window: window}
 		end 'of'
 	end 'SampledStack'
+
+	/// A sampled thread's link register: `holds` on macOS, `absent` on Windows and Linux.
+	public union LinkRegister
+		absent
+		holds(address RegisterWord)
+
+		public function isWithin(code SignalTrampoline) returns bool
+			return match self 'which'
+				absent gives false
+				holds(address) gives code.contains(address)
+			end 'which'
+		end 'isWithin'
+	end 'LinkRegister'
+
+	/// The code a thread runs while a signal is delivered to it: `spanning` once located, `unplaced`
+	/// when it cannot be located, and `absent` where there is none to find yet or the host has none.
+	public union SignalTrampoline
+		absent
+		unplaced
+		spanning(start RegisterWord, limit RegisterWord)
+
+		public function contains(address RegisterWord) returns bool
+			return match self 'which'
+				absent or
+				unplaced gives false
+				spanning(start, limit) gives address >= start and address < limit
+			end 'which'
+		end 'contains'
+
+		public function placed() returns SignalTrampoline throws SamplerError
+			match self 'which'
+				absent or
+				spanning then return self
+				unplaced then throw SamplerError.signalTrampolineUnavailable
+			end 'which'
+		end 'placed'
+
+		#if os(Macos)
+			function entryAddress() returns RegisterWord
+				return match self 'which'
+					absent gives MachNoTrampoline
+					unplaced panic("SignalTrampoline.entryAddress: a stop places the trampoline before it asks for its entry, and an unplaced one throws there")
+					spanning(start, _) gives start
+				end 'which'
+			end 'entryAddress'
+		#endif
+	end 'SignalTrampoline'
+
+	#if os(Macos)
+		union TrampolineLocation
+			notYet
+			located(code SignalTrampoline)
+		end 'TrampolineLocation'
+
+		union DyldImageList
+			stillLoading
+			listed(count RegisterWord, array RegisterWord)
+		end 'DyldImageList'
+
+		union MachCommandWanted
+			ofKind(kind RegisterWord)
+			segment(firstName RegisterWord, secondName RegisterWord)
+		end 'MachCommandWanted'
+	#endif
 
 	public union SampleCapture
 		threadGone
@@ -467,6 +579,10 @@
 			var pending as PendingStop
 		#endif
 
+		#if os(Macos)
+			var trampoline as TrampolineLocation
+		#endif
+
 		#if os(Linux)
 			var trace as ProcessTrace
 			var seized as SeizedThreads
@@ -491,6 +607,19 @@
 				return true
 			#endif
 		end 'foreignCodeKeepsTheFrameChain'
+
+		/// libsystem_platform's `_sigtramp` on macOS, kept once located; `absent` until libSystem has
+		/// initialised, and always on Windows and Linux.
+		public function signalTrampoline() returns SignalTrampoline
+			#if os(Macos)
+				match self.trampoline 'which'
+					located(code) then return code
+					notYet then return self.placedTrampoline()
+				end 'which'
+			#else
+				return SignalTrampoline.absent
+			#endif
+		end 'signalTrampoline'
 
 		public static function open(pid Pid) returns SampledProcess throws SamplerError
 			#if os(Windows) and arch(x64)
@@ -537,7 +666,7 @@
 					throw SamplerError.accessDenied
 				end 'refused'
 
-				let sampled = Self{process: __ManagedHandle.adopting(port), pid: pid as RegisterWord, scratch: scratch, window: window, openThreads: OpenThreadArray.create(0), captures: CaptureSerialCell.create(0 as CaptureSerial), watches: ThreadWatchArray.create(0), pending: PendingStop.none()}
+				let sampled = Self{process: __ManagedHandle.adopting(port), pid: pid as RegisterWord, scratch: scratch, window: window, openThreads: OpenThreadArray.create(0), captures: CaptureSerialCell.create(0 as CaptureSerial), watches: ThreadWatchArray.create(0), pending: PendingStop.none(), trampoline: TrampolineLocation.notYet}
 
 				return sampled
 			#endif
@@ -676,24 +805,29 @@
 		public function cycles(thread SampledThread) returns SampleCycles throws SamplerError
 			try self.requireHeld(thread)
 
-			return self.cyclesOf(thread)
-		end 'cycles'
-
-		function cyclesOf(thread SampledThread) returns SampleCycles
 			#if os(Windows) and arch(x64)
 				return __Builtins.profileThreadCycles(thread.rawHandle()) as SampleCycles
 			#endif
 
 			#if not os(Windows)
 				self.pending = PendingStop.none()
+				let reading = self.threadReading(thread)
 
-				match self.threadReading(thread) 'reading'
-					running then return self.cyclesAtAStop(thread)
-					idle(cpuNanos) then return self.settleWatch(thread.id, exact: cpuNanos)
-					unreadable then return self.lastCycles(thread.id)
+				if reading.isRunning() 'canBeStopped'
+					#if os(Linux)
+						self.pending = self.stopThread(thread, stateKnown: true)
+					#else
+						self.pending = try self.stopThread(thread)
+					#endif
+				end 'canBeStopped'
+
+				return match reading 'reading'
+					running or
+					unreadable gives self.lastCycles(thread.id)
+					idle(cpuNanos) gives self.settleWatch(thread.id, exact: cpuNanos)
 				end 'reading'
 			#endif
-		end 'cyclesOf'
+		end 'cycles'
 
 		#if not os(Windows)
 			function watchSlotOf(id SampledThreadId) returns SampledThreadSlot
@@ -737,22 +871,12 @@
 				return watch.cycles
 			end 'settledWatch'
 
-			function cyclesAtAStop(thread SampledThread) returns SampleCycles
-				#if os(Linux)
-					self.pending = self.stopThread(thread, stateKnown: true)
-				#else
-					self.pending = self.stopThread(thread)
-				#endif
-
-				return self.lastCycles(thread.id)
-			end 'cyclesAtAStop'
-
 			function takePendingStop(id SampledThreadId) returns PendingStop
 				if self.pending.id != id 'someoneElses'
 					return PendingStop.none()
 				end 'someoneElses'
 
-				let taken = PendingStop.of(self.pending.id, kind: self.pending.kind, programCounter: self.pending.programCounter, framePointer: self.pending.framePointer, stackPointer: self.pending.stackPointer, copied: self.pending.copied, serial: self.pending.serial, cycles: self.pending.cycles)
+				let taken = PendingStop.of(self.pending.id, kind: self.pending.kind, programCounter: self.pending.programCounter, framePointer: self.pending.framePointer, stackPointer: self.pending.stackPointer, linkRegister: self.pending.linkRegister, copied: self.pending.copied, serial: self.pending.serial, cycles: self.pending.cycles)
 				self.pending = PendingStop.none()
 
 				return taken
@@ -763,7 +887,7 @@
 					calling then throw SamplerError.callingThread
 					gone then return SampleCapture.threadGone
 					unreadable then return SampleCapture.unreadable(StackReservation.unreported, suspendedCycles: stop.cycles as RegisterWord)
-					registers then return self.capturedStack(stop.programCounter, framePointer: stop.framePointer, stackPointer: stop.stackPointer, copied: stop.copied, serial: stop.serial, suspendedCycles: stop.cycles as RegisterWord)
+					registers then return self.capturedStack(stop.programCounter, framePointer: stop.framePointer, stackPointer: stop.stackPointer, linkRegister: stop.linkRegister, copied: stop.copied, serial: stop.serial, suspendedCycles: stop.cycles as RegisterWord)
 					nothing then panic("SampledProcess.captureOfStop: a stop that stopped nothing reached a capture")
 				end 'which'
 			end 'captureOfStop'
@@ -796,7 +920,7 @@
 
 				let copiedStack = StackWindow.over(self.window.readHandle(), copied: windowBytes as RegisterWord, serial: serial, captures: self.captures)
 
-				return SampleCapture.captured(SampledStack.of(self.scratch.word(SampleContextRipSlot), framePointer: self.scratch.word(SampleContextRbpSlot), stackPointer: self.scratch.word(SampleContextRspSlot), reservation: StackReservation.base(allocationBase), suspendedCycles: suspendedCycles, window: copiedStack))
+				return SampleCapture.captured(SampledStack.of(self.scratch.word(SampleContextRipSlot), framePointer: self.scratch.word(SampleContextRbpSlot), stackPointer: self.scratch.word(SampleContextRspSlot), linkRegister: LinkRegister.absent, reservation: StackReservation.base(allocationBase), suspendedCycles: suspendedCycles, window: copiedStack))
 			#endif
 
 			#if not os(Windows)
@@ -809,7 +933,7 @@
 				#if os(Linux)
 					return try self.captureOfStop(self.stopThread(thread, stateKnown: false))
 				#else
-					return try self.captureOfStop(self.stopThread(thread))
+					return try self.captureOfStop(try self.stopThread(thread))
 				#endif
 			#endif
 		end 'capture'
@@ -822,10 +946,10 @@
 		end 'nextCapture'
 
 		#if not os(Windows)
-			function capturedStack(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, copied RegisterWord, serial CaptureSerial, suspendedCycles RegisterWord) returns SampleCapture
+			function capturedStack(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, linkRegister LinkRegister, copied RegisterWord, serial CaptureSerial, suspendedCycles RegisterWord) returns SampleCapture
 				let copiedStack = StackWindow.over(self.window.readHandle(), copied: copied, serial: serial, captures: self.captures)
 
-				return SampleCapture.captured(SampledStack.of(programCounter, framePointer: framePointer, stackPointer: stackPointer, reservation: StackReservation.unreported, suspendedCycles: suspendedCycles, window: copiedStack))
+				return SampleCapture.captured(SampledStack.of(programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: linkRegister, reservation: StackReservation.unreported, suspendedCycles: suspendedCycles, window: copiedStack))
 			end 'capturedStack'
 		#endif
 
@@ -882,10 +1006,14 @@
 				return self.settleWatch(thread.id, exact: self.machInfoCpuNanos())
 			end 'callerCycles'
 
-			function stopThread(thread SampledThread) returns PendingStop
+			function stopThread(thread SampledThread) returns PendingStop throws SamplerError
+				// Placed before the serial is taken: locating reads into the same window and steps the serial,
+				// which would invalidate the stack this stop copies.
+				let placed = try self.signalTrampoline().placed()
 				let serial = self.nextCapture()
 				self.scratch.setWord(MachInfoSlot, value: 0)
 				self.scratch.setWord(MachInfoSecondSlot, value: 0)
+				self.scratch.setWord(MachStateTrampolineSlot, value: placed.entryAddress())
 
 				let windowBytes = __Builtins.profileMachSample(self.process.handle() as RegisterWord, thread.rawHandle(), self.scratch.addressOf(MachStateSlot), self.scratch.addressOf(MachInfoSlot), self.window.addressOf(0), SampleWindowBytes)
 
@@ -894,7 +1022,7 @@
 				end 'exited'
 
 				if windowBytes == ProfileSampleCallingThread 'callersOwn'
-					return PendingStop.of(thread.id, kind: StopKind.calling, programCounter: 0, framePointer: 0, stackPointer: 0, copied: 0, serial: serial, cycles: self.callerCycles(thread))
+					return PendingStop.of(thread.id, kind: StopKind.calling, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, serial: serial, cycles: self.callerCycles(thread))
 				end 'callersOwn'
 
 				let suspendedCycles = self.settleWatch(thread.id, exact: self.machInfoCpuNanos())
@@ -903,7 +1031,7 @@
 					return PendingStop.unreadable(thread.id, serial: serial, cycles: suspendedCycles)
 				end 'nothingToRead'
 
-				return PendingStop.of(thread.id, kind: StopKind.registers, programCounter: self.scratch.word(MachStateProgramCounterSlot), framePointer: self.scratch.word(MachStateFramePointerSlot), stackPointer: self.scratch.word(MachStateStackPointerSlot), copied: windowBytes as RegisterWord, serial: serial, cycles: suspendedCycles)
+				return PendingStop.of(thread.id, kind: StopKind.registers, programCounter: self.scratch.word(MachStateProgramCounterSlot), framePointer: self.scratch.word(MachStateFramePointerSlot), stackPointer: self.scratch.word(MachStateStackPointerSlot), linkRegister: LinkRegister.holds(self.scratch.word(MachStateLinkRegisterSlot)), copied: windowBytes as RegisterWord, serial: serial, cycles: suspendedCycles)
 			end 'stopThread'
 		#endif
 
@@ -1009,7 +1137,7 @@
 					return PendingStop.unreadable(thread.id, serial: serial, cycles: suspendedCycles)
 				end 'nothingToRead'
 
-				return PendingStop.of(thread.id, kind: StopKind.registers, programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, copied: copied, serial: serial, cycles: suspendedCycles)
+				return PendingStop.of(thread.id, kind: StopKind.registers, programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: LinkRegister.absent, copied: copied, serial: serial, cycles: suspendedCycles)
 			end 'stopThread'
 
 			function canBeTraced() returns TraceProbe
@@ -1148,17 +1276,50 @@
 		end 'modules'
 
 		#if os(Macos)
-			function listedModules() returns SampledModuleArray
-				var modules = SampledModuleArray.create(0)
+			function dyldImageList() returns DyldImageList
 				_ = self.nextCapture()
 				self.scratch.setWord(MachCountSlot, value: MachTaskDyldInfoWords)
 
 				if __Builtins.profileMachTaskInfo(self.process.handle() as RegisterWord, MachTaskDyldInfo, self.scratch.addressOf(MachDyldInfoSlot), self.scratch.addressOf(MachCountSlot)) != MachSuccess or not self.readRemote(self.scratch.word(MachDyldInfoSlot), windowOffset: 0, count: MachImageInfoHeaderBytes) 'noImageList'
-					return modules
+					return DyldImageList.stillLoading
 				end 'noImageList'
 
-				let imageCount = self.window.word(0) shr MachHighHalfShift
-				let imageArray = self.window.word(MachImageArrayOffset)
+				// Until libSystem initialises, the list can hold only the executable, and every library address
+				// would then read as outside the program's images.
+				if ((self.window.word(MachLibSystemFlagsOffset) shr MachLibSystemInitializedShift) and MachByteMask) == 0 'libSystemUninitialized'
+					return DyldImageList.stillLoading
+				end 'libSystemUninitialized'
+
+				return DyldImageList.listed(self.window.word(0) shr MachHighHalfShift, array: self.window.word(MachImageArrayOffset))
+			end 'dyldImageList'
+
+			function listedModules() returns SampledModuleArray
+				return match self.dyldImageList() 'images'
+					stillLoading gives SampledModuleArray.create(0)
+					listed(count, array) gives self.loadedImages(count, imageArray: array)
+				end 'images'
+			end 'listedModules'
+
+			// `absent` is not kept, so the next stop asks again. Answering it before libSystem initialises
+			// is sound: the runtime installs its SIGURG handler in `mrt_runtime_init`, which `mrt_start`
+			// calls before `main` and after dyld has initialised libSystem, so no thread can be at the
+			// trampoline yet.
+			function placedTrampoline() returns SignalTrampoline
+				match self.dyldImageList() 'images'
+					stillLoading then return SignalTrampoline.absent
+					listed(count, array) then return self.locatedOrUnplaced(self.loadedImages(count, imageArray: array))
+				end 'images'
+			end 'placedTrampoline'
+
+			function locatedOrUnplaced(modules SampledModuleArray) returns SignalTrampoline
+				let code = try self.locatedTrampoline(modules) otherwise return SignalTrampoline.unplaced
+				self.trampoline = TrampolineLocation.located(code)
+
+				return code
+			end 'locatedOrUnplaced'
+
+			function loadedImages(imageCount RegisterWord, imageArray RegisterWord) returns SampledModuleArray
+				var modules = SampledModuleArray.create(0)
 				var index = 0 as RegisterWord
 
 				while index < imageCount and index < MachMaxModules 'eachImage'
@@ -1182,7 +1343,7 @@
 				end 'eachImage'
 
 				return modules
-			end 'listedModules'
+			end 'loadedImages'
 		#endif
 
 		#if os(Windows) and arch(x64)
@@ -1233,37 +1394,166 @@
 		#endif
 
 		#if os(Macos)
-			function machTextExtent(base RegisterWord) returns RegisterWord
+			function machReadCommands(base RegisterWord) returns RegisterWord throws SamplerError
 				if not self.readRemote(base, windowOffset: 0, count: MachHeaderBytes) 'noHeader'
-					return 0
+					throw SamplerError.moduleListUnavailable
 				end 'noHeader'
 
 				let commandBytes = self.window.word(MachHeaderCommandsWord) shr MachHighHalfShift
 
 				if commandBytes > MachMaxCommandBytes or not self.readRemote(base + MachHeaderBytes, windowOffset: MachHeaderBytes, count: commandBytes) 'noCommands'
-					return 0
+					throw SamplerError.moduleListUnavailable
 				end 'noCommands'
 
+				return commandBytes
+			end 'machReadCommands'
+
+			function machCommandWord(wanted MachCommandWanted, commandBytes RegisterWord, field RegisterWord) returns RegisterWord throws SamplerError
 				var offset = MachHeaderBytes as RegisterWord
 
 				while offset < MachHeaderBytes + commandBytes 'eachCommand'
 					let command = self.window.word(offset as ScratchOffset)
-					let kind = command and MachLowHalfMask
 					let size = command shr MachHighHalfShift
 
 					if size == 0 'malformed'
-						return 0
+						throw SamplerError.moduleListUnavailable
 					end 'malformed'
 
-					if kind == MachLoadCommandSegment64 and self.window.word((offset + MachSegmentNameOffset) as ScratchOffset) == MachTextSegmentNameWord 'theTextSegment'
-						return self.window.word((offset + MachSegmentSizeOffset) as ScratchOffset)
-					end 'theTextSegment'
+					if self.machCommandIs(wanted, kind: command and MachLowHalfMask, offset: offset) 'theWantedCommand'
+						return self.window.word((offset + field) as ScratchOffset)
+					end 'theWantedCommand'
 
 					offset = offset + size
 				end 'eachCommand'
 
-				return 0
+				throw SamplerError.moduleListUnavailable
+			end 'machCommandWord'
+
+			function machCommandIs(wanted MachCommandWanted, kind RegisterWord, offset RegisterWord) returns bool
+				return match wanted 'which'
+					ofKind(wantedKind) gives kind == wantedKind
+					segment(firstName, secondName) gives kind == MachLoadCommandSegment64 and self.window.word((offset + MachSegmentNameOffset) as ScratchOffset) == firstName and self.window.word((offset + MachSegmentSecondNameOffset) as ScratchOffset) == secondName
+				end 'which'
+			end 'machCommandIs'
+
+			function machTextExtent(base RegisterWord) returns RegisterWord
+				let commandBytes = try self.machReadCommands(base) otherwise return 0
+
+				return try self.machCommandWord(MachCommandWanted.segment(MachTextSegmentNameWord, secondName: 0), commandBytes: commandBytes, field: MachSegmentSizeOffset) otherwise 0
 			end 'machTextExtent'
+
+			function locatedTrampoline(modules SampledModuleArray) returns SignalTrampoline throws SamplerError
+				for module in modules 'eachModule'
+					if module.name == MachSignalLibraryName 'theSignalLibrary'
+						return try self.machFunctionSpan(module.base, name: MachSignalTrampolineSymbol)
+					end 'theSignalLibrary'
+				end 'eachModule'
+
+				throw SamplerError.moduleListUnavailable
+			end 'locatedTrampoline'
+
+			function machFunctionSpan(base RegisterWord, name String) returns SignalTrampoline throws SamplerError
+				let commandBytes = try self.machReadCommands(base)
+				let text = MachCommandWanted.segment(MachTextSegmentNameWord, secondName: 0)
+				let textAddress = try self.machCommandWord(text, commandBytes: commandBytes, field: MachSegmentAddressOffset)
+				let textSize = try self.machCommandWord(text, commandBytes: commandBytes, field: MachSegmentSizeOffset)
+				let linkEdit = MachCommandWanted.segment(MachLinkEditFirstNameWord, secondName: MachLinkEditSecondNameWord)
+				let linkEditAddress = try self.machCommandWord(linkEdit, commandBytes: commandBytes, field: MachSegmentAddressOffset)
+				let linkEditFileOffset = try self.machCommandWord(linkEdit, commandBytes: commandBytes, field: MachSegmentFileOffsetOffset)
+				let symbolTable = MachCommandWanted.ofKind(MachLoadCommandSymbolTable)
+				let tableLocation = try self.machCommandWord(symbolTable, commandBytes: commandBytes, field: MachSymbolTableLocationOffset)
+				let stringsLocation = try self.machCommandWord(symbolTable, commandBytes: commandBytes, field: MachSymbolTableStringsOffset)
+				let startsLocation = try self.machCommandWord(MachCommandWanted.ofKind(MachLoadCommandFunctionStarts), commandBytes: commandBytes, field: MachFunctionStartsLocationOffset)
+				let slide = base - textAddress
+				let linkEditBase = linkEditAddress + slide - linkEditFileOffset
+				let start = try self.machSymbolValue(linkEditBase + (tableLocation and MachLowHalfMask), symbolCount: tableLocation shr MachHighHalfShift, strings: linkEditBase + (stringsLocation and MachLowHalfMask), name: name)
+				let limit = try self.machNextFunctionStart(linkEditBase + (startsLocation and MachLowHalfMask), byteCount: startsLocation shr MachHighHalfShift, textAddress: textAddress, after: start, textLimit: textAddress + textSize)
+
+				return SignalTrampoline.spanning(start + slide, limit: limit + slide)
+			end 'machFunctionSpan'
+
+			// The trampoline ends at the next entry of `LC_FUNCTION_STARTS`, never the next symbol: the
+			// symbol table need not list the function that follows, so the next symbol can lie past it and
+			// the span would swallow its samples.
+			function machNextFunctionStart(starts RegisterWord, byteCount RegisterWord, textAddress RegisterWord, after RegisterWord, textLimit RegisterWord) returns RegisterWord throws SamplerError
+				if byteCount > SampleWindowBytes or not self.readRemote(starts, windowOffset: 0, count: byteCount) 'unreadableStarts'
+					throw SamplerError.moduleListUnavailable
+				end 'unreadableStarts'
+
+				var address = textAddress
+				var delta = 0 as RegisterWord
+				var shift = 0 as MachUlebShift
+
+				for byte in self.window.bytesAt(0, count: byteCount as DebuggeeByteCount) 'eachByte'
+					delta = delta or (((byte as RegisterWord) and MachUlebPayloadMask) shl shift)
+
+					if ((byte as RegisterWord) and MachUlebContinuation) != 0 'deltaContinues'
+						if shift >= MachUlebMaxShift 'overlong'
+							throw SamplerError.moduleListUnavailable
+						end 'overlong'
+
+						shift = (shift + MachUlebPayloadBits) as MachUlebShift
+						continue
+					end 'deltaContinues'
+
+					address = address + delta
+
+					if address > after 'theNextFunction'
+						return address
+					end 'theNextFunction'
+
+					delta = 0
+					shift = 0
+				end 'eachByte'
+
+				if shift != 0 'truncatedDelta'
+					throw SamplerError.moduleListUnavailable
+				end 'truncatedDelta'
+
+				return textLimit
+			end 'machNextFunctionStart'
+
+			function machSymbolValue(table RegisterWord, symbolCount RegisterWord, strings RegisterWord, name String) returns RegisterWord throws SamplerError
+				let terminated = name.toByteArray()
+				terminated.push(0)
+				var first = 0 as RegisterWord
+
+				while first < symbolCount 'eachBatch'
+					let batch = MachSymbolsPerRead if symbolCount - first > MachSymbolsPerRead else symbolCount - first
+
+					if not self.readRemote(table + first * MachSymbolEntryBytes, windowOffset: 0, count: batch * MachSymbolEntryBytes) 'unreadableTable'
+						throw SamplerError.moduleListUnavailable
+					end 'unreadableTable'
+
+					for entry in 0 upto batch 'eachSymbol'
+						let entryOffset = (entry * MachSymbolEntryBytes) as ScratchOffset
+						let identity = self.window.word(entryOffset)
+						let symbolType = (identity shr MachSymbolTypeShift) and MachByteMask
+
+						if (symbolType and MachSymbolTypeMask) != MachSymbolInSection 'notInASection'
+							continue
+						end 'notInASection'
+
+						let value = self.window.word(entryOffset + MachSymbolValueOffset)
+
+						if self.machNameIs(strings + (identity and MachLowHalfMask), terminated: terminated) 'theWantedSymbol'
+							return value
+						end 'theWantedSymbol'
+					end 'eachSymbol'
+
+					first = first + batch
+				end 'eachBatch'
+
+				throw SamplerError.moduleListUnavailable
+			end 'machSymbolValue'
+
+			function machNameIs(address RegisterWord, terminated ByteArray) returns bool
+				if not self.readRemote(address, windowOffset: MachSymbolNameWindowOffset, count: terminated.count() as RegisterWord) 'unreadable'
+					return false
+				end 'unreadable'
+
+				return self.window.bytesAt(MachSymbolNameWindowOffset as ScratchOffset, count: terminated.count() as DebuggeeByteCount).equals(terminated)
+			end 'machNameIs'
 
 			function machBaseName(path RegisterWord) returns String
 				var name = ByteArray.create(0)

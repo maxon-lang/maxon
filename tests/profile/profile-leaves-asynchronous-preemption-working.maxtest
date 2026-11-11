@@ -1,5 +1,3 @@
-let OneProcessor = "MAXON_MAX_PROCS=1"
-let FastestSampling = "--rate=10000"
 let EchoedLinePrefix = "echoed"
 let BurnedLinePrefix = "burned"
 
@@ -8,14 +6,14 @@ test 'a service that never yields is still preempted for the whole of a profile'
 	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: PreemptionFixtureName)
 
 	var arguments = StringArray.create(0)
-	arguments.push("{TargetEnvFlagPrefix}{OneProcessor}")
-	arguments.push(FastestSampling)
+	arguments.push("{TargetEnvFlagPrefix}{OneProcessorPin}")
+	arguments.push(FastestSamplingFlag)
 
 	let run = runProfiler(staged, extraArguments: arguments)
-	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {FastestSampling}` did not complete a measurement of the preemption fixture. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {FastestSamplingFlag}` did not complete a measurement of the preemption fixture. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
 
 	let finished = firstFinisher(outputLines(run.stderr))
-	Expect.equal(finished, expected: EchoedLinePrefix, message: "the burner finished before the echo service had answered its messages, though the fixture lets the echo service run only when the burner is preempted off the one processor `{OneProcessor}` leaves. A profile that stops the burner's thread to sample it must still deliver the preemption signal the runtime sent it; one that discards the signal leaves that machine un-preemptable for the rest of the run. The program wrote to stderr:{LineFeed}{run.stderr}")
+	Expect.equal(finished, expected: EchoedLinePrefix, message: "the burner finished before the echo service had answered its messages, though the fixture lets the echo service run only when the burner is preempted off the one processor `{OneProcessorPin}` leaves. A profile that stops the burner's thread to sample it must still deliver the preemption signal the runtime sent it; one that discards the signal leaves that machine un-preemptable for the rest of the run. The program wrote to stderr:{LineFeed}{run.stderr}")
 
 	discardStagedDir(staged)
 end 'a service that never yields is still preempted for the whole of a profile'

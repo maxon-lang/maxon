@@ -1,0 +1,31 @@
+test 'every stack of a preempted green-thread program is named by a frame of the program'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-a-preempted-green-thread-is-sampled-as-itself", fixture: GreenThreadsFixtureName)
+	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: GreenThreadsFixtureName)
+
+	var arguments = StringArray.create(0)
+	arguments.push(FastestSamplingFlag)
+	arguments.push("{TargetEnvFlagPrefix}{TwoProcessorPin}")
+
+	let run = runProfiler(staged, extraArguments: arguments)
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {FastestSamplingFlag} {TargetEnvFlagPrefix}{TwoProcessorPin}` did not complete a measurement of the green-thread fixture. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+
+	let lines = outputLines(run.stdout)
+	Expect.isTrue(reportHasLine(lines, wanted: StacksHeader), message: "the report carries no '{StacksHeader}' section. It printed:{LineFeed}{run.stdout}")
+
+	let synthetic = syntheticallyNamed(rowNames(sectionRows(lines, header: StacksHeader)))
+	Expect.isTrue(synthetic.isEmpty(), message: "'{StacksHeader}' lists {synthetic.count()} stack(s) named by a frame the profile could not name. A stack is named by its outermost named frame, so one whose every frame is synthetic is a sample walked from somewhere no program frame is reachable from: a thread suspended as the runtime's preemption signal was delivered, walked from the signal stack instead of the stack the signal interrupted. That sample belongs to the green thread it interrupted. They were:{LineFeed}{terminatedLines(synthetic)}{LineFeed}The whole report was:{LineFeed}{run.stdout}")
+
+	discardStagedDir(staged)
+end 'every stack of a preempted green-thread program is named by a frame of the program'
+
+function syntheticallyNamed(names StringArray) returns StringArray
+	var found = StringArray.create(0)
+
+	for name in names 'eachName'
+		if name.startsWith(SyntheticFramePrefix) 'synthetic'
+			found.push(name)
+		end 'synthetic'
+	end 'eachName'
+
+	return found
+end 'syntheticallyNamed'

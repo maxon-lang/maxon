@@ -15,6 +15,10 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- `SamplerError` has the case `signalTrampolineUnavailable`, which `SampledProcess.cycles` and `capture` throw
+  on macOS, so a `match` over `SamplerError` that names every case no longer covers it.
+  Fix: add a `signalTrampolineUnavailable` arm to each such `match`.
+
 - A type that declares two fields of one name is E3006 (`Duplicate field 'count' in type 'Counter'`), reported
   at the second; the type keeps the first.
   Fix: rename or remove the repeated field.

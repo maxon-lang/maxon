@@ -42,10 +42,7 @@ let QuieterTaskName = "spinB"
 // have produced.
 let SchedulerWorkerLoopName = "__sched_worker_loop"
 
-// How many worker processors the scheduler is pinned to, and how many stacks the fixture therefore runs: one
-// per green thread. Two and not more — a third worker would add park/wake traffic that says nothing about
-// the profiler.
-let PinnedProcessorCount = "MAXON_MAX_PROCS=2"
+// How many stacks the fixture runs under `TwoProcessorPin`: one per green thread.
 let GreenThreadStackCount = 2
 
 let MaxRuntimeShareDivisor = 4
@@ -55,10 +52,10 @@ test 'two green threads are profiled as themselves and the scheduler is not'
 	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: GreenThreadsFixtureName)
 
 	var pinned = StringArray.create(0)
-	pinned.push("{TargetEnvFlagPrefix}{PinnedProcessorCount}")
+	pinned.push("{TargetEnvFlagPrefix}{TwoProcessorPin}")
 
 	let run = runProfiler(staged, extraArguments: pinned)
-	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {TargetEnvFlagPrefix}{PinnedProcessorCount}` did not complete a measurement of the green-thread fixture. `{TargetEnvFlagPrefix}` is the only way to pin the scheduler's worker count, and without it this profile measures the host as much as the program. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {TargetEnvFlagPrefix}{TwoProcessorPin}` did not complete a measurement of the green-thread fixture. `{TargetEnvFlagPrefix}` is the only way to pin the scheduler's worker count, and without it this profile measures the host as much as the program. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
 
 	let lines = outputLines(run.stdout)
 	Expect.isFalse(reportHasLineStartingWith(lines, prefix: TooFewSamplesPrefix), message: "the profiler reported too few samples to rank anything, so the ordering of the two green threads below would be a coin flip. It printed:{LineFeed}{run.stdout}")
@@ -85,7 +82,7 @@ test 'two green threads are profiled as themselves and the scheduler is not'
 	// ⭐ CLAIM 2 — two stacks, because two green threads ran. Nothing enumerated them; their stack allocations
 	// did.
 	let stackNames = rowNames(significantRows(sectionRows(lines, header: StacksHeader), totalSamples: samples))
-	Expect.equal(stackNames.count(), expected: GreenThreadStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor, and the fixture runs {GreenThreadStackCount} green threads on {PinnedProcessorCount}. ONE would mean both tasks were folded onto the worker that happened to run them, which is the whole failure this case exists to catch. It listed:{LineFeed}{terminatedLines(stackNames)}")
+	Expect.equal(stackNames.count(), expected: GreenThreadStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor, and the fixture runs {GreenThreadStackCount} green threads on {TwoProcessorPin}. ONE would mean both tasks were folded onto the worker that happened to run them, which is the whole failure this case exists to catch. It listed:{LineFeed}{terminatedLines(stackNames)}")
 
 	// ⭐ CLAIM 3 — the scheduler nowhere, and its own samples on the `runtime:` line.
 	Expect.isFalse(withoutCarriageReturns(run.stdout).contains(SchedulerWorkerLoopName), message: "`{SchedulerWorkerLoopName}` appears in the profile. It is the loop a worker runs BETWEEN green threads, and a sampler that attributed a task's samples to it would report every Maxon program as spending its life in the scheduler — burying the work under the machinery that dispatched it. The symbol is in this fixture's own sidecar, so naming it is something the profiler can do and must not. It printed:{LineFeed}{run.stdout}")

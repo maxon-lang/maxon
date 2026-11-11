@@ -88,8 +88,9 @@
 		var ends as ProfileWordArray
 		var names as ProfileStringArray
 		var fileTypes as ProfileWordArray
+		export let signalTrampoline as SignalTrampoline
 
-		static function over(modules SampledModuleArray) returns ProfileModuleMap
+		static function over(modules SampledModuleArray, signalTrampoline SignalTrampoline) returns ProfileModuleMap
 			var starts = ProfileWordArray.create(modules.count(), zeroed: false)
 			var ends = ProfileWordArray.create(modules.count(), zeroed: false)
 			var names = ProfileStringArray.create(modules.count(), zeroed: false)
@@ -102,7 +103,7 @@
 				fileTypes.push(loaded.fileType)
 			end 'eachModule'
 
-			return Self{starts: starts, ends: ends, names: names, fileTypes: fileTypes}
+			return Self{starts: starts, ends: ends, names: names, fileTypes: fileTypes, signalTrampoline: signalTrampoline}
 		end 'over'
 
 		// Where the executable was loaded: the first module of a Toolhelp walk on Windows, the image whose
@@ -244,8 +245,18 @@
 	// reads the CALLER's frame pointer, so that one sample attributes the leaf correctly and misses its
 	// immediate caller. It is a per-sample error of one frame over a window of one or two instructions per
 	// call, and it does not accumulate.
-	function walkProfileFrames(frames ProfileStringArray, image ProfileImage, leafPc RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, window StackWindow) returns ProfileWalk
+	function walkProfileFrames(frames ProfileStringArray, image ProfileImage, leafPc RegisterWord, linkRegister LinkRegister, framePointer RegisterWord, stackPointer RegisterWord, window StackWindow) returns ProfileWalk
 		frames.clear()
+
+		let signalTrampoline = image.modules.signalTrampoline
+
+		// A stop at the trampoline's entry arrives with the interrupted context already recovered by
+		// `__prof_mach_sample`, so a pc still inside it is the runtime delivering a signal. The link
+		// register catches the `__sigreturn` stub, a leaf that pushes no frame and is called from the
+		// trampoline.
+		if signalTrampoline.contains(leafPc) or linkRegister.isWithin(signalTrampoline) 'insideSignalDelivery'
+			return ProfileWalk.signalDelivery()
+		end 'insideSignalDelivery'
 
 		var ranTheProgram = false
 		var sawOurCode = false
@@ -301,6 +312,12 @@
 					ranTheProgram = true
 				end 'aProgramFrame'
 			end 'ourCode' else 'foreignCode'
+				// A return into the trampoline below every program frame is the runtime's signal handler
+				// running on the signal stack.
+				if signalTrampoline.contains(returnAddress) and not ranTheProgram 'signalDeliveryAbove'
+					return ProfileWalk.signalDelivery()
+				end 'signalDeliveryAbove'
+
 				if not SampledProcess.foreignCodeKeepsTheFrameChain() 'endOfOurCode'
 					return ProfileWalk.of(false, rootFrame: fp, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
 				end 'endOfOurCode'
@@ -394,11 +411,15 @@
 		end 'create'
 
 		function loadedModules() returns ProfileModuleMap throws SamplerError
-			return ProfileModuleMap.over(try self.process.modules())
+			let modules = try self.process.modules()
+
+			let signalTrampoline = try self.process.signalTrampoline().placed()
+
+			return ProfileModuleMap.over(modules, signalTrampoline: signalTrampoline)
 		end 'loadedModules'
 
 		function cyclesOf(thread SampledThread) returns RegisterWord
-			return (try self.process.cycles(thread) otherwise panic("ProfileSession.cyclesOf: every thread this session reads was handed out by its own process and is released only by this session")) as RegisterWord
+			return (try self.process.cycles(thread) otherwise panic("ProfileSession.cyclesOf: every thread this session reads was handed out by its own process and is released only by this session, and the image load that precedes the first read placed the signal trampoline")) as RegisterWord
 		end 'cyclesOf'
 
 		function tracks(id SampledThreadId) returns bool
@@ -510,7 +531,7 @@
 
 		// One captured stack, carrying `charges` samples. `gone` means the thread has exited and should be dropped.
 		function sampleThread(thread SampledThread, charges ProfileCharges, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns ProfileThreadSample
-			let capture = try self.process.capture(thread) otherwise panic("ProfileSession.sampleThread: every thread this session samples was handed out by its own process and is released only by this session")
+			let capture = try self.process.capture(thread) otherwise panic("ProfileSession.sampleThread: every thread this session samples was handed out by its own process and is released only by this session, and the image load that precedes the first sample placed the signal trampoline")
 
 			return match capture 'captured'
 				threadGone gives ProfileThreadSample.gone
@@ -531,7 +552,7 @@
 		// symbolizing needs the target held, and holding it would multiply the suspension by the stack's
 		// depth.
 		function chargedWithStack(stack SampledStack, thread SampledThread, charges ProfileCharges, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns ProfileThreadSample
-			let walk = walkProfileFrames(frames, image: image, leafPc: stack.programCounter, framePointer: stack.framePointer, stackPointer: stack.stackPointer, window: stack.window)
+			let walk = walkProfileFrames(frames, image: image, leafPc: stack.programCounter, linkRegister: stack.linkRegister, framePointer: stack.framePointer, stackPointer: stack.stackPointer, window: stack.window)
 			let hadNoChain = stack.window.byteCount() == 0
 
 			if walk.runtimeOnly 'theRuntimesOwnMachinery'
@@ -562,6 +583,10 @@
 		static function of(lostItsRoot bool, rootFrame RegisterWord, sawOurCode bool, ranTheProgram bool) returns ProfileWalk
 			return Self{lostItsRoot: lostItsRoot, rootFrame: rootFrame, runtimeOnly: sawOurCode and not ranTheProgram}
 		end 'of'
+
+		static function signalDelivery() returns ProfileWalk
+			return Self{lostItsRoot: false, rootFrame: 0, runtimeOnly: true}
+		end 'signalDelivery'
 	end 'ProfileWalk'
 
 	function profileStackIdentity(reservation StackReservation, thread SampledThread) returns ProfileStackBase
@@ -589,15 +614,32 @@
 	end 'profileThreadIdsContain'
 
 	let ProfileModuleListUnreadableReason = "the program's loaded images could not be listed, so its code cannot be placed"
+	let ProfileSignalTrampolineUnplacedReason = "the system's signal trampoline could not be located in the program's loaded images, so a thread stopped while a signal was being delivered to it could not be told apart from the program"
 
 	module function profileImageFor(session ProfileSession, sidecar MxdbgReader, textBytes DebugAddress) returns ProfileImageLoad
-		let modules = try session.loadedModules() otherwise return ProfileImageLoad.refused(ProfileModuleListUnreadableReason)
+		let modules = try session.loadedModules() otherwise (e) 'unplaced'
+			return ProfileImageLoad.refused(profileModuleRefusalReason(e))
+		end 'unplaced'
 
 		return match executablePlacementOf(sidecar.target, location: modules.executableLocation(sidecar.target)) 'placed'
 			refused(reason) gives ProfileImageLoad.refused(reason)
 			ready(placement) gives ProfileImageLoad.loaded(profileImageAt(sidecar, textBytes: textBytes, placement: placement, modules: modules))
 		end 'placed'
 	end 'profileImageFor'
+
+	function profileModuleRefusalReason(failure SamplerError) returns String
+		match failure 'why'
+			signalTrampolineUnavailable then return ProfileSignalTrampolineUnplacedReason
+			moduleListUnavailable then return ProfileModuleListUnreadableReason
+			noSuchProcess or
+			noScratch or
+			unknownThread or
+			outOfWindow or
+			callingThread or
+			accessDenied or
+			threadNotPinned then panic("profileModuleRefusalReason: ProfileSession.loadedModules refuses only an unlistable image list or an unplaced signal trampoline")
+		end 'why'
+	end 'profileModuleRefusalReason'
 
 	function profileImageAt(sidecar MxdbgReader, textBytes DebugAddress, placement BackendImagePlacement, modules ProfileModuleMap) returns ProfileImage
 		let contract = DebugRuntimeContract.readFrom(sidecar, textBytes: textBytes, placement: placement)

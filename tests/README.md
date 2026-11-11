@@ -544,6 +544,7 @@ tests/
     profile-hot-ordering.maxtest            the busier function ranks first in every section
     profile-folded.maxtest                  collapsed stacks carry every path, whatever the floor
     profile-greenthreads.maxtest            two green threads as themselves, the scheduler absent
+    profile-a-preempted-green-thread-is-sampled-as-itself.maxtest   at the fastest rate on two processors, no stack of the green-thread fixture is named by a synthetic frame
     profile-leaves-asynchronous-preemption-working.maxtest   a one-processor program whose burner never yields still preempts it to run its echo service while it is profiled
     profile-ordinary-build-has-no-entitlement.maxtest    an ordinary arm64-macos build names no `get-task-allow`
     profile-runs-an-ordinary-build.maxtest               an ordinary build is measured with no flag and no rebuild

@@ -48,6 +48,7 @@
 	export typealias ProfileNodeArray = Array with ProfileNode
 	export typealias ProfileStackArray = Array with ProfileStackRow
 	typealias ProfileTallyMap = Map with (String, ProfileTally)
+	typealias ProfileStackMap = Map with (ProfileStackBase, ProfileStackRow)
 	typealias ElementIndexArray = Array with ElementIndex
 
 	// ⭐ **THE ONE CONVENTION FOR A FRAME THE PROFILE COULD NOT NAME: IT IS WRITTEN IN BRACKETS.** No function
@@ -224,7 +225,7 @@
 		var totalByName as ProfileTallyMap
 		var pathTotal as ProfileTallyMap
 		var pathSelf as ProfileTallyMap
-		var stackTotal as ProfileTallyMap
+		var stacks as ProfileStackMap
 		var samples as ProfileTally
 		var captures as ProfileTally
 		var unsymbolized as ProfileTally
@@ -233,7 +234,7 @@
 		var truncated as ProfileTally
 
 		export static function create() returns ProfileAccumulator
-			return Self{selfByName: ProfileTallyMap.create(), totalByName: ProfileTallyMap.create(), pathTotal: ProfileTallyMap.create(), pathSelf: ProfileTallyMap.create(), stackTotal: ProfileTallyMap.create(), samples: 0, captures: 0, unsymbolized: 0, inRuntime: 0, unreadable: 0, truncated: 0}
+			return Self{selfByName: ProfileTallyMap.create(), totalByName: ProfileTallyMap.create(), pathTotal: ProfileTallyMap.create(), pathSelf: ProfileTallyMap.create(), stacks: ProfileStackMap.create(), samples: 0, captures: 0, unsymbolized: 0, inRuntime: 0, unreadable: 0, truncated: 0}
 		end 'create'
 
 		// ⭐ Accept ONE captured stack, carrying `charged` samples — the ticks of CPU its thread was charged when
@@ -277,8 +278,22 @@
 			end 'eachPrefix'
 
 			bumpProfileTally(self.pathSelf, key: path, by: weight)
-			bumpProfileTally(self.stackTotal, key: "{stackIdentity}{ProfilePathSeparator}{profileOutermostNamedFrame(frames)}", by: weight)
+			self.countStack(stackIdentity, weight: weight, candidate: profileOutermostNamedFrame(frames))
 		end 'accept'
+
+		// Keyed by the stack alone: samples of one stack can name different roots (on Windows a green
+		// thread sampled in ntdll), and keying by the name would split that stack into several rows.
+		function countStack(stack ProfileStackBase, weight ProfileTally, candidate String)
+			if let row = try self.stacks.get(stack) 'alreadyCounted'
+				row.samples = row.samples + weight
+
+				if profileStackNameOutranks(candidate, current: row.rootFunction) 'betterName'
+					row.rootFunction = candidate
+				end 'betterName'
+			end 'alreadyCounted' else 'firstSample'
+				self.stacks.upsert(stack, value: ProfileStackRow.create(candidate, samples: weight))
+			end 'firstSample'
+		end 'countStack'
 
 		export function acceptRuntime(charged ProfileCharges, lostItsRoot bool, hadNoChain bool)
 			let weight = self.countCapture(charged, lostItsRoot: lostItsRoot, hadNoChain: hadNoChain)
@@ -296,7 +311,7 @@
 		end 'countCapture'
 
 		export function finish(exePath String, targetStatus ProfileTargetStatus, runCompleted bool, requestedRateHz ProfileRate, ticks ProfileTally, durationSeconds ProfileSeconds, minPercent ProfileShare) returns ProfileReport
-			return ProfileReport.create(exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: self.samples, captures: self.captures, samplesUnsymbolized: self.unsymbolized, samplesInRuntime: self.inRuntime, stacksUnreadable: self.unreadable, stacksTruncated: self.truncated, minPercent: minPercent, functions: rankedProfileFunctions(self.selfByName, totals: self.totalByName), nodes: rankedProfileNodes(self.pathTotal, leaves: self.pathSelf), stacks: rankedProfileStacks(self.stackTotal))
+			return ProfileReport.create(exePath, targetStatus: targetStatus, runCompleted: runCompleted, requestedRateHz: requestedRateHz, ticks: ticks, durationSeconds: durationSeconds, samples: self.samples, captures: self.captures, samplesUnsymbolized: self.unsymbolized, samplesInRuntime: self.inRuntime, stacksUnreadable: self.unreadable, stacksTruncated: self.truncated, minPercent: minPercent, functions: rankedProfileFunctions(self.selfByName, totals: self.totalByName), nodes: rankedProfileNodes(self.pathTotal, leaves: self.pathSelf), stacks: rankedProfileStacks(self.stacks))
 		end 'finish'
 	end 'ProfileAccumulator'
 
@@ -326,6 +341,17 @@
 		return try frames.get(0) otherwise ProfileUnreadableStackFrame
 	end 'profileOutermostNamedFrame'
 
+	// A total order, so the name a stack's row ends with does not depend on the order of its samples.
+	function profileStackNameOutranks(candidate String, current String) returns bool
+		let candidateIsNamed = not profileFrameIsSynthetic(candidate)
+
+		if candidateIsNamed != (not profileFrameIsSynthetic(current)) 'oneIsNamed'
+			return candidateIsNamed
+		end 'oneIsNamed'
+
+		return compareBytesOrdinally(candidate.toByteArray(), right: current.toByteArray()) == Ordering.lessThan
+	end 'profileStackNameOutranks'
+
 	function bumpProfileTally(tally ProfileTallyMap, key String, by ProfileTally)
 		tally.upsert(key, value: (try tally.get(key) otherwise 0) + by)
 	end 'bumpProfileTally'
@@ -354,11 +380,11 @@
 		return rows
 	end 'rankedProfileFunctions'
 
-	function rankedProfileStacks(stackTotal ProfileTallyMap) returns ProfileStackArray
-		var rows = ProfileStackArray.create(stackTotal.count(), zeroed: false)
+	function rankedProfileStacks(stacks ProfileStackMap) returns ProfileStackArray
+		var rows = ProfileStackArray.create(stacks.count(), zeroed: false)
 
-		for (key, samples) in stackTotal 'eachStack'
-			rows.push(ProfileStackRow.create(profileKeyTail(key), samples: samples))
+		for (_, row) in stacks 'eachStack'
+			rows.push(row)
 		end 'eachStack'
 
 		rows.sortBy(function(left ProfileStackRow, right ProfileStackRow) gives profileRankOrder(left.samples, rightSamples: right.samples, leftName: left.rootFunction, rightName: right.rootFunction))

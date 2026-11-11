@@ -184,12 +184,13 @@ end 'installMachHostRuntime'
 
 export let MachSampleName = b"__prof_mach_sample"
 
-let MachSampleScratchBytes = 40
+let MachSampleScratchBytes = 48
 let MachSampleResultSlot = 0 as SpillSlot
 let MachSampleCountSlot = 1 as SpillSlot
 let MachSampleSizeSlot = 2 as SpillSlot
 let MachSampleCopiedSlot = 3 as SpillSlot
 let MachSampleWantSlot = 4 as SpillSlot
+let MachSampleContextSlot = 5 as SpillSlot
 
 // The whole suspended window as one entry, stack copy included: every path after a successful suspend
 // reaches `resume`. The calling thread is refused first, because a thread that suspends itself never runs
@@ -203,6 +204,11 @@ function buildMachSample(module StdModule, layout HostContextLayout)
 	var suspend = module.addBlock(func, label: b"mssusp", heat: BlockHeat.normal)
 	var callingThread = module.addBlock(func, label: b"msself", heat: BlockHeat.normal)
 	var readState = module.addBlock(func, label: b"msstate", heat: BlockHeat.normal)
+	var terminated = module.addBlock(func, label: b"msterm", heat: BlockHeat.normal)
+	var exitedWhileSuspended = module.addBlock(func, label: b"msgone", heat: BlockHeat.normal)
+	var recoverStart = module.addBlock(func, label: b"msrecov", heat: BlockHeat.normal)
+	var recoverContext = module.addBlock(func, label: b"msctx", heat: BlockHeat.normal)
+	var recoverRegisters = module.addBlock(func, label: b"msregs", heat: BlockHeat.normal)
 	var copyStart = module.addBlock(func, label: b"mscopy", heat: BlockHeat.normal)
 	var copyLoop = module.addBlock(func, label: b"mshead", heat: BlockHeat.normal)
 	var copyStep = module.addBlock(func, label: b"msstep", heat: BlockHeat.normal)
@@ -234,6 +240,8 @@ function buildMachSample(module StdModule, layout HostContextLayout)
 	module.appendOp(entry, op: StdOp.stackRecordAddr(copiedPtr, slot: MachSampleCopiedSlot))
 	let wantPtr = ids.mint()
 	module.appendOp(entry, op: StdOp.stackRecordAddr(wantPtr, slot: MachSampleWantSlot))
+	let contextPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.stackRecordAddr(contextPtr, slot: MachSampleContextSlot))
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let threadGone = emitConst(module, block: entry, value: layout.sampleThreadGone, ids: ids)
@@ -255,7 +263,33 @@ function buildMachSample(module StdModule, layout HostContextLayout)
 	emitStoreField(module, block: readState, record: countPtr, offset: 0, value: emitConst(module, block: readState, value: layout.machThreadStateWords, ids: ids))
 	let stateFlavor = emitConst(module, block: readState, value: layout.machThreadStateFlavor, ids: ids)
 	let gotState = emitHostSample(module, block: readState, service: HostProcessCall.machThreadState, a0: thread, a1: stateFlavor, a2: statePtr, a3: countPtr, a4: zero, a5: zero, ids: ids)
-	emitBranchOnCompare(module, block: readState, value: gotState, pred: StdCmpPred.eq, against: layout.machSuccess, whenTrue: copyStart, whenFalse: readInfo, ids: ids)
+	emitBranchOnCompare(module, block: readState, value: gotState, pred: StdCmpPred.eq, against: layout.machSuccess, whenTrue: recoverStart, whenFalse: terminated, ids: ids)
+
+	emitBranchOnCompare(module, block: terminated, value: gotState, pred: StdCmpPred.eq, against: layout.machObjectTerminated, whenTrue: exitedWhileSuspended, whenFalse: readInfo, ids: ids)
+
+	emitStoreField(module, block: exitedWhileSuspended, record: resultPtr, offset: 0, value: threadGone)
+	module.setTerminator(exitedWhileSuspended, op: StdOp.branch(readInfo.id))
+
+	// A thread suspended as a signal is delivered stops at the trampoline's entry, on the signal
+	// stack, with its fp still the interrupted code's. There the interrupted fp, lr, sp and pc are
+	// read from the signal's ucontext (x4) into the state record before the stack is copied, so the
+	// copy starts at the interrupted sp and the sample is charged to the code the signal interrupted.
+	let programCounter = emitLoadField(module, block: recoverStart, record: statePtr, offset: layout.machStateProgramCounterOffset as ByteOffset, ids: ids)
+	let trampoline = emitLoadField(module, block: recoverStart, record: statePtr, offset: layout.machStateTrampolineOffset as ByteOffset, ids: ids)
+	emitBranchOnCompareValues(module, block: recoverStart, a: programCounter, pred: StdCmpPred.eq, b: trampoline, whenTrue: recoverContext, whenFalse: copyStart, ids: ids, operandType: StdType.u64)
+
+	let signalContext = emitLoadField(module, block: recoverContext, record: statePtr, offset: layout.machStateSignalContextOffset as ByteOffset, ids: ids)
+	let contextPointerAddress = emitBin(module, block: recoverContext, a: signalContext, b: emitConst(module, block: recoverContext, value: layout.machContextPointerOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let pointerBytes = emitConst(module, block: recoverContext, value: MachineWordBytes as FullRangeInt, ids: ids)
+	let readPointer = emitHostSample(module, block: recoverContext, service: HostProcessCall.machReadMemory, a0: task, a1: contextPointerAddress, a2: pointerBytes, a3: contextPtr, a4: sizePtr, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: recoverContext, value: readPointer, pred: StdCmpPred.eq, against: layout.machSuccess, whenTrue: recoverRegisters, whenFalse: copyStart, ids: ids)
+
+	let machineContext = emitLoadField(module, block: recoverRegisters, record: contextPtr, offset: 0, ids: ids)
+	let interruptedRegisters = emitBin(module, block: recoverRegisters, a: machineContext, b: emitConst(module, block: recoverRegisters, value: layout.machContextRegistersOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let registersInState = emitBin(module, block: recoverRegisters, a: statePtr, b: emitConst(module, block: recoverRegisters, value: layout.machStateFramePointerOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let registerBytes = emitConst(module, block: recoverRegisters, value: layout.machContextRegisterBytes, ids: ids)
+	_ = emitHostSample(module, block: recoverRegisters, service: HostProcessCall.machReadMemory, a0: task, a1: interruptedRegisters, a2: registerBytes, a3: registersInState, a4: sizePtr, a5: zero, ids: ids)
+	module.setTerminator(recoverRegisters, op: StdOp.branch(copyStart.id))
 
 	emitStoreField(module, block: copyStart, record: resultPtr, offset: 0, value: zero)
 	emitStoreField(module, block: copyStart, record: copiedPtr, offset: 0, value: zero)

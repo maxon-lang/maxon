@@ -2364,9 +2364,10 @@ A thread is stopped through its thread handle on `x64-windows`, its Mach thread 
 | `SampledProcess.foreignCodeKeepsTheFrameChain()` | `bool` | — | True on macOS and Linux, where a frame-pointer walk may continue through code outside the sampled program; false on Windows. |
 | `threads()` | `SampledThreadArray` | — | Open every thread the process has now. Each stays open until `release` or `close`. |
 | `release(thread SampledThread)` | — | — | Close one thread this sampler opened. |
-| `cycles(thread SampledThread)` | `SampleCycles` | `SamplerError.unknownThread` | CPU time the thread has consumed, in the unit `cyclesAreNanoseconds()` names. On macOS and Linux a running thread is stopped to read it, and the next `capture` of that thread answers from the same stop. |
-| `capture(thread SampledThread)` | `SampleCapture` | `SamplerError.unknownThread`, `.callingThread` | Sample one thread. `unknownThread` refuses a thread `threads()` did not hand out or `release` let go; `callingThread` refuses the thread making the call, which would stop itself. On Linux a thread in uninterruptible sleep answers `unreadable`. |
-| `modules()` | `SampledModuleArray` | `SamplerError.moduleListUnavailable` | The modules loaded in the process: the module snapshot on Windows and the dyld image list on macOS, each retried while it comes back empty, then `moduleListUnavailable`. On macOS an image whose entry cannot be read is left out, so a process that is exiting can answer a partial list. On Linux, whose images are static, an empty array while the process lives. |
+| `cycles(thread SampledThread)` | `SampleCycles` | `SamplerError.unknownThread`, `.signalTrampolineUnavailable` | CPU time the thread has consumed, in the unit `cyclesAreNanoseconds()` names. On macOS and Linux a running thread is stopped to read it, and the next `capture` of that thread answers from the same stop. `signalTrampolineUnavailable`: on macOS the stop needs `signalTrampoline()` and it is `unplaced`. |
+| `capture(thread SampledThread)` | `SampleCapture` | `SamplerError.unknownThread`, `.callingThread`, `.signalTrampolineUnavailable` | Sample one thread. `unknownThread` refuses a thread `threads()` did not hand out or `release` let go; `callingThread` refuses the thread making the call, which would stop itself; `signalTrampolineUnavailable` is thrown on macOS as by `cycles`. On Linux a thread in uninterruptible sleep answers `unreadable`. On macOS a thread stopped at the first instruction of the signal trampoline is captured with the registers of the code the signal interrupted, read from the signal's context, and its stack is copied from that code's stack pointer. |
+| `modules()` | `SampledModuleArray` | `SamplerError.moduleListUnavailable` | The modules loaded in the process: the module snapshot on Windows, retried while it comes back empty, and the dyld image list on macOS, retried until dyld reports libSystem initialised, then `moduleListUnavailable`. On macOS the list therefore holds every image the loader maps before the program's entry point, and an image whose entry cannot be read is left out, so a process that is exiting can answer a partial list. On Linux, whose images are static, an empty array while the process lives. |
+| `signalTrampoline()` | `SignalTrampoline` | — | Where the code a thread runs while a signal is delivered to it lies. On macOS it is libsystem_platform's `_sigtramp`, found in that image's symbol table and ending at the next entry of its function starts; it is kept once located, and is `absent` until libSystem has initialised. `absent` on Windows and Linux. |
 | `close()` | — | — | Close every open thread, the process and the scratch regions. On Linux it detaches every thread it stopped, then unpins the calling green thread; call it on the green thread that opened the sampler. |
 | `clone()` | — | — | Panics: a sampler owns one process's handles, so it is held in one place. |
 
@@ -2380,7 +2381,8 @@ stopped, and stderr carries one line per process:
 | `unreadable(reservation, suspendedCycles)` | The thread was stopped, and its registers were unreadable. |
 | `captured(stack)` | A `SampledStack`. |
 
-A `SampledStack` has `programCounter`, `framePointer` and `stackPointer`; `reservation`, a
+A `SampledStack` has `programCounter`, `framePointer` and `stackPointer`; `linkRegister`, a `LinkRegister`
+that `holds(address)` on macOS and is `absent` on Windows and Linux; `reservation`, a
 `StackReservation`; `suspendedCycles`, the thread's CPU time read while it was stopped; and `window`, a
 `StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` stays readable until the
 sampler's next `capture`: `byteCount()` is the bytes copied, 0 once a later capture has replaced them, and
@@ -2391,6 +2393,16 @@ copy or after a later capture.
 |-------------------------|---------|
 | `base(address)` | The base of the reservation the stack lives in, unique to each live stack. Windows reports it. |
 | `unreported` | The reservation is unknown, as on macOS and Linux. |
+
+| `SignalTrampoline` case | Meaning |
+|-------------------------|---------|
+| `spanning(start, limit)` | The trampoline occupies `[start, limit)`. |
+| `unplaced` | The process has a trampoline that could not be located. |
+| `absent` | Every answer on Windows and Linux, and on macOS until libSystem has initialised. |
+
+`contains(address RegisterWord)` is true when `address` lies in a `spanning` trampoline. `placed()` returns the
+trampoline, throwing `SamplerError.signalTrampolineUnavailable` when it is `unplaced`. `LinkRegister`'s
+`isWithin(code SignalTrampoline)` is true when it `holds` an address `code` contains.
 
 `SampledThread` has a public `id` (`SampledThreadId`). `SampledModule` has `base`, `limit`, `name` and
 `fileType`. On Windows each UTF-16 unit above ASCII in the name reads as `?`, and `fileType` is 0; on macOS
@@ -2411,6 +2423,7 @@ enum SamplerError implements Error
 	unknownThread
 	outOfWindow
 	moduleListUnavailable
+	signalTrampolineUnavailable
 	callingThread
 	accessDenied
 	threadNotPinned

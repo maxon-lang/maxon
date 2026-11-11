@@ -10,19 +10,14 @@
 let HandlerMethodName = "mixRounds"
 let MethodQualifier = "."
 
-let ProfileServiceHandlerIsAttributedAsItselfPinnedProcessorCount = "MAXON_MAX_PROCS=1"
-let SamplingRateArgument = "--rate=10000"
-
 let ProfileServiceHandlerIsAttributedAsItselfMaxRuntimeShareDivisor = 2
-
-let SyntheticFramePrefix = "["
 
 test 'a service handler inlined into its synthesized loop is attributed as itself and a switch is not a stack of its own'
 	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-service-handler-is-attributed-as-itself", fixture: ServiceLoopFixtureName)
 	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: ServiceLoopFixtureName)
 
 	let run = runProfiler(staged, extraArguments: profilerArguments(false))
-	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {SamplingRateArgument} {TargetEnvFlagPrefix}{ProfileServiceHandlerIsAttributedAsItselfPinnedProcessorCount}` did not complete a measurement of the service-loop fixture. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {FastestSamplingFlag} {TargetEnvFlagPrefix}{OneProcessorPin}` did not complete a measurement of the service-loop fixture. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
 
 	let lines = outputLines(run.stdout)
 	Expect.isFalse(reportHasLineStartingWith(lines, prefix: TooFewSamplesPrefix), message: "the profiler reported too few samples to rank anything. It printed:{LineFeed}{run.stdout}")
@@ -48,8 +43,8 @@ end 'a service handler inlined into its synthesized loop is attributed as itself
 
 function profilerArguments(folded bool) returns StringArray
 	var arguments = StringArray.create(0)
-	arguments.push(SamplingRateArgument)
-	arguments.push("{TargetEnvFlagPrefix}{ProfileServiceHandlerIsAttributedAsItselfPinnedProcessorCount}")
+	arguments.push(FastestSamplingFlag)
+	arguments.push("{TargetEnvFlagPrefix}{OneProcessorPin}")
 
 	if folded 'machineFormat'
 		arguments.push(FoldedFlag)

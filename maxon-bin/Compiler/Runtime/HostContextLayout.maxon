@@ -21,6 +21,14 @@ let ProfileSampleCallingThreadName = "ProfileSampleCallingThread"
 
 let MachSuccessName = "MachSuccess"
 let MachStateStackPointerOffsetName = "MachStateStackPointerOffset"
+let MachStateFramePointerOffsetName = "MachStateFramePointerOffset"
+let MachStateProgramCounterOffsetName = "MachStateProgramCounterOffset"
+// x4 of the thread state: the signal's ucontext argument, still in place at the trampoline's entry.
+let MachStateSignalContextOffset = 32
+let MachStateTrampolineOffsetName = "MachStateTrampolineOffset"
+let MachStateLinkRegisterOffsetName = "MachStateLinkRegisterOffset"
+let MachThreadStateCountUnitBytes = 4
+let MachObjectTerminated = 37
 let MachThreadInfoFlavorName = "MachThreadBasicInfo"
 let MachThreadInfoWordsName = "MachThreadBasicInfoWords"
 let StackReadChunkBytesName = "StackReadChunkBytes"
@@ -66,6 +74,14 @@ export type HostContextLayout
 	export var machThreadStateFlavor as FullRangeInt
 	export var machThreadStateWords as FullRangeInt
 	export var machStateStackPointerOffset as FullRangeInt
+	export var machStateFramePointerOffset as FullRangeInt
+	export var machStateProgramCounterOffset as FullRangeInt
+	export var machStateSignalContextOffset as FullRangeInt
+	export var machStateTrampolineOffset as FullRangeInt
+	export var machContextPointerOffset as FullRangeInt
+	export var machContextRegistersOffset as FullRangeInt
+	export var machContextRegisterBytes as FullRangeInt
+	export var machObjectTerminated as FullRangeInt
 	export var machThreadInfoFlavor as FullRangeInt
 	export var machThreadInfoWords as FullRangeInt
 	export var machChunkBytes as FullRangeInt
@@ -133,6 +149,24 @@ export type HostContextLayout
 		self.machThreadStateFlavor = MachArmThreadState64
 		self.machThreadStateWords = MachArmThreadState64Words
 		self.machStateStackPointerOffset = signatures.integerConstantIn(MachStateStackPointerOffsetName, filePath: sampler)
+		self.machStateFramePointerOffset = signatures.integerConstantIn(MachStateFramePointerOffsetName, filePath: sampler)
+		self.machStateProgramCounterOffset = signatures.integerConstantIn(MachStateProgramCounterOffsetName, filePath: sampler)
+		self.machStateSignalContextOffset = MachStateSignalContextOffset
+		self.machStateTrampolineOffset = signatures.integerConstantIn(MachStateTrampolineOffsetName, filePath: sampler)
+		self.machContextPointerOffset = DarwinUcontextOffMcontext as FullRangeInt
+		self.machContextRegistersOffset = DarwinMcontextOffSsFp as FullRangeInt
+		self.machContextRegisterBytes = (DarwinMcontextOffSsPc as FullRangeInt) + (MachineWordBytes as FullRangeInt) - self.machContextRegistersOffset
+		self.machObjectTerminated = MachObjectTerminated
+		let linkRegisterOffset = signatures.integerConstantIn(MachStateLinkRegisterOffsetName, filePath: sampler)
+
+		if (DarwinMcontextOffSsLr as FullRangeInt) - self.machContextRegistersOffset != linkRegisterOffset - self.machStateFramePointerOffset or (DarwinMcontextOffSsSp as FullRangeInt) - self.machContextRegistersOffset != self.machStateStackPointerOffset - self.machStateFramePointerOffset or (DarwinMcontextOffSsPc as FullRangeInt) - self.machContextRegistersOffset != self.machStateProgramCounterOffset - self.machStateFramePointerOffset 'registerRunsDiffer'
+			panic("HostContextLayout.readMachSampler: {SamplerStdlibFileName} lays out the thread state's frame pointer, link register, stack pointer and program counter differently from the `mcontext64` thread state in Arm64FaultRuntime — `__prof_mach_sample` copies that run of registers from a signal context into the state record as one block, so the two layouts must agree")
+		end 'registerRunsDiffer'
+
+		if self.machStateTrampolineOffset < self.machThreadStateWords * MachThreadStateCountUnitBytes 'trampolineInsideState'
+			panic("HostContextLayout.readMachSampler: {SamplerStdlibFileName} puts the trampoline word at {self.machStateTrampolineOffset}, inside the {self.machThreadStateWords * MachThreadStateCountUnitBytes} bytes `thread_get_state` writes, so reading the state would overwrite it")
+		end 'trampolineInsideState'
+
 		self.machThreadInfoFlavor = signatures.integerConstantIn(MachThreadInfoFlavorName, filePath: sampler)
 		self.machThreadInfoWords = signatures.integerConstantIn(MachThreadInfoWordsName, filePath: sampler)
 		self.machChunkBytes = signatures.integerConstantIn(StackReadChunkBytesName, filePath: sampler)
@@ -153,6 +187,6 @@ export type HostContextLayout
 	end 'readPtraceSampler'
 
 	export static function unread() returns HostContextLayout
-		return Self{contextFlagsOffset: 0, contextControl: 0, contextInteger: 0, contextRipOffset: 0, contextRspOffset: 0, contextRbpOffset: 0, suspendThreadFailed: 0, regionRecordBytes: 0, mbiBaseAddressOffset: 0, regionAllocationBaseOffset: 0, mbiRegionSizeOffset: 0, regionSuspendedCyclesOffset: 0, sampleThreadGone: 0, sampleNoRegisters: 0, sampleCallingThread: 0, machSuccess: 0, machThreadStateFlavor: 0, machThreadStateWords: 0, machStateStackPointerOffset: 0, machThreadInfoFlavor: 0, machThreadInfoWords: 0, machChunkBytes: 0, seizedTableBytes: 0, seizedPidOffset: 0, seizedCountOffset: 0, seizedPinOffset: 0, seizedKilledOffset: 0, seizedThreadsOffset: 0, seizedWordBytes: 0, traceKillSignal: 0, ptraceDetach: 0, ptraceInterrupt: 0, traceStopBudgetMillis: 0}
+		return Self{contextFlagsOffset: 0, contextControl: 0, contextInteger: 0, contextRipOffset: 0, contextRspOffset: 0, contextRbpOffset: 0, suspendThreadFailed: 0, regionRecordBytes: 0, mbiBaseAddressOffset: 0, regionAllocationBaseOffset: 0, mbiRegionSizeOffset: 0, regionSuspendedCyclesOffset: 0, sampleThreadGone: 0, sampleNoRegisters: 0, sampleCallingThread: 0, machSuccess: 0, machThreadStateFlavor: 0, machThreadStateWords: 0, machStateStackPointerOffset: 0, machStateFramePointerOffset: 0, machStateProgramCounterOffset: 0, machStateSignalContextOffset: 0, machStateTrampolineOffset: 0, machContextPointerOffset: 0, machContextRegistersOffset: 0, machContextRegisterBytes: 0, machObjectTerminated: 0, machThreadInfoFlavor: 0, machThreadInfoWords: 0, machChunkBytes: 0, seizedTableBytes: 0, seizedPidOffset: 0, seizedCountOffset: 0, seizedPinOffset: 0, seizedKilledOffset: 0, seizedThreadsOffset: 0, seizedWordBytes: 0, traceKillSignal: 0, ptraceDetach: 0, ptraceInterrupt: 0, traceStopBudgetMillis: 0}
 	end 'unread'
 end 'HostContextLayout'

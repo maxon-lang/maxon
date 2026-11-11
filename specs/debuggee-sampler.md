@@ -485,7 +485,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Sampler.maxon:1366: SampleTimer.wait: the timer was closed
+panic at Sampler.maxon:1656: SampleTimer.wait: the timer was closed
 Stack trace:
   in SampleTimer.wait
   in main
@@ -537,6 +537,74 @@ end 'main'
 ```stdout
 threads true
 captured true true
+```
+```exitcode
+0
+```
+
+<!-- test: a-just-spawned-childs-module-list-holds-the-system-library -->
+<!-- unsupported-targets: x64-linux, arm64-linux, wasm32-wasi -->
+<!-- process: own -->
+The program runs itself as a child that sleeps, opens the child the moment it is spawned, without waiting for it to
+say it is ready, and lists its modules at once. The list holds every image the loader maps before the program's entry
+point, so the host's system library is in it: `libsystem_kernel.dylib` on macOS and `kernel32.dll` on Windows, which
+Toolhelp names in capitals. A Linux program is one static image with no loader, and `modules()` there answers an empty
+list, so the case does not run on Linux.
+```maxon
+function systemLibrary() returns String
+	#if os(Macos)
+		return "libsystem_kernel.dylib"
+	#endif
+
+	#if os(Windows)
+		return "kernel32.dll"
+	#endif
+end 'systemLibrary'
+
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+
+	if arguments.count() > 1 'asTheChild'
+		sleep(60000)
+
+		return 0
+	end 'asTheChild'
+
+	let me = try Process.executablePath() otherwise return 1
+	var childArguments = StringArray.create(0)
+	childArguments.push("child")
+	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	let pid = try child.processId() otherwise return 3
+	var sampled = try SampledProcess.open(pid) otherwise return 4
+	let modules = try sampled.modules() otherwise return 5
+	var listed = false
+
+	for module in modules 'eachModule'
+		if module.name.toLower() == systemLibrary() 'isTheSystemLibrary'
+			listed = true
+		end 'isTheSystemLibrary'
+	end 'eachModule'
+
+	print("system library listed {listed}\n")
+	sampled.close()
+
+	let ended = match child.endTree() 'treeEnd'
+		ended gives true
+		survived or
+		unconfirmed gives false
+	end 'treeEnd'
+
+	child.release()
+
+	if not ended 'treeSurvived'
+		return 6
+	end 'treeSurvived'
+
+	return 0
+end 'main'
+```
+```stdout
+system library listed true
 ```
 ```exitcode
 0
