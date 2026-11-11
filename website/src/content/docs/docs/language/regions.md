@@ -184,6 +184,25 @@ receiver) and as immutable at line 27; a parameter cannot be both`). An argument
 **E3207**, and the message names the use that decided it:
 
 ```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+type Table
+	var rows as TallyArray
+
+	static function create() returns Self
+		return Self{rows: TallyArray.create(0)}
+	end 'create'
+
+	function count() returns Count
+		return self.rows.count()
+	end 'count'
+
+	function add(n Tally)
+		self.rows.push(n)
+	end 'add'
+end 'Table'
+
 function describe(table Table) returns String
 	return "{table.count()} rows"
 end 'describe'

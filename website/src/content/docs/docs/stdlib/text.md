@@ -290,10 +290,8 @@ data, read as `CharacterSet.letters` with no call. `from` builds a set of exactl
 | `contains(c Character)` | `bool` | True when `c` is a member or falls in one of the set's categories. |
 
 ```maxon
-typealias Letters = Set with Character
-
 function main() returns ExitCode
-	let members = Letters.create()
+	let members = CharSet.create()
 	members.insert('x')
 	members.insert('y')
 	let xy = CharacterSet.from(members)

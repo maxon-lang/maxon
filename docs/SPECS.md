@@ -227,14 +227,12 @@ For code that demonstrates compile/parse errors:
 
 ```maxon
 function main() returns ExitCode
-		var x = "not a number"
-		return x + 5
+	let x = "not a number"
+	return x + 5
 end 'main'
 ```
 ```maxoncstderr
-In file 'temp\temp_fragment.maxon':
-Type mismatch: cannot perform arithmetic on string
-  Location: line 3, column 12
+error E2004: <fragment>:3:11: Cannot operate on String and int
 ```
 
 ### Multi-File Tests
@@ -380,19 +378,34 @@ and compares the decoded, normalized trace against the block:
 <!-- test: heap-alloc-free -->
 ```maxon
 function main() returns ExitCode
-	let s = "value {n}"
-	print(s)
-	return 0
+	let sb = StringBuilder.create()
+	sb.append("ab")
+	sb.append("cd")
+	let s = sb.build()
+	return s.byteLength() as ExitCode
 end 'main'
 ```
 ```exitcode
-0
+4
 ```
 ```mm-trace
-mm_alloc String #1 size=16
-mm_incref String #1 rc=1
-mm_decref String #1 rc=0
-mm_free String #1
+mm_alloc ArrayRecord #1 size=48
+mm_alloc StringBuilder #2 size=16
+mm_alloc ElementBuffer #3 size=4
+mm_incref ArrayRecord #1 rc=2
+mm_alloc StringRecord #4 size=61
+mm_decref ArrayRecord #1 rc=1
+mm_alloc ArrayRecord #5 size=48
+mm_decref ArrayRecord #1 rc=0
+mm_decref ElementBuffer #3 rc=0
+mm_free ElementBuffer #3
+mm_free ArrayRecord #1
+mm_decref StringRecord #4 rc=0
+mm_free StringRecord #4
+mm_decref StringBuilder #2 rc=0
+mm_decref ArrayRecord #5 rc=0
+mm_free ArrayRecord #5
+mm_free StringBuilder #2
 ```
 ````
 
@@ -445,8 +458,8 @@ let y = abs(x)  // Returns 5.5
 
 ```maxon
 function main() returns ExitCode
-		var x = abs(-5.0)
-		return trunc(x)
+	let x = abs(-5.0)
+	return trunc(x)
 end 'main'
 ```
 
@@ -455,8 +468,8 @@ end 'main'
 <!-- test: abs.float -->
 ```maxon
 function main() returns ExitCode
-		var x = abs(-5.5)
-		return trunc(x)
+	let x = abs(-5.5)
+	return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -466,7 +479,7 @@ end 'main'
 <!-- test: abs.zero -->
 ```maxon
 function main() returns ExitCode
-		return trunc(abs(0.0))
+	return trunc(abs(0.0))
 end 'main'
 ```
 ```exitcode

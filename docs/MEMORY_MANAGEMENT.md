@@ -304,7 +304,7 @@ type Point
 	export var x as Coord
 	export var y as Coord
 
-	export static function create(x Coord, y Coord) returns Self
+	static function create(x Coord, y Coord) returns Self
 		return Self{x: x, y: y}   // mm_alloc -> rc=0, then mm_incref -> rc=1
 	end 'create'
 end 'Point'

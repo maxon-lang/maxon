@@ -516,11 +516,12 @@ function main() returns ExitCode
 	let opened = try aead.open(nonce, sealed: sealed, additionalData: "v1".toByteArray()) otherwise return 1
 	print("{sealed.count()} {opened.count()}\n")
 
-	_ = try aead.open(nonce, sealed: sealed, additionalData: "v2".toByteArray()) otherwise (e) 'refused'
+	let forged = try aead.open(nonce, sealed: sealed, additionalData: "v2".toByteArray()) otherwise (e) 'refused'
 		print("{e}\n")
 		return 0
 	end 'refused'
 
+	print("{forged.count()}\n")
 	return 1
 end 'main'
 ```

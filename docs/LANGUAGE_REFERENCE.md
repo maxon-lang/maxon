@@ -4977,7 +4977,17 @@ excludes, counts as a use.
 ### Qualified Names
 
 Qualify a name with its namespace to be explicit, or to choose between two declarations with the same
-name:
+name. With `geometry/area.maxon`:
+
+```maxon
+public typealias Length = int(0 to 1000)
+
+public function area(width Length, height Length) returns Length
+	return width * height
+end 'area'
+```
+
+`main.maxon`:
 
 ```maxon
 function main() returns ExitCode
@@ -5379,8 +5389,24 @@ until it ends, so the promise is awaited or cancelled and nothing else. It lives
 a consuming `await` that every path reaches before the function returns:
 
 ```maxon
+typealias Tally = int(0 to u64.max)
+
+type Row
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Row'
+
+function bump(row Row) returns Tally
+	sleep(1)
+	row.n = row.n + 1
+	return row.n
+end 'bump'
+
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	let later = async bump(row)
 	let n = await later
 	print("{n}\n")
@@ -6274,6 +6300,25 @@ receiver) and as immutable at line 27; a parameter cannot be both`). An argument
 **E3207**, and the message names the use that decided it:
 
 ```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyArray = Array with Tally
+
+type Table
+	var rows as TallyArray
+
+	static function create() returns Self
+		return Self{rows: TallyArray.create(0)}
+	end 'create'
+
+	function count() returns Count
+		return self.rows.count()
+	end 'count'
+
+	function add(n Tally)
+		self.rows.push(n)
+	end 'add'
+end 'Table'
+
 function describe(table Table) returns String
 	return "{table.count()} rows"
 end 'describe'

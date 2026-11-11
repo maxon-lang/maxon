@@ -606,17 +606,19 @@ flight are bounded by the operating system's socket limits, each in time by [`Ht
 and, for TLS, by the options' handshake deadline. `serve` returns once the listener has ended and every
 connection it took has finished.
 
-The handler is one frozen value every connection reads at once: `serve` takes it `immutable`, so the caller
-passes `freeze Handler.create(…)` or an `immutable` handler it received. A handler whose methods write one
-of its fields fails to conform to `HttpHandler` ([E3210](/docs/cli/error-codes/#e3210--semanticcapabilityconversionrefused)).
-State the connections share, or the caller
-reads when `serve` returns, lives in a [service](/docs/language/async/#services--spawn) the handler holds a handle
-to, as in the example below; give the handler a `handle.clone()` for each handle it keeps. A handler that
-holds an OS handle, a function value or a promise cannot be frozen for `serve`.
+The handler is one read-only value every connection reads at once: `serve` takes it `immutable`. A handler whose
+fields are all `let` values (numbers, `String`, `bool`, enums, service handles) is already such a value and is
+passed as it is, and `freeze` of it is [E3200](/docs/cli/error-codes/#e3200--semanticisolatedrecoverneedscleaninputs); a handler
+holding a record or array built at run time is frozen first with `freeze`, or is an `immutable` handler the
+caller received. `HttpHandler.handle` is read-only and never waits: a conformer whose method writes its own
+field or awaits a reply fails to conform to `HttpHandler`
+([E3210](/docs/cli/error-codes/#e3210--semanticcapabilityconversionrefused)). State the connections share, or the caller reads
+when `serve` returns, lives in a [service](/docs/language/async/#services--spawn) the handler holds a handle to,
+as in the example below: `handle` sends the service a message and discards the reply with `_ =`, and the caller
+reads the state afterwards with `await`. Give the handler a `handle.clone()` for each handle it keeps. A handler
+that holds an OS handle, a function value or a promise cannot be passed to `serve`.
 
 ```maxon
-typealias Count = int(0 to u64.max)
-
 type Visits
 	var seen as Count
 
@@ -629,6 +631,10 @@ type Visits
 
 		return self.seen
 	end 'record'
+
+	export function total() returns Count
+		return self.seen
+	end 'total'
 end 'Visits'
 
 type CountingHandler implements HttpHandler
@@ -639,9 +645,9 @@ type CountingHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		let seen = try await visits.record() otherwise throw HttpServerError.sendFailed
+		_ = try visits.record() otherwise throw HttpServerError.sendFailed
 
-		try exchange.respondWith(StatusCode.ok, body: "visit {seen}", contentType: "text/plain")
+		try exchange.respondWith(StatusCode.ok, body: "counted", contentType: "text/plain")
 	end 'handle'
 
 	function faulted(fault HttpHandlerFault)
@@ -652,12 +658,20 @@ end 'CountingHandler'
 function main() returns ExitCode
 	let server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
 	let visits = spawn Visits.create()
+	try server.setAcceptDeadline(30000) otherwise return 2
 
-	_ = server.serve(freeze CountingHandler.create(visits.clone()))
+	_ = server.serve(CountingHandler.create(visits.clone()))
+
+	let total = try await visits.total() otherwise return 3
+
+	print("{total} visits\n")
 
 	return 0
 end 'main'
 ```
+
+The program answers `counted` to every request until no connection has arrived for 30 seconds, then prints
+`<n> visits`.
 
 `serve` hands each exchange to `handler.handle`. A handler that throws, or returns without answering, has
 its exchange answered `500` with an empty body, and `handler.faulted` is told. A request `accept()` refuses
@@ -717,7 +731,7 @@ function main() returns ExitCode
 	let identity = try TlsIdentity.fromPem(certificates, key: key) otherwise return 3
 	let server = try HttpServer.bindTls("0.0.0.0", port: 8443, options: TlsServerOptions.create(identity)) otherwise return 4
 
-	_ = server.serve(freeze HelloHandler.create())
+	_ = server.serve(HelloHandler.create())
 
 	return 0
 end 'main'
@@ -854,7 +868,7 @@ end 'HelloHandler'
 
 function main() returns ExitCode
 	let server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
-	_ = server.serve(freeze HelloHandler.create("hello\n"))
+	_ = server.serve(HelloHandler.create("hello\n"))
 
 	return 0
 end 'main'

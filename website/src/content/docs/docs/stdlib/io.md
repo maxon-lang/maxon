@@ -292,8 +292,7 @@ Run as `program --mode=fast`, it prints `2 fast a=b`.
 ```maxon
 function main() returns ExitCode
 	let rounds = try CommandLine.readOptionalIntArgument(1, otherwise: 1000) otherwise return 2
-	print("{rounds} rounds
-")
+	print("{rounds} rounds\n")
 	return 0
 end 'main'
 ```
@@ -934,7 +933,10 @@ function main() returns ExitCode
 		return 1
 	end 'read'
 
-	let code = try child.wait() otherwise -1
+	let code = try child.wait() otherwise (e) 'wait'
+		print("{e.displayReason()}\n")
+		return 1
+	end 'wait'
 
 	let state = match child.pollExit() 'poll'
 		running gives "running"

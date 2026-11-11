@@ -489,6 +489,8 @@ The literal-initialization interfaces (`InitableFromStringLiteral`, `InitableFro
 `InitableFromArrayLiteral`, `InitableFromDictionaryLiteral`) let a type be written as `MyType from <literal>`;
 see Initializing From Literals in [LANGUAGE_REFERENCE.md](/docs/language/overview/).
 
+A type declares `toString` once, so it implements `Stringable` or `FormattedStringable`, not both.
+
 ### Supporting types
 
 ```maxon
@@ -519,16 +521,12 @@ end 'Ordering'
 ```maxon
 typealias Cents = int(0 to u32.max)
 
-type Money implements Stringable, FormattedStringable, Equatable, Comparable, Hashable, Cloneable
+type Money implements FormattedStringable, Equatable, Comparable, Hashable, Cloneable
 	let cents as Cents
 
 	static function create(cents Cents) returns Money
 		return Money{cents: cents}
 	end 'create'
-
-	function toString() returns String
-		return "{cents} cents"
-	end 'toString'
 
 	function toString(format String) returns String
 		return "{format} {cents}"
@@ -558,9 +556,9 @@ function main() returns ExitCode
 	let prices = Prices.create()
 	prices.insert(price)
 	prices.insert(price.clone())
-	print("{price} | {price:EUR} | {price == Money.create(250)} {price.compare(Money.create(1))} {prices.count()}\n")
+	print("{price:EUR} | {price:USD} | {price == Money.create(250)} {price.compare(Money.create(1))} {prices.count()}\n")
 	return 0
 end 'main'
 ```
 
-Output: `250 cents | EUR 250 | true greaterThan 1`.
+Output: `EUR 250 | USD 250 | true greaterThan 1`.

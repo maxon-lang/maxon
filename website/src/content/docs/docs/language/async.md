@@ -271,8 +271,24 @@ until it ends, so the promise is awaited or cancelled and nothing else. It lives
 a consuming `await` that every path reaches before the function returns:
 
 ```maxon
+typealias Tally = int(0 to u64.max)
+
+type Row
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Row'
+
+function bump(row Row) returns Tally
+	sleep(1)
+	row.n = row.n + 1
+	return row.n
+end 'bump'
+
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	let later = async bump(row)
 	let n = await later
 	print("{n}\n")

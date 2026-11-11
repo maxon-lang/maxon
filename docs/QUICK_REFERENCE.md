@@ -639,7 +639,9 @@ type Multi uses A, B where A is Hashable, B is Cloneable // multiple params with
 // An inner typealias takes its own modifier; unmarked, it is private to its file.
 type Pool uses T
 	export typealias Idx = int(0 to u64.max)
-	export function get(index Idx) returns T
+	export function checked(at Idx) returns Idx
+		return at
+	end 'checked'
 end 'Pool'
 // PoolA.Idx and PoolB.Idx are incompatible types
 // Use 'as' to explicitly convert: aIdx as PoolB.Idx
@@ -958,13 +960,16 @@ panic("expected {a}, got {b}")      // interpolated strings supported
 ## Regions and Capabilities
 
 ```maxon
-// isolated: a region of its own, one entry, written only inside `modify` or a one-call open
-let builder = IndexBuilder.create() as isolated IndexBuilder
-modify builder 'fill'
-	builder.add(declaration.clone())      // `builder` is writable here; outer data is read-only
-end 'fill'
-let index = freeze builder                // immutable: shared freely; reading `builder` afterwards is E3102
 typealias SettledIndex = immutable IndexBuilder
+
+// isolated: a region of its own, one entry, written only inside `modify` or a one-call open
+function settle(declaration Declaration) returns SettledIndex
+	let builder = IndexBuilder.create() as isolated IndexBuilder
+	modify builder 'fill'
+		builder.add(declaration.clone())  // `builder` is writable here; outer data is read-only
+	end 'fill'
+	return freeze builder                 // immutable: shared freely; reading `builder` afterwards is E3102
+end 'settle'
 
 // An isolated field: `swap` takes the region out and leaves another in the slot
 type Indexer

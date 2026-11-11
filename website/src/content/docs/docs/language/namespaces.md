@@ -158,7 +158,17 @@ excludes, counts as a use.
 ## Qualified Names
 
 Qualify a name with its namespace to be explicit, or to choose between two declarations with the same
-name:
+name. With `geometry/area.maxon`:
+
+```maxon
+public typealias Length = int(0 to 1000)
+
+public function area(width Length, height Length) returns Length
+	return width * height
+end 'area'
+```
+
+`main.maxon`:
 
 ```maxon
 function main() returns ExitCode

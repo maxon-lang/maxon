@@ -25,7 +25,7 @@ Always use **tabs for indentation**. One level per nested block.
 function main() returns ExitCode
 	let x = 5
 	if x > 0 'check'
-		print(x)
+		print("{x}\n")
 	end 'check'
 	return 0
 end 'main'
@@ -38,14 +38,19 @@ Each block increases indentation by one level:
 - `end` statements decrease indentation
 
 ```maxon
-function calculate(value int) returns int
+typealias Amount = int(0 to i64.max)
+
+function calculate(start Amount) returns Amount
+	var value = start
+
 	if value > 0 'positive'
-		while value > 0 'loop'
+		while value > 5 'loop'
 			value = value - 1
 		end 'loop'
-	else
+	end 'positive' else 'zero'
 		value = 0
-	end 'positive'
+	end 'zero'
+
 	return value
 end 'calculate'
 ```
@@ -393,6 +398,7 @@ Here's a complete program following all style guide conventions:
 
 ```maxon
 typealias Number = int(0 to i64.max)
+typealias Positive = int(1 to i64.max)
 
 // Calculate the sum of integers from 1 to N
 function sum(n Number) returns Number
@@ -408,12 +414,12 @@ function sum(n Number) returns Number
 end 'sum'
 
 // Check if a number is prime
-function isPrime(num Number) returns bool
+function isPrime(num Positive) returns bool
 	if num <= 1 'notPrime'
 		return false
 	end 'notPrime'
 
-	var i = 2 as Number
+	var i = 2 as Positive
 	while i * i <= num 'divisorCheck'
 		if num mod i == 0 'hasDivisor'
 			return false
