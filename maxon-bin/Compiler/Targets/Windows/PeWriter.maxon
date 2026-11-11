@@ -627,8 +627,7 @@ export enum IatSlot
 	getsockname = IatSlotMeta{dll: ImportDll.ws2_32}
 	shutdown = IatSlotMeta{dll: ImportDll.ws2_32}
 
-	// ⛔⛔ **THE ONE `ntdll.dll` IMPORT, AND IT CARRIES AN ACCEPTED RISK THAT IS WRITTEN DOWN HERE
-	// BECAUSE NOTHING ELSE CAN STATE IT.** `NtGetNextThread` is a STATIC PE import, so the Windows loader
+	// ⛔⛔ **`NtGetNextThread` CARRIES AN ACCEPTED RISK.** It is a STATIC PE import, so the Windows loader
 	// binds it before `main` runs: on a host whose ntdll does not export it, `maxon.exe` FAILS TO
 	// LOAD AT ALL — not just the sampler, the whole image. That is the ruling and the trade is accepted;
 	// the alternative (`LoadLibrary` + `GetProcAddress`) buys a graceful refusal at the price of a second
@@ -642,6 +641,7 @@ export enum IatSlot
 	// thread snapshot ignores its pid argument; this call enumerates ONE process's threads and hands back
 	// handles that already carry the access mask asked for, so there is no `OpenThread` either.
 	NtGetNextThread = IatSlotMeta{dll: ImportDll.ntdll}
+	NtQueryInformationProcess = IatSlotMeta{dll: ImportDll.ntdll}
 
 	ProcessPrng = IatSlotMeta{dll: ImportDll.bcryptprimitives}
 
@@ -787,6 +787,7 @@ export function importAnswerOf(slot IatSlot) returns ImportAnswer
 		getsockname or
 		shutdown or
 		NtGetNextThread or
+		NtQueryInformationProcess or
 		RegGetValueW or
 		IsProcessInJob or
 		QueryFullProcessImageNameW or
@@ -1012,6 +1013,7 @@ function isOptionalTrailingImport(slot IatSlot) returns bool
 		getsockname or
 		shutdown or
 		NtGetNextThread or
+		NtQueryInformationProcess or
 		CertOpenSystemStoreW or
 		CertEnumCertificatesInStore or
 		CertCloseStore or
@@ -2015,11 +2017,11 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let optionalImports = codeResult.stdModule.debugStream or codeResult.stdModule.usesCpuCount or codeResult.stdModule.carriesThreadCpuTicks or codeResult.stdModule.usesGt or codeResult.stdModule.usesBackgroundPriority or codeResult.stdModule.usesProcessLiveness or codeResult.stdModule.usesProcessDescendants or codeResult.stdModule.usesTerminalDetection or codeResult.stdModule.usesSharedMemory or codeResult.stdModule.usesUptimeClock or codeResult.stdModule.usesProcessSampling or codeResult.stdModule.usesProcessDebug or codeResult.stdModule.usesProcessNamespace or codeResult.stdModule.usesEnvironment
 
 	// ⭐ **THE SAMPLER IS ntdll's ONLY PRODUCER**, and it feeds BOTH gates: the suspend/context/read/resume
-	// family, the timer pair and the module walk ride the optional kernel32 band above, while
-	// `NtGetNextThread` is the sole member of a directory entry no other program in the language has. Both
-	// are read off `stdModule` AFTER `pipeline.run()` replaced it (`Compiler.maxon`'s build seam); a read
-	// taken before that measures a module the lowering discards and emits `iatCall`s at slot indices past
-	// the end of the table it actually writes.
+	// family, the timer pair and the module walk ride the optional kernel32 band above, while the ntdll run
+	// is a directory entry no other program in the language has. Both are read off `stdModule` AFTER
+	// `pipeline.run()` replaced it (`Compiler.maxon`'s build seam); a read taken before that measures a
+	// module the lowering discards and emits `iatCall`s at slot indices past the end of the table it
+	// actually writes.
 	let gates = ImportGates.create(optionalImports, sockets: codeResult.stdModule.usesSockets, threadWalk: codeResult.stdModule.usesProcessSampling, entropy: codeResult.stdModule.usesEntropy, trustStore: codeResult.stdModule.usesTrustStore)
 	let idata = buildImportSection(idataRva as Rva, gates: gates)
 	let idataSize = idata.data.count()

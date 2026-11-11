@@ -48,6 +48,23 @@
 		let ModuleEntryBaseSlot = (4096 + 24) as ScratchOffset
 		let ModuleEntryExtentSlot = (4096 + 32) as ScratchOffset
 		let ModuleEntryNameOffset = 48
+
+		let SampleProcessInformationSlot = 6144
+		let SamplePebSlot = 6400
+		let ProcessBasicInformationClass = 0
+		let ProcessBasicInformationBytes = 48
+		let ProcessPebAddressOffset = 8
+		let PebPrefixBytes = 0x58
+		let PebLoaderOffset = 0x18
+		let PebCrossProcessFlagsOffset = 0x50
+		let ProcessInitializingFlag = 0x2
+		let NtStatusSuccess = 0
+		let ReadProcessMemoryFailed = 0
+		let PebLoaderAbsent = 0
+		let ProcessPebAddressSlot = (SampleProcessInformationSlot + ProcessPebAddressOffset) as ScratchOffset
+		let PebLoaderSlot = (SamplePebSlot + PebLoaderOffset) as ScratchOffset
+		let PebCrossProcessFlagsSlot = (SamplePebSlot + PebCrossProcessFlagsOffset) as ScratchOffset
+
 		let ModuleListAttempts = 20
 		let ModuleListRetryMs = 5
 		let InvalidHandle = 0 - 1
@@ -1322,8 +1339,32 @@
 		#endif
 
 		#if os(Windows) and arch(x64)
+			// `PEB.Ldr` is non-null and `PEB_LDR_DATA.Initialized` is already 1 while the loader still maps the
+			// import closure; only `ProcessInitializingFlag` clearing marks it finished.
+			function loaderHasInitialized() returns bool
+				let target = self.process.handle() as RegisterWord
+				let status = __Builtins.profileQueryProcess(target, ProcessBasicInformationClass, self.scratch.addressOf(SampleProcessInformationSlot), ProcessBasicInformationBytes) as RegisterWord
+
+				if status != NtStatusSuccess 'unqueried'
+					return false
+				end 'unqueried'
+
+				let readFailed = __Builtins.profileReadRemote(target, self.scratch.word(ProcessPebAddressSlot), self.scratch.addressOf(SamplePebSlot), PebPrefixBytes) == ReadProcessMemoryFailed
+
+				if readFailed 'unreadable'
+					return false
+				end 'unreadable'
+
+				return self.scratch.word(PebLoaderSlot) != PebLoaderAbsent and (self.scratch.word(PebCrossProcessFlagsSlot) and ProcessInitializingFlag) == 0
+			end 'loaderHasInitialized'
+
 			function listedModules() returns SampledModuleArray
 				let modules = SampledModuleArray.create(0)
+
+				if not self.loaderHasInitialized() 'stillLoading'
+					return modules
+				end 'stillLoading'
+
 				let snapshot = __Builtins.profileModuleSnapshot(self.pid) as RegisterWord
 
 				if snapshot == InvalidHandle or snapshot == 0 'notYet'

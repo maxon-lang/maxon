@@ -45,6 +45,9 @@ export let ProfileModuleSnapshotName = b"__prof_module_snapshot"
 export let ProfileModuleFirstName = b"__prof_module_first"
 export let ProfileModuleNextName = b"__prof_module_next"
 
+export let ProfileQueryProcessName = b"__prof_query_process"
+export let ProfileReadRemoteName = b"__prof_read_remote"
+
 // Handles and raw memory. The accessors are entry points rather than surface syntax because Maxon has no raw
 // dereference: `readWord` is one `loadIndirect` at an address the language cannot otherwise name, which is
 // `__shm_read_word`'s position one family over.
@@ -798,6 +801,8 @@ function installWin32SamplingEntries(module StdModule, layout HostContextLayout)
 	buildProfileModuleSnapshot(module)
 	buildProfileModuleFirst(module)
 	buildProfileModuleNext(module)
+	buildHostProcessEntry(module, name: ProfileQueryProcessName, words: HostProcessFourWords, service: HostProcessCall.queryProcessInformation)
+	buildHostProcessEntry(module, name: ProfileReadRemoteName, words: HostProcessFourWords, service: HostProcessCall.readProcessMemory)
 end 'installWin32SamplingEntries'
 
 function installPtraceSamplingEntries(module StdModule, layout HostContextLayout)

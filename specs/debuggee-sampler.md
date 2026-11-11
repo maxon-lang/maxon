@@ -485,7 +485,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Sampler.maxon:1627: SampleTimer.wait: the timer was closed
+panic at Sampler.maxon:1668: SampleTimer.wait: the timer was closed
 Stack trace:
   in SampleTimer.wait
   in main
@@ -672,6 +672,108 @@ end 'readAfterTheDrop'
 ```stdout
 read after the drop true
 a word at an unaligned offset ends where the next word begins true
+```
+```exitcode
+0
+```
+
+<!-- test: a-child-held-inside-its-loader-has-no-module-list-until-it-is-released -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- process: own -->
+The program runs itself as a traced child and holds it at its second library-load event. The first is `ntdll.dll`,
+mapped before the loader runs; the second is the first library the loader maps, before the loader has finished
+initialising the process. While the child is held there, `modules()` has no list to answer and throws
+`moduleListUnavailable`. Once the program stops debugging the child, the loader finishes and the list holds
+`kernel32.dll`. `DebugPort` drives the Win32 debug API, which only Windows provides.
+```maxon
+let LoadEventsToHold = 2
+let EventBudgetMs = 10000
+
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+
+	if arguments.count() > 1 'asTheChild'
+		sleep(60000)
+
+		return 0
+	end 'asTheChild'
+
+	let me = try Process.executablePath() otherwise return 1
+	let directory = try me.parent() otherwise return 1
+	let childArguments = StringArray.create(0)
+	childArguments.push("child")
+	let child = try StreamingSubprocess.spawnTraceable(Executable.path(me), arguments: childArguments, workingDirectory: directory, environment: Environment.inherit, traced: true) otherwise return 2
+	let pid = try child.processId() otherwise return 3
+	let pin = MachinePin.acquire()
+	let port = DebugPort.create()
+	var loads = 0 as Count
+
+	while loads < LoadEventsToHold 'untilTheLoaderMaps'
+		let isLoad = match port.waitEvent(EventBudgetMs) 'event'
+			libraryLoaded gives true
+			timedOut panic("the traced child raised no debug event within the budget")
+			processCreated or
+			threadCreated or
+			threadExited or
+			processExited or
+			exception or
+			other gives false
+		end 'event'
+
+		if isLoad 'aLibraryMapped'
+			loads = loads + 1
+		end 'aLibraryMapped'
+
+		if loads < LoadEventsToHold 'notYetHeld'
+			_ = port.continueEvent(DebugDisposition.handled)
+		end 'notYetHeld'
+	end 'untilTheLoaderMaps'
+
+	let sampled = try SampledProcess.open(pid) otherwise return 5
+
+	if let held = try sampled.modules() 'heldListed'
+		print("held listed {held.count()} modules\n")
+	end 'heldListed' else (e) 'heldRefused'
+		match e 'why'
+			moduleListUnavailable then print("held module list unavailable\n")
+			default panic("the held child's module list was refused for another reason: {e}")
+		end 'why'
+	end 'heldRefused'
+
+	print("detached {port.detach(pid as DebuggeeProcessId)}\n")
+	let modules = try sampled.modules() otherwise return 6
+	var listed = false
+
+	for module in modules 'eachModule'
+		if module.name.toLower() == "kernel32.dll" 'isTheSystemLibrary'
+			listed = true
+		end 'isTheSystemLibrary'
+	end 'eachModule'
+
+	print("system library listed {listed}\n")
+	sampled.close()
+	port.close()
+	pin.release()
+
+	let ended = match child.endTree() 'treeEnd'
+		ended gives true
+		survived or
+		unconfirmed gives false
+	end 'treeEnd'
+
+	child.release()
+
+	if not ended 'treeSurvived'
+		return 7
+	end 'treeSurvived'
+
+	return 0
+end 'main'
+```
+```stdout
+held module list unavailable
+detached true
+system library listed true
 ```
 ```exitcode
 0

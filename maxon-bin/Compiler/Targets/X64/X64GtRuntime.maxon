@@ -639,6 +639,7 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		SetWaitableTimer gives HostProcessStackArgWords  // 6: hTimer, lpDueTime, lPeriod, pfnCompletionRoutine, lpArgToCompletionRoutine, fResume
 		ReadProcessMemory or  // 5: hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesRead
 		WriteProcessMemory or  // 5: hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten
+		NtQueryInformationProcess or  // 5: ProcessHandle, ProcessInformationClass, ProcessInformation, ProcessInformationLength, ReturnLength
 		VirtualProtectEx gives ReadProcessMemoryStackArgWords  // 5: hProcess, lpAddress, dwSize, flNewProtect, lpflOldProtect
 
 		GetQueuedCompletionStatusEx gives GetQueuedCompletionStatusExStackArgWords  // 6: CompletionPort, lpCompletionPortEntries, ulCount, ulNumEntriesRemoved, dwMilliseconds, fAlertable
@@ -844,10 +845,8 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		FreeAddrInfoW or
 		UnmapViewOfFile or
 
-		// Bounded kernel bookkeeping over handles this process already holds: a handle open, the
-		// suspend/resume pair and the context read, the thread walk, the VAD query and the timer pair.
-		// None waits on another party; the sampler's wait is `osWaitHandle`'s `WaitForSingleObject`,
-		// classified above.
+		// Bounded kernel bookkeeping over handles this process already holds. None waits on another party;
+		// the sampler's wait is `osWaitHandle`'s `WaitForSingleObject`, classified above.
 		OpenProcess or
 		SuspendThread or
 		ResumeThread or
@@ -858,6 +857,7 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		GetThreadId or
 		VirtualQueryEx or
 		NtGetNextThread or
+		NtQueryInformationProcess or
 		CreateWaitableTimerExW or
 		SetWaitableTimer or
 
