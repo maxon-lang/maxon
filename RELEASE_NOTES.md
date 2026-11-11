@@ -656,6 +656,11 @@ release's version as its heading when the release is cut.
   link included. `notFound` means nothing is at the path.
   Fix: where a handler treats `notFound` as "already gone" for a path that may hold a file or a link, handle
   `deleteFailed` the same way, or remove a file with `File.delete`.
+- `RunProcessError`, the error `__Builtins.runProcess` throws, has a second case, `statusLost`: the child ended
+  while another process took its exit status, so there is no exit code to report. It used to answer the
+  status the runtime last held, 0. A `match` over `RunProcessError` that lists every case, with no `default`, no
+  longer compiles (E2026).
+  Fix: add a `statusLost` arm beside `spawnFailed`, or give the `match` a `default throws`.
 
 ## 0.5.0 — 2026-10-08
 

@@ -3344,7 +3344,7 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 end 'buildX64LinuxProcReapChunk'
 
 // ==========================================================================
-// mrt_host_proc_await(rcx = object, rdx = timeoutMs) -> rax = WAIT_OBJECT_0 | WAIT_TIMEOUT
+// mrt_host_proc_await(rcx = object, rdx = timeoutMs) -> rax = WAIT_OBJECT_0 | WAIT_TIMEOUT | WAIT_ABANDONED
 // ==========================================================================
 
 // ⭐⭐ **`WaitForSingleObject` ON A CHILD, AND THE THREE TIMEOUTS THAT ARE DIFFERENT QUESTIONS.** Answering
@@ -3353,13 +3353,16 @@ end 'buildX64LinuxProcReapChunk'
 //   • **0 — a POLL.** The exit tests of `__gt_subp_wait_collect` and `__gt_subp_wait_exit` drive their own
 //     loops.
 //   • **INFINITE — a real block**, inside the wait syscall itself. There is nothing to poll for: the kernel
-//     already has the notification.
+//     already has the notification. A status another process took answers `WAIT_ABANDONED` here as on the
+//     other arms: its cached code is 0, so `emitSubpBranchOnTakenStatus` reads no code on that answer.
 //   • **anything else — a bounded poll.** A deadline no POSIX wait takes, so it is a scan and a millisecond
 //     sleep.
 //
 // ⚠ **THE INFINITE ARM BLOCKS THE OS THREAD, AND ITS CALLERS ARE WHY IT MAY.** `__gt_subp_wait` is reached
 // with the child's output already drained, so the block is bounded by the child's own exit, and the wait
-// that follows a kill is bounded by the teardown the kill started. It is the one child wait on this lane that
+// that follows a kill is bounded by the teardown the kill started. The status look that ends
+// `__gt_subp_wait_exit`, `__gt_subp_wait_collect` and `__gt_process_run` comes after the child has left, so
+// it does not block. It is the one child wait on this lane that
 // does NOT go through the poller's child band, which every other one does.
 //
 // ⚠ **IT CONTAINS NO OS CALL AT ALL** — two calls and a compare — which is why the arm64 pair share one body.
@@ -3379,12 +3382,13 @@ function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), srcReg: X64Register.rdx, wide: true)
 
-	// INFINITE: one blocking reap, and the answer cannot be anything but signalled.
 	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: WaitInfinite)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: bounded)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixReapBlocking)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcReapName)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: PosixChildReapedElsewhere as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: reapedElsewhere)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: signalled)
 
 	// 0 and everything else share one loop: it reaps FIRST and tests the deadline second, so a zero timeout
@@ -3430,12 +3434,11 @@ end 'buildX64LinuxProcAwaitChunk'
 // mrt_host_proc_exit_code(rcx = handle, rdx = codeOutPtr)
 // ==========================================================================
 
-// `GetExitCodeProcess`. It BLOCKS if the child has not been reaped yet, which is exactly what its Win32
-// twin's callers already guarantee is safe: every one of them has either just seen the handle signalled or is
-// `__gt_subp_wait`, whose whole contract is to wait.
+// `GetExitCodeProcess`. It BLOCKS if the child has not been reaped yet, which its callers make safe: every one
+// reads it only after a look at the handle answered signalled.
 //
 // ⚠ **A REAP THAT CANNOT HAPPEN LEAVES THE CACHED STATUS UNTOUCHED**, which is 0 for a handle whose child
-// some other path already took. Answering the last known status beats inventing one.
+// another process took.
 function buildX64LinuxProcExitCodeChunk() returns FunctionCodeChunk
 	let SlotCodeOut = 0
 	let SlotObj = 1

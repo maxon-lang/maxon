@@ -3207,7 +3207,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1428: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+panic at Subprocess.maxon:1429: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
 Stack trace:
   in StreamingSubprocess.release
   in main
@@ -3672,7 +3672,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1432: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first
+panic at Subprocess.maxon:1433: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first
 Stack trace:
   in StreamingSubprocess.release
   in main
@@ -3857,7 +3857,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1428: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+panic at Subprocess.maxon:1429: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
 Stack trace:
   in StreamingSubprocess.release
   in main
@@ -3893,7 +3893,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1432: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first
+panic at Subprocess.maxon:1433: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first
 Stack trace:
   in StreamingSubprocess.release
   in main

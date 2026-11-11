@@ -306,9 +306,10 @@ end 'TerminationStatus'
 // =============================================================================
 
 /// The error `__Builtins.runProcess` throws: `spawnFailed` when the command names nothing the host can
-/// start.
+/// start, `statusLost` when the child ended while another process took its exit status.
 public enum RunProcessError implements Error
 	spawnFailed
+	statusLost
 end 'RunProcessError'
 
 /// Errors raised by `Subprocess.run` / `Configuration.run` and by a
@@ -1441,8 +1442,8 @@ end 'StreamingSubprocess'
 
 /// What `StreamingSubprocess.endTree` found. `ended`: the child and everything it left running are
 /// gone. `survived`: the child is gone but part of its tree could not be ended, with the
-/// operating-system code of the refusal. `unconfirmed`: the kill was refused and the child had not
-/// ended five seconds later, so it may still run, or the handle was released, with the reason.
+/// operating-system code of the refusal. `unconfirmed`: the kill was refused and no wait saw the child
+/// end within five seconds, so it may still run, or the handle was released, with the reason.
 public union TreeEnd
 	ended
 	survived(osError OsErrorCode)

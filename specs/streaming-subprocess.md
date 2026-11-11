@@ -36,7 +36,7 @@ is a measured property with cases pinning it, not an aside.
 - `subpWriteLine(h, line: s)` writes `s + "\n"` to the child's stdin, synchronously, returning
   `0` on success or non-zero on a broken pipe.
 - `subpCloseStdin(h)` closes the parent's write end of stdin, so the child sees EOF.
-- `subpWait(h)` blocks until the child exits and returns its exit code.
+- `subpWait(h)` blocks until the child exits and returns its exit code, `-4` when another process took the child's exit status, or `-1` for a handle naming no live child.
 - `subpRelease(h)` closes every OS handle the child owns and marks the table slot free for reuse. The
   slot's reusable line buffers persist across spawn/release cycles, so a spawn+read+release loop is
   memory-bounded rather than leaking a fresh buffer per iteration.

@@ -35,8 +35,9 @@ gate is reachability-BLIND — pinned by `rejected-on-wasm-when-unreached` below
 must be called under `try`, exactly as a throwing array accessor is. It rides the same dual-register error ABI
 (`errorReturn`) an ordinary throwing call uses — the exit code in R8, the error flag in R10 — so
 `try __Builtins.runProcess(cmd) otherwise <handler>` catches the spawn failure, and a program can recover from
-it instead of dying. The error is `RunProcessError` (`stdlib/Subprocess.maxon`), whose one case is
-`spawnFailed`, so an `otherwise (e)` handler can `match` on it.
+it instead of dying. The error is `RunProcessError` (`stdlib/Subprocess.maxon`), whose cases are
+`spawnFailed` and `statusLost` (another process took the child's exit status), so an `otherwise (e)` handler
+can `match` on it.
 
 ```text
 function runChild() returns int
@@ -789,6 +790,7 @@ function main() returns ExitCode
 	try __Builtins.runProcess("nonexistentprogram_xyz_24680") otherwise (e) 'handler'
 		match e 'check'
 			spawnFailed then return 42
+			statusLost then return 1
 		end 'check'
 	end 'handler'
 	return 0

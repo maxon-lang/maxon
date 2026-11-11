@@ -1169,7 +1169,7 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#16
   readerStillOut:
-    x64.leaRegRdata rcx, [rip + __str_blob_197]  ; "panic at Subprocess.maxon:1428: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_197]  ; "panic at Subprocess.maxon:1429: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 184
@@ -1186,7 +1186,7 @@ func @main {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#18
   stderrReaderStillOut:
-    x64.leaRegRdata rcx, [rip + __str_blob_198]  ; "panic at Subprocess.maxon:1432: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_198]  ; "panic at Subprocess.maxon:1433: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 184
@@ -1239,7 +1239,7 @@ func @main {
     x64.movRegReg rdx, r8
     x64.jmp __im_cont
   tryerr#48:
-    x64.leaRegRdata rcx, [rip + __str_blob_194]  ; "panic at Subprocess.maxon:1073: StreamingSubprocess.spawn: empty path is the sentinel for 'inherit cwd'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_194]  ; "panic at Subprocess.maxon:1074: StreamingSubprocess.spawn: empty path is the sentinel for 'inherit cwd'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 184
@@ -1263,7 +1263,7 @@ func @main {
     x64.popReg rbp
     x64.retIndirect
   __rc_panic#137:
-    x64.leaRegRdata rcx, [rip + __str_blob_325]  ; "panic at Subprocess.maxon:720: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_325]  ; "panic at Subprocess.maxon:721: Range check failed: value outside typealias 'ElementIndex'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 184
@@ -1311,7 +1311,7 @@ func @main {
     x64.popReg rbp
     x64.retIndirect
   tryerr#145:
-    x64.leaRegRdata rcx, [rip + __str_blob_175]  ; "panic at Subprocess.maxon:691: buildArgvBlob: args.get(i) out of bounds\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_175]  ; "panic at Subprocess.maxon:692: buildArgvBlob: args.get(i) out of bounds\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 184
@@ -1335,7 +1335,7 @@ func @main {
     x64.popReg rbp
     x64.retIndirect
   tryerr#79:
-    x64.leaRegRdata rcx, [rip + __str_blob_193]  ; "panic at Subprocess.maxon:956: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_193]  ; "panic at Subprocess.maxon:957: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 184
@@ -1347,7 +1347,7 @@ func @main {
     x64.popReg rbp
     x64.retIndirect
   __rc_panic#73:
-    x64.leaRegRdata rcx, [rip + __str_blob_327]  ; "panic at Subprocess.maxon:1112: Range check failed: value outside typealias 'StreamingHandle'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_327]  ; "panic at Subprocess.maxon:1113: Range check failed: value outside typealias 'StreamingHandle'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 184
@@ -1359,7 +1359,7 @@ func @main {
     x64.popReg rbp
     x64.retIndirect
   __rc_panic#39:
-    x64.leaRegRdata rcx, [rip + __str_blob_328]  ; "panic at Subprocess.maxon:1260: Range check failed: value outside typealias 'ExitInt'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_328]  ; "panic at Subprocess.maxon:1261: Range check failed: value outside typealias 'ExitInt'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 184
@@ -1417,16 +1417,17 @@ chunk @mrt_host_proc_reap {
 
 chunk @mrt_host_proc_await {
     0000: 55 48 89 e5 48 83 ec 40 48 89 4d f8 48 89 55 f0
-    0010: 48 b8 ff ff ff ff 00 00 00 00 48 39 c2 0f 85 0f
-    0020: 00 00 00 ba 01 00 00 00 e8 00 00 00 00 e9 55 00
-    0030: 00 00 e8 00 00 00 00 48 8b 4d f0 48 01 c8 48 89
-    0040: 45 e8 48 8b 4d f8 ba 00 00 00 00 e8 00 00 00 00
-    0050: 48 81 f8 02 00 00 00 0f 84 3e 00 00 00 48 85 c0
-    0060: 0f 85 21 00 00 00 e8 00 00 00 00 48 8b 4d e8 48
-    0070: 39 c8 0f 8d 19 00 00 00 b9 01 00 00 00 e8 00 00
-    0080: 00 00 e9 bb ff ff ff b8 00 00 00 00 e9 0f 00 00
-    0090: 00 b8 02 01 00 00 e9 05 00 00 00 b8 80 00 00 00
-    00a0: 48 83 c4 40 5d c3
+    0010: 48 b8 ff ff ff ff 00 00 00 00 48 39 c2 0f 85 1c
+    0020: 00 00 00 ba 01 00 00 00 e8 00 00 00 00 48 81 f8
+    0030: 02 00 00 00 0f 84 6e 00 00 00 e9 55 00 00 00 e8
+    0040: 00 00 00 00 48 8b 4d f0 48 01 c8 48 89 45 e8 48
+    0050: 8b 4d f8 ba 00 00 00 00 e8 00 00 00 00 48 81 f8
+    0060: 02 00 00 00 0f 84 3e 00 00 00 48 85 c0 0f 85 21
+    0070: 00 00 00 e8 00 00 00 00 48 8b 4d e8 48 39 c8 0f
+    0080: 8d 19 00 00 00 b9 01 00 00 00 e8 00 00 00 00 e9
+    0090: bb ff ff ff b8 00 00 00 00 e9 0f 00 00 00 b8 02
+    00a0: 01 00 00 e9 05 00 00 00 b8 80 00 00 00 48 83 c4
+    00b0: 40 5d c3
 }
 ```
 
@@ -2552,7 +2553,7 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x19 + 16]
     arm64.cbz x0, ifcont#16
   readerStillOut:
-    arm64.leaRdata x0, __str_blob_197  ; "panic at Subprocess.maxon:1428: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
+    arm64.leaRdata x0, __str_blob_197  ; "panic at Subprocess.maxon:1429: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -2571,7 +2572,7 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x19 + 24]
     arm64.cbz x0, ifcont#18
   stderrReaderStillOut:
-    arm64.leaRdata x0, __str_blob_198  ; "panic at Subprocess.maxon:1432: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first\x0a"
+    arm64.leaRdata x0, __str_blob_198  ; "panic at Subprocess.maxon:1433: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -2629,7 +2630,7 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.b __im_cont
   tryerr#48:
-    arm64.leaRdata x0, __str_blob_194  ; "panic at Subprocess.maxon:1073: StreamingSubprocess.spawn: empty path is the sentinel for 'inherit cwd'\x0a"
+    arm64.leaRdata x0, __str_blob_194  ; "panic at Subprocess.maxon:1074: StreamingSubprocess.spawn: empty path is the sentinel for 'inherit cwd'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -2661,7 +2662,7 @@ func @main {
     arm64.epilogue 144
     arm64.retIndirect
   __rc_panic#137:
-    arm64.leaRdata x0, __str_blob_325  ; "panic at Subprocess.maxon:720: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_325  ; "panic at Subprocess.maxon:721: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -2725,7 +2726,7 @@ func @main {
     arm64.epilogue 144
     arm64.retIndirect
   tryerr#145:
-    arm64.leaRdata x0, __str_blob_175  ; "panic at Subprocess.maxon:691: buildArgvBlob: args.get(i) out of bounds\x0a"
+    arm64.leaRdata x0, __str_blob_175  ; "panic at Subprocess.maxon:692: buildArgvBlob: args.get(i) out of bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -2757,7 +2758,7 @@ func @main {
     arm64.epilogue 144
     arm64.retIndirect
   tryerr#79:
-    arm64.leaRdata x0, __str_blob_193  ; "panic at Subprocess.maxon:956: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
+    arm64.leaRdata x0, __str_blob_193  ; "panic at Subprocess.maxon:957: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -2773,7 +2774,7 @@ func @main {
     arm64.epilogue 144
     arm64.retIndirect
   __rc_panic#73:
-    arm64.leaRdata x0, __str_blob_327  ; "panic at Subprocess.maxon:1112: Range check failed: value outside typealias 'StreamingHandle'\x0a"
+    arm64.leaRdata x0, __str_blob_327  ; "panic at Subprocess.maxon:1113: Range check failed: value outside typealias 'StreamingHandle'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -2789,7 +2790,7 @@ func @main {
     arm64.epilogue 144
     arm64.retIndirect
   __rc_panic#39:
-    arm64.leaRdata x0, __str_blob_328  ; "panic at Subprocess.maxon:1260: Range check failed: value outside typealias 'ExitInt'\x0a"
+    arm64.leaRdata x0, __str_blob_328  ; "panic at Subprocess.maxon:1261: Range check failed: value outside typealias 'ExitInt'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -2851,14 +2852,15 @@ chunk @mrt_host_proc_reap {
 
 chunk @mrt_host_proc_await {
     0000: fd 7b bd a9 fd 03 00 91 a0 0b 00 f9 a1 0f 00 f9
-    0010: e2 ff 9f d2 e2 ff bf f2 3f 00 02 eb 81 00 00 54
-    0020: 21 00 80 d2 00 00 00 94 12 00 00 14 00 00 00 94
-    0030: a1 0f 40 f9 00 00 01 8b a0 13 00 f9 a0 0b 40 f9
-    0040: e1 03 1f aa 00 00 00 94 1f 08 00 f1 a0 01 00 54
-    0050: 00 01 00 b5 00 00 00 94 a1 13 40 f9 1f 00 01 eb
-    0060: ca 00 00 54 20 00 80 d2 00 00 00 94 f4 ff ff 17
-    0070: e0 03 1f aa 04 00 00 14 40 20 80 d2 02 00 00 14
-    0080: 00 10 80 d2 fd 7b c3 a8 c0 03 5f d6
+    0010: e2 ff 9f d2 e2 ff bf f2 3f 00 02 eb c1 00 00 54
+    0020: 21 00 80 d2 00 00 00 94 1f 08 00 f1 e0 02 00 54
+    0030: 12 00 00 14 00 00 00 94 a1 0f 40 f9 00 00 01 8b
+    0040: a0 13 00 f9 a0 0b 40 f9 e1 03 1f aa 00 00 00 94
+    0050: 1f 08 00 f1 a0 01 00 54 00 01 00 b5 00 00 00 94
+    0060: a1 13 40 f9 1f 00 01 eb ca 00 00 54 20 00 80 d2
+    0070: 00 00 00 94 f4 ff ff 17 e0 03 1f aa 04 00 00 14
+    0080: 40 20 80 d2 02 00 00 14 00 10 80 d2 fd 7b c3 a8
+    0090: c0 03 5f d6
 }
 ```
 
@@ -3976,7 +3978,7 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x19 + 16]
     arm64.cbz x0, ifcont#16
   readerStillOut:
-    arm64.leaRdata x0, __str_blob_197  ; "panic at Subprocess.maxon:1428: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
+    arm64.leaRdata x0, __str_blob_197  ; "panic at Subprocess.maxon:1429: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -3995,7 +3997,7 @@ func @main {
     arm64.loadRegBaseDisp.byte x0, [x19 + 24]
     arm64.cbz x0, ifcont#18
   stderrReaderStillOut:
-    arm64.leaRdata x0, __str_blob_198  ; "panic at Subprocess.maxon:1432: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first\x0a"
+    arm64.leaRdata x0, __str_blob_198  ; "panic at Subprocess.maxon:1433: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -4053,7 +4055,7 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.b __im_cont
   tryerr#48:
-    arm64.leaRdata x0, __str_blob_194  ; "panic at Subprocess.maxon:1073: StreamingSubprocess.spawn: empty path is the sentinel for 'inherit cwd'\x0a"
+    arm64.leaRdata x0, __str_blob_194  ; "panic at Subprocess.maxon:1074: StreamingSubprocess.spawn: empty path is the sentinel for 'inherit cwd'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -4085,7 +4087,7 @@ func @main {
     arm64.epilogue 144
     arm64.retIndirect
   __rc_panic#137:
-    arm64.leaRdata x0, __str_blob_325  ; "panic at Subprocess.maxon:720: Range check failed: value outside typealias 'ElementIndex'\x0a"
+    arm64.leaRdata x0, __str_blob_325  ; "panic at Subprocess.maxon:721: Range check failed: value outside typealias 'ElementIndex'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -4149,7 +4151,7 @@ func @main {
     arm64.epilogue 144
     arm64.retIndirect
   tryerr#145:
-    arm64.leaRdata x0, __str_blob_175  ; "panic at Subprocess.maxon:691: buildArgvBlob: args.get(i) out of bounds\x0a"
+    arm64.leaRdata x0, __str_blob_175  ; "panic at Subprocess.maxon:692: buildArgvBlob: args.get(i) out of bounds\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -4181,7 +4183,7 @@ func @main {
     arm64.epilogue 144
     arm64.retIndirect
   tryerr#79:
-    arm64.leaRdata x0, __str_blob_193  ; "panic at Subprocess.maxon:956: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
+    arm64.leaRdata x0, __str_blob_193  ; "panic at Subprocess.maxon:957: Subprocess.spawnFailure: the runtime recorded a spawn step this library does not know\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -4197,7 +4199,7 @@ func @main {
     arm64.epilogue 144
     arm64.retIndirect
   __rc_panic#73:
-    arm64.leaRdata x0, __str_blob_327  ; "panic at Subprocess.maxon:1112: Range check failed: value outside typealias 'StreamingHandle'\x0a"
+    arm64.leaRdata x0, __str_blob_327  ; "panic at Subprocess.maxon:1113: Range check failed: value outside typealias 'StreamingHandle'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -4213,7 +4215,7 @@ func @main {
     arm64.epilogue 144
     arm64.retIndirect
   __rc_panic#39:
-    arm64.leaRdata x0, __str_blob_328  ; "panic at Subprocess.maxon:1260: Range check failed: value outside typealias 'ExitInt'\x0a"
+    arm64.leaRdata x0, __str_blob_328  ; "panic at Subprocess.maxon:1261: Range check failed: value outside typealias 'ExitInt'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot6
@@ -4268,13 +4270,14 @@ chunk @mrt_host_proc_reap {
 
 chunk @mrt_host_proc_await {
     0000: fd 7b bd a9 fd 03 00 91 a0 0b 00 f9 a1 0f 00 f9
-    0010: e2 ff 9f d2 e2 ff bf f2 3f 00 02 eb 81 00 00 54
-    0020: 21 00 80 d2 00 00 00 94 12 00 00 14 00 00 00 94
-    0030: a1 0f 40 f9 00 00 01 8b a0 13 00 f9 a0 0b 40 f9
-    0040: e1 03 1f aa 00 00 00 94 1f 08 00 f1 a0 01 00 54
-    0050: 00 01 00 b5 00 00 00 94 a1 13 40 f9 1f 00 01 eb
-    0060: ca 00 00 54 20 00 80 d2 00 00 00 94 f4 ff ff 17
-    0070: e0 03 1f aa 04 00 00 14 40 20 80 d2 02 00 00 14
-    0080: 00 10 80 d2 fd 7b c3 a8 c0 03 5f d6
+    0010: e2 ff 9f d2 e2 ff bf f2 3f 00 02 eb c1 00 00 54
+    0020: 21 00 80 d2 00 00 00 94 1f 08 00 f1 e0 02 00 54
+    0030: 12 00 00 14 00 00 00 94 a1 0f 40 f9 00 00 01 8b
+    0040: a0 13 00 f9 a0 0b 40 f9 e1 03 1f aa 00 00 00 94
+    0050: 1f 08 00 f1 a0 01 00 54 00 01 00 b5 00 00 00 94
+    0060: a1 13 40 f9 1f 00 01 eb ca 00 00 54 20 00 80 d2
+    0070: 00 00 00 94 f4 ff ff 17 e0 03 1f aa 04 00 00 14
+    0080: 40 20 80 d2 02 00 00 14 00 10 80 d2 fd 7b c3 a8
+    0090: c0 03 5f d6
 }
 ```

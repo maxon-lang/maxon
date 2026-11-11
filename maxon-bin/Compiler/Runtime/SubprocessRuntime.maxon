@@ -124,6 +124,7 @@ let SubpStatusTreeNotEnded = 3
 let SubpStatusReapedElsewhere = 4
 export let SubpNoExitSignal = 0 as FullRangeInt
 let SubpReapedElsewhereAnswer = -4
+let SubpUnreadExitCode = 0
 
 let SubprocessStdlibFileName = "Subprocess.maxon"
 
@@ -1368,6 +1369,7 @@ export function emitSubpTerminateTree(module StdModule, func IrFunction, cur IrB
 	let killCode = emitConst(module, block: cur, value: SubpKilledExitCode, ids: ids)
 	let delivered = ids.mint()
 	module.appendOp(cur, op: StdOp.osProcessTerminate(delivered, handleId: tree, exitCodeId: killCode))
+
 	// A refused terminate answers FALSE with or without the tree bit; OR-ing the bit in makes both one
 	// value. Comparing `delivered` with `Win32False` alone would send a refusal that carries the bit
 	// to the infinite wait.
@@ -1375,7 +1377,11 @@ export function emitSubpTerminateTree(module StdModule, func IrFunction, cur IrB
 	let answerWithTree = emitBin(module, block: cur, a: delivered, b: treeBit, opcode: StdBinOpcode.bitOr, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: answerWithTree, pred: StdCmpPred.eq, against: TerminateTreeIncomplete, whenTrue: endedAlready, whenFalse: awaitTheEnd, ids: ids)
 
-	emitSubpWaitForTheChild(module, block: awaitTheEnd, hProcess: hProcess, timeoutMs: SubpWaitInfinite, ended: gone, stillRunning: unconfirmed, ids: ids)
+	// After a delivered kill, a status another process took means the child is gone. After a refused
+	// one (`endedAlready`) it proves only that the status moved, so that wait counts signalled alone.
+	let settled = emitSubpAwaitChild(module, block: awaitTheEnd, hProcess: hProcess, timeoutMs: SubpWaitInfinite, ids: ids)
+	module.setTerminator(awaitTheEnd, op: StdOp.condBranch(emitSubpLookSaysLeft(module, block: awaitTheEnd, look: settled, ids: ids), thenBlockId: gone.id, elseBlockId: unconfirmed.id))
+
 	emitSubpWaitForTheChild(module, block: endedAlready, hProcess: hProcess, timeoutMs: ProcessEndBoundMs, ended: gone, stillRunning: unconfirmed, ids: ids)
 
 	return emitSubpBranchOnTreeBit(module, func: func, gone: gone, delivered: delivered, treeUnended: treeUnended, ids: ids)
@@ -1409,10 +1415,15 @@ function emitSubpAbandonCollection(module StdModule, func IrFunction, ids ValueM
 end 'emitSubpAbandonCollection'
 
 function emitSubpWaitForTheChild(module StdModule, block IrBlock, hProcess ValueId, timeoutMs FullRangeInt, ended IrBlock, stillRunning IrBlock, ids ValueMinter)
-	let settled = ids.mint()
-	module.appendOp(block, op: StdOp.osWaitChild(settled, handleId: hProcess, timeoutMsId: emitConst(module, block: block, value: timeoutMs, ids: ids)))
+	let settled = emitSubpAwaitChild(module, block: block, hProcess: hProcess, timeoutMs: timeoutMs, ids: ids)
 	emitBranchOnCompare(module, block: block, value: settled, pred: StdCmpPred.eq, against: WaitObjectSignalled, whenTrue: ended, whenFalse: stillRunning, ids: ids)
 end 'emitSubpWaitForTheChild'
+
+function emitSubpAwaitChild(module StdModule, block IrBlock, hProcess ValueId, timeoutMs FullRangeInt, ids ValueMinter) returns ValueId
+	let look = ids.mint()
+	module.appendOp(block, op: StdOp.osWaitChild(look, handleId: hProcess, timeoutMsId: emitConst(module, block: block, value: timeoutMs, ids: ids)))
+	return look
+end 'emitSubpAwaitChild'
 
 // `__gt_subp_wait_exit(handle, timeoutMs) -> exitCode | -2 (timed out) | -3 (timed out, tree not
 // ended) | -4 (status went to another process) | -1 (bad handle)` —
@@ -1521,11 +1532,8 @@ function buildSubpWaitExit(module StdModule, target Target)
 	let handleR = emitLoadField(module, block: reap, record: state, offset: WcHandle, ids: ids)
 	let slotR = emitSubpSlotOf(module, block: reap, ids: ids, handle: handleR)
 	let hProcessR = emitLoadField(module, block: reap, record: slotR, offset: SubpSlotHProcess, ids: ids)
-	let exitCode = emitSubpReportedExitCode(module, block: reap, slot: slotR, hProcess: hProcessR, ids: ids)
-	let taken = emitSubpChildWasReapedElsewhere(module, block: reap, ids: ids, hProcess: hProcessR)
-	let answer = emitSelectWord(module, block: reap, cond: taken, whenSet: emitConst(module, block: reap, value: SubpReapedElsewhereAnswer, ids: ids), whenClear: exitCode, ids: ids)
 	emitSlabFree(module, block: reap, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
-	module.setTerminator(reap, op: StdOp.ret(answer))
+	emitSubpReturnExitAnswer(module, func: func, block: reap, slot: slotR, hProcess: hProcessR, ids: ids)
 
 	module.functions.push(func)
 end 'buildSubpWaitExit'
@@ -1654,18 +1662,32 @@ end 'emitSubpExitSignalOf'
 // (`WaitAbandoned`). On POSIX it is a `waitpid(WNOHANG)`, which reaps a child it finds exited and caches the
 // status for the reads that follow.
 function emitSubpChildHasLeft(module StdModule, block IrBlock, ids ValueMinter, hProcess ValueId) returns ValueId
-	let look = emitSubpChildLook(module, block: block, ids: ids, hProcess: hProcess)
+	return emitSubpLookSaysLeft(module, block: block, look: emitSubpChildLook(module, block: block, ids: ids, hProcess: hProcess), ids: ids)
+end 'emitSubpChildHasLeft'
+
+function emitSubpLookSaysLeft(module StdModule, block IrBlock, look ValueId, ids ValueMinter) returns ValueId
 	let exited = emitCompareWithConstant(module, block: block, value: look, pred: StdCmpPred.eq, against: WaitObjectSignalled, ids: ids)
 	let reapedElsewhere = emitCompareWithConstant(module, block: block, value: look, pred: StdCmpPred.eq, against: WaitAbandoned, ids: ids)
 
 	return emitBin(module, block: block, a: exited, b: reapedElsewhere, opcode: StdBinOpcode.bitOr, ids: ids)
-end 'emitSubpChildHasLeft'
+end 'emitSubpLookSaysLeft'
 
-function emitSubpChildWasReapedElsewhere(module StdModule, block IrBlock, ids ValueMinter, hProcess ValueId) returns ValueId
-	let look = emitSubpChildLook(module, block: block, ids: ids, hProcess: hProcess)
+// The one look every exit-status read decides on. Read the code only on `whenTaken`: a reap that
+// fails because another process took the status leaves the cached code 0, and a second look can
+// disagree with this one.
+module function emitSubpBranchOnTakenStatus(module StdModule, block IrBlock, hProcess ValueId, whenLost IrBlock, whenTaken IrBlock, ids ValueMinter)
+	let look = emitSubpAwaitChild(module, block: block, hProcess: hProcess, timeoutMs: SubpWaitInfinite, ids: ids)
+	emitBranchOnCompare(module, block: block, value: look, pred: StdCmpPred.eq, against: WaitAbandoned, whenTrue: whenLost, whenFalse: whenTaken, ids: ids)
+end 'emitSubpBranchOnTakenStatus'
 
-	return emitCompareWithConstant(module, block: block, value: look, pred: StdCmpPred.eq, against: WaitAbandoned, ids: ids)
-end 'emitSubpChildWasReapedElsewhere'
+module function emitSubpReturnExitAnswer(module StdModule, func IrFunction, block IrBlock, slot ValueId, hProcess ValueId, ids ValueMinter)
+	var statusLost = module.addBlock(func, label: b"subpstatuslost", heat: BlockHeat.normal)
+	var statusTaken = module.addBlock(func, label: b"subpstatustaken", heat: BlockHeat.normal)
+	emitSubpBranchOnTakenStatus(module, block: block, hProcess: hProcess, whenLost: statusLost, whenTaken: statusTaken, ids: ids)
+
+	module.setTerminator(statusLost, op: StdOp.ret(emitConst(module, block: statusLost, value: SubpReapedElsewhereAnswer, ids: ids)))
+	module.setTerminator(statusTaken, op: StdOp.ret(emitSubpReportedExitCode(module, block: statusTaken, slot: slot, hProcess: hProcess, ids: ids)))
+end 'emitSubpReturnExitAnswer'
 
 function emitSubpChildLook(module StdModule, block IrBlock, ids ValueMinter, hProcess ValueId) returns ValueId
 	let noWait = emitConst(module, block: block, value: 0, ids: ids)
@@ -1711,6 +1733,9 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	var doSleep = module.addBlock(func, label: b"wcsleep", heat: BlockHeat.normal)
 	var finish = module.addBlock(func, label: b"wcfinish", heat: BlockHeat.normal)
 	var reap = module.addBlock(func, label: b"wcreap", heat: BlockHeat.normal)
+	var statusLost = module.addBlock(func, label: b"wcstatuslost", heat: BlockHeat.normal)
+	var statusTaken = module.addBlock(func, label: b"wcstatustaken", heat: BlockHeat.normal)
+	var packed = module.addBlock(func, label: b"wcpacked", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let handle = 0
@@ -1850,36 +1875,42 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let handleF = emitLoadField(module, block: reap, record: state, offset: WcHandle, ids: ids)
 	let slotF = emitSubpSlotOf(module, block: reap, ids: ids, handle: handleF)
 	let hProcessF = emitLoadField(module, block: reap, record: slotF, offset: SubpSlotHProcess, ids: ids)
-	let reportedCode = emitSubpReportedExitCode(module, block: reap, slot: slotF, hProcess: hProcessF, ids: ids)
-	let exitSignal = emitSubpExitSignalOf(module, block: reap, hProcess: hProcessF, ids: ids)
-	let waitedStatus = emitLoadField(module, block: reap, record: state, offset: WcStatus, ids: ids)
-	let exitedNormally = emitCompareWithConstant(module, block: reap, value: waitedStatus, pred: StdCmpPred.eq, against: SubpStatusExited, ids: ids)
-	let hasASignal = emitCompareWithConstant(module, block: reap, value: exitSignal, pred: StdCmpPred.ne, against: SubpNoExitSignal, ids: ids)
-	let killedBySignal = emitBin(module, block: reap, a: exitedNormally, b: hasASignal, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let exitCode = emitSelectWord(module, block: reap, cond: killedBySignal, whenSet: exitSignal, whenClear: reportedCode, ids: ids)
-	let reportedStatus = emitSelectWord(module, block: reap, cond: killedBySignal, whenSet: emitConst(module, block: reap, value: SubpStatusSignalled, ids: ids), whenClear: waitedStatus, ids: ids)
-	let taken = emitSubpChildWasReapedElsewhere(module, block: reap, ids: ids, hProcess: hProcessF)
-	let status = emitSelectWord(module, block: reap, cond: taken, whenSet: emitConst(module, block: reap, value: SubpStatusReapedElsewhere, ids: ids), whenClear: reportedStatus, ids: ids)
-	let endMs = ids.mint()
-	module.appendOp(reap, op: StdOp.osTickCountMs(endMs))
-	let startF = emitLoadField(module, block: reap, record: state, offset: WcStartMs, ids: ids)
-	let duration = emitBin(module, block: reap, a: endMs, b: startF, opcode: StdBinOpcode.sub, ids: ids)
 	let resSize = emitConst(module, block: reap, value: ResBytes, ids: ids)
 	let result = emitRawAlloc(module, block: reap, byteCount: resSize, ids: ids)
-	emitStoreField(module, block: reap, record: result, offset: ResStatus, value: status)
-	emitStoreField(module, block: reap, record: result, offset: ResCode, value: exitCode)
-	emitStoreField(module, block: reap, record: result, offset: ResDuration, value: duration)
-	let outBufF = emitLoadField(module, block: reap, record: state, offset: WcOutBuf, ids: ids)
-	let outLenF = emitLoadField(module, block: reap, record: state, offset: WcOutLen, ids: ids)
-	emitStoreField(module, block: reap, record: result, offset: ResOutBuf, value: outBufF)
-	emitStoreField(module, block: reap, record: result, offset: ResOutLen, value: outLenF)
-	let errBufF = emitLoadField(module, block: reap, record: state, offset: WcErrBuf, ids: ids)
-	let errLenF = emitLoadField(module, block: reap, record: state, offset: WcErrLen, ids: ids)
-	emitStoreField(module, block: reap, record: result, offset: ResErrBuf, value: errBufF)
-	emitStoreField(module, block: reap, record: result, offset: ResErrLen, value: errLenF)
-	emitSlabFree(module, block: reap, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
-	emitSubpCollectorFree(module, block: reap, slot: slotF, ids: ids)
-	module.setTerminator(reap, op: StdOp.ret(result))
+	emitSubpBranchOnTakenStatus(module, block: reap, hProcess: hProcessF, whenLost: statusLost, whenTaken: statusTaken, ids: ids)
+
+	emitStoreField(module, block: statusLost, record: result, offset: ResStatus, value: emitConst(module, block: statusLost, value: SubpStatusReapedElsewhere, ids: ids))
+	emitStoreField(module, block: statusLost, record: result, offset: ResCode, value: emitConst(module, block: statusLost, value: SubpUnreadExitCode, ids: ids))
+	module.setTerminator(statusLost, op: StdOp.branch(packed.id))
+
+	let reportedCode = emitSubpReportedExitCode(module, block: statusTaken, slot: slotF, hProcess: hProcessF, ids: ids)
+	let exitSignal = emitSubpExitSignalOf(module, block: statusTaken, hProcess: hProcessF, ids: ids)
+	let waitedStatus = emitLoadField(module, block: statusTaken, record: state, offset: WcStatus, ids: ids)
+	let exitedNormally = emitCompareWithConstant(module, block: statusTaken, value: waitedStatus, pred: StdCmpPred.eq, against: SubpStatusExited, ids: ids)
+	let hasASignal = emitCompareWithConstant(module, block: statusTaken, value: exitSignal, pred: StdCmpPred.ne, against: SubpNoExitSignal, ids: ids)
+	let killedBySignal = emitBin(module, block: statusTaken, a: exitedNormally, b: hasASignal, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let exitCode = emitSelectWord(module, block: statusTaken, cond: killedBySignal, whenSet: exitSignal, whenClear: reportedCode, ids: ids)
+	let reportedStatus = emitSelectWord(module, block: statusTaken, cond: killedBySignal, whenSet: emitConst(module, block: statusTaken, value: SubpStatusSignalled, ids: ids), whenClear: waitedStatus, ids: ids)
+	emitStoreField(module, block: statusTaken, record: result, offset: ResStatus, value: reportedStatus)
+	emitStoreField(module, block: statusTaken, record: result, offset: ResCode, value: exitCode)
+	module.setTerminator(statusTaken, op: StdOp.branch(packed.id))
+
+	let endMs = ids.mint()
+	module.appendOp(packed, op: StdOp.osTickCountMs(endMs))
+	let startF = emitLoadField(module, block: packed, record: state, offset: WcStartMs, ids: ids)
+	let duration = emitBin(module, block: packed, a: endMs, b: startF, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: packed, record: result, offset: ResDuration, value: duration)
+	let outBufF = emitLoadField(module, block: packed, record: state, offset: WcOutBuf, ids: ids)
+	let outLenF = emitLoadField(module, block: packed, record: state, offset: WcOutLen, ids: ids)
+	emitStoreField(module, block: packed, record: result, offset: ResOutBuf, value: outBufF)
+	emitStoreField(module, block: packed, record: result, offset: ResOutLen, value: outLenF)
+	let errBufF = emitLoadField(module, block: packed, record: state, offset: WcErrBuf, ids: ids)
+	let errLenF = emitLoadField(module, block: packed, record: state, offset: WcErrLen, ids: ids)
+	emitStoreField(module, block: packed, record: result, offset: ResErrBuf, value: errBufF)
+	emitStoreField(module, block: packed, record: result, offset: ResErrLen, value: errLenF)
+	emitSlabFree(module, block: packed, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
+	emitSubpCollectorFree(module, block: packed, slot: slotF, ids: ids)
+	module.setTerminator(packed, op: StdOp.ret(result))
 
 	module.functions.push(func)
 end 'buildSubpWaitCollect'

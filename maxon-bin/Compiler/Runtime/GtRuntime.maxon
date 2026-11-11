@@ -1099,6 +1099,8 @@ export let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL ter
 //     is not a runnable executable). On failure CreateProcessW leaves the PROCESS_INFORMATION untouched, and
 //     the call's is a freshly zeroed slot, so `hProcess == 0` detects it — and the runtime MUST NOT park on a
 //     null handle, which nothing could ever make ready, leaving the thread parked for ever.
+//   * `RunProcessError.statusLost` — the child ended while another process took its exit status, so there is
+//     no code to return.
 //
 // ⭐⭐ **HOW MANY CHILDREN MAY BE PARKED AT ONCE IS NOT A QUESTION THIS ERROR ANSWERS.** A parked child is a
 // SOURCE ON THE POLLER (`NetpollRuntime`'s child band), so the ceiling is the process's own descriptor limit
@@ -1119,18 +1121,21 @@ export let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL ter
 // scalar ordinals below (correct), never a box.
 let RunProcessErrorOrdinalInstaller = b"the green-thread runtime (RunProcessError)"
 let RunProcessSpawnFailedCaseName = b"spawnFailed"
+let RunProcessStatusLostCaseName = b"statusLost"
 
 // The `RunProcessError` case ORDINAL — it rides R10 as `ordinal + ErrorFlagOrdinalBias`, the SAME scalar-error
 // encoding a source `throw E.case` uses (`LowerMaxonToStd.lowerThrowError`), so the `otherwise (e)` decode
 // (`e = flag - bias`, `parseOtherwiseBlock`) needs no third copy of the bias. `0` is reserved by the bias for
 // "no error in flight".
 let RunProcessSpawnFailedOrdinal = 0
+let RunProcessStatusLostOrdinal = 1
 
 // The R10 error-flag VALUE the throw emits and a successful `runProcess` clears — the ordinal biased by the
 // one `ErrorFlagOrdinalBias` (never a second literal, so the runtime encode cannot drift from the parser decode),
 // and the shared `MaxonDialect.NoErrorFlag` alongside a real exit code — the success value the bias reserves,
 // read from its one declaration rather than re-spelled `0` here.
 let RunProcessSpawnFailedFlag = RunProcessSpawnFailedOrdinal + ErrorFlagOrdinalBias
+let RunProcessStatusLostFlag = RunProcessStatusLostOrdinal + ErrorFlagOrdinalBias
 
 function runProcessErrorThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(RunProcessErrorTypeName))
@@ -1146,6 +1151,7 @@ end 'verifyRunProcessErrorOrdinals'
 function claimRunProcessErrorOrdinals(project Project, declaration EnumLayout)
 	var errors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: RunProcessErrorOrdinalInstaller)
 	errors.claim(RunProcessSpawnFailedCaseName, ordinal: RunProcessSpawnFailedOrdinal)
+	errors.claim(RunProcessStatusLostCaseName, ordinal: RunProcessStatusLostOrdinal)
 	errors.requireTotal()
 end 'claimRunProcessErrorOrdinals'
 
@@ -8387,7 +8393,8 @@ end 'buildGtPreempt'
 // ⭐ **A THROWING FUNCTION** — its `throws RunProcessError` clause makes the x64/wasm backends give it
 // the dual-register `errorReturn` ABI (exit code in R8, error flag in R10), the same shape a throwing array
 // accessor uses. Every exit is an `errorReturn`: the reap path returns `(code, NoErrorFlag)`, a
-// `CreateProcessW` failure returns `(0, RunProcessSpawnFailedFlag)`. The front end recognizes `__gt_process_run` as a
+// `CreateProcessW` failure returns `(0, RunProcessSpawnFailedFlag)`, a status another process took returns
+// `(0, RunProcessStatusLostFlag)`. The front end recognizes `__gt_process_run` as a
 // throwing runtime callee (`isThrowingGtRuntimeCallee`), so a `runProcess` call must be a `tryCall`.
 function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape, childShape NetpollShape)
 	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: runProcessErrorThrows())
@@ -8440,6 +8447,8 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	var childReady = module.addBlock(func, label: b"childready", heat: BlockHeat.normal)
 	var renounced = module.addBlock(func, label: b"renounced", heat: BlockHeat.normal)
 	var reapExit = module.addBlock(func, label: b"reapexit", heat: BlockHeat.normal)
+	var statusLost = module.addBlock(func, label: b"statuslost", heat: BlockHeat.normal)
+	var statusTaken = module.addBlock(func, label: b"statustaken", heat: BlockHeat.normal)
 
 	// afterCopy: spawn the child. On FAILURE (`hProcess == 0` — CreateProcessW leaves the PROCESS_INFORMATION
 	// untouched, and this call's is a fresh, zeroed slot) → `spawnFailed` (throw, never park on a null handle).
@@ -8480,11 +8489,7 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	// spawnFailed: the command names no runnable executable — THROW `RunProcessError.spawnFailed` rather
 	// than park on a null handle. The primary register carries a `0` sentinel the catcher ignores (the flag is
 	// non-zero), and the flag is `RunProcessSpawnFailedFlag`.
-	let spawnFailSentinel = ids.mint()
-	module.appendOp(spawnFailed, op: StdOp.const(spawnFailSentinel, value: 0, valueType: StdType.i64))
-	let spawnFailFlag = ids.mint()
-	module.appendOp(spawnFailed, op: StdOp.const(spawnFailFlag, value: RunProcessSpawnFailedFlag, valueType: StdType.i64))
-	module.setTerminator(spawnFailed, op: StdOp.errorReturn(spawnFailSentinel, errorFlagId: spawnFailFlag))
+	emitErrorReturn(module, block: spawnFailed, flag: RunProcessSpawnFailedFlag, ids: ids)
 
 	// spawnOk: close the (unneeded) thread handle, then make the child a SOURCE ON THE POLLER and park on it.
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
@@ -8510,11 +8515,14 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 
 	emitNetpollRenounceChild(module, block: renounced, shape: childShape, child: child, hProcess: hProcess, ids: ids)
 
-	let renouncedNoError = ids.mint()
-	module.appendOp(renounced, op: StdOp.const(renouncedNoError, value: NoErrorFlag, valueType: StdType.i64))
-	module.setTerminator(renounced, op: StdOp.errorReturn(renouncedCode, errorFlagId: renouncedNoError))
+	emitOkReturn(module, block: renounced, value: renouncedCode, ids: ids)
 
-	// reapExit: the child has exited. Read its code and close the handle.
+	// reapExit: the child has exited.
+	emitSubpBranchOnTakenStatus(module, block: reapExit, hProcess: hProcess, whenLost: statusLost, whenTaken: statusTaken, ids: ids)
+
+	module.appendOp(statusLost, op: StdOp.osCloseHandle(hProcess))
+	emitErrorReturn(module, block: statusLost, flag: RunProcessStatusLostFlag, ids: ids)
+
 	// ⭐ **THE EXIT-CODE SLOT IS TAKEN HERE, AFTER THE PARK, AND GIVEN BACK BEFORE THE RETURN** — so no
 	// scratch of this call's is alive while the green thread is suspended, and the slot cannot be shared with
 	// another call's reap. THE ZEROING IS WHY THE i64 READ IS CLEAN: GetExitCodeProcess writes only the low
@@ -8522,19 +8530,17 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	// exactly this child's code (a full-word load is the only wide memory form — a u32 read would need an `as`
 	// cast the runtime builder cannot spell). A fresh slab slot supplies that.
 	let codeSizeConst = ids.mint()
-	module.appendOp(reapExit, op: StdOp.const(codeSizeConst, value: ExitCodeSlotBytes, valueType: StdType.i64))
-	let codePtr = emitSlabAlloc(module, block: reapExit, bytes: codeSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
-	module.appendOp(reapExit, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
+	module.appendOp(statusTaken, op: StdOp.const(codeSizeConst, value: ExitCodeSlotBytes, valueType: StdType.i64))
+	let codePtr = emitSlabAlloc(module, block: statusTaken, bytes: codeSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
+	module.appendOp(statusTaken, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
 	let code = ids.mint()
-	module.appendOp(reapExit, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
-	emitSlabFree(module, block: reapExit, ptr: codePtr, kind: SlabBufferKind.subprocessState, ids: ids)
-	module.appendOp(reapExit, op: StdOp.osCloseHandle(hProcess))
+	module.appendOp(statusTaken, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
+	emitSlabFree(module, block: statusTaken, ptr: codePtr, kind: SlabBufferKind.subprocessState, ids: ids)
+	module.appendOp(statusTaken, op: StdOp.osCloseHandle(hProcess))
 
 	// A THROWING function's successful exit still writes BOTH registers — the child's exit code in the
 	// primary, `NoErrorFlag` in the flag — so the `try` caller reads flag 0 and takes the success path.
-	let reapNoError = ids.mint()
-	module.appendOp(reapExit, op: StdOp.const(reapNoError, value: NoErrorFlag, valueType: StdType.i64))
-	module.setTerminator(reapExit, op: StdOp.errorReturn(code, errorFlagId: reapNoError))
+	emitOkReturn(module, block: statusTaken, value: code, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtProcessRun'
@@ -11188,9 +11194,9 @@ function buildSubpCloseStdin(module StdModule)
 	module.functions.push(func)
 end 'buildSubpCloseStdin'
 
-// `__gt_subp_wait(handle) -> exitCode` — block until the child exits and return its exit code. A blocking
-// WaitForSingleObject (the harness waits after draining output, so the child is already exiting); GetExitCodeProcess
-// writes the code into the handle's reusable bytesOut slot.
+// `__gt_subp_wait(handle) -> exitCode | -4 (status went to another process) | -1 (bad handle)` — block
+// until the child exits. The wait may block the machine because the harness waits after draining output, so
+// the child is already exiting.
 function buildSubpWait(module StdModule)
 	var func = IrFunction.createFromStd(SubpWaitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -11210,13 +11216,7 @@ function buildSubpWait(module StdModule)
 	var live = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: badHandle)
 	let slot = emitSubpSlotOf(module, block: live, ids: ids, handle: handle)
 	let hProcess = emitLoadField(module, block: live, record: slot, offset: SubpSlotHProcess, ids: ids)
-	let infinite = emitConst(module, block: live, value: SubpWaitInfinite, ids: ids)
-	let waitResult = ids.mint()
-	module.appendOp(live, op: StdOp.osWaitChild(waitResult, handleId: hProcess, timeoutMsId: infinite))
-	let codePtr = emitLoadField(module, block: live, record: slot, offset: SubpSlotBytesOut, ids: ids)
-	module.appendOp(live, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
-	let exitCode = emitLoadDword(module, block: live, record: codePtr, offset: 0, ids: ids)
-	module.setTerminator(live, op: StdOp.ret(exitCode))
+	emitSubpReturnExitAnswer(module, func: func, block: live, slot: slot, hProcess: hProcess, ids: ids)
 
 	module.functions.push(func)
 end 'buildSubpWait'
