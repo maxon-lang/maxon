@@ -4,11 +4,10 @@ let BurstDetachLaps = 8
 let BurstDetachStopTimeout = "0.01"
 let BurstProcessorCount = "64"
 let BurstProcessorVariable = "MAXON_MAX_PROCS"
-let BurstMarkerLooks = 100
-let BurstMarkerLookGapMs = 100
+let BurstEndDeadlineMs = 10000
+let BurstLookGapMs = 1
 
 #if os(Linux)
-	typealias BurstLook = int(0 to 100)
 	typealias BurstLap = int(0 to 100)
 #endif
 
@@ -32,14 +31,22 @@ test 'a program the session detaches from while it is starting threads runs on t
 
 			Expect.equal(eventsOfKind(events, kind: ErrorEventName).count(), expected: 0, message: "lap {lap}: the detach of a program that was still starting threads was refused. {said}")
 
-			var looks = 0 as BurstLook
+			let released = Clock.nowMs()
 
-			while not File.exists(marker) and looks < BurstMarkerLooks 'untilTheProgramEnds'
-				sleep(BurstMarkerLookGapMs)
-				looks = looks + 1
+			while not File.exists(marker) and Clock.elapsedMs(released) < BurstEndDeadlineMs 'untilTheProgramEnds'
+				sleep(BurstLookGapMs)
 			end 'untilTheProgramEnds'
 
 			Expect.isTrue(File.exists(marker), message: "⛔ lap {lap}: A DETACHED PROGRAM RUNS TO ITS OWN END, and {BurstFinishedMarkerName} never appeared. A thread the session was tracing when it detached and never released is killed with the session (`PTRACE_O_EXITKILL`), and a thread killed takes its process with it. The session ran {session.durationMs} ms and exited {session.exitCode()}. {said}")
+
+			let program = burstProcessId(staged)
+			let marked = Clock.nowMs()
+
+			while Process.isAlive(program) and Clock.elapsedMs(marked) < BurstEndDeadlineMs 'untilTheProgramExits'
+				sleep(BurstLookGapMs)
+			end 'untilTheProgramExits'
+
+			Expect.isFalse(Process.isAlive(program), message: "lap {lap}: the released program wrote {BurstFinishedMarkerName} and was still running {BurstEndDeadlineMs} ms later: {stateRowOf(program)}. {said}")
 		end 'eachLap'
 
 		discardStagedDir(staged)
