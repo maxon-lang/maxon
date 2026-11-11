@@ -220,7 +220,7 @@ end 'ProcessPlace'
 
 export function placeOf(process Pid) returns ProcessPlace
 	#if os(Windows)
-		return ProcessPlace.absent
+		panic("the gate could not run — this host has no process listing to place process {process} in")
 	#else
 		let listed = try listedProcesses() otherwise (e) 'noListing'
 			panic("the gate could not run — the process listing failed: {e.displayReason()}")
@@ -232,6 +232,8 @@ end 'placeOf'
 
 export function defunctAmong(processes ProcessIds) returns StringArray
 	#if os(Windows)
+		_ = processes
+
 		return StringArray.create(0)
 	#else
 		let listed = try listedProcesses() otherwise (e) 'noListing'
