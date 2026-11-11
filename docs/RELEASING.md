@@ -212,10 +212,13 @@ empty cell, and a cell that holds several values is a comma list. Readers find a
 | `docker` | its Docker platform architecture |
 | `shell` | the login shell `install-script.yml` runs `install.sh` under |
 | `roles` | the single-lane CI work it hosts: the steps `cpu-probe`, `codecs` and `targets-gate`, and the `cross-suite` job |
+| `suite-shards` | how many jobs `ci.yml` splits that lane's spec suite into; on a `cross-suite` row, the cross-target suites too. macOS has fewer, so one run's macOS jobs fit the five GitHub Free runs at once |
 
 Workflows build their matrices with `scripts/targets/matrix.sh`, which selects rows by `native`, `cross`
-or `COLUMN=VALUE`. `ci.yml` crosses the native rows with `--with shard=1,…,N` to run the spec suites in
-`SUITE_SHARDS` shards per lane.
+or `COLUMN=VALUE`. `--with NAME=A,B` crosses every row with a list, and `--count NAME=COLUMN` expands each
+row into `NAME=1,…,N` with N read from that row's `COLUMN`. `ci.yml` builds each lane's compiler once, in
+its `build` job, and that lane's test jobs download it; its suite jobs come from
+`--count shard=suite-shards`.
 
 ### Adding a target
 

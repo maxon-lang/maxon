@@ -90,7 +90,7 @@ on:
 # ⚠ THE `run_id` FALLBACK IS WHAT TURNS CANCELLING OFF, and `cancel-in-progress: false` would not.
 # A group is the thing that supersedes, and a group still discards a run while it is QUEUED — which a
 # `main` run often is, because GitHub Free allows five concurrent macOS jobs and one run's macOS
-# lane alone needs more.
+# lane fills all five.
 # Giving each `main` run a group of its own is the only way it is left alone.
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
@@ -98,9 +98,6 @@ concurrency:
 
 permissions:
   contents: read
-
-env:
-  SUITE_SHARDS: 4
 
 jobs:
   targets:
@@ -121,12 +118,11 @@ jobs:
       - name: Read the native targets from the table
         id: matrix
         run: |
-          shards="$(seq -s, 1 "$SUITE_SHARDS")"
           echo "native=$(./scripts/targets/matrix.sh json native)" >> "$GITHUB_OUTPUT"
-          echo "shards=$(./scripts/targets/matrix.sh json --with shard="$shards" native)" >> "$GITHUB_OUTPUT"
-          echo "cross-shards=$(./scripts/targets/matrix.sh json --with shard="$shards" native roles=cross-suite)" >> "$GITHUB_OUTPUT"
+          echo "shards=$(./scripts/targets/matrix.sh json --count shard=suite-shards native)" >> "$GITHUB_OUTPUT"
+          echo "cross-shards=$(./scripts/targets/matrix.sh json --count shard=suite-shards native roles=cross-suite)" >> "$GITHUB_OUTPUT"
 
-  corpora:
+  build:
     needs: targets
     strategy: &lanes
       fail-fast: false
@@ -135,9 +131,59 @@ jobs:
     defaults: &bash-steps
       run:
         shell: bash
+    outputs:
+      seeded: ${{ steps.seed.outputs.seeded }}
     steps:
       - &checkout
         uses: actions/checkout@v5
+
+      # The seed is the binary alone; `scripts/fetch-seed.sh` says why and is the one place that fetches it.
+      - name: Seed from the pinned seed release
+        id: seed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          allow_none=""; [ "${{ github.repository }}" = "maxon-lang/maxon" ] || allow_none="--allow-none"
+          ./scripts/fetch-seed.sh ${{ matrix.target }} $allow_none
+          . scripts/lib/host-binaries.sh
+          if [ -x "$(maxon_downloaded_path)" ]; then
+            echo "seeded=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::the pinned seed release is not published in this repository — CI is inert"
+            echo "seeded=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The seed builds `C1` and `C1` builds `C2`: one build would run the suite on the seed's runtime.
+      - name: Build
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./scripts/build-from-seed.sh
+
+      # A tar keeps the executable bit the artifact store drops. It goes through a pipe because GNU tar
+      # reads the `D:` of a Windows path given to `-f` as a remote host.
+      - name: Pack the compiler
+        if: steps.seed.outputs.seeded == 'yes'
+        run: tar -cf - maxon-bin/.maxon > "$RUNNER_TEMP/compiler.tar"
+
+      - name: Upload the compiler
+        if: steps.seed.outputs.seeded == 'yes'
+        uses: actions/upload-artifact@v6
+        with:
+          name: compiler-${{ matrix.target }}
+          path: ${{ runner.temp }}/compiler.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  # Without the `if`, one lane's failed build would skip every lane's tests, and a skipped job is not
+  # a red one. A lane whose build failed fails at its own download instead.
+  corpora:
+    needs: [targets, build]
+    if: ${{ !cancelled() && needs.targets.result == 'success' }}
+    strategy: *lanes
+    runs-on: ${{ matrix.runner }}
+    defaults: *bash-steps
+    steps:
+      - *checkout
 
       # A role is matched with a comma on each side, so a role named inside another cannot select a lane.
       - name: Runner CPU
@@ -177,29 +223,23 @@ jobs:
         if: contains(format(',{0},', matrix.roles), ',codecs,')
         run: python3 scripts/test-bench-common.py
 
-      # The seed is the binary alone; `scripts/fetch-seed.sh` says why and is the one place that fetches it.
-      - &seed
-        name: Seed from the pinned seed release
+      - &download-compiler
+        name: Download the compiler
+        if: needs.build.outputs.seeded == 'yes'
+        uses: actions/download-artifact@v7
+        with:
+          name: compiler-${{ matrix.target }}
+          path: ${{ runner.temp }}/compiler
+
+      - &unpack-compiler
+        name: Unpack the compiler
         id: seed
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: needs.build.outputs.seeded == 'yes'
         run: |
           set -euo pipefail
-          allow_none=""; [ "${{ github.repository }}" = "maxon-lang/maxon" ] || allow_none="--allow-none"
-          ./scripts/fetch-seed.sh ${{ matrix.target }} $allow_none
-          . scripts/lib/host-binaries.sh
-          if [ -x "$(maxon_downloaded_path)" ]; then
-            echo "seeded=yes" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::the pinned seed release is not published in this repository — CI is inert"
-            echo "seeded=no" >> "$GITHUB_OUTPUT"
-          fi
-
-      # The seed builds `C1` and `C1` builds `C2`: one build would run the suite on the seed's runtime.
-      - &build
-        name: Build
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./scripts/build-from-seed.sh
+          tar -xmf - < "$RUNNER_TEMP/compiler/compiler.tar"
+          ./maxon-bin/.maxon/maxon version
+          echo "seeded=yes" >> "$GITHUB_OUTPUT"
 
       # Samples memory and the largest processes for the rest of the job into the log "Resource evidence"
       # prints: a step killed by its timeout or by the OOM killer leaves no such record in its own log.
@@ -417,14 +457,15 @@ jobs:
           if-no-files-found: ignore
 
   tools:
-    needs: targets
+    needs: [targets, build]
+    if: ${{ !cancelled() && needs.targets.result == 'success' }}
     strategy: *lanes
     runs-on: ${{ matrix.runner }}
     defaults: *bash-steps
     steps:
       - *checkout
-      - *seed
-      - *build
+      - *download-compiler
+      - *unpack-compiler
       - *sampler
       - *sampler-windows
       - *openssl
@@ -470,7 +511,8 @@ jobs:
   # Each shard runs its share of both the whole suite and the reversed-order run: a job of their own
   # for the second would add a shard's worth of macOS jobs against the five GitHub Free allows.
   suite:
-    needs: targets
+    needs: [targets, build]
+    if: ${{ !cancelled() && needs.targets.result == 'success' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.shards) }}
@@ -478,8 +520,8 @@ jobs:
     defaults: *bash-steps
     steps:
       - *checkout
-      - *seed
-      - *build
+      - *download-compiler
+      - *unpack-compiler
       - *sampler
       - *sampler-windows
       - *openssl
@@ -488,7 +530,7 @@ jobs:
 
       - name: Suite
         if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon spec-test --shard="${{ matrix.shard }}/$SUITE_SHARDS"
+        run: ./maxon-bin/.maxon/maxon spec-test --shard="${{ matrix.shard }}/${{ matrix.suite-shards }}"
 
       - name: Suite in reversed source order
         if: steps.seed.outputs.seeded == 'yes'
@@ -496,7 +538,7 @@ jobs:
           MAXON_SOURCE_ORDER: reversed
         run: >-
           ./maxon-bin/.maxon/maxon spec-test
-          --shard="${{ matrix.shard }}/$SUITE_SHARDS"
+          --shard="${{ matrix.shard }}/${{ matrix.suite-shards }}"
           --filter=array-conditional-conformance-withheld/
           --filter=arrays/
           --filter=associated-type-held-at-an-interface/
@@ -559,7 +601,8 @@ jobs:
   # One lane: its programs run under `vendor/wasmtime`, which `Stage vendor` stages, rather than on
   # the runner's OS, so no lane's host changes what they run on.
   cross-suite:
-    needs: targets
+    needs: [targets, build]
+    if: ${{ !cancelled() && needs.targets.result == 'success' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.cross-shards) }}
@@ -567,8 +610,8 @@ jobs:
     defaults: *bash-steps
     steps:
       - *checkout
-      - *seed
-      - *build
+      - *download-compiler
+      - *unpack-compiler
       - *sampler
       - *sampler-windows
       - *openssl
@@ -581,7 +624,7 @@ jobs:
           set -euo pipefail
           targets="$(./scripts/targets/matrix.sh list target cross)"
           for target in $targets; do
-            ./maxon-bin/.maxon/maxon spec-test --target="$target" --shard="${{ matrix.shard }}/$SUITE_SHARDS"
+            ./maxon-bin/.maxon/maxon spec-test --target="$target" --shard="${{ matrix.shard }}/${{ matrix.suite-shards }}"
           done
 
       - *leftovers
