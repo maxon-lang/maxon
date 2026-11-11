@@ -1370,7 +1370,9 @@ build. The new binary is written into the build's staging directory, as every bu
 [`maxon build`](#maxon-build)). Once the compile succeeds, the compiler renames its running image to
 `maxon.previous` (`maxon.previous.exe` on Windows) and renames the new binary into the empty slot. If an older
 `maxon.previous` is itself still running, for example an editor's language server, it is renamed aside to
-`maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later rebuild. A **failed** build leaves
+`maxon.retired.<tag>.<start>.<pid>.<serial>`. A later build into that slot deletes the retired images nothing
+runs any longer, whether it is the compiler rebuilding itself or another compiler building into a slot that
+has a `maxon.previous` beside it. A **failed** build leaves
 the running compiler in place. Such a build always compiles: every build of the compiler changes the compiler identity a
 [build record](#up-to-date) would be checked against.
 
@@ -3196,7 +3198,7 @@ succeeds, the running image is renamed to `maxon.previous` and the new compiler,
 build's staging directory, is renamed into its place, and the server keeps answering from the renamed
 image. A server started before an earlier
 rebuild is running an older `maxon.previous`; that file is renamed aside to
-`maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later rebuild once the server has exited.
+`maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later build into the slot once the server has exited.
 A failed build leaves the running compiler in the slot.
 
 **The running server is still the compiler it was started as.** Restart it when you want the newly

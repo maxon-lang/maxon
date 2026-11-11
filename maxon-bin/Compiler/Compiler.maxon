@@ -407,11 +407,9 @@ end 'outputIsRunningImage'
 //
 // ⚠ **AN OLDER `.previous` MAY ITSELF BE RUNNING** — an `mcp-server` or `lsp-server` started before the
 // last rebuild — and then it cannot be deleted either. It is renamed aside to a unique
-// `<stem>.retired.<scratch block><ext>` instead, and every self-rebuild first sweeps the retired images
-// nothing holds any longer.
+// `<stem>.retired.<scratch block><ext>` instead. `publishStagedImage` sweeps the retired images nothing
+// holds any longer.
 function vacateRunningImage(project Project, outputPath FilePath) throws CompileError
-	sweepRetiredImages(outputPath.anchoredAt(Directory.currentPath()))
-
 	let previous = siblingImagePath(outputPath, infix: PreviousImageSuffix)
 
 	if File.exists(previous) 'staleBackup'
@@ -431,6 +429,12 @@ union VacatedOutput
 end 'VacatedOutput'
 
 function publishStagedImage(project Project, staged FilePath, outputPath FilePath, rebuildsItself bool, stagedSidecar SidecarOutcome) returns SidecarOutcome throws CompileError
+	// Only a compiler's slot is swept: an ordinary output never lists its directory, and spec-test and the
+	// run cache publish many outputs into one.
+	if rebuildsItself or File.exists(siblingImagePath(outputPath, infix: PreviousImageSuffix)) 'aSlot'
+		sweepRetiredImages(outputPath.anchoredAt(Directory.currentPath()), numberedSpelling: rebuildsItself)
+	end 'aSlot'
+
 	let vacated = try vacateOutput(project, staged: staged, outputPath: outputPath, rebuildsItself: rebuildsItself)
 
 	try File.rename(staged, to: outputPath) otherwise 'unplaceable'
@@ -663,25 +667,27 @@ end 'retireHeldImage'
 
 // Best-effort and silent per entry: an image still running stays for a later sweep, and debris must never
 // fail a build.
-function sweepRetiredImages(outputPath FilePath)
+function sweepRetiredImages(outputPath FilePath, numberedSpelling bool)
 	let dir = try outputPath.parent() otherwise panic("sweepRetiredImages: an anchored image path has a parent")
 	let entries = try Directory.list(dir) otherwise return
 	let stem = outputPath.stem()
 	let ext = outputPath.fileExtension()
 
 	for entry in entries 'eachEntry'
-		if isRetiredImage(entry, stem: stem, ext: ext) 'retired'
+		if isRetiredImage(entry, stem: stem, ext: ext, numberedSpelling: numberedSpelling) 'retired'
 			try File.delete(entry) otherwise ignore
 		end 'retired'
 	end 'eachEntry'
 end 'sweepRetiredImages'
 
-function isRetiredImage(entry FilePath, stem String, ext String) returns bool
+// The numbered spelling is swept only by a self-rebuild: another compiler's output can have a user's own
+// `report.retired-2.exe` beside it.
+function isRetiredImage(entry FilePath, stem String, ext String, numberedSpelling bool) returns bool
 	let name = entry.filename()
 
 	match parsedScratchName(name, family: retiredImageFamily(stem)) 'parsed'
 		minted(retiredStem, _) then return isImageSuffixOrItsSidecar(name.replaceFirst(retiredStem, with: ""), image: ext)
-		unminted then return isNumberedRetiredImage(name, stem: stem, ext: ext)
+		unminted then return numberedSpelling and isNumberedRetiredImage(name, stem: stem, ext: ext)
 	end 'parsed'
 end 'isRetiredImage'
 

@@ -1,0 +1,26 @@
+let BuildKeepsFilesBesideAnOutputStagedDirName = "mcp-build-keeps-files-beside-an-output"
+let BuildKeepsFilesBesideAnOutputBuilderStem = "builder"
+let BuildKeepsFilesBesideAnOutputKnownLine = "built beside files that only look retired"
+
+test 'a build into an output with no previous image deletes nothing beside it, a numbered retired-looking file included'
+	let dir = stagedInTreeDirNamed(BuildKeepsFilesBesideAnOutputStagedDirName)
+	clearStagedTree(dir)
+
+	let imageName = "{CompilerStem}{executableSuffix()}"
+	let builder = stagedCopyOf(testedCompilerPath(), dir: dir, name: BuildKeepsFilesBesideAnOutputBuilderStem)
+	let program = dir.join(ProgramFileName)
+	writeStagedFile(program, content: printingProgramSource(BuildKeepsFilesBesideAnOutputKnownLine))
+
+	let planted = PlantedRetiredImages.plantBeside(dir)
+
+	let output = dir.join(imageName)
+	let built = spawnCompiler([BuildCommandName, program.toString(), "{OutputOptionPrefix}{output.toString()}"], staged: dir, what: "the build of an output that is no compiler's slot", binary: builder)
+	Expect.equal(built.exitCode(), expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOptionPrefix}{imageName}`, run by {builder.filename()}, exited {built.exitCode()}. The compiler said: {built.stderr}")
+	Expect.isTrue(File.exists(output), message: "{builder.filename()} reported success and published no {imageName}")
+
+	expectNamesKept(dir, names: planted.numbered, why: "{imageName} has no previous image and was not rebuilt by itself, so it is a user's program and a file beside it is the user's own")
+	expectNamesKept(dir, names: planted.minted, why: "{imageName} has no previous image and was not rebuilt by itself, so nothing beside it is swept")
+	expectNamesKept(dir, names: planted.lookalikes, why: "it only shares the stem of {imageName} and is no retired image")
+
+	discardStagedDir(dir)
+end 'a build into an output with no previous image deletes nothing beside it, a numbered retired-looking file included'

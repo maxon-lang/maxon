@@ -973,3 +973,66 @@ module let SnippetStem = "mcp-snippet"
 module let CompilerStem = "maxon"
 module let PreviousInfix = ".previous"
 module let ProgramFileName = "program.maxon"
+let RetiredImageProbeLabel = "mcp-retired-images"
+let RetiredImagePlantedSerial = 7
+let RetiredImagePlantedText = "left by an earlier build"
+let NumberedRetiredBase = "maxon.retired-"
+let RetiredBase = "maxon.retired"
+
+function plantNamesBeside(dir FilePath, names StringArray)
+	for name in names 'eachName'
+		writeStagedFile(dir.join(name), content: RetiredImagePlantedText)
+	end 'eachName'
+end 'plantNamesBeside'
+
+export type PlantedRetiredImages
+	export var minted as StringArray
+	export var numbered as StringArray
+	export var lookalikes as StringArray
+
+	export static function plantBeside(dir FilePath) returns Self
+		let suffix = executableSuffix()
+		let mintedHere = mintedScratchName(RetiredImageProbeLabel, base: RetiredBase, namespace: OwnHostNamespace, pid: endedProcessId(), serial: RetiredImagePlantedSerial)
+		let mintedByAnotherHost = mintedScratchName(RetiredImageProbeLabel, base: RetiredBase, namespace: AnotherHost, pid: endedProcessId(), serial: RetiredImagePlantedSerial + 1)
+
+		let minted = [
+			"{mintedHere}{suffix}",
+			"{mintedHere}{suffix}{SidecarSuffix}",
+			"{mintedByAnotherHost}{suffix}"
+		]
+
+		let numbered = [
+			"{NumberedRetiredBase}123{suffix}",
+			"{NumberedRetiredBase}123{suffix}{SidecarSuffix}"
+		]
+
+		let lookalikes = [
+			"{NumberedRetiredBase}notes.txt",
+			"{NumberedRetiredBase}123notes.txt",
+			"{mintedHere}.notes.txt",
+			"{RetiredBase}.notes.txt"
+		]
+
+		plantNamesBeside(dir, names: minted)
+		plantNamesBeside(dir, names: numbered)
+		plantNamesBeside(dir, names: lookalikes)
+
+		return Self{minted: minted, numbered: numbered, lookalikes: lookalikes}
+	end 'plantBeside'
+end 'PlantedRetiredImages'
+
+module function plantPreviousImageBeside(dir FilePath)
+	writeStagedFile(dir.join("{CompilerStem}{PreviousInfix}{executableSuffix()}"), content: RetiredImagePlantedText)
+end 'plantPreviousImageBeside'
+
+module function expectNamesSwept(dir FilePath, names StringArray, why String) throws TestFailure
+	for name in names 'eachSwept'
+		try Expect.isFalse(File.exists(dir.join(name)), message: "{name} is still there, and it should have been deleted: {why}")
+	end 'eachSwept'
+end 'expectNamesSwept'
+
+module function expectNamesKept(dir FilePath, names StringArray, why String) throws TestFailure
+	for name in names 'eachKept'
+		try Expect.isTrue(File.exists(dir.join(name)), message: "{name} was deleted, and it should have stayed: {why}")
+	end 'eachKept'
+end 'expectNamesKept'

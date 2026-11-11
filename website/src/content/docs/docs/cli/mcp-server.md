@@ -438,7 +438,7 @@ succeeds, the running image is renamed to `maxon.previous` and the new compiler,
 build's staging directory, is renamed into its place, and the server keeps answering from the renamed
 image. A server started before an earlier
 rebuild is running an older `maxon.previous`; that file is renamed aside to
-`maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later rebuild once the server has exited.
+`maxon.retired.<tag>.<start>.<pid>.<serial>` and deleted by a later build into the slot once the server has exited.
 A failed build leaves the running compiler in the slot.
 
 **The running server is still the compiler it was started as.** Restart it when you want the newly

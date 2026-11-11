@@ -667,6 +667,8 @@ tests/
     rebuild-with-a-compile-error.maxtest         a self-rebuild that fails to compile leaves the slot untouched
     rebuild-that-cannot-stage-its-image-leaves-the-slot-untouched.maxtest   a self-rebuild with nowhere to stage its new image refuses and leaves the slot, its sidecar and an older `.previous` untouched
     rebuild-sweeps-retired-images.maxtest        a self-rebuild deletes retired images and sidecars of both spellings, and keeps every other file sharing the stem
+    a-build-of-another-compiler-sweeps-the-retired-images-beside-its-output.maxtest   a build run by another compiler into a slot with a `.previous` image deletes the minted retired images beside it and keeps the numbered spelling
+    a-build-into-an-output-with-no-previous-image-sweeps-nothing-beside-it.maxtest   a build into an output with no `.previous` image deletes nothing beside it, retired-looking names included
     reference-documents-every-tool.maxtest       docs/CLI_REFERENCE.md's `## MCP Server` section names every tool and argument `--dev` advertises
     reference-documents-the-agent-instructions.maxtest       `initialize`'s `instructions` are docs/WRITING_MAXON_CODE.md's preamble and its `## Scripts and scriptlib` section
     check-reports-a-type-error-and-writes-nothing.maxtest      `check` answers a type error's code, is not the warm-rebuild gate, and writes nothing

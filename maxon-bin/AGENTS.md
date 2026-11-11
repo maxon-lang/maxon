@@ -70,8 +70,10 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
 > SUCCEEDS**, so a FAILED build (a compile error included) leaves the running compiler in the slot, able to
 > build the fix; a staged image that cannot be renamed in moves the running one back (E6002). An older
 > `.previous` that another process is still running (an `mcp-server` or `lsp-server` started before the
-> last rebuild) is renamed aside to `maxon.retired.<block>` (`Run/ScratchName.maxon`), and every
-> self-rebuild deletes the retired images nothing holds any longer.
+> last rebuild) is renamed aside to `maxon.retired.<block>` (`Run/ScratchName.maxon`). A self-rebuild, and
+> any build into a slot that has a `.previous` image beside it (the seed building into the slot, or another
+> tree's compiler), deletes the retired images nothing holds any longer; only a self-rebuild also deletes
+> the older numbered `maxon.retired-<digits>` spelling.
 >
 > ⛔ **`maxon-bin/.maxon/` IS A CLOSED DIRECTORY.** It holds the slot's `maxon[.exe]`, `maxon.previous[.exe]`, their
 > `.mxdbg` sidecars, the compiler-minted `maxon.retired.<block>` images, `.staging-<hex>/`, and the

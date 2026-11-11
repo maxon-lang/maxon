@@ -1,0 +1,27 @@
+let BuildSweepsRetiredImagesStagedDirName = "mcp-build-sweeps-retired-images"
+let BuildSweepsRetiredImagesBuilderStem = "builder"
+let BuildSweepsRetiredImagesKnownLine = "built by another compiler beside retired images"
+
+test 'a build run by another compiler deletes the minted retired images beside the slot it publishes into, and keeps the numbered spelling'
+	let dir = stagedInTreeDirNamed(BuildSweepsRetiredImagesStagedDirName)
+	clearStagedTree(dir)
+
+	let imageName = "{CompilerStem}{executableSuffix()}"
+	let builder = stagedCopyOf(testedCompilerPath(), dir: dir, name: BuildSweepsRetiredImagesBuilderStem)
+	let program = dir.join(ProgramFileName)
+	writeStagedFile(program, content: printingProgramSource(BuildSweepsRetiredImagesKnownLine))
+
+	let planted = PlantedRetiredImages.plantBeside(dir)
+	plantPreviousImageBeside(dir)
+
+	let slot = dir.join(imageName)
+	let built = spawnCompiler([BuildCommandName, program.toString(), "{OutputOptionPrefix}{slot.toString()}"], staged: dir, what: "the build into a slot it is not", binary: builder)
+	Expect.equal(built.exitCode(), expected: 0, message: "`{BuildCommandName} {ProgramFileName} {OutputOptionPrefix}{imageName}`, run by {builder.filename()}, exited {built.exitCode()}. The compiler said: {built.stderr}")
+	Expect.isTrue(File.exists(slot), message: "{builder.filename()} reported success and published no {imageName}")
+
+	expectNamesSwept(dir, names: planted.minted, why: "{imageName} has a previous image, so it is a compiler's slot, and every build into a slot sweeps the minted retired images beside it")
+	expectNamesKept(dir, names: planted.numbered, why: "only a self-rebuild of {imageName} sweeps the numbered spelling, which a user's own file can share")
+	expectNamesKept(dir, names: planted.lookalikes, why: "it only shares the stem of {imageName} and is no retired image")
+
+	discardStagedDir(dir)
+end 'a build run by another compiler deletes the minted retired images beside the slot it publishes into, and keeps the numbered spelling'
