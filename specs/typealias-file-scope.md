@@ -2938,3 +2938,75 @@ end 'nominalQ'
 ```exitcode
 7
 ```
+
+<!-- test: error.a-files-own-alias-is-no-generic-base-beside-another-directorys-generic-type -->
+`b/shadow.maxon` declares its own `Pair`, so the bare `Pair` in `Pair with ExitCode` names that alias and not the
+generic type `a/` exports under the same name. An alias is not a generic base, so the `with` is refused as one
+and nothing else is said about `Pair`: the alias is used by it, and the exported signature names `Bad`.
+```maxon
+// --- file: a/pair.maxon
+export type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+export function aHelper() returns ExitCode
+	return 0
+end 'aHelper'
+
+// --- file: b/shadow.maxon
+typealias Pair = int(0 to 5)
+
+typealias Bad = Pair with ExitCode
+
+export function create() returns Bad
+	panic("never built")
+end 'create'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = b.create()
+	return h.first + a.aHelper()
+end 'main'
+```
+```maxoncstderr
+error E2055: b/<fragment>:15:17: Type 'Pair' has no associated types
+error E3167: b/<fragment>:17:17: exported function 'b.create' names file-private typealias 'Bad' in its return type
+```
+
+<!-- test: a-files-own-alias-leaves-a-directory-qualified-generic-base-meaning-that-directorys-type -->
+The same file that declares its own `Pair` writes `a.Pair with …`: the directory qualifier names the generic type
+`a/` exports, whatever the bare `Pair` means in this file.
+```maxon
+// --- file: a/pair.maxon
+export type Pair uses A, B
+	export var first as A
+	export var second as B
+
+	export static function create(first A, second B) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+
+// --- file: b/shadow.maxon
+typealias Pair = int(0 to 5)
+typealias Good = a.Pair with (ExitCode, ExitCode)
+
+function narrow(p Pair) returns Pair
+	return p
+end 'narrow'
+
+export function total() returns ExitCode
+	let g = Good.create(40, second: 2)
+	let kept = narrow(3)
+	return g.first + g.second + (kept as ExitCode) - 3
+end 'total'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return b.total()
+end 'main'
+```
+```exitcode
+42
+```

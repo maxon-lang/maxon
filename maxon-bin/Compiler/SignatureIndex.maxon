@@ -33980,6 +33980,96 @@ export type ProgramSignatures
 		return self.settledDeclarations().typeAliases.rangeScopedName(name, readerFilePath: readerFilePath)
 	end 'rangeScopedDeclaredName'
 
+	function resolveGenericAliasBases()
+		var resolvedAny = false
+
+		for index in 0 upto self.settledDeclarations().genericAliasDecls.count() 'eachDeclaration'
+			let entry = try self.mainThreadSettled().genericAliasDecls.get(index) otherwise panic("ProgramSignatures.resolveGenericAliasBases: genericAliasDecls.get OOB at {index} inside its own `upto` bound")
+			let swept = entry.internedInstance()
+			let meant = self.baseResolvedInstance(swept, filePath: entry.filePath)
+
+			if meant == swept 'theBaseIsTheOneDeclared'
+				continue
+			end 'theBaseIsTheOneDeclared'
+
+			try self.mainThreadSettled().genericAliasDecls.set(index, value: entry.recorded(meant)) otherwise panic("ProgramSignatures.resolveGenericAliasBases: genericAliasDecls.set OOB at {index} inside its own `upto` bound")
+			resolvedAny = true
+		end 'eachDeclaration'
+
+		if not resolvedAny 'noBaseWasMeantDifferently'
+			return
+		end 'noBaseWasMeantDifferently'
+
+		for entry in self.mainThreadSettled().genericAliasDecls 'eachRecordedDeclaration'
+			self.mainThreadSettled().genericAliases.upsert(entry.aliasName, value: entry.internedInstance())
+		end 'eachRecordedDeclaration'
+
+		view sites = self.mainThreadSettled().genericAliasSites
+		var meantSites = GenericInstantiationSiteArray.create(sites.count(), zeroed: false)
+
+		for site in sites 'eachSite'
+			meantSites.push(GenericInstantiationSite.create(self.baseResolvedInstance(site.gid, filePath: site.filePath), nameLine: site.nameLine, nameColumn: site.nameColumn, filePath: site.filePath))
+		end 'eachSite'
+
+		var ownDeclarations = self.mainThreadSettled()
+		ownDeclarations.genericAliasSites = meantSites
+	end 'resolveGenericAliasBases'
+
+	function baseResolvedInstance(id GenericInstanceId, filePath FilePath) returns GenericInstanceId
+		let baseId = self.rowBaseId(id)
+		let meantBase = self.resolvedBaseId(baseId, filePath: filePath)
+		view args = self.rowArgs(id)
+		var meantArgs = MaxonTypeArray.create(0)
+		var rebuilt = meantBase != baseId
+
+		for position in 0 upto args.count() 'eachArg'
+			var arg = try args.get(position) otherwise panic("ProgramSignatures.baseResolvedInstance: args.get OOB at {position} inside its own `upto` bound")
+
+			if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'aNestedInstance'
+				let nested = genericInstanceIdOf(arg)
+				let meantNested = self.baseResolvedInstance(nested, filePath: filePath)
+
+				if meantNested != nested and not rebuilt 'theFirstChange'
+					for earlier in 0 upto position 'eachEarlierArg'
+						meantArgs.push(try args.get(earlier) otherwise panic("ProgramSignatures.baseResolvedInstance: args.get OOB at {earlier} below position {position}"))
+					end 'eachEarlierArg'
+
+					rebuilt = true
+				end 'theFirstChange'
+
+				arg = MaxonType.genericInstance(meantNested)
+			end 'aNestedInstance'
+
+			if rebuilt 'collectingTheMeantArgs'
+				meantArgs.push(arg)
+			end 'collectingTheMeantArgs'
+		end 'eachArg'
+
+		if not rebuilt 'everyBaseIsTheOneDeclared'
+			return id
+		end 'everyBaseIsTheOneDeclared'
+
+		return self.internRow(meantBase, args: meantArgs, shape: self.rowShape(id))
+	end 'baseResolvedInstance'
+
+	function resolvedBaseId(baseId TypeNameId, filePath FilePath) returns TypeNameId
+		let written = self.nameOfId(baseId)
+
+		if containsQualifier(written) 'aDirectoryQualifiedBase'
+			match lookupQualifiedType(self, written: written, readerFilePath: filePath) 'declaration'
+				found(declaration) then return baseId if isTypeAliasDecl(declaration.kind) else self.typeNames.intern(declaration.name)
+				ambiguous or
+				missing then return baseId
+			end 'declaration'
+		end 'aDirectoryQualifiedBase'
+
+		if self.writtenNameMeansAnAliasHere(written, readerFilePath: filePath) 'anAliasIsMeantNotAGenericType'
+			return self.typeNames.intern(aliasFamilyMint(written))
+		end 'anAliasIsMeantNotAGenericType'
+
+		return baseId
+	end 'resolvedBaseId'
+
 	// ⭐⭐ **SETTLE THE RANGE CONTEST, RE-KEY EVERY DECLARED ALIAS TO ITS OWN FILE'S INSTANCE, AND INTERN
 	// EVERY SCOPED VARIANT A PARSE COULD ASK FOR** — one pass, at the one moment the whole program is
 	// known and nothing has read an instance yet.
@@ -33996,6 +34086,7 @@ export type ProgramSignatures
 	//   3. **The PARSE MUST NOT WRITE.** Every (instance, reader environment) pair is interned here, so
 	//      `fileScopedInstance` is a pure lookup from every parallel per-file parse.
 	export function settleRangeScopedInstances()
+		self.resolveGenericAliasBases()
 		self.mainThreadSettled().typeAliases.settleRangeContests(self.crossKindScopedAliasNames())
 		self.rangeContestsSettled = true
 

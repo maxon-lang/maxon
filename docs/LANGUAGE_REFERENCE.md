@@ -1086,6 +1086,9 @@ no cost, and `return` re-brands implicitly.
   a parenthesised note — the shape where two function shapes differ, otherwise `(declared in <file>)`. A
   view of a buffer prints as `__ManagedMemory with <element>`, noted `(the view of 'Name')` where two views
   read alike.
+- The base of a generic-instance alias is read as [Generic Types](#generic-types) says: a directory-qualified
+  base (`typealias Good = lib.Pair with (Integer, Integer)`) names that directory's type, and a bare base that a
+  `typealias` wins for the reading file is **E2055**.
 - Casting to a **different** instance (`Array with Byte` to `Array with Integer`) is **E3131**: the
   elements have different layouts, so build a new container instead. A cast between two instances whose
   elements are same-named declarations of one layout — the same underlying type, range and domain;
@@ -1744,6 +1747,17 @@ end 'main'
   It is reported once, where the instance is written, however many uses the typealias that names it has.
   An interface base's arguments bind its associated types instead; one bound to an interface is
   **E2015** only where a requirement takes that associated type as a parameter.
+- A base may be written through the directory that declares it: `typealias Good = lib.Pair with (Integer,
+  Integer)` instantiates the generic type `lib/` exports, and `Array with (lib.Pair with (Integer, Integer))`
+  nests it as an argument. The qualifier names that directory's type whatever the bare name means in the
+  reading file, so two directories that each declare a `Pair` are told apart by it, and each alias takes the
+  type parameters of the one it names. A type the directory does not export is
+  [E3008](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3008) at the base.
+- A bare base is the declaration the bare name resolves to in the reading file (see
+  [Bare Names and Ambiguity](#bare-names-and-ambiguity)). Where that declaration is a `typealias` — the file's
+  own, a sibling file's in its directory, or the project root's — the base is an alias, which has no type
+  parameters, and the `with` is **E2055** (`Type 'Pair' has no associated types`) even when another directory
+  exports a generic type of that name. Write the qualified base (`a.Pair with …`) to name that type.
 
 Inside `type Outer uses T`, another generic type written without `with` arguments binds by parameter NAME:
 `Inner uses T` means `Inner with T`. A base whose parameters the scope does not declare (`Box uses Element`)

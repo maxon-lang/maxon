@@ -523,8 +523,27 @@ module function resultFromPositionCount(func IrFunction) returns ParamCount
 	return count
 end 'resultFromPositionCount'
 
+// The one door for a function value's declared boundary. Absent for a name a failed file would have
+// declared, and for a function or lifted closure, which have a shape but no `aliasShapes` entry.
+module function declaredBoundaryShapeOf(project Project, func IrFunction, value ValueId) returns FunctionShape throws AbsentError
+	let name = functionValueGoverningName(project, func: func, value: value)
+	let registry = functionTypeRegistryOf(project)
+
+	if functionShapeIsMissingBesideAFailedFile(project, registry: registry, name: name) 'aRefusedDeclaration'
+		throw AbsentError.absent
+	end 'aRefusedDeclaration'
+
+	let shape = requireFunctionShapeOf(registry, name: name, side: "called")
+
+	if not registry.aliasShapes.contains(name) 'aFunctionOrLiftedClosure'
+		throw AbsentError.absent
+	end 'aFunctionOrLiftedClosure'
+
+	return shape
+end 'declaredBoundaryShapeOf'
+
 module function functionValueIsMutable(project Project, func IrFunction, value ValueId) returns bool
-	view shape = try functionTypeRegistryOf(project).aliasShapes.get(functionValueGoverningName(project, func: func, value: value)) otherwise return false
+	view shape = try declaredBoundaryShapeOf(project, func: func, value: value) otherwise return false
 	return shape.mutableFunction
 end 'functionValueIsMutable'
 
@@ -1015,7 +1034,7 @@ function noteFunctionValueCallSeeds(project Project, sources ParamSources, calle
 		default panic("noteFunctionValueCallSeeds: handed an op that is not an indirect call")
 	end 'op'
 
-	view shape = try functionTypeRegistryOf(project).aliasShapes.get(functionValueGoverningName(project, func: func, value: calleeValue)) otherwise return
+	view shape = try declaredBoundaryShapeOf(project, func: func, value: calleeValue) otherwise return
 
 	let line = project.opRanges.get(opIdx).line
 	let boundary = aliasDisplayOf(project, name: functionValueGoverningName(project, func: func, value: calleeValue))

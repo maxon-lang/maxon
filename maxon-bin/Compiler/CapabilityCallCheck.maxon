@@ -617,7 +617,7 @@ function checkFunctionValueCall(project Project, funcNames FunctionNameIndex, pr
 	end 'op'
 
 	checkMutableFunctionCall(project, func: func, opIdx: opIdx, calleeValue: parts.0)
-	view shape = try functionTypeRegistryOf(project).aliasShapes.get(functionValueGoverningName(project, func: func, value: parts.0)) otherwise 'undeclaredBoundary'
+	view shape = try declaredBoundaryShapeOf(project, func: func, value: parts.0) otherwise 'undeclaredBoundary'
 		let bodies = calls.functionValueBodiesCalledThrough(func, callee: parts.0)
 		checkLandingBodiesTakeTheArguments(project, funcNames: funcNames, provenance: provenance, facts: facts, func: func, opIdx: opIdx, bodies: bodies, args: parts.1, argImmutableNames: parts.2, memo: memo)
 		return
@@ -1413,7 +1413,7 @@ function checkPausedFunctionValueCall(project Project, facts CapabilityFacts, fu
 		default panic("checkPausedFunctionValueCall: handed an op that is not an indirect call")
 	end 'op'
 
-	view shape = try functionTypeRegistryOf(project).aliasShapes.get(functionValueGoverningName(project, func: func, value: parts.0)) otherwise return
+	view shape = try declaredBoundaryShapeOf(project, func: func, value: parts.0) otherwise return
 	let alias = aliasDisplayOf(project, name: functionValueGoverningName(project, func: func, value: parts.0))
 
 	if shape.mutableFunction and maskHasParam(paused, param: userArityOfIndirectCall(parts.1)) and not capabilityIsReadOnly(argumentCapabilityOf(project, func: func, argId: parts.0)) 'aMutableFunctionPaused'

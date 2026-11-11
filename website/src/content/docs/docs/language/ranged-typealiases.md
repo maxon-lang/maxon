@@ -374,6 +374,9 @@ no cost, and `return` re-brands implicitly.
   a parenthesised note — the shape where two function shapes differ, otherwise `(declared in <file>)`. A
   view of a buffer prints as `__ManagedMemory with <element>`, noted `(the view of 'Name')` where two views
   read alike.
+- The base of a generic-instance alias is read as [Generic Types](/docs/language/composite-types/#generic-types) says: a directory-qualified
+  base (`typealias Good = lib.Pair with (Integer, Integer)`) names that directory's type, and a bare base that a
+  `typealias` wins for the reading file is **E2055**.
 - Casting to a **different** instance (`Array with Byte` to `Array with Integer`) is **E3131**: the
   elements have different layouts, so build a new container instead. A cast between two instances whose
   elements are same-named declarations of one layout — the same underlying type, range and domain;

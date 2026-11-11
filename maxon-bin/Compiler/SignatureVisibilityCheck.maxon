@@ -726,12 +726,19 @@ end 'walkEveryElement'
 
 function walkInstanceArguments(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, id GenericInstanceId, seen ReportedTypeNameSet)
 	var argumentTypeNames = signatures.indexTypeNames()
-	walkSignatureTypeName(project, signatures: signatures, subject: subject, where: where, name: signatures.genericInstanceBaseName(id), seen: seen)
+	walkInstanceBase(project, signatures: signatures, subject: subject, where: where, base: signatures.genericInstanceBaseName(id), seen: seen)
 
 	for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArgument'
 		walkSignatureType(project, signatures: signatures, subject: subject, where: where, declared: signatures.substitutedInstanceArg(id, position: position), typeNames: argumentTypeNames, seen: seen)
 	end 'eachArgument'
 end 'walkInstanceArguments'
+
+function walkInstanceBase(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, base ByteArray, seen ReportedTypeNameSet)
+	match signatures.nominalTypeNameIn(base) 'aBase'
+		undeclared then return
+		declared(kind, visibility, declFilePath) then judgeDeclaredType(project, signatures: signatures, subject: subject, where: where, name: base, kind: kind, visibility: visibility, declFilePath: declFilePath, seen: seen)
+	end 'aBase'
+end 'walkInstanceBase'
 
 function declaredTypeNoun(kind TypeDeclKind) returns String
 	return match kind 'kind'

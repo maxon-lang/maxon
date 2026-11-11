@@ -5088,9 +5088,10 @@ end 'PendingUnstorableRequirement'
 type GenericBaseName
 	export let anchor as Token
 	export let written as immutable ByteArray
+	export let denoted as immutable ByteArray
 
-	static function create(anchor Token, written ByteArray) returns GenericBaseName
-		return Self{anchor: anchor, written: written}
+	static function create(anchor Token, written ByteArray, denoted ByteArray) returns GenericBaseName
+		return Self{anchor: anchor, written: written, denoted: denoted}
 	end 'create'
 end 'GenericBaseName'
 
@@ -6672,7 +6673,7 @@ function layoutReceivingField(declared StructLayout, repeatsAField bool) returns
 end 'layoutReceivingField'
 
 function baseNotGenericMessage(base ByteArray) returns String
-	return "Type '{String.from(base)}' has no associated types"
+	return "Type '{sourceSpelledAliasText(base)}' has no associated types"
 end 'baseNotGenericMessage'
 
 function genericArgumentCountCode(layout StructLayout) returns ErrorCode
@@ -19841,6 +19842,13 @@ end 'SpawnedType'
 union QualifiedTypeChain
 	declared(declaration ChainType, consumed ElementIndex)
 	notQualified
+
+	function denotedName(spelled immutable ByteArray) returns immutable ByteArray
+		return match self 'chain'
+			declared(declaration, _) gives nominalNameOr(declaration.kind, name: declaration.name, spelling: spelled)
+			notQualified gives spelled
+		end 'chain'
+	end 'denotedName'
 end 'QualifiedTypeChain'
 
 type GenericBindingScope
@@ -29642,7 +29650,7 @@ export type Parser
 		// `canonicalGenericBaseName`. The SPELLING is kept only as `baseIsBuffer`, which decides the member
 		// surface every declared position naming this alias takes.
 		let baseIsBuffer = base.written.equals(ManagedMemoryTypeName)
-		view baseName = self.canonicalGenericBaseNameInThisFile(base.written)
+		view baseName = self.canonicalGenericBaseNameInThisFile(base.denoted)
 		var args = GenericArgNodeArray.create(0)
 		let argsStart = self.pos
 		let (argCount, qualified) = try self.parseGenericArgNodes(args, baseName: baseName, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, slot: self.signatures.genericArgSlotOf(baseName))
@@ -29672,17 +29680,34 @@ export type Parser
 	// argument each read one, and a gate that admitted a qualified base at only one of them would parse half
 	// the spellings of one type.
 	function consumeGenericBaseName() returns GenericBaseName throws SourceParseError
+		let headIndex = self.pos
 		let baseTok = try self.consume(TokenKind.identifier)
 		try self.requireTypeSpellingIsNotRawBuffer(baseTok)
 
 		if not self.at(TokenKind.dot) 'unqualified'
-			return GenericBaseName.create(baseTok, written: baseTok.value)
+			return GenericBaseName.create(baseTok, written: baseTok.value, denoted: baseTok.value)
 		end 'unqualified'
 
 		try self.consume(TokenKind.dot)
 		let memberTok = try self.consume(TokenKind.identifier)
-		return GenericBaseName.create(baseTok, written: joinQualifiedName(baseTok.value, member: memberTok.value))
+		let written = joinQualifiedName(baseTok.value, member: memberTok.value)
+		return GenericBaseName.create(baseTok, written: written, denoted: try self.denotedQualifiedGenericBase(headIndex, written: written, anchor: baseTok))
 	end 'consumeGenericBaseName'
+
+	function denotedQualifiedGenericBase(headIndex ElementIndex, written immutable ByteArray, anchor Token) returns immutable ByteArray throws SourceParseError
+		if not self.signatures.allFilesFolded 'theSweepHoldsNoDeclarationYet'
+			return written
+		end 'theSweepHoldsNoDeclarationYet'
+
+		let chain = try self.resolvedTypeChainAt(headIndex, anchor: anchor, use: ChainUse.typeReference)
+
+		match chain 'chain'
+			declared then self.recordTypeNameUse(written)
+			notQualified then break
+		end 'chain'
+
+		return chain.denotedName(written)
+	end 'denotedQualifiedGenericBase'
 
 	// ⭐ **THE TOKEN AT WHICH THIS DECLARATION NAMES ITSELF** — the second `A` of `typealias A = Array with A`.
 	// It is the word the author has to change, and it is the anchor `specs/type-checking.md` blames a
@@ -30320,7 +30345,7 @@ export type Parser
 
 			// The canonical base, for the top-level arm's reason: a nested `__ManagedMemory with T` must
 			// intern to the same instance a nested `Array with T` does, or one record has two ids.
-			view subBaseName = self.canonicalGenericBaseNameInThisFile(base.written)
+			view subBaseName = self.canonicalGenericBaseNameInThisFile(base.denoted)
 			var subNodes = GenericArgNodeArray.create(0)
 			let (subCount, subQualified) = try self.parseGenericArgNodes(subNodes, baseName: subBaseName, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, slot: self.signatures.genericArgSlotOf(subBaseName))
 			self.checkGenericInstance(base, argCount: subCount)
@@ -30566,7 +30591,7 @@ export type Parser
 		// ⭐ **ASKED ABOUT THE CANONICAL BASE AND BLAMED ON THE WRITTEN ONE** — `__ManagedMemory with T`
 		// is an `Array` instance (`canonicalGenericBaseName`), so it must be checked against `Array`'s arity;
 		// the sentence still quotes the spelling the author actually wrote, because that is the word to change.
-		view baseName = self.canonicalGenericBaseNameInThisFile(base.written)
+		view baseName = self.canonicalGenericBaseNameInThisFile(base.denoted)
 
 		if self.signatures.isBuiltinGenericBaseName(baseName) 'builtinGeneric'
 			let expected = self.signatures.builtinGenericTypeParamCount(baseName)
@@ -30577,6 +30602,12 @@ export type Parser
 
 			return
 		end 'builtinGeneric'
+
+		if not containsQualifier(base.written) and self.signatures.writtenNameMeansAnAliasHere(baseName, readerFilePath: self.job.path) 'anAliasIsMeantNotAGenericType'
+			self.recordTypeNameUse(base.written)
+			self.recordBaseNotGeneric(base, named: base.written)
+			return
+		end 'anAliasIsMeantNotAGenericType'
 
 		// ⭐⭐ **AN INTERFACE'S `uses` NAMES ARE ASSOCIATED TYPES, SO `Iterator with Element` IS A BASE THIS
 		// CHECK MUST ANSWER FOR — AND IT ASKED ONLY `structOf`, WHICH AN INTERFACE IS NEVER IN.** The verdict
@@ -30598,8 +30629,16 @@ export type Parser
 		end 'interfaceBase'
 	end 'checkGenericInstance'
 
+	function declaredStructOfBase(baseName ByteArray, base GenericBaseName) returns DeclaredStruct
+		if containsQualifier(base.written) 'aQualifiedBaseNamesItsDeclaration'
+			return self.signatures.structInAnyFile(baseName)
+		end 'aQualifiedBaseNamesItsDeclaration'
+
+		return self.signatures.structFor(baseName, readerFilePath: self.job.path)
+	end 'declaredStructOfBase'
+
 	function checkStructGenericInstance(baseName ByteArray, base GenericBaseName, argCount FieldIndex)
-		match self.signatures.structFor(baseName, readerFilePath: self.job.path) 'declaration'
+		match self.declaredStructOfBase(baseName, base: base) 'declaration'
 			undeclared then self.recordBaseNotGeneric(base, named: baseName)
 			declared(layout) then self.checkGenericInstanceAgainst(layout, base: base, argCount: argCount)
 		end 'declaration'
@@ -36668,10 +36707,7 @@ export type Parser
 			self.advance()
 		end 'eachSegment'
 
-		match chain 'chain'
-			declared(declaration, _) then return ThrowsClause.throwing(String.from(nominalNameOr(declaration.kind, name: declaration.name, spelling: qualified)))
-			notQualified then return ThrowsClause.throwing(String.from(qualified))
-		end 'chain'
+		return ThrowsClause.throwing(String.from(chain.denotedName(qualified)))
 	end 'parseOptionalThrowsClause'
 
 	// ⛔ **A DECLARATION HEADER ENDS AT THE END OF ITS LINE** — a function signature once its optional
@@ -36862,12 +36898,7 @@ export type Parser
 			self.advance()
 		end 'eachSegment'
 
-		let name = match chain 'chain'
-			declared(declaration, _) gives nominalNameOr(declaration.kind, name: declaration.name, spelling: written)
-			notQualified gives written
-		end 'chain'
-
-		return Token.create(TokenKind.identifier, line: headTok.line, column: headTok.column, value: name, startByte: headTok.startByte, endByte: lastEnd)
+		return Token.create(TokenKind.identifier, line: headTok.line, column: headTok.column, value: chain.denotedName(written), startByte: headTok.startByte, endByte: lastEnd)
 	end 'consumeQualifiedTypeName'
 
 	// Does the program state `interfaceName`'s `uses` arity YET? — the one question that decides whether an

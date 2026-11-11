@@ -1912,6 +1912,150 @@ end 'main'
 error E2055: <fragment>:9:19: Type 'alpha.Nonexistent' has no associated types
 ```
 
+<!-- test: a-directory-qualified-generic-base-names-that-directorys-type -->
+A generic base may be written through the directory that declares it, and means that directory's type. The
+alias, an array of it and a value built through it all agree with the type `lib/` declares.
+```maxon
+// --- file: lib/pair.maxon
+export type Pair uses A, B
+	export var first as A
+	export var second as B
+
+	export static function create(first A, second B) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+
+// --- file: main.maxon
+typealias Good = lib.Pair with (ExitCode, ExitCode)
+typealias Goods = Array with Good
+
+function total(g Good) returns ExitCode
+	return g.first + g.second
+end 'total'
+
+function main() returns ExitCode
+	let goods = Goods.create(0)
+	goods.push(Good.create(40, second: 2))
+	let g = try goods.get(0) otherwise panic("one pair was pushed")
+	return total(g)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: a-directory-qualified-generic-base-nests-inside-another-instance -->
+A qualified base is also read where it is an argument of another instance.
+```maxon
+// --- file: lib/pair.maxon
+export type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+// --- file: main.maxon
+typealias Goods = Array with (lib.Pair with (ExitCode, ExitCode))
+
+function main() returns ExitCode
+	let goods = Goods.create(0)
+	return goods.count() as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: two-directories-each-declaring-a-generic-type-are-told-apart-by-a-qualified-base -->
+`a/` and `b/` both declare `Pair`, with two and one type parameters. Each qualified base means its own
+directory's type, so each alias takes the arity of the type it names.
+```maxon
+// --- file: a/pair.maxon
+export type Pair uses A, B
+	export var first as A
+	export var second as B
+
+	export static function create(first A, second B) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+
+// --- file: b/pair.maxon
+export type Pair uses A
+	export var only as A
+
+	export static function create(only A) returns Self
+		return Self{only: only}
+	end 'create'
+end 'Pair'
+
+// --- file: main.maxon
+typealias FromA = a.Pair with (ExitCode, ExitCode)
+typealias FromB = b.Pair with ExitCode
+
+function main() returns ExitCode
+	let both = FromA.create(40, second: 2)
+	let single = FromB.create(5)
+	return both.first + both.second + single.only
+end 'main'
+```
+```exitcode
+47
+```
+
+<!-- test: error.a-directory-qualified-generic-base-that-is-not-generic -->
+A qualified base that names a type with no type parameters is judged as that type, exactly as the bare spelling is.
+```maxon
+// --- file: lib/plain.maxon
+export type Plain
+	export var first as ExitCode
+end 'Plain'
+
+export function helper() returns ExitCode
+	return 0
+end 'helper'
+
+// --- file: main.maxon
+typealias Bad = lib.Plain with ExitCode
+
+function total(g Bad) returns ExitCode
+	return g.first
+end 'total'
+
+function main() returns ExitCode
+	return lib.helper()
+end 'main'
+```
+```maxoncstderr
+error E2055: <fragment>:12:17: Type 'Plain' has no associated types
+```
+
+<!-- test: error.a-directory-qualified-generic-base-the-directory-does-not-export -->
+A qualified base is a reference to the type, so a type the directory keeps to itself is refused at the base.
+```maxon
+// --- file: lib/pair.maxon
+type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+export function helper() returns ExitCode
+	return 0
+end 'helper'
+
+// --- file: main.maxon
+typealias Good = lib.Pair with (ExitCode, ExitCode)
+typealias Goods = Array with Good
+
+function main() returns ExitCode
+	let goods = Goods.create(0)
+	return goods.count() as ExitCode + lib.helper()
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:13:18: type 'lib.Pair' is not exported
+```
+
 <!-- test: error.undeclared-generic-base-reaches-no-layout-query -->
 An instance is interned for whatever base a `with` names, declared or not, so the
 whole-program instance walks (`noteDestructorUsage`'s managed-opaque-element rooting

@@ -665,6 +665,11 @@ release's version as its heading when the release is cut.
   status the runtime last held, 0. A `match` over `RunProcessError` that lists every case, with no `default`, no
   longer compiles (E2026).
   Fix: add a `statusLost` arm beside `spawnFailed`, or give the `match` a `default throws`.
+- A bare generic base means what the reading file means by that name. A file where a `typealias Pair` wins the
+  bare name `Pair` (its own, a sibling file's in the same directory, or the project root's) and that writes `Pair with …` named the
+  generic type another directory exports as `Pair`; it is now E2055 (`Type 'Pair' has no associated types`), because
+  an alias is not a generic type and the alias that wins is the declaration the bare name means.
+  Fix: write the directory-qualified base for the generic type (`a.Pair with …`), or rename the alias.
 
 ## 0.5.0 — 2026-10-08
 
