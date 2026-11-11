@@ -204,6 +204,7 @@ export union ConsequenceOf
 	subject(names NameRoster)
 	handlerBody(message immutable ByteArray)
 	unknownType(name immutable ByteArray)
+	hiddenTypeName(name immutable ByteArray)
 	genericArgumentCount(reported String)
 end 'ConsequenceOf'
 
@@ -216,6 +217,7 @@ function cacheWriteConsequenceOf(writer LibraryCacheWriter, value ConsequenceOf)
 		subject(a0) then cacheWriteConsequenceOfSubject(writer, a0: a0)
 		handlerBody(a0) then cacheWriteConsequenceOfHandlerBody(writer, a0: a0)
 		unknownType(a0) then cacheWriteConsequenceOfUnknownType(writer, a0: a0)
+		hiddenTypeName(a0) then cacheWriteConsequenceOfHiddenTypeName(writer, a0: a0)
 		genericArgumentCount(a0) then cacheWriteConsequenceOfGenericArgumentCount(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteConsequenceOf'
@@ -232,6 +234,10 @@ function cacheWriteConsequenceOfUnknownType(writer LibraryCacheWriter, a0 immuta
 	writer.bytes(a0)
 end 'cacheWriteConsequenceOfUnknownType'
 
+function cacheWriteConsequenceOfHiddenTypeName(writer LibraryCacheWriter, a0 immutable ByteArray)
+	writer.bytes(a0)
+end 'cacheWriteConsequenceOfHiddenTypeName'
+
 function cacheWriteConsequenceOfGenericArgumentCount(writer LibraryCacheWriter, a0 String)
 	writer.text(a0)
 end 'cacheWriteConsequenceOfGenericArgumentCount'
@@ -244,7 +250,8 @@ function cacheReadConsequenceOf(reader LibraryCacheReader) returns ConsequenceOf
 		1 gives try cacheReadConsequenceOfSubject(reader)
 		2 gives try cacheReadConsequenceOfHandlerBody(reader)
 		3 gives try cacheReadConsequenceOfUnknownType(reader)
-		4 gives try cacheReadConsequenceOfGenericArgumentCount(reader)
+		4 gives try cacheReadConsequenceOfHiddenTypeName(reader)
+		5 gives try cacheReadConsequenceOfGenericArgumentCount(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadConsequenceOf'
@@ -266,6 +273,12 @@ function cacheReadConsequenceOfUnknownType(reader LibraryCacheReader) returns Co
 
 	return ConsequenceOf.unknownType(a0)
 end 'cacheReadConsequenceOfUnknownType'
+
+function cacheReadConsequenceOfHiddenTypeName(reader LibraryCacheReader) returns ConsequenceOf throws LibraryCacheDamage
+	let a0 = freeze try reader.bytes()
+
+	return ConsequenceOf.hiddenTypeName(a0)
+end 'cacheReadConsequenceOfHiddenTypeName'
 
 function cacheReadConsequenceOfGenericArgumentCount(reader LibraryCacheReader) returns ConsequenceOf throws LibraryCacheDamage
 	let a0 = try reader.text()
@@ -400,6 +413,7 @@ end 'namedConsequence'
 function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 	return match error 'kind'
 		unknownTypeName(typeName, _, _) gives ConsequenceOf.unknownType(freeze typeName.toByteArray())
+		hiddenTypeMembers(typeName, _, _, _) gives ConsequenceOf.hiddenTypeName(freeze typeName.toByteArray())
 		unknownField(typeName, _, _, _) gives namedConsequence(freeze typeName.toByteArray())
 		undefinedVariable(name, _, _) gives namedConsequence(freeze name.toByteArray())
 		uninferrableClosureParam(_, aliasName, _, _) gives namedConsequence(freeze aliasName.toByteArray())
@@ -1193,6 +1207,7 @@ export type FileParseArtifact
 	// and a single list would have to re-derive that split at the drain.
 	export var unusedTypeAliases as DeferredNameDiagnosticRoster
 	export var hiddenTypeNames as DeferredDiagnosticRoster
+	export var hiddenTypeDeclarations as NameRoster
 
 	// ⭐ THE SECONDARY FINDINGS this file's parse recorded (`findingStandingOf` classifies them), kept OUT
 	// of `diagnostics` above so they cannot gate the pipeline ahead of the checks that could explain the
@@ -1259,6 +1274,7 @@ export type FileParseArtifact
 			refusedInstanceDeferrals: 0,
 			unusedTypeAliases: noDeferredNameDiagnostics,
 			hiddenTypeNames: noDeferredDiagnostics,
+			hiddenTypeDeclarations: NameRoster.create(0),
 			secondaryDiagnostics: DiagnosticArray.create(0),
 			parseMints: ParseMints.none,
 			instanceIdsInUse: GenericInstanceIdArray.create(0)
@@ -1313,6 +1329,10 @@ export type FileParseArtifact
 	end 'recordHiddenTypeName'
 
 	export function adoptHiddenTypeNames(source FileParseArtifact)
+		for declared in source.hiddenTypeDeclarations 'eachDeclared'
+			self.hiddenTypeDeclarations.push(declared)
+		end 'eachDeclared'
+
 		match source.hiddenTypeNames 'source'
 			unwritten then return
 			entries(recorded) then self.recordHiddenTypeNames(recorded)
@@ -1617,6 +1637,7 @@ export type FileParseArtifact
 		writer.unsigned(self.refusedInstanceDeferrals as CacheUnsigned)
 		cacheWriteDeferredNameDiagnosticRoster(writer, value: self.unusedTypeAliases)
 		cacheWriteDeferredDiagnosticRoster(writer, value: self.hiddenTypeNames)
+		cacheWriteNameRoster(writer, value: self.hiddenTypeDeclarations)
 		cacheWriteDiagnosticArray(writer, value: self.secondaryDiagnostics)
 		cacheWriteParseMints(writer, value: self.parseMints)
 		cacheWriteGenericInstanceIdArray(writer, value: self.instanceIdsInUse)
@@ -1667,15 +1688,16 @@ export type FileParseArtifact
 		let f_refusedInstanceDeferrals = (try reader.unsigned()) as ElementIndex
 		let f_unusedTypeAliases = try cacheReadDeferredNameDiagnosticRoster(reader)
 		let f_hiddenTypeNames = try cacheReadDeferredDiagnosticRoster(reader)
+		let f_hiddenTypeDeclarations = try cacheReadNameRoster(reader)
 		let f_secondaryDiagnostics = try cacheReadDiagnosticArray(reader)
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, closureRecordSites: f_closureRecordSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, abandonedRegions: f_abandonedRegions, refusal: f_refusal, refusedInstanceDeferrals: f_refusedInstanceDeferrals, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, secondaryDiagnostics: f_secondaryDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, closureRecordSites: f_closureRecordSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, abandonedRegions: f_abandonedRegions, refusal: f_refusal, refusedInstanceDeferrals: f_refusedInstanceDeferrals, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, hiddenTypeDeclarations: f_hiddenTypeDeclarations, secondaryDiagnostics: f_secondaryDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize376
-		return sizeof(FileParseArtifact) as CacheSize376
+	static function cacheLayoutBytes() returns CacheSize384
+		return sizeof(FileParseArtifact) as CacheSize384
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -2037,6 +2059,10 @@ function commitDeferredNameDiagnostics(project Project, artifact FileParseArtifa
 		unwritten then break
 		entries(recorded) then project.hiddenTypeNameDiagnostics.append(recorded)
 	end 'hidden'
+
+	for declared in artifact.hiddenTypeDeclarations 'eachDeclared'
+		project.hiddenTypeNameReports.note(String.from(declared), readerFilePath: artifact.filePath)
+	end 'eachDeclared'
 end 'commitDeferredNameDiagnostics'
 
 // The cross-file half of E3062: a generic-instance alias may be written only in files other than the

@@ -174,6 +174,7 @@ ARTIFACT_REWIND = {
     "refusedInstanceDeferrals": ("kept", "a deferral stays counted whichever region made it, since the refusal it stands on is a diagnostic that no rewind withdraws"),
     "unusedTypeAliases": ("kept", "recorded after the last region, by the end-of-file report"),
     "hiddenTypeNames": ("kept", "a name this file could not see stays unseen whichever region named it"),
+    "hiddenTypeDeclarations": ("kept", "the declaration a refused name denotes stays refused whichever region named it"),
     "secondaryDiagnostics": ("counted",),
     "parseMints": ("kept", "filed once, when the parse ends"),
     "instanceIdsInUse": ("kept", "filed once, when the parse ends"),

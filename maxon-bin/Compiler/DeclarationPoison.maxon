@@ -46,9 +46,10 @@ export type PendingConsequence
 		return Self{file: self.file.clone(), consequence: self.consequence.clone(), lost: self.lost.clone(), sinkStart: self.sinkStart - removed, sinkEnd: self.sinkEnd - removed}
 	end 'shiftedBack'
 
-	export function isExplainedBy(poison DeclarationPoison, signatures ProgramSignatures, reports UnknownTypeReports, arityReports ReportedArityMessageSet) returns bool
+	export function isExplainedBy(poison DeclarationPoison, signatures ProgramSignatures, reports UnknownTypeReports, hiddenReports ReaderNameSet, arityReports ReportedArityMessageSet) returns bool
 		return match self.consequence 'consequence'
 			unrelated gives false
+			hiddenTypeName(name) gives hiddenReports.holds(String.from(name), readerFilePath: self.file)
 			unknownType(name) gives poison.refusesAnyPartOfFrom(singleName(name), reader: self.file, signatures: signatures, counting: PoisonEntriesCounted.backedEntries) or reports.reportedUnknownName(name, readerFilePath: self.file)
 			subject(names) gives poison.refusesAnyPartOfFrom(names, reader: self.file, signatures: signatures, counting: PoisonEntriesCounted.backedEntries) or poison.refusesAnExtensionQualifying(names, reader: self.file, signatures: signatures)
 			handlerBody(message) gives poison.holdsABackedAbandonedBodyNamed(message)
@@ -61,6 +62,7 @@ export type PendingConsequence
 
 		match self.consequence 'consequence'
 			unrelated or
+			hiddenTypeName or
 			genericArgumentCount then break
 			unknownType(name) then addRefusalKeys(name, into: names)
 			subject(subjects) then addEachRefusalKeys(subjects, into: names)
@@ -77,6 +79,7 @@ export type PendingConsequence
 			subject(subjects) then addExtensionQualifiers(subjects, into: qualifiers)
 			unrelated or
 			unknownType or
+			hiddenTypeName or
 			genericArgumentCount or
 			handlerBody then break
 		end 'consequence'

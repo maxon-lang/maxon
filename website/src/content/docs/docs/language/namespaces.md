@@ -47,10 +47,11 @@ bare or as `Holder.Inner` — is **E3008**. A typealias inside an `interface` ha
 At most one modifier may be written; combining two is **E2001** (`'export' and 'public' cannot be combined`).
 
 **A type hides its members.** Where a type is not visible, nothing of it is: naming it is **E3008**
-(**E3088** for a `module` type), and so is reaching a member through a value of it — a value an exported
-function returns included. That covers its fields, methods, extension methods, accessors and statics, and
-the calls the language makes on the author's behalf: `toString` in an interpolation, `==` and `<`, the
-iteration a `for` performs, and a `match` over an enum or union value. Inside a
+(**E3088** for a `module` type). A file that writes the type's name, or a hidden alias of it, gets that one
+refusal at the written name. A value reached without its name being written, such as one an exported
+function returns, is refused at its member use. The members are its fields, methods, extension methods,
+accessors and statics, and the calls the language makes on the author's behalf: `toString` in an
+interpolation, `==` and `<`, the iteration a `for` performs, and a `match` over an enum or union value. Inside a
 [generic function](/docs/language/composite-types/#generic-functions)'s copy, the interpolation, `==`, `<` and `for` over a value of a type
 parameter are judged for the caller that instantiated it instead. A value held at an interface type that
 is visible answers that interface's requirements. The standard library follows the same rule: a library type

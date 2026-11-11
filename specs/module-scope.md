@@ -415,15 +415,23 @@ module type Box
 	end 'create'
 end 'Box'
 
+export type Shelf
+	export var box as Box
+
+	export static function make() returns Self
+		return Self{box: Box.create(42)}
+	end 'make'
+end 'Shelf'
+
 // --- file: other/main.maxon
 function main() returns ExitCode
-	let b = Box.create(42)
-	return b.v
+	let s = Shelf.make()
+	return s.box.v
 end 'main'
 ```
 ```maxoncstderr
-error E3088: other/<fragment>:15:10: type 'Box' is module-scoped and not visible from this directory
-error E3088: other/<fragment>:16:11: type 'Box' is module-scoped and not visible from this directory
+error E3167: feature/<fragment>:14:20: exported field 'feature.Shelf.box' names module type 'Box' in its type
+error E3088: other/<fragment>:24:15: type 'Box' is module-scoped and not visible from this directory
 ```
 
 <!-- test: a-module-type-is-reachable-from-a-subdirectory -->

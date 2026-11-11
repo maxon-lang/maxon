@@ -12272,7 +12272,27 @@ export typealias UnplacedUnknownTypeArray = Array with UnplacedUnknownType
 typealias ReportedTypeSiteSet = Set with String
 
 typealias ReportedUnknownTypeMessageSet = Set with String
-typealias ReportedUnknownNameSet = Set with String
+typealias ReaderNameKeySet = Set with String
+
+export type ReaderNameSet
+	var keys as ReaderNameKeySet
+
+	export static function create() returns ReaderNameSet
+		return Self{keys: ReaderNameKeySet.create()}
+	end 'create'
+
+	export function note(name String, readerFilePath FilePath)
+		self.keys.insert(readerNameKey(name, readerFilePath: readerFilePath))
+	end 'note'
+
+	export function holds(name String, readerFilePath FilePath) returns bool
+		return self.keys.contains(readerNameKey(name, readerFilePath: readerFilePath))
+	end 'holds'
+end 'ReaderNameSet'
+
+function readerNameKey(name String, readerFilePath FilePath) returns String
+	return "{readerFilePath}|{name}"
+end 'readerNameKey'
 
 export type UnknownTypeReports
 	var reportedSites as ReportedTypeSiteSet
@@ -12280,11 +12300,11 @@ export type UnknownTypeReports
 
 	// A parser refusal of the same unknown name in the same file repeats this E3011, and is dropped
 	// once `resolveTypes` has run (`ConsequenceDropStage.afterTypeResolution`).
-	var reportedNames as ReportedUnknownNameSet
+	var reportedNames as ReaderNameSet
 	export var unplaced as UnplacedUnknownTypeArray
 
 	export static function create() returns UnknownTypeReports
-		return Self{reportedSites: ReportedTypeSiteSet.create(), reportedMessages: ReportedUnknownTypeMessageSet.create(), reportedNames: ReportedUnknownNameSet.create(), unplaced: UnplacedUnknownTypeArray.create(0)}
+		return Self{reportedSites: ReportedTypeSiteSet.create(), reportedMessages: ReportedUnknownTypeMessageSet.create(), reportedNames: ReaderNameSet.create(), unplaced: UnplacedUnknownTypeArray.create(0)}
 	end 'create'
 
 	// One report per written site: a generic instance resolves the same written slot again.
@@ -12305,11 +12325,11 @@ export type UnknownTypeReports
 	end 'wasReported'
 
 	export function noteReportedName(typeName String, readerFilePath FilePath)
-		self.reportedNames.insert("{readerFilePath}|{typeName}")
+		self.reportedNames.note(typeName, readerFilePath: readerFilePath)
 	end 'noteReportedName'
 
 	export function reportedUnknownName(typeName ByteArray, readerFilePath FilePath) returns bool
-		return self.reportedNames.contains("{readerFilePath}|{String.from(typeName)}")
+		return self.reportedNames.holds(String.from(typeName), readerFilePath: readerFilePath)
 	end 'reportedUnknownName'
 
 end 'UnknownTypeReports'
@@ -12388,6 +12408,7 @@ export type Project
 	// targets so a warm rebuild does not double them.
 	export var unusedTypeAliasDiagnostics as DeferredNameDiagnosticArray
 	export var hiddenTypeNameDiagnostics as DiagnosticArray
+	export var hiddenTypeNameReports as ReaderNameSet
 	export var unknownTypeReports as UnknownTypeReports
 
 	// The generic-instance alias names some file wrote in a type position — one half of the cross-file
@@ -12895,6 +12916,7 @@ export type Project
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(0),
 			unusedTypeAliasDiagnostics: DeferredNameDiagnosticArray.create(0),
 			hiddenTypeNameDiagnostics: DiagnosticArray.create(0),
+			hiddenTypeNameReports: ReaderNameSet.create(),
 			unknownTypeReports: UnknownTypeReports.create(),
 			genericAliasNamesWrittenByAFile: UsedTypeNameSet.create(),
 			secondaryDiagnostics: DiagnosticArray.create(0),

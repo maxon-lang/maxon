@@ -490,6 +490,290 @@ error E3008: app/specs/namespace-qualified-resolution/error.hidden-alias-as-a-qu
 ```
 
 
+<!-- test: error.hidden-type-written-qualified-in-a-parameter-is-refused-once -->
+A parameter typed with a directory-qualified type its file may not name is refused at the written name. The
+value the parameter binds is that refused name's, so reading its field is no second refusal.
+```maxon
+// --- file: lib/hidden.maxon
+type Hidden
+	export var first as ExitCode
+end 'Hidden'
+
+export function helper() returns ExitCode
+	return 0
+end 'helper'
+
+// --- file: app/main.maxon
+function total(g lib.Hidden) returns ExitCode
+	return g.first
+end 'total'
+
+function main() returns ExitCode
+	return lib.helper()
+end 'main'
+```
+```maxoncstderr
+error E3008: app/specs/namespace-qualified-resolution/error.hidden-type-written-qualified-in-a-parameter-is-refused-once.maxon:12:18: type 'lib.Hidden' is not exported
+```
+
+<!-- test: error.a-method-call-through-a-parameter-of-a-hidden-qualified-type-is-refused-once -->
+The same holds for a method call and for a second read through the parameter: the refusal is the written
+name's, and every use of the value it typed is that one refusal.
+```maxon
+// --- file: lib/hidden.maxon
+type Hidden
+	export var first as ExitCode
+
+	export function get() returns ExitCode
+		return self.first
+	end 'get'
+end 'Hidden'
+
+export function helper() returns ExitCode
+	return 0
+end 'helper'
+
+// --- file: app/main.maxon
+function total(g lib.Hidden) returns ExitCode
+	return g.first + g.get()
+end 'total'
+
+function main() returns ExitCode
+	return lib.helper()
+end 'main'
+```
+```maxoncstderr
+error E3008: app/specs/namespace-qualified-resolution/error.a-method-call-through-a-parameter-of-a-hidden-qualified-type-is-refused-once.maxon:16:18: type 'lib.Hidden' is not exported
+```
+
+<!-- test: error.a-typealias-over-a-hidden-generic-type-is-refused-once -->
+A typealias whose generic base is a type its file may not name is refused at the base. A parameter written
+through the alias reads the alias's refused instance, so a field read through it is no second refusal.
+```maxon
+// --- file: lib/pair.maxon
+type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+export function helper() returns ExitCode
+	return 0
+end 'helper'
+
+// --- file: app/main.maxon
+typealias Good = lib.Pair with (ExitCode, ExitCode)
+
+function total(g Good) returns ExitCode
+	return g.first
+end 'total'
+
+function main() returns ExitCode
+	return lib.helper()
+end 'main'
+```
+```maxoncstderr
+error E3008: app/specs/namespace-qualified-resolution/error.a-typealias-over-a-hidden-generic-type-is-refused-once.maxon:13:18: type 'lib.Pair' is not exported
+```
+
+<!-- test: error.a-hidden-qualified-type-as-a-static-call-head-is-refused-once -->
+The head of a static call names its type, and the value the call returns is of the refused type: reading its
+field is no second refusal.
+```maxon
+// --- file: lib/hidden.maxon
+type Hidden
+	export var first as ExitCode
+
+	static function make() returns Self
+		return Self{first: 1}
+	end 'make'
+end 'Hidden'
+
+export function helper() returns ExitCode
+	return 0
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let k = lib.Hidden.make()
+	return k.first
+end 'main'
+```
+```maxoncstderr
+error E3008: app/specs/namespace-qualified-resolution/error.a-hidden-qualified-type-as-a-static-call-head-is-refused-once.maxon:17:10: type 'lib.Hidden' is not exported
+```
+
+<!-- test: error.a-hidden-type-reached-without-being-written-is-refused-at-its-member -->
+A file that never writes the hidden type's name has no refusal of it to rely on, so the first use of a value of
+that type is the refusal.
+```maxon
+// --- file: lib/box.maxon
+type Box uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+end 'Box'
+
+export typealias StrBox = Box with String
+
+export function made() returns StrBox
+	return StrBox.make("boxed")
+end 'made'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let b = lib.made()
+	print("{b.v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: app/specs/namespace-qualified-resolution/error.a-hidden-type-reached-without-being-written-is-refused-at-its-member.maxon:20:12: type 'Box' is not exported
+error E3167: lib/specs/namespace-qualified-resolution/error.a-hidden-type-reached-without-being-written-is-refused-at-its-member.maxon:11:18: exported typealias 'lib.StrBox' names file-private type 'Box' in its target
+error E3167: lib/specs/namespace-qualified-resolution/error.a-hidden-type-reached-without-being-written-is-refused-at-its-member.maxon:13:17: exported function 'lib.made' names file-private type 'Box' in its return type
+```
+
+<!-- test: error.a-refused-member-of-a-hidden-type-leaves-its-later-uses-unreported -->
+A file that reaches a hidden type without writing its name has its member read refused, and that refusal
+stands. A top-level binding it loses is no fresh error where another file uses it.
+```maxon
+// --- file: lib/box.maxon
+type Box uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+end 'Box'
+
+export typealias StrBox = Box with String
+
+export function made() returns StrBox
+	return StrBox.make("boxed")
+end 'made'
+
+// --- file: app/first.maxon
+export let n = lib.made().v
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: app/specs/namespace-qualified-resolution/error.a-refused-member-of-a-hidden-type-leaves-its-later-uses-unreported.maxon:18:27: type 'Box' is not exported
+error E3167: lib/specs/namespace-qualified-resolution/error.a-refused-member-of-a-hidden-type-leaves-its-later-uses-unreported.maxon:11:18: exported typealias 'lib.StrBox' names file-private type 'Box' in its target
+error E3167: lib/specs/namespace-qualified-resolution/error.a-refused-member-of-a-hidden-type-leaves-its-later-uses-unreported.maxon:13:17: exported function 'lib.made' names file-private type 'Box' in its return type
+```
+
+<!-- test: error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written -->
+The file writes the hidden `Item` in a parameter and reaches the hidden `Box` through an exported function's
+result. Only `Item` has a written refusal, so the member read of `Box` is refused as well.
+```maxon
+// --- file: lib/box.maxon
+type Item
+	export var first as ExitCode
+end 'Item'
+
+type Box uses T
+	export var v as T
+
+	static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+end 'Box'
+
+export typealias StrBox = Box with String
+
+export function made() returns StrBox
+	return StrBox.make("boxed")
+end 'made'
+
+// --- file: app/main.maxon
+function total(item lib.Item) returns ExitCode
+	return 0
+end 'total'
+
+function main() returns ExitCode
+	let b = lib.made()
+	print("{b.v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: app/specs/namespace-qualified-resolution/error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written.maxon:22:21: type 'lib.Item' is not exported
+error E3008: app/specs/namespace-qualified-resolution/error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written.maxon:28:12: type 'Box' is not exported
+error E3167: lib/specs/namespace-qualified-resolution/error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written.maxon:15:18: exported typealias 'lib.StrBox' names file-private type 'Box' in its target
+error E3167: lib/specs/namespace-qualified-resolution/error.a-written-hidden-name-does-not-explain-another-hidden-type-reached-without-being-written.maxon:17:17: exported function 'lib.made' names file-private type 'Box' in its return type
+```
+
+<!-- test: error.a-written-hidden-name-explains-only-its-own-files-member-reads -->
+`first.maxon` writes the hidden `Box`; `second.maxon` reaches it without writing it. The refusal of the name is
+`first.maxon`'s, so the member read in `second.maxon` is refused on its own.
+```maxon
+// --- file: lib/box.maxon
+type Box
+	export var v as ExitCode
+
+	static function make() returns Self
+		return Self{v: 1}
+	end 'make'
+end 'Box'
+
+export function made() returns Box
+	return Box.make()
+end 'made'
+
+// --- file: app/first.maxon
+function total(b lib.Box) returns ExitCode
+	return 0
+end 'total'
+
+// --- file: app/second.maxon
+function main() returns ExitCode
+	let b = lib.made()
+	print("{b.v}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: app/specs/namespace-qualified-resolution/error.a-written-hidden-name-explains-only-its-own-files-member-reads.maxon:16:18: type 'lib.Box' is not exported
+error E3008: app/specs/namespace-qualified-resolution/error.a-written-hidden-name-explains-only-its-own-files-member-reads.maxon:23:12: type 'Box' is not exported
+error E3167: lib/specs/namespace-qualified-resolution/error.a-written-hidden-name-explains-only-its-own-files-member-reads.maxon:11:17: exported function 'lib.made' names file-private type 'Box' in its return type
+```
+
+<!-- test: error.a-written-hidden-typealias-explains-the-member-reads-of-the-type-it-denotes -->
+A parameter written through a typealias its file may not name is refused at that name. Reading a field of the
+value is no second refusal, of the type the alias denotes.
+```maxon
+// --- file: lib/box.maxon
+type Box uses T
+	export var v as T
+end 'Box'
+
+typealias StrBox = Box with String
+
+export function helper() returns ExitCode
+	let unused = 0 as ExitCode
+	return unused
+end 'helper'
+
+// --- file: app/main.maxon
+function total(b lib.StrBox) returns ExitCode
+	print("{b.v}\n")
+	return 0
+end 'total'
+
+function main() returns ExitCode
+	return lib.helper()
+end 'main'
+```
+```maxoncstderr
+error E3008: app/specs/namespace-qualified-resolution/error.a-written-hidden-typealias-explains-the-member-reads-of-the-type-it-denotes.maxon:15:18: typealias 'lib.StrBox' is not exported
+```
+
 <!-- test: error.same-directory-underlying-conflict-is-reported-once -->
 Two files in ONE directory export a `Score` over different underlying primitives. The pair is one
 mistake and earns exactly one diagnostic, E3061 at the second declaration — a directory-qualified

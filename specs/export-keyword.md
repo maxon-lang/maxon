@@ -405,7 +405,66 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: specs/export-keyword/error.non-exported-type-cross-file.maxon:15:10: type 'InternalPoint' is not exported
-error E3008: specs/export-keyword/error.non-exported-type-cross-file.maxon:16:11: type 'InternalPoint' is not exported
+```
+
+<!-- test: error.a-hidden-type-written-in-a-parameter-is-refused-once -->
+A parameter typed with a type its file may not name is refused at the written name, and every use of the value
+it binds is that one refusal.
+```maxon
+// --- file: point.maxon
+type InternalPoint
+	export var x as ExitCode
+
+	export function get() returns ExitCode
+		return self.x
+	end 'get'
+end 'InternalPoint'
+
+export function helper() returns ExitCode
+	return 0
+end 'helper'
+
+// --- file: main.maxon
+function total(p InternalPoint) returns ExitCode
+	return p.x + p.get()
+end 'total'
+
+function main() returns ExitCode
+	return helper()
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/export-keyword/error.a-hidden-type-written-in-a-parameter-is-refused-once.maxon:16:18: type 'InternalPoint' is not exported
+```
+
+<!-- test: error.a-hidden-generic-typealias-written-in-a-parameter-is-refused-once -->
+A parameter typed with a typealias its file may not name is refused at that name. Reading a field of the value
+is no second refusal, of the type the alias denotes.
+```maxon
+// --- file: alias.maxon
+type Box uses T
+	export var v as T
+end 'Box'
+
+typealias StrBox = Box with String
+
+export function helper() returns ExitCode
+	let unused = 0 as ExitCode
+	return unused
+end 'helper'
+
+// --- file: main.maxon
+function total(b StrBox) returns ExitCode
+	print("{b.v}\n")
+	return 0
+end 'total'
+
+function main() returns ExitCode
+	return helper()
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/export-keyword/error.a-hidden-generic-typealias-written-in-a-parameter-is-refused-once.maxon:15:18: typealias 'StrBox' is not exported
 ```
 
 <!-- test: error.a-non-exported-types-static-is-refused-across-files -->
@@ -1163,7 +1222,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: specs/export-keyword/error.a-non-exported-unions-case-construction-across-files.maxon:12:10: type 'Shape' is not exported
-error E3008: specs/export-keyword/error.a-non-exported-unions-case-construction-across-files.maxon:14:2: type 'Shape' is not exported
 ```
 
 <!-- test: exported-typealias-cross-file -->

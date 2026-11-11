@@ -2181,6 +2181,7 @@ function holdAsAConsequence(project Project, path FilePath, consequence Conseque
 		unrelated then return PoisonBacking.backed
 		subject or
 		unknownType or
+		hiddenTypeName or
 		genericArgumentCount or
 		handlerBody then break
 	end 'consequence'
@@ -2215,7 +2216,7 @@ module function dropExplainedParseConsequences(project Project, signatures Progr
 
 		view consequence = try held.get(position) otherwise panic("dropExplainedParseConsequences: held.get OOB at {position} below count {held.count()}")
 
-		if not consequence.isExplainedBy(project.poison, signatures: signatures, reports: reports, arityReports: arityReports) 'stillUnexplained'
+		if not consequence.isExplainedBy(project.poison, signatures: signatures, reports: reports, hiddenReports: project.hiddenTypeNameReports, arityReports: arityReports) 'stillUnexplained'
 			continue
 		end 'stillUnexplained'
 
@@ -3707,6 +3708,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	// every entry.
 	project.unusedTypeAliasDiagnostics = DeferredNameDiagnosticArray.create(0)
 	project.hiddenTypeNameDiagnostics = DiagnosticArray.create(0)
+	project.hiddenTypeNameReports = ReaderNameSet.create()
 
 	project.genericAliasNamesWrittenByAFile = UsedTypeNameSet.create()
 
@@ -3995,6 +3997,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// a BODY's hidden call with, applied to the refusals a parse-time door has to decide for itself:
 		// a top-level initializer's call and a hidden static member.
 		symbolNotVisible(kind, symbol, tier, line, column) gives hiddenSymbolDiagnostic(kind, noun: symbol, tier: tier, line: line, column: column, filePath: path)
+		hiddenTypeMembers(typeName, tier, line, column) gives hiddenSymbolDiagnostic(HiddenSymbolKind.typeDeclaration, noun: typeName, tier: tier, line: line, column: column, filePath: path)
 
 		missingReturn(name, line, column) gives Diagnostic.create(ErrorCode.missingReturn, message: "missing return statement: '{name}'", line: line, column: column, filePath: path)
 		returnValueFromVoid(name, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "type mismatch: '{name}' declares no return type, so it cannot return a value", line: line, column: column, filePath: path)

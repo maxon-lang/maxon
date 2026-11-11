@@ -1918,6 +1918,8 @@ export union SourceParseError implements Error
 	// same producer, which is what keeps a static and a function from drifting on what `module` means.
 	symbolNotVisible(kind HiddenSymbolKind, symbol String, tier Visibility, line LineNumber, column ColumnNumber)
 
+	hiddenTypeMembers(typeName String, tier Visibility, line LineNumber, column ColumnNumber)
+
 	// ⭐ **A PLACE ASSIGNED TO ITSELF, TEXTUALLY** — `x = x`, `p.x = p.x`, `self.n = self.n`. Renders
 	// as **E3067**, positioned at the statement's FIRST token. `place` is the chain as written, which
 	// the message prints on BOTH sides of the `=`. Raised by `Parser.rejectDegenerateAssignment`,
@@ -19795,9 +19797,24 @@ end 'tupleTargetNamed'
 // records it and parses on (`settleTypeNameVerdict`), while a constant initializer's walk throws it
 // (`refuseHiddenTypeName`), since that walk's artifact is discarded and a recorded refusal would
 // vanish.
+union HiddenNominal
+	none
+	named(name immutable ByteArray)
+	aliasSpelled(written immutable ByteArray)
+end 'HiddenNominal'
+
+function bareNominalOf(kind HiddenSymbolKind, noun ByteArray) returns HiddenNominal
+	return match kind 'kind'
+		typeDeclaration gives HiddenNominal.named(noun)
+		typeAliasDeclaration gives HiddenNominal.aliasSpelled(noun)
+		functionDeclaration or
+		staticMember panic("bareNominalOf: a bare type name is hidden as a type or a typealias, never as a function or a static")
+	end 'kind'
+end 'bareNominalOf'
+
 union TypeNameVerdict
 	nameable
-	hidden(kind HiddenSymbolKind, tier Visibility, noun immutable ByteArray, anchor Token)
+	hidden(kind HiddenSymbolKind, tier Visibility, noun immutable ByteArray, nominal HiddenNominal, anchor Token)
 end 'TypeNameVerdict'
 
 enum TypeNameHeadForm
@@ -19816,14 +19833,14 @@ type TypeNameHead
 end 'TypeNameHead'
 
 function hiddenMembersRefusal(typeName ByteArray, visibility Visibility, memberTok Token) returns SourceParseError
-	return SourceParseError.symbolNotVisible(HiddenSymbolKind.typeDeclaration, symbol: String.from(typeName), tier: visibility, line: memberTok.line, column: memberTok.column)
+	return SourceParseError.hiddenTypeMembers(String.from(typeName), tier: visibility, line: memberTok.line, column: memberTok.column)
 end 'hiddenMembersRefusal'
 
 function typeNameVerdictOf(hiding TypeNameHiding, noun ByteArray, anchor Token) returns TypeNameVerdict
 	return match hiding 'hiding'
 		notHidden or
 		declaredInAnotherLayer gives TypeNameVerdict.nameable
-		hidden(kind, tier) gives TypeNameVerdict.hidden(kind, tier: tier, noun: noun, anchor: anchor)
+		hidden(kind, tier) gives TypeNameVerdict.hidden(kind, tier: tier, noun: noun, nominal: bareNominalOf(kind, noun: noun), anchor: anchor)
 	end 'hiding'
 end 'typeNameVerdictOf'
 
@@ -19923,6 +19940,7 @@ export type Parser
 	let respelledStarts as RespelledTokenStartSet
 	var parenGroups as ParenGroups
 	var settledTypeNames as SettledTypeNameMap
+	var refusedHiddenSites as PositionKeySet
 
 	// Keyed by name or instance alone: sound because a `Parser` parses one file, and `ProgramSignatures`
 	// is not written while it does.
@@ -20592,6 +20610,7 @@ export type Parser
 			respelledStarts: prepared.respelledStarts,
 			parenGroups: ParenGroups.create(),
 			settledTypeNames: SettledTypeNameMap.create(),
+			refusedHiddenSites: PositionKeySet.create(),
 			memos: ParseMemos.create(),
 			fileNonCallNames: NonCallNameIndex.from(0),
 			bodyNonCallNames: NonCallNameIndex.from(0),
@@ -64569,7 +64588,7 @@ export type Parser
 	function requireTypeNameVerdictNameable(verdict TypeNameVerdict) throws SourceParseError
 		match verdict 'verdict'
 			nameable then return
-			hidden(kind, tier, noun, anchor) then throw SourceParseError.symbolNotVisible(kind, symbol: String.from(noun), tier: tier, line: anchor.line, column: anchor.column)
+			hidden(kind, tier, noun, _, anchor) then throw SourceParseError.symbolNotVisible(kind, symbol: String.from(noun), tier: tier, line: anchor.line, column: anchor.column)
 		end 'verdict'
 	end 'requireTypeNameVerdictNameable'
 
@@ -64596,7 +64615,7 @@ export type Parser
 	function chainTypeVerdict(declaration ChainType, anchor Token) returns TypeNameVerdict
 		return match declaration.standing 'standing'
 			nameable gives TypeNameVerdict.nameable
-			hidden(kind, tier) gives TypeNameVerdict.hidden(kind, tier: tier, noun: declaration.written, anchor: anchor)
+			hidden(kind, tier) gives TypeNameVerdict.hidden(kind, tier: tier, noun: declaration.written, nominal: self.nominalOfHiddenChain(declaration), anchor: anchor)
 		end 'standing'
 	end 'chainTypeVerdict'
 
@@ -64679,9 +64698,68 @@ export type Parser
 
 		match verdict 'verdict'
 			nameable then return
-			hidden(kind, tier, noun, anchor) then self.artifact.recordHiddenTypeName(hiddenSymbolDiagnostic(kind, noun: String.from(noun), tier: tier, line: anchor.line, column: anchor.column, filePath: self.job.path))
+			hidden(kind, tier, noun, nominal, anchor) then self.recordRefusedHiddenTypeName(kind, tier: tier, noun: noun, nominal: nominal, anchor: anchor)
 		end 'verdict'
 	end 'settleTypeNameVerdict'
+
+	function recordRefusedHiddenTypeName(kind HiddenSymbolKind, tier Visibility, noun ByteArray, nominal HiddenNominal, anchor Token)
+		let site = positionKey(anchor.line, column: anchor.column)
+
+		if self.refusedHiddenSites.contains(site) 'alreadyRefusedHere'
+			return
+		end 'alreadyRefusedHere'
+
+		self.refusedHiddenSites.insert(site)
+		self.artifact.recordHiddenTypeName(hiddenSymbolDiagnostic(kind, noun: String.from(noun), tier: tier, line: anchor.line, column: anchor.column, filePath: self.job.path))
+
+		match kind 'kind'
+			typeDeclaration or
+			typeAliasDeclaration then self.recordHiddenNominal(nominal)
+			functionDeclaration or
+			staticMember then panic("recordRefusedHiddenTypeName: a type-name verdict is hidden as a type or a typealias, never as a function or a static")
+		end 'kind'
+	end 'recordRefusedHiddenTypeName'
+
+	function recordHiddenNominal(nominal HiddenNominal)
+		match nominal 'nominal'
+			none then return
+			named(name) then self.artifact.hiddenTypeDeclarations.push(name)
+			aliasSpelled(written) then self.recordNominalOfSpelledAlias(written)
+		end 'nominal'
+	end 'recordHiddenNominal'
+
+	function recordNominalOfSpelledAlias(written ByteArray)
+		if not self.signatures.allFilesFolded 'theIndexIsStillBeingBuilt'
+			return
+		end 'theIndexIsStillBeingBuilt'
+
+		if not self.signatures.isAliasOfFormFor(written, readerFilePath: self.job.path, wanted: FormAliasKind.generic) 'noInstanceToDenote'
+			return
+		end 'noInstanceToDenote'
+
+		self.artifact.hiddenTypeDeclarations.push(self.signatures.genericInstanceBaseName(self.signatures.genericAliasInstanceFrom(written, readerFilePath: self.job.path)))
+	end 'recordNominalOfSpelledAlias'
+
+	function nominalOfHiddenChain(declaration ChainType) returns HiddenNominal
+		match declaration.kind 'kind'
+			structType or
+			enumType or
+			unionType or
+			interfaceType then return HiddenNominal.named(declaration.name)
+			genericAlias then return self.nominalOfHiddenGenericAlias(declaration)
+			rangedAlias or
+			functionAlias or
+			tupleAlias then return HiddenNominal.none
+		end 'kind'
+	end 'nominalOfHiddenChain'
+
+	function nominalOfHiddenGenericAlias(declaration ChainType) returns HiddenNominal
+		if not self.signatures.allFilesFolded 'theIndexIsStillBeingBuilt'
+			return HiddenNominal.none
+		end 'theIndexIsStillBeingBuilt'
+
+		return HiddenNominal.named(self.signatures.genericInstanceBaseName(self.signatures.genericAliasInstanceFrom(self.signatures.aliasFamilyIdentity(declaration.name), readerFilePath: declaration.declFilePath)))
+	end 'nominalOfHiddenGenericAlias'
 
 	function requireNoCallToNothing(qualifier ByteArray) throws SourceParseError
 		if not self.chainCallFollowsAt(self.pos) 'notACall'

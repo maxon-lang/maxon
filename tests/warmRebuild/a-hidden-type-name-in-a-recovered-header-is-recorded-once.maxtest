@@ -1,0 +1,12 @@
+let RecoveredHeaderStabilityPassLine = "PASS stability: two checks over unchanged input both reported 2 diagnostic(s)"
+let RecoveredHeaderStabilityFailLabel = "FAIL stability:"
+
+test 'a hidden type name in a header read again after its body is abandoned is recorded once'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "a-hidden-type-name-in-a-recovered-header-is-recorded-once", fixture: "hidden-name-in-recovered-header")
+	let run = spawnRecheck(staged)
+
+	Expect.contains(run.stdout, needle: RecoveredHeaderStabilityPassLine, message: "`{TestedCompilerStem} {RecheckCommandName}` did not count the two standing diagnostics (one parameter type naming a type its file may not see, one undefined variable in the body that is abandoned) as two. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.isFalse(run.stderr.contains(RecoveredHeaderStabilityFailLabel), message: "`{TestedCompilerStem} {RecheckCommandName}` found the two checks over unchanged input disagreeing on how many diagnostics they reported. It wrote to stderr: {run.stderr}")
+
+	discardStagedDir(staged)
+end 'a hidden type name in a header read again after its body is abandoned is recorded once'

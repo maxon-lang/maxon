@@ -4617,3 +4617,20 @@ end 'main'
 error E2045: <fragment>:2:13: Global initializer for 'first' is not a constant expression: '(match 2 'pickFirst'newline 1 gives 10newline 2 gives 20newline default gives 0newline end 'pickFirst')' cannot be evaluated at compile time
 error E2045: <fragment>:8:14: Global initializer for 'second' is not a constant expression: '(match 3 'pickSecond'newline 1 gives 11newline 3 gives 33newline default gives 0newline end 'pickSecond')' cannot be evaluated at compile time
 ```
+
+<!-- test: error.a-constant-refused-for-an-unknown-type-leaves-another-files-use-of-it-unreported -->
+A constant whose initializer names a type that does not exist is refused where it is written. Another file's
+read of it is that refusal's consequence, and is no second error.
+```maxon
+// --- file: app/first.maxon
+export let n = 5 as Nope
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: app/<fragment>:3:18: Unknown type 'Nope'
+```
