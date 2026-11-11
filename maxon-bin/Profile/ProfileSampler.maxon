@@ -106,30 +106,38 @@
 		end 'over'
 
 		// Where the executable was loaded: the first module of a Toolhelp walk on Windows, the image whose
-		// Mach-O file type is the executable's on macOS. Zero when nothing was enumerated, and on Linux, whose
-		// static image is placed as linked (`executablePlacementOf`).
-		export function executableBase(target Target) returns RegisterWord
+		// Mach-O file type is the executable's on macOS. `notLocated` when no such module was listed, and
+		// always on Linux, whose static image is placed as linked (`executablePlacementOf`).
+		export function executableLocation(target Target) returns ExecutableLocation
 			return match target.os 'os'
-				windows gives try self.starts.get(0) otherwise 0
-				macos gives self.baseOfTheMachOExecutable()
-				linux gives 0
-				wasi panic("ProfileModuleMap.executableBase: {targetToString(target)} has no sampler, so no module list was read")
+				windows gives self.locationOfTheFirstModule()
+				macos gives self.locationOfTheMachOExecutable()
+				linux gives ExecutableLocation.notLocated
+				wasi panic("ProfileModuleMap.executableLocation: {targetToString(target)} has no sampler, so no module list was read")
 			end 'os'
-		end 'executableBase'
+		end 'executableLocation'
 
-		function baseOfTheMachOExecutable() returns RegisterWord
+		function locationOfTheFirstModule() returns ExecutableLocation
+			let first = try self.starts.get(0) otherwise return ExecutableLocation.notLocated
+
+			return ExecutableLocation.located(first as DebugAddress)
+		end 'locationOfTheFirstModule'
+
+		function locationOfTheMachOExecutable() returns ExecutableLocation
 			for (iter, fileType) in self.fileTypes.withIterator() 'eachModule'
 				if isTheMachOExecutable(fileType as FullRangeInt) 'theProgram'
-					return try self.starts.get(iter.index()) otherwise 0
+					let start = try self.starts.get(iter.index()) otherwise panic("ProfileModuleMap.locationOfTheMachOExecutable: module {iter.index()} has a file type and no start — the columns are pushed together")
+
+					return ExecutableLocation.located(start as DebugAddress)
 				end 'theProgram'
 			end 'eachModule'
 
-			return 0
-		end 'baseOfTheMachOExecutable'
+			return ExecutableLocation.notLocated
+		end 'locationOfTheMachOExecutable'
 
 		export function nameAt(address RegisterWord) returns String throws AbsentError
 			for (iter, start) in self.starts.withIterator() 'eachModule'
-				if address >= start and address < (try self.ends.get(iter.index()) otherwise start) 'inThisModule'
+				if address >= start and address < (try self.ends.get(iter.index()) otherwise panic("ProfileModuleMap.nameAt: module {iter.index()} has a start and no end — the columns are pushed together")) 'inThisModule'
 					return try self.names.get(iter.index()) otherwise panic("ProfileModuleMap.nameAt: module {iter.index()} has a start and no name — the three columns are pushed together")
 				end 'inThisModule'
 			end 'eachModule'
@@ -580,10 +588,12 @@
 		return false
 	end 'profileThreadIdsContain'
 
-	module function profileImageFor(session ProfileSession, sidecar MxdbgReader, textBytes DebugAddress) returns ProfileImageLoad
-		let modules = try session.loadedModules() otherwise ProfileModuleMap.over(SampledModuleArray.create(0))
+	let ProfileModuleListUnreadableReason = "the program's loaded images could not be listed, so its code cannot be placed"
 
-		return match executablePlacementOf(sidecar.target, loadedAt: modules.executableBase(sidecar.target) as DebugAddress) 'placed'
+	module function profileImageFor(session ProfileSession, sidecar MxdbgReader, textBytes DebugAddress) returns ProfileImageLoad
+		let modules = try session.loadedModules() otherwise return ProfileImageLoad.refused(ProfileModuleListUnreadableReason)
+
+		return match executablePlacementOf(sidecar.target, location: modules.executableLocation(sidecar.target)) 'placed'
 			refused(reason) gives ProfileImageLoad.refused(reason)
 			ready(placement) gives ProfileImageLoad.loaded(profileImageAt(sidecar, textBytes: textBytes, placement: placement, modules: modules))
 		end 'placed'

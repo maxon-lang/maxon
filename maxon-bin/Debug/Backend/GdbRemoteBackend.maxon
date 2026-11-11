@@ -2028,11 +2028,13 @@ function gdbSlideOf(doc JsonDoc, image JsonNodeId) returns BackendAdoption
 		return BackendAdoption.refused("the debug stub named the program's image and not the address it was loaded at")
 	end 'noAddress'
 
+	// A Mach-O executable is never loaded at 0 (`__PAGEZERO`), and a negative JSON integer must not be cast
+	// to an address.
 	if loaded <= 0 'notAnAddress'
 		return BackendAdoption.refused("the debug stub reports the program's image loaded at {loaded}, which is no address")
 	end 'notAnAddress'
 
-	return executablePlacementOf(detectHostTarget(), loadedAt: loaded as DebugAddress)
+	return executablePlacementOf(detectHostTarget(), location: ExecutableLocation.located(loaded as DebugAddress))
 end 'gdbSlideOf'
 
 #if arch(arm64)

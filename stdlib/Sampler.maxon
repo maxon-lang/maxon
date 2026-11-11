@@ -49,8 +49,8 @@
 		let ModuleEntryBaseSlot = (4096 + 24) as ScratchOffset
 		let ModuleEntryExtentSlot = (4096 + 32) as ScratchOffset
 		let ModuleEntryNameOffset = 48
-		let ModuleSnapshotAttempts = 20
-		let ModuleSnapshotRetryMs = 5
+		let ModuleListAttempts = 20
+		let ModuleListRetryMs = 5
 		let InvalidHandle = 0 - 1
 		let CurrentThreadPseudoHandle = 0 - 2
 
@@ -77,8 +77,8 @@
 		let MachThreadIdentifierInfoWords = 6
 		let MachTaskDyldInfo = 17
 		let MachTaskDyldInfoWords = 5
-		let MachImageListAttempts = 40
-		let MachImageListRetryMs = 5
+		let ModuleListAttempts = 40
+		let ModuleListRetryMs = 5
 
 		let MachStateFramePointerOffset = 232
 		let MachStateStackPointerOffset = 248
@@ -1121,39 +1121,18 @@
 		#endif
 
 		public function modules() returns SampledModuleArray throws SamplerError
-			#if os(Windows) and arch(x64)
+			#if not os(Linux)
 				var attempt = 0 as Count
 
-				while attempt < ModuleSnapshotAttempts 'retry'
+				while attempt < ModuleListAttempts 'retry'
 					attempt = attempt + 1
-					let snapshot = __Builtins.profileModuleSnapshot(self.pid) as RegisterWord
+					let listed = self.listedModules()
 
-					if snapshot == InvalidHandle or snapshot == 0 'notYet'
-						sleep(ModuleSnapshotRetryMs)
-						continue
-					end 'notYet'
-
-					let walked = self.walkedModules(snapshot)
-					__Builtins.profileClose(snapshot)
-
-					return walked
-				end 'retry'
-
-				throw SamplerError.moduleListUnavailable
-			#endif
-
-			#if os(Macos)
-				var attempt = 0 as Count
-
-				while attempt < MachImageListAttempts 'retry'
-					attempt = attempt + 1
-					let images = self.machImages()
-
-					if images.count() > 0 'listed'
-						return images
+					if listed.count() > 0 'listed'
+						return listed
 					end 'listed'
 
-					sleep(MachImageListRetryMs)
+					sleep(ModuleListRetryMs)
 				end 'retry'
 
 				throw SamplerError.moduleListUnavailable
@@ -1169,7 +1148,7 @@
 		end 'modules'
 
 		#if os(Macos)
-			function machImages() returns SampledModuleArray
+			function listedModules() returns SampledModuleArray
 				var modules = SampledModuleArray.create(0)
 				_ = self.nextCapture()
 				self.scratch.setWord(MachCountSlot, value: MachTaskDyldInfoWords)
@@ -1203,12 +1182,18 @@
 				end 'eachImage'
 
 				return modules
-			end 'machImages'
+			end 'listedModules'
 		#endif
 
 		#if os(Windows) and arch(x64)
-			function walkedModules(snapshot RegisterWord) returns SampledModuleArray
+			function listedModules() returns SampledModuleArray
 				var modules = SampledModuleArray.create(0)
+				let snapshot = __Builtins.profileModuleSnapshot(self.pid) as RegisterWord
+
+				if snapshot == InvalidHandle or snapshot == 0 'notYet'
+					return modules
+				end 'notYet'
+
 				self.scratch.setWord(ModuleEntrySizeSlot, value: ModuleEntryBytes)
 				var more = __Builtins.profileModuleFirst(snapshot, self.scratch.addressOf(SampleModuleEntrySlot))
 
@@ -1218,8 +1203,10 @@
 					more = __Builtins.profileModuleNext(snapshot, self.scratch.addressOf(SampleModuleEntrySlot))
 				end 'eachModule'
 
+				__Builtins.profileClose(snapshot)
+
 				return modules
-			end 'walkedModules'
+			end 'listedModules'
 
 			function moduleName() returns String
 				var name = ByteArray.create(0)

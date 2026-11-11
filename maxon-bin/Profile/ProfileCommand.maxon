@@ -382,9 +382,9 @@
 
 		let process = try SampledProcess.open(pid) otherwise (e) 'cannotOpen'
 			match e 'why'
-				noSuchProcess then return refuseProfileAfterKilling(child, reason: "{reportSpelledPathDisplay(request.exePath())} could not be sampled: it ended before the sampler attached. Profile a program that runs long enough to be measured.")
+				noSuchProcess then return refuseProfileAfterKilling(child, reason: profileEndedFirstReason(request))
 				noScratch then return refuseProfileAfterKilling(child, reason: ProfileNoSamplerReason)
-				accessDenied then return refuseProfileAfterKilling(child, reason: "{reportSpelledPathDisplay(request.exePath())} could not be sampled: {profileAccessDeniedHint(detectHostTarget().os)}")
+				accessDenied then return refuseProfileAfterKilling(child, reason: profileUnsampledReason(request, why: profileAccessDeniedHint(detectHostTarget().os)))
 				threadNotPinned then return refuseProfileAfterKilling(child, reason: ProfileNotPinnedReason)
 				unknownThread or
 				outOfWindow or
@@ -395,7 +395,7 @@
 
 		var session = ProfileSession.create(process, cyclesPerTick: cyclesPerTick)
 
-		let outcome = match profileImageFor(session, sidecar: sidecar, textBytes: textBytes) 'symbols'
+		let outcome = match attachedImage(request, child: child, session: session, sidecar: sidecar, textBytes: textBytes) 'symbols'
 			refused(reason) gives refuseProfileAfterKilling(child, reason: reason)
 			loaded(image) gives runProfileTicks(request, child: child, session: session, image: image)
 		end 'symbols'
@@ -404,6 +404,46 @@
 
 		return outcome
 	end 'sampleUntilItEnds'
+
+	let ProfileEndLooks = 5
+	let ProfileEndLookGapMs = 20
+
+	function profileEndedFirstReason(request ProfileRequest) returns String
+		return profileUnsampledReason(request, why: "it ended before the sampler attached. Profile a program that runs long enough to be measured.")
+	end 'profileEndedFirstReason'
+
+	function profileUnsampledReason(request ProfileRequest, why String) returns String
+		return "{reportSpelledPathDisplay(request.exePath())} could not be sampled: {why}"
+	end 'profileUnsampledReason'
+
+	// A program exiting during the image-list read can hand back a partial list that lacks the executable
+	// before it is reapable, so a refusal is checked against the child's exit before it is reported.
+	function attachedImage(request ProfileRequest, child StreamingSubprocess, session ProfileSession, sidecar MxdbgReader, textBytes DebugAddress) returns ProfileImageLoad
+		let look = profileImageFor(session, sidecar: sidecar, textBytes: textBytes)
+
+		return match look 'found'
+			loaded gives look
+			refused gives ProfileImageLoad.refused(profileEndedFirstReason(request)) if profileChildEndsSoon(child) else look
+		end 'found'
+	end 'attachedImage'
+
+	function profileChildEndsSoon(child StreamingSubprocess) returns bool
+		var looks = 0 as Count
+
+		while true 'eachLook'
+			if profileStatusObserved(profileChildExit(child)) 'ended'
+				return true
+			end 'ended'
+
+			looks = looks + 1
+
+			if looks >= ProfileEndLooks 'stillRunning'
+				return false
+			end 'stillRunning'
+
+			sleep(ProfileEndLookGapMs)
+		end 'eachLook'
+	end 'profileChildEndsSoon'
 
 	function runProfileTicks(request ProfileRequest, child StreamingSubprocess, session ProfileSession, image ProfileImage) returns ExitCode
 		var accumulator = ProfileAccumulator.create()
