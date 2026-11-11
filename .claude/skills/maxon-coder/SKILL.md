@@ -35,8 +35,8 @@ defect: fix the doc in the same change (the `documenter` skill owns that step).
 ⛔ **Write no comments** — not a `//`, not a `///`, not the doc block above a registry case. Code changes
 shape while it is being written, so a comment written now is rewritten and mostly thrown away. **The
 `documenter` skill writes every comment, once, on the finished diff before the commit** — it is the one
-exception to this rule. Leave the *why* of an unobvious shape in your report instead; the documenter builds
-the comments from it. A block holding only a comment is still empty (E3082).
+exception to this rule. Leave the *why* of an unobvious shape in your report instead; the documenter decides
+whether it earns a comment. A block holding only a comment is still empty (E3082).
 
 ## 4. Compile every edit before you hand it back
 

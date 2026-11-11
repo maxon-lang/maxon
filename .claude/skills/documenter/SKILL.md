@@ -1,460 +1,142 @@
 ---
 name: documenter
-description: Author a finished change's comments and documentation in one pass, immediately before the commit — the ONLY step that writes comments, because code is written with none. Minimal and concise: three gates and an allow-list, and most declarations end with no comment. Also updates the `docs/` source the change's surface owns and regenerates the site. Comments and docs only — not one byte of code changes. Invoke as `/documenter`.
+description: Author a finished change's comments and documentation in one pass, immediately before the commit — the ONLY step that writes comments, because code is written with none. The expected output is ZERO comment lines; four narrow categories can earn one, at most two lines each. Also updates the `docs/` source the change's surface owns and regenerates the site. Comments and docs only — not one byte of code changes. Invoke as `/documenter`.
 ---
 
 # Document one finished change
 
-**Code in this repository is written with NO comments.** This skill is where every comment comes from,
-and it runs once, on the finished diff, immediately before the commit.
-
-**Why the split:** code changes shape while a change is being written, so a comment written mid-flight
-is written and rewritten several times and most of that prose never reaches the commit. Only the final
-shape of the code is worth commenting, and that shape does not exist until the change is done.
-
-⚠ **That is not a licence to write more now.** Running last means holding the whole change in context,
-which is exactly what makes this step prone to over-writing. The output is **minimal and concise**: the
-default is no comment, and most declarations in the diff end with none.
+Code in this repository is written with no comments; this pass, run once on the finished diff, is
+where every comment comes from. **The expected result is zero comment lines added.** Most changes
+need none, and a pass that adds more than a few lines has almost certainly over-written.
 
 **Argument:** none = the working diff against `HEAD` (`git status --short`, then `git diff`). Optionally
 a revision range or an explicit list of paths.
 
-## ⛔ Refusals, before anything else
+## Refusals
 
-**1. Not one byte of code changes.** Not a rename, not a reordered argument, not a whitespace fix inside
-a statement. Found a bug, or a comment describing a shape the code no longer has? The fix is to the
-**comment**; report the bug and leave the code alone. Deleting and adding comments cannot break a build
-— that is what lets you work freely, and it is true only while you change nothing else.
+1. **Not one byte of code changes.** A bug, or a comment describing a shape the code no longer has, is
+   fixed in the comment or reported — never in the code.
+2. **Generated files:** `maxon-bin/Compiler/Runtime/SlabClasses.maxon` and any file whose header
+   declares itself generated. (`ErrorCodeRegistry.maxon` is hand-written and in scope.)
+3. **`specs/`** is read-only.
+4. **Generated site pages** under `website/src/content/docs/docs/{cli,language,stdlib,spec,best-practices}/`
+   — edit the source and re-run the sync.
 
-**2. Generated files are refused outright.** Rewriting one is reverted by the next generator run *and*
-fails that generator's own drift check — for `SlabClasses.maxon` that is
-`scripts/gen-slab-classes.sh --check`. Refuse the path
-`maxon-bin/Compiler/Runtime/SlabClasses.maxon`, and any file whose header declares ITSELF generated
-(`SlabClasses.maxon`'s `GENERATED — DO NOT EDIT BY HAND`); the second test is the one that holds as
-generators are added. A file that merely MENTIONS a generated sibling (`SlabClassTable.maxon`) or says it
-is not regenerated (`UnicodeCategoryRuntime.maxon`) is hand-written and in scope.
-⚠ **`maxon-bin/Compiler/ErrorCodeRegistry.maxon` is NOT one of these.** It is hand-authored, has no
-generator, and the `//` block above each case is the text `lookup_error_code` serves — it is a primary
-work item here.
+## Comments
 
-**3. `specs/` is read-only.** It is the canonical definition of the language.
+### Do not hunt for things to say
 
-**4. A generated site page is never edited by hand.** Everything under
-`website/src/content/docs/docs/{cli,language,stdlib,spec,best-practices}/` is built from a source; edit
-the source and re-run the sync.
+Do not inventory the diff's facts and filter them. Read the diff once. A comment exists only where,
+reading the finished code, you hit a spot where **someone editing it would plausibly make it silently
+wrong** — a wrong answer, a leak, a broken gate, a crash on one target — and the code gives them no
+way to see it. "A reader might wonder why" is not that. "This is non-obvious and I worked it out" is
+not that.
 
-A `//` inside a string literal is not a comment, and anything the lexer treats as a token is not one
-either.
+The caller's brief carries the change's diagnosis and the implementers' reports. They are context for
+judging the code, **not material to transcribe**: the commit message records the change's why.
 
-## The comment pass
+### The four categories — nothing else is written
 
-> ### ⛔⛔ MINIMAL AND CONCISE IS THE OUTPUT CONSTRAINT, NOT A STYLE NOTE
->
-> **The default is NO COMMENT, structurally.** A comment has to be argued *into* the file against the
-> allow-list below. There is no delete-list, so anything matching no category is simply never written.
-> **Expect most declarations in the diff to end with none, and a typical change to add between zero and
-> a handful of lines.**
->
-> ⛔ **You are not documenting the change.** The commit message does that, and the diff is already the
-> record of what moved. You are leaving behind the few facts a future reader cannot recover from the
-> code.
->
-> **Length is what the fact takes and not one word more.** A twelve-line ordering argument that
-> genuinely needs twelve lines keeps them; the same argument stated in four keeps four. A comment never
-> earns its place by being interesting, well-written or hard-won — and a fact worked out painfully
-> during the change is exactly the one that gets over-explained.
+1. **Ordering:** X must run before Y, and what silently breaks otherwise.
+2. **A non-local invariant:** correctness rests on a fact outside this function that its signature
+   cannot state (a cache key that omits the target, sound only because a `Project` has one target).
+3. **A gate that will fail:** wording pinned byte-for-byte by a named spec file, output compared by a
+   named pin. Name the gate.
+4. **A deliberate asymmetry** that invites a wrong "fix": two nearby sites differing on purpose.
 
-> ### ⭐⭐ THREE GATES, IN ORDER. EACH IS NECESSARY; NONE IS SUFFICIENT.
->
-> **Gate 1 — ⛔ Does the code already say it? Then it is not written.**
->
-> Not a paraphrase of it, not a summary of it, not a friendlier spelling of it. **The test: delete the
-> comment and read the code. If the fact is recoverable from the signature, the types, the names, the
-> guard's condition or the literal, it was never a comment.** The code is the one copy that cannot go
-> stale; a second copy in prose is a second thing to maintain, and it stops being true silently.
->
-> These are Gate-1 failures, and they are what gets written by default when nothing stops it: a
-> restated signature above a function; a narration of the block below; a guard's condition re-spelled
-> in English; a return described when the return type describes it; a named constant's name repeated as
-> prose; a type restated.
->
-> ⇒ **The comment starts where the code stops.** Nothing above that line goes in the file.
->
-> **Gate 2 — Is it on the allow-list?** Nine categories read as nine invitations, and a diligent pass
-> finds something on the list to say about almost any declaration. The list decides only what is
-> *eligible*.
->
-> **Gate 3 — What goes wrong if nobody ever knows this?**
->
-> - "A reader works it out from the code in a minute" → **no comment.** True, non-obvious and on the
->   list is not enough. The bar is *consequence*, not *interest*.
-> - "Someone changes this and gets a silent wrong answer, a leak, a broken gate, or a crash on one
->   target" → **write it**, and name that consequence, because it is the whole content.
->
-> **Then rank and cut.** Where a declaration clears all three gates twice, one fact usually has the
-> worst consequence: keep that one and drop the rest. Three comments around one declaration is how a
-> file reaches 55% commentary one honest step at a time.
->
-> ⇒ **Most eligible facts are still not written.** A pass writing everything that matched a category is
-> not applying Gates 1 and 3.
+A guard's reason, a cost argument, a pointer elsewhere, a summary, a restated signature, a narrated
+block: not written. When one declaration has two candidates, keep the worse consequence only.
 
-### The rules
+### Shape
 
-Binding on every comment written and every comment touched.
-
-- **Minimal and concise.** The default is no comment. Write one only where the code cannot carry the
-  point by itself, and then in as few words as it takes. A comment per line, a banner over every
-  section, and a restated signature above a function are all noise — and noise is unverified prose that
-  rots while the code keeps working.
-- **"Why", never "how".** The code is the "how". Comment what the reader cannot recover from it: the
-  constraint, the invariant, the reason this order or bound or branch is correct, the cost that
-  motivated an unobvious shape.
-- ⛔ **NO HISTORY. Describe the CURRENT state only.** No "used to", "previously", "changed from",
-  "renamed", "now that we…", "this was a workaround for…", no dated narration of an edit, no reference
-  to a former name. Git holds the history; a comment holds the present. The reason a guard exists is a
-  *why* and belongs — but state the constraint that still binds ("callers may hand this an unsorted
-  list"), never the edit that introduced it.
-- ⛔ **An existing comment is edited only when its CONTENT must change** — a fact the change made
-  false, a history clause, a fact outside the allow-list, a duplicate. A comment whose content is true
-  and allowed stays byte-for-byte as it is, whatever its formatting: bold, capitals, `⭐`, its wrap
-  width and its wording are not reasons to edit it. When content does change, rewrite the sentences
-  that carry it, not the block around them. ⛔ **Never ONLY reflow.** Re-wrapping a paragraph is part of
-  editing its content and is fine then; a comment whose words do not change is never re-wrapped,
-  restyled or re-broken on its own.
-
-The Maxon form:
+- **One or two lines.** A fact that seems to need more is being explained, not stated; cut to the
+  constraint and its consequence.
+- `//` only. Present tense, no markdown, no `⭐`, no ALL-CAPS, no `⚠`. Wrap at 100 columns, tabs
+  matching the code.
+- **No history and no provenance:** no "used to", "previously", "renamed", "ported from", "split out
+  of", no measurements, dates or past bugs. State the constraint that binds now.
+- Every name a comment cites is grepped first. No counts of lines, cases or callers.
+- A fact lives at one site.
 
 ```maxon
-// Bad: restates the code
-var i = 0  // set i to zero
-
-// Bad: narrates the block below
-// Loop over the items and add them up
-
-// Good: the reason this bound is correct, which the code cannot say
-// Callers pass unsorted ids, so the scan cannot early-exit.
-
-// Bad: history
-// We used to hash the name here; switched to the interned id in the parser rewrite.
-
-// Good: the invariant that still binds
-// Keyed by interned id — two spellings of one name must land on the same entry.
+// Asked below `queryTokens`: a shared hit that skipped it would leave `tokenCache` empty, so the next
+// re-query of an unchanged file would miss.
 ```
 
-Use `//`, or `/* … */` for a block. A comment-only block is still an empty block (E3082).
+A typical refactor, extraction, new helper or bug fix gets **nothing**.
 
-### Two rulings that decide most borderline cases
+### Existing comments — audit the neighbourhood
 
-**1. Measurements, dates, incident reports and gate output are DELETED** — not compressed, not
-relocated. `MEASURED 2026-08-20`, `10.8 ms of a 227.8 ms compile`, `expected 52, got 1`, a named past
-bug. Git, `docs/optimization-log.md` and the commit message hold them. **Keep the rule the measurement
-established; drop the measurement.**
+Scope: every comment block attached to, or inside, a declaration the diff touched, in every file the
+change touched. Not the whole file. The audit cuts; it never adds.
 
-**2. ⛔ NEVER RECORD WHERE CODE CAME FROM. Provenance is history.** No "ported from", no "the same
-reason X does it", no "inherited from", no citation into a file outside this tree. A comment describes
-THIS code.
+For each block, sentence by sentence:
 
-⚠ **But many such references encode a LIVE constraint, and deleting the whole comment breaks the
-suite.** A diagnostic's wording is often compared byte-for-byte by a spec's `maxoncstderr` block. Strip the provenance
-and keep the constraint, restated in terms of what binds now — which reads better anyway, because it no
-longer needs the reader to know where the code came from:
+- **False** (the change or anything else made it untrue) → rewrite the sentence to what is true, or
+  delete it. Verify a claimed difference from another path in both directions first.
+- **History, provenance, a measurement, a date, a past bug** → delete it. Where it carries a live
+  constraint (a wording pinned by a spec), keep the constraint and name the gate:
+  `Pinned byte-for-byte by specs/top-level-let.md.`
+- **Restates the code** (signature, guard condition, narrated block, constant's name) → delete it.
+- **Outside the four categories and nothing goes wrong if nobody knows it** → delete it.
+- **Two sites stating one fact** → keep one.
+- **A fact sitting above the wrong declaration** → move the text to the one it describes.
 
-- ❌ `Byte-for-byte the wording this was ported from, pinned by top-level-let.md`
-- ✅ `Pinned byte-for-byte by specs/top-level-let.md — changing this wording fails the suite.`
-- ❌ `The code this was ported from has the identical unbounded recursion`
-- ✅ *(clause deleted — the constraint above it stands on its own)*
+What survives stays byte-for-byte: never restyle, reflow or reword a sentence whose content is true
+and allowed, whatever its bold, capitals or wrap. When a sentence changes, rewrite that sentence, and
+reflow only the paragraph it is in.
 
-⇒ **Ask of every such reference: does it bind, or does it explain an origin?** A gate that will fail
-binds — name the gate. An origin goes, with nothing in its place.
+### Prose this pass authors (not code comments; the categories do not apply)
 
-### The allow-list — the only things eligible (Gate 2)
+1. **A new `ErrorCodeRegistry.maxon` case** needs the `//` block directly above it (no blank line): the
+   text `lookup_error_code` serves and the Error Codes page body. Write it for a user who hit the
+   diagnostic — what was refused and what makes it legal. The sync fails closed on a case without one.
+2. **`///` on a newly exported function** — rendered in LSP hover. One or two sentences.
+3. **Agent-facing rules:** a change to a command, workflow or rule an agent follows updates
+   `docs/WRITING_MAXON_CODE.md`'s preamble or its `## Scripts and scriptlib` section; the sync
+   regenerates `maxon-bin/Compiler/Mcp/McpInstructionsGenerated.maxon`.
 
-1. an **ordering constraint** — X runs before Y, and what silently goes wrong otherwise;
-2. an **invariant or precondition** the signature cannot state;
-3. **why a guard, bound or branch exists** — the input it refuses, the case it catches;
-4. a **soundness argument resting on a fact outside this function** — a cache key that omits the
-   target, sound only because a `Project` is aimed at one target for its whole life;
-5. a **deliberate asymmetry** — two nearby sites doing different things on purpose;
-6. a **cost reason for an unobvious shape** — "asked per token on a walk that visits every token, so
-   the next probe is a compare rather than a scan";
-7. a **gate that will fail** — a wording pinned byte-for-byte by a named spec file, a `TargetIr`
-   pin that compares this output. Name the gate, never where the wording came from;
-8. a **pointer to the one place a rule lives** — "see `X`, which owns the rule". The pointer only,
-   never a summary of what is there;
-9. a **known unguarded failure mode of THIS code** — what it does not handle and what happens then.
-   Category 3 covers why a guard EXISTS; this one covers the ABSENCE of a guard, and a limitation of
-   the code as it stands is present state, not history.
+## Documentation
 
-**There is no delete-list, deliberately.** A delete-list must enumerate every bad shape, and the one it
-forgets survives: a deny-list caught `"Split out of …"` and missed `"Split into its own function so …"`
-two declarations later, because that spelling was not on it. Under an allow-list an unrecognized fact
-is simply never written, and no gap in any enumeration can rescue it.
+A user-visible change (a command, flag or help text; a diagnostic; syntax or semantics; a `public`
+stdlib API; a runtime environment variable; target support; LSP, VS Code or MCP behaviour) updates its
+documentation in the same commit.
 
-### Two inputs, two rules
+1. Decide visibility and say so in the report either way.
+2. Find the owning source through `website/MAINTAINING.md`'s "what changed → which source" map. Edit
+   the source, never the page.
+3. Grep `docs/` and `vscode-extension/README.md` for every name the change moved, renamed or removed —
+   a sentence made false is found only this way.
+4. Link forms are in `MAINTAINING.md`; a route to a generated page is refused by the sync.
+5. Run `node website/scripts/sync-docs.mjs` and fix what it names. Not `--check`; that is the caller's.
+6. If `vscode-extension/syntaxes/maxon.tmLanguage.json` changed, copy it to `website/src/grammars/`.
+7. Docs state what the software does: no "no longer", "now", "used to", "instead of", and no negatives
+   ("never shows", "is not reported", "rather than X"). Grep the paragraphs you touched for them.
+8. A change that can break existing code, scripts or workflows adds a bullet under `## Unreleased` ›
+   `### Breaking changes` in `RELEASE_NOTES.md` with an indented `Fix: …` line (`docs/RELEASING.md`).
+   Nothing else goes there per change.
 
-**For code the change wrote, you are COMPOSING.** A composed comment may state only a fact you can
-point at — in the code itself, or in the diagnosis your caller's brief carries. ⛔ **Never a reason
-inferred from the shape of the diff.**
+## Verification
 
-**For a comment that already exists, you are CHECKING, and the default is no edit.** Change it only
-where its content must change (see the rules above), and then every surviving fact traces to text that
-was already in the file.
-
-⚠ **Both ways, a fact must be VERIFIABLE.** If a claim cannot be checked and does not clearly match a
-category, drop it. **A confident, fabricated invariant is far worse than a missing comment**, because
-someone will rely on it. If a claim's substance matters but cannot be verified, preserve it verbatim
-rather than rephrasing into something the code does not support.
-
-- ⛔ **Grep every file, function or heading a comment or doc cites before writing it.** An invented name
-  is worse than the dangling reference it replaced.
-- **Omit a prose count** (lines, cases, callers): it rots beside the thing it counts.
-- **A doc or comment correction has no test behind it**, so read it against the code and name any claim
-  you could not check.
-- **A comment claiming a difference from another path is verified in both directions before it is kept or
-  acted on.** The natural answer to "we differ here" is to go and align it, so a false claim invites the edit
-  that creates the divergence. Where one proves false, write what is true and warn off the edit it suggested.
-  Correcting a claim, grep its text: other comments may quote it to justify a live decision. A comment
-  describing a rule no committed case exercises goes in your report, so the case gets written.
-- **A stated reason must name the property the predicate tests.** If the code branches on `isUnion`, a reason
-  about payloads is wrong even when the verdict is right, and it invites the edit that breaks the rule. A
-  comment justifying a discard or a shared path states which shapes it holds for. Check a quoted spec sentence
-  against the spec. Deleting a false reason leaves a gate with none: supply the true one.
-
-### Scope, and working in order
-
-**The diff plus its neighbourhood, never the whole file.** For each file the change touched: every
-comment block attached to a declaration the diff touched, and every comment block *inside* such a
-declaration. A conforming comment three hundred lines away is not this pass's business.
-
-**Build the inventory first, for the whole scope — do not start editing and see how it goes.** It
-carries all three gates as separate columns so none can be skipped:
-
-| line | attaches to | fact | in the code already? | category (1-9, or NONE) | what goes wrong if unknown | written? |
-|---|---|---|---|---|---|---|
-
-A `yes` in the fourth column ends the row; nothing after it is asked. Naming the consequence in its own
-cell is what turns "this is a real invariant" into "nothing goes wrong, so nothing is written" — a
-blank or hand-waving consequence cell is a `no`.
-
-Naming the fact before deciding is also what turns "this paragraph feels long" into "this paragraph
-asserts one thing, and here it is in nine words". **A block you cannot summarize is a block you do not
-yet understand** — read the code again before judging it.
-
-⭐ **A fact belongs on the declaration it describes.** A block documenting two declarations is split,
-and a block sitting above the wrong one is moved. Moving comment TEXT between declarations is expected;
-moving CODE is refused, and Verification proves you did not.
-
-Keep a running list of facts already written: a fact belongs at ONE site, and a second site gets a
-pointer or nothing. **Duplication is a finding, exactly as it is for code** — one rule in three
-paraphrases is three things free to drift.
-
-⚠ **Batch the edits.** One `Edit` per comment block at most, and prefer one per contiguous run of
-blocks. Forty small edits cost roughly twice what ten large ones do.
-
-### Writing what survives
-
-These govern text this pass WRITES. They are never a reason to edit an existing comment on its own.
-
-- Present tense, declarative, third person. State what is true now.
-- One idea per sentence. No sentence whose only job is to set up the next one.
-- **No markdown** — no `**bold**`, no `*italics*`, no `>`. Backticks around identifiers stay; they are
-  idiomatic here and carry information.
-- **No `⭐`.** At most one `⚠` per block, only where the hazard is a *silent wrong answer* rather than a
-  compile error. Never doubled.
-- No ALL-CAPS runs. A single capitalized word for emphasis, rarely.
-- **Wrap at 100 columns** (a tab counted as one) — new comment text, and a paragraph whose content
-  you are editing; never a comment whose words are unchanged (see the edit rule above). Tabs for
-  indentation, matching the code the comment attaches to.
-
-The register to aim at:
-
-```maxon
-// LSP stdio framing: `Content-Length: <n>\r\n\r\n<body>` in both directions.
-
-// The one header this server reads, lowercased: LSP header field names are case-insensitive.
-
-// Parsing and serializing JSON is `stdlib/Json.maxon`'s job and is not repeated here; this file owns
-// only the members JSON-RPC and LSP define, and the rules for filling them.
-```
-
-### Four worked examples
-
-**A. New code, nothing written — and this is the common case.**
+No build and no tests: a comment cannot change behaviour, and the caller's landing gates build the
+tree minutes later. What can go wrong is an accidental code edit, and this proves there was none.
+Snapshot each file in scope to the scratchpad before editing, then:
 
 ```
-The change extracts `foldOneFileInto` from `queryProgramSignatures` and passes the
-`isStdlibSource` bit the caller already knows.
-
-WRITTEN
-(nothing)
+sed 's://.*::; s/[[:space:]]*$//' <snapshot> | grep -v '^$' > <scratchpad>/doc-a
+sed 's://.*::; s/[[:space:]]*$//' <file>     | grep -v '^$' > <scratchpad>/doc-b
+diff <scratchpad>/doc-a <scratchpad>/doc-b        # must be empty
 ```
 
-Gate 1 stops it: the name says what it sweeps, the signature says what it takes. *Why the function was
-extracted* is an edit, not a constraint, and belongs in the commit message. An ordinary refactor
-yielding zero comments is a correct outcome, not a skipped step.
+An empty diff for every file is the only acceptable result. Batch edits: one `Edit` per contiguous run
+of comment lines.
 
-**B. New code, one comment — category 1, and the consequence is the content.**
+## Report — short
 
-```
-The change adds a filtered-token query below the raw one in `Queries.maxon`.
-
-WRITTEN (2 lines)
-// Asked below `queryTokens`, not above it: a shared hit that skipped it would leave this project's
-// `tokenCache` empty, so the next re-query of an unchanged file would miss.
-```
-
-An ordering constraint whose violation is a silent cache miss, not an error. Gate 3 is what earns it
-the two lines; the measurement that found it stays in the commit message.
-
-**C. An existing block whose content still holds — left exactly as it is.**
-
-```
-EXISTING (over the filtered-token cache in `Queries.maxon`; the change edited the function below it)
-// ⚠ **THE FILTERED STREAM IS TARGET-DEPENDENT AND THIS MEMO'S KEY IS NOT, WHICH IS SOUND ONLY
-// BECAUSE A `Project` HAS EXACTLY ONE TARGET FOR ITS WHOLE LIFE.** `Project.target` is a `let`, and
-// this cache lives on `project.db` — so two targets are two `Project`s and two databases. Should a
-// `Project` ever need re-aiming, THIS memo's key is what becomes wrong: mix the target into it.
-
-AFTER
-(unchanged)
-```
-
-Every claim is still true and each is a category-4 fact. The capitals, the bold and the wrap are not
-content, so they are not a reason to edit. Rewrapping or restyling this block would be a diff with no
-change in meaning, which is noise in review and cost in the pass.
-
-If the change had made one of its facts false — say `Project.target` became a `var` — the edit is that
-sentence and the conclusion that rests on it, nothing else in the block.
-
-**D. An existing block, nothing survives.**
-
-```
-BEFORE (3 lines, over `function foldOneFileInto(...)`)
-// Sweep ONE file's declarations into the index. Split out of `queryProgramSignatures` when the sweep
-// was partitioned by provenance, so the two halves are one body rather than two copies of it — and so
-// the `isStdlibSource` bit each half already knows is PASSED rather than re-derived per file.
-
-AFTER
-(nothing)
-```
-
-Sentence 1 fails Gate 1. The rest is provenance and an extraction rationale.
-
-### Three surfaces this pass AUTHORS, not merely tidies
-
-Code is written with no comments, so the first two arrive empty and are work items here, and the third
-is prose only this pass keeps true. None is a code comment, and the allow-list does not apply to them —
-they are prose for a reader outside this file.
-
-1. ⭐ **A new `ErrorCodeRegistry.maxon` case with no doc comment.** The `//` block immediately above a
-   case is the text `lookup_error_code` serves at runtime and the body of the generated Error Codes
-   page. Write it for a compiler user who hit the diagnostic: what the compiler refused and what makes
-   it legal. **`node website/scripts/sync-docs.mjs` fails closed on a case without one, so running the
-   sync is how these are found.** ⚠ A blank line between the comment and its case orphans it and fails
-   the same way.
-2. **`///` doc comments on newly exported functions**, which the language server renders in
-   `textDocument/hover` — what a reader sees in an editor. Tighten the prose of an existing one; never
-   delete it.
-3. **How an agent should use Maxon.** A change to a command, workflow, tier or rule an agent follows
-   updates `docs/WRITING_MAXON_CODE.md`'s preamble (the lines between its `# ` title and its first `## `)
-   or its `## Scripts and scriptlib` section, then `node website/scripts/sync-docs.mjs` regenerates
-   `maxon-bin/Compiler/Mcp/McpInstructionsGenerated.maxon`, the text `maxon mcp-server` serves as
-   `instructions` in its `initialize` result. State only what an agent decides and link the owning
-   `docs/` section for mechanics, so no fact is written in two places. `sync-docs.mjs --check` fails when
-   the generated file drifts from the document, and `tests/mcp --filter=reference-documents` fails when
-   the compiled text and the document disagree.
-
-## The documentation pass
-
-**A user-visible change updates its documentation in the same commit** (`AGENTS.md`).
-User-visible means a command, flag or `maxon help` text; a diagnostic; syntax or semantics; a `public`
-stdlib API; a runtime environment variable; target support; LSP, VS Code or MCP behaviour.
-
-1. **Decide visibility against that list, and say so either way.** A change with nothing user-visible
-   states that in the report — a claim someone can check, not a step quietly skipped.
-2. **Find the owning source** through `website/MAINTAINING.md`'s "what changed → which source" map. It
-   is the one map of where the site's documentation comes from. ⛔ Edit the source, never the page.
-3. ⭐ **Grep `docs/` and `vscode-extension/README.md` for every name the change moved, renamed or
-   removed.** The doc-coverage gates check names, not truth: a sentence the change made FALSE is found only this way, and finding it is
-   the part of this step that cannot be automated.
-4. **Link forms**, from `MAINTAINING.md`: `[text](#anchor)` within a file,
-   `[text](CLI_REFERENCE.md#anchor)` across synced files,
-   `[E3014](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3014)` for a code (lower case), and a route
-   like `/docs/contributing/` only for a page written for the site alone. ⛔ A route to a *generated*
-   page is refused by the sync.
-5. **Regenerate: `node website/scripts/sync-docs.mjs`.** The regenerated pages are committed with the
-   source. The sync fails closed and names every problem; fix them here rather than leaving them for
-   the caller's gate.
-6. **The manual copy nothing checks**, when the change touches it:
-   `vscode-extension/syntaxes/maxon.tmLanguage.json` → `website/src/grammars/`. `MAINTAINING.md` lists the install-script fan-out.
-7. ⛔ **DOCS STATE WHAT THE SOFTWARE DOES — NOT WHAT IT USED TO DO, AND NOT WHAT IT DOESN'T DO** (user
-   ruling). No history: "no longer", "as before", "instead of <what it did>", "used to", "now". No
-   negatives: "never shows", "does not pop up", "is not reported", "sends neither", "rather than X".
-   Say where a thing goes and when it happens, and stop there. Grep every doc file you touched for those
-   words before reporting, and rewrite a hit in a paragraph you touched, whoever wrote it. The records
-   whose purpose IS history — `docs/optimization-log.md`, a release's release notes entry, a commit
-   message — are the exception.
-8. ⛔ **`RELEASE_NOTES.md` takes one kind of entry per change: a BREAKING one.** A change that can break an
-   existing project, script or workflow (a removed or renamed spelling, command, flag, file name, syntax or
-   stdlib API, or a program now refused or run differently) adds a bullet under `## Unreleased` ›
-   `### Breaking changes`, creating that section as the first in the file when it is absent, followed by an
-   indented `Fix: …` line that is concrete, short and checked against the docs as they stand. Then run
-   `node website/scripts/sync-docs.mjs`, which compiles the entry into the driver and fails on a bullet with
-   no fix. Everything else the release says (Added, Changed, Fixed, Removed) is written at the cut with the
-   whole release in view — never appended to per change. `docs/RELEASING.md` has the format.
-
-## Verification — a recompile, and nothing else
-
-> ⭐ **The verification is the slot build, `./maxon-bin/.maxon/maxon run build`.** A comments-and-docs pass can break exactly one thing:
-> the code, by accident. The build catches that, and it is the whole gate.
->
-> ⛔ **No test runs. Not the spec suite, not the wasm lane, not the doc-coverage gates.** None of them
-> can move on a comment, so running one is confirmation rather than detection — the caller's landing
-> gates run minutes later on the same tree, and CI runs the rest. Never repeat a run whose inputs have
-> not changed.
-
-Two things precede the build. Both cost seconds, and both catch what a build cannot.
-
-1. **Read every hunk of `git diff`.** Each `-`/`+` line must be a whole comment line, a blank line, or
-   a code line whose text before the `//` is byte-identical.
-2. **Mechanical code-identity proof.** ⚠ The baseline is NOT `HEAD` — the file already differs from it.
-   Snapshot every file in scope before the pass, then compare the two stripped of comments:
-   ```
-   sed 's://.*::; s/[[:space:]]*$//' <snapshot> | grep -v '^$' > <scratchpad>/doc-a
-   sed 's://.*::; s/[[:space:]]*$//' <file>     | grep -v '^$' > <scratchpad>/doc-b
-   diff <scratchpad>/doc-a <scratchpad>/doc-b        # MUST be empty
-   ```
-   ⚠ **The `grep -v '^$'` is load-bearing** — stripping a comment-only line leaves a blank one, so a
-   correct DELETE would otherwise show in the diff and force you to explain away a failure you should
-   never see. A deleted CODE line is still caught: stripped of its comment it is non-blank. Both sides
-   get identical mangling of any `//` inside a string. Put the output in the report verbatim; **an
-   empty diff is the only acceptable result** — do not argue around a non-empty one.
-3. **`./maxon-bin/.maxon/maxon run build`** — about a minute, exit 0. MCP `build` with
-   `path: "maxon-bin"` is a path build that leaves the slot as it was, so the caller's landing gates would
-   find the binary stale. ⛔ Skip only when the caller says it is batching the build.
-
-`node website/scripts/sync-docs.mjs` still **runs** — it is the regeneration this pass owes, not a
-check. Its `--check` form is the caller's gate and is not run here.
-
-⚠ `mcp__maxon__fmt` is not a substitute for the build: it refuses a file it cannot lex or whose blocks
-do not close, but it formats a file with any other error in its grammar, and a file that formatted
-reports `unchanged` just as an already-canonical one does, so `unchanged` alone proves nothing.
-
-## Report
-
-- ⭐ **The count, first: comment lines added, rewritten and deleted, and the net.** A volume you have
-  to state is a volume you have to defend, and this line is what makes over-writing visible at a
-  glance.
-- **Every comment written, with its category number (1-9) and the consequence it prevents.** ⛔ A
-  comment matching no category, or whose consequence is "a reader might wonder", comes back out.
-- **Every fact NOT written, one line each, split by the gate that stopped it**: already in the code ·
-  matched no category · failed the consequence gate. ⭐ **These lists together should dwarf the one
-  above.** The omissions are the bulk of the work and leave no trace in the file, so this is the only
-  place a wrongly-dropped constraint becomes reviewable, and your caller spot-checks it.
-- **The documentation decision** — user-visible or not, which source owns the surface, what the grep of
-  `docs/` for moved names turned up, and every file touched.
-- **The step-2 `diff` verbatim, and the build's exit code.**
-- Any claim you could not verify against the code, named, with what you did about it.
-- Bugs and stale claims found and **not** acted on.
-
-Never claim a check you did not run.
+- **Comment lines added / rewritten / deleted / net**, first.
+- Each comment written: file:line, its category (1-4), the silent failure it prevents.
+- The audit: blocks examined, and per edited block one line — deleted, trimmed, corrected or moved,
+  and why.
+- The documentation decision: user-visible or not, files touched, what the name grep found.
+- The identity-proof result (empty, per file).
+- Bugs or stale claims noticed and not acted on, and any claim you could not verify.

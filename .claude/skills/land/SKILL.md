@@ -84,7 +84,7 @@ gates and the commit.** Agents do the reading and the typing.
 | **3** | Green the set — **on the FILTER, never the full suite** | same agent(s) · **you** integrate and confirm | keep going |
 | **4** | Optimization pass | the **`optimize`** skill, in a dispatched agent, on a trigger · **the ladder read is YOURS** | a ladder you cannot explain |
 | **5** | Independent review | the **`code-review`** skill, in a dispatched agent — never one that wrote the code | fix before the commit |
-| **6** | **Document it** — every comment the change gets, plus its `docs/` source | the **`documenter`** skill, in a dispatched agent | a build that no longer compiles |
+| **6** | **Document it** — every comment the change gets, plus its `docs/` source | the **`documenter`** skill, in a dispatched agent | a non-empty code-identity proof |
 | **7** | **Rebase** on `origin/main` | **you** | resolve by hand |
 | **8** | THE LANDING GATES, once: build · filtered specs · codecs check · **self-compile** and seed chain where the diff calls for them | **you** | **stop** |
 | **9** | Commit and push — do not wait for CI | **you** | a rejected push re-runs §8 |
@@ -133,7 +133,7 @@ five times per change and exactly one of those runs gates anything.
 
 | Work | Runs | Where | Everywhere else |
 |---|---|---|---|
-| **build** | **only when the binary is stale** | whoever last edited a compiled-in source — usually **§6's documenter**, which is the last editor | ⛔ **nobody builds a current binary** — see the box below |
+| **build** | **only when the binary is stale** | **you, §8** — §6's documenter is the last editor and does not build; its comment edits make the binary stale | ⛔ **nobody builds a current binary** — see the box below |
 | **filtered specs** | many | **each agent's own loop** | that is the loop, not a gate |
 | **the §8 gates** — final filtered specs · codecs check · self-compile · seed chain · docs check | **once** | **you, §8** | ⛔ **no agent runs any of these** — §6's documenter finishes minutes before them, on the identical tree, and runs no tests at all. The full suite, the wasm lane and the tree corpora are CI's |
 | **`scale-test` ladder** | **once** | **you, §4** — plus the optimizer's own before/after, which is its instrument | ⛔ not the implementer's: a reading on a pre-review tree attributes nothing |
@@ -161,8 +161,8 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
 >   when something it depended on has changed since.
 > - **Every edit comes before the expensive runs, never beside them.** An edit to a compiled-in source
 >   after a run started invalidates that run. So the landing gates start only once no agent can still edit:
->   **§6's documenter is the last editor**, and its verification is a build — so the gates'
->   build-if-stale row is already satisfied when it arrives, and you do not pay for it twice.
+>   **§6's documenter is the last editor** and builds nothing, so §8's build is the one build after
+>   the review.
 > - **A red you did not cause is re-run by FILTER** — the failing cases alone — never by re-running the
 >   whole suite.
 
@@ -540,26 +540,23 @@ review then rewrites, which is the write-it-twice waste the no-comments rule exi
 
 **What the brief carries, beyond the standard nine:**
 
-- ⭐ **THE DIAGNOSIS — the change's *why*.** This is the most valuable thing in the brief and it exists
-  nowhere else: a why-only comment cannot be composed from a diff. Also the implementer's and
-  optimizer's reports, which hold the reasons behind an unobvious shape, a deliberate asymmetry and any
-  forked fast path.
+- **The diagnosis** and the implementer's and optimizer's reports — context for judging where an
+  edit would go silently wrong, not material to transcribe into comments.
 - **What the change made user-visible**, in `AGENTS.md`'s terms — or that nothing is, which is
   an answer it must state rather than skip.
-- ⛔ **It runs NO tests** — not the suite, not a lane, not the doc-coverage gates. Its
-  verification is the slot build, `./maxon-bin/.maxon/maxon run build`, and §8's gates run minutes later on the same
-  tree. It regenerates the site pages but does not run `sync-docs.mjs --check`; that is §8's.
+- ⛔ **It builds nothing and runs NO tests.** Its verification is a mechanical code-identity proof;
+  §8 builds and gates minutes later on the same tree. It regenerates the site pages but does not run
+  `sync-docs.mjs --check`; that is §8's.
 - **It does not commit, `git add`, push, rebase or stash**, and it changes not one byte of code.
 
 ⚠ **Its report must carry no code defects.** One that does means §5 failed: see the rule closing §5.
 
 ⚠ **Read its report, do not re-derive it.** The line that matters is the count: comment lines added,
-rewritten, deleted, net. **A change that came back with a paragraph per declaration has failed the
-skill's own first rule** — the default is no comment, and most declarations end with none. Spot-check
-its list of facts it did NOT write, which is where a wrongly-dropped constraint would be.
+rewritten, deleted, net. The expected count is zero or close to it; more than a few lines, or any
+comment over two lines, has failed the skill.
 
-**Its build is §8's build.** §8 rebuilds only if the binary is stale; §6 is the last editor and
-its verification is a build, so that row is already satisfied unless the rebase moves a source.
+**§8 builds.** §6 edits compiled-in sources and does not build, so §8's build-if-stale row always
+fires after it.
 
 ## 7. Rebase on `origin/main` — yours
 
@@ -607,7 +604,7 @@ fix commit; the cost of a local battery is paid on every change.
 
 | Gate | |
 |---|---|
-| **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt. The exception is emitted runtime: when the slot was built with `MAXON_SECOND_STAGE=1` since the change, run `maxon run build` again now, without it, before the spec rows — it builds twice |
+| **Build** exit 0 | **Only if stale** — after §6's comment edits it is stale whenever §6 touched a compiled-in source. A current binary is not rebuilt. The exception is emitted runtime: when the slot was built with `MAXON_SECOND_STAGE=1` since the change, run `maxon run build` again now, without it, before the spec rows — it builds twice |
 | **Filtered `run_spec_test`** — §1's minimal set plus every spec file the change touched, in ONE run | **`failed: 0`**, and no exit **101**. The gate is zero failures in every case the filter selects, never a total |
 | **Filtered tree corpora and IR specs** — `./maxon-bin/.maxon/maxon test <tests/dir> --filter=…` and `spec-test ir-specs --filter=<spec>/` for each corpus case or `ir-specs/` spec the change touched | each `0 fail` / `failed: 0`. A pin the change moved is re-minted with `--update-required --filter=<spec>/` and staged with the change (`git add -A ir-specs/ specs/`); a change to one target's emitted code also filters `ir-specs` on that target's lane (`--target=<lane>`), which compiles each pin without running it, on any host. See the box below |
 | **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land/selfcompile --rebuild` | **Where the change adds or removes an `export` or a `module`, adds a file declaring types, deletes the last cross-file caller of an `export` (de-duplicating is the usual way to orphan one), or adds or tightens a diagnostic.** The slot compiler that `run build` wrote was compiled by its predecessor, so this row is the first time the change's own rules meet the compiler's own source. Exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
