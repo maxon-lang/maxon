@@ -73,6 +73,13 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
 > last rebuild) is renamed aside to `maxon.retired.<block>` (`Run/ScratchName.maxon`), and every
 > self-rebuild deletes the retired images nothing holds any longer.
 >
+> ⛔ **`maxon-bin/.maxon/` IS A CLOSED DIRECTORY.** It holds the slot's `maxon[.exe]`, `maxon.previous[.exe]`, their
+> `.mxdbg` sidecars, the compiler-minted `maxon.retired.<block>` images, `.staging-<hex>/`, and the
+> `maxon-<cpu>-linux` guest compilers `spec-test` builds on a macOS host — the names
+> `scripts/allowed-ignored-paths.txt` lists under `closed-directory: maxon-bin/.maxon`. The `/land` "No leftovers"
+> gate (`scripts/check-ignored-files.py`) fails any other name there. A compiler image you want to keep goes in
+> `temp/<task>/` (`--output=temp/<task>/maxon.exe`); never rename the slot's own image to keep it.
+>
 >
 > ⛔ **A CHANGE TO EMITTED RUNTIME — `Compiler/Runtime/` OR `Compiler/Targets/*/*Runtime*.maxon` — NEEDS
 > *TWO* SELF-COMPILES BEFORE THE COMPILER ITSELF BEHAVES THAT WAY.** The compiler EMITS the runtime
@@ -382,12 +389,14 @@ facts worth knowing before you get there:
   ```
   ./maxon-bin/.maxon/maxon.exe test tests/testCommand
   ```
-  ⚠ **CI runs eight of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/specHarness`, `tests/ladders`, `tests/examples`, `tests/buildManifest`,
-  `tests/emittedRuntime` and `tests/cli` — plus `tests/debug`,
-  `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `tests/targets` on
-  one lane (the `targets-gate` role in `targets.tsv`). `/land` runs a corpus only filtered to the cases
-  the change touched; the full corpora are CI's. Every other corpus runs only when someone names it, but CI BUILDS every one of them on every lane (`scripts/build-test-corpora.sh`: `maxon test tests/<corpus> --list --build` for each tracked directory directly under `tests/` that holds a `.maxtest`), so a corpus that stops compiling fails the run that broke it.
-  Both also run `scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory,
+  ⚠ **CI runs every corpus on every lane, and no workflow names one.** `scripts/run-test-corpora.sh <job>` finds
+  each tracked directory directly under `tests/` that holds a `.maxtest` and runs those assigned to the job
+  (`corpora`, or `tools` for `cli`, `lsp`, `profile` and the debugger corpora `debug`, `dap` and `mcp`). A corpus's
+  `tests/<corpus>/ci.txt` declares its job, the `targets.tsv` columns the lane must satisfy (`debug`, `dap` and `mcp`
+  need `debugger=yes`, `targets` the `targets-gate` role: a lane that does not satisfy one builds the corpus and runs none of it) and its timeout,
+  and a corpus with no file runs everywhere; `tests/README.md` has the grammar. A new corpus is run from the day it
+  is added. `/land` runs a corpus only filtered to the cases the change touched; the full corpora are CI's.
+  CI also runs `scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory,
   and `maxon check-stdlib`, which compiles every `stdlib/` function for every target whether or not a program calls it.
   CI also runs a filtered spec suite with `MAXON_SOURCE_ORDER=reversed`, the knob that checks the compiler does not depend on file or declaration order (see `StdlibLoader.maxon`'s header).
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python

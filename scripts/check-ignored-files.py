@@ -2,6 +2,10 @@
 # The `/land` "No leftovers" gate (`.claude/skills/land/SKILL.md` §8): a run that leaves files in the
 # checkout is found here, before the commit, as an untracked path or a gitignored one
 # `scripts/allowed-ignored-paths.txt` does not allow.
+#
+# A `closed-directory: <path>` line in that file closes a directory: each entry beneath it is judged
+# alone, against the patterns that name it, and a pattern matching the directory or an ancestor of
+# it (`**/.maxon/`) allows nothing inside.
 import os
 import re
 import subprocess
@@ -29,6 +33,7 @@ FIELD_SEPARATOR = "\0"
 
 COMMENT_PREFIX = "#"
 NEGATION_PREFIX = "!"
+CLOSED_DIRECTORY_PREFIX = "closed-directory:"
 DIRECTORY_SUFFIX = "/"
 ESCAPE = "\\"
 DOUBLE_STAR = "**"
@@ -45,6 +50,13 @@ FIX_LINE = (
     "Delete each path above. If a tool legitimately leaves one, add a pattern for it to "
     + ALLOW_LIST_RELATIVE_PATH
     + ". An untracked path that belongs to the change is staged with git add."
+)
+
+CLOSED_FIX_LINE = (
+    "{directory}/ is a closed directory: it may hold only the names "
+    + ALLOW_LIST_RELATIVE_PATH
+    + " lists under it, and each path above under it is none of them. Delete it. A compiler image kept by "
+    + "renaming one in the slot belongs under temp/<task>/ instead, built with --output=temp/<task>/maxon.exe."
 )
 
 
@@ -148,7 +160,36 @@ class Pattern:
         return self.regex.fullmatch(path) is not None
 
 
-def load_patterns():
+class AllowList:
+    def __init__(self, patterns, closed_directories):
+        self.patterns = patterns
+        self.closed_directories = closed_directories
+
+    def closed_directory_holding(self, components):
+        for closed in self.closed_directories:
+            if len(components) > len(closed) and components[: len(closed)] == closed:
+                return closed
+
+        return None
+
+    def closed_directory_at_or_below(self, components):
+        for closed in self.closed_directories:
+            if closed[: len(components)] == components:
+                return closed
+
+        return None
+
+
+def closed_directory_components(text):
+    components = text.strip(DIRECTORY_SUFFIX).split(DIRECTORY_SUFFIX)
+
+    if text == "" or any(component == "" for component in components):
+        raise CheckFailed(f"{ALLOW_LIST_RELATIVE_PATH}: '{CLOSED_DIRECTORY_PREFIX} {text}' names no directory")
+
+    return components
+
+
+def load_allow_list():
     try:
         with open(ALLOW_LIST_PATH, encoding="utf-8") as handle:
             lines = handle.read().splitlines()
@@ -156,6 +197,7 @@ def load_patterns():
         raise CheckFailed(f"cannot read {ALLOW_LIST_RELATIVE_PATH}: {error}")
 
     patterns = []
+    closed_directories = []
 
     for line in lines:
         text = line.strip()
@@ -166,9 +208,12 @@ def load_patterns():
         if text.startswith(NEGATION_PREFIX):
             raise CheckFailed(f"{ALLOW_LIST_RELATIVE_PATH}: '{text}' negates; the allow-list has no negation")
 
-        patterns.append(Pattern(text))
+        if text.startswith(CLOSED_DIRECTORY_PREFIX):
+            closed_directories.append(closed_directory_components(text[len(CLOSED_DIRECTORY_PREFIX):].strip()))
+        else:
+            patterns.append(Pattern(text))
 
-    return patterns
+    return AllowList(patterns, closed_directories)
 
 
 def git_status_entries():
@@ -200,31 +245,72 @@ def git_status_entries():
     return entries
 
 
-def is_allowed(path, patterns):
-    is_directory = path.endswith(DIRECTORY_SUFFIX)
-    components = path.rstrip(DIRECTORY_SUFFIX).split(DIRECTORY_SUFFIX)
+def path_components(path):
+    return path.rstrip(DIRECTORY_SUFFIX).split(DIRECTORY_SUFFIX)
 
-    for depth in range(1, len(components) + 1):
+
+def is_allowed(path, allow_list):
+    is_directory = path.endswith(DIRECTORY_SUFFIX)
+    components = path_components(path)
+    closed = allow_list.closed_directory_holding(components)
+    first_depth = 1 if closed is None else len(closed) + 1
+
+    for depth in range(first_depth, len(components) + 1):
         candidate = DIRECTORY_SUFFIX.join(components[:depth])
         candidate_is_directory = depth < len(components) or is_directory
 
-        if any(pattern.matches(candidate, candidate_is_directory) for pattern in patterns):
+        if any(pattern.matches(candidate, candidate_is_directory) for pattern in allow_list.patterns):
             return True
 
     return False
 
 
+def entries_judged_for(path, allow_list):
+    components = path_components(path)
+
+    if not path.endswith(DIRECTORY_SUFFIX) or allow_list.closed_directory_at_or_below(components) is None:
+        return [path]
+
+    directory = os.path.join(REPO_ROOT, *components)
+
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError as error:
+        raise CheckFailed(f"cannot list {path}: {error}")
+
+    judged = []
+
+    for name in names:
+        child = path + name
+        is_directory = os.path.isdir(os.path.join(directory, name))
+        judged.extend(entries_judged_for(child + DIRECTORY_SUFFIX, allow_list) if is_directory else [child])
+
+    return judged
+
+
 def leftover_paths():
-    patterns = load_patterns()
+    allow_list = load_allow_list()
     leftovers = []
 
     for status, path in git_status_entries():
         if status == STATUS_UNTRACKED:
             leftovers.append(path)
-        elif status == STATUS_IGNORED and not is_allowed(path, patterns):
-            leftovers.append(path)
+        elif status == STATUS_IGNORED:
+            leftovers.extend(entry for entry in entries_judged_for(path, allow_list) if not is_allowed(entry, allow_list))
 
-    return sorted(leftovers)
+    return sorted(leftovers), allow_list
+
+
+def closed_directories_holding_any(leftovers, allow_list):
+    holding = []
+
+    for path in leftovers:
+        closed = allow_list.closed_directory_holding(path_components(path))
+
+        if closed is not None and closed not in holding:
+            holding.append(closed)
+
+    return holding
 
 
 def main():
@@ -233,7 +319,7 @@ def main():
         return EXIT_FAILED
 
     try:
-        leftovers = leftover_paths()
+        leftovers, allow_list = leftover_paths()
     except CheckFailed as error:
         print(f"check-ignored-files: {error}", file=sys.stderr)
         return EXIT_FAILED
@@ -247,6 +333,10 @@ def main():
         print(path)
 
     print(FIX_LINE)
+
+    for closed in closed_directories_holding_any(leftovers, allow_list):
+        print(CLOSED_FIX_LINE.format(directory=DIRECTORY_SUFFIX.join(closed)))
+
     return EXIT_LEFTOVERS
 
 
