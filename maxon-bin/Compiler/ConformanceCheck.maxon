@@ -1536,7 +1536,7 @@ end 'interfaceNamesDeclaredBy'
 // ⭐ Exported for `ProgramSignatures.typeImplementsInterface` and the parser, which reach it with
 // `ProgramSignatures.sweptConformanceIndex()` — the `type -> declared interfaces` relation built
 // from the declarations' `implements` clauses and an extension's unconditional ones.
-export function typeDeclaresInterface(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray) returns bool
+function typeDeclaresInterface(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray) returns bool
 	if let declaredInterfaces = try declared.get(typeName) 'hasDecl'
 		return declaredInterfacesReach(interfaces, declaredNames: declaredInterfaces, wanted: interfaceName)
 	end 'hasDecl'
@@ -1546,7 +1546,7 @@ end 'typeDeclaresInterface'
 
 // Check one `implements I1, I2` declaration against each named interface.
 function checkOneConformance(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, signatures ProgramSignatures)
-	if project.poison.declaresANominalType(conformance.typeName) 'conformerDeclaredInAFailedFile'
+	if project.poison.refusesTheDeclarationOf(conformance.typeName, reader: conformance.filePath, signatures: signatures) 'conformerDeclaredInAFailedFile'
 		return
 	end 'conformerDeclaredInAFailedFile'
 

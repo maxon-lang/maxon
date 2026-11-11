@@ -101,8 +101,8 @@ error E3104: app.maxon:3:10: 'Clock.threadCpuTicks' lowers to the runtime entry 
 error E3074: app.maxon:5:17: Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).
 ```
 
-E3104 and E3074 are reported only when the language checks find no other error in the program, so a
-program with a language error shows that error alone.
+E3104 and E3074 are reported once the program has no other error, beside any unneeded cast (**E3010**),
+so a program with a language error shows that error alone.
 
 To keep one source for several targets, guard the unsupported part with `#if not os(Wasi)`.
 

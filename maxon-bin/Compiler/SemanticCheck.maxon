@@ -1270,22 +1270,27 @@ type ReturnedCallResults
 	function widenResultMask() returns bool
 		let func = self.sources.func
 		var closed = func.resultFromParamMask
+		var closedUnknown = func.resultMayBeUnknown
 		self.sources.forgetMasks()
 
 		for value in self.values 'eachReturnedResult'
 			let opIdx = try self.sources.settlingOpOf(value) otherwise panic("widenResultMask: a returned call result has its settling op")
 			closed = closed or self.sources.maskOfResult(opIdx)
+			closedUnknown = closedUnknown or self.sources.resultIsUnknown(opIdx)
 		end 'eachReturnedResult'
 
+		// A held result does not make the result unknown: the record holding it is fresh, so its
+		// capability is known.
 		for opIdx in self.heldOps 'eachHeldResult'
 			closed = closed or self.sources.maskOfResult(opIdx)
 		end 'eachHeldResult'
 
-		if closed == func.resultFromParamMask 'unchanged'
+		if closed == func.resultFromParamMask and closedUnknown == func.resultMayBeUnknown 'unchanged'
 			return false
 		end 'unchanged'
 
 		func.resultFromParamMask = closed
+		func.resultMayBeUnknown = closedUnknown
 		return true
 	end 'widenResultMask'
 end 'ReturnedCallResults'
@@ -3944,8 +3949,8 @@ end 'reportSpawnOfNonYielding'
 // ⭐⭐ **THE SPAWN'S TARGET REFUSAL, AND IT IS A BACKSTOP RATHER THAN A GATE — WHICH IS WHY IT SPEAKS ONLY
 // INTO A COMPILE THAT WOULD OTHERWISE REACH THE BACKEND.** Its whole job is to turn a backend panic into a
 // diagnostic; a program already carrying a diagnostic never reaches a backend, so there is no panic left to
-// pre-empt and a second line would only make one rejection read as two. A refusal parked on
-// `project.targetRefusalDiagnostics` counts the same way: it is reported unless something else is, and
+// pre-empt and a second line would only make one rejection read as two. A target refusal on the secondary
+// roster (`project.targetRefusalFiled`) counts the same way: it is reported unless something else is, and
 // either way the backend is not reached.
 //
 // ⚠ MEASURED, both directions: without the guard, `await-any.md`'s and `promise-peek.md`'s wasm refusal
@@ -3953,7 +3958,7 @@ end 'reportSpawnOfNonYielding'
 // beneath it; with it, `async compute()` on `--target=x64-linux` answers E3104 rather than dying
 // at `StdToX64Conversion.lowerTlsAlloc`.
 function requireTargetHostsSpawn(project Project, func IrFunction, opIndex ElementIndex)
-	if projectHasErrors(project) or project.targetRefusalDiagnostics.count() > 0 'alreadyRefused'
+	if projectHasErrors(project) or project.targetRefusalFiled 'alreadyRefused'
 		return
 	end 'alreadyRefused'
 
@@ -4262,7 +4267,7 @@ export type WitnessDispatchTargets
 	// reduces every registration name to.
 	//
 	// ⛔⛔ **A STDLIB BODY NO PATH FROM `main` DEMANDED IS NOT A CANDIDATE, AND WITHOUT THAT THIS ANSWERS
-	// NOTHING.** Such a body is one empty block (`Parser.bodyWasSkippedAsUnreached`), which every summary
+	// NOTHING.** Such a body is one empty block (`BodyStatus.skippedAsUnreached`), which every summary
 	// here reads as an effect — so leaving it in the set makes `Hashable.hash` effectful in every program,
 	// because `float.hash` and `Character.hash` are declared in every program and reached by almost none.
 	// MEASURED: a user interface's `tag()` reported E3064 while the identical program over `Hashable.hash`
@@ -4291,7 +4296,7 @@ export type WitnessDispatchTargets
 		while more 'eachNamesake'
 			var candidate = try self.functions.get(i) otherwise panic("candidatesFor: functions.get OOB at {i} — the namesake chain is built over `functions`")
 
-			if not candidate.bodyWasSkippedAsUnreached 'inThisProgram'
+			if candidate.bodyStatus == BodyStatus.parsed 'inThisProgram'
 				candidates.push(candidate.name)
 			end 'inThisProgram'
 
@@ -4565,15 +4570,18 @@ end 'CallGraphEdges'
 
 // ⛔ **THIS BODY'S OPS ARE NOT WHAT THE SOURCE SAYS**, so every whole-program summary over them must
 // decline rather than conclude. Two shapes, one question: NO blocks at all is a declaration this module
-// cannot read (a restored intrinsic, an extern), and `bodyWasSkippedAsUnreached` is one empty block the
-// parser left behind after walking past a stdlib body no path from `main` demanded. The second reads as an
-// ordinary function that happens to do nothing, which is why it has to be asked for by name.
+// cannot read (a restored intrinsic, an extern), and a `bodyStatus` other than `parsed` is one empty block
+// the parser left behind after walking past a stdlib body no path from `main` demanded, or past a body it
+// abandoned. The second reads as an ordinary function that happens to do nothing, which is why it has to
+// be asked for by name.
 module function bodyIsUnreadable(func IrFunction) returns bool
-	return func.blockRefs.count() == 0 or func.bodyWasSkippedAsUnreached
+	return func.blockRefs.count() == 0 or func.bodyStatus != BodyStatus.parsed
 end 'bodyIsUnreadable'
 
+// An abandoned body is unknown rather than opaque: assumed to wait, yield or write, it would earn
+// findings about code its reported refusal already rejects.
 module function bodyIsOpaqueToSummaries(func IrFunction, libraryFacts LibraryFacts) returns bool
-	return bodyIsUnreadable(func) and not libraryFacts.bodyIsSwept(func.name) and not libraryFacts.runtimeTier.contains(func.name)
+	return bodyIsUnreadable(func) and func.bodyStatus != BodyStatus.abandoned and not libraryFacts.bodyIsSwept(func.name) and not libraryFacts.runtimeTier.contains(func.name)
 end 'bodyIsOpaqueToSummaries'
 
 // Does this function promise a value at all? A `void` return is the language's way of saying the call is
@@ -4963,7 +4971,7 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex E
 		// program with several has to be told which one each report is about.
 		if isSubprocessRuntimeCallee(entry) and not targetCanHostSubprocess(project.target) 'noProcessSpawnPrimitive'
 			let callRange = project.opRanges.get(opIndex)
-			deferTargetRefusal(project, code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on {targetToString(project.target)} (no process-spawn primitive); guard the call with #if not os(Wasi).", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+			fileSecondary(project, code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on {targetToString(project.target)} (no process-spawn primitive); guard the call with #if not os(Wasi).", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 			return
 		end 'noProcessSpawnPrimitive'
 
@@ -5018,7 +5026,7 @@ end 'requireTargetSupportsServiceEntry'
 // same crossing — only the noun differs.
 function reportRawIntrinsicUnsupported(project Project, func IrFunction, opIndex ElementIndex, subject String, intrinsic RawIntrinsic)
 	let callRange = project.opRanges.get(opIndex)
-	deferTargetRefusal(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} reaches '{String.from(rawIntrinsicCalleeName(intrinsic))}', a raw machine operation the {targetToString(project.target)} lane does not provide", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+	fileSecondary(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} reaches '{String.from(rawIntrinsicCalleeName(intrinsic))}', a raw machine operation the {targetToString(project.target)} lane does not provide", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 end 'reportRawIntrinsicUnsupported'
 
 // The one wire format of E3104 for a callee, so the two subjects cannot drift into two spellings of one
@@ -5026,12 +5034,8 @@ end 'reportRawIntrinsicUnsupported'
 // heap `SourceRange` and this is the cold path — the gate itself runs over every call op of every function.
 function reportTargetUnsupportedCallee(project Project, func IrFunction, opIndex ElementIndex, subject String, entry ByteArray)
 	let callRange = project.opRanges.get(opIndex)
-	deferTargetRefusal(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+	fileSecondary(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 end 'reportTargetUnsupportedCallee'
-
-module function reportTargetRefusals(project Project)
-	_ = reportDeferredUnlessErrors(project, deferred: project.targetRefusalDiagnostics)
-end 'reportTargetRefusals'
 
 // What this pass has to say about taking a named function's ADDRESS: the target gate every call op gets, and
 // the uniform-ABI rule below that only a function VALUE is subject to.
@@ -6007,7 +6011,9 @@ function checkArgTypes(project Project, module MaxonModule, func IrFunction, res
 	for i in 0 upto argIds.count() 'eachArg'
 		let argId = try argIds.get(i) otherwise panic("checkArgTypes: argIds.get OOB at {i}")
 
-		if project.unknownTypeReports.holdsUnknownParameter(callee, position: i as ParamCount) 'itsDeclaredTypeNamesNothing'
+		let declaredParamType = try sig.paramTypes.get(i) otherwise panic("checkArgTypes: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature")
+
+		if tagIsUnresolved(maxonTypeTag(declaredParamType)) 'itsDeclaredTypeNamesNothing'
 			continue
 		end 'itsDeclaredTypeNamesNothing'
 
@@ -6015,7 +6021,7 @@ function checkArgTypes(project Project, module MaxonModule, func IrFunction, res
 			continue
 		end 'itsTypeIsTheRefusedCalleesToo'
 
-		let paramType = paramTypeThroughCallInstance(project, func: func, subject: instanceSubject, paramType: try sig.paramTypes.get(i) otherwise panic("checkArgTypes: paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} slots for a {sig.paramCount()}-parameter signature"))
+		let paramType = paramTypeThroughCallInstance(project, func: func, subject: instanceSubject, paramType: declaredParamType)
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")
 
 		// ⛔⛔ **THE RECEIVER ARGUMENT (`__self`, position 0) IS JUDGED LIKE EVERY OTHER PARAMETER, AND AN
@@ -7202,7 +7208,7 @@ function reportUnneededLiteralCastArgument(project Project, cast LiteralCast, de
 		return
 	end 'theParameterDeclaresAnotherType'
 
-	reportPositioned(project, code: ErrorCode.semanticUnneededCast, message: unneededLiteralCastMessage(cast), line: cast.asRange.line, column: cast.asRange.column, filePath: filePath)
+	fileSecondary(project, code: ErrorCode.semanticUnneededCast, message: unneededLiteralCastMessage(cast), line: cast.asRange.line, column: cast.asRange.column, filePath: filePath)
 end 'reportUnneededLiteralCastArgument'
 
 function calleeParamAlias(project Project, callee ByteArray, position ParamCount) returns RangedTypeAlias throws MapError

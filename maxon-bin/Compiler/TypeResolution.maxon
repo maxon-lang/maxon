@@ -323,9 +323,9 @@ end 'UnknownTypeName'
 
 // Resolve every named type in `module`'s function signatures to a concrete `MaxonType`, and
 // re-sync each function's resolved return type into the project's `funcReturnTypes` registry
-// (SemanticCheck's source of truth). A closure parameter typed by `ClosureParamOffer.deferred`
-// stays `unresolved`: E3004 rejects its program before lowering, and
-// `requireNoUnresolvedTagsSurvivedTheMaxonTier` guards that.
+// (SemanticCheck's source of truth). A closure parameter typed by `ClosureParamOffer.deferred`, and a
+// declared type that names nothing, stay `unresolved`: a reported refusal rejects the program before
+// lowering, and `requireNoUnresolvedTagsSurvivedTheMaxonTier` guards that.
 module function resolveTypes(project Project, module MaxonModule)
 	// Fetched ONCE for the whole pass, not per named type: `denotedNamedType` reads it for every
 	// reference, and the memoized query is a map probe that has no business being on that path.
@@ -342,12 +342,7 @@ module function resolveTypes(project Project, module MaxonModule)
 
 		for position in 0 upto func.maxonParamTypes.count() 'eachParam'
 			let pt = try func.maxonParamTypes.get(position) otherwise panic("resolveTypes: maxonParamTypes.get OOB at {position} below its own count")
-			let unknownBefore = project.unknownTypeReports.occurrenceCount()
-			resolvedParams.push(resolveParamType(project, signatures: signatures, t: pt, readerFilePath: func.sourceFilePath, site: func.typeSites.siteAt(position), declaration: func.name))
-
-			if project.unknownTypeReports.occurrenceCount() != unknownBefore 'itsTypeNamesNothing'
-				project.unknownTypeReports.noteUnknownParameter(func.name, position: position as ParamCount)
-			end 'itsTypeNamesNothing'
+			resolvedParams.push(resolveType(project, signatures: signatures, t: pt, readerFilePath: func.sourceFilePath, site: func.typeSites.siteAt(position), declaration: func.name))
 		end 'eachParam'
 
 		func.maxonParamTypes = resolvedParams
@@ -412,6 +407,10 @@ module function reportDeferredNameDiagnostics(project Project, signatures Progra
 			continue
 		end 'alreadyExplained'
 
+		if aSpellingOfTheAliasMayHaveBeenLost(project, entry: entry, signatures: signatures) 'aRegionWasAbandonedWhereItCouldBeNamed'
+			continue
+		end 'aRegionWasAbandonedWhereItCouldBeNamed'
+
 		// ⚠ Only the `readerMeansKind` half of the second call can fail here — nothing enters
 		// `genericAliasNamesWrittenByAFile` except through `ParseStaging.noteWrittenGenericAliasNames`,
 		// which asks the same door of the spelling file. The whole door is asked anyway because that
@@ -429,6 +428,16 @@ module function reportDeferredNameDiagnostics(project Project, signatures Progra
 		reportDiagnostic(project, diagnostic: (try project.hiddenTypeNameDiagnostics.get(hiddenIndex) otherwise panic("reportDeferredNameDiagnostics: hiddenIndex {hiddenIndex} is below project.hiddenTypeNameDiagnostics.count()")).clone())
 	end 'eachHidden'
 end 'reportDeferredNameDiagnostics'
+
+// Another file's lost text holds back only a generic-instance alias, the one form a spelling in another
+// file credits; widening it would drop a true E3062 for every alias in a program with one lost region.
+function aSpellingOfTheAliasMayHaveBeenLost(project Project, entry DeferredNameDiagnostic, signatures ProgramSignatures) returns bool
+	if project.poison.lostTextIn(entry.filePath) 'itsOwnFileLostARegion'
+		return true
+	end 'itsOwnFileLostARegion'
+
+	return project.poison.holdsLostText() and signatures.fileMeansTheSoleGenericAliasDeclaration(entry.name, readerFilePath: entry.filePath)
+end 'aSpellingOfTheAliasMayHaveBeenLost'
 
 // Is there already a diagnostic against this declaration's own source line? See the caller for the
 // rule; this is the scan that answers it.
@@ -485,8 +494,8 @@ end 'reportedAtTheDeclaration'
 // no new id in practice; it is what makes the alias's types comparable with a signature's at all.
 //
 // ⚠ An undeclared name in a function alias's signature is E3011 here, at the type name in the alias's
-// declaration (`FunctionTypeAlias.typeSites`). `resolveType`'s recovery answer for it is what lands in a
-// resolved shape, and the pipeline's error gate stops the build before anything reads it.
+// declaration (`FunctionTypeAlias.typeSites`). `resolveType` answers `unresolved` for it, which is what
+// lands in a resolved shape, and the pipeline's error gate stops the build before anything reads it.
 function functionAliasShapesIn(project Project, signatures ProgramSignatures, form FunctionAliasShapeForm) returns FunctionShapeMap
 	var names = NameRoster.create(project.functionTypeAliases.count(), zeroed: false)
 
@@ -656,7 +665,7 @@ end 'functionTypeRegistryOf'
 // close. A value merge asks it too, of parse-time shapes; FunctionShape states why a door and a
 // merge get different rules.
 export function functionShapesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, readerFilePath FilePath) returns bool
-	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: FunctionTypePairArray.create(0), readerFilePath: readerFilePath)
+	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: FunctionTypePairArray.create(0), readerFilePath: readerFilePath, comparison: ShapeComparison.exact)
 end 'functionShapesAgree'
 
 let MaxNestedFunctionTypeDepth = 8
@@ -707,6 +716,10 @@ function typeMentionsATypeParameterWithin(registry FunctionTypeRegistry, signatu
 	end 'nested'
 end 'typeMentionsATypeParameterWithin'
 
+function shapePartsDisagreeInArity(declared ShapeAgreement, got ShapeAgreement) returns bool
+	return declared.arity() != got.arity() or declared.markedParams != got.markedParams or (got.mutableFunction and not declared.mutableFunction)
+end 'shapePartsDisagreeInArity'
+
 function capabilityMarkersAgree(declared ParamCapability, got ParamCapability) returns bool
 	if declared == got 'sameMarker'
 		return true
@@ -729,28 +742,15 @@ export function functionShapesAgreeUnderSomeInstantiation(registry FunctionTypeR
 		return functionShapesAgree(registry, signatures: signatures, declared: declared, got: got, readerFilePath: readerFilePath)
 	end 'nothingToSubstitute'
 
-	let declaredParts = declared.agreementParts()
-	let gotParts = got.agreementParts()
-
-	if declaredParts.arity() != gotParts.arity() or declaredParts.markedParams != gotParts.markedParams or (gotParts.mutableFunction and not declaredParts.mutableFunction) 'arity'
-		return false
-	end 'arity'
-
-	for i in 0 upto declaredParts.arity() 'eachParam'
-		if not capabilityMarkersAgree(declaredParts.capabilityAt(i), got: gotParts.capabilityAt(i)) 'markerMismatch'
-			return false
-		end 'markerMismatch'
-
-		if not parameterAgreesUnderSomeInstantiation(registry, signatures: signatures, declared: declaredParts, got: gotParts, index: i, readerFilePath: readerFilePath) 'paramMismatch'
-			return false
-		end 'paramMismatch'
-	end 'eachParam'
-
-	let gotValue = try valueTypeOfReturn(gotParts.returnType) otherwise return maxonReturnTypeIsVoid(declaredParts.returnType)
-	let declaredValue = try valueTypeOfReturn(declaredParts.returnType) otherwise return false
-
-	return positionAgreesUnderSomeInstantiation(registry, signatures: signatures, slotType: declaredValue, sourceType: gotValue, slotIdentity: declaredParts.returnIdentity, sourceIdentity: gotParts.returnIdentity, readerFilePath: readerFilePath)
+	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: FunctionTypePairArray.create(0), readerFilePath: readerFilePath, comparison: ShapeComparison.someInstantiation)
 end 'functionShapesAgreeUnderSomeInstantiation'
+
+function returnAgreesUnderSomeInstantiation(registry FunctionTypeRegistry, signatures ProgramSignatures, declared ShapeAgreement, got ShapeAgreement, readerFilePath FilePath) returns bool
+	let gotValue = try valueTypeOfReturn(got.returnType) otherwise return maxonReturnTypeIsVoid(declared.returnType)
+	let declaredValue = try valueTypeOfReturn(declared.returnType) otherwise return false
+
+	return positionAgreesUnderSomeInstantiation(registry, signatures: signatures, slotType: declaredValue, sourceType: gotValue, slotIdentity: declared.returnIdentity, sourceIdentity: got.returnIdentity, readerFilePath: readerFilePath)
+end 'returnAgreesUnderSomeInstantiation'
 
 function positionAgreesUnderSomeInstantiation(registry FunctionTypeRegistry, signatures ProgramSignatures, slotType MaxonType, sourceType MaxonType, slotIdentity ByteArray, sourceIdentity ByteArray, readerFilePath FilePath) returns bool
 	let slotIsOpen = typeMentionsATypeParameter(registry, signatures: signatures, t: slotType)
@@ -777,11 +777,11 @@ end 'parameterAgreesUnderSomeInstantiation'
 // The rule proper, carrying the pairs of function-type names already under comparison further down the
 // same descent (see `FunctionTypePair`). Split from the entry point above only so the cycle guard is one
 // argument the three call sites never have to know about.
-function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, pending FunctionTypePairArray, readerFilePath FilePath) returns bool
+function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, pending FunctionTypePairArray, readerFilePath FilePath, comparison ShapeComparison) returns bool
 	let declaredParts = declared.agreementParts()
 	let gotParts = got.agreementParts()
 
-	if declaredParts.arity() != gotParts.arity() or declaredParts.markedParams != gotParts.markedParams or (gotParts.mutableFunction and not declaredParts.mutableFunction) 'arity'
+	if shapePartsDisagreeInArity(declaredParts, got: gotParts) 'arity'
 		return false
 	end 'arity'
 
@@ -790,42 +790,73 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSigna
 			return false
 		end 'markerMismatch'
 
-		if not resolvedTypesMatch(registry, signatures: signatures, declared: gotParts.typeAt(i), got: declaredParts.typeAt(i), pending: pending, readerFilePath: readerFilePath) 'paramMismatch'
+		if slotsHoldAnUnknownType(declaredParts.typeAt(i), got: gotParts.typeAt(i)) 'anUnknownSlot'
+			continue
+		end 'anUnknownSlot'
+
+		if not parameterSlotAgrees(registry, signatures: signatures, declared: declaredParts, got: gotParts, index: i, pending: pending, readerFilePath: readerFilePath, comparison: comparison) 'paramMismatch'
 			return false
 		end 'paramMismatch'
-
-		// ⭐⭐ **AND THE PRE-ERASURE IDENTITY, WHICH `resolvedTypesMatch` STRUCTURALLY CANNOT ASK.** `resolveType`
-		// collapses a boxed union/enum (and a per-instance ranged alias) to bare `integer`, so `function(Shade)`
-		// and `function(Color)` are the SAME resolved parameter list and every enum agreed with every other.
-		// **MEASURED, on programs that compiled clean and then died: SIGSEGV at a function-typed parameter,
-		// `ACCESS_VIOLATION` at a struct field, `STATUS_STACK_OVERFLOW` at an erased RETURN** — the callee's
-		// `match` indexing an ordinal past its own last arm.
-		//
-		// ⚠ **A CONJUNCTION WITH THE TAG RULE RATHER THAN A REPLACEMENT FOR IT, AND THAT IS SAFE BECAUSE THE TWO
-		// ARE DISJOINT BY CONSTRUCTION.** The identity-first/tag-second shape `TypeRules.columnValueMatches` is
-		// written in is the same rule stated for a caller holding ONE side's live type; for a door both sides are already RESOLVED, so every tag whose identity survives resolution
-		// (`structRef`, `interfaceRef`, `genericInstance`, `typeParameter`) is compared by id above while carrying
-		// an EMPTY column, and every tag whose identity does not survive arrives as bare `integer` with nothing
-		// for the tag rule to say. At most one of the two halves is informative about a position, so asking both
-		// IS "identity where there is one, representation where there is not".
-		//
-		// ⚠ **THE EMPTY-AGAINST-NON-EMPTY CASE IS A DISAGREEMENT WHEREVER THE NAME IS AN AGGREGATE'S** —
-		// `function(Integer)` reaching a `function(Color)` place would have the callee read an ordinal as a
-		// number, or a number as an ordinal. `identitiesConflict` is the same rule every coercion site asks,
-		// so a ranged alias — a scalar wearing a name — decays here exactly as it does there.
-		if not signatures.identityFitsSlot(declaredParts.identityAt(i), slot: gotParts.identityAt(i), readerFilePath: readerFilePath) 'paramIdentityMismatch'
-			return false
-		end 'paramIdentityMismatch'
-
-		if declaredParts.isWrittenAt(i) and not writtenParameterFlowsBack(registry, signatures: signatures, declared: declaredParts, got: gotParts, index: i, pending: pending, readerFilePath: readerFilePath) 'writtenParameterIsInvariant'
-			return false
-		end 'writtenParameterIsInvariant'
 	end 'eachParam'
 
 	// The RETURN slot asks both halves too, and for the same measurement — a shape carries ONE return identity
 	// rather than a per-position array, because a function type returns exactly one thing.
-	return returnSlotsMatch(registry, signatures: signatures, declared: declaredParts.returnType, got: gotParts.returnType, pending: pending, readerFilePath: readerFilePath) and signatures.identityFitsSlot(gotParts.returnIdentity, slot: declaredParts.returnIdentity, readerFilePath: readerFilePath)
+	if returnSlotsHoldAnUnknownType(declaredParts.returnType, got: gotParts.returnType) 'anUnknownReturn'
+		return true
+	end 'anUnknownReturn'
+
+	return returnSlotAgrees(registry, signatures: signatures, declared: declaredParts, got: gotParts, pending: pending, readerFilePath: readerFilePath, comparison: comparison)
 end 'shapesAgreeUnder'
+
+enum ShapeComparison
+	exact
+	someInstantiation
+end 'ShapeComparison'
+
+function parameterSlotAgrees(registry FunctionTypeRegistry, signatures ProgramSignatures, declared ShapeAgreement, got ShapeAgreement, index ParamCount, pending FunctionTypePairArray, readerFilePath FilePath, comparison ShapeComparison) returns bool
+	return match comparison 'comparison'
+		exact gives exactParameterAgrees(registry, signatures: signatures, declared: declared, got: got, index: index, pending: pending, readerFilePath: readerFilePath)
+		someInstantiation gives parameterAgreesUnderSomeInstantiation(registry, signatures: signatures, declared: declared, got: got, index: index, readerFilePath: readerFilePath)
+	end 'comparison'
+end 'parameterSlotAgrees'
+
+function returnSlotAgrees(registry FunctionTypeRegistry, signatures ProgramSignatures, declared ShapeAgreement, got ShapeAgreement, pending FunctionTypePairArray, readerFilePath FilePath, comparison ShapeComparison) returns bool
+	return match comparison 'comparison'
+		exact gives returnSlotsMatch(registry, signatures: signatures, declared: declared.returnType, got: got.returnType, pending: pending, readerFilePath: readerFilePath) and signatures.identityFitsSlot(got.returnIdentity, slot: declared.returnIdentity, readerFilePath: readerFilePath)
+		someInstantiation gives returnAgreesUnderSomeInstantiation(registry, signatures: signatures, declared: declared, got: got, readerFilePath: readerFilePath)
+	end 'comparison'
+end 'returnSlotAgrees'
+
+function exactParameterAgrees(registry FunctionTypeRegistry, signatures ProgramSignatures, declared ShapeAgreement, got ShapeAgreement, index ParamCount, pending FunctionTypePairArray, readerFilePath FilePath) returns bool
+	if not resolvedTypesMatch(registry, signatures: signatures, declared: got.typeAt(index), got: declared.typeAt(index), pending: pending, readerFilePath: readerFilePath) 'paramMismatch'
+		return false
+	end 'paramMismatch'
+
+	// ⭐⭐ **AND THE PRE-ERASURE IDENTITY, WHICH `resolvedTypesMatch` STRUCTURALLY CANNOT ASK.** `resolveType`
+	// collapses a boxed union/enum (and a per-instance ranged alias) to bare `integer`, so `function(Shade)`
+	// and `function(Color)` are the SAME resolved parameter list and every enum agreed with every other.
+	// **MEASURED, on programs that compiled clean and then died: SIGSEGV at a function-typed parameter,
+	// `ACCESS_VIOLATION` at a struct field, `STATUS_STACK_OVERFLOW` at an erased RETURN** — the callee's
+	// `match` indexing an ordinal past its own last arm.
+	//
+	// ⚠ **A CONJUNCTION WITH THE TAG RULE RATHER THAN A REPLACEMENT FOR IT, AND THAT IS SAFE BECAUSE THE TWO
+	// ARE DISJOINT BY CONSTRUCTION.** The identity-first/tag-second shape `TypeRules.columnValueMatches` is
+	// written in is the same rule stated for a caller holding ONE side's live type; for a door both sides are already RESOLVED, so every tag whose identity survives resolution
+	// (`structRef`, `interfaceRef`, `genericInstance`, `typeParameter`) is compared by id above while carrying
+	// an EMPTY column, and every tag whose identity does not survive arrives as bare `integer` with nothing
+	// for the tag rule to say. At most one of the two halves is informative about a position, so asking both
+	// IS "identity where there is one, representation where there is not".
+	//
+	// ⚠ **THE EMPTY-AGAINST-NON-EMPTY CASE IS A DISAGREEMENT WHEREVER THE NAME IS AN AGGREGATE'S** —
+	// `function(Integer)` reaching a `function(Color)` place would have the callee read an ordinal as a
+	// number, or a number as an ordinal. `identitiesConflict` is the same rule every coercion site asks,
+	// so a ranged alias — a scalar wearing a name — decays here exactly as it does there.
+	if not signatures.identityFitsSlot(declared.identityAt(index), slot: got.identityAt(index), readerFilePath: readerFilePath) 'paramIdentityMismatch'
+		return false
+	end 'paramIdentityMismatch'
+
+	return not declared.isWrittenAt(index) or writtenParameterFlowsBack(registry, signatures: signatures, declared: declared, got: got, index: index, pending: pending, readerFilePath: readerFilePath)
+end 'exactParameterAgrees'
 
 // ⭐ **RENDER A RESOLVED SHAPE THE WAY IT WAS WRITTEN — the diagnostic twin of `functionShapesAgree`, and it
 // exists for the reason `resolvedTypesMatch`'s nested arm states one screen up.** Rendering a shape's
@@ -880,6 +911,17 @@ end 'shapeParamIdentity'
 export function shapeParamSpelling(shape FunctionShape, index ParamCount) returns immutable ByteArray
 	return try shape.paramDeclaredNames.get(index) otherwise panic("shapeParamSpelling: paramDeclaredNames.get OOB at {index} below count {shape.paramDeclaredNames.count()} — a shape's parameter columns are filled in lockstep with paramTypes")
 end 'shapeParamSpelling'
+
+function slotsHoldAnUnknownType(declared MaxonType, got MaxonType) returns bool
+	return tagIsUnresolved(maxonTypeTag(declared)) or tagIsUnresolved(maxonTypeTag(got))
+end 'slotsHoldAnUnknownType'
+
+function returnSlotsHoldAnUnknownType(declared MaxonReturnType, got MaxonReturnType) returns bool
+	let gotValue = try valueTypeOfReturn(got) otherwise return false
+	let declaredValue = try valueTypeOfReturn(declared) otherwise return false
+
+	return slotsHoldAnUnknownType(declaredValue, got: gotValue)
+end 'returnSlotsHoldAnUnknownType'
 
 // Two resolved RETURN slots are the same slot: both return nothing, or both return the same type. A `void`
 // meeting a value (or the reverse) is a real disagreement — a call site that expects a result register from
@@ -991,7 +1033,7 @@ function nestedFunctionTypesAgree(registry FunctionTypeRegistry, signatures Prog
 		return false
 	end 'twoBrandsOfOneShape'
 
-	return shapesAgreeUnder(registry, signatures: signatures, declared: requireFunctionShapeOf(registry, name: declaredName, side: "nested declared"), got: requireFunctionShapeOf(registry, name: gotName, side: "nested arriving"), pending: pendingWithPair(pending, declaredName: declaredName, gotName: gotName), readerFilePath: readerFilePath)
+	return shapesAgreeUnder(registry, signatures: signatures, declared: requireFunctionShapeOf(registry, name: declaredName, side: "nested declared"), got: requireFunctionShapeOf(registry, name: gotName, side: "nested arriving"), pending: pendingWithPair(pending, declaredName: declaredName, gotName: gotName), readerFilePath: readerFilePath, comparison: ShapeComparison.exact)
 end 'nestedFunctionTypesAgree'
 
 // ⭐ **THE NAME BEHIND A `function`-TAGGED TYPE'S ID — the ONE reader.** Every consumer of a function type
@@ -1189,14 +1231,6 @@ function sourceParamTypesOf(func IrFunction, declaredCount ParamCount) returns M
 	return sourceParams
 end 'sourceParamTypesOf'
 
-function resolveParamType(project Project, signatures ProgramSignatures, t MaxonType, readerFilePath FilePath, site PositionKey, declaration ByteArray) returns MaxonType
-	if tagIsUnresolved(maxonTypeTag(t)) 'aDeferredClosureParameter'
-		return t
-	end 'aDeferredClosureParameter'
-
-	return resolveType(project, signatures: signatures, t: t, readerFilePath: readerFilePath, site: site, declaration: declaration)
-end 'resolveParamType'
-
 function resolveReturnType(project Project, signatures ProgramSignatures, ret MaxonReturnType, readerFilePath FilePath, site PositionKey, declaration ByteArray) returns MaxonReturnType
 	return match ret 'r'
 		void gives MaxonReturnType.void
@@ -1217,7 +1251,7 @@ export function resolveType(project Project, signatures ProgramSignatures, t Max
 		float then return t
 		exitCode then return t
 		named(id) then return resolveNamedType(project, signatures: signatures, id: id, readerFilePath: readerFilePath, site: site, declaration: declaration)
-		unresolved then panic("resolveTypes: `unresolved` reached type resolution — a declared type is never `unresolved`, and the one signature slot that may be (a closure parameter typed by a deferred member's argument) is passed through by `resolveParamType` before it reaches here")
+		unresolved then return t
 
 		// Already resolved, and by the PARSER: `Parser.parseTypeReference` mints a `structRef`
 		// directly for `Self` (and for the enclosing type's own name) inside a `type` body, because
@@ -1489,10 +1523,8 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// two interfaces declaring identical methods are still two types with two witness tables. So the id
 	// survives, carried by `interfaceRef`.
 	//
-	// ⚠ **WITHOUT THIS ARM THE CASCADE FALLS THROUGH TO ITS RECOVERY `MaxonType.integer`** — an
-	// interface-typed field or parameter resolves to an INT, `TypeRules.typeClassOf` reads it as numeric and
-	// `typeTagName` prints it `int`, so a field declared `as Backend` is refused as an `int` and a method
-	// call on such a parameter reports *"E3011: Unknown type 'Backend'"* about a name the program declares.
+	// ⚠ **WITHOUT THIS ARM THE CASCADE FALLS THROUGH TO `undeclared`** — an interface-typed field or
+	// parameter reports *"E3011: Unknown type 'Backend'"* about a name the program declares.
 	//
 	// It is asked of `interfaceMap()`, the SAME whole-program store `Parser.parseTypeReference` and every
 	// witness resolution read, so the AUTHORITY and the parser cannot come to disagree about which names
@@ -1568,7 +1600,7 @@ export function denotedNamedType(signatures ProgramSignatures, name ByteArray, i
 	// A name in NONE of the sources is a USER error — a typo (`Scor` for `Score`), a bare
 	// sized type (`u8` is not a type in Maxon; a ranged alias over it is), or a
 	// user-defined type this slice does not have. Each reader decides what to DO about it:
-	// this pass reports E3011 at the declaration's type name and recovers, the two cast sites raise the
+	// this pass reports E3011 at the declaration's type name and answers `unresolved`, the two cast sites raise the
 	// same code anchored on the `as` they were written at.
 	//
 	// ⚠ **A NON-RANGED ALIAS FORM ALSO ARRIVES HERE, AND IT IS NOT A TYPO.** A reference to a function,
@@ -1635,27 +1667,40 @@ export function barePrimitiveCastMessage(spelling String) returns String
 end 'barePrimitiveCastMessage'
 
 // `denotedNamedType`, then `denotedAliasForm`, for the DECLARATION sites this pass walks — a parameter,
-// a return type, a struct field. Each reports and recovers rather than failing the pass, so a file with three
-// undeclared types reports three diagnostics.
+// a return type, a struct field. Each reports and answers `unresolved` rather than failing the pass, so a
+// file with three undeclared types reports three diagnostics. `unresolved` and not a guessed type, because
+// every check skips it and a guess would be re-reported at each use.
 //
 // The caller hands the position of the type name as the declaration wrote it (`DeclaredTypeSites`).
 function resolveNamedType(project Project, signatures ProgramSignatures, id TypeNameId, readerFilePath FilePath, site PositionKey, declaration ByteArray) returns MaxonType
 	let name = try project.typeNames.nameOf(id) otherwise panic("resolveTypes: named type id {id} is not in the project interner (merge did not fold this file's interner)")
 
+	return try denotedDeclaredType(signatures, name: name, id: id, readerFilePath: readerFilePath, into: project.typeNames) otherwise 'undeclared'
+		if not project.poison.declaresNamedFrom(name, reader: readerFilePath, signatures: signatures) 'anIndependentUnknownType'
+			reportUnknownDeclaredType(project, typeName: signatures.aliasIdentityDisplay(name), readerFilePath: readerFilePath, site: site, declaration: declaration)
+		end 'anIndependentUnknownType'
+
+		return MaxonType.unresolved
+	end 'undeclared'
+end 'resolveNamedType'
+
+function denotedDeclaredType(signatures ProgramSignatures, name ByteArray, id TypeNameId, readerFilePath FilePath, into TypeNameInterner) returns MaxonType throws UnknownTypeName
 	if let declared = try denotedNamedType(signatures, name: name, id: id, readerFilePath: readerFilePath) 'aDeclaredType'
 		return declared
 	end 'aDeclaredType'
 
-	return try denotedAliasForm(signatures, name: name, readerFilePath: readerFilePath, into: project.typeNames) otherwise 'undeclared'
-		reportUnknownDeclaredType(project, typeName: signatures.aliasIdentityDisplay(name), readerFilePath: readerFilePath, site: site, declaration: declaration)
+	return try denotedAliasForm(signatures, name: name, readerFilePath: readerFilePath, into: into)
+end 'denotedDeclaredType'
 
-		// A RECOVERY type, not a sentinel answer: it keeps the module structurally
-		// well-formed so the analysis goes on to report the program's OTHER errors, and
-		// the E3011 refuses the build at the gate before lowering. An argument handed to a
-		// parameter of this type is not checked against it (`checkArgTypes`).
-		return MaxonType.integer
-	end 'undeclared'
-end 'resolveNamedType'
+export function declaredNameDenotesNothing(signatures ProgramSignatures, name ByteArray, id TypeNameId, readerFilePath FilePath) returns bool
+	let _ = try denotedNamedType(signatures, name: name, id: id, readerFilePath: readerFilePath) otherwise 'notANamedType'
+		let _ = try signatures.aliasFormFor(name, readerFilePath: readerFilePath) otherwise return true
+
+		return false
+	end 'notANamedType'
+
+	return false
+end 'declaredNameDenotesNothing'
 
 // A slot with no site is a compiler copy of a written one (a default helper's return, a service
 // payload, a closure parameter typed by an offer). It is reported where it was written, so it is only
@@ -1664,8 +1709,6 @@ function reportUnknownDeclaredType(project Project, typeName String, readerFileP
 	let line = positionKeyLine(site)
 	let column = positionKeyColumn(site)
 	let message = unknownTypeMessage(typeName)
-
-	project.unknownTypeReports.noteOccurrence()
 
 	if not namesASourcePosition(line, column: column) 'copiedByTheCompiler'
 		if declaration.isEmpty() 'noDeclarationToDeferTo'

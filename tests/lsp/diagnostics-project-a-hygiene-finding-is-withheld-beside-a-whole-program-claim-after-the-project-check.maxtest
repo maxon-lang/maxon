@@ -1,0 +1,15 @@
+let ProjectHygieneCheckDirName = "diagnostics-project-hygiene-beside-a-claim-checked"
+let ProjectHygieneCheckBufferFileName = "main.maxon"
+let ProjectHygieneCheckBufferSource = "public function f() returns ExitCode\n\tlet x = 256 as Byte\n\treturn 0 as ExitCode\nend 'f'\n"
+let ProjectHygieneCheckPublished = "E3010@2"
+
+test 'a hygiene finding is withheld beside a whole-program claim after the project check'
+	let root = stagedProjectDiagnosticsRoot(ProjectHygieneCheckDirName)
+	writeCorpusFile(root, fileName: ProjectHygieneCheckBufferFileName, content: ProjectHygieneCheckBufferSource)
+
+	let probe = probeProjectCheckDiagnostics(root, fileName: ProjectHygieneCheckBufferFileName, content: ProjectHygieneCheckBufferSource, edits: StringArray.create(0))
+
+	discardStagedDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectHygieneCheckPublished, note: "the project check of a program with no `main` stops at the whole-program claim, before the lowering that finds the out-of-range cast `256 as Byte`. The unused `x` waits on that lowering, so the check does not publish it. The unneeded cast in `return 0 as ExitCode` is found before the lowering, so the check publishes it beside the claim.")
+end 'a hygiene finding is withheld beside a whole-program claim after the project check'

@@ -634,7 +634,8 @@ export enum ErrorCode
 	// parameter, an operator operand. A field default that already names its type takes no cast to it: `var gauge =
 	// Gauge.make() as Gauge` is refused. A cast to an alias the value's own alias implements,
 	// directly or through its parents, is legal: it retypes the value as that ancestor. A cast between two
-	// declarations of one name in two files converts, and is legal too.
+	// declarations of one name in two files converts, and is legal too. Reported once the program has no
+	// other error, beside any target refusal (E3074, E3104).
 	semanticUnneededCast = "E3010"
 
 	// A named type resolves to no declared type -- a typo, or a type this compiler slice does not have. The
@@ -928,7 +929,7 @@ export enum ErrorCode
 	// with `#if not os(Wasi)` to exclude it from the wasm build.
 	// Raised from `SemanticCheck.requireTargetSupportsCallee`, at the first call from USER code
 	// into a `stdlib/Subprocess.maxon` entry point, where E3104 would otherwise be raised.
-	// Reported only when the language checks find no other error in the program.
+	// Reported once the program has no other error, beside any unneeded cast (E3010).
 	semanticSubprocessUnsupportedTarget = "E3074"
 
 	// A match arm names a case in qualified form (`Color.red`). The scrutinee's enum
@@ -1191,7 +1192,7 @@ export enum ErrorCode
 	// exist on wasm32-wasi -- a permanent property of the
 	// platform -- while this one says the target has not lowered the entry, a statement about this
 	// compiler's progress.
-	// Reported only when the language checks find no other error in the program.
+	// Reported once the program has no other error, beside any unneeded cast (E3010).
 	targetUnsupportedConstruct = "E3104"
 
 	// `Array.resize` is called on an array whose ELEMENT TYPE IS MANAGED -- a struct, a `String`,
@@ -2549,14 +2550,15 @@ export enum ErrorCode
 	// cancelled on every path out of the function, and is never returned, stored in a field or container,
 	// captured, sent, or passed to a parameter the callee keeps. A path that leaves it unawaited and
 	// uncancelled is refused at that exit. `.cancel()` waits for the coroutine to finish. Await or cancel it
-	// before the function returns.
+	// before the function returns. Reported once the program has no other error.
 	semanticTiedPromiseRefused = "E3212"
 
 	// A promise held in a local is dropped. A promise is consumed on every path out of its scope: awaited,
 	// cancelled with `.cancel()`, stored, returned, or passed to a parameter that takes it. Refused: leaving
 	// the scope without one of those, overwriting the variable, discarding the promise with `_ =`, and
 	// leaving the function on a path that does none. A promise inside a container or a field is cancelled
-	// when its holder is dropped. `await` it, call `.cancel()` on it, store it or return it.
+	// when its holder is dropped. `await` it, call `.cancel()` on it, store it or return it. Reported once
+	// the program has no other error.
 	semanticPromiseDropped = "E3213"
 
 	// A `unique` value is copied or given a second name. A type declared `is unique`, or holding a `unique`

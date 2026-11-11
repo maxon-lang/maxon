@@ -2155,6 +2155,8 @@ module function reportOwnRefusals(project Project, artifact FileParseArtifact)
 	let path = artifact.filePath
 
 	for region in artifact.abandonedRegions 'eachRegion'
+		project.poison.noteTextLostIn(path)
+
 		let backing = reportRefusal(project, path: path, error: region.error, blame: region.blame.clone(), consequence: region.consequence, lost: LostDeclaration.region(region.poisoned.clone()))
 		noteDeclarationLostTo(project, filePath: path, poisoned: region.poisoned, backing: backing)
 	end 'eachRegion'
@@ -2168,7 +2170,7 @@ end 'reportOwnRefusals'
 module function reportRecordedDiagnostics(project Project, artifact FileParseArtifact)
 	for diagnostic in artifact.diagnostics 'eachDiagnostic'
 		reportDiagnostic(project, diagnostic: diagnostic)
-		noteDeclarationRefusedBy(project, diagnostic: diagnostic)
+		noteFactsLostTo(project, diagnostic: diagnostic)
 	end 'eachDiagnostic'
 end 'reportRecordedDiagnostics'
 
@@ -3692,9 +3694,8 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 
 	project.genericAliasNamesWrittenByAFile = UsedTypeNameSet.create()
 
-	// The binding-hygiene list (E3012/E3077) is a push target of the same merge, and doubles the same
-	// way.
-	project.bindingHygieneDiagnostics = DiagnosticArray.create(0)
+	// The secondary roster is a push target of the same merge, and doubles the same way.
+	resetSecondaryFindings(project)
 	project.collidedTypeNames = CollidedTypeNameSet.create()
 
 	// `conformances` is a PUSH array: a warm rebuild that re-merges the same files would double it

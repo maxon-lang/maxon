@@ -1,0 +1,12 @@
+let SecondaryStabilityPassLine = "PASS stability: two checks over unchanged input both reported 1 diagnostic(s)"
+let SecondaryStabilityFailLabel = "FAIL stability:"
+
+test 'a program that folds the front end several times reports a secondary finding once'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "a-program-needing-several-folds-reports-a-secondary-finding-once", fixture: "several-folds-one-secondary")
+	let run = spawnRecheck(staged)
+
+	Expect.contains(run.stdout, needle: SecondaryStabilityPassLine, message: "`{TestedCompilerStem} {RecheckCommandName}` did not count the one standing diagnostic (an unneeded cast, a secondary finding the parser records and every fold files again) as one over a program whose generic type is instantiated only inside a body and whose standard-library demand takes further rounds. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.isFalse(run.stderr.contains(SecondaryStabilityFailLabel), message: "`{TestedCompilerStem} {RecheckCommandName}` found the two checks over unchanged input disagreeing on how many diagnostics they reported. It wrote to stderr: {run.stderr}")
+
+	discardStagedDir(staged)
+end 'a program that folds the front end several times reports a secondary finding once'

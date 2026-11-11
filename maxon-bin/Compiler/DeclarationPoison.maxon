@@ -113,6 +113,10 @@ type DeclarationHead
 	end 'create'
 end 'DeclarationHead'
 
+function memberHeadOf(enclosing DeclarationHead, member ByteArray) returns DeclarationHead
+	return DeclarationHead.create(qualifiedMethodName(enclosing.name, methodName: member), reach: enclosing.reach, nominal: false, extendsAType: false)
+end 'memberHeadOf'
+
 // How much the poison holds, compared by `FoldLedger.withdrawStandingFold` to prove nothing was
 // poisoned between a fold standing and its withdrawal, which rolling back would erase.
 export type PoisonExtent implements Equatable
@@ -128,19 +132,20 @@ export type PoisonExtent implements Equatable
 	let backedNames as ElementIndex
 	let unreadable as bool
 	let unreadableTypeUniverse as bool
+	let filesWithLostText as ElementIndex
 
-	static function create(files ElementIndex, backedFiles ElementIndex, declared ElementIndex, abandonedBodies ElementIndex, duplicated ElementIndex, lostHeads ElementIndex, extended ElementIndex, held ElementIndex, deferred ElementIndex, backedNames ElementIndex, unreadable bool, unreadableTypeUniverse bool) returns PoisonExtent
-		return Self{files: files, backedFiles: backedFiles, declared: declared, abandonedBodies: abandonedBodies, duplicated: duplicated, lostHeads: lostHeads, extended: extended, held: held, deferred: deferred, backedNames: backedNames, unreadable: unreadable, unreadableTypeUniverse: unreadableTypeUniverse}
+	static function create(files ElementIndex, backedFiles ElementIndex, declared ElementIndex, abandonedBodies ElementIndex, duplicated ElementIndex, lostHeads ElementIndex, extended ElementIndex, held ElementIndex, deferred ElementIndex, backedNames ElementIndex, unreadable bool, unreadableTypeUniverse bool, filesWithLostText ElementIndex) returns PoisonExtent
+		return Self{files: files, backedFiles: backedFiles, declared: declared, abandonedBodies: abandonedBodies, duplicated: duplicated, lostHeads: lostHeads, extended: extended, held: held, deferred: deferred, backedNames: backedNames, unreadable: unreadable, unreadableTypeUniverse: unreadableTypeUniverse, filesWithLostText: filesWithLostText}
 	end 'create'
 
 	export function equals(other PoisonExtent) returns bool
-		return self.files == other.files and self.backedFiles == other.backedFiles and self.declared == other.declared and self.abandonedBodies == other.abandonedBodies and self.duplicated == other.duplicated and self.lostHeads == other.lostHeads and self.extended == other.extended and self.held == other.held and self.deferred == other.deferred and self.backedNames == other.backedNames and self.unreadable == other.unreadable and self.unreadableTypeUniverse == other.unreadableTypeUniverse
+		return self.files == other.files and self.backedFiles == other.backedFiles and self.declared == other.declared and self.abandonedBodies == other.abandonedBodies and self.duplicated == other.duplicated and self.lostHeads == other.lostHeads and self.extended == other.extended and self.held == other.held and self.deferred == other.deferred and self.backedNames == other.backedNames and self.unreadable == other.unreadable and self.unreadableTypeUniverse == other.unreadableTypeUniverse and self.filesWithLostText == other.filesWithLostText
 	end 'equals'
 end 'PoisonExtent'
 
 // A field added to `DeclarationPoison` moves its size out of this range and fails the cast in
 // `restore`: copy the field there and count it in `extent` before moving the bound to the new size.
-typealias DeclarationPoisonLayoutBytes = int(96 to 96)
+typealias DeclarationPoisonLayoutBytes = int(104 to 104)
 
 function entriesIn(byName PoisonedDeclarationsByName) returns ElementIndex
 	var total = 0 as ElementIndex
@@ -169,6 +174,10 @@ export type DeclarationPoison
 	var unreadable as bool
 	var unreadableTypeUniverse as bool
 
+	// Files whose text the parse did not read, an abandoned region or a failed file: a typealias may be
+	// spelled only there (`TypeResolution.aSpellingOfTheAliasMayHaveBeenLost`).
+	var filesWithLostText as FailedFileSet
+
 	// Keyed by the extended type's name, because a refused extension's members may be what a call on
 	// that type, or on any type implementing it, meant (`refusesAnExtensionReaching`).
 	var extended as PoisonedDeclarationsByName
@@ -177,7 +186,7 @@ export type DeclarationPoison
 	var backedNames as BackedNameArray
 
 	export static function create() returns Self
-		return Self{files: FailedFileSet.create(), backedFiles: FailedFileSet.create(), declared: PoisonedDeclarationsByName.create(), abandonedBodies: PoisonedDeclarationsByName.create(), duplicated: DuplicatedFunctionSet.create(), lostHeads: LostHeadNameSet.create(), unreadable: false, unreadableTypeUniverse: false, extended: PoisonedDeclarationsByName.create(), heldConsequences: PendingConsequenceArray.create(0), deferredConsequences: PendingConsequenceArray.create(0), backedNames: BackedNameArray.create(0)}
+		return Self{files: FailedFileSet.create(), backedFiles: FailedFileSet.create(), declared: PoisonedDeclarationsByName.create(), abandonedBodies: PoisonedDeclarationsByName.create(), duplicated: DuplicatedFunctionSet.create(), lostHeads: LostHeadNameSet.create(), unreadable: false, unreadableTypeUniverse: false, filesWithLostText: FailedFileSet.create(), extended: PoisonedDeclarationsByName.create(), heldConsequences: PendingConsequenceArray.create(0), deferredConsequences: PendingConsequenceArray.create(0), backedNames: BackedNameArray.create(0)}
 	end 'create'
 
 	export function snapshot() returns Self
@@ -188,7 +197,7 @@ export type DeclarationPoison
 	end 'snapshot'
 
 	export function extent() returns PoisonExtent
-		return PoisonExtent.create(self.files.count(), backedFiles: self.backedFiles.count(), declared: entriesIn(self.declared), abandonedBodies: entriesIn(self.abandonedBodies), duplicated: self.duplicated.count(), lostHeads: self.lostHeads.count(), extended: entriesIn(self.extended), held: self.heldConsequences.count(), deferred: self.deferredConsequences.count(), backedNames: self.backedNames.count(), unreadable: self.unreadable, unreadableTypeUniverse: self.unreadableTypeUniverse)
+		return PoisonExtent.create(self.files.count(), backedFiles: self.backedFiles.count(), declared: entriesIn(self.declared), abandonedBodies: entriesIn(self.abandonedBodies), duplicated: self.duplicated.count(), lostHeads: self.lostHeads.count(), extended: entriesIn(self.extended), held: self.heldConsequences.count(), deferred: self.deferredConsequences.count(), backedNames: self.backedNames.count(), unreadable: self.unreadable, unreadableTypeUniverse: self.unreadableTypeUniverse, filesWithLostText: self.filesWithLostText.count())
 	end 'extent'
 
 	// Every field is copied: one left out survives a rolled-back fold (`Queries.FoldCheckpoint`).
@@ -203,6 +212,7 @@ export type DeclarationPoison
 		self.lostHeads = copiedLostHeads(source.lostHeads)
 		self.unreadable = source.unreadable
 		self.unreadableTypeUniverse = source.unreadableTypeUniverse
+		self.filesWithLostText = copiedFailedFiles(source.filesWithLostText)
 		self.extended = copiedPoisonedDeclarations(source.extended)
 		self.heldConsequences = copiedPendingConsequences(source.heldConsequences)
 		self.deferredConsequences = copiedPendingConsequences(source.deferredConsequences)
@@ -247,25 +257,53 @@ export type DeclarationPoison
 		return false
 	end 'holdsAnAbandonedBodyOf'
 
+	export function noteTextLostIn(path FilePath)
+		self.filesWithLostText.insert(path)
+	end 'noteTextLostIn'
+
+	export function lostTextIn(path FilePath) returns bool
+		return self.filesWithLostText.contains(path)
+	end 'lostTextIn'
+
+	export function holdsLostText() returns bool
+		return self.filesWithLostText.count() > 0
+	end 'holdsLostText'
+
+	export function refusesTheDeclarationOf(typeName ByteArray, reader FilePath, signatures ProgramSignatures) returns bool
+		return self.declaresANominalType(typeName) or self.refusesAnExtensionReaching(typeName, reader: reader, signatures: signatures, counting: PoisonEntriesCounted.everyEntry)
+	end 'refusesTheDeclarationOf'
+
+	// Probes `extended` by key: a type's interfaces are a small set, and the refused extension targets
+	// are unbounded.
 	export function refusesAnExtensionReaching(qualifier ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
-		for (target, held) in self.extended 'eachExtendedType'
-			if not extensionReaches(target, qualifier: qualifier, signatures: signatures) 'notReachedByIt'
-				continue
-			end 'notReachedByIt'
+		if self.extended.count() == 0 'noExtensionIsRefused'
+			return false
+		end 'noExtensionIsRefused'
 
-			for declaration in held 'eachDeclaration'
-				if counting == PoisonEntriesCounted.backedEntries and declaration.backing != PoisonBacking.backed 'notYetExplainedByAReportedError'
-					continue
-				end 'notYetExplainedByAReportedError'
-
-				if signatures.isVisibleFrom(declaration.reach, declFilePath: declaration.file, readerFilePath: reader) 'theReaderMayNameIt'
-					return true
-				end 'theReaderMayNameIt'
-			end 'eachDeclaration'
-		end 'eachExtendedType'
+		for key in extensionKeysReaching(qualifier, signatures: signatures) 'eachKey'
+			if self.refusesAnExtensionOf(key, reader: reader, signatures: signatures, counting: counting) 'anExtensionKeyedByItIsRefused'
+				return true
+			end 'anExtensionKeyedByItIsRefused'
+		end 'eachKey'
 
 		return false
 	end 'refusesAnExtensionReaching'
+
+	function refusesAnExtensionOf(target ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
+		let held = try self.extended.get(target) otherwise return false
+
+		for declaration in held 'eachDeclaration'
+			if counting == PoisonEntriesCounted.backedEntries and declaration.backing != PoisonBacking.backed 'notYetExplainedByAReportedError'
+				continue
+			end 'notYetExplainedByAReportedError'
+
+			if signatures.isVisibleFrom(declaration.reach, declFilePath: declaration.file, readerFilePath: reader) 'theReaderMayNameIt'
+				return true
+			end 'theReaderMayNameIt'
+		end 'eachDeclaration'
+
+		return false
+	end 'refusesAnExtensionOf'
 
 	export function refusesAnExtensionQualifying(names NameRoster, reader FilePath, signatures ProgramSignatures) returns bool
 		for name in names 'eachName'
@@ -280,7 +318,7 @@ export type DeclarationPoison
 	end 'refusesAnExtensionQualifying'
 
 	export function isEmpty() returns bool
-		return self.files.count() == 0 and self.declared.count() == 0 and self.duplicated.count() == 0
+		return self.files.count() == 0 and self.declared.count() == 0 and self.duplicated.count() == 0 and self.lostHeads.count() == 0
 	end 'isEmpty'
 
 	export function noteDuplicatedFunction(registrationName ByteArray)
@@ -308,6 +346,7 @@ export type DeclarationPoison
 	end 'holdsAnUnreadableFile'
 
 	export function noteUnreadableFile(path FilePath)
+		self.noteTextLostIn(path)
 		self.files.insert(path)
 		self.unreadable = true
 	end 'noteUnreadableFile'
@@ -321,6 +360,8 @@ export type DeclarationPoison
 	end 'typeUniverseIsUnreadable'
 
 	export function noteFailedFile(path FilePath, heads DeclarationHeadIndex, backing PoisonBacking)
+		self.noteTextLostIn(path)
+
 		if self.backedFiles.contains(path) or (backing == PoisonBacking.provisional and self.files.contains(path)) 'alreadyNoted'
 			return
 		end 'alreadyNoted'
@@ -356,8 +397,8 @@ export type DeclarationPoison
 	end 'noteRefusedDeclarationAt'
 
 	// A head that lost its declaration keyword (`main() returns ExitCode`) declares nothing the merge
-	// registers, so only its name is kept, and only the entry check asks: E3001 does not follow the
-	// refusal.
+	// registers, so only its name is kept. The entry check asks it, so E3001 does not follow the
+	// refusal, and `refusesAPartOfFrom` asks it, so a call to the name is a call to a refused callee.
 	export function holdsALostHeadNamed(name ByteArray) returns bool
 		return self.lostHeads.contains(name)
 	end 'holdsALostHeadNamed'
@@ -375,9 +416,26 @@ export type DeclarationPoison
 		self.fileAbandonedBody(enclosing, file: path, backing: backing)
 
 		let member = try heads.memberAt(line) otherwise return
-		let message = DeclarationHead.create(qualifiedMethodName(enclosing.name, methodName: member), reach: enclosing.reach, nominal: false, extendsAType: false)
-		self.fileAbandonedBody(message, file: path, backing: backing)
+		self.fileAbandonedBody(memberHeadOf(enclosing, member: member), file: path, backing: backing)
 	end 'noteAbandonedBodyUnder'
+
+	export function noteRefusedMemberAt(path FilePath, line LineNumber, heads DeclarationHeadIndex, backing PoisonBacking)
+		let region = try heads.regionAt(line) otherwise return
+
+		match region 'region'
+			declaration(enclosing) then self.noteRefusedMemberUnder(enclosing, path: path, line: line, heads: heads, backing: backing)
+			lostHead(name) then self.lostHeads.insert(name)
+		end 'region'
+	end 'noteRefusedMemberAt'
+
+	function noteRefusedMemberUnder(enclosing DeclarationHead, path FilePath, line LineNumber, heads DeclarationHeadIndex, backing PoisonBacking)
+		let member = try heads.memberAt(line) otherwise 'theDeclarationItself'
+			self.noteHead(enclosing, file: path, backing: backing)
+			return
+		end 'theDeclarationItself'
+
+		self.noteHead(memberHeadOf(enclosing, member: member), file: path, backing: backing)
+	end 'noteRefusedMemberUnder'
 
 	function fileAbandonedBody(head DeclarationHead, file FilePath, backing PoisonBacking)
 		fileHeadUnder(self.abandonedBodies, head: head, file: file, backing: backing)
@@ -465,6 +523,10 @@ export type DeclarationPoison
 	end 'refusesAnyPartOfFrom'
 
 	export function refusesAPartOfFrom(callee immutable ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
+		if self.holdsALostHeadNamed(callee) 'theCalleeIsALostHead'
+			return true
+		end 'theCalleeIsALostHead'
+
 		for key in refusalKeysOf(callee) 'eachKey'
 			if self.refusesANamedFrom(key.spelling(), reader: reader, signatures: signatures, counting: counting, within: key.scope()) 'aKeyIsRefused'
 				return true
@@ -517,7 +579,7 @@ typealias ConsequencePositionArray = Array with ElementIndex
 typealias ConsequencePositionsByName = Map with (ByteArray, ConsequencePositionArray)
 
 // Files each held consequence under the poison names `isExplainedBy` tests, derived by the same
-// `refusalKeysOf`, `extensionQualifierOf` and `extensionReaches` rules. A name a predicate reads
+// `refusalKeysOf`, `extensionQualifierOf` and `extensionKeysReaching` rules. A name a predicate reads
 // that is not a key here never wakes its consequence, which then stays held though a backed refusal
 // explains it.
 module type ConsequenceWorklist
@@ -577,9 +639,12 @@ module type ConsequenceWorklist
 
 	function wakeSubjectsReachedBy(target ByteArray, signatures ProgramSignatures, explained FixedBoolArray)
 		for (qualifier, positions) in self.byQualifier 'eachQualifier'
-			if extensionReaches(target, qualifier: qualifier, signatures: signatures) 'theExtensionReachesIt'
-				self.enqueueUnexplained(positions, explained: explained)
-			end 'theExtensionReachesIt'
+			for key in extensionKeysReaching(qualifier, signatures: signatures) 'eachKey'
+				if key.equals(target) 'theExtensionReachesIt'
+					self.enqueueUnexplained(positions, explained: explained)
+					break
+				end 'theExtensionReachesIt'
+			end 'eachKey'
 		end 'eachQualifier'
 	end 'wakeSubjectsReachedBy'
 
@@ -646,9 +711,19 @@ function extensionQualifierOf(name ByteArray) returns immutable ByteArray throws
 	return qualifier
 end 'extensionQualifierOf'
 
-function extensionReaches(target ByteArray, qualifier ByteArray, signatures ProgramSignatures) returns bool
-	return target.equals(qualifier) or signatures.typeImplementsInterface(qualifier, interfaceName: target)
-end 'extensionReaches'
+function extensionKeysReaching(qualifier ByteArray, signatures ProgramSignatures) returns NameRoster
+	var keys = NameRoster.create(0)
+	keys.push(qualifier)
+
+	var implemented = InterfaceNameSet.create()
+	signatures.collectImplementedInterfaces(qualifier, into: implemented)
+
+	for interfaceName in implemented 'eachImplementedInterface'
+		keys.push(interfaceName)
+	end 'eachImplementedInterface'
+
+	return keys
+end 'extensionKeysReaching'
 
 function addRefusalKeys(callee immutable ByteArray, into NameRoster)
 	for key in refusalKeysOf(callee) 'eachKey'
@@ -764,16 +839,24 @@ end 'LineOrder'
 export type DeclarationHeadIndex
 	let readings as HeadReadingArray
 	let headOrder as LineOrder
-	let memberNames as NameRoster
+	let memberReadings as MemberReadingArray
 	let memberOrder as LineOrder
 
+	// Members are classified by structure, never by column: active tokens keep their `#if` indentation,
+	// and the language allows spaces. A method body runs from a line-start method header to its
+	// `end '<name>'`; an interface requirement has none (BNF §3.5). Every other line-start line of a type
+	// outside a body is type-level, because fields, typealiases and cases interleave with methods.
 	export static function build(tokens TokenArray) returns DeclarationHeadIndex
 		var readings = HeadReadingArray.create(0)
 		var headOrder = LineOrder.create()
-		var memberNames = NameRoster.create(0)
+		var memberReadings = MemberReadingArray.create(0)
 		var memberOrder = LineOrder.create()
 		var lineStartColumn = 1 as ColumnNumber
 		var previousLine = 0 as LineNumber
+		var headHoldsMembers = false
+		var headMethodsHaveBodies = false
+		var methodBodyOpen = false
+		var openMethodName = b""
 
 		for position in 0 upto tokens.count() 'eachToken'
 			view token = try tokens.get(position) otherwise panic("DeclarationHeadIndex.build: tokens.get OOB at {position} below count {tokens.count()}")
@@ -783,26 +866,44 @@ export type DeclarationHeadIndex
 			end 'layout'
 
 			if token.column == DeclarationHeadColumn 'aHead'
+				let headKeyword = tokenKindAt(tokens, index: pastVisibilityModifiers(tokens, index: position))
+
 				readings.push(headReadingAt(tokens, position: position))
 				headOrder.add(token.line)
+				headHoldsMembers = tokenKindDeclaresANamedType(headKeyword)
+				headMethodsHaveBodies = headKeyword != TokenKind.interface
+				methodBodyOpen = false
 			end 'aHead'
 
-			if token.line != previousLine 'aLineStarts'
+			let startsALine = token.line != previousLine
+
+			if startsALine 'aLineStarts'
 				previousLine = token.line
 				lineStartColumn = token.column
 			end 'aLineStarts'
 
+			if methodBodyOpen and methodBodyClosesAt(tokens, index: position, methodName: openMethodName) 'theBodyCloses'
+				methodBodyOpen = false
+			end 'theBodyCloses'
+
+			if startsALine and headHoldsMembers and not methodBodyOpen and token.column > DeclarationHeadColumn and tokenKindAt(tokens, index: position - 1) == TokenKind.newline and not methodHeaderLineIn(tokens, index: position) 'aTypeLevelMember'
+				memberReadings.push(MemberReading.typeLevel)
+				memberOrder.add(token.line)
+			end 'aTypeLevelMember'
+
 			if token.kind == TokenKind.function and lineStartColumn > DeclarationHeadColumn and functionDeclarationShapeIn(tokens, index: position) 'aNestedFunction'
 				view name = try tokens.get(position + 1) otherwise panic("DeclarationHeadIndex.build: the name of the function at {position} is missing, though its shape was just read")
-				memberNames.push(name.value)
+				memberReadings.push(MemberReading.method(name.value))
 				memberOrder.add(token.line)
+				methodBodyOpen = headMethodsHaveBodies
+				openMethodName = name.value
 			end 'aNestedFunction'
 		end 'eachToken'
 
 		headOrder.seal()
 		memberOrder.seal()
 
-		return Self{readings: readings, headOrder: headOrder, memberNames: memberNames, memberOrder: memberOrder}
+		return Self{readings: readings, headOrder: headOrder, memberReadings: memberReadings, memberOrder: memberOrder}
 	end 'build'
 
 	function headCount() returns Count
@@ -830,9 +931,39 @@ export type DeclarationHeadIndex
 			throw AbsentError.absent
 		end 'outsideTheEnclosingDeclaration'
 
-		return try self.memberNames.get(member.position()) otherwise panic("DeclarationHeadIndex.memberAt: memberNames.get OOB at {member.position()} below count {self.memberNames.count()}")
+		match try self.memberReadings.get(member.position()) otherwise panic("DeclarationHeadIndex.memberAt: memberReadings.get OOB at {member.position()} below count {self.memberReadings.count()}") 'reading'
+			method(name) then return name
+			typeLevel then throw AbsentError.absent
+		end 'reading'
 	end 'memberAt'
 end 'DeclarationHeadIndex'
+
+union MemberReading
+	method(name immutable ByteArray)
+	typeLevel
+end 'MemberReading'
+
+typealias MemberReadingArray = Array with MemberReading
+
+function methodBodyClosesAt(tokens TokenArray, index ElementIndex, methodName ByteArray) returns bool
+	if not labelledBlockCloserAt(tokens, index: index) 'notACloser'
+		return false
+	end 'notACloser'
+
+	view label = try tokens.get(index + 1) otherwise panic("methodBodyClosesAt: the label after the closer at {index} is missing, though its shape was just read")
+
+	return label.value.equals(methodName)
+end 'methodBodyClosesAt'
+
+function methodHeaderLineIn(tokens TokenArray, index ElementIndex) returns bool
+	var keyword = pastVisibilityModifiers(tokens, index: index)
+
+	if tokenKindAt(tokens, index: keyword) == TokenKind.static 'aStaticMember'
+		keyword = pastVisibilityModifiers(tokens, index: keyword + 1)
+	end 'aStaticMember'
+
+	return functionDeclarationShapeIn(tokens, index: keyword)
+end 'methodHeaderLineIn'
 
 function headReadingAt(tokens TokenArray, position ElementIndex) returns HeadReading
 	let found = try regionHeadAt(tokens, position: position) otherwise return HeadReading.opensNothing

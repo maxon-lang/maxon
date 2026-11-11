@@ -644,18 +644,6 @@ function cacheTableAgreesExistentialStorePlace() returns bool
 	return true
 end 'cacheTableAgreesExistentialStorePlace'
 
-export function cacheEnumTablesAgreeInCompilerIRIrFunction() returns bool
-	if not cacheTableAgreesMoveDestinationKind() 'disagreesCacheTableAgreesMoveDestinationKind'
-		return false
-	end 'disagreesCacheTableAgreesMoveDestinationKind'
-
-	if not cacheTableAgreesExistentialStorePlace() 'disagreesCacheTableAgreesExistentialStorePlace'
-		return false
-	end 'disagreesCacheTableAgreesExistentialStorePlace'
-
-	return true
-end 'cacheEnumTablesAgreeInCompilerIRIrFunction'
-
 // @generated library-cache end
 
 export typealias ExistentialFieldStoreArray = Array with ExistentialFieldStore
@@ -3163,6 +3151,58 @@ end 'cacheReadClosureCaptureSourceEnvSlot'
 
 // @generated library-cache end
 
+export enum BodyStatus
+	parsed
+	skippedAsUnreached
+	abandoned
+end 'BodyStatus'
+
+// @generated library-cache begin
+let CacheCasesBodyStatus = [BodyStatus.parsed, BodyStatus.skippedAsUnreached, BodyStatus.abandoned]
+
+function cacheReadBodyStatus(reader LibraryCacheReader) returns BodyStatus throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesBodyStatus.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadBodyStatus'
+
+function cacheTableAgreesBodyStatus() returns bool
+	let declared = BodyStatus.allCases
+
+	if CacheCasesBodyStatus.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesBodyStatus.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesBodyStatus'
+
+export function cacheEnumTablesAgreeInCompilerIRIrFunction() returns bool
+	if not cacheTableAgreesMoveDestinationKind() 'disagreesCacheTableAgreesMoveDestinationKind'
+		return false
+	end 'disagreesCacheTableAgreesMoveDestinationKind'
+
+	if not cacheTableAgreesExistentialStorePlace() 'disagreesCacheTableAgreesExistentialStorePlace'
+		return false
+	end 'disagreesCacheTableAgreesExistentialStorePlace'
+
+	if not cacheTableAgreesBodyStatus() 'disagreesCacheTableAgreesBodyStatus'
+		return false
+	end 'disagreesCacheTableAgreesBodyStatus'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerIRIrFunction'
+
+// @generated library-cache end
+
 export let LayoutSlotWidth = 1 as ParamCount
 
 export type IrFunction
@@ -3446,6 +3486,7 @@ export type IrFunction
 	export var resultFromParamMask as ParamPositionMask
 	export var resultHasOtherPath as bool
 	export var resultMayBeFrozen as bool
+	export var resultMayBeUnknown as bool
 	export var mayWaitSeed as bool
 	export var mayYieldSeed as bool
 
@@ -3456,17 +3497,19 @@ export type IrFunction
 	// read by `EffectSummaryBuilder.walkNode`. No emitter sets it: a module-level binding is never assigned.
 	export var writesModuleStorage as bool
 
-	// ⛔⛔ **THE PARSER WALKED PAST THIS BODY WITHOUT BUILDING IT — so NOTHING may be concluded from its ops,
-	// and an analysis that reads them is reading an empty function that is not what the source says.**
-	// `Parser.skipUnreachedFunctionBody` leaves ONE block holding a bare `retVoid` and no ops at all, which is
-	// indistinguishable from a body that genuinely does nothing.
+	// ⛔⛔ **ANYTHING BUT `parsed`: THE PARSER WALKED PAST THIS BODY WITHOUT BUILDING IT — so NOTHING may be
+	// concluded from its ops, and an analysis that reads them is reading an empty function that is not what
+	// the source says.** `Parser.skipUnreachedFunctionBody` and `Parser.skipAbandonedBody` leave ONE block
+	// holding a bare `retVoid` and no ops at all, which is indistinguishable from a body that genuinely does
+	// nothing. An unreached body is opaque to summaries and an abandoned one is unknown
+	// (`bodyIsOpaqueToSummaries`).
 	//
 	// ⛔ MEASURED: read as ops, `Map.remove` — which sets a slot state and decrements a count — classifies
 	// EFFECT-FREE whenever the walk has not demanded its body, which refuses `stdlib/Subprocess.maxon`'s own
 	// `_ = pending.remove(name)` with E3064. The verdict would then turn on nothing but whether some other
 	// call site happened to make the body reachable, which is exactly the kind of answer an analysis must not
 	// give.
-	export var bodyWasSkippedAsUnreached as bool
+	export var bodyStatus as BodyStatus
 
 	// The body MOVED into its one call site (`InlineLeaves.spliceWave`) and the original was emptied. Nothing
 	// may reach it afterwards: dead-function elimination panics on one it still reaches, because laid out
@@ -3640,12 +3683,13 @@ export type IrFunction
 			resultFromParamMask: 0,
 			resultHasOtherPath: false,
 			resultMayBeFrozen: false,
+			resultMayBeUnknown: false,
 			mayWaitSeed: false,
 			mayYieldSeed: false,
 			brandOriginValues: ValueIdArray.create(0),
 			brandOriginKeys: NameRoster.create(0),
 			writesModuleStorage: false,
-			bodyWasSkippedAsUnreached: false,
+			bodyStatus: BodyStatus.parsed,
 			bodySplicedAway: false,
 			usesValueTupleReturn: false,
 			allocatesParameterCells: false,
@@ -3738,12 +3782,13 @@ export type IrFunction
 			resultFromParamMask: 0,
 			resultHasOtherPath: false,
 			resultMayBeFrozen: false,
+			resultMayBeUnknown: false,
 			mayWaitSeed: false,
 			mayYieldSeed: false,
 			brandOriginValues: ValueIdArray.create(0),
 			brandOriginKeys: NameRoster.create(0),
 			writesModuleStorage: false,
-			bodyWasSkippedAsUnreached: false,
+			bodyStatus: BodyStatus.parsed,
 			bodySplicedAway: false,
 			usesValueTupleReturn: false,
 			allocatesParameterCells: false,
@@ -3827,12 +3872,13 @@ export type IrFunction
 			resultFromParamMask: src.resultFromParamMask,
 			resultHasOtherPath: src.resultHasOtherPath,
 			resultMayBeFrozen: src.resultMayBeFrozen,
+			resultMayBeUnknown: src.resultMayBeUnknown,
 			mayWaitSeed: src.mayWaitSeed,
 			mayYieldSeed: src.mayYieldSeed,
 			brandOriginValues: src.brandOriginValues,
 			brandOriginKeys: src.brandOriginKeys,
 			writesModuleStorage: src.writesModuleStorage,
-			bodyWasSkippedAsUnreached: src.bodyWasSkippedAsUnreached,
+			bodyStatus: src.bodyStatus,
 			bodySplicedAway: src.bodySplicedAway,
 			usesValueTupleReturn: src.usesValueTupleReturn,
 			allocatesParameterCells: src.allocatesParameterCells,
@@ -3858,6 +3904,10 @@ export type IrFunction
 	export function reservesConditionalWitnesses() returns bool
 		return self.layoutReserve > LayoutSlotWidth
 	end 'reservesConditionalWitnesses'
+
+	export function resultIsUnknown() returns bool
+		return self.bodyStatus == BodyStatus.abandoned or self.resultMayBeUnknown
+	end 'resultIsUnknown'
 
 	export function surrenderColumns()
 		self.ownership = ColumnOwnership.nothing()
@@ -4196,12 +4246,13 @@ export type IrFunction
 		writer.unsigned(self.resultFromParamMask as CacheUnsigned)
 		writer.flag(self.resultHasOtherPath)
 		writer.flag(self.resultMayBeFrozen)
+		writer.flag(self.resultMayBeUnknown)
 		writer.flag(self.mayWaitSeed)
 		writer.flag(self.mayYieldSeed)
 		cacheWriteValueIdArray(writer, value: self.brandOriginValues)
 		cacheWriteNameRoster(writer, value: self.brandOriginKeys)
 		writer.flag(self.writesModuleStorage)
-		writer.flag(self.bodyWasSkippedAsUnreached)
+		writer.unsigned(self.bodyStatus.ordinal as CacheUnsigned)
 		writer.flag(self.bodySplicedAway)
 		writer.flag(self.usesValueTupleReturn)
 		writer.flag(self.allocatesParameterCells)
@@ -4269,12 +4320,13 @@ export type IrFunction
 		let f_resultFromParamMask = (try reader.unsigned()) as ParamPositionMask
 		let f_resultHasOtherPath = try reader.flag()
 		let f_resultMayBeFrozen = try reader.flag()
+		let f_resultMayBeUnknown = try reader.flag()
 		let f_mayWaitSeed = try reader.flag()
 		let f_mayYieldSeed = try reader.flag()
 		let f_brandOriginValues = try cacheReadValueIdArray(reader)
 		let f_brandOriginKeys = try cacheReadNameRoster(reader)
 		let f_writesModuleStorage = try reader.flag()
-		let f_bodyWasSkippedAsUnreached = try reader.flag()
+		let f_bodyStatus = try cacheReadBodyStatus(reader)
 		let f_bodySplicedAway = try reader.flag()
 		let f_usesValueTupleReturn = try reader.flag()
 		let f_allocatesParameterCells = try reader.flag()
@@ -4289,11 +4341,11 @@ export type IrFunction
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 		let f_debugLocalSpans = try DebugSpanRows.cacheRead(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueCapabilities: f_valueCapabilities, capabilityNotes: f_capabilityNotes, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, needsMutableParamMask: f_needsMutableParamMask, needsFrozenParamMask: f_needsFrozenParamMask, resultFromParamMask: f_resultFromParamMask, resultHasOtherPath: f_resultHasOtherPath, resultMayBeFrozen: f_resultMayBeFrozen, mayWaitSeed: f_mayWaitSeed, mayYieldSeed: f_mayYieldSeed, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, allocatesParameterCells: f_allocatesParameterCells, reassignedParamMask: f_reassignedParamMask, storedParamMask: f_storedParamMask, letCastReads: f_letCastReads, pendingOverlaps: f_pendingOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueCapabilities: f_valueCapabilities, capabilityNotes: f_capabilityNotes, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, needsMutableParamMask: f_needsMutableParamMask, needsFrozenParamMask: f_needsFrozenParamMask, resultFromParamMask: f_resultFromParamMask, resultHasOtherPath: f_resultHasOtherPath, resultMayBeFrozen: f_resultMayBeFrozen, resultMayBeUnknown: f_resultMayBeUnknown, mayWaitSeed: f_mayWaitSeed, mayYieldSeed: f_mayYieldSeed, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyStatus: f_bodyStatus, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, allocatesParameterCells: f_allocatesParameterCells, reassignedParamMask: f_reassignedParamMask, storedParamMask: f_storedParamMask, letCastReads: f_letCastReads, pendingOverlaps: f_pendingOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize568
-		return sizeof(IrFunction) as CacheSize568
+	static function cacheLayoutBytes() returns CacheSize576
+		return sizeof(IrFunction) as CacheSize576
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

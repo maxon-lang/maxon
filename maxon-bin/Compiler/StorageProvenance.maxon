@@ -7268,7 +7268,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		let at = self.hygieneIndexOf(candidates.reported)
 		let name = try candidates.names.get(firstUnexcused) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: names.get OOB at {firstUnexcused}")
 		let range = try candidates.ranges.get(firstUnexcused) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: ranges.get OOB at {firstUnexcused}")
-		try self.project.bindingHygieneDiagnostics.set(at, value: Diagnostic.create(ErrorCode.semanticVarShouldBeLet, message: varShouldBeLetMessage(String.from(name)), line: range.line, column: range.column, filePath: hygieneSiteOf(candidates.reported).0)) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: bindingHygieneDiagnostics.set OOB at {at}")
+		try self.project.secondaryDiagnostics.set(at, value: Diagnostic.create(ErrorCode.semanticVarShouldBeLet, message: varShouldBeLetMessage(String.from(name)), line: range.line, column: range.column, filePath: hygieneSiteOf(candidates.reported).0)) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: secondaryDiagnostics.set OOB at {at}")
 	end 'withholdVarShouldBeLet'
 
 	function withdrawVarShouldBeLet(reported Diagnostic)
@@ -7280,7 +7280,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.indexHygieneDiagnostics()
 		var at = try self.hygieneFirstAtPosition.get(hygienePositionKeyOf(reported)) otherwise panic("ProvenanceTracer.hygieneIndexOf: no binding-hygiene diagnostic sits where the parser filed this E3077 — `commitDiagnostics` merges every artifact's")
 
-		while not hygieneDiagnosticsAreOne(try self.project.bindingHygieneDiagnostics.get(at) otherwise panic("ProvenanceTracer.hygieneIndexOf: bindingHygieneDiagnostics.get OOB at {at}"), reported: reported) 'eachAtThePosition'
+		while not hygieneDiagnosticsAreOne(try self.project.secondaryDiagnostics.get(at) otherwise panic("ProvenanceTracer.hygieneIndexOf: secondaryDiagnostics.get OOB at {at}"), reported: reported) 'eachAtThePosition'
 			at = try self.hygieneNextAtPosition.get(at) otherwise panic("ProvenanceTracer.hygieneIndexOf: none of the binding-hygiene diagnostics at its position is the E3077 the parser filed — `commitDiagnostics` merges every artifact's")
 		end 'eachAtThePosition'
 
@@ -7294,14 +7294,14 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'indexed'
 
 		self.hygieneIndexed = true
-		let count = self.project.bindingHygieneDiagnostics.count()
+		let count = self.project.secondaryDiagnostics.count()
 		self.hygieneNextAtPosition.makeAbsent(count)
 		self.hygieneWithdrawn.refill(count, value: false)
 		var i = count
 
 		while i > 0 'eachFromTheLast'
 			i = i - 1
-			let diagnostic = try self.project.bindingHygieneDiagnostics.get(i) otherwise panic("ProvenanceTracer.indexHygieneDiagnostics: bindingHygieneDiagnostics.get OOB at {i}")
+			let diagnostic = try self.project.secondaryDiagnostics.get(i) otherwise panic("ProvenanceTracer.indexHygieneDiagnostics: secondaryDiagnostics.get OOB at {i}")
 			let key = hygienePositionKeyOf(diagnostic)
 
 			if let following = try self.hygieneFirstAtPosition.get(key) 'aLaterOneAtThePosition'
@@ -7319,14 +7319,15 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		end 'noneWithdrawn'
 
 		var kept = DiagnosticArray.create(0)
+		let indexed = self.hygieneWithdrawn.count()
 
-		for i in 0 upto self.project.bindingHygieneDiagnostics.count() 'eachDiagnostic'
-			if not (try self.hygieneWithdrawn.get(i) otherwise panic("ProvenanceTracer.dropWithdrawnHygiene: hygieneWithdrawn.get OOB at {i}")) 'kept'
-				kept.push(try self.project.bindingHygieneDiagnostics.get(i) otherwise panic("ProvenanceTracer.dropWithdrawnHygiene: bindingHygieneDiagnostics.get OOB at {i}"))
+		for i in 0 upto self.project.secondaryDiagnostics.count() 'eachDiagnostic'
+			if i >= indexed or not (try self.hygieneWithdrawn.get(i) otherwise panic("ProvenanceTracer.dropWithdrawnHygiene: hygieneWithdrawn.get OOB at {i}")) 'kept'
+				kept.push(try self.project.secondaryDiagnostics.get(i) otherwise panic("ProvenanceTracer.dropWithdrawnHygiene: secondaryDiagnostics.get OOB at {i}"))
 			end 'kept'
 		end 'eachDiagnostic'
 
-		self.project.bindingHygieneDiagnostics = kept
+		self.project.secondaryDiagnostics = kept
 	end 'dropWithdrawnHygiene'
 
 	// Would a `let` in place of the `var` named `name` holding `value` meet a mutable door that moves it
@@ -11739,6 +11740,6 @@ function hygieneSiteOf(diagnostic Diagnostic) returns (FilePath, LineNumber, Col
 	match diagnostic.anchor 'anchor'
 		at(filePath, line, column) then return (filePath, line, column)
 		programWide or
-		file then panic("binding hygiene: {diagnostic.code.rawValue} is recorded at a binding's own span by `Parser.recordBindingHygieneDiagnostic`, so it has a line to be indexed by")
+		file then panic("secondary finding: {diagnostic.code.rawValue} is recorded at a binding's own span by `Parser.recordArtifactDiagnostic`, so it has a line to be indexed by")
 	end 'anchor'
 end 'hygieneSiteOf'

@@ -1,0 +1,15 @@
+let ProjectHygieneClaimDirName = "diagnostics-project-hygiene-beside-a-claim"
+let ProjectHygieneClaimBufferFileName = "main.maxon"
+let ProjectHygieneClaimBufferSource = "public function f() returns ExitCode\n\tlet x = 256 as Byte\n\treturn 0 as ExitCode\nend 'f'\n"
+let ProjectHygieneClaimPublished = "E3010@2"
+
+test 'a hygiene finding is withheld beside a whole-program claim'
+	let root = stagedProjectDiagnosticsRoot(ProjectHygieneClaimDirName)
+	writeCorpusFile(root, fileName: ProjectHygieneClaimBufferFileName, content: ProjectHygieneClaimBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectHygieneClaimBufferFileName, content: ProjectHygieneClaimBufferSource)
+
+	discardStagedDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectHygieneClaimPublished, note: "the program declares no `main`, so the one claim that stands is about the whole program and the build stops before the lowering that finds the out-of-range cast `256 as Byte`. The unused `x` is a finding that waits on that lowering, so publishing it would put a hygiene squiggle on a binding whose real error was never looked for. The unneeded cast in `return 0 as ExitCode` is found before the lowering, so it is published beside the claim.")
+end 'a hygiene finding is withheld beside a whole-program claim'

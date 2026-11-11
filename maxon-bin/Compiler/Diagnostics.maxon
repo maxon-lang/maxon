@@ -1073,26 +1073,85 @@ export function reportPositioned(project Project, code ErrorCode, message String
 	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
 end 'reportPositioned'
 
-// A target refusal is about the target, not the program, and a language error is the author's to fix
-// first: parked here, it is reported by `SemanticCheck.reportTargetRefusals` only into a program with no
-// other diagnostic.
-export function deferTargetRefusal(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
-	project.targetRefusalDiagnostics.push(Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
-end 'deferTargetRefusal'
+module enum SecondaryFlush
+	beforeLowering
+	beforeBackend
+end 'SecondaryFlush'
 
-// The one rule for every deferred list: stacked on a real complaint, a deferred diagnostic would make one
-// mistake read as two.
-module function reportDeferredUnlessErrors(project Project, deferred DiagnosticArray) returns bool
-	if deferred.count() == 0 or projectHasErrors(project) 'nothingToSayOrSomethingRealerSaidIt'
+module union FindingStanding
+	primary
+	secondary(flush SecondaryFlush)
+end 'FindingStanding'
+
+// A secondary finding prints only while no primary error stands: stacked on one it would make one
+// mistake read as two, and the primary error alone keeps the program from compiling.
+module function findingStandingOf(code ErrorCode) returns FindingStanding
+	if code == ErrorCode.semanticUnneededCast or isTargetRefusal(code) 'beforeLowering'
+		return FindingStanding.secondary(SecondaryFlush.beforeLowering)
+	end 'beforeLowering'
+
+	if code == ErrorCode.semanticUnusedVariable or code == ErrorCode.semanticVarShouldBeLet or code == ErrorCode.semanticTiedPromiseRefused or code == ErrorCode.semanticPromiseDropped 'beforeBackend'
+		return FindingStanding.secondary(SecondaryFlush.beforeBackend)
+	end 'beforeBackend'
+
+	return FindingStanding.primary
+end 'findingStandingOf'
+
+module function isTargetRefusal(code ErrorCode) returns bool
+	return code == ErrorCode.targetUnsupportedConstruct or code == ErrorCode.semanticSubprocessUnsupportedTarget
+end 'isTargetRefusal'
+
+module function fileSecondary(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
+	fileSecondaryFinding(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
+end 'fileSecondary'
+
+module function fileSecondaryFinding(project Project, diagnostic Diagnostic)
+	match secondaryFlushOf(diagnostic.code) 'dueAt'
+		beforeLowering or
+		beforeBackend then break
+	end 'dueAt'
+
+	if isTargetRefusal(diagnostic.code) 'aTargetRefusal'
+		project.targetRefusalFiled = true
+	end 'aTargetRefusal'
+
+	project.secondaryDiagnostics.push(diagnostic)
+end 'fileSecondaryFinding'
+
+module function resetSecondaryFindings(project Project)
+	project.secondaryDiagnostics = DiagnosticArray.create(0)
+	project.targetRefusalFiled = false
+end 'resetSecondaryFindings'
+
+module function reportSecondaryFindings(project Project, flush SecondaryFlush) returns bool
+	if projectHasErrors(project) 'aPrimaryErrorStands'
 		return false
-	end 'nothingToSayOrSomethingRealerSaidIt'
+	end 'aPrimaryErrorStands'
 
-	for diagnostic in deferred 'each'
+	return reportFindingsDueAt(project, flush: flush)
+end 'reportSecondaryFindings'
+
+module function reportFindingsDueAt(project Project, flush SecondaryFlush) returns bool
+	var reported = false
+
+	for diagnostic in project.secondaryDiagnostics 'eachFinding'
+		if secondaryFlushOf(diagnostic.code) != flush 'dueAtAnotherFlush'
+			continue
+		end 'dueAtAnotherFlush'
+
 		reportDiagnostic(project, diagnostic: diagnostic)
-	end 'each'
+		reported = true
+	end 'eachFinding'
 
-	return true
-end 'reportDeferredUnlessErrors'
+	return reported
+end 'reportFindingsDueAt'
+
+function secondaryFlushOf(code ErrorCode) returns SecondaryFlush
+	match findingStandingOf(code) 'standing'
+		primary then panic("secondaryFlushOf: {code.rawValue} is a primary finding and never sits on the secondary roster")
+		secondary(flush) then return flush
+	end 'standing'
+end 'secondaryFlushOf'
 
 export function reportAtFunctionName(project Project, func IrFunction, code ErrorCode, message String)
 	reportPositioned(project, code: code, message: message, line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)

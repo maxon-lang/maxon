@@ -66,7 +66,7 @@ function checkResultUses(project Project, funcNames FunctionNameIndex, facts Cap
 		let filePath = authoredFileOf(project, func: func, opIndex: use.op)
 
 		if use.sends 'aSend'
-			if settled != ValueCapability.immutable 'notFrozen'
+			if capabilityBreaksAFrozenNeed(settled) 'notFrozen'
 				reportPositioned(project, code: ErrorCode.semanticArgumentCapabilityRefused, message: "{use.place}{capabilityWord(settled)}{freezeAdvice(settled, phrase: ". Freeze it first")}", line: use.line, column: use.column, filePath: filePath)
 			end 'notFrozen'
 
@@ -422,6 +422,8 @@ let ImmutableSource = 2 as SourceKinds
 
 let ReadOnlySource = 4 as SourceKinds
 
+let UnknownSource = 8 as SourceKinds
+
 function sourceKindOf(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction, callerIndex ElementIndex, argId ValueId, memo SettledMemo) returns SourceKinds
 	if not valueCarriesACapability(project, func: func, value: argId) 'aValueHasNoCapability'
 		return NoSourceKinds
@@ -444,6 +446,7 @@ function sourceKindOf(project Project, funcNames FunctionNameIndex, facts Capabi
 		isolated gives MutableSource
 		immutable gives ImmutableSource
 		paused gives ReadOnlySource
+		unknown gives UnknownSource
 	end 'capability'
 end 'sourceKindOf'
 
@@ -469,7 +472,7 @@ function sourcesInclude(kinds SourceKinds, wanted SourceKinds) returns bool
 end 'sourcesInclude'
 
 function sourcesAreMixed(kinds SourceKinds) returns bool
-	return sourcesInclude(kinds, wanted: MutableSource) and sourcesInclude(kinds, wanted: ImmutableSource) and not sourcesInclude(kinds, wanted: ReadOnlySource)
+	return sourcesInclude(kinds, wanted: MutableSource) and sourcesInclude(kinds, wanted: ImmutableSource) and not sourcesInclude(kinds, wanted: ReadOnlySource) and not sourcesInclude(kinds, wanted: UnknownSource)
 end 'sourcesAreMixed'
 
 function refusalOfArgument(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, calleeFunc IrFunction, calleeIndex ElementIndex, position ParamCount, paramClass ParamClass, capability ValueCapability, subject String) returns String
@@ -487,7 +490,7 @@ end 'refusalOfArgument'
 function argumentClassRefuses(paramClass ParamClass, capability ValueCapability) returns bool
 	return match paramClass 'paramClass'
 		mutableOnly gives capabilityIsReadOnly(capability)
-		immutableOnly gives capability != ValueCapability.immutable
+		immutableOnly gives capabilityBreaksAFrozenNeed(capability)
 		anyCapability or
 		both or
 		isolatedParam gives false
@@ -572,7 +575,7 @@ function checkDeclaredArgument(project Project, func IrFunction, opIdx ElementIn
 end 'checkDeclaredArgument'
 
 function declaredArgumentIsRefused(declared ParamCapability, capability ValueCapability) returns bool
-	return (declared == ParamCapability.mutable and capabilityIsReadOnly(capability)) or (declared == ParamCapability.immutable and capability != ValueCapability.immutable)
+	return (declared == ParamCapability.mutable and capabilityIsReadOnly(capability)) or (declared == ParamCapability.immutable and capabilityBreaksAFrozenNeed(capability))
 end 'declaredArgumentIsRefused'
 
 function refusalOfDeclaredArgument(boundary String, declared ParamCapability, capability ValueCapability, subject String, atTheReceiver bool) returns String
@@ -723,11 +726,11 @@ function checkNoPromiseIsDropped(project Project, module MaxonModule, func IrFun
 
 		if let tiedOp = try owners.get(dropped) 'aTiedPromise'
 			let spawn = project.opRanges.get(tiedOp)
-			project.droppedPromiseDiagnostics.push(Diagnostic.create(ErrorCode.semanticTiedPromiseRefused, message: droppedTiedPromiseMessage(name, spawn: spawn), line: range.line, column: range.column, filePath: filePath))
+			fileSecondary(project, code: ErrorCode.semanticTiedPromiseRefused, message: droppedTiedPromiseMessage(name, spawn: spawn), line: range.line, column: range.column, filePath: filePath)
 			continue
 		end 'aTiedPromise'
 
-		project.droppedPromiseDiagnostics.push(Diagnostic.create(ErrorCode.semanticPromiseDropped, message: droppedPromiseMessage(name), line: range.line, column: range.column, filePath: filePath))
+		fileSecondary(project, code: ErrorCode.semanticPromiseDropped, message: droppedPromiseMessage(name), line: range.line, column: range.column, filePath: filePath)
 	end 'eachDrop'
 end 'checkNoPromiseIsDropped'
 
@@ -922,9 +925,9 @@ function settledResultCapability(project Project, funcNames FunctionNameIndex, f
 	let calleeFunc = try funcNames.functions.get(calleeIndex) otherwise panic("settledResultCapability: functions.get OOB at {calleeIndex}")
 	view sig = try project.funcSignatures.get(callee) otherwise return provisional
 
-	if project.poison.holdsABackedAbandonedBodyNamed(calleeFunc.name) 'aBodyWithAReportedError'
-		return ValueCapability.mutable
-	end 'aBodyWithAReportedError'
+	if calleeFunc.resultIsUnknown() 'aResultTheParserCouldNotType'
+		return ValueCapability.unknown
+	end 'aResultTheParserCouldNotType'
 
 	if bodyIsUnreadable(calleeFunc) 'nothingToJudge'
 		return provisional
@@ -940,6 +943,10 @@ function settledResultCapability(project Project, funcNames FunctionNameIndex, f
 
 	let callerIndex = try facts.indexOf(func.name) otherwise return provisional
 	let kinds = sourceKindsOf(project, funcNames: funcNames, facts: facts, func: func, callerIndex: callerIndex, calleeFunc: calleeFunc, sig: sig, args: args, argLabels: labels, memo: memo)
+
+	if sourcesInclude(kinds, wanted: UnknownSource) 'anUnknownSource'
+		return ValueCapability.unknown
+	end 'anUnknownSource'
 
 	if sourcesInclude(kinds, wanted: ReadOnlySource) 'readOnly'
 		return ValueCapability.paused
@@ -965,7 +972,7 @@ function checkDeferredResultWrites(project Project, funcNames FunctionNameIndex,
 		let writableAtParse = try notes.resultWriteWritable.get(position) otherwise panic("checkDeferredResultWrites: resultWriteWritable.get OOB at {position}")
 		let settled = settledResultCapability(project, funcNames: funcNames, facts: facts, func: func, op: op, provisional: ValueCapability.mutable if writableAtParse else ProvisionalForAWrite, memo: memo)
 
-		if settled == ValueCapability.mutable or settled == ValueCapability.temporary or settled == ValueCapability.isolated 'writable'
+		if settled == ValueCapability.mutable or settled == ValueCapability.temporary or settled == ValueCapability.isolated or settled == ValueCapability.unknown 'writable'
 			continue
 		end 'writable'
 
@@ -1015,7 +1022,7 @@ function checkReturnFitsDeclaredResult(project Project, module MaxonModule, func
 
 	var capability = settledArgumentCapability(project, funcNames: funcNames, facts: facts, func: func, argId: retVal, memo: memo)
 
-	if capability != ValueCapability.immutable and sig.returnCapability == ResultCapability.immutable and memo.mergesArms(retVal) 'parametersAreFrozenByTheResult'
+	if capabilityBreaksAFrozenNeed(capability) and sig.returnCapability == ResultCapability.immutable and memo.mergesArms(retVal) 'parametersAreFrozenByTheResult'
 		var visited = ValueIdArray.create(0)
 		capability = settledBesideParameterArms(project, funcNames: funcNames, facts: facts, func: func, phi: retVal, memo: memo, visited: visited)
 	end 'parametersAreFrozenByTheResult'
@@ -1062,7 +1069,7 @@ function refusalOfReturn(declared ResultCapability, capability ValueCapability, 
 end 'refusalOfReturn'
 
 function refusalOfReturnForImmutable(capability ValueCapability) returns String throws AbsentError
-	if capability == ValueCapability.immutable 'fits'
+	if not capabilityBreaksAFrozenNeed(capability) 'fits'
 		throw AbsentError.absent
 	end 'fits'
 

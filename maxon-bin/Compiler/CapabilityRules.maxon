@@ -33,6 +33,7 @@ module function capabilityWord(capability ValueCapability) returns String
 		immutable gives "immutable"
 		paused gives "read-only"
 		isolated gives "isolated"
+		unknown panic("capabilityWord: an unknown capability is never reported")
 	end 'capability'
 end 'capabilityWord'
 
@@ -181,6 +182,10 @@ module function capabilityIsReadOnly(capability ValueCapability) returns bool
 	return capability == ValueCapability.immutable or capability == ValueCapability.paused
 end 'capabilityIsReadOnly'
 
+module function capabilityBreaksAFrozenNeed(capability ValueCapability) returns bool
+	return capability != ValueCapability.immutable and capability != ValueCapability.unknown
+end 'capabilityBreaksAFrozenNeed'
+
 module function needsWritableRefusal(head String, subject String, capability ValueCapability) returns String
 	return "{head}; {subject} is {capabilityWord(capability)}"
 end 'needsWritableRefusal'
@@ -235,6 +240,10 @@ module function windowedReadCapability(window ValueCapability, slot ParamCapabil
 end 'windowedReadCapability'
 
 module function joinedCapability(first ValueCapability, second ValueCapability) returns ValueCapability
+	if first == ValueCapability.unknown or second == ValueCapability.unknown 'anUnknownArm'
+		return ValueCapability.unknown
+	end 'anUnknownArm'
+
 	if first == second 'agree'
 		return first
 	end 'agree'
@@ -298,9 +307,9 @@ module function isCleanInput(capability ValueCapability, isValueType bool, isSlo
 end 'isCleanInput'
 
 module function storeVerdict(slot ParamCapability, value ValueCapability, isValueType bool, isSlotRead bool) returns StoreVerdict
-	if isValueType 'aValue'
+	if isValueType or value == ValueCapability.unknown 'aValueOrAnUnknown'
 		return StoreVerdict.fits
-	end 'aValue'
+	end 'aValueOrAnUnknown'
 
 	if slot == ParamCapability.isolated 'anIsolatedSlot'
 		if value == ValueCapability.isolated and not isSlotRead 'aMovedIsolated'

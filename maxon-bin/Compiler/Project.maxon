@@ -12273,7 +12273,6 @@ typealias ReportedTypeSiteSet = Set with String
 
 typealias ReportedUnknownTypeMessageSet = Set with String
 typealias ReportedUnknownNameSet = Set with String
-typealias UnknownParameterSet = Set with String
 
 export type UnknownTypeReports
 	var reportedSites as ReportedTypeSiteSet
@@ -12282,15 +12281,10 @@ export type UnknownTypeReports
 	// A parser refusal of the same unknown name in the same file repeats this E3011, and is dropped
 	// once `resolveTypes` has run (`ConsequenceDropStage.afterTypeResolution`).
 	var reportedNames as ReportedUnknownNameSet
-
-	// A parameter whose type names nothing holds a recovery type, so its arguments are not
-	// type-checked (`checkArgTypes`): a mismatch against that type would only repeat the E3011.
-	var unknownParameters as UnknownParameterSet
-	var occurrences as Count
 	export var unplaced as UnplacedUnknownTypeArray
 
 	export static function create() returns UnknownTypeReports
-		return Self{reportedSites: ReportedTypeSiteSet.create(), reportedMessages: ReportedUnknownTypeMessageSet.create(), reportedNames: ReportedUnknownNameSet.create(), unknownParameters: UnknownParameterSet.create(), occurrences: 0, unplaced: UnplacedUnknownTypeArray.create(0)}
+		return Self{reportedSites: ReportedTypeSiteSet.create(), reportedMessages: ReportedUnknownTypeMessageSet.create(), reportedNames: ReportedUnknownNameSet.create(), unplaced: UnplacedUnknownTypeArray.create(0)}
 	end 'create'
 
 	// One report per written site: a generic instance resolves the same written slot again.
@@ -12318,21 +12312,6 @@ export type UnknownTypeReports
 		return self.reportedNames.contains("{readerFilePath}|{String.from(typeName)}")
 	end 'reportedUnknownName'
 
-	export function noteOccurrence()
-		self.occurrences = self.occurrences + 1
-	end 'noteOccurrence'
-
-	export function occurrenceCount() returns Count
-		return self.occurrences
-	end 'occurrenceCount'
-
-	export function noteUnknownParameter(declaration ByteArray, position ParamCount)
-		self.unknownParameters.insert("{String.from(declaration)}|{position}")
-	end 'noteUnknownParameter'
-
-	export function holdsUnknownParameter(declaration ByteArray, position ParamCount) returns bool
-		return self.unknownParameters.contains("{String.from(declaration)}|{position}")
-	end 'holdsUnknownParameter'
 end 'UnknownTypeReports'
 
 export type Project
@@ -12418,26 +12397,12 @@ export type Project
 	// (`ParseStaging.noteWrittenGenericAliasNames`); a wider insert silently drops a true E3062.
 	export var genericAliasNamesWrittenByAFile as UsedTypeNameSet
 
-	// ⭐⭐ **THE DECLARATION-HYGIENE DIAGNOSTICS (E3012 unused, E3077 var-should-be-let), HELD BACK
-	// UNTIL EVERY CHECK THAT COULD EXPLAIN THE BODY HAS RUN** — appended per file by `mergeArtifact`
-	// and drained by `Compiler.reportBindingHygieneDiagnostics`, after the Std-tier passes and before
-	// the backend; that header argues the position. ⛔ Moving the drain ahead of the Std-tier passes
-	// re-breaks `type-casting.md`.
-	//
-	// ⚠ **REPORTING THEM WHERE THEY ARE FOUND IS A MEASURED CASCADE, and it is why this list exists.** They
-	// are decided at a function's `end` DURING THE PARSE, before `resolveTypes`/`semanticCheck` have
-	// judged the body — so `let x = 256 as Byte`, whose whole point is the out-of-range cast, would
-	// report `unused variable: 'x'` beside the E3005 it is a test OF. 26
-	// committed error-cases moved that way the first time locals were admitted, `type-casting.md` (a
-	// canonical `/specs` port) among them.
-	//
-	// ⇒ **A body the compiler had a real complaint about never also reports its hygiene diagnostics**, which
-	// is the drain's one rule (see there for why the suppression is whole-program rather than per function).
-	export var bindingHygieneDiagnostics as DiagnosticArray
+	// `findingStandingOf` owns which codes ride this roster and when they print.
+	export var secondaryDiagnostics as DiagnosticArray
 
-	export var targetRefusalDiagnostics as DiagnosticArray
-
-	export var droppedPromiseDiagnostics as DiagnosticArray
+	// Whether the roster holds a target refusal, asked per spawn op so the roster is never scanned. Only
+	// `fileSecondaryFinding` and `resetSecondaryFindings` keep it in step; a direct push leaves it stale.
+	export var targetRefusalFiled as bool
 
 	// ⭐ Every declaration a type-name COLLISION was reported for (E3061/E3006,
 	// `reportTypeNameCollision`) — the suppression set the unused-typealias drain reads, so one mistake
@@ -12932,9 +12897,8 @@ export type Project
 			hiddenTypeNameDiagnostics: DiagnosticArray.create(0),
 			unknownTypeReports: UnknownTypeReports.create(),
 			genericAliasNamesWrittenByAFile: UsedTypeNameSet.create(),
-			bindingHygieneDiagnostics: DiagnosticArray.create(0),
-			targetRefusalDiagnostics: DiagnosticArray.create(0),
-			droppedPromiseDiagnostics: DiagnosticArray.create(0),
+			secondaryDiagnostics: DiagnosticArray.create(0),
+			targetRefusalFiled: false,
 			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(0),
 			pendingBrandRecords: PendingBrandRecordArray.create(0),
@@ -13201,9 +13165,8 @@ end 'rootIsASingleFile'
 //
 // ⭐ **IT IS THE ONLY DOOR INTO `project.diagnostics`, and the lists that look
 // like a second one are not.** `ParseStaging.commitDiagnostics` folds the
-// parser's own into this function; `Diagnostics.reportDeferredUnlessErrors`
-// drains the hygiene list and the deferred target refusals through it as well;
-// and the deferred name diagnostics
+// parser's own into this function; `Diagnostics.reportFindingsDueAt` flushes
+// the secondary roster through it as well; and the deferred name diagnostics
 // reach it via `TypeResolution.reportDeferredNameDiagnostics` calling
 // `reportPositioned`.
 //

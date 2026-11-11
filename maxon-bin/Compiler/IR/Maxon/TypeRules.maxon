@@ -2837,8 +2837,8 @@ end 'foldIntUnaryOp'
 // therefore answers `boolean` for a pair whose right operand it could not type.
 //
 // **THE OPTIMISM IS SAFE BECAUSE OF WHAT `unresolved` MEANS, NOT BECAUSE OF ANYTHING IN THIS FUNCTION.**
-// A callee some file declares is never `unresolved` (`Queries.queryProgramSignatures`), so the only pair
-// that reaches the guess carries a callee NO file declares — a program E3004 rejects before it can run.
+// An `unresolved` operand is a call to a callee NO file declares, or a value whose declared type names
+// nothing — each in a program a reported refusal (E3004, E3011) rejects before it can run.
 // ⚠ Let `unresolved` mean anything else and the false tag is a wrong ANSWER: `flag and crossFileInt()`
 // mints a merge phi tagged `boolean` carrying the int 7, and `if m` then branches on 7, a value the
 // compiler believes is a bool and is not.
@@ -2875,13 +2875,11 @@ end 'wordOpResultTag'
 // readings of one value, they are two different registers, and `addsd` cannot read the first.
 // Saying `float` here while a raw integer still reaches the op is a SILENT WRONG ANSWER, not a
 // missing feature. `Parser.emitBinOp` is the emitter, and it is what gates on this.
-//
-// The `unresolved` case is deliberately NOT deferred to, and this is the one asymmetry with
-// `wordOpResultTag` (whose header argues the same trade at length): `integer` is the answer for a mixed
-// `(integer, unresolved)` pair, an `unresolved` operand can only be a call no file declares (E3004,
-// which gates the pipeline before codegen), and widening the deferral here would buy an honest tag on a
-// program that is already rejected at the cost of moving a live rule.
 function arithResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
+	if tagIsUnresolved(left) or tagIsUnresolved(right) 'defer'
+		return ValueTypeTag.unresolved
+	end 'defer'
+
 	if operandsAreFloat(left, right: right) 'promote'
 		return ValueTypeTag.float
 	end 'promote'

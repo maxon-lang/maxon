@@ -303,7 +303,8 @@ it as gone.
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
 `source: "maxon"` and severity Error; the untrusted-workspace notice and the breaking-change notices
 above have severity Information. "No `main` function" (E3001) and the unused-export diagnostics
-(E3092, E3093, E3094) appear in `maxon build`'s output alone.
+(E3092, E3093, E3094) appear in `maxon build`'s output alone. When they are the only errors, a document
+is published with its unneeded casts (E3010) and target refusals (E3074, E3104).
 
 **A `.maxon` document in a project is published twice per version: the buffer check's set, then the
 project check's.** This applies where the document's root is a directory holding a `.maxproj`. The

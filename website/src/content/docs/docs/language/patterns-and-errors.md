@@ -137,12 +137,17 @@ end 'main'
 
 A compile reports every independent error in the program at once. An error that follows from another is
 covered by it: a call to a function whose declaration was refused, an argument typed by that function's
-result, a closure written for its parameter, or a use of a binding whose initializer was refused, is
-reported through that refusal. A parse error abandons the function body, initializer or
-declaration it is in, and the rest of its file is checked; one inside a generic body, or one that leaves
-the file's block structure unreadable, fails the whole file. Unused bindings (**E3012**, **E3077**),
-unused exports (**E3092**–**E3094**), unused file-private declarations (**E3219**), target refusals and the checks made while generating code are
-reported once the program has no other error, so fixing every reported error can surface more.
+result, a closure written for its parameter, a conformance a refused `extension` would supply, or a use
+of a binding whose initializer was refused, is reported through that refusal. A parse error abandons the
+function body, initializer or declaration it is in, and the rest of its file is checked; one inside a
+generic body, or one that leaves the file's block structure unreadable, fails the whole file. An
+abandoned body is unknown: what it waits for, writes and returns fits every check made of its callers and
+its results. A type name that denotes nothing is reported where it is written, and a value of that type
+is unresolved, so each use of it is covered by that report. An error inside one method's body covers that
+method, and the rest of its type is checked. Unneeded casts (**E3010**), unused bindings (**E3012**,
+**E3077**), unused exports (**E3092**–**E3094**), unused file-private declarations (**E3219**), dropped
+promises (**E3212**, **E3213**), target refusals and the checks made while generating code are reported
+once the program has no other error, so fixing every reported error can surface more.
 
 Each example below is refused with the diagnostic shown.
 

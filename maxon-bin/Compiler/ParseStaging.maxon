@@ -1174,15 +1174,15 @@ export type FileParseArtifact
 	export var unusedTypeAliases as DeferredNameDiagnosticRoster
 	export var hiddenTypeNames as DeferredDiagnosticRoster
 
-	// ⭐ THE DECLARATION-HYGIENE DIAGNOSTICS this file's function bodies earned (E3012 unused, E3077
-	// var-should-be-let), kept OUT of `diagnostics` above so they cannot gate the pipeline ahead of the
-	// checks that could explain the body instead. `mergeArtifact` folds them into
-	// `project.bindingHygieneDiagnostics`, which carries the measured cascade this deferral cures.
+	// ⭐ THE SECONDARY FINDINGS this file's parse recorded (`findingStandingOf` classifies them), kept OUT
+	// of `diagnostics` above so they cannot gate the pipeline ahead of the checks that could explain the
+	// body instead. `commitDiagnostics` files them on `project.secondaryDiagnostics`. Kept in the memo, so
+	// a warm rebuild or an LSP re-check replays them.
 	//
 	// They are finished `Diagnostic`s and not `DeferredNameDiagnostic`s because nothing about them needs
 	// re-deciding later — only the REPORTING is deferred, never the verdict, which is a fact about one
 	// function body and is settled at its `end`.
-	export var bindingHygieneDiagnostics as DiagnosticArray
+	export var secondaryDiagnostics as DiagnosticArray
 
 	// ⭐⭐ **WHAT THIS FILE'S PARSE WROTE INTO THE SIGNATURE INDEX.** The parse's writes are undone when it
 	// ends, so a parse reads only the settled index and its own mints; every merge folds these back in
@@ -1239,7 +1239,7 @@ export type FileParseArtifact
 			refusedInstanceDeferrals: 0,
 			unusedTypeAliases: noDeferredNameDiagnostics,
 			hiddenTypeNames: noDeferredDiagnostics,
-			bindingHygieneDiagnostics: DiagnosticArray.create(0),
+			secondaryDiagnostics: DiagnosticArray.create(0),
 			parseMints: ParseMints.none,
 			instanceIdsInUse: GenericInstanceIdArray.create(0)
 		}
@@ -1597,7 +1597,7 @@ export type FileParseArtifact
 		writer.unsigned(self.refusedInstanceDeferrals as CacheUnsigned)
 		cacheWriteDeferredNameDiagnosticRoster(writer, value: self.unusedTypeAliases)
 		cacheWriteDeferredDiagnosticRoster(writer, value: self.hiddenTypeNames)
-		cacheWriteDiagnosticArray(writer, value: self.bindingHygieneDiagnostics)
+		cacheWriteDiagnosticArray(writer, value: self.secondaryDiagnostics)
 		cacheWriteParseMints(writer, value: self.parseMints)
 		cacheWriteGenericInstanceIdArray(writer, value: self.instanceIdsInUse)
 	end 'cacheWrite'
@@ -1647,11 +1647,11 @@ export type FileParseArtifact
 		let f_refusedInstanceDeferrals = (try reader.unsigned()) as ElementIndex
 		let f_unusedTypeAliases = try cacheReadDeferredNameDiagnosticRoster(reader)
 		let f_hiddenTypeNames = try cacheReadDeferredDiagnosticRoster(reader)
-		let f_bindingHygieneDiagnostics = try cacheReadDiagnosticArray(reader)
+		let f_secondaryDiagnostics = try cacheReadDiagnosticArray(reader)
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, closureRecordSites: f_closureRecordSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, abandonedRegions: f_abandonedRegions, refusal: f_refusal, refusedInstanceDeferrals: f_refusedInstanceDeferrals, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, closureRecordSites: f_closureRecordSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, abandonedRegions: f_abandonedRegions, refusal: f_refusal, refusedInstanceDeferrals: f_refusedInstanceDeferrals, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, secondaryDiagnostics: f_secondaryDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
 	static function cacheLayoutBytes() returns CacheSize376
@@ -1700,7 +1700,7 @@ export type FileParseArtifact
 		self.typeNames.rewindTo(mark.typeNames)
 		self.currentFuncIndex = mark.currentFuncIndex
 		self.diagnostics.truncate(mark.diagnostics)
-		self.bindingHygieneDiagnostics.truncate(mark.bindingHygieneDiagnostics)
+		self.secondaryDiagnostics.truncate(mark.secondaryDiagnostics)
 		mark.requireHeldBy(self)
 	end 'rewindTo'
 
@@ -1736,10 +1736,10 @@ module type ArtifactMark
 	module let typeNames as NameId
 	module let currentFuncIndex as ElementIndex
 	module let diagnostics as ElementIndex
-	module let bindingHygieneDiagnostics as ElementIndex
+	module let secondaryDiagnostics as ElementIndex
 
 	module static function of(artifact FileParseArtifact) returns ArtifactMark
-		return Self{ops: artifact.module.opCount(), blocks: artifact.module.blocks.count(), functions: artifact.module.funcCount(), covPoints: artifact.covPoints.count(), valueOrigins: artifact.valueOrigins.mark(), valueOriginRows: artifact.valueOrigins.count(), deferredChains: artifact.deferredChains.count(), funcSignatures: artifact.funcSignatures.count(), pendingFnMergeChecks: artifact.pendingFnMergeChecks.count(), pendingFunctionTypeDoors: artifact.pendingFunctionTypeDoors.count(), pendingBrandRecords: artifact.pendingBrandRecords.count(), pendingDiscardedResults: artifact.pendingDiscardedResults.count(), rangeChecks: artifact.rangeChecks.count(), typeAliases: artifact.typeAliases.count(), functionTypeAliases: artifact.functionTypeAliases.count(), structTypes: artifact.structTypes.count(), writtenTupleTypes: artifact.writtenTupleTypes.count(), enumTypes: artifact.enumTypes.count(), interfaces: artifact.interfaces.count(), typeNameDecls: artifact.typeNameDecls.count(), unbuiltBodies: artifact.unbuiltBodies.count(), conformances: artifact.conformances.count(), literalInitSites: artifact.literalInitSites.count(), inferredInstantiationSites: artifact.inferredInstantiationSites.count(), typeNames: artifact.typeNames.markTable(), currentFuncIndex: artifact.currentFuncIndex, diagnostics: artifact.diagnostics.count(), bindingHygieneDiagnostics: artifact.bindingHygieneDiagnostics.count()}
+		return Self{ops: artifact.module.opCount(), blocks: artifact.module.blocks.count(), functions: artifact.module.funcCount(), covPoints: artifact.covPoints.count(), valueOrigins: artifact.valueOrigins.mark(), valueOriginRows: artifact.valueOrigins.count(), deferredChains: artifact.deferredChains.count(), funcSignatures: artifact.funcSignatures.count(), pendingFnMergeChecks: artifact.pendingFnMergeChecks.count(), pendingFunctionTypeDoors: artifact.pendingFunctionTypeDoors.count(), pendingBrandRecords: artifact.pendingBrandRecords.count(), pendingDiscardedResults: artifact.pendingDiscardedResults.count(), rangeChecks: artifact.rangeChecks.count(), typeAliases: artifact.typeAliases.count(), functionTypeAliases: artifact.functionTypeAliases.count(), structTypes: artifact.structTypes.count(), writtenTupleTypes: artifact.writtenTupleTypes.count(), enumTypes: artifact.enumTypes.count(), interfaces: artifact.interfaces.count(), typeNameDecls: artifact.typeNameDecls.count(), unbuiltBodies: artifact.unbuiltBodies.count(), conformances: artifact.conformances.count(), literalInitSites: artifact.literalInitSites.count(), inferredInstantiationSites: artifact.inferredInstantiationSites.count(), typeNames: artifact.typeNames.markTable(), currentFuncIndex: artifact.currentFuncIndex, diagnostics: artifact.diagnostics.count(), secondaryDiagnostics: artifact.secondaryDiagnostics.count()}
 	end 'of'
 
 	module function requireHeldBy(artifact FileParseArtifact)
@@ -1770,7 +1770,7 @@ module type ArtifactMark
 		requireRewoundCount("artifact typeNames", now: artifact.typeNames.markTable(), marked: self.typeNames)
 		requireRewoundCount("artifact currentFuncIndex", now: artifact.currentFuncIndex, marked: self.currentFuncIndex)
 		requireRewoundCount("artifact diagnostics", now: artifact.diagnostics.count(), marked: self.diagnostics)
-		requireRewoundCount("artifact bindingHygieneDiagnostics", now: artifact.bindingHygieneDiagnostics.count(), marked: self.bindingHygieneDiagnostics)
+		requireRewoundCount("artifact secondaryDiagnostics", now: artifact.secondaryDiagnostics.count(), marked: self.secondaryDiagnostics)
 	end 'requireHeldBy'
 end 'ArtifactMark'
 
@@ -2053,27 +2053,39 @@ end 'pushEachDeferredDiagnostic'
 // Fold this file's parser-raised diagnostics into `project.diagnostics` — the last
 // contribution, and the one that carries no ids to remap (a `Diagnostic` is a finished
 // (code, message, position) record). `reportDiagnostic` is the single project sink, so a
-// parser-recorded diagnostic and a `SemanticCheck`-recorded one are indistinguishable downstream.
+// parser-recorded diagnostic and a `SemanticCheck`-recorded one are indistinguishable downstream. Its
+// secondary findings go onto the secondary roster instead.
 function commitDiagnostics(project Project, artifact FileParseArtifact)
 	reportOwnRefusals(project, artifact: artifact)
 	reportRecordedDiagnostics(project, artifact: artifact)
 
-	// ⭐ The hygiene half does NOT go through `reportDiagnostic`: reaching the project's sink is exactly
-	// what would gate the pipeline before the checks that might explain the body — see
-	// `Project.bindingHygieneDiagnostics`. It is appended, and drained past the Std-tier passes by
-	// `Compiler.reportBindingHygieneDiagnostics`, which is the only place that position is argued for.
-	for diagnostic in artifact.bindingHygieneDiagnostics 'eachHygiene'
-		project.bindingHygieneDiagnostics.push(diagnostic)
-	end 'eachHygiene'
+	for diagnostic in artifact.secondaryDiagnostics 'eachSecondary'
+		fileSecondaryFinding(project, diagnostic: diagnostic)
+	end 'eachSecondary'
 end 'commitDiagnostics'
 
-module function noteDeclarationRefusedBy(project Project, diagnostic Diagnostic)
+// A recorded diagnostic of any other kind leaves its declaration's facts standing, so it poisons
+// nothing: a poisoned declaration would hide the independent errors on it.
+function diagnosticLosesDeclarationFacts(code ErrorCode) returns bool
+	return code == ErrorCode.unknownType or code == ErrorCode.genericFloatTypeArg or code == ErrorCode.genericBarePrimitiveArg or code == ErrorCode.genericArityMismatch or code == ErrorCode.genericBaseNotGeneric or code == ErrorCode.fixedArraySizeMalformed or code == ErrorCode.duplicateDefinition or code == ErrorCode.parserUnsupportedFeature or code == ErrorCode.conformanceWithArgSurplus
+end 'diagnosticLosesDeclarationFacts'
+
+module function noteFactsLostTo(project Project, diagnostic Diagnostic)
+	if not diagnosticLosesDeclarationFacts(diagnostic.code) 'nothingIsLost'
+		return
+	end 'nothingIsLost'
+
 	match diagnostic.anchor 'anchor'
-		at(filePath, line, _) then noteDeclarationRefusedAt(project, filePath: filePath, line: line, backing: PoisonBacking.backed)
+		at(filePath, line, _) then noteMemberRefusedAt(project, filePath: filePath, line: line, backing: PoisonBacking.backed)
 		programWide or
 		file then break
 	end 'anchor'
-end 'noteDeclarationRefusedBy'
+end 'noteFactsLostTo'
+
+function noteMemberRefusedAt(project Project, filePath FilePath, line LineNumber, backing PoisonBacking)
+	view heads = try queryDeclarationHeads(project, path: filePath) otherwise return
+	project.poison.noteRefusedMemberAt(filePath, line: line, heads: heads, backing: backing)
+end 'noteMemberRefusedAt'
 
 module function noteDeclarationLostTo(project Project, filePath FilePath, poisoned PoisonedAt, backing PoisonBacking)
 	match poisoned 'site'

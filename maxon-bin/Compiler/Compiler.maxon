@@ -983,17 +983,13 @@ function libraryCheckOf(program FilePath, target Target, stdlibDir FilePath, scr
 	end 'refusedWithoutADiagnostic'
 
 	for diagnostic in diagnostics 'eachDiagnostic'
-		if not diagnosticIsATargetAbsence(diagnostic) 'aLanguageError'
+		if not isTargetRefusal(diagnostic.code) 'aLanguageError'
 			return LibraryCheck.refused(diagnostics)
 		end 'aLanguageError'
 	end 'eachDiagnostic'
 
 	return LibraryCheck.targetLacksFacilities(diagnostics)
 end 'libraryCheckOf'
-
-function diagnosticIsATargetAbsence(diagnostic Diagnostic) returns bool
-	return diagnostic.code == ErrorCode.targetUnsupportedConstruct or diagnostic.code == ErrorCode.semanticSubprocessUnsupportedTarget
-end 'diagnosticIsATargetAbsence'
 
 // The Target IR text of a finished compile: what `--emit-ir` writes and `maxon/generateIR` answers. What it
 // shows and withholds is stated at the render in `compileMeasured`.
@@ -1208,8 +1204,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// time it is merged (`commitDiagnostics`), and every later check re-runs over the re-folded module
 	// below.
 	project.diagnostics.clear()
-	project.targetRefusalDiagnostics.clear()
-	project.droppedPromiseDiagnostics.clear()
+	resetSecondaryFindings(project)
 	project.poison = DeclarationPoison.create()
 
 	// Fresh per compile, because a warm project lowers again. Sound only while nothing in the front end,
@@ -1697,7 +1692,7 @@ function checkTheFrontEnd(project Project) throws CompileError
 		return
 	end 'failed'
 
-	try reportBindingHygieneDiagnostics(project) otherwise return
+	try reportSecondaryFindingsBeforeBackend(project) otherwise return
 end 'checkTheFrontEnd'
 
 function rethrowUnlessRefused(failure CompileError) throws CompileError
@@ -2216,9 +2211,9 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 
 	runStdPassesOverTheBand(project, module: pipeline.stdModule, members: buildEmittedBandPasses(), firstFuncIndex: firstEmittedFuncIndex)
 
-	// The declaration-hygiene drain (E3012 unused, E3077 var-should-be-let) sits between the Std-tier
-	// passes and the backend. See `reportBindingHygieneDiagnostics`.
-	try reportBindingHygieneDiagnostics(project)
+	// The before-backend secondary flush sits between the Std-tier passes and the backend. See
+	// `reportSecondaryFindingsBeforeBackend`.
+	try reportSecondaryFindingsBeforeBackend(project)
 
 	// The backend owns its own error gate, and TWO of its stages use it: the register allocator
 	// reports E5001 (register pressure) onto `project.diagnostics` and throws when a loop genuinely
@@ -2235,13 +2230,10 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	return codeResult
 end 'codeResultOf'
 
-// ⭐⭐ **REPORT THE HYGIENE DIAGNOSTICS THE PARSER DECIDED, NOW THAT EVERY PASS THAT COULD EXPLAIN THE BODY
-// INSTEAD HAS RUN.** Both verdicts (E3012 unused, E3077 var-should-be-let) are facts about ONE function,
-// settled at its `end` during the parse; only the REPORTING waits, and `Project.bindingHygieneDiagnostics`
-// carries the measured cascade that makes it wait.
+// The before-backend flush of the secondary roster (`findingStandingOf` owns which codes it holds).
 //
 // It is called after the band's Std-tier passes, because the compile-time narrowing (E3005) is
-// `InsertRangeChecks`, a Std-tier pass: drained any earlier, `let x = 256 as Byte` in
+// `InsertRangeChecks`, a Std-tier pass: flushed any earlier, `let x = 256 as Byte` in
 // `type-casting.md` (a canonical `/specs` port whose program may not be edited) reports the unused
 // `x` instead of the out-of-range cast it pins. It is called before `buildBackend`, so a
 // hygiene-refused program never pays for register allocation or codegen
@@ -2257,17 +2249,13 @@ end 'codeResultOf'
 // ⚠ **THE GATE IS NOT REDUNDANT, THOUGH NOTHING CAN TRIP IT FROM HERE TODAY.** Both callers reach this
 // call only once every stage before it has passed its error gate, so the sink is empty — but that is a
 // property of the CALLERS, and a hygiene diagnostic stacked on top of a real one is precisely the defect
-// this deferral exists to prevent. The rule is written in `reportDeferredUnlessErrors`, not left resting on
+// this deferral exists to prevent. The rule is written in `reportSecondaryFindings`, not left resting on
 // the control flow above it.
-function reportBindingHygieneDiagnostics(project Project) throws CompileError
-	if reportDeferredUnlessErrors(project, deferred: project.bindingHygieneDiagnostics) 'reported'
+function reportSecondaryFindingsBeforeBackend(project Project) throws CompileError
+	if reportSecondaryFindings(project, flush: SecondaryFlush.beforeBackend) 'reported'
 		try refuseCompile(project)
 	end 'reported'
-
-	if reportDeferredUnlessErrors(project, deferred: project.droppedPromiseDiagnostics) 'droppedAPromise'
-		try refuseCompile(project)
-	end 'droppedAPromise'
-end 'reportBindingHygieneDiagnostics'
+end 'reportSecondaryFindingsBeforeBackend'
 
 // --- Source loading ---
 

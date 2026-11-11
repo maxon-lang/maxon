@@ -1323,9 +1323,9 @@ end 'main'
 error E3212: <fragment>:46:8: the promise of this `async` call is tied to the mutable data it was given: it is awaited or cancelled and nothing else, never returned, stored, captured, sent or passed on, because the coroutine still holds the caller's data
 ```
 
-<!-- test: cancelling-a-joined-tied-promise-waits-so-a-modify-caller-may-not-call-it -->
+<!-- test: cancelling-a-joined-tied-promise-reports-the-borrow-alone -->
 <!-- unsupported-targets: wasm32-wasi -->
-`settle` cancels the join of two tied promises, which waits for both coroutines, so a window may not call it.
+`settle` cancels the join of two tied promises, which is refused as a borrow of a promise no frame owns. The refused body is unknown, so no wait is reported about the call to `settle` inside the window.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -1372,7 +1372,39 @@ end 'main'
 ```
 ```maxoncstderr
 error E3141: <fragment>:31:9: a promise cannot be borrowed through 'cancel': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. No frame owns this one: either the slot it was read from has already been consumed by another read of it, or it reached here through a branch or loop join — and a merge has no single slot to empty, because the paths can name different ones. Consume each read once, and do it before the paths join
-error E3205: <fragment>:38:3: cannot call 'settle' inside 'window'; it may wait (its body cannot be read, so it is assumed to wait on another party). Call it before or after the block
+```
+
+<!-- test: a-function-with-an-abandoned-body-called-inside-a-modify-window-reports-only-the-syntax-error -->
+`settle` is abandoned at its syntax error, so whether it waits is unknown: the call to it inside the window is not
+reported as one that may wait. `other` is an independent error and stays reported.
+
+```maxon
+typealias Tally = int(0 to 1024)
+typealias LineArray = Array with String
+
+function settle(n Tally) returns Tally
+	let total = n + )
+	return total
+end 'settle'
+
+function other(n Tally) returns Tally
+	return n + "x"
+end 'other'
+
+function main() returns ExitCode
+	var batch = LineArray.create(0) as isolated LineArray
+
+	modify batch 'window'
+		let n = settle(3)
+		batch.push("{n}")
+	end 'window'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:6:18: Expected expression but got ')'
+error E2004: <fragment>:11:11: Cannot operate on Tally and String
 ```
 
 <!-- test: a-generic-callee-given-to-async-ties-its-promise -->

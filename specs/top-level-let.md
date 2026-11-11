@@ -2536,9 +2536,9 @@ end 'useLarger'
 error E3008: <fragment>:3:11: function 'larger' is not exported
 ```
 
-<!-- test: error.a-refused-call-inside-a-record-literal-reports-the-call-and-the-cast-before-it -->
-The refused call sits inside a record literal; the cast written before it is still read, so its unneeded
-`as Small` is reported beside the call, as in a function body.
+<!-- test: error.a-refused-call-inside-a-record-literal-reports-the-call-alone -->
+The refused call sits inside a record literal; the unneeded `as Small` written before it is a secondary
+finding, held while the call's error stands, as in a function body.
 ```maxon
 typealias Small = int(0 to 9)
 
@@ -2558,11 +2558,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: <fragment>:13:23: unneeded cast: the literal 1 already fits in 'Small'
 error E3004: <fragment>:13:36: call to undefined function 'nothere'
 ```
 
-<!-- test: error.a-refused-call-inside-a-record-literal-in-a-function-body-reports-the-call-and-the-cast-before-it -->
+<!-- test: error.a-refused-call-inside-a-record-literal-in-a-function-body-reports-the-call-alone -->
 The same call in a function body.
 ```maxon
 typealias Small = int(0 to 9)
@@ -2582,7 +2581,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: <fragment>:14:24: unneeded cast: the literal 1 already fits in 'Small'
 error E3004: <fragment>:14:37: call to undefined function 'nothere'
 ```
 
@@ -4009,6 +4007,565 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:21:19: Unsupported: parameter 'amount' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type
+```
+
+<!-- test: error.a-call-to-a-function-with-an-abandoned-body-from-a-conformer-reports-only-the-syntax-error -->
+The body of `scaled` is abandoned at its syntax error, so whether it waits is unknown: `Ruler.measure`, which calls it
+and satisfies a requirement that never waits, is not reported as one that may wait. `other` is an independent
+error and stays reported.
+```maxon
+typealias Tally = int(0 to 1024)
+
+interface Measured
+	function measure() returns Tally
+end 'Measured'
+
+type Ruler implements Measured
+	var base as Tally
+
+	static function create() returns Self
+		return Self{base: 3}
+	end 'create'
+
+	function measure() returns Tally
+		return scaled(self.base)
+	end 'measure'
+end 'Ruler'
+
+function scaled(n Tally) returns Tally
+	let total = n + )
+	return total
+end 'scaled'
+
+function other(n Tally) returns Tally
+	return n + "x"
+end 'other'
+
+function report(item Measured) returns Tally
+	return item.measure()
+end 'report'
+
+function main() returns ExitCode
+	let ruler = Ruler.create()
+	return report(ruler) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:21:18: Expected expression but got ')'
+error E2004: <fragment>:26:11: Cannot operate on Tally and String
+```
+
+<!-- test: error.a-function-value-naming-a-function-with-an-abandoned-body-reports-only-the-syntax-error -->
+`scaled` is passed by name where a function type never waits. Its body is abandoned at the syntax error, so whether it
+waits is unknown and the function value is not reported as one that may wait. `other` stays reported.
+```maxon
+typealias Tally = int(0 to 1024)
+typealias Step = function(Tally) returns Tally
+
+function scaled(n Tally) returns Tally
+	let total = n + )
+	return total
+end 'scaled'
+
+function other(n Tally) returns Tally
+	return n + "x"
+end 'other'
+
+function drive(step Step) returns Tally
+	return step(3)
+end 'drive'
+
+function main() returns ExitCode
+	let r = drive(function(n) gives scaled(n))
+	let s = drive(scaled)
+	return (r + s) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:6:18: Expected expression but got ')'
+error E2004: <fragment>:11:11: Cannot operate on Tally and String
+```
+
+<!-- test: error.a-result-of-a-function-with-an-abandoned-body-stored-into-a-frozen-array-reports-only-the-syntax-error -->
+`pick` is abandoned at its syntax error, so what its result holds is unknown: storing the result into an array of
+`immutable Box` is not reported as storing mutable data. Storing it into an array of `Box` is clean, and `other`
+stays reported.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias Boxes = Array with Box
+typealias FrozenBoxes = Array with immutable Box
+
+type Box
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function pick(first Box, second Box) returns Box
+	let chosen = first if first.n > ) else second
+	return chosen
+end 'pick'
+
+function other(n Tally) returns Tally
+	return n + "x"
+end 'other'
+
+function main() returns ExitCode
+	let frozen = freeze Box.create(1)
+	let loose = Box.create(2)
+	var items = Boxes.create(0)
+	var kept = FrozenBoxes.create(0)
+	items.push(pick(frozen, second: loose))
+	kept.push(pick(frozen, second: loose))
+	let direct = pick(frozen, second: loose)
+	items.push(direct)
+	kept.push(direct)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:15:34: Expected expression but got ')'
+error E2004: <fragment>:20:11: Cannot operate on Tally and String
+```
+
+<!-- test: error.an-undefined-call-as-the-result-of-a-function-stored-into-a-frozen-array-reports-only-the-undefined-call -->
+`pick` returns the result of `nothere`, which does not exist, so that result is unknown: nothing is concluded about what
+`pick` returns or about the stores of it into either array. `other` stays reported.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias Boxes = Array with Box
+typealias FrozenBoxes = Array with immutable Box
+
+type Box
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function pick(first Box, second Box) returns Box
+	let chosen = nothere()
+	return chosen
+end 'pick'
+
+function other(n Tally) returns Tally
+	return n + "x"
+end 'other'
+
+function main() returns ExitCode
+	let frozen = freeze Box.create(1)
+	let loose = Box.create(2)
+	var items = Boxes.create(0)
+	var kept = FrozenBoxes.create(0)
+	items.push(pick(frozen, second: loose))
+	kept.push(pick(frozen, second: loose))
+	let direct = pick(frozen, second: loose)
+	items.push(direct)
+	kept.push(direct)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:15:15: call to undefined function 'nothere'
+error E2004: <fragment>:20:11: Cannot operate on Tally and String
+```
+
+<!-- test: error.a-result-passed-through-a-wrapper-of-an-abandoned-function-stored-into-a-frozen-array-reports-only-the-syntax-error -->
+`pick` is abandoned at its syntax error, and `wrap` returns the result of calling it, so what `wrap` returns is unknown
+too: storing the result of `wrap` into an array of `immutable Box` is not reported as storing mutable data. Storing it
+into an array of `Box` is clean, and `other` stays reported.
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias Boxes = Array with Box
+typealias FrozenBoxes = Array with immutable Box
+
+type Box
+	export var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function pick(first Box, second Box) returns Box
+	let chosen = first if first.n > ) else second
+	return chosen
+end 'pick'
+
+function wrap(a Box, second Box) returns Box
+	return pick(a, second: second)
+end 'wrap'
+
+function other(n Tally) returns Tally
+	return n + "x"
+end 'other'
+
+function main() returns ExitCode
+	let frozen = freeze Box.create(1)
+	let loose = Box.create(2)
+	var items = Boxes.create(0)
+	var kept = FrozenBoxes.create(0)
+	items.push(wrap(frozen, second: loose))
+	kept.push(wrap(frozen, second: loose))
+	let direct = wrap(frozen, second: loose)
+	items.push(direct)
+	kept.push(direct)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:15:34: Expected expression but got ')'
+error E2004: <fragment>:24:11: Cannot operate on Tally and String
+```
+
+<!-- test: error.a-call-to-a-function-whose-head-lost-its-keyword-reports-only-the-lost-head -->
+`helper() returns ExitCode` has no `function` keyword, so the declaration is refused and every call to `helper` is a
+consequence of that refusal, not an undefined function. `other` stays reported.
+```maxon
+helper() returns ExitCode
+	return 0
+end 'helper'
+
+function other(n ExitCode) returns ExitCode
+	return n + "x"
+end 'other'
+
+function twice() returns ExitCode
+	return helper()
+end 'twice'
+
+function main() returns ExitCode
+	let a = helper()
+	return twice() + a
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:2:1: Expected function declaration, got 'helper'
+error E2004: <fragment>:7:11: Cannot operate on ExitCode and String
+```
+
+<!-- test: error.a-typealias-of-an-unknown-type-written-at-several-declarations-reports-the-refusal-once -->
+`Reading` is refused, so each declaration that names it (a field, a parameter, another function's parameter) is a
+consequence of that one refusal and is not an unknown type of its own. `other` stays reported.
+```maxon
+typealias Reading = Missing
+
+type Sensor
+	export var level as Reading
+
+	static function create(level Reading) returns Self
+		return Self{level: level}
+	end 'create'
+end 'Sensor'
+
+function show(r Reading) returns String
+	return "{r}"
+end 'show'
+
+function other(n ExitCode) returns ExitCode
+	return n + "x"
+end 'other'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:21: Unsupported: a typealias over 'identifier' (a typealias names `int(low to high)`, `float(low to high)`, `bits(n)`, `function(...)`, a tuple `(A, B)` or a generic instance `Base with …`)
+error E2004: <fragment>:17:11: Cannot operate on ExitCode and String
+```
+
+<!-- test: error.a-result-of-a-function-returning-an-unknown-type-reports-only-the-unknown-type -->
+`measure` returns a type that does not exist, so its result has no known type and passing it where a `String` is
+expected is not a mismatch. `other` stays reported.
+```maxon
+function measure() returns Missing
+	return 3
+end 'measure'
+
+function describe(text String) returns String
+	return text
+end 'describe'
+
+function other(n ExitCode) returns ExitCode
+	return n + "x"
+end 'other'
+
+function main() returns ExitCode
+	let label = describe(measure())
+	print(label)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:2:28: Unknown type 'Missing'
+error E2004: <fragment>:11:11: Cannot operate on ExitCode and String
+```
+
+<!-- test: error.a-field-of-an-unknown-type-used-in-arithmetic-reports-only-the-unknown-type -->
+`reading` has a type that does not exist, so `g.reading + 1` has no known operand type and is not an error of its own.
+`other` stays reported.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Gauge
+	export var reading as Missing
+	export var floor as Count
+
+	static function create(floor Count) returns Self
+		return Self{reading: 0, floor: floor}
+	end 'create'
+end 'Gauge'
+
+function label(g Gauge) returns Count
+	let c = g.reading + 1
+	return g.floor
+end 'label'
+
+function other(n ExitCode) returns ExitCode
+	return n + "x"
+end 'other'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:5:24: Unknown type 'Missing'
+error E2004: <fragment>:19:11: Cannot operate on ExitCode and String
+```
+
+<!-- test: error.a-diagnostic-recorded-inside-one-method-hides-no-independent-error-on-its-type -->
+The reused label in `Counter.make` is reported without losing any fact about `Counter`, so an undefined static
+member and a wrong-arity call to another method of `Counter` are both reported beside it.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Counter
+	export var n as Count
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	static function make(seed Count) returns Self
+		if seed > 1 'outer'
+			if seed > 2 'outer'
+				return Self{n: 2}
+			end 'outer'
+		end 'outer'
+
+		return Self{n: 1}
+	end 'make'
+
+	function bump(by Count) returns Count
+		return self.n + by
+	end 'bump'
+end 'Counter'
+
+function main() returns ExitCode
+	let a = Counter.nothere(1)
+	let c = Counter.create()
+	let d = c.bump(1, by: 2)
+	return d as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2081: <fragment>:13:16: Block label 'outer' is already the label of an enclosing block or declaration (line 12, column 15); an `end 'outer'` could close either, so rename the inner block's label
+error E3004: <fragment>:27:18: call to undefined function 'Counter.nothere'
+error E3036: <fragment>:29:12: 'Counter.bump' expects 2 argument(s) but 3 were provided
+```
+
+<!-- test: error.a-refused-member-typealias-after-a-method-refuses-the-whole-type -->
+A member typealias is part of the type, not of the method written above it, so its unknown type refuses `Holder` and
+the read of a missing field of `Holder` is a consequence of that refusal. `other` stays reported.
+```maxon
+type Holder
+	export let flag as ExitCode
+
+	export function value() returns ExitCode
+		return self.flag
+	end 'value'
+
+	typealias Bad = Array with Nowhere
+
+	static function create() returns Holder
+		return Holder{flag: 1}
+	end 'create'
+end 'Holder'
+
+function other() returns ExitCode
+	let broken = "text"
+	return broken + 1
+end 'other'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.flag + h.absent
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:9:29: Unknown type 'Nowhere'
+error E2004: <fragment>:18:16: Cannot operate on String and int
+```
+
+<!-- test: error.a-refused-extension-supplying-a-required-method-reports-only-the-refusal -->
+`Foo`'s only `shifted` is in an extension that is refused, so the missing method the conformance reports is a
+consequence of that refusal. `other` stays reported.
+```maxon
+typealias Digit = int(0 to 9)
+
+interface Shifts
+	function shifted(amount Digit) returns Digit
+end 'Shifts'
+
+type Foo implements Shifts
+	let n as Digit
+
+	static function create() returns Foo
+		return Self{n: 1}
+	end 'create'
+end 'Foo'
+
+extension Foo
+	function shifted(amount) returns Digit
+		return n
+	end 'shifted'
+end 'Foo'
+
+function other(n Digit) returns Digit
+	return n + "x"
+end 'other'
+
+function main() returns ExitCode
+	let c = Foo.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:17:19: Unsupported: parameter 'amount' with no type — the compiler infers an omitted parameter type only for a closure literal passed where the parameter is declared with a function type; every other parameter declares its type
+error E2004: <fragment>:23:11: Cannot operate on Digit and String
+```
+
+<!-- test: error.a-generic-alias-written-only-inside-an-abandoned-body-of-another-file-reports-only-the-syntax-error -->
+`collect` spells `Tallies` after its syntax error, so the body is abandoned before the name is read. The spelling that
+was lost is not evidence that `Tallies` is unused. The undefined call in `main` stays reported.
+```maxon
+// --- file: a.maxon
+module typealias Tally = int(0 to 1000)
+typealias Tallies = Array with Tally
+
+// --- file: main.maxon
+function collect() returns ExitCode
+	let broken = )
+	let xs = Tallies.create(0)
+	return 0
+end 'collect'
+
+function main() returns ExitCode
+	let g = nothere(7)
+	return g as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:8:15: Expected expression but got ')'
+error E3004: <fragment>:14:10: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-generic-alias-written-only-in-a-file-that-fails-outright-reports-only-that-failure -->
+A syntax error inside a generic body fails its whole file, so every name that file spells is lost with it. `larger`
+spells `Tallies` after its syntax error, and the lost spelling is not evidence that `Tallies` is unused. The undefined
+call in `main.maxon` stays reported.
+```maxon
+// --- file: a.maxon
+module typealias Tally = int(0 to 1000)
+typealias Tallies = Array with Tally
+
+// --- file: b.maxon
+function larger(a T, b T) uses T returns T where T is Comparable
+	let broken = )
+	let xs = Tallies.create(0)
+	return a
+end 'larger'
+
+function collect() returns ExitCode
+	return larger(1, b: 2) as ExitCode
+end 'collect'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let g = nothere(7)
+	return g as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:8:15: Expected expression but got ')'
+error E3004: <fragment>:19:10: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-closure-handed-to-a-refused-function-type-alias-reports-only-the-refusal -->
+`NamedFn` is refused because a function type may not take an interface-typed parameter, so the closure given to
+`apply` has no known parameter type: its `item.label()` is not a member access on an `int`. `other` stays reported.
+```maxon
+interface Named
+	function label() returns String
+end 'Named'
+
+type Thing implements Named
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function label() returns String
+		return "thing"
+	end 'label'
+end 'Thing'
+
+typealias NamedFn = function(Named) returns Count
+
+function apply(f NamedFn, item Named) returns Count
+	return f(item)
+end 'apply'
+
+function other(n ExitCode) returns ExitCode
+	return n + "x"
+end 'other'
+
+function main() returns ExitCode
+	let measured = apply(function(item) gives item.label().byteLength(), item: Thing.create())
+	print("{measured}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:16:30: Unsupported: a function type's parameter declared at the interface type 'Named' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a function value is called indirectly, through a call that reserves no adjacent slot for the witness half. Declare the parameter at a concrete type, or pass the interface to a named function DIRECTLY, whose signature reserves the adjacent slot
+error E2004: <fragment>:23:11: Cannot operate on ExitCode and String
+```
+
+<!-- test: error.an-unneeded-cast-beside-an-independent-error-in-another-function-reports-only-the-error -->
+An unneeded cast is a secondary finding: it is held while any other error stands, and reported once none does (a lone
+one is pinned by `type-casting`'s `error.unneeded.same-type-int`).
+```maxon
+typealias Score = int(0 to 100)
+
+function passMark() returns Score
+	let base = 50 as Score
+	return base
+end 'passMark'
+
+function broken() returns Score
+	return nothere(7)
+end 'broken'
+
+function main() returns ExitCode
+	return (passMark() + broken()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:10:9: call to undefined function 'nothere'
 ```
 
 <!-- test: error.constants-initialized-by-a-match-are-each-refused -->

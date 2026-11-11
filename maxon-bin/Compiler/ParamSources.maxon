@@ -277,6 +277,14 @@ module type ParamSources
 		return mask
 	end 'maskOfResult'
 
+	module function resultIsUnknown(opIdx ElementIndex) returns bool
+		let op = try self.ir.ops.get(opIdx) otherwise panic("ParamSources.resultIsUnknown: ops.get OOB at {opIdx}")
+		let parts = try directCallPartsOf(op) otherwise return false
+		let calleeIndex = try self.funcIndexByName.get(parts.0) otherwise return false
+
+		return (try self.ir.functions.get(calleeIndex) otherwise panic("ParamSources.resultIsUnknown: functions.get OOB at {calleeIndex}")).resultIsUnknown()
+	end 'resultIsUnknown'
+
 	module function maskOfCallArgument(opIdx ElementIndex, args ValueIdArray, position ElementIndex) returns ParamPositionMask
 		let argId = try args.get(position) otherwise panic("ParamSources.maskOfCallArgument: args.get OOB at {position}")
 		let recorded = try self.notes.callArguments.get(positionSlotKey(opIdx, position: position)) otherwise NoParamPositions

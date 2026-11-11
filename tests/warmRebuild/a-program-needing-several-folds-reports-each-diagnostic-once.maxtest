@@ -5,7 +5,7 @@ test 'a program that folds the front end several times reports each diagnostic o
 	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "a-program-needing-several-folds-reports-each-diagnostic-once", fixture: "several-folds")
 	let run = spawnRecheck(staged)
 
-	Expect.contains(run.stdout, needle: StabilityPassLine, message: "`{TestedCompilerStem} {RecheckCommandName}` did not count the two standing diagnostics (one function body that does not parse, one unneeded cast) as two over a program whose generic type is instantiated only inside a body and whose standard-library demand takes further rounds. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
+	Expect.contains(run.stdout, needle: StabilityPassLine, message: "`{TestedCompilerStem} {RecheckCommandName}` did not count the two standing diagnostics (one function body that does not parse, one call to a function declared nowhere) as two over a program whose generic type is instantiated only inside a body and whose standard-library demand takes further rounds. It printed: {run.stdout} — and wrote to stderr: {run.stderr}")
 	Expect.isFalse(run.stderr.contains(StabilityFailLabel), message: "`{TestedCompilerStem} {RecheckCommandName}` found the two checks over unchanged input disagreeing on how many diagnostics they reported. It wrote to stderr: {run.stderr}")
 
 	discardStagedDir(staged)

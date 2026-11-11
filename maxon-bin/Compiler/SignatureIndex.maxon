@@ -18974,8 +18974,24 @@ export type ProgramSignatures
 	end 'interfaceHandleRepresentative'
 
 	export function typeImplementsInterface(typeName ByteArray, interfaceName ByteArray) returns bool
-		return self.hasRegisteredLayout(typeName) and typeDeclaresInterface(self.sweptConformanceIndex(), interfaces: self.settledDeclarations().interfaces, typeName: typeName, interfaceName: interfaceName)
+		let declared = try self.declaredInterfacesOfALaidOutType(typeName) otherwise return false
+
+		return declaredInterfacesReach(self.settledDeclarations().interfaces, declaredNames: declared, wanted: interfaceName)
 	end 'typeImplementsInterface'
+
+	export function collectImplementedInterfaces(typeName ByteArray, into InterfaceNameSet)
+		let declared = try self.declaredInterfacesOfALaidOutType(typeName) otherwise return
+
+		collectDeclaredInterfaceClosure(self.settledDeclarations().interfaces, declaredNames: declared, into: into)
+	end 'collectImplementedInterfaces'
+
+	function declaredInterfacesOfALaidOutType(typeName ByteArray) returns InterfaceNameSet throws AbsentError
+		if not self.hasRegisteredLayout(typeName) 'noLayout'
+			throw AbsentError.absent
+		end 'noLayout'
+
+		return try self.sweptConformanceIndex().get(typeName) otherwise throw AbsentError.absent
+	end 'declaredInterfacesOfALaidOutType'
 
 	// ⚠ The one answer to "does this handle convert to that interface handle": every door converts
 	// through `Parser.interfaceHandleOf`, and the type checks accept a `T.handle` for an `I.handle`

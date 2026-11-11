@@ -709,7 +709,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3011: <fragment>:4:35: Unknown type 'T'
-error E3005: <fragment>:16:2: argument type mismatch for 'step': expected 'fn(mutable int)', got 'fn(mutable Wide)'
 ```
 
 <!-- test: a-generic-function-is-not-a-function-value -->

@@ -146,8 +146,32 @@ extension Project
 	function checkedDiagnostics() returns DiagnosticArray
 		_ = checkWithoutWriting(self)
 
+		self.reportSecondaryFindingsBesideClaims()
+
 		return self.diagnostics.clone()
 	end 'checkedDiagnostics'
+
+	// A whole-program claim is withheld from the buffer, so beside one alone the secondary findings are
+	// published. Only the before-lowering flush has run: those claims stop the build before the Std tier.
+	module function reportSecondaryFindingsBesideClaims()
+		if self.onlyWholeProgramClaimsStand() 'noRealErrorStands'
+			_ = reportFindingsDueAt(self, flush: SecondaryFlush.beforeLowering)
+		end 'noRealErrorStands'
+	end 'reportSecondaryFindingsBesideClaims'
+
+	function onlyWholeProgramClaimsStand() returns bool
+		if self.diagnostics.isEmpty() 'nothingStands'
+			return false
+		end 'nothingStands'
+
+		for diagnostic in self.diagnostics 'eachStanding'
+			if not claimsAboutTheWholeProgram(diagnostic.code) 'aRealError'
+				return false
+			end 'aRealError'
+		end 'eachStanding'
+
+		return true
+	end 'onlyWholeProgramClaimsStand'
 
 	function correctedCheck(reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
 		let reported = thisDocumentsOwn(self.checkedDiagnostics(), path: buffer)

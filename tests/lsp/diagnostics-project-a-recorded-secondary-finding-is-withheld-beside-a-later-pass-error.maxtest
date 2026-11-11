@@ -1,0 +1,18 @@
+let ProjectWithheldDirName = "diagnostics-project-withheld"
+let ProjectWithheldHelperFileName = "helper.maxon"
+let ProjectWithheldBufferFileName = "main.maxon"
+let ProjectWithheldHelperSource = "module function projectWithheldHelper() returns String\n\treturn \"\"\nend 'projectWithheldHelper'\n"
+let ProjectWithheldBufferSource = "typealias Integer = int(i64.min to i64.max)\n\nfunction first() returns Integer\n\treturn 5 as Integer\nend 'first'\n\nfunction other() returns Integer\n\treturn projectWithheldNowhere(7)\nend 'other'\n\nfunction main() returns ExitCode\n\treturn 0\nend 'main'\n"
+let ProjectWithheldPublished = "E3004@7"
+
+test 'a recorded secondary finding is withheld beside a later pass error'
+	let root = stagedProjectDiagnosticsRoot(ProjectWithheldDirName)
+	writeCorpusFile(root, fileName: ProjectWithheldHelperFileName, content: ProjectWithheldHelperSource)
+	writeCorpusFile(root, fileName: ProjectWithheldBufferFileName, content: ProjectWithheldBufferSource)
+
+	let probe = probeProjectDiagnostics(root, fileName: ProjectWithheldBufferFileName, content: ProjectWithheldBufferSource)
+
+	discardStagedDir(root)
+
+	expectProjectDiagnosticCodesAndLines(probe, expected: ProjectWithheldPublished, note: "`first` casts a literal to the alias its return already declares, which the parser records as a secondary finding, and `other` calls a function declared nowhere. A secondary finding is published only while no other error stands, so the server publishes the call alone.")
+end 'a recorded secondary finding is withheld beside a later pass error'

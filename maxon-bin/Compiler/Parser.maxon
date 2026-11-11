@@ -15508,6 +15508,15 @@ union PayloadHolder
 	word
 end 'PayloadHolder'
 
+type FieldRead
+	export let value as ValueId
+	export let typeIsUnknown as bool
+
+	static function create(value ValueId, typeIsUnknown bool) returns FieldRead
+		return Self{value: value, typeIsUnknown: typeIsUnknown}
+	end 'create'
+end 'FieldRead'
+
 union LastFieldRead
 	none
 	read(value ValueId, box ValueId, offset ByteOffset)
@@ -18897,6 +18906,7 @@ type FunctionBodyState
 	export var returnsOtherwise as bool
 	export var returnsFrozenData as bool
 	export var returnsMutableData as bool
+	export var returnsAnUnknownValue as bool
 	export var frozenResultRefusal as DeferredRefusal
 	export var discardedReplies as ValueIdArray
 	export var undecidedResults as UndecidedResultOpMap
@@ -19544,6 +19554,7 @@ type FunctionBodyState
 			returnsOtherwise: false,
 			returnsFrozenData: false,
 			returnsMutableData: false,
+			returnsAnUnknownValue: false,
 			frozenResultRefusal: DeferredRefusal.none,
 			discardedReplies: ValueIdArray.create(0),
 			undecidedResults: UndecidedResultOpMap.create(),
@@ -20613,11 +20624,9 @@ export type Parser
 
 		// ⭐ AT THE END, AND ONLY AT THE END: "is this alias used?" is a question about the WHOLE file, so
 		// it cannot be answered before the last declaration has been read. A file that threw never gets
-		// here, and one that abandoned a region skips the report: the uses in what it did not parse were
-		// never seen, so an alias used only there would look unused.
-		if self.abandonedRegions.count() == 0 'everyUseWasRead'
-			self.reportUnusedTypeAliases()
-		end 'everyUseWasRead'
+		// here. One that abandoned a region still records its candidates, and the drain holds each whose
+		// use may sit in the lost text (`TypeResolution.aSpellingOfTheAliasMayHaveBeenLost`).
+		self.reportUnusedTypeAliases()
 
 		// ⭐ **THE SAME SET, KEPT.** `reportUnusedTypeAliases` has just answered "did THIS file use its own
 		// alias?" from `usedTypeNames`; `checkUnusedExports` asks "did any OTHER file use this one?", and
@@ -27982,7 +27991,7 @@ export type Parser
 			managedValue or
 			imagedRecord or
 			imagedBox then break
-			failed(error) then try self.throwRecordedConstantError(error)
+			failed(error) then try self.reportRecordedConstantError(error)
 			unvalidatedRecord then try self.parseGlobalInitializer(decl, valueType: MaxonType.unresolved)
 			deferredRecord or
 			pending or
@@ -28004,7 +28013,7 @@ export type Parser
 		var entry = self.bodyState.currentBlock
 
 		if not self.job.buildsBodies 'bodyNotReached'
-			initializer.bodyWasSkippedAsUnreached = true
+			initializer.bodyStatus = BodyStatus.skippedAsUnreached
 			self.artifact.unbuiltBodies.push(UnbuiltBody.create(decl.initStart, limit: decl.initEnd))
 			self.emitBodyTerminator(entry, op: MaxonOp.retVoid, range: SourceRange.ofToken(anchor))
 		end 'bodyNotReached' else 'bodyReached'
@@ -28504,6 +28513,29 @@ export type Parser
 	function throwRecordedConstantError(error SourceParseError) throws SourceParseError
 		throw error
 	end 'throwRecordedConstantError'
+
+	function reportRecordedConstantError(error SourceParseError) throws SourceParseError
+		let finding = try self.recordedSecondaryFinding(error) otherwise 'aRefusal'
+			try self.throwRecordedConstantError(error)
+			return
+		end 'aRefusal'
+
+		self.artifact.secondaryDiagnostics.push(finding)
+	end 'reportRecordedConstantError'
+
+	function recordedSecondaryFinding(error SourceParseError) returns Diagnostic throws AbsentError
+		match error 'kind'
+			deepLet(code, message, line, column) then return try self.secondaryFindingAt(code, message: message, line: line, column: column)
+			default throws AbsentError.absent
+		end 'kind'
+	end 'recordedSecondaryFinding'
+
+	function secondaryFindingAt(code ErrorCode, message String, line LineNumber, column ColumnNumber) returns Diagnostic throws AbsentError
+		match findingStandingOf(code) 'standing'
+			primary then throw AbsentError.absent
+			secondary then return Diagnostic.create(code, message: message, line: line, column: column, filePath: self.job.path)
+		end 'standing'
+	end 'secondaryFindingAt'
 
 	// Read a top-level binding declaration: `[export] (let|var) <NAME> = <expression>`.
 	//
@@ -29734,22 +29766,21 @@ export type Parser
 
 	// Record a whole-program semantic DIAGNOSTIC the pure parser detected, WITHOUT unwinding the parse
 	// — the parser twin of `reportPositioned`, writing into the artifact (which `mergeArtifact`
-	// folds into `project.diagnostics`) rather than into `project`, so the pure-parser invariant holds.
+	// folds into `project.diagnostics`, or onto the secondary roster for a secondary finding) rather
+	// than into `project`, so the pure-parser invariant holds.
 	//
 	// It takes the SPAN and not the token, because a reporter may hold one without holding the other: a
 	// parameter's name token is consumed inside `parseFunctionParameters` and only its `SourceRange`
 	// survives into `bindParameters`, where E3012's candidate is recorded. A `Diagnostic` wants a line and
 	// a column in any case, which is exactly what a range carries.
 	function recordArtifactDiagnostic(code ErrorCode, message String, range SourceRange)
-		self.artifact.diagnostics.push(Diagnostic.create(code, message: message, line: range.line, column: range.column, filePath: self.artifact.filePath))
-	end 'recordArtifactDiagnostic'
+		let diagnostic = Diagnostic.create(code, message: message, line: range.line, column: range.column, filePath: self.artifact.filePath)
 
-	// The DECLARATION-HYGIENE twin of the above (E3012, E3077) — same record, a different list, and the
-	// difference is WHEN it is reported rather than what it says. See `Project.bindingHygieneDiagnostics`
-	// for the cascade that makes the second list necessary.
-	function recordBindingHygieneDiagnostic(code ErrorCode, message String, range SourceRange)
-		self.artifact.bindingHygieneDiagnostics.push(Diagnostic.create(code, message: message, line: range.line, column: range.column, filePath: self.artifact.filePath))
-	end 'recordBindingHygieneDiagnostic'
+		match findingStandingOf(code) 'standing'
+			primary then self.artifact.diagnostics.push(diagnostic)
+			secondary then self.artifact.secondaryDiagnostics.push(diagnostic)
+		end 'standing'
+	end 'recordArtifactDiagnostic'
 
 	// The argument list of a `Base with Args` — a single arg (`Box with Integer`) or a
 	// parenthesized comma list (`Pair with (Integer, Bool)`). Each arg is an ordinary type reference,
@@ -34145,10 +34176,10 @@ export type Parser
 		let enclosingRegion = self.openRegion.clone()
 
 		if abandoned 'abandonedBody'
-			func.bodyWasSkippedAsUnreached = true
+			func.bodyStatus = BodyStatus.abandoned
 			self.skipAbandonedBody(entry, nameTok: nameTok)
 		end 'abandonedBody' else if not self.job.buildsBodies 'bodyNotReached'
-			func.bodyWasSkippedAsUnreached = true
+			func.bodyStatus = BodyStatus.skippedAsUnreached
 			self.skipUnreachedFunctionBody(entry, nameTok: nameTok)
 		end 'bodyNotReached' else 'bodyReached'
 			// A refusal in a generic instance's body is confined to no region, so it fails the whole file.
@@ -35038,7 +35069,7 @@ export type Parser
 				continue
 			end 'contractDictatedTheList'
 
-			self.recordBindingHygieneDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from((try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")).binding.name)}'", range: (try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")).nameRange)
+			self.recordArtifactDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from((try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")).binding.name)}'", range: (try self.bodyState.unusedCandidates.get(candidateIndex) otherwise panic("reportUnusedBindings: candidateIndex {candidateIndex} is below self.bodyState.unusedCandidates.count()")).nameRange)
 			return true
 		end 'eachCandidate'
 
@@ -35101,8 +35132,8 @@ export type Parser
 			declTokens.push(candidate.declToken)
 		end 'eachCandidate'
 
-		self.recordBindingHygieneDiagnostic(ErrorCode.semanticVarShouldBeLet, message: varShouldBeLetMessage(String.from(try names.get(0) otherwise panic("varShouldBeLetCandidatesFrom: the first candidate is missing"))), range: try ranges.get(0) otherwise panic("varShouldBeLetCandidatesFrom: the first candidate's range is missing"))
-		let reported = try self.artifact.bindingHygieneDiagnostics.get(self.artifact.bindingHygieneDiagnostics.count() - 1) otherwise panic("varShouldBeLetCandidatesFrom: the diagnostic just recorded is missing")
+		self.recordArtifactDiagnostic(ErrorCode.semanticVarShouldBeLet, message: varShouldBeLetMessage(String.from(try names.get(0) otherwise panic("varShouldBeLetCandidatesFrom: the first candidate is missing"))), range: try ranges.get(0) otherwise panic("varShouldBeLetCandidatesFrom: the first candidate's range is missing"))
+		let reported = try self.artifact.secondaryDiagnostics.get(self.artifact.secondaryDiagnostics.count() - 1) otherwise panic("varShouldBeLetCandidatesFrom: the diagnostic just recorded is missing")
 		return VarShouldBeLetCandidates.create(values, names: names, ranges: ranges, infos: infos, declTokens: declTokens, reported: reported)
 	end 'varShouldBeLetCandidatesFrom'
 
@@ -42150,15 +42181,27 @@ export type Parser
 			return
 		end 'nothingToNote'
 
-		let argTag = maxonTypeTag(argType)
-
-		if argTag != ValueTypeTag.interfaceRef and (argTag != ValueTypeTag.named and argTag != ValueTypeTag.structRef or not isInterfaceName(self.signatures.interfaceMap(), name: self.internedName(typeNameIdOf(argType)))) 'notAnInterfaceBinding'
+		if not self.typeNamesAnInterface(argType) 'notAnInterfaceBinding'
 			return
 		end 'notAnInterfaceBinding'
 
 		let associatedPosition = try self.extensionAssociated.names.positionOfName(argTok.value) otherwise return
 		self.extensionAssociated.heldUses.push(HeldAssociatedUse.create(associatedPosition, held: ExtensionHeldArgument.create(baseName, position: position)))
 	end 'noteInterfaceBindingHeldAsArgument'
+
+	function typeNamesAnInterface(declared MaxonType) returns bool
+		let tag = maxonTypeTag(declared)
+
+		if tag == ValueTypeTag.interfaceRef 'anExistential'
+			return true
+		end 'anExistential'
+
+		if tag != ValueTypeTag.named and tag != ValueTypeTag.structRef 'notANameToLookUp'
+			return false
+		end 'notANameToLookUp'
+
+		return isInterfaceName(self.signatures.interfaceMap(), name: self.internedName(typeNameIdOf(declared)))
+	end 'typeNamesAnInterface'
 
 	// The interned NAME behind a `named`/`structRef` id, from THIS file's interner — where every id a
 	// type check sees was minted: the value during this parse, a declared return/field/binding type
@@ -65297,6 +65340,7 @@ export type Parser
 		func.resultFromParamMask = self.bodyState.returnsFromParams
 		func.resultHasOtherPath = self.bodyState.returnsOtherwise
 		func.resultMayBeFrozen = self.bodyState.returnsFrozenData and (self.bodyState.returnsMutableData or self.bodyState.resultFreezesWithItsInstance)
+		func.resultMayBeUnknown = self.bodyState.returnsAnUnknownValue
 
 		match self.bodyState.regionFacts 'facts'
 			unwritten then return
@@ -77016,8 +77060,32 @@ export type Parser
 			return MaxonType.unresolved
 		end 'aRefusedInstance'
 
-		return declared
+		return self.deferredWhenUnknown(declared, scopeFilePath: self.job.path)
 	end 'deferredWhenRefused'
+
+	function deferredWhenUnknown(declared MaxonType, scopeFilePath FilePath) returns MaxonType
+		if self.declaredTypeIsUnknown(declared, scopeFilePath: scopeFilePath) 'anUnknownType'
+			return MaxonType.unresolved
+		end 'anUnknownType'
+
+		return declared
+	end 'deferredWhenUnknown'
+
+	function declaredTypeIsUnknown(declared MaxonType, scopeFilePath FilePath) returns bool
+		let tag = maxonTypeTag(declared)
+
+		if tagIsUnresolved(tag) 'alreadyDeferred'
+			return true
+		end 'alreadyDeferred'
+
+		if not self.signatures.allFilesFolded or tag != ValueTypeTag.named 'nothingToJudge'
+			return false
+		end 'nothingToJudge'
+
+		let id = typeNameIdOf(declared)
+
+		return declaredNameDenotesNothing(self.signatures, name: self.internedName(id), id: id, readerFilePath: scopeFilePath)
+	end 'declaredTypeIsUnknown'
 
 	function aliasDenotesARefusedInstance(aliasName ByteArray) returns bool
 		if not self.signatures.isAliasOfFormFor(aliasName, readerFilePath: self.job.path, wanted: FormAliasKind.generic) 'notAnInstanceAlias'
@@ -82644,6 +82712,10 @@ export type Parser
 			if self.namesTypeParameterOutOfScope(offered) 'anUnboundTypeParameter'
 				return noClosureParamOffer
 			end 'anUnboundTypeParameter'
+
+			if self.typeNamesAnInterface(offered) 'aParameterTheAliasRefuses'
+				return ClosureParamOffer.deferred
+			end 'aParameterTheAliasRefuses'
 
 			paramTypes.push(offered)
 		end 'eachParam'
@@ -92848,6 +92920,10 @@ export type Parser
 	end 'requireAssignmentAllowedInWindows'
 
 	function requireReturnedCapability(func IrFunction, value ValueId, retStart ElementIndex) throws SourceParseError
+		if self.valueIsDeferred(value) 'anUnknownResult'
+			self.bodyState.returnsAnUnknownValue = true
+		end 'anUnknownResult'
+
 		try self.requireNoUniqueAlias(value, action: "return", anchor: self.tokenAt(retStart))
 		try self.requireNotAnIsolatedSlotRead(value, startIndex: retStart)
 		let declared = self.bodyState.declaredReturnCapability
@@ -93012,7 +93088,8 @@ export type Parser
 	end 'rootValueOf'
 
 	function emitFieldLoad(box ValueId, layout StructLayout, index FieldIndex, range SourceRange) returns ValueId
-		let loaded = self.emitFieldLoadValue(box, layout: layout, index: index, range: range)
+		let read = self.emitFieldLoadValue(box, layout: layout, index: index, range: range)
+		let loaded = read.value
 
 		if loaded != box 'aFieldWasRead'
 			self.openStatementWindowThrough(box, floor: loaded, range: range)
@@ -93026,10 +93103,25 @@ export type Parser
 			end 'windowState'
 
 			self.regionFactsForWrite().fieldOrigins.upsert(loaded, value: FieldOrigin.create(box, layoutName: layout.name, field: index, slot: layout.fieldTypeSites.capabilityAt(index)))
+
+			if read.typeIsUnknown 'theFieldTypeDenotesNothing'
+				self.retypeValue(loaded, valueType: MaxonType.unresolved)
+				self.noteDeferredValueInTryBlock()
+			end 'theFieldTypeDenotesNothing'
 		end 'aFieldWasRead'
 
 		return loaded
 	end 'emitFieldLoad'
+
+	function fieldReadOf(value ValueId, layout StructLayout, index FieldIndex, declared MaxonType) returns FieldRead
+		let written = try layout.fieldTypes.get(index) otherwise panic("fieldReadOf: fieldTypes.get OOB at {index} for `type {String.from(layout.name)}`")
+
+		if maxonTypeTag(written) != ValueTypeTag.named 'notANamedType'
+			return FieldRead.create(value, typeIsUnknown: false)
+		end 'notANamedType'
+
+		return FieldRead.create(value, typeIsUnknown: self.declaredTypeIsUnknown(declared, scopeFilePath: layout.declFilePath))
+	end 'fieldReadOf'
 
 	function noteAdaptedSlotRead(loaded ValueId, box ValueId, slot ParamCapability)
 		self.setValueCapability(loaded, capability: adaptedCapability(self.effectiveCapabilityOf(box), slot: slotCapabilityOf(slot)))
@@ -93122,7 +93214,7 @@ export type Parser
 		notes.derivedResultOps.push(op)
 	end 'noteDerivedResult'
 
-	function emitFieldLoadValue(box ValueId, layout StructLayout, index FieldIndex, range SourceRange) returns ValueId
+	function emitFieldLoadValue(box ValueId, layout StructLayout, index FieldIndex, range SourceRange) returns FieldRead
 		// ⭐⭐ **READING A FUSED WRAPPER'S INLINE `managed` IS NOT A LOAD — THE FIELD *IS* THE RECEIVER.**
 		// `type String`'s `managed` is the `__ManagedMemory` embedded whole at offset 0, so its ADDRESS
 		// equals the record pointer; an `emitIndirectLoad` at offset 0 would read `buffer@0` and hand
@@ -93206,7 +93298,7 @@ export type Parser
 			// stride is 1 and a fixed array's slots are its element's, and the element read back as a concrete byte
 			// leaves `opaqueTypeParamPosition` with no `uses` name to answer.
 			if self.signatures.declarationsValueIsTheManagedRecord(layout.name) 'theRecordISTheBuffer'
-				return self.bufferSurfaceOfDeclaredRecord(box, layout: layout, range: range)
+				return FieldRead.create(self.bufferSurfaceOfDeclaredRecord(box, layout: layout, range: range), typeIsUnknown: false)
 			end 'theRecordISTheBuffer'
 
 			// ⚠ **THE MINTED VIEW WEARS THE INSTANCE `bufferSurfaceInstanceOf` NAMES, NOT A CONSTANT SPELLED HERE.**
@@ -93218,7 +93310,7 @@ export type Parser
 			// byte-record instance can never be taught to two of the three doors and missed at the third.
 			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: argsOf(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.bufferSurfaceInstanceOf(box, layout: layout) as TypeNameId, range: range, exclusivity: OwnedHeapExclusivity.coOwned)
 			self.markBufferSurface(view, origin: EmptySourceText)
-			return view
+			return FieldRead.create(view, typeIsUnknown: false)
 		end 'inlineManagedIsTheReceiver'
 
 		// A FUNCTION-typed field (`export var op as UnaryOp`) arrives from `fieldTypeOf` already re-tagged
@@ -93228,7 +93320,7 @@ export type Parser
 		let declared = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
 
 		if self.signatures.layoutPacksInlineIntoAWord(layout) 'inlinePacked'
-			return self.emitInlinePackedFieldRead(box, layout: layout, index: index, declared: declared, range: range)
+			return self.fieldReadOf(self.emitInlinePackedFieldRead(box, layout: layout, index: index, declared: declared, range: range), layout: layout, index: index, declared: declared)
 		end 'inlinePacked'
 
 		// ⭐⭐ **READING A PROMISE'S `inner` IS NOT A LOAD EITHER — THE HANDLE *IS* THE VALUE.** The
@@ -93249,7 +93341,7 @@ export type Parser
 		// `named` throw-source to record and no buffer surface; and it is a `let`, so the rebindable-slot
 		// mark is unreachable twice over (immutable, and not managed heap).
 		if fieldReadIsThePromiseHandle(self.signatures, receiverType: self.typeOf(box), layout: layout, index: index) 'handleIsTheValue'
-			return self.emitRetaggedCastValue(box, targetType: declared, range: range)
+			return self.fieldReadOf(self.emitRetaggedCastValue(box, targetType: declared, range: range), layout: layout, index: index, declared: declared)
 		end 'handleIsTheValue'
 
 		let offset = layout.offsetOfField(index)
@@ -93374,7 +93466,7 @@ export type Parser
 		self.carryReadOnlyFieldMark(box, read: result)
 		self.noteFrozenTupleFieldRead(result, tuple: box, index: index)
 		self.settleFloatResult(result)
-		return result
+		return self.fieldReadOf(result, layout: layout, index: index, declared: declared)
 	end 'emitFieldLoadValue'
 
 	function carryReadOnlyFieldMark(box ValueId, read ValueId)
@@ -96579,14 +96671,19 @@ export type Parser
 	end 'requireNoFailedDependency'
 
 	function requireNoRecordedDefect() throws ConstEvalError
-		for diagnostic in self.artifact.diagnostics 'eachDiagnostic'
+		try self.requireNoDefectIn(self.artifact.diagnostics)
+		try self.requireNoDefectIn(self.artifact.secondaryDiagnostics)
+	end 'requireNoRecordedDefect'
+
+	function requireNoDefectIn(recorded DiagnosticArray) throws ConstEvalError
+		for diagnostic in recorded 'eachDiagnostic'
 			match diagnostic.anchor 'anchor'
 				at(_, line, column) then throw ConstEvalError.defective(SourceParseError.deepLet(diagnostic.code, message: diagnostic.message, line: line, column: column))
 				programWide or
-				file then panic("Parser.requireNoRecordedDefect: a diagnostic recorded while folding an initializer carries no source position — `recordArtifactDiagnostic` anchors every one at a range")
+				file then panic("Parser.requireNoDefectIn: a diagnostic recorded while folding an initializer carries no source position — `recordArtifactDiagnostic` anchors every one at a range")
 			end 'anchor'
 		end 'eachDiagnostic'
-	end 'requireNoRecordedDefect'
+	end 'requireNoDefectIn'
 
 	function noteConstLetCast(decl TopLevelDecl, value ValueId)
 		let span = try self.literalCastSpanning(value, first: decl.initStart) otherwise return
@@ -104176,6 +104273,10 @@ export type Parser
 	// The result of a call to a callee some file DOES declare — where the void/value split is
 	// finally a split and not a sentinel.
 	function mintDeclaredCallValue(callee ByteArray, inner MaxonType, declFilePath FilePath) returns ValueId
+		if self.declaredTypeIsUnknown(inner, scopeFilePath: declFilePath) 'aResultOfAnUnknownType'
+			return self.mintDeferredValue()
+		end 'aResultOfAnUnknownType'
+
 		let result = self.mintDirectCallValueResult(inner, scopeFilePath: declFilePath)
 
 		if self.tagOf(result) == ValueTypeTag.interfaceRef 'existentialReturn'

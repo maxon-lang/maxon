@@ -191,7 +191,7 @@ end 'dispatchLandingCall'
 function dispatchLandedBody(walker SummaryCallWalker, func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, impl ElementIndex)
 	var cursor = walker.callSiteCursor()
 
-	if cursor.resolution.implWasSkippedAsUnreached(impl) 'notInThisProgram'
+	if cursor.resolution.implBodyWasSkipped(impl) 'notInThisProgram'
 		return
 	end 'notInThisProgram'
 
@@ -1075,7 +1075,7 @@ module type CallSummaryIndex
 		end 'aSummaryDescribesIt'
 
 		if let index = try self.funcIndexByName.get(callee) 'declared'
-			if self.project.funcSignatures.contains(callee) and self.implWasSkippedAsUnreached(index) 'anAbandonedBody'
+			if self.project.funcSignatures.contains(callee) and self.implBodyWasSkipped(index) 'anAbandonedBody'
 				return CalleeClass.refused
 			end 'anAbandonedBody'
 		end 'declared'
@@ -1091,9 +1091,9 @@ module type CallSummaryIndex
 		return not bodyIsUnreadable(self.functionAt(index))
 	end 'implHasSummary'
 
-	module function implWasSkippedAsUnreached(index ElementIndex) returns bool
-		return self.functionAt(index).bodyWasSkippedAsUnreached
-	end 'implWasSkippedAsUnreached'
+	module function implBodyWasSkipped(index ElementIndex) returns bool
+		return self.functionAt(index).bodyStatus != BodyStatus.parsed
+	end 'implBodyWasSkipped'
 
 	function functionAt(index ElementIndex) returns IrFunction
 		return try self.module.functions.get(index) otherwise panic("CallSummaryIndex.functionAt: function index {index} is past the module's functions")
@@ -1352,7 +1352,7 @@ module type CallSummaryIndex
 		var participants = FuncIndexArray.create(0)
 
 		for impl in contents.impls 'eachMember'
-			if not self.implWasSkippedAsUnreached(impl) 'inThisProgram'
+			if not self.implBodyWasSkipped(impl) 'inThisProgram'
 				self.requireSignature(impl)
 				participants.push(impl)
 			end 'inThisProgram'

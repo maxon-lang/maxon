@@ -561,3 +561,37 @@ end 'main'
 ```exitcode
 21
 ```
+
+<!-- test: error.refused-field-after-gated-first-field-poisons-the-type -->
+A member refused for a lost declaration fact poisons the whole type when it is a field and only the method when it is inside one, and a type whose first member is a live `#if` field must still tell its later ungated field from the method before it. The refused `value` field is storage, so `h.absent` is a consequence of the refused type and goes unreported, while `other` stays independent.
+```maxon
+type Holder
+	#if testing(false)
+		export let flag as ExitCode
+	#endif
+
+	export function value() returns ExitCode
+		return self.flag
+	end 'value'
+
+	export let value as ExitCode
+
+	static function create() returns Holder
+		return Holder{flag: 1, value: 2}
+	end 'create'
+end 'Holder'
+
+function other() returns ExitCode
+	let broken = "text"
+	return broken + 1
+end 'other'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.flag + h.value + h.absent
+end 'main'
+```
+```maxoncstderr
+error E3006: specs/compiler-directives-positions/error.refused-field-after-gated-first-field-poisons-the-type.maxon:11:13: 'value' names both a field and a method of type 'Holder'
+error E2004: specs/compiler-directives-positions/error.refused-field-after-gated-first-field-poisons-the-type.maxon:20:16: Cannot operate on String and int
+```

@@ -2482,7 +2482,8 @@ it as gone.
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
 `source: "maxon"` and severity Error; the untrusted-workspace notice and the breaking-change notices
 above have severity Information. "No `main` function" (E3001) and the unused-export diagnostics
-(E3092, E3093, E3094) appear in `maxon build`'s output alone.
+(E3092, E3093, E3094) appear in `maxon build`'s output alone. When they are the only errors, a document
+is published with its unneeded casts (E3010) and target refusals (E3074, E3104).
 
 **A `.maxon` document in a project is published twice per version: the buffer check's set, then the
 project check's.** This applies where the document's root is a directory holding a `.maxproj`. The
@@ -2755,8 +2756,8 @@ error E3104: app.maxon:3:10: 'Clock.threadCpuTicks' lowers to the runtime entry 
 error E3074: app.maxon:5:17: Subprocess is not supported on wasm32-wasi (no process-spawn primitive); guard the call with #if not os(Wasi).
 ```
 
-E3104 and E3074 are reported only when the language checks find no other error in the program, so a
-program with a language error shows that error alone.
+E3104 and E3074 are reported once the program has no other error, beside any unneeded cast (**E3010**),
+so a program with a language error shows that error alone.
 
 To keep one source for several targets, guard the unsupported part with `#if not os(Wasi)`.
 
