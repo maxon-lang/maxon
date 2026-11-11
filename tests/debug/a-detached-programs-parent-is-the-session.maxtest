@@ -1,0 +1,47 @@
+let HandedBackCaseLabel = "a-detached-programs-parent-is-the-session"
+
+let HandedBackRounds = 8
+let HandedBackStubGoneDeadlineMs = 20000
+let HandedBackEndDeadlineMs = 60000
+let HandedBackLookMs = 2
+let HandedBackExitWording = "the program exited with code"
+
+function placeOnceTheStubIsGone(program Pid) returns ProcessPlace
+	let started = Clock.nowMs()
+	var place = placeOf(program)
+
+	while place.isHeldByAStub() and Clock.elapsedMs(started) < HandedBackStubGoneDeadlineMs 'untilTheStubLeaves'
+		sleep(HandedBackLookMs)
+
+		place = placeOf(program)
+	end 'untilTheStubLeaves'
+
+	return place
+end 'placeOnceTheStubIsGone'
+
+test 'the program a session detached from is the session own child again, alive, by the time the debug stub is gone'
+	#if os(Macos)
+		let staged = builtFixture(HandedBackCaseLabel, fixture: ThreadBurstFixtureName)
+
+		for round in 0 upto HandedBackRounds 'eachRound'
+			var session = sessionHeldAt(staged, anchor: BurstSpinAnchorName)
+			let program = burstProcessId(staged)
+
+			session.say(DetachCommand)
+
+			let place = placeOnceTheStubIsGone(program)
+
+			Expect.isTrue(place.isALiveChildOf(session.processId()), message: "round {round}: ⛔ A STUB THAT IS ENDED BEFORE IT HAS HANDED THE PROGRAM BACK TAKES THE PROGRAM WITH IT, OR LEAVES IT TO A PARENT THAT NEVER WAITS FOR IT. The session ({session.processId()}) let go of process {program}, and once the stub was gone {place.displayReason()}. The session said: {session.said()}")
+			Expect.isTrue(session.sayUntilThe(HandedBackExitWording, deadlineMs: HandedBackEndDeadlineMs), message: "round {round}: the released program runs on and the session reports its own end. The session said: {session.said()}")
+
+			session.say(QuitCommand)
+
+			Expect.isTrue(session.finish(HandedBackEndDeadlineMs), message: "round {round}: the session ends once it is told to quit. {session.said()} {session.evidence()}")
+			Expect.isTrue(File.exists(staged.join(BurstFinishedMarkerName)), message: "round {round}: the released program ran to its own end and wrote {BurstFinishedMarkerName}. The session said: {session.said()}")
+
+			try File.delete(staged.join(BurstFinishedMarkerName)) otherwise panic("the gate could not run — the marker of round {round} could not be removed.")
+		end 'eachRound'
+
+		discardStagedDir(staged)
+	#endif
+end 'the program a session detached from is the session own child again, alive, by the time the debug stub is gone'

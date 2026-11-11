@@ -7,6 +7,8 @@ let StubAttachOption = "--attach="
 let ProcessIdColumn = 0
 let ParentColumn = 1
 let GroupColumn = 2
+let StatColumn = 3
+let DefunctState = "Z"
 let SamplingTool = "sample"
 let SamplingSeconds = "1"
 let SamplingMs = 30000
@@ -16,6 +18,7 @@ let AliveStateRow = "alive"
 export let GoneStateRow = "gone"
 
 typealias ListedProcesses = Array with ListedProcess
+export typealias ProcessIds = Array with Pid
 
 type ListedProcess
 	let line as String
@@ -55,14 +58,21 @@ type ListedProcess
 	end 'attachesTo'
 
 	function isAmong(processes ListedProcesses) returns bool
-		for other in processes 'eachProcess'
-			if other.isProcess(self.id) 'thisOne'
-				return true
-			end 'thisOne'
+		return match ListedProcess.lookUp(self.id, listed: processes) 'which'
+			absent gives false
+			found gives true
+		end 'which'
+	end 'isAmong'
+
+	static function lookUp(process Pid, listed ListedProcesses) returns ListedLookup
+		for candidate in listed 'eachProcess'
+			if candidate.isProcess(process) 'theProcess'
+				return ListedLookup.found(candidate)
+			end 'theProcess'
 		end 'eachProcess'
 
-		return false
-	end 'isAmong'
+		return ListedLookup.absent
+	end 'lookUp'
 
 	// The group link holds a zombie reparented to launchd, which keeps its group. It admits only a kept
 	// process's descendants because every child a Maxon program spawns leads a group of its own.
@@ -107,7 +117,44 @@ type ListedProcess
 	function isProcess(process Pid) returns bool
 		return self.id == process
 	end 'isProcess'
+
+	function isDefunct() returns bool
+		let state = try self.columns.get(StatColumn as ElementIndex) otherwise return false
+
+		return state.startsWith(DefunctState)
+	end 'isDefunct'
+
+	static function placeAmong(listed ListedProcesses, process Pid) returns ProcessPlace
+		return match ListedProcess.lookUp(process, listed: listed) 'which'
+			absent gives ProcessPlace.absent
+			found(candidate) gives ProcessPlace.present(candidate.parentId, defunct: candidate.isDefunct(), heldByAStub: candidate.hasAStubParentAmong(listed))
+		end 'which'
+	end 'placeAmong'
+
+	function hasAStubParentAmong(listed ListedProcesses) returns bool
+		return match ListedProcess.lookUp(self.parentId, listed: listed) 'which'
+			absent gives false
+			found(parent) gives parent.isStub()
+		end 'which'
+	end 'hasAStubParentAmong'
+
+	static function defunctLinesOf(processes ProcessIds, listed ListedProcesses) returns StringArray
+		var lines = StringArray.create(0)
+
+		for candidate in listed 'eachProcess'
+			if candidate.isDefunct() and processes.contains(candidate.id) 'aLeftover'
+				lines.push(candidate.line)
+			end 'aLeftover'
+		end 'eachProcess'
+
+		return lines
+	end 'defunctLinesOf'
 end 'ListedProcess'
+
+union ListedLookup
+	absent
+	found(process ListedProcess)
+end 'ListedLookup'
 
 function listedProcesses() returns ListedProcesses throws SubprocessError
 	let listed = try Subprocess.run(Executable.name(ProcessListingTool), arguments: [ProcessListingOption, ProcessListingColumns], timeoutMs: ProcessListingMs)
@@ -145,6 +192,56 @@ export function processSnapshot(matching String) returns String
 		return "{family.count()} process(es) name {matching}, descend from or share a process group with one that does, or are a {StubProcessName} attached to one:{LineFeed}{listedLines(family)}"
 	#endif
 end 'processSnapshot'
+
+export union ProcessPlace
+	absent
+	present(parentId Pid, defunct bool, heldByAStub bool)
+
+	export function isHeldByAStub() returns bool
+		return match self 'which'
+			absent gives false
+			present(_, _, heldByAStub) gives heldByAStub
+		end 'which'
+	end 'isHeldByAStub'
+
+	export function isALiveChildOf(parent Pid) returns bool
+		return match self 'which'
+			absent gives false
+			present(parentId, defunct, heldByAStub) gives parentId == parent and not defunct and not heldByAStub
+		end 'which'
+	end 'isALiveChildOf'
+
+	export function displayReason() returns String
+		return match self 'which'
+			absent gives "the process is not listed"
+			present(parentId, defunct, heldByAStub) gives "the process is listed with parent {parentId}, {"defunct" if defunct else "not defunct"}, {"the parent is a debug stub" if heldByAStub else "the parent is not a debug stub"}"
+		end 'which'
+	end 'displayReason'
+end 'ProcessPlace'
+
+export function placeOf(process Pid) returns ProcessPlace
+	#if os(Windows)
+		return ProcessPlace.absent
+	#else
+		let listed = try listedProcesses() otherwise (e) 'noListing'
+			panic("the gate could not run — the process listing failed: {e.displayReason()}")
+		end 'noListing'
+
+		return ListedProcess.placeAmong(listed, process: process)
+	#endif
+end 'placeOf'
+
+export function defunctAmong(processes ProcessIds) returns StringArray
+	#if os(Windows)
+		return StringArray.create(0)
+	#else
+		let listed = try listedProcesses() otherwise (e) 'noListing'
+			panic("the gate could not run — the process listing failed: {e.displayReason()}")
+		end 'noListing'
+
+		return ListedProcess.defunctLinesOf(processes, listed: listed)
+	#endif
+end 'defunctAmong'
 
 export function stateRowOf(process Pid) returns String
 	if not Process.isAlive(process) 'ended'

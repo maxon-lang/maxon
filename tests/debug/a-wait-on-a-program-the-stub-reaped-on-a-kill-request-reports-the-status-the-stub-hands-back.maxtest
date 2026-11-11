@@ -1,0 +1,184 @@
+let StubReapedCaseLabel = "a-wait-on-a-program-the-stub-reaped-on-a-kill-request-reports-the-status-the-stub-hands-back"
+
+let StubReapedRounds = 8
+let StubReapedKilledVerdict = "exited 137"
+let StubReapedKillRequest = "$k#6b"
+let StubReapedKillAnswer = "X"
+let StubReapedHost = "127.0.0.1"
+let StubReapedReverseOption = "-R"
+let StubReapedAttachOption = "--attach="
+let StubReapedAcceptMs = 20000
+let StubReapedReplyMs = 10000
+let StubReapedWaitMs = 15000
+let StubReapedSessionMs = 60000
+let StubReapedReceiveBytes = 256
+let StubReapedReads = 32
+let StubReapedStopPrefix = "$T"
+let StubReapedContinuePacket = "$c#63"
+let StubReapedInterruptByte = 0x03 as Byte
+let StubReapedRunMs = 300
+let StubReapedSettleMs = 300
+let StubReapedHandOverMs = 5000
+let StubReapedHandOverLookMs = 5
+let StubReapedPacketEnd = "#"
+let StubReapedAcknowledgePacket = "+"
+let StubReapedAttachedSuffix = ".attached"
+let StubReapedEntitledName = "entitled"
+
+function entitledCopyOf(staged FilePath) returns FilePath
+	var session = sessionHeldAt(staged, anchor: BurstSpinAnchorName)
+	let entitled = staged.join(StubReapedEntitledName)
+	var copied = false
+
+	for entry in listing(staged) 'eachEntry'
+		if entry.filename().endsWith(StubReapedAttachedSuffix) 'theSignedCopy'
+			let bytes = try File.readBinary(entry) otherwise panic("the gate could not run — the debugger's attachable copy cannot be read.")
+
+			try File.writeBinary(entitled, content: bytes, mode: FilePermission.executable) otherwise panic("the gate could not run — the entitled copy cannot be written.")
+
+			copied = true
+		end 'theSignedCopy'
+	end 'eachEntry'
+
+	session.say(QuitCommand)
+	_ = session.finish(StubReapedSessionMs)
+
+	if not copied 'noCopy'
+		panic("the gate could not run — the debugger left no attachable copy of the program beside it.")
+	end 'noCopy'
+
+	return entitled
+end 'entitledCopyOf'
+
+function stubHeard(socket TcpClient, needle String) returns String
+	var heard = ""
+
+	try socket.setReadDeadline(StubReapedReplyMs) otherwise panic("the gate could not run — the stub connection takes no read deadline.")
+
+	for _ in 0 upto StubReapedReads 'eachRead'
+		if heard.contains(needle) and heard.contains(StubReapedPacketEnd) 'answered'
+			return heard
+		end 'answered'
+
+		let chunk = try socket.recv(StubReapedReceiveBytes) otherwise return heard
+
+		heard.append(chunk)
+	end 'eachRead'
+
+	return heard
+end 'stubHeard'
+
+function interruptText() returns String
+	var raw = ByteArray.create(1, zeroed: false)
+	raw.push(StubReapedInterruptByte)
+
+	return String.from(raw)
+end 'interruptText'
+
+function heardAfterInterrupt(socket TcpClient) returns String
+	_ = try socket.send(StubReapedContinuePacket) otherwise panic("the gate could not run — the continue packet could not be sent.")
+
+	sleep(StubReapedRunMs)
+
+	_ = try socket.send(interruptText()) otherwise panic("the gate could not run — the interrupt could not be sent.")
+
+	return stubHeard(socket, needle: StubReapedStopPrefix)
+end 'heardAfterInterrupt'
+
+function waitVerdict(program StreamingSubprocess) returns String
+	let code = try program.waitWithTimeout(StubReapedWaitMs) otherwise (e) 'notEnded'
+		return e.displayReason()
+	end 'notEnded'
+
+	return "exited {code}"
+end 'waitVerdict'
+
+function stubGone(treeEnd TreeEnd) returns bool
+	return match treeEnd 'which'
+		ended gives true
+		survived or
+		unconfirmed gives false
+	end 'which'
+end 'stubGone'
+
+function awaitedHandBack(program StreamingSubprocess) returns bool
+	let started = Clock.nowMs()
+
+	while program.isReapedElsewhere() and Clock.elapsedMs(started) < StubReapedHandOverMs 'untilItIsOurs'
+		sleep(StubReapedHandOverLookMs)
+	end 'untilItIsOurs'
+
+	return not program.isReapedElsewhere()
+end 'awaitedHandBack'
+
+function heldProgramKilledThenAskedToKill(entitled FilePath, staged FilePath, round Count) throws TestFailure
+	let log = roundStubLog(staged, round: round)
+	let listener = try TcpListener.bind(StubReapedHost, port: 0) otherwise panic("the gate could not run — no port to listen on.")
+	var program = try StreamingSubprocess.spawnTraceable(Executable.path(entitled), arguments: StringArray.create(0), workingDirectory: staged, environment: Environment.inherit, traced: true) otherwise panic("the gate could not run — the traced spawn of the fixture was refused.")
+
+	program.closeStdin()
+
+	let pid = try program.processId() otherwise panic("the gate could not run — the spawned program has no process id.")
+	let stubFile = try FilePath.from(LoggedStubPath) otherwise panic("the gate could not run — the stub path is not a path.")
+	var stubArguments = [StubReapedReverseOption, "{StubReapedHost}:{listener.port()}", "{StubReapedAttachOption}{pid}"]
+
+	for option in stubLogArguments(log) 'eachLogOption'
+		stubArguments.push(option)
+	end 'eachLogOption'
+
+	var stub = try StreamingSubprocess.spawn(Executable.path(stubFile), arguments: stubArguments) otherwise panic("the gate could not run — the debug stub could not start.")
+
+	stub.closeStdin()
+
+	try listener.setAcceptDeadline(StubReapedAcceptMs) otherwise panic("the gate could not run — the listener takes no accept deadline.")
+
+	let socket = try listener.accept() otherwise panic("the gate could not run — the debug stub never connected.")
+	let stopped = heardAfterInterrupt(socket)
+
+	_ = try socket.send(StubReapedAcknowledgePacket) otherwise panic("the gate could not run — the stop could not be acknowledged.")
+
+	killedOutright(pid)
+
+	_ = try socket.send(StubReapedKillRequest) otherwise panic("the gate could not run — the kill request could not be sent.")
+
+	let answered = stubHeard(socket, needle: StubReapedKillAnswer)
+
+	_ = try socket.send(StubReapedAcknowledgePacket) otherwise panic("the gate could not run — the stub's answer could not be acknowledged.")
+
+	let handedBack = awaitedHandBack(program)
+	let stubEnd = stub.endTree()
+	let verdict = waitVerdict(program)
+
+	sleep(StubReapedSettleMs)
+
+	let again = waitVerdict(program)
+	let stubPid = try stub.processId() otherwise panic("the gate could not run — the debug stub has no process id.")
+
+	stub.release()
+	_ = program.endTree()
+	program.release()
+
+	try Expect.isTrue(stopped.contains(StubReapedStopPrefix), message: "round {round}: the stub never reported the stop the interrupt asks for. It said: {stopped}")
+	try Expect.isTrue(answered.contains(StubReapedKillAnswer), message: "round {round}: the stub never answered with {StubReapedKillAnswer}. It said: {answered}")
+	try Expect.isTrue(handedBack, message: "round {round}: ⛔ A STUB THAT ANSWERED A REQUEST ABOUT A PROGRAM KILLED WHILE IT WAS HELD HANDS THE PROGRAM BACK TO ITS PARENT, AND THE PARENT CAN TELL WHEN. {StubReapedHandOverMs} ms after the answer process {pid} was still not this process's child.")
+	try Expect.isTrue(stubGone(stubEnd), message: "round {round}: the stub could not be ended, so the program's parent is not settled. {stubEnd.displayReason()}")
+	try Expect.isTrue(again == verdict, message: "round {round}: once the stub has exited, the answer is a property of the program's state and does not change with time. The first wait answered '{verdict}', the second '{again}'.")
+	try requireNothingDefunct(round, program: pid, stub: stubPid, log: log, context: "This process waited for both and released them.")
+	try Expect.isTrue(stubReapedTheProgram(log), message: "round {round}: the case is about a program the stub reaped, and the stub's own log shows it never reaped the program. {stubLogTail(log, lines: StubLogTailLines)}")
+	try Expect.equal(verdict, expected: StubReapedKilledVerdict, message: "round {round}: ⛔ A PROGRAM THE DEBUG STUB REAPED ON A KILL REQUEST HANDS ITS STATUS BACK TO THIS PROCESS, AND A WAIT FOR IT READS IT. The wait answered: {verdict}")
+end 'heldProgramKilledThenAskedToKill'
+
+// A status truly taken by another process cannot be staged without orphaning a zombie, which launchd
+// never reaps, so this case pins the status the stub hands back.
+test 'a wait on a program killed while the debugger held it, after the stub reaped it on a kill request, reports the status the stub handed back'
+	#if os(Macos)
+		let staged = builtFixture(StubReapedCaseLabel, fixture: ThreadBurstFixtureName)
+		let entitled = entitledCopyOf(staged)
+
+		for round in 0 upto StubReapedRounds 'eachRound'
+			heldProgramKilledThenAskedToKill(entitled, staged: staged, round: round)
+		end 'eachRound'
+
+		discardStagedDir(staged)
+	#endif
+end 'a wait on a program killed while the debugger held it, after the stub reaped it on a kill request, reports the status the stub handed back'

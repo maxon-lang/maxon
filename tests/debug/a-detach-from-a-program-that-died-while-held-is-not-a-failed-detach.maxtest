@@ -1,7 +1,6 @@
 let DiedWhileHeldCaseLabel = "a-detach-from-a-program-that-died-while-held-is-not-a-failed-detach"
 
 let DiedWhileHeldDeadlineMs = 120000
-let DiedWhileHeldStopWording = "stopped ("
 let DiedWhileHeldClearedWording = "breakpoint cleared"
 let DetachFailureWording = "the detach failed"
 let DetachRefusalWording = "refused to detach"
@@ -12,12 +11,7 @@ test 'a program that dies while the session holds it is let go, not reported as 
 	#if os(Linux)
 		let staged = builtFixture(DiedWhileHeldCaseLabel, fixture: ThreadBurstFixtureName)
 		let spinLine = anchorLine(staged.join(StagedProgramFileName), anchor: BurstSpinAnchorName)
-		var session = ReplSession.open(builtExecutable(staged), staged: staged)
-
-		session.say("{BreakCommand} {lineTarget(spinLine)}")
-		session.say(RunCommand)
-
-		Expect.isTrue(session.sayUntilThe(DiedWhileHeldStopWording, deadlineMs: DiedWhileHeldDeadlineMs), message: "the program must be held at its breakpoint before it is killed. {session.said()}")
+		var session = sessionHeldAt(staged, anchor: BurstSpinAnchorName)
 
 		session.say("{ClearCommand} {lineTarget(spinLine)}")
 

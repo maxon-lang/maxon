@@ -726,6 +726,23 @@ export function lineTarget(line SourceLine, file String = StagedProgramFileName)
 	return "{file}:{line}"
 end 'lineTarget'
 
+let HeldStopWording = "stopped ("
+let HeldStopDeadlineMs = 120000
+
+export function sessionHeldAt(staged FilePath, anchor String, environment Environment = Environment.inherit) returns ReplSession
+	let line = anchorLine(staged.join(StagedProgramFileName), anchor: anchor)
+	var session = ReplSession.open(builtExecutable(staged), staged: staged, environment: environment)
+
+	session.say("{BreakCommand} {lineTarget(line)}")
+	session.say(RunCommand)
+
+	if not session.sayUntilThe(HeldStopWording, deadlineMs: HeldStopDeadlineMs) 'notHeld'
+		panic("the gate could not run — the program never stopped at its breakpoint at `{anchor}`. {session.said()}")
+	end 'notHeld'
+
+	return session
+end 'sessionHeldAt'
+
 // One staged, built fixture — the preamble every case in this corpus opens with, in ONE place. A build
 // that failed stops the case running at all, so it panics naming the fixture rather than failing an
 // assertion about a debugger that was never handed a program.

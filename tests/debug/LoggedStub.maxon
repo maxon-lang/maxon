@@ -1,12 +1,37 @@
 export let LoggedStubPath = "/Library/Developer/CommandLineTools/Library/PrivateFrameworks/LLDB.framework/Versions/A/Resources/debugserver"
+export let StubLogTailLines = 150
 
+let LoggedStubLogStem = "stub-"
+let LoggedStubLogExtension = ".log"
 let LoggedStubDirectoryName = "logged-stub"
 let LoggedStubName = "debugserver"
 let LoggedStubLogOption = "--log-file="
 let LoggedStubFlagsOption = "--log-flags=0xffffffff"
+let LoggedStubPidSuffix = ".pid"
 let LoggedStubReapMark = "-> SIGNALED and EXITED"
 let LoggedStubPathVariable = "PATH"
 let LoggedStubPathSeparator = ":"
+
+function loggedStubPidFile(log FilePath) returns FilePath
+	return try FilePath.from("{log.toString()}{LoggedStubPidSuffix}") otherwise panic("a log path with a suffix is a path")
+end 'loggedStubPidFile'
+
+export function loggedStubProcessId(log FilePath) returns Pid
+	let text = try File.readText(loggedStubPidFile(log)) otherwise panic("the gate could not run — the logging stub recorded no process id beside {log.toString()}.")
+	let id = try int.fromString(text.trim()) otherwise panic("the gate could not run — the logging stub's process id file holds `{text}`.")
+
+	return id as Pid
+end 'loggedStubProcessId'
+
+export function roundStubLog(staged FilePath, round Count) returns FilePath
+	return staged.join("{LoggedStubLogStem}{round}{LoggedStubLogExtension}")
+end 'roundStubLog'
+
+export function requireNothingDefunct(round Count, program Pid, stub Pid, log FilePath, context String) throws TestFailure
+	let leftover = defunctAmong([program, stub])
+
+	try Expect.isTrue(leftover.isEmpty(), message: "round {round}: ⛔ A PROGRAM AND ITS DEBUG STUB, ONCE THIS PROCESS IS DONE WITH THEM, LEAVE NO DEFUNCT PROCESS BEHIND, FOR THE HOST'S INIT NEVER REAPS ONE. The program ({program}) or its stub ({stub}) is still defunct:{listedLines(leftover)}{LineFeed}{context}{LineFeed}{stubLogTail(log, lines: StubLogTailLines)}")
+end 'requireNothingDefunct'
 
 export function stubLogArguments(log FilePath) returns StringArray
 	return ["{LoggedStubLogOption}{log.toString()}", LoggedStubFlagsOption]
@@ -19,7 +44,7 @@ export function loggedStubEnvironment(staged FilePath, log FilePath) returns Env
 		panic("the gate could not run — the directory for the logging stub could not be created.")
 	end 'noDirectory'
 
-	let script = "#!/bin/sh\ncase \" $* \" in *\" -R \"*) exec {LoggedStubPath} \"$@\" {LoggedStubLogOption}{log.toString()} {LoggedStubFlagsOption};; esac\nexec {LoggedStubPath} \"$@\"\n"
+	let script = "#!/bin/sh\ncase \" $* \" in *\" -R \"*) echo $$ > {loggedStubPidFile(log).toString()}; exec {LoggedStubPath} \"$@\" {LoggedStubLogOption}{log.toString()} {LoggedStubFlagsOption};; esac\nexec {LoggedStubPath} \"$@\"\n"
 
 	try File.writeBinary(directory.join(LoggedStubName), content: script.toByteArray(), mode: FilePermission.executable) otherwise panic("the gate could not run — the logging stub could not be written.")
 

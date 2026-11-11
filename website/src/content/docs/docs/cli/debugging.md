@@ -132,9 +132,8 @@ and the operation is refused.
 
 `detach` restores every byte the debugger wrote, lifts every held green thread, puts asynchronous
 preemption back and lets the program run on under its own steam; the session then waits for the program's
-own ending and reports it; an ending whose exit status went to another process (on `arm64-macos`, a
-program killed while the stub held it) is reported as `the program ended, and its exit status went to
-another process, so it is not available`. On `arm64-macos` the re-signed copy the program was launched from is removed at
+own ending and reports it; an ending whose exit status went to another process is reported as `the
+program ended, and its exit status went to another process, so it is not available`. On `arm64-macos` the re-signed copy the program was launched from is removed at
 the detach, and the program keeps running from the file it already has open. While a trap byte cannot be
 written back, `detach` is refused `unwritable` with every breakpoint the debugger could write back
 cleared, and the program stays attached. A program that ended while the session held it has nothing left
@@ -147,6 +146,11 @@ A kernel that refuses to let the program go refuses the `detach` `detach-refused
 command except `help` and `quit` is refused: the detach failed, the program's state is unknown (it may
 be running), and only `quit` remains. `quit` then ends the program, as it does in a session still
 attached to it.
+
+On `arm64-macos` a `detach` the stub has answered waits up to a second for the program to become the
+session's own child again, and only then ends the stub. A program the stub still holds after that is
+refused `the-stub-still-holds-the-program`, and the stub keeps holding it. After it, every command
+except `help` and `quit` is refused, and `quit` ends the program through the stub.
 
 `break <target> if <local> <op> <literal>` arms a conditional breakpoint the driver judges at the stop, so a
 hit that fails it resumes at once; a condition over a float, a `String`, a field path, a constant or a local
@@ -180,6 +184,8 @@ lives: every word that names one re-lists the roster first, and an id whose thre
 - `unwritable` — for a byte the debugger could not write into the program's code.
 - `detach-refused` — for a `detach` the kernel refused to carry out; the program's state is unknown and
   only `quit` remains.
+- `the-stub-still-holds-the-program` — for a `detach` on `arm64-macos` whose stub had not handed the
+  program back within a second; the program stays with the stub and only `quit` remains.
 - `inside-runtime-symbol` — for a `break` at code that is the runtime's own: the runtime tier, and
   anything the compiler synthesized.
 

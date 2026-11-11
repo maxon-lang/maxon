@@ -1,0 +1,27 @@
+let QuitKilledCaseLabel = "a-quit-after-a-held-program-was-killed-outright-leaves-no-defunct-process"
+
+let QuitKilledRounds = 8
+let QuitKilledRoundDeadlineMs = 20000
+
+test 'a session told to quit after the held program was killed outright leaves neither the program nor its stub defunct'
+	#if os(Macos)
+		let staged = builtFixture(QuitKilledCaseLabel, fixture: ThreadBurstFixtureName)
+
+		for round in 0 upto QuitKilledRounds 'eachRound'
+			let log = roundStubLog(staged, round: round)
+			var session = sessionHeldAt(staged, anchor: BurstSpinAnchorName, environment: loggedStubEnvironment(staged, log: log))
+			let program = burstProcessId(staged)
+
+			killedOutright(program)
+			session.say(QuitCommand)
+
+			let ended = session.finish(QuitKilledRoundDeadlineMs)
+
+			Expect.isTrue(ended, message: "round {round}: the session must end once it is told to quit. {session.said()} {session.evidence()}")
+
+			requireNothingDefunct(round, program: program, stub: loggedStubProcessId(log), log: log, context: "The session said: {session.said()}")
+		end 'eachRound'
+
+		discardStagedDir(staged)
+	#endif
+end 'a session told to quit after the held program was killed outright leaves neither the program nor its stub defunct'

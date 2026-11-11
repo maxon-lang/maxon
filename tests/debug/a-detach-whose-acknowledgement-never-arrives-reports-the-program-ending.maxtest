@@ -2,12 +2,10 @@ let UnansweredDetachCaseLabel = "a-detach-whose-acknowledgement-never-arrives-re
 
 let UnansweredDetachRounds = 4
 let UnansweredDetachAnchorName = "hot"
-let UnansweredDetachStopDeadlineMs = 60000
 let UnansweredDetachRoundDeadlineMs = 10000
 let UnansweredDetachPatienceMs = 3000
 let UnansweredDetachRequest = "D"
 let UnansweredDetachTraceStem = "proxy-trace-"
-let UnansweredDetachStopWording = "stopped ("
 let UnansweredDetachExitedWording = "the program exited with code "
 let UnansweredDetachFailureWording = "the detach failed"
 let UnansweredDetachRefusalWording = "refused to detach"
@@ -16,17 +14,11 @@ test 'a detach the stub never acknowledges, because the program ended during it,
 	#if os(Macos)
 		let staged = builtFixture(UnansweredDetachCaseLabel, fixture: HeaplessFixtureName)
 		let proxies = stubProxyDirectory(UnansweredDetachCaseLabel)
-		let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: UnansweredDetachAnchorName)
 		let expectedEnd = "{UnansweredDetachExitedWording}{runBuiltProgram(staged).exitCode()}"
 
 		for round in 0 upto UnansweredDetachRounds 'eachRound'
 			let trace = staged.join("{UnansweredDetachTraceStem}{round}.txt")
-			var session = ReplSession.open(builtExecutable(staged), staged: staged, environment: silentProxyEnvironment(proxies, trace: trace, after: UnansweredDetachRequest))
-
-			session.say("{BreakCommand} {lineTarget(hotLine)}")
-			session.say(RunCommand)
-
-			Expect.isTrue(session.sayUntilThe(UnansweredDetachStopWording, deadlineMs: UnansweredDetachStopDeadlineMs), message: "round {round}: the program must be held at its breakpoint before it is detached from. {session.said()}")
+			var session = sessionHeldAt(staged, anchor: UnansweredDetachAnchorName, environment: silentProxyEnvironment(proxies, trace: trace, after: UnansweredDetachRequest))
 
 			let detachedAt = Clock.nowMs()
 

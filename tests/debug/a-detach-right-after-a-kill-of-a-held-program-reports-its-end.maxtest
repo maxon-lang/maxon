@@ -1,32 +1,22 @@
 let KilledHeldCaseLabel = "a-detach-right-after-a-kill-of-a-held-program-reports-its-end"
 
 let KilledHeldRounds = 8
-let KilledHeldStopDeadlineMs = 60000
 let KilledHeldRoundDeadlineMs = 20000
 let KilledHeldDetachPatienceMs = 3000
-let KilledHeldStopWording = "stopped ("
 let KilledHeldKilledWording = "the program exited with code 137"
-let KilledHeldStubLogStem = "stub-"
-let KilledHeldStubLogLines = 150
-let KilledHeldStatusLostWording = "its exit status went to another process"
 let KilledHeldDetachFailureWording = "the detach failed"
 let KilledHeldDetachRefusalWording = "refused to detach"
 
 test 'a detach issued right after the held program was killed outright reports the program ending instead of hanging'
 	#if os(Macos)
 		let staged = builtFixture(KilledHeldCaseLabel, fixture: ThreadBurstFixtureName)
-		let spinLine = anchorLine(staged.join(StagedProgramFileName), anchor: BurstSpinAnchorName)
 
 		for round in 0 upto KilledHeldRounds 'eachRound'
-			let log = staged.join("{KilledHeldStubLogStem}{round}.log")
-			var session = ReplSession.open(builtExecutable(staged), staged: staged, environment: loggedStubEnvironment(staged, log: log))
+			let log = roundStubLog(staged, round: round)
+			var session = sessionHeldAt(staged, anchor: BurstSpinAnchorName, environment: loggedStubEnvironment(staged, log: log))
+			let program = burstProcessId(staged)
 
-			session.say("{BreakCommand} {lineTarget(spinLine)}")
-			session.say(RunCommand)
-
-			Expect.isTrue(session.sayUntilThe(KilledHeldStopWording, deadlineMs: KilledHeldStopDeadlineMs), message: "round {round}: the program must be held at its breakpoint before it is killed. {session.said()}")
-
-			killedOutright(burstProcessId(staged))
+			killedOutright(program)
 
 			let detachedAt = Clock.nowMs()
 
@@ -38,17 +28,15 @@ test 'a detach issued right after the held program was killed outright reports t
 			let spoken = session.said()
 
 			if not ended 'itHung'
-				Expect.fail("round {round}: ⛔ A KILL THAT TAKES EFFECT ONLY WHEN THE DEBUGGER LETS GO CAN HAND THE DEAD PROGRAM TO A PROCESS THAT IS NOT THE DEBUGGER, WHICH THEN CANNOT WAIT FOR IT. The session did not end once it was told to quit. {spoken} {session.evidence()} {stubLogTail(log, lines: KilledHeldStubLogLines)}")
+				Expect.fail("round {round}: ⛔ A KILL THAT TAKES EFFECT ONLY WHEN THE DEBUGGER LETS GO CAN HAND THE DEAD PROGRAM TO A PROCESS THAT IS NOT THE DEBUGGER, WHICH THEN CANNOT WAIT FOR IT. The session did not end once it was told to quit. {spoken} {session.evidence()} {stubLogTail(log, lines: StubLogTailLines)}")
 			end 'itHung'
 
 			Expect.atMost(detachMs, than: KilledHeldDetachPatienceMs, message: "round {round}: a detach does not wait for the stub to leave on its own. The detach and the quit took {detachMs} ms. The session said: {spoken}")
 			Expect.isFalse(spoken.contains(KilledHeldDetachRefusalWording), message: "round {round}: a detach from a program that was killed is not refused. The session said: {spoken}")
 			Expect.isFalse(spoken.contains(KilledHeldDetachFailureWording), message: "round {round}: a detach from a program that was killed did not fail. The session said: {spoken}")
-			Expect.isTrue(spoken.contains(KilledHeldKilledWording) or spoken.contains(KilledHeldStatusLostWording), message: "round {round}: the detach must report the program's end. The session said: {spoken}")
+			Expect.isTrue(spoken.contains(KilledHeldKilledWording), message: "round {round}: the detach must report the program's end. The session said: {spoken}")
 
-			if stubReapedTheProgram(log) 'theStubReapedIt'
-				Expect.isTrue(spoken.contains(KilledHeldKilledWording), message: "round {round}: the stub's own log shows it reaped the program, which hands the status back to this session, so the kill must be reported. The session said: {spoken}")
-			end 'theStubReapedIt'
+			requireNothingDefunct(round, program: program, stub: loggedStubProcessId(log), log: log, context: "The session said: {spoken}")
 		end 'eachRound'
 
 		discardStagedDir(staged)

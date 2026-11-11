@@ -17,6 +17,7 @@ export union TargetSettling
 	letGo
 end 'TargetSettling'
 
+let HandOverBudgetMs = 1000
 let WindowsExitCodeMask = 0xFFFFFFFF
 let NtStatusSeverityMask = 0xC0000000
 
@@ -55,6 +56,22 @@ export type DebugTarget
 			running gives false
 		end 'polled'
 	end 'hasLeft'
+
+	export function awaitHandOver() returns bool
+		if self.hasSettled() 'nothingToHandOver'
+			return true
+		end 'nothingToHandOver'
+
+		let started = Clock.nowMs()
+
+		// This process's wait answers ECHILD while the stub holds the program, which
+		// `isReapedElsewhere` reports; `Process.isAlive` cannot tell, a held zombie is not alive.
+		while self.child.isReapedElsewhere() and Clock.elapsedMs(started) < HandOverBudgetMs 'untilItIsOurs'
+			sleep(ChildPollMs)
+		end 'untilItIsOurs'
+
+		return not self.child.isReapedElsewhere()
+	end 'awaitHandOver'
 
 	export function settle(how TargetSettling) returns TargetOutcome
 		if not targetIsRunning(self.settled) 'alreadySettled'
@@ -98,8 +115,13 @@ export type DebugTarget
 	end 'settleEvenIfRunning'
 
 	function releasedRunning()
-		self.pump()
-		self.child.release()
+		// An exited program is reaped, not released: the session must not exit holding an unreaped child.
+		self.settleIfItExited()
+
+		if targetIsRunning(self.settled) 'itRunsOn'
+			self.pump()
+			self.child.release()
+		end 'itRunsOn'
 	end 'releasedRunning'
 
 	function settleAfterExit(code DebugExitCode)

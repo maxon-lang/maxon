@@ -126,6 +126,7 @@ let DebugThreadIsRunningReason = "thread-is-running"
 let DebugNotPausableReason = "not-pausable"
 let DebugUnwritableReason = "unwritable"
 let DebugDetachRefusedReason = "detach-refused"
+let DebugDetachStillHeldReason = "the-stub-still-holds-the-program"
 
 let WaitSliceMs = 5
 let DetachLookMs = 20
@@ -492,7 +493,7 @@ export type DebugEngine implements DebugMemory
 	end 'letGo'
 
 	function askTheKernelToLetGo() returns CommandOutcome
-		let accepted = self.detachSettled()
+		let answered = self.detachSettled()
 
 		self.stopped = false
 		self.pausePending = false
@@ -501,10 +502,10 @@ export type DebugEngine implements DebugMemory
 		// A refusing backend has already changed the program's state (Windows resumes every thread,
 		// ptrace may have detached some, gdb-remote forgets its stop), so nothing is put back: a hold or
 		// preemption write now could land in a running program.
-		if not accepted 'theKernelRefused'
+		if not answered.accepted() 'theKernelRefused'
 			self.attachment = EngineAttachment.detachFailed
 
-			return CommandOutcome.refused(DebugDetachRefusedReason)
+			return answered
 		end 'theKernelRefused'
 
 		self.attachment = EngineAttachment.letGo
@@ -515,20 +516,21 @@ export type DebugEngine implements DebugMemory
 	// A debugserver whose program died during the detach never answers it: the detach waits for an
 	// exception thread that nothing wakes once the task is gone. That debugserver reaps the program,
 	// which hands the status to this process, so the program ending is the answer.
-	function detachSettled() returns bool
+	function detachSettled() returns CommandOutcome
 		var progress = self.backend.beginDetach()
 
 		while true 'untilSettled'
 			match progress 'which'
-				accepted then return true
-				refused then return false
+				accepted then return CommandOutcome.done
+				refused then return CommandOutcome.refused(DebugDetachRefusedReason)
+				acknowledged then return self.endAcknowledgedStub()
 				awaiting then break
 			end 'which'
 
 			if self.target.hasLeft() 'theProgramEndedFirst'
 				self.backend.finishDetach()
 
-				return true
+				return CommandOutcome.done
 			end 'theProgramEndedFirst'
 
 			progress = self.backend.awaitDetach(DetachLookMs as BackendWaitBudgetMs)
@@ -536,6 +538,20 @@ export type DebugEngine implements DebugMemory
 
 		panic("DebugEngine.detachSettled: the loop leaves only by answering, and every arm above answers")
 	end 'detachSettled'
+
+	// debugserver answers the detach before the kernel hands the program back to this process.
+	// Ending a stub that still traces the program kills a running one and leaves a dead one to
+	// launchd, which never reaps it, so a stub that does not hand it back in time is left alone:
+	// `quit` ends the program through the stub's `k`, which leaves no defunct process.
+	function endAcknowledgedStub() returns CommandOutcome
+		if not self.target.awaitHandOver() 'stillHeld'
+			return CommandOutcome.refused(DebugDetachStillHeldReason)
+		end 'stillHeld'
+
+		self.backend.finishDetach()
+
+		return CommandOutcome.done
+	end 'endAcknowledgedStub'
 
 	export function attachmentState() returns EngineAttachment
 		return self.attachment
