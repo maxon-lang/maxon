@@ -416,6 +416,26 @@ module function tokenKindClosesABracket(kind TokenKind) returns bool
 	return kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace
 end 'tokenKindClosesABracket'
 
+module function tokenKindOpensAGroup(kind TokenKind) returns bool
+	return tokenKindOpensABracket(kind) or kind == TokenKind.stringInterpStart
+end 'tokenKindOpensAGroup'
+
+module function tokenKindClosesAGroup(kind TokenKind) returns bool
+	return tokenKindClosesABracket(kind) or kind == TokenKind.stringInterpEnd
+end 'tokenKindClosesAGroup'
+
+module function groupNestingAfter(kind TokenKind, nesting NestingDepth) returns NestingDepth
+	if tokenKindOpensAGroup(kind) 'opens'
+		return nesting + 1
+	end 'opens'
+
+	if tokenKindClosesAGroup(kind) 'closes'
+		return nesting - 1
+	end 'closes'
+
+	return nesting
+end 'groupNestingAfter'
+
 module function interpolatedLiteralLastFragment(tokens TokenArray, first ElementIndex) returns ElementIndex throws AbsentError
 	if tokenKindAt(tokens, index: first) != TokenKind.stringLiteral or tokenKindAt(tokens, index: first + 1) != TokenKind.stringInterpStart 'notAnInterpolatedLiteral'
 		throw AbsentError.absent

@@ -314,11 +314,7 @@ function topLevelDeclarationStarts(path FilePath, tokens TokenArray) returns Dec
 			end 'closedByAnAlignedEnd'
 		end 'aStatementStart'
 
-		if tokenOpensABracket(token) 'opens'
-			bracketDepth = bracketDepth + 1
-		end 'opens' else if tokenClosesABracket(token) 'closes'
-			bracketDepth = bracketDepth - 1
-		end 'closes'
+		bracketDepth = groupNestingAfter(token.kind, nesting: bracketDepth)
 	end 'eachToken'
 
 	if openBlockColumn != 0 'aDeclarationNeverClosed'
@@ -352,14 +348,6 @@ end 'declarationOpensABlock'
 function tokenNeverStartsAStatement(token Token) returns bool
 	return token.kind == TokenKind.newline or token.kind == TokenKind.eof or token.kind == TokenKind.docComment or token.kind == TokenKind.end
 end 'tokenNeverStartsAStatement'
-
-function tokenOpensABracket(token Token) returns bool
-	return token.kind == TokenKind.leftParen or token.kind == TokenKind.leftBracket or token.kind == TokenKind.leftBrace or token.kind == TokenKind.stringInterpStart
-end 'tokenOpensABracket'
-
-function tokenClosesABracket(token Token) returns bool
-	return token.kind == TokenKind.rightParen or token.kind == TokenKind.rightBracket or token.kind == TokenKind.rightBrace or token.kind == TokenKind.stringInterpEnd
-end 'tokenClosesABracket'
 
 function startsATopLevelDeclaration(tokens TokenArray, position ElementIndex) returns bool
 	let kind = tokenKindAt(tokens, index: position)
@@ -2103,7 +2091,7 @@ module function parseQueryOf(project Project, path FilePath) returns ParseQuery 
 	view overrides = project.db.rowSetOverrides.of(path)
 	let contentHash = (try sourceEntryOf(project, path: path)).contentHash
 	let liveness = signatures.livenessDigestParsedBy(path)
-	let keyHash = currentParseMemoKey(project, contentHash: contentHash, signatureHash: Hasher.combined(signatures.hash, value: liveness), buildsBodies: buildsBodies, overrides: overrides)
+	let keyHash = currentParseMemoKey(project, path: path, contentHash: contentHash, signatureHash: Hasher.combined(signatures.hash, value: liveness), buildsBodies: buildsBodies, overrides: overrides)
 
 	if let memo = try project.db.parseCache.get(path) 'memoized'
 		if memo.keyHash == keyHash 'hit'
@@ -2193,6 +2181,7 @@ function holdAsAConsequence(project Project, path FilePath, consequence Conseque
 		unrelated then return PoisonBacking.backed
 		subject or
 		unknownType or
+		genericArgumentCount or
 		handlerBody then break
 	end 'consequence'
 
@@ -2209,6 +2198,8 @@ module function dropExplainedParseConsequences(project Project, signatures Progr
 		return
 	end 'nothingIsHeld'
 
+	let arityReports = reportedArityMessages(project, held: held)
+
 	var explained = FixedBoolArray.create(held.count())
 	var anyExplained = false
 	var worklist = ConsequenceWorklist.over(held)
@@ -2224,7 +2215,7 @@ module function dropExplainedParseConsequences(project Project, signatures Progr
 
 		view consequence = try held.get(position) otherwise panic("dropExplainedParseConsequences: held.get OOB at {position} below count {held.count()}")
 
-		if not consequence.isExplainedBy(project.poison, signatures: signatures, reports: reports) 'stillUnexplained'
+		if not consequence.isExplainedBy(project.poison, signatures: signatures, reports: reports, arityReports: arityReports) 'stillUnexplained'
 			continue
 		end 'stillUnexplained'
 
@@ -2283,6 +2274,31 @@ function unexplainedAfterTheDrop(held PendingConsequenceArray, explained FixedBo
 
 	return remaining
 end 'unexplainedAfterTheDrop'
+
+function reportedArityMessages(project Project, held PendingConsequenceArray) returns ReportedArityMessageSet
+	var heldOwn = FixedBoolArray.create(project.diagnostics.count())
+
+	for consequence in held 'eachHeld'
+		for index in consequence.sinkStart upto consequence.sinkEnd 'eachOwnDiagnostic'
+			try heldOwn.set(index, value: true) otherwise panic("reportedArityMessages: heldOwn.set OOB at {index} below count {heldOwn.count()}")
+		end 'eachOwnDiagnostic'
+	end 'eachHeld'
+
+	var messages = ReportedArityMessageSet.create()
+
+	for index in 0 upto project.diagnostics.count() 'eachDiagnostic'
+		view diagnostic = try project.diagnostics.get(index) otherwise panic("reportedArityMessages: diagnostics.get OOB at {index} below its own count")
+		let heldItsOwn = try heldOwn.get(index) otherwise panic("reportedArityMessages: heldOwn.get OOB at {index}")
+
+		if heldItsOwn or not isGenericArgumentCountCode(diagnostic.code) 'notAReportedCount'
+			continue
+		end 'notAReportedCount'
+
+		messages.insert(diagnostic.message)
+	end 'eachDiagnostic'
+
+	return messages
+end 'reportedArityMessages'
 
 function consequenceIsExplained(explained FixedBoolArray, position ElementIndex) returns bool
 	return try explained.get(position) otherwise panic("consequenceIsExplained: explained.get OOB at {position}")
@@ -3632,7 +3648,7 @@ function parseJobFrom(project Project, path FilePath, namespace String, livesUnd
 	// one compile, which is the drift this routine exists to prevent.
 	let isRuntimeSource = isRuntimeSourceFile(project, path: path)
 
-	return ParseJob.create(path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: project.compilerWrittenSources.mintedNamesIn(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
+	return ParseJob.create(path, authoredPath: project.stagedSourceOrigins.authoredPathOf(path), namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: project.compilerWrittenSources.mintedNamesIn(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
 end 'parseJobFrom'
 
 // A reader over one file for a pass that folds what it reads into the index rather than building an artifact —
@@ -4397,6 +4413,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		serviceReplyAliasesState(explanation, line, column, note) gives Diagnostic.create(ErrorCode.semanticServiceReplyAliasesState, message: explanation, line: line, column: column, filePath: path).withNote(note)
 		serviceReplyInstanceUnknown(explanation, line, column) gives Diagnostic.create(ErrorCode.semanticServiceReplyInstanceUnknown, message: explanation, line: line, column: column, filePath: path)
 		spawnStartRequiresTry(explanation, _, line, column) gives Diagnostic.create(ErrorCode.throwingFunctionRequiresTry, message: explanation, line: line, column: column, filePath: path)
+		genericArgumentCountRefused(code, explanation, line, column) gives Diagnostic.create(code, message: explanation, line: line, column: column, filePath: path)
 		registryRefused(code, explanation, line, column, note) gives Diagnostic.create(code, message: explanation, line: line, column: column, filePath: path).withNote(note)
 		duplicateDeclaration(explanation, line, column) gives Diagnostic.create(ErrorCode.duplicateDefinition, message: explanation, line: line, column: column, filePath: path)
 	end 'kind'

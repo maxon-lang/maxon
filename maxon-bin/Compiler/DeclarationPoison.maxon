@@ -3,6 +3,7 @@ typealias PoisonedDeclarationArray = Array with PoisonedDeclaration
 typealias PoisonedDeclarationsByName = Map with (ByteArray, PoisonedDeclarationArray)
 typealias DuplicatedFunctionSet = Set with ByteArray
 typealias LostHeadNameSet = Set with ByteArray
+export typealias ReportedArityMessageSet = Set with String
 
 export typealias PendingConsequenceArray = Array with PendingConsequence
 
@@ -45,12 +46,13 @@ export type PendingConsequence
 		return Self{file: self.file.clone(), consequence: self.consequence.clone(), lost: self.lost.clone(), sinkStart: self.sinkStart - removed, sinkEnd: self.sinkEnd - removed}
 	end 'shiftedBack'
 
-	export function isExplainedBy(poison DeclarationPoison, signatures ProgramSignatures, reports UnknownTypeReports) returns bool
+	export function isExplainedBy(poison DeclarationPoison, signatures ProgramSignatures, reports UnknownTypeReports, arityReports ReportedArityMessageSet) returns bool
 		return match self.consequence 'consequence'
 			unrelated gives false
 			unknownType(name) gives poison.refusesAnyPartOfFrom(singleName(name), reader: self.file, signatures: signatures, counting: PoisonEntriesCounted.backedEntries) or reports.reportedUnknownName(name, readerFilePath: self.file)
 			subject(names) gives poison.refusesAnyPartOfFrom(names, reader: self.file, signatures: signatures, counting: PoisonEntriesCounted.backedEntries) or poison.refusesAnExtensionQualifying(names, reader: self.file, signatures: signatures)
 			handlerBody(message) gives poison.holdsABackedAbandonedBodyNamed(message)
+			genericArgumentCount(reported) gives arityReports.contains(reported)
 		end 'consequence'
 	end 'isExplainedBy'
 
@@ -58,7 +60,8 @@ export type PendingConsequence
 		var names = NameRoster.create(0)
 
 		match self.consequence 'consequence'
-			unrelated then break
+			unrelated or
+			genericArgumentCount then break
 			unknownType(name) then addRefusalKeys(name, into: names)
 			subject(subjects) then addEachRefusalKeys(subjects, into: names)
 			handlerBody(message) then names.push(message)
@@ -74,6 +77,7 @@ export type PendingConsequence
 			subject(subjects) then addExtensionQualifiers(subjects, into: qualifiers)
 			unrelated or
 			unknownType or
+			genericArgumentCount or
 			handlerBody then break
 		end 'consequence'
 
@@ -523,7 +527,7 @@ export type DeclarationPoison
 	end 'refusesAnyPartOfFrom'
 
 	export function refusesAPartOfFrom(callee immutable ByteArray, reader FilePath, signatures ProgramSignatures, counting PoisonEntriesCounted) returns bool
-		if self.holdsALostHeadNamed(callee) 'theCalleeIsALostHead'
+		if self.holdsALostHeadNamed(callee) and not signatures.declaresAFreeFunctionVisibleFrom(callee, readerFilePath: reader) 'theCalleeIsALostHead'
 			return true
 		end 'theCalleeIsALostHead'
 
@@ -956,13 +960,7 @@ function methodBodyClosesAt(tokens TokenArray, index ElementIndex, methodName By
 end 'methodBodyClosesAt'
 
 function methodHeaderLineIn(tokens TokenArray, index ElementIndex) returns bool
-	var keyword = pastVisibilityModifiers(tokens, index: index)
-
-	if tokenKindAt(tokens, index: keyword) == TokenKind.static 'aStaticMember'
-		keyword = pastVisibilityModifiers(tokens, index: keyword + 1)
-	end 'aStaticMember'
-
-	return functionDeclarationShapeIn(tokens, index: keyword)
+	return functionDeclarationShapeIn(tokens, index: pastVisibilityModifiers(tokens, index: pastDeclarationModifiers(tokens, index: index)))
 end 'methodHeaderLineIn'
 
 function headReadingAt(tokens TokenArray, position ElementIndex) returns HeadReading

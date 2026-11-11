@@ -4247,6 +4247,30 @@ error E2001: <fragment>:2:1: Expected function declaration, got 'helper'
 error E2004: <fragment>:7:11: Cannot operate on ExitCode and String
 ```
 
+<!-- test: error.a-lost-head-in-one-file-does-not-hide-a-wrong-call-to-a-same-named-function-of-another -->
+`a.maxon` loses its `function` keyword, so `helper` there is refused. `b.maxon` declares its own `helper`, which takes one
+argument, and `main` calls it with none: that call resolves to `b.maxon`'s declaration, not to the refused head, so the
+arity error is reported beside the lost head.
+```maxon
+// --- file: a.maxon
+helper() returns ExitCode
+	return 0
+end 'helper'
+
+// --- file: b.maxon
+function helper(n ExitCode) returns ExitCode
+	return n
+end 'helper'
+
+function main() returns ExitCode
+	return helper()
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:3:1: Expected function declaration, got 'helper'
+error E3036: <fragment>:13:9: 'helper' expects 1 argument(s) but 0 were provided
+```
+
 <!-- test: error.a-typealias-of-an-unknown-type-written-at-several-declarations-reports-the-refusal-once -->
 `Reading` is refused, so each declaration that names it (a field, a parameter, another function's parameter) is a
 consequence of that one refusal and is not an unknown type of its own. `other` stays reported.

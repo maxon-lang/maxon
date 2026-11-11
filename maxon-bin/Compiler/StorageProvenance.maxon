@@ -2918,7 +2918,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.noteLastArgumentJudged()
 
 		for parameter in parameters 'eachWritersName'
-			reportPositioned(self.project, code: ErrorCode.semanticWriteThroughImmutableRecord, message: writtenArgumentMessage(self.blamedSubject(func, value: value, blamed: blamed, call: call), parameter: parameter, functionName: self.signatures.sourceNameOfFunction(func.name)), line: call.line, column: call.column, filePath: func.sourceFilePath)
+			reportPositioned(self.project, code: ErrorCode.semanticWriteThroughImmutableRecord, message: writtenArgumentMessage(self.blamedSubject(func, value: value, blamed: blamed, call: call), parameter: parameter, functionName: functionDisplay(self.project, func: func).bare()), line: call.line, column: call.column, filePath: func.sourceFilePath)
 		end 'eachWritersName'
 
 		return true
@@ -6886,7 +6886,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			let view = self.maybePermanentViewOf(value)
 
 			if view != PermanentView.none and not self.writeWasRefusedAtItsDoor(func, target: value) 'aPermanentViewsRecord'
-				let viewMessage = writtenArgumentMessage(readOnlyRootSubject(try self.viewRootName(func, ir: ir, value: value) otherwise "", kind: viewRootKind(view)), parameter: try self.writtenArgParams.get(k) otherwise panic("ProvenanceTracer.checkWrittenArguments: writtenArgParams.get OOB at {k}"), functionName: self.signatures.sourceNameOfFunction(func.name))
+				let viewMessage = writtenArgumentMessage(readOnlyRootSubject(try self.viewRootName(func, ir: ir, value: value) otherwise "", kind: viewRootKind(view)), parameter: try self.writtenArgParams.get(k) otherwise panic("ProvenanceTracer.checkWrittenArguments: writtenArgParams.get OOB at {k}"), functionName: functionDisplay(self.project, func: func).bare())
 				self.refuse(callLine, column: callColumn, code: ErrorCode.semanticWriteThroughImmutableRecord, message: viewMessage)
 				continue
 			end 'aPermanentViewsRecord'
@@ -6915,7 +6915,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			end 'noNamedRecord'
 
 			view parameter = try self.writtenArgParams.get(k) otherwise panic("ProvenanceTracer.checkWrittenArguments: writtenArgParams.get OOB at {k}")
-			let message = writtenArgumentMessage(self.blamedSubject(func, value: value, blamed: blamed, call: call), parameter: parameter, functionName: self.signatures.sourceNameOfFunction(func.name))
+			let message = writtenArgumentMessage(self.blamedSubject(func, value: value, blamed: blamed, call: call), parameter: parameter, functionName: functionDisplay(self.project, func: func).bare())
 			self.refuse(callLine, column: callColumn, code: ErrorCode.semanticWriteThroughImmutableRecord, message: message)
 			self.leaveDoor()
 		end 'eachArgument'
@@ -11166,8 +11166,8 @@ end 'writtenArgumentMessage'
 
 module function callbackWritesHandedValueMessage(writer String, parameter ArgumentParameter, callee String, blamed String) returns String
 	return match parameter 'parameter'
-		named(name) gives "'{writer}' writes its parameter '{displayParamName(name)}', but '{callee}' passes it the immutable '{blamed}'"
-		unnamed gives "'{writer}' may write its arguments, but '{callee}' passes it the immutable '{blamed}'"
+		named(name) gives "{writer} writes its parameter '{displayParamName(name)}', but {callee} passes it the immutable '{blamed}'"
+		unnamed gives "{writer} may write its arguments, but {callee} passes it the immutable '{blamed}'"
 	end 'parameter'
 end 'callbackWritesHandedValueMessage'
 

@@ -225,6 +225,95 @@ end 'main'
 error E3006: <fragment>:9:11: 'total' names both a field and a method of type 'Counter'
 ```
 
+<!-- test: error.two-fields-of-one-name-in-a-type -->
+A field name is declared once per type, as a method name is. The second `payload` is refused where it is declared, and
+the literal that supplies `payload` once is not a missing field.
+```maxon
+type Holder
+	export let payload as ExitCode
+	export let payload as ExitCode
+
+	static function create() returns Self
+		return Self{payload: 1}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.payload
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:4:13: Duplicate field 'payload' in type 'Holder'
+```
+
+<!-- test: error.two-fields-of-one-name-with-expression-defaults -->
+A repeated field with an expression default is refused at the second declaration and nowhere else: the second default
+supplies no helper of its own.
+```maxon
+type Inner
+	export let value as ExitCode
+
+	static function create() returns Self
+		return Self{value: 3}
+	end 'create'
+end 'Inner'
+
+type Holder
+	export let payload = Inner.create()
+	export let payload = Inner.create()
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.payload.value
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:12:13: Duplicate field 'payload' in type 'Holder'
+```
+
+<!-- test: error.two-fields-of-one-name-with-expression-defaults-of-different-types -->
+The two defaults may have different types; the refusal is still the second declaration alone.
+```maxon
+type Inner
+	export let value as ExitCode
+
+	static function create() returns Self
+		return Self{value: 3}
+	end 'create'
+end 'Inner'
+
+type Other
+	export let value as ExitCode
+
+	static function create() returns Self
+		return Self{value: 4}
+	end 'create'
+end 'Other'
+
+type Holder
+	export let payload = Inner.create()
+	export let payload = Other.create()
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.payload.value
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:20:13: Duplicate field 'payload' in type 'Holder'
+```
+
 <!-- test: error.two-free-functions-of-one-name-in-two-files-of-one-directory -->
 Two files of one directory declare `module function helper`, which every file of the directory sees: the
 second declaration, in `b.maxon`, is refused.

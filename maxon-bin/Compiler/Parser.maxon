@@ -2009,6 +2009,7 @@ export union SourceParseError implements Error
 	serviceTypeNotASpawnTarget(explanation String, typeName String, line LineNumber, column ColumnNumber)
 	serviceReplyGraphNotWalkable(explanation String, message String, line LineNumber, column ColumnNumber)
 	spawnStartRequiresTry(explanation String, factory immutable ByteArray, line LineNumber, column ColumnNumber)
+	genericArgumentCountRefused(code ErrorCode, explanation String, line LineNumber, column ColumnNumber)
 end 'SourceParseError'
 
 // The declarations a receiver was derived from (its brand, the calls that produced it followed
@@ -4159,12 +4160,28 @@ type BodyWalk
 	end 'argumentIndex'
 end 'BodyWalk'
 
+enum BodyExtent
+	block
+	expression
+end 'BodyExtent'
+
+typealias NonCallNameSites = Map with ByteArray, ElementIndex
+
+type NonCallNameIndex
+	export let start as ElementIndex
+	export var scannedTo as ElementIndex
+	export var firstSites as NonCallNameSites
+
+	static function from(start ElementIndex) returns NonCallNameIndex
+		return Self{start: start, scannedTo: start, firstSites: NonCallNameSites.create()}
+	end 'from'
+end 'NonCallNameIndex'
+
 type IndirectCallScan
 	export var boundNames as CellLocalNameSet
-	export var nonCallNames as CellLocalNameSet
-	export var scannedTo as ElementIndex
+	export var nonCallNames as NonCallNameIndex
 
-	static function over(start ElementIndex, params NameRoster, enclosing CellLocalNameRoster) returns IndirectCallScan
+	static function over(nonCallNames NonCallNameIndex, params NameRoster, enclosing CellLocalNameRoster) returns IndirectCallScan
 		var names = CellLocalNameSet.create()
 
 		for param in params 'eachParameter'
@@ -4178,7 +4195,7 @@ type IndirectCallScan
 			entries(outer) then insertAllNames(names, source: outer)
 		end 'chain'
 
-		return Self{boundNames: names, nonCallNames: CellLocalNameSet.create(), scannedTo: start}
+		return Self{boundNames: names, nonCallNames: nonCallNames}
 	end 'over'
 end 'IndirectCallScan'
 
@@ -6628,6 +6645,26 @@ end 'duplicateDeclarationMessage'
 function fieldAndMethodMessage(member ByteArray, typeName ByteArray) returns String
 	return "'{String.from(member)}' names both a field and a method of type '{String.from(typeName)}'"
 end 'fieldAndMethodMessage'
+
+function layoutReceivingField(declared StructLayout, repeatsAField bool) returns StructLayout
+	if not repeatsAField 'aNewName'
+		return declared
+	end 'aNewName'
+
+	return StructLayout.create(declared.name, visibility: declared.visibility, declFilePath: declared.declFilePath)
+end 'layoutReceivingField'
+
+function baseNotGenericMessage(base ByteArray) returns String
+	return "Type '{String.from(base)}' has no associated types"
+end 'baseNotGenericMessage'
+
+function genericArgumentCountCode(layout StructLayout) returns ErrorCode
+	return ErrorCode.genericBaseNotGeneric if layout.typeParamCount() == 0 else ErrorCode.genericArityMismatch
+end 'genericArgumentCountCode'
+
+function duplicateFieldMessage(member ByteArray, typeName ByteArray) returns String
+	return "Duplicate field '{String.from(member)}' in type '{String.from(typeName)}'"
+end 'duplicateFieldMessage'
 
 enum TypeMemberKind
 	field
@@ -16121,8 +16158,22 @@ end 'declarationBeginsStatementIn'
 // own stated reason — a third tier taught to one reader and not another would put two readers of one
 // grammar a token apart.
 function declarationModifierIn(tokens TokenArray, index ElementIndex) returns bool
-	return visibilityModifierIn(tokens, index: index) or (try tokens.get(index) otherwise return false).kind == TokenKind.static
+	return pastDeclarationModifiers(tokens, index: index) > index
 end 'declarationModifierIn'
+
+module function pastDeclarationModifiers(tokens TokenArray, index ElementIndex) returns ElementIndex
+	let keyword = pastVisibilityModifiers(tokens, index: index)
+
+	if tokenKindAt(tokens, index: keyword) == TokenKind.static 'aStaticMember'
+		return keyword + 1
+	end 'aStaticMember'
+
+	return keyword
+end 'pastDeclarationModifiers'
+
+function staticModifierEndsAt(tokens TokenArray, index ElementIndex) returns bool
+	return index > 0 and tokenKindAt(tokens, index: index - 1) == TokenKind.static
+end 'staticModifierEndsAt'
 
 // The same question at an arbitrary INDEX — split out for `moduleModifierIn`'s reason, one door up: the
 // fixed-element-count scan (`Parser.structFieldKeywordAt`) walks a type body by index and parses
@@ -19867,6 +19918,9 @@ export type Parser
 	// are never confused.
 	var blockExtentEnds as TokenIndexArray
 
+	var fileNonCallNames as NonCallNameIndex
+	var bodyNonCallNames as NonCallNameIndex
+
 	// ⭐ **THE FILE'S KEYWORD TOKENS THAT ARE DECLARED NAMES, ASCENDING** — a function's own name and each of
 	// its parameters' names, kept only where the source spelled a KEYWORD there. It exists for exactly
 	// one reader, `namesADeclaration`: a keyword written in one of those positions is a NAME, so the
@@ -20514,6 +20568,8 @@ export type Parser
 			parenGroups: ParenGroups.create(),
 			settledTypeNames: SettledTypeNameMap.create(),
 			memos: ParseMemos.create(),
+			fileNonCallNames: NonCallNameIndex.from(0),
+			bodyNonCallNames: NonCallNameIndex.from(0),
 			pos: 0,
 			artifact: FileParseArtifact.create(job.path, livesUnderStdlibDirectory: job.livesUnderStdlibDirectory, sourceBytes: sourceBytes),
 			libraryBlame: LibraryBlame.unblamed,
@@ -20794,6 +20850,12 @@ export type Parser
 		for region in self.artifact.abandonedRegions 'eachRegion'
 			salvaged.abandonedRegions.push(region)
 		end 'eachRegion'
+
+		for diagnostic in self.artifact.diagnostics 'eachDiagnostic'
+			if isGenericArgumentCountCode(diagnostic.code) 'aRefusedArgumentCount'
+				salvaged.diagnostics.push(diagnostic.clone())
+			end 'aRefusedArgumentCount'
+		end 'eachDiagnostic'
 
 		salvaged.adoptHiddenTypeNames(self.artifact)
 		salvaged.refusal = refusal
@@ -23683,6 +23745,7 @@ export type Parser
 		self.enterTypeScope(site.typeName, isEnum: false)
 		self.enclosingTypeParams = self.signatures.structTypeParamsOf(site.typeName)
 		var q = site.bodyStart
+		let fieldNames = TypeMemberNames.create()
 
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			if self.closesBlockAt(q) 'bodyEnd'
@@ -23695,7 +23758,7 @@ export type Parser
 			end 'method'
 
 			if self.structFieldKeywordAt(q) 'field'
-				q = self.recordFieldDefaultCountNeeds(q, typeName: site.typeName, methodNames: methodNames, countSeeds: countSeeds, countCallees: countCallees)
+				q = self.recordFieldDefaultCountNeeds(q, typeName: site.typeName, fieldNames: fieldNames, methodNames: methodNames, countSeeds: countSeeds, countCallees: countCallees)
 				continue
 			end 'field'
 
@@ -23727,9 +23790,11 @@ export type Parser
 		return scan.endPos
 	end 'recordMethodCountNeeds'
 
-	function recordFieldDefaultCountNeeds(q ElementIndex, typeName ByteArray, methodNames NameRoster, countSeeds DescriptorNeedMap, countCallees SelfCalleesMap) returns ElementIndex
+	function recordFieldDefaultCountNeeds(q ElementIndex, typeName ByteArray, fieldNames TypeMemberNames, methodNames NameRoster, countSeeds DescriptorNeedMap, countCallees SelfCalleesMap) returns ElementIndex
 		let afterModifier = pastVisibilityModifiers(self.tokens, index: q)
 		let fieldName = self.tokenAt(afterModifier + 1).value
+		let repeatsAField = fieldNames.contains(fieldName)
+		fieldNames.upsert(fieldName, value: TypeMemberKind.field)
 
 		var eq = afterModifier + 2
 
@@ -23742,6 +23807,11 @@ export type Parser
 		end 'noDefault'
 
 		let regionEnd = statementEndIndexIn(self.tokens, start: eq + 1, blockShiftAt: ignoreBlocks)
+
+		if repeatsAField 'aRepeatedField'
+			return regionEnd
+		end 'aRepeatedField'
+
 		let helperName = fieldDefaultHelperName(typeName, fieldName: fieldName)
 		let scan = self.scanFixedElementCountIn(eq + 1, regionEnd: regionEnd)
 
@@ -25813,7 +25883,11 @@ export type Parser
 				// field at the wrong offset — so the scan stops rather than recording a layout it
 				// knows is wrong. The real parse reports the malformed declaration properly.
 				try self.readStructFieldInto(layout) otherwise break
-				self.recordScannedFieldDefaultHelper(layout, index: fieldIndex, entries: entries)
+
+				if layout.fieldCount() > fieldIndex 'aNewField'
+					self.recordScannedFieldDefaultHelper(layout, index: fieldIndex, entries: entries)
+				end 'aNewField'
+
 				continue
 			end 'isField'
 
@@ -26820,7 +26894,7 @@ export type Parser
 			// signature is read, because reading it moves the cursor past the `function` keyword — exactly as
 			// `recordScannedType`'s method arm does, and for the same reason.
 			if depth == 0 and self.atEnumMethodStart() 'method'
-				self.pos = self.enumMethodKeywordIndex(self.pos)
+				self.pos = pastDeclarationModifiers(self.tokens, index: self.pos)
 				depth = depth + 1
 				self.advance()
 
@@ -27225,28 +27299,22 @@ export type Parser
 	// head is recognized. `visibilityModifierIn`'s split, one door up, and for its reason: the
 	// fixed-element-count scan walks a type body by index and parses nothing.
 	function structFieldKeywordAt(index ElementIndex) returns bool
-		let afterModifier = pastVisibilityModifiers(self.tokens, index: index)
-		let kind = self.kindAt(afterModifier)
+		let keyword = pastDeclarationModifiers(self.tokens, index: index)
+		let kind = self.kindAt(keyword)
 
-		if afterModifier > 0 and self.kindAt(afterModifier - 1) == TokenKind.static 'aWordAfterStatic'
-			return false
-		end 'aWordAfterStatic'
-
-		return kind == TokenKind.let or kind == TokenKind.var
+		// `scanFixedElementCountNeedsInto` steps token by token, so it also asks at the `let` of a
+		// `static let`, where no modifier lies ahead; the backward look keeps that binding out of the fields.
+		return (kind == TokenKind.let or kind == TokenKind.var) and not staticModifierEndsAt(self.tokens, index: keyword)
 	end 'structFieldKeywordAt'
 
 	// ⭐ **DOES A MEMBER DECLARATION OPENING AT `index` DECLARE TYPE-QUALIFIED MODULE STORAGE — `[export]
-	// static (let|var)`?** The `static` prefix is the whole difference between this and
+	// static let`?** The `static` prefix is the whole difference between this and
 	// `structFieldKeywordAt` one door up, which is why the two are written as siblings: a `let`/`var`
 	// WITHOUT `static` is a per-instance FIELD and one WITH it is one copy for the type, and the predicates
 	// that tell a member list which it is read the same head from the same index.
-	//
-	// It defers to `structFieldKeywordAt` for the keyword half rather than respelling `let or var`, for
-	// that predicate's own reason: the set of keywords that introduce a binding lives in ONE place, so a
-	// keyword taught to one reader and not another cannot put two readers of one grammar a token apart.
 	function staticBindingKeywordAt(index ElementIndex) returns bool
-		let afterModifier = pastVisibilityModifiers(self.tokens, index: index)
-		return self.kindAt(afterModifier) == TokenKind.static and self.kindAt(pastVisibilityModifiers(self.tokens, index: afterModifier + 1)) == TokenKind.let
+		let afterStatic = pastDeclarationModifiers(self.tokens, index: index)
+		return afterStatic > pastVisibilityModifiers(self.tokens, index: index) and self.kindAt(pastVisibilityModifiers(self.tokens, index: afterStatic)) == TokenKind.let
 	end 'staticBindingKeywordAt'
 
 	// Read one field declaration into `layout`. THE one field reader, shared by the sweep and the real
@@ -27258,13 +27326,15 @@ export type Parser
 	//
 	// A defaulted field's type is read off the default's TOKENS (`inferredFieldTypeAt`) because the
 	// sweep fixes the layout's offsets from it before any initializer is evaluated.
-	function readStructFieldInto(layout StructLayout) throws SourceParseError
+	function readStructFieldInto(declared StructLayout) throws SourceParseError
 		let visibility = try self.consumeOptionalVisibility()
 
 		let mutable = self.at(TokenKind.var)
 		try self.consume(TokenKind.var if mutable else TokenKind.let)
 
 		let nameTok = try self.consume(TokenKind.identifier)
+		let repeatsAField = declared.fieldNames.contains(nameTok.value)
+		let layout = layoutReceivingField(declared, repeatsAField: repeatsAField)
 
 		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try requireMemberCount((layout.fieldCount()) + 1, limit: MaxDeclaredMembers, members: "fields", anchor: nameTok)
@@ -27293,7 +27363,7 @@ export type Parser
 		let spelling = inferred.spelling
 		try self.requireDefaultableFieldType(nameTok, equalsTok: equalsTok, layout: layout, fieldType: spelling.fieldType)
 
-		let defaultValue = try self.readInferredFieldDefault(nameTok, layout: layout, inferred: inferred, defaultStart: defaultStart, defaultEnd: defaultEnd)
+		let defaultValue = try self.readInferredFieldDefault(nameTok, layout: layout, inferred: inferred, defaultStart: defaultStart, defaultEnd: defaultEnd, repeatsAField: repeatsAField)
 		layout.addField(nameTok.value, declaredType: spelling.fieldType, mutable: mutable, tier: visibility, defaultValue: defaultValue, declaredSurface: spelling.declaredSurface, declaredBrand: spelling.declaredBrand, spelledName: spelling.spelledName, typeSite: spelling.typeSite)
 		layout.fieldTypeSites.noteCapabilityOfLatest(spelling.capability)
 	end 'readStructFieldInto'
@@ -27355,7 +27425,7 @@ export type Parser
 		throw SourceParseError.uninferrableFieldDefault(uninferrableTok.line, column: uninferrableTok.column)
 	end 'inferredFieldTypeAt'
 
-	function readInferredFieldDefault(nameTok Token, layout StructLayout, inferred InferredFieldType, defaultStart ElementIndex, defaultEnd ElementIndex) returns FieldDefault throws SourceParseError
+	function readInferredFieldDefault(nameTok Token, layout StructLayout, inferred InferredFieldType, defaultStart ElementIndex, defaultEnd ElementIndex, repeatsAField bool) returns FieldDefault throws SourceParseError
 		self.pos = defaultStart
 
 		if self.defaultRegionIsLiteral(defaultStart, regionEnd: inferred.valueEnd) 'aLiteral'
@@ -27364,6 +27434,11 @@ export type Parser
 			self.pos = defaultEnd
 			return FieldDefault.literal(given)
 		end 'aLiteral'
+
+		if repeatsAField 'aRepeatedField'
+			self.pos = defaultEnd
+			return FieldDefault.none
+		end 'aRepeatedField'
 
 		let bareCreate = self.defaultRegionIsAnEmptyCreate(defaultStart, regionEnd: defaultEnd)
 		let helperName = self.captureFieldDefault(layout.name, fieldName: nameTok.value, fieldType: inferred.spelling.fieldType, regionEnd: defaultEnd)
@@ -27401,9 +27476,9 @@ export type Parser
 		while q < regionEnd 'scan'
 			let kind = self.kindAt(q)
 
-			if tokenKindOpensABracket(kind) or kind == TokenKind.stringInterpStart 'opens'
+			if tokenKindOpensAGroup(kind) 'opens'
 				depth = depth + 1
-			end 'opens' else if tokenKindClosesABracket(kind) or kind == TokenKind.stringInterpEnd 'closes'
+			end 'opens' else if tokenKindClosesAGroup(kind) 'closes'
 				depth = depth - 1
 			end 'closes' else if depth == 0 and kind == TokenKind.as 'aCast'
 				castAt = q
@@ -30543,7 +30618,7 @@ export type Parser
 	// that is a declared type with an empty `uses` list (`typeParamCount() == 0`) — which are the same
 	// diagnostic. Bound here rather than spelled at each site so the two callers cannot drift the message.
 	function recordBaseNotGeneric(base GenericBaseName)
-		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: "Type '{String.from(base.written)}' has no associated types", range: SourceRange.ofToken(base.anchor))
+		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: baseNotGenericMessage(base.written), range: SourceRange.ofToken(base.anchor))
 	end 'recordBaseNotGeneric'
 
 	// The declared-base half of `checkGenericInstance` — base-is-generic, then arity. No per-argument managed
@@ -30555,17 +30630,9 @@ export type Parser
 	// parameter, so the rule cannot be read off the declaration: it is derived from the base NAME in
 	// `PromiseType.maxon`, which is the one place that has to learn a second such base if one ever appears.
 	function checkGenericInstanceAgainst(layout StructLayout, base GenericBaseName, argCount FieldIndex)
-		if layout.typeParamCount() == 0 'notGeneric'
-			self.recordBaseNotGeneric(base)
-			return
-		end 'notGeneric'
-
-		let least = layout.typeParamCount() - promiseOptionalTrailingTypeParams(layout.name)
-
-		if argCount < least or argCount > layout.typeParamCount() 'wrongArity'
-			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(base.written)}' expects {genericArityPhrase(least, most: layout.typeParamCount())} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(base.anchor))
-			return
-		end 'wrongArity'
+		if layout.typeParamCount() == 0 or not layoutAdmitsTypeArgumentCount(layout, count: argCount) 'wrongArgumentCount'
+			self.recordArtifactDiagnostic(genericArgumentCountCode(layout), message: self.genericArgumentCountMessage(layout, base: base.written, supplied: argCount), range: SourceRange.ofToken(base.anchor))
+		end 'wrongArgumentCount'
 	end 'checkGenericInstanceAgainst'
 
 	// How E2056 spells the arity it wanted. A base with no optional parameters says one number, exactly as
@@ -30574,6 +30641,18 @@ export type Parser
 	function genericArityPhrase(least FieldIndex, most FieldIndex) returns String
 		return "{most}" if least == most else "{least} or {most}"
 	end 'genericArityPhrase'
+
+	function genericArgumentCountMessage(layout StructLayout, base ByteArray, supplied FieldIndex) returns String
+		if layout.typeParamCount() == 0 'notGeneric'
+			return baseNotGenericMessage(base)
+		end 'notGeneric'
+
+		return "generic type '{String.from(base)}' expects {self.genericArityPhrase(layoutLeastTypeArguments(layout), most: layout.typeParamCount())} type argument(s), but {supplied} were supplied"
+	end 'genericArgumentCountMessage'
+
+	function genericArgumentCountRefusal(layout StructLayout, supplied ElementIndex, baseTok Token) returns SourceParseError
+		return SourceParseError.genericArgumentCountRefused(genericArgumentCountCode(layout), explanation: self.genericArgumentCountMessage(layout, base: layout.name, supplied: supplied as FieldIndex), line: baseTok.line, column: baseTok.column)
+	end 'genericArgumentCountRefusal'
 
 	// Parse `function(paramTypes) [returns T]` on a typealias RHS, the cursor sitting on
 	// `function`. The whole declared SIGNATURE is stored INTERNER-FREE (a tag + a name per parameter and for
@@ -31169,7 +31248,13 @@ export type Parser
 		if let earlier = try memberNames.get(nameTok.value) 'aNameAlreadyDeclared'
 			if earlier != kind 'oneOfEach'
 				self.recordArtifactDiagnostic(ErrorCode.duplicateDefinition, message: fieldAndMethodMessage(nameTok.value, typeName: typeName), range: SourceRange.ofToken(nameTok))
+				return
 			end 'oneOfEach'
+
+			match kind 'sameKind'
+				field then self.recordArtifactDiagnostic(ErrorCode.duplicateDefinition, message: duplicateFieldMessage(nameTok.value, typeName: typeName), range: SourceRange.ofToken(nameTok))
+				method then return
+			end 'sameKind'
 
 			return
 		end 'aNameAlreadyDeclared'
@@ -31178,7 +31263,7 @@ export type Parser
 	end 'noteMemberName'
 
 	function typeMemberMethodNameToken() returns Token throws AbsentError
-		let at = self.extensionMemberFunctionKeywordAt(self.pos)
+		let at = pastDeclarationModifiers(self.tokens, index: self.pos)
 
 		if not self.functionDeclarationAt(at) 'notAMethod'
 			throw AbsentError.absent
@@ -31449,12 +31534,12 @@ export type Parser
 					let shadowed = self.signatures.extensionMethodIsShadowed(extensionMemberName, takesReceiver: memberTakesReceiver)
 
 					if not shadowed and not extensionTargetIsAnInterface(header.target) and self.signatures.typeDeclaresField(conformer, fieldName: memberName) 'nameTheTypeGivesAField'
-						let fieldMemberTok = self.tokenAt(self.extensionMemberFunctionKeywordAt(self.pos) + 1)
+						let fieldMemberTok = self.tokenAt(pastDeclarationModifiers(self.tokens, index: self.pos) + 1)
 						throw SourceParseError.duplicateDeclaration(fieldAndMethodMessage(memberName, typeName: conformer), line: fieldMemberTok.line, column: fieldMemberTok.column)
 					end 'nameTheTypeGivesAField'
 
 					if shadowed and not extensionTargetIsAnInterface(header.target) 'hidesTheTypesOwnMember'
-						let memberNameTok = self.tokenAt(self.extensionMemberFunctionKeywordAt(self.pos) + 1)
+						let memberNameTok = self.tokenAt(pastDeclarationModifiers(self.tokens, index: self.pos) + 1)
 						throw SourceParseError.duplicateDeclaration(duplicateDeclarationMessage(extensionMemberName), line: memberNameTok.line, column: memberNameTok.column)
 					end 'hidesTheTypesOwnMember'
 
@@ -31495,7 +31580,7 @@ export type Parser
 	// `function <name>` — because the shadow decision has to be taken BEFORE the member is consumed,
 	// and a member the decision skips is stepped over whole rather than parsed.
 	function extensionMemberMethodNameAt(index ElementIndex) returns immutable ByteArray throws AbsentError
-		let at = self.extensionMemberFunctionKeywordAt(index)
+		let at = pastDeclarationModifiers(self.tokens, index: index)
 
 		if not self.functionDeclarationAt(at) 'notAMethod'
 			throw AbsentError.absent
@@ -31503,16 +31588,6 @@ export type Parser
 
 		return self.tokenAt(at + 1).value
 	end 'extensionMemberMethodNameAt'
-
-	function extensionMemberFunctionKeywordAt(index ElementIndex) returns ElementIndex
-		let at = pastVisibilityModifiers(self.tokens, index: index)
-
-		if self.extensionMemberTakesReceiverAt(index) 'instanceMember'
-			return at
-		end 'instanceMember'
-
-		return at + 1
-	end 'extensionMemberFunctionKeywordAt'
 
 	function extensionInnerAliasSiteAt(nameTok Token) returns ExtensionInnerAliasSite
 		return ExtensionInnerAliasSite.create(self.job.path, nameLine: nameTok.line, nameColumn: nameTok.column)
@@ -32575,23 +32650,8 @@ export type Parser
 	// ⚠ It is the shape gate for BOTH readers of an enum body — the real parse and the tolerant sweep — so
 	// the two cannot disagree about which members are cases, which is what a case's TAG depends on.
 	function atEnumMethodStart() returns bool
-		return self.functionDeclarationAt(self.enumMethodKeywordIndex(self.pos))
+		return self.functionDeclarationAt(pastDeclarationModifiers(self.tokens, index: self.pos))
 	end 'atEnumMethodStart'
-
-	// The index the enum member starting at `index` declares its `function` keyword at, having stepped over
-	// the optional visibility and `static` modifiers. THE one spelling of that modifier list, read by the
-	// peek-only predicate above AND by the sweep's cursor step (`recordScannedEnum`) — taught to one and not
-	// the other, the sweep would count a modifier token as the method's block opener and mis-close the enum.
-	// The visibility modifiers are `pastVisibilityModifiers`', the parser's one copy of that set.
-	function enumMethodKeywordIndex(index ElementIndex) returns ElementIndex
-		var p = pastVisibilityModifiers(self.tokens, index: index)
-
-		if self.kindAt(p) == TokenKind.static 'static'
-			p = p + 1
-		end 'static'
-
-		return p
-	end 'enumMethodKeywordIndex'
 
 	// Read ONE enum/union case into `layout`, threading the auto-increment tag through `counter` and
 	// fixing the layout's BACKING. Reports the three declaration diagnostics: E3030 (duplicate case
@@ -34163,7 +34223,7 @@ export type Parser
 
 		self.bodyState.bodyStart = self.pos
 		self.bodyState.outerBodyStart = self.pos
-		self.seedCellLocalNames(paramNames)
+		self.seedCellLocalNames(paramNames, extent: BodyExtent.block)
 		try self.bindParameters(func, consume: self.signatures.consumeOf(sourceName), paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
 
 		self.skipNewlines()
@@ -91659,7 +91719,7 @@ export type Parser
 		// `missingBaseLayout`'s *"the compiler reads no stdlib"* sentence — a refusal whose every clause had stopped
 		// being true for this type the moment the module was listed.**
 		if tag == ValueTypeTag.genericInstance and not (self.signatures.genericInstanceHasBaseLayout(nameId as GenericInstanceId) or self.signatures.declarationsValueIsTheManagedRecord(typeName)) 'noBaseLayout'
-			throw self.missingBaseLayout(access, typeName: typeName, baseTok: baseTok)
+			throw self.missingBaseLayout(access, instance: nameId as GenericInstanceId, typeName: typeName, baseTok: baseTok)
 		end 'noBaseLayout'
 
 		match self.signatures.structInAnyFile(typeName) 'declared'
@@ -91668,7 +91728,7 @@ export type Parser
 		end 'declared'
 	end 'structLayoutOfType'
 
-	// Which of the two ways a generic instance's base has no `StructLayout` this one is, worded for a reader
+	// Which of the three ways a generic instance's base has no `StructLayout` this one is, worded for a reader
 	// who needs opposite things from them — the diagnostic half of `ProgramSignatures.genericInstanceHasBaseLayout`,
 	// whose header states the split. Only an instance reaches here; a `structRef` with no layout is an
 	// invariant break and panics at the call site above.
@@ -91681,7 +91741,7 @@ export type Parser
 	// `array-declared-record.error.a-conformer-named-for-a-container-that-constructs-nothing-…` MEASURED it:
 	// `v.push(5 as Num)` reported as a field access on `v`. A refusal that misnames the construct it refuses
 	// sends the reader to look at the wrong line.
-	function missingBaseLayout(access BaseAccessKind, typeName ByteArray, baseTok Token) returns SourceParseError
+	function missingBaseLayout(access BaseAccessKind, instance GenericInstanceId, typeName ByteArray, baseTok Token) returns SourceParseError
 		// ⚠ **DO NOT SAY THE FIELD DOES NOT EXIST — IT VERY LIKELY DOES.** The compiler SYNTHESIZES
 		// the `Array`/`Set` runtime record instead of compiling the declaration, so no `type` exists here to
 		// carry a field table at all — the field is missing from this compiler, not from the language. E2015 —
@@ -91699,6 +91759,12 @@ export type Parser
 		if self.signatures.isBuiltinGenericBaseName(typeName) 'synthesizedBuiltin'
 			return SourceParseError.unsupported(builtinRecordAccessRefusal(access, typeName: typeName, baseName: baseTok.value), line: baseTok.line, column: baseTok.column)
 		end 'synthesizedBuiltin'
+
+		let supplied = self.signatures.genericInstanceArgCount(instance)
+
+		if self.signatures.declaresABaseRefusingTypeArgumentCount(typeName, count: supplied) 'aRefusedArgumentCount'
+			return self.genericArgumentCountRefusal(self.signatures.baseLayoutOf(instance), supplied: supplied, baseTok: baseTok)
+		end 'aRefusedArgumentCount'
 
 		// The base is not declared AT ALL, so it has no fields and never will under this spelling. The
 		// `with` that named it is the actual error and `checkGenericInstance` records E2055 against it — but
@@ -95599,7 +95665,7 @@ export type Parser
 		self.bodyState.outerBodyStart = savedBody.outerBodyStart
 		self.bodyState.resultOrigin = resultOriginOf(declaredResult)
 		self.bodyState.boundParams = savedBody.boundParams
-		self.seedCellLocalNames(paramNames)
+		self.seedCellLocalNames(paramNames, extent: BodyExtent.expression)
 		try self.bindParameters(lifted, consume: self.signatures.consumeOf(closureName), paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
 
 		// Parse the single body expression, then close the lifted function like a value `return`: the
@@ -95615,7 +95681,7 @@ export type Parser
 		// ask because it is a function of its own.
 		// It names the closure and points at the `function` keyword, so a refusal names the closure rather than
 		// blaming the method around it.
-		try self.requireNoWitnessCursorElementIsDropped("the closure written in '{self.signatures.sourceNameOfFunction(func.name)}'", line: functionTok.line, column: functionTok.column)
+		try self.requireNoWitnessCursorElementIsDropped("the closure written in {self.signatures.functionDisplay(func, authoredPath: self.job.authoredPath).quoted()}", line: functionTok.line, column: functionTok.column)
 
 		// Claimed before the capture snapshot below: a claim is a capture slot, and the env is built from the
 		// snapshot.
@@ -100099,14 +100165,14 @@ export type Parser
 		end 'aPlaceTheBindingRefusesLater'
 
 		let subject = "a literal" if self.argumentIsALiteralAt(valueStart) else "an expression"
-		throw mutableArgumentNeedsAVarError(subject, parameter: parameter, functionName: self.signatures.sourceNameOfFunction(func.name), anchor: callAnchor)
+		throw mutableArgumentNeedsAVarError(subject, parameter: parameter, functionName: self.signatures.functionDisplay(func, authoredPath: self.job.authoredPath).bare(), anchor: callAnchor)
 	end 'requireNonStorageIsNotWritten'
 
 	function requireNotAnUnmarkedParameter(func IrFunction, name ByteArray, parameter WrittenParameter, callAnchor Token) throws SourceParseError
 		view binding = self.bodyState.scope.getInfo(name)
 
 		if binding.isParameter and not binding.isCellBinding and self.parameterReassignKindOf(binding) == ParameterReassignKind.valueParameter 'anUnmarkedParameter'
-			throw SourceParseError.registryRefused(ErrorCode.semanticWriteThroughImmutableRecord, explanation: deepLetCallMessage("'{String.from(name)}', which is read-only (a parameter),", parameter: parameter, functionName: self.signatures.sourceNameOfFunction(func.name)), line: callAnchor.line, column: callAnchor.column, note: DiagnosticNote.none)
+			throw SourceParseError.registryRefused(ErrorCode.semanticWriteThroughImmutableRecord, explanation: deepLetCallMessage("'{String.from(name)}', which is read-only (a parameter),", parameter: parameter, functionName: self.signatures.functionDisplay(func, authoredPath: self.job.authoredPath).bare()), line: callAnchor.line, column: callAnchor.column, note: DiagnosticNote.none)
 		end 'anUnmarkedParameter'
 	end 'requireNotAnUnmarkedParameter'
 
@@ -105499,27 +105565,29 @@ export type Parser
 	//
 	// ⚡ **THE GATE IS WHY NO EXISTING PROGRAM PAYS FOR THIS.** `programTakesAParamByRef` is false for every program
 	// in which no function marks a parameter `mutable`, so those programs never pay for the prescan.
-	function seedCellLocalNames(paramNames NameRoster)
+	function seedCellLocalNames(paramNames NameRoster, extent BodyExtent)
 		if not self.signatures.programTakesAParamByRef() 'nothingCouldWantACell'
 			return
 		end 'nothingCouldWantACell'
 
-		self.bodyState.cellLocalNames = self.cellLocalNamesIn(self.pos, paramNames: paramNames)
+		self.bodyState.cellLocalNames = self.cellLocalNamesIn(self.pos, paramNames: paramNames, extent: extent)
 	end 'seedCellLocalNames'
 
-	function cellLocalNamesIn(bodyStart ElementIndex, paramNames NameRoster) returns CellLocalNameRoster
+	function cellLocalNamesIn(bodyStart ElementIndex, paramNames NameRoster, extent BodyExtent) returns CellLocalNameRoster
 		var handedOverByReference = CellLocalNameSet.create()
 		var walk = BodyWalk.create()
 
-		var scan = IndirectCallScan.over(self.bodyState.outerBodyStart, params: paramNames, enclosing: self.bodyState.boundParams)
+		var scan = IndirectCallScan.over(self.nonCallNamesFrom(self.bodyState.outerBodyStart), params: paramNames, enclosing: self.bodyState.boundParams)
+		var nesting = 0 as NestingDepth
 		var q = bodyStart
 
-		while self.kindAt(q) != TokenKind.eof and not self.bodyWalkEndsAt(walk, q: q) 'walk'
+		while self.kindAt(q) != TokenKind.eof and not self.bodyWalkEndsAt(walk, q: q) and not self.expressionBodyEndsAt(q, extent: extent, nesting: nesting, blockDepth: walk.blockDepth) 'walk'
 			if self.handsANameByReferenceAt(q, walk: walk) or (self.bareCallArgumentAt(q, braceStack: walk.braceStack) and self.handsToAFunctionValueByReferenceAt(q, walk: walk, scan: scan)) 'handedToAByRefPosition'
 				handedOverByReference.insert(self.tokenAt(q).value)
 			end 'handedToAByRefPosition'
 
 			self.stepBodyWalk(walk, q: q)
+			nesting = groupNestingAfter(self.kindAt(q), nesting: nesting)
 			q = q + 1
 		end 'walk'
 
@@ -105564,6 +105632,27 @@ export type Parser
 	function bodyWalkEndsAt(walk BodyWalk, q ElementIndex) returns bool
 		return walk.blockDepth == 0 and self.closesBlockAt(q)
 	end 'bodyWalkEndsAt'
+
+	function expressionBodyEndsAt(q ElementIndex, extent BodyExtent, nesting NestingDepth, blockDepth BlockDepth) returns bool
+		if extent == BodyExtent.block or nesting > 0 or blockDepth > 0 'insideTheBody'
+			return false
+		end 'insideTheBody'
+
+		let kind = self.kindAt(q)
+		return kind == TokenKind.newline or kind == TokenKind.comma or tokenKindClosesAGroup(kind)
+	end 'expressionBodyEndsAt'
+
+	function nonCallNamesFrom(start ElementIndex) returns NonCallNameIndex
+		if start == self.fileNonCallNames.start 'theFileItself'
+			return self.fileNonCallNames
+		end 'theFileItself'
+
+		if start != self.bodyNonCallNames.start 'anotherBody'
+			self.bodyNonCallNames = NonCallNameIndex.from(start)
+		end 'anotherBody'
+
+		return self.bodyNonCallNames
+	end 'nonCallNamesFrom'
 
 	function argumentHandOffAt(q ElementIndex, walk BodyWalk) returns ByRefHandOff
 		if walk.insideASubscript() or not self.callArgumentStartsAt(q, braceStack: walk.braceStack) 'notInACallsArguments'
@@ -105678,17 +105767,17 @@ export type Parser
 	end 'enclosingTypeHasAFunctionValuedFieldNamed'
 
 	function nameOccursAsAValueBefore(name ByteArray, upTo ElementIndex, scan IndirectCallScan) returns bool
-		while scan.scannedTo < upTo 'extend'
-			let i = scan.scannedTo
+		while scan.nonCallNames.scannedTo < upTo 'extend'
+			let i = scan.nonCallNames.scannedTo
 
-			if tokenCanBeAName(self.tokenAt(i)) and self.kindAt(i + 1) != TokenKind.leftParen and (i == 0 or self.kindAt(i - 1) != TokenKind.dot) 'aNameNotCalledNorAMember'
-				scan.nonCallNames.insert(self.tokenAt(i).value)
-			end 'aNameNotCalledNorAMember'
+			if tokenCanBeAName(self.tokenAt(i)) and self.kindAt(i + 1) != TokenKind.leftParen and (i == 0 or self.kindAt(i - 1) != TokenKind.dot) and not scan.nonCallNames.firstSites.contains(self.tokenAt(i).value) 'aFirstNameNotCalledNorAMember'
+				scan.nonCallNames.firstSites.upsert(self.tokenAt(i).value, value: i)
+			end 'aFirstNameNotCalledNorAMember'
 
-			scan.scannedTo = i + 1
+			scan.nonCallNames.scannedTo = i + 1
 		end 'extend'
 
-		return scan.nonCallNames.contains(name)
+		return (try scan.nonCallNames.firstSites.get(name) otherwise return false) < upTo
 	end 'nameOccursAsAValueBefore'
 
 	function callOpeningAtIsSpawned(opener ElementIndex) returns bool
@@ -107826,15 +107915,15 @@ type AuthorNameScopeWalk
 
 		while at <= self.tokens.count() 'eachToken'
 			let kind = tokenKindIn(self.tokens, index: at)
-			let ends = kind == TokenKind.eof or kind == TokenKind.newline or kind == TokenKind.rightParen or kind == TokenKind.rightBracket or kind == TokenKind.rightBrace or kind == TokenKind.comma or kind == TokenKind.stringInterpEnd
+			let ends = kind == TokenKind.eof or kind == TokenKind.newline or kind == TokenKind.comma or tokenKindClosesAGroup(kind)
 
 			if depth == 0 and ends 'theClosureEnds'
 				return at - 1
 			end 'theClosureEnds'
 
-			if kind == TokenKind.leftParen or kind == TokenKind.leftBracket or kind == TokenKind.leftBrace or kind == TokenKind.stringInterpStart 'aGroupOpens'
+			if tokenKindOpensAGroup(kind) 'aGroupOpens'
 				depth = depth + 1
-			end 'aGroupOpens' else if ends and kind != TokenKind.comma and kind != TokenKind.newline and kind != TokenKind.eof 'aGroupCloses'
+			end 'aGroupOpens' else if tokenKindClosesAGroup(kind) 'aGroupCloses'
 				depth = depth - 1
 			end 'aGroupCloses'
 

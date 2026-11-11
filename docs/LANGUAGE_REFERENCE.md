@@ -1320,11 +1320,12 @@ An instance method called with no receiver is [E3193](../maxon-bin/Compiler/Erro
 a bare call to it from a static method or a file-scope initializer, or
 `Type.name()` with no arguments. `Type.name(value, …)` calls it on `value`.
 
-A type declares each method name once. A static and an instance method of one name, a method in the type's
-body and one an `extension` of it adds, and a field and a method are each two declarations of one name, and
-the second is [E3006](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3006), in any file and for a
-standard-library type too (`Duplicate method 'add' in type 'Counter'`, `'total' names both a field and a
-method of type 'Counter'`). Give the second its own name. An [interface extension](#interface-extensions)'s
+A type declares each field and method name once. Two fields of one name, a static and an instance method of
+one name, a method in the type's body and one an `extension` of it adds, and a field and a method are each two
+declarations of one name, and the second is [E3006](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3006), in
+any file and for a standard-library type too (`Duplicate field 'count' in type 'Counter'`, `Duplicate method
+'add' in type 'Counter'`, `'total' names both a field and a method of type 'Counter'`). Give the second its own
+name. An [interface extension](#interface-extensions)'s
 method is a default: a conforming type may declare its own method of that name, and its values call that
 one.
 
@@ -7296,7 +7297,9 @@ covered by it: a call to a function whose declaration was refused, an argument t
 result, a closure written for its parameter, a conformance a refused `extension` would supply, or a use
 of a binding whose initializer was refused, is reported through that refusal. A parse error abandons the
 function body, initializer or declaration it is in, and the rest of its file is checked; one inside a
-generic body, or one that leaves the file's block structure unreadable, fails the whole file. An
+generic function's body, or one that leaves the file's block structure unreadable, fails the whole file. A
+generic function's body is parsed for each instantiation, so it is checked once something instantiates it;
+a generic type's methods are parsed with the type. An
 abandoned body is unknown: what it waits for, writes and returns fits every check made of its callers and
 its results. A type name that denotes nothing is reported where it is written, and a value of that type
 is unresolved, so each use of it is covered by that report. An error inside one method's body covers that

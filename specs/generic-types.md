@@ -4309,6 +4309,110 @@ end 'main'
 error E2056: <fragment>:10:20: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
 ```
 
+<!-- test: error.a-wrong-arity-alias-in-a-type-reports-the-arity-error-instead-of-panicking -->
+`Bad` gives `Pair` one type argument for its two parameters. The alias is refused where it is written, and a function
+that returns it is a consequence of that refusal: the compiler reports E2056 and does not build an instance of `Pair`
+with one argument.
+```maxon
+type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+type Holder
+	typealias Bad = Pair with ExitCode
+
+	static function create() returns Bad
+		panic("never built")
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2056: <fragment>:8:18: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
+```
+
+<!-- test: error.a-wrong-arity-alias-field-read-reports-only-the-arity-error -->
+A field read of a value whose type is the refused alias is a consequence of the same E2056: the compiler reports it
+alone and does not add that the base type is not declared.
+```maxon
+type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+type Holder
+	typealias Bad = Pair with ExitCode
+
+	static function create() returns Bad
+		panic("never built")
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return h.first
+end 'main'
+```
+```maxoncstderr
+error E2056: <fragment>:8:18: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
+```
+
+<!-- test: error.a-wrong-arity-alias-field-read-in-a-generic-body-still-reports-the-arity-error -->
+A refusal inside a generic function body fails the whole file, so the arity error recorded at the `typealias` is the
+only report the file has: the field read that follows from it is not reported, and the arity error is.
+```maxon
+type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+typealias Bad = Pair with ExitCode
+
+function make() returns Bad
+	panic("never built")
+end 'make'
+
+function peek(x T) uses T returns ExitCode
+	return make().first
+end 'peek'
+
+function main() returns ExitCode
+	return peek(1 as ExitCode)
+end 'main'
+```
+```maxoncstderr
+error E2056: <fragment>:7:17: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
+```
+
+<!-- test: error.a-wrong-arity-top-level-alias-used-by-a-function-reports-the-arity-error-instead-of-panicking -->
+The same refusal for a top-level alias: the arity error is reported when a function returns the alias and `main` binds
+its result, exactly as when nothing names the alias.
+```maxon
+type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+typealias Bad = Pair with ExitCode
+
+function create() returns Bad
+	panic("never built")
+end 'create'
+
+function main() returns ExitCode
+	let h = create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2056: <fragment>:7:17: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
+```
+
 <!-- test: a-nested-datatype-through-a-function-typed-field-compiles -->
 ```maxon
 public typealias Val = int(i64.min to i64.max)

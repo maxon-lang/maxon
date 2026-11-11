@@ -302,7 +302,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3205: <fragment>:20:14: cannot call 'main$closure_0' inside 'edit'; it may yield (it calls 'pause', which it awaits a coroutine at line 12). Call it before or after the block
+error E3205: <fragment>:20:14: cannot call the closure at <fragment>:17:12 inside 'edit'; it may yield (it calls 'pause', which it awaits a coroutine at line 12). Call it before or after the block
 ```
 
 <!-- test: a-result-through-a-function-value-is-read-only -->

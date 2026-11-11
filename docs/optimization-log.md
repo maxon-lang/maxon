@@ -2344,3 +2344,18 @@ Measured with `--metrics`, `phase semanticCheck` allocations unless stated, the 
 | `genundecided.sh`, `phase semanticCheck` cputicks | 6400 | 12.8 G | 11.0 G |
 
 Before, `generrors.sh` `valid` and `extvalid` grew ×3.3 to ×4.0 per doubling. `genclosurepass.sh` `phase parse` bytes read 0.79 G, 4.89 G, 36.3 G and 283 G at N = 60, 120, 240 and 480 before, and 141 M, 152 M, 174 M, 220 M and 310 M at N = 60 to 960 after, whose rung differences (11.3 M, 22.4 M, 45.3 M, 90.7 M) double. `genundecided.sh` cputicks in millions at N = 200 to 6400 read 269, 441, 809, 1772, 4356 and 12835 before and 271, 434, 785, 1654, 3950 and 10958 after: the lookup is gone, and what still bends is `checkClosureCycles`, 62% of `semanticCheck` at N = 3200 (816 of 1304 samples under `profile run`, against 280 of 534 at 1600) while the capability checks double with N. Self-compile `semanticCheck` allocations are unchanged within 0.5%.
+
+### Result — 2026-11-10, a closure's cell prescan walks only the closure, and `checkClosureCycles` files a container edge in O(1)
+
+Two Θ(closures²) terms in one function holding many closures (`tests/ladders/genundecided.sh`). In `parse`, each closure's cell prescan (`Parser.cellLocalNamesIn`) walked from the closure's body to the end of the enclosing block, and its indirect-call scan restarted from the enclosing function's body start, so every closure read the rest of the function twice; the walk now ends where the closure's expression ends, and the scan's first-sighting index is shared by every body that starts at the same token (`NonCallNameIndex`). The executables of the ladder rungs and of a probe whose closures declare `var`s handed to `mutable` parameters are byte-identical before and after. One rare shape emits fewer cells: `nameOccursAsAValueBefore` is exact where the old high-water-mark scan over-approximated, so in `h(h, g(z), y)` the old scan answered true for `y` and the name now answers false. In `semanticCheck`, `CycleTrace.addContainerEdge` deduplicated an edge by scanning every edge already filed on the record, and the N closure environments of the ladder all hold the same record; an edge is now interned by holder and op.
+
+Measured with `--metrics`, before → after, deltas between rungs (allocations, cputicks in M):
+
+| N | `parse` allocs | `parse` cputicks | `semanticCheck` allocs | `semanticCheck` cputicks |
+|---:|---:|---:|---:|---:|
+| 200 | 2,063,155 → 2,063,605 | 3220 → 3106 | 715,904 → 720,098 | 295 → 298 |
+| 400 | +250,226 → +238,634 | +1255 → −42 | +387,297 → +391,313 | +242 → +161 |
+| 800 | +502,700 → +477,108 | +4396 → +391 | +774,215 → +782,223 | +323 → +308 |
+| 1600 | +1,011,064 → +955,072 | +15579 → −434 | +1,548,061 → +1,564,077 | +954 → +568 |
+
+`parse` cputicks are now flat within noise across the ladder (its floor is the standard library); `checkClosureCycles` reads 184 → 356 samples from N = 1600 to 3200 under `profile run` (×1.93). The constant +450 `parse` and +19,728 `signatures` allocations are the two indexes each `Parser` creates; `semanticCheck`'s +4,194 to +32,234 is each trace's edge map.

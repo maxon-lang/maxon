@@ -1153,6 +1153,32 @@ function secondaryFlushOf(code ErrorCode) returns SecondaryFlush
 	end 'standing'
 end 'secondaryFlushOf'
 
+export union FunctionDisplay
+	named(name String)
+	closure(site String)
+
+	export function quoted() returns String
+		return match self 'display'
+			named(name) gives "'{name}'"
+			closure(site) gives site
+		end 'display'
+	end 'quoted'
+
+	export function bare() returns String
+		return match self 'display'
+			named(name) gives name
+			closure(site) gives site
+		end 'display'
+	end 'bare'
+
+	export function memberQuoted() returns String
+		return match self 'display'
+			named(name) gives "'{String.from(unqualifiedMemberName(name.toByteArray()))}'"
+			closure(site) gives site
+		end 'display'
+	end 'memberQuoted'
+end 'FunctionDisplay'
+
 export function reportAtFunctionName(project Project, func IrFunction, code ErrorCode, message String)
 	reportPositioned(project, code: code, message: message, line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
 end 'reportAtFunctionName'

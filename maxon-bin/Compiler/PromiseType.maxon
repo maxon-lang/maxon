@@ -189,9 +189,23 @@ let PromiseThrowingArgCount = 2 as FieldIndex
 // but one. It is a function of the base NAME and not a field on `StructLayout` because there is exactly one
 // such base and a field would be a column every layout carries to answer for one of them; if a second ever
 // wants it, this is the one place that has to learn the name.
-export function promiseOptionalTrailingTypeParams(baseName ByteArray) returns FieldIndex
+function promiseOptionalTrailingTypeParams(baseName ByteArray) returns FieldIndex
 	return 1 as FieldIndex if baseName.equals(PromiseTypeName) else 0 as FieldIndex
 end 'promiseOptionalTrailingTypeParams'
+
+export function layoutLeastTypeArguments(layout StructLayout) returns FieldIndex
+	return layout.typeParamCount() - promiseOptionalTrailingTypeParams(layout.name)
+end 'layoutLeastTypeArguments'
+
+export function layoutAdmitsTypeArgumentCount(layout StructLayout, count ElementIndex) returns bool
+	return count >= layoutLeastTypeArguments(layout) and count <= layout.typeParamCount()
+end 'layoutAdmitsTypeArgumentCount'
+
+// Differs from `layoutAdmitsTypeArgumentCount` only for `Promise`'s optional trailing argument. A site
+// that substitutes every type parameter asks this one: a `Promise with T` leaves one unbound.
+export function layoutTakesEveryTypeArgument(layout StructLayout, count ElementIndex) returns bool
+	return count == layout.typeParamCount() as ElementIndex
+end 'layoutTakesEveryTypeArgument'
 
 // Is `t` the type of a stored promise — a `genericInstance` over the `Promise` base?
 //

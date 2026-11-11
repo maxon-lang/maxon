@@ -33545,7 +33545,7 @@ export type ProgramSignatures
 		return self.declarationIsVisibleFrom(key, declaration: declaration, readerFilePath: readerFilePath)
 	end 'declaresAFunctionVisibleFrom'
 
-	function declaresAFreeFunctionVisibleFrom(key ByteArray, readerFilePath FilePath) returns bool
+	export function declaresAFreeFunctionVisibleFrom(key ByteArray, readerFilePath FilePath) returns bool
 		return self.declaresAFunctionVisibleFrom(key, readerFilePath: readerFilePath) or self.declaresAGenericTemplateVisibleFrom(key, readerFilePath: readerFilePath)
 	end 'declaresAFreeFunctionVisibleFrom'
 
@@ -37082,12 +37082,25 @@ export type ProgramSignatures
 		panic("ProgramSignatures.builtinGenericTypeParamCount: `{String.from(name)}` is not a synthesized builtin generic — every caller opens with isBuiltinGenericBaseName, and a name that answers yes there owes an arity here")
 	end 'builtinGenericTypeParamCount'
 
+	export function declaresABaseRefusingTypeArgumentCount(base ByteArray, count ElementIndex) returns bool
+		match self.structInAnyFile(base) 'declaration'
+			declared(layout) then return not layoutAdmitsTypeArgumentCount(layout, count: count)
+			undeclared then return false
+		end 'declaration'
+	end 'declaresABaseRefusingTypeArgumentCount'
+
 	// Does instance `id`'s base struct have a declared `StructLayout` to read fields out of — the exact
 	// precondition of `baseLayoutOf`, and the gate every instance FIELD WALK opens with. False for a
-	// synthesized builtin (no declaration to carry one) and for an undeclared base (E2055 already reported).
+	// synthesized builtin (no declaration to carry one), for an undeclared base (E2055 already reported),
+	// and for a type-argument count the base refuses (E2056 already reported).
 	export function genericInstanceHasBaseLayout(id GenericInstanceId) returns bool
 		let baseName = self.genericInstanceBaseName(id)
-		return not self.isBuiltinGenericBaseName(baseName) and self.containsStructInAnyFile(baseName)
+
+		if self.isBuiltinGenericBaseName(baseName) or not self.containsStructInAnyFile(baseName) 'noDeclaredBase'
+			return false
+		end 'noDeclaredBase'
+
+		return not self.declaresABaseRefusingTypeArgumentCount(baseName, count: self.genericInstanceArgCount(id))
 	end 'genericInstanceHasBaseLayout'
 
 	// Is instance `id`'s base one this compiler KNOWS AT ALL — a builtin it synthesizes, or a `type` some
@@ -37982,9 +37995,9 @@ export type ProgramSignatures
 		visited.insert(key)
 		let base = self.genericInstanceBaseName(id)
 
-		if self.genericInstanceHasBaseLayout(id) and self.genericInstanceArgCount(id) != self.structTypeParamsOf(base).count() 'wrongArity'
+		if self.genericInstanceHasBaseLayout(id) and not layoutTakesEveryTypeArgument(self.baseLayoutOf(id), count: self.genericInstanceArgCount(id)) 'aTypeArgumentIsOmitted'
 			return false
-		end 'wrongArity'
+		end 'aTypeArgumentIsOmitted'
 
 		let argCount = self.genericInstanceArgCount(id)
 		var args = MaxonTypeArray.create(argCount, zeroed: false)
@@ -44292,7 +44305,7 @@ export type ProgramSignatures
 		return host
 	end 'liftedFunctionHostOf'
 
-	export function sourceNameOfFunction(name ByteArray) returns String
+	function sourceNameOfFunction(name ByteArray) returns String
 		if isGlobalInitializerName(name) 'aGlobalInitializer'
 			return "initializer of {globalInitializerBindingOf(name)}"
 		end 'aGlobalInitializer'
@@ -44306,6 +44319,14 @@ export type ProgramSignatures
 
 		return "{String.from(self.declaredNameOf(host))}{String.from(lifted)}"
 	end 'sourceNameOfFunction'
+
+	export function functionDisplay(func IrFunction, authoredPath FilePath) returns FunctionDisplay
+		if isLiftedClosureName(func.name) 'aClosureLiteral'
+			return FunctionDisplay.closure("the closure at {authoredPath.toString()}:{func.nameLine}:{func.nameColumn}")
+		end 'aClosureLiteral'
+
+		return FunctionDisplay.named(self.sourceNameOfFunction(func.name))
+	end 'functionDisplay'
 
 	export function isGenericInstanceName(name ByteArray) returns bool
 		return self.settledDeclarations().genericInstancesByName.contains(name)

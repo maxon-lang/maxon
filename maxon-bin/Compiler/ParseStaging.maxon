@@ -38,6 +38,7 @@ end 'internedArenaHintFor'
 // the project (`Queries.parseJobFor`), so a parse on a pool worker needs nothing the main thread owns.
 export type ParseJob
 	export let path as FilePath
+	export let authoredPath as FilePath
 	export let namespace as String
 
 	// ⭐ **IS THE FILE BEING PARSED `stdlib/` OR `scriptlib/` SOURCE?** One bit, decided once per file
@@ -131,8 +132,8 @@ export type ParseJob
 	export let instrumentsCoverage as bool
 	export let initializerRole as InitializerRole
 
-	export static function create(path FilePath, namespace String, isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool, declaresCompilerInternalNames bool, compilerMintedNames NameRoster, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool) returns ParseJob
-		return Self{path: path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, initializerRole: InitializerRole.ordinary}
+	export static function create(path FilePath, authoredPath FilePath, namespace String, isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool, declaresCompilerInternalNames bool, compilerMintedNames NameRoster, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool) returns ParseJob
+		return Self{path: path, authoredPath: authoredPath, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, initializerRole: InitializerRole.ordinary}
 	end 'create'
 
 	// The job `ProgramSignatures` parses an initializer under, in the role it names: the declaring file's
@@ -140,7 +141,7 @@ export type ParseJob
 	// because the fold's ops reach no emitted image. Derived from the stored job rather than from the
 	// project, which would put a `Directory.currentPath()` probe on the per-declaration path.
 	export function forInitializerRole(role InitializerRole) returns ParseJob
-		return Self{path: self.path, namespace: self.namespace, isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource, declaresCompilerInternalNames: self.declaresCompilerInternalNames, compilerMintedNames: self.compilerMintedNames, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, initializerRole: role}
+		return Self{path: self.path, authoredPath: self.authoredPath, namespace: self.namespace, isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource, declaresCompilerInternalNames: self.declaresCompilerInternalNames, compilerMintedNames: self.compilerMintedNames, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, initializerRole: role}
 	end 'forInitializerRole'
 
 	export function readsAuthorSource() returns bool
@@ -196,12 +197,14 @@ end 'cacheReadParseRefusalRefused'
 // @generated library-cache end
 
 // What a parse refusal may be the consequence of. Anything but `unrelated` is held, and dropped
-// once a backed refusal of what it names explains it (`PendingConsequence.isExplainedBy`).
+// once what it names explains it (`PendingConsequence.isExplainedBy`): a backed refusal of the name,
+// or, for `genericArgumentCount`, a declared base that refuses the count.
 export union ConsequenceOf
 	unrelated
 	subject(names NameRoster)
 	handlerBody(message immutable ByteArray)
 	unknownType(name immutable ByteArray)
+	genericArgumentCount(reported String)
 end 'ConsequenceOf'
 
 // @generated library-cache begin
@@ -213,6 +216,7 @@ function cacheWriteConsequenceOf(writer LibraryCacheWriter, value ConsequenceOf)
 		subject(a0) then cacheWriteConsequenceOfSubject(writer, a0: a0)
 		handlerBody(a0) then cacheWriteConsequenceOfHandlerBody(writer, a0: a0)
 		unknownType(a0) then cacheWriteConsequenceOfUnknownType(writer, a0: a0)
+		genericArgumentCount(a0) then cacheWriteConsequenceOfGenericArgumentCount(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteConsequenceOf'
 
@@ -228,6 +232,10 @@ function cacheWriteConsequenceOfUnknownType(writer LibraryCacheWriter, a0 immuta
 	writer.bytes(a0)
 end 'cacheWriteConsequenceOfUnknownType'
 
+function cacheWriteConsequenceOfGenericArgumentCount(writer LibraryCacheWriter, a0 String)
+	writer.text(a0)
+end 'cacheWriteConsequenceOfGenericArgumentCount'
+
 function cacheReadConsequenceOf(reader LibraryCacheReader) returns ConsequenceOf throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
@@ -236,6 +244,7 @@ function cacheReadConsequenceOf(reader LibraryCacheReader) returns ConsequenceOf
 		1 gives try cacheReadConsequenceOfSubject(reader)
 		2 gives try cacheReadConsequenceOfHandlerBody(reader)
 		3 gives try cacheReadConsequenceOfUnknownType(reader)
+		4 gives try cacheReadConsequenceOfGenericArgumentCount(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadConsequenceOf'
@@ -257,6 +266,12 @@ function cacheReadConsequenceOfUnknownType(reader LibraryCacheReader) returns Co
 
 	return ConsequenceOf.unknownType(a0)
 end 'cacheReadConsequenceOfUnknownType'
+
+function cacheReadConsequenceOfGenericArgumentCount(reader LibraryCacheReader) returns ConsequenceOf throws LibraryCacheDamage
+	let a0 = try reader.text()
+
+	return ConsequenceOf.genericArgumentCount(a0)
+end 'cacheReadConsequenceOfGenericArgumentCount'
 
 // @generated library-cache end
 
@@ -371,6 +386,10 @@ function consequenceOfReceiverOrigin(origin ReceiverOrigin) returns ConsequenceO
 	end 'origin'
 end 'consequenceOfReceiverOrigin'
 
+module function isGenericArgumentCountCode(code ErrorCode) returns bool
+	return code == ErrorCode.genericArityMismatch or code == ErrorCode.genericBaseNotGeneric
+end 'isGenericArgumentCountCode'
+
 function namedConsequence(name immutable ByteArray) returns ConsequenceOf
 	return ConsequenceOf.subject(singleName(name))
 end 'namedConsequence'
@@ -390,6 +409,7 @@ function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 		serviceTypeNotASpawnTarget(_, typeName, _, _) gives namedConsequence(freeze typeName.toByteArray())
 		serviceReplyGraphNotWalkable(_, message, _, _) gives ConsequenceOf.handlerBody(freeze message.toByteArray())
 		spawnStartRequiresTry(_, factory, _, _) gives namedConsequence(genericTemplateName(factory))
+		genericArgumentCountRefused(_, explanation, _, _) gives ConsequenceOf.genericArgumentCount(explanation)
 		memberAccessOnNonStruct(_, _, _, origin) gives consequenceOfReceiverOrigin(origin)
 		returnTypeMismatch(_, _, _, _, _, _, origin) gives consequenceOfReceiverOrigin(origin)
 		unexpectedToken or

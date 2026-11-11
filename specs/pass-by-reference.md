@@ -417,7 +417,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.maxon:12:27: cannot pass 'x' to a function that writes parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach the original; pass a clone()
+error E3159: specs/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.maxon:12:27: cannot pass 'x' to a function that writes parameter 'dest' (in the closure at specs/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.maxon:12:10): the closure holds its own copy of 'x', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 <!-- test: pass-by-reference.captured-var-to-mutating-param-error -->
@@ -439,7 +439,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:13:27: cannot pass 'x' to a function that writes parameter 'dest' (in main$closure_0): the closure holds its own copy of 'x', so a write through 'dest' cannot reach the original; pass a clone()
+error E3159: <fragment>:13:27: cannot pass 'x' to a function that writes parameter 'dest' (in the closure at <fragment>:13:10): the closure holds its own copy of 'x', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 <!-- test: pass-by-reference.captured-parameter-to-mutating-param-error -->
@@ -464,7 +464,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:11:27: cannot pass 'p' to a function that writes parameter 'dest' (in run$closure_0): the closure holds its own copy of 'p', so a write through 'dest' cannot reach the original; pass a clone()
+error E3159: <fragment>:11:27: cannot pass 'p' to a function that writes parameter 'dest' (in the closure at <fragment>:11:10): the closure holds its own copy of 'p', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 <!-- test: pass-by-reference.nested-calls -->

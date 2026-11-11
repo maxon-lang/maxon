@@ -67,7 +67,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:37:20: 'bumpFirst' writes 'boxes' (it calls 'bumpFirst$closure_0', which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
+error E3207: <fragment>:37:20: 'bumpFirst' writes 'boxes' (it calls the closure at <fragment>:25:10, which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
 ```
 
 <!-- test: error.a-returned-mutates-captures-closure-over-an-array-iterator-is-refused-for-a-frozen-array -->
@@ -114,7 +114,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:36:19: 'makeBump' writes 'boxes' (it calls 'makeBump$closure_0', which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
+error E3207: <fragment>:36:19: 'makeBump' writes 'boxes' (it calls the closure at <fragment>:25:9, which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
 ```
 
 <!-- test: error.a-mutates-captures-closure-over-a-list-iterator-is-refused-for-a-frozen-list -->
@@ -161,7 +161,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:37:20: 'bumpFirst' writes 'boxes' (it calls 'bumpFirst$closure_0', which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
+error E3207: <fragment>:37:20: 'bumpFirst' writes 'boxes' (it calls the closure at <fragment>:25:10, which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
 ```
 
 <!-- test: error.a-mutates-captures-closure-over-a-map-iterator-is-refused-for-a-frozen-map -->
@@ -208,7 +208,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:37:20: 'bumpFirst' writes 'boxes' (it calls 'bumpFirst$closure_0', which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
+error E3207: <fragment>:37:20: 'bumpFirst' writes 'boxes' (it calls the closure at <fragment>:25:10, which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
 ```
 
 <!-- test: error.a-mutates-captures-closure-over-an-iterator-of-a-records-collection-is-refused-for-a-frozen-record -->
@@ -263,7 +263,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:45:20: 'bumpFirst' writes 'coll' (it calls 'bumpFirst$closure_0', which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
+error E3207: <fragment>:45:20: 'bumpFirst' writes 'coll' (it calls the closure at <fragment>:37:10, which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
 ```
 
 <!-- test: error.a-returned-mutates-captures-closure-over-an-iterator-through-a-holder-is-refused-for-a-frozen-record -->
@@ -328,7 +328,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:54:19: 'makeBump' writes 'coll' (it calls 'makeBump$closure_0', which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
+error E3207: <fragment>:54:19: 'makeBump' writes 'coll' (it calls the closure at <fragment>:47:9, which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
 ```
 
 <!-- test: error.a-mutates-captures-closure-inside-a-mutates-captures-closure-over-an-iterator-is-refused-for-a-frozen-array -->
@@ -375,7 +375,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:36:19: 'makeBump' writes 'boxes' (it calls 'makeBump$closure_0', which writes the data it captured); 'frozen' is immutable
+error E3207: <fragment>:36:19: 'makeBump' writes 'boxes' (it calls the closure at <fragment>:25:9, which writes the data it captured); 'frozen' is immutable
 ```
 
 <!-- test: error.a-mutates-captures-closure-over-a-user-iterator-is-refused-for-a-frozen-array -->
@@ -477,7 +477,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3207: <fragment>:24:32: 'look' takes `immutable` 'box'; 'it.current()' is mutable. Freeze it first
-error E3207: <fragment>:31:20: 'peekFirst' needs 'boxes' frozen (it calls 'peekFirst$closure_0', which calls 'look', which takes `immutable` 'box'); 'boxes' is mutable. Freeze it first
+error E3207: <fragment>:31:20: 'peekFirst' needs 'boxes' frozen (it calls the closure at <fragment>:24:10, which calls 'look', which takes `immutable` 'box'); 'boxes' is mutable. Freeze it first
 ```
 
 <!-- test: a-plain-closure-reads-elements-through-a-captured-iterator-over-a-frozen-array -->
@@ -653,7 +653,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:42:18: 'bumpAll' writes 'boxes' (it calls 'bumpAll$closure_0', which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
+error E3207: <fragment>:42:18: 'bumpAll' writes 'boxes' (it calls the closure at <fragment>:27:11, which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
 ```
 
 <!-- test: error.a-mutates-captures-closure-over-an-iterator-held-in-a-tuple-is-refused-for-a-frozen-array -->
@@ -701,7 +701,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:38:20: 'bumpFirst' writes 'boxes' (it calls 'bumpFirst$closure_0', which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
+error E3207: <fragment>:38:20: 'bumpFirst' writes 'boxes' (it calls the closure at <fragment>:26:10, which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
 ```
 
 <!-- test: a-mutates-captures-closure-writes-through-a-with-iterator-pair-over-a-mutable-array -->
@@ -886,7 +886,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:46:20: 'bumpFirst' writes 'boxes' (it calls 'bumpFirst$closure_0', which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
+error E3207: <fragment>:46:20: 'bumpFirst' writes 'boxes' (it calls the closure at <fragment>:34:10, which calls 'bumpBox', which writes 'box'); 'frozen' is immutable
 ```
 
 <!-- test: a-mutates-captures-closure-writes-through-an-iterator-held-in-a-record-over-a-mutable-array -->

@@ -736,6 +736,7 @@ type CycleTrace implements SummaryCallWalker
 	var containerHandles as OptionalElementIndexColumn
 	var edgeHolders as OriginList
 	var edgeOps as EntryIndexArray
+	var edgeIds as OriginByKey
 	var fieldStoreOps as HandleByKey
 	var fieldStoreOpsByLine as HandleByKey
 	var originEvents as OptionalElementIndexColumn
@@ -772,7 +773,7 @@ type CycleTrace implements SummaryCallWalker
 
 	static function over(checker ClosureCycleChecker, func IrFunction, index ElementIndex, body CycleBodyIndex) returns CycleTrace
 		let valueCount = func.valueTags.count()
-		return Self{checker: checker, traced: func, tracedIndex: index, tracked: body.tracked, blockIndex: body.blockIndex, kinds: OriginKindArray.create(0), parents: OriginList.create(0), depths: OriginDepthArray.create(0), rootParams: ParamCountArray.create(0), ranks: OriginKeyArray.create(0), offsets: ByteOffsetArray.create(0), rootedInAParameter: BoolArray.create(0), childOrigins: OriginByKey.create(), syntheticOrigins: OriginByKey.create(), freshOrigins: OptionalElementIndexColumn.absent(valueCount), holdingsOrigins: OptionalElementIndexColumn.absent(func.paramCount), globalOrigins: OriginByLabel.create(), globalLabels: OriginLabelMap.create(), closureBodies: OriginNameMap.create(), originNames: OriginNameMap.create(), lists: checker.listPool, listsInUse: 0, noOrigins: checker.noOrigins, membership: ListMembership.create(), baseHandles: OptionalElementIndexColumn.absent(valueCount), heldHandles: OptionalElementIndexColumn.create(), containerHandles: OptionalElementIndexColumn.create(), edgeHolders: OriginList.create(0), edgeOps: EntryIndexArray.create(0), fieldStoreOps: body.fieldStoreOps, fieldStoreOpsByLine: body.fieldStoreOpsByLine, originEvents: OptionalElementIndexColumn.create(), fieldEvents: HandleByKey.create(), eventOps: EntryIndexArray.create(0), eventRecords: EntryIndexArray.create(0), forwarded: body.forwarded, opPositions: body.opPositions, successors: body.successors, reachFrom: body.reachFrom, elementSites: body.elementSites, operands: ValueIdArray.create(0), returned: ValueIdArray.create(0), scratch: BoolArray.create(0), cycles: ClosureCycles.create(), changed: true, mode: CycleTraceMode.propagate, row: TracedCycleRow.create(func.paramCount)}
+		return Self{checker: checker, traced: func, tracedIndex: index, tracked: body.tracked, blockIndex: body.blockIndex, kinds: OriginKindArray.create(0), parents: OriginList.create(0), depths: OriginDepthArray.create(0), rootParams: ParamCountArray.create(0), ranks: OriginKeyArray.create(0), offsets: ByteOffsetArray.create(0), rootedInAParameter: BoolArray.create(0), childOrigins: OriginByKey.create(), syntheticOrigins: OriginByKey.create(), freshOrigins: OptionalElementIndexColumn.absent(valueCount), holdingsOrigins: OptionalElementIndexColumn.absent(func.paramCount), globalOrigins: OriginByLabel.create(), globalLabels: OriginLabelMap.create(), closureBodies: OriginNameMap.create(), originNames: OriginNameMap.create(), lists: checker.listPool, listsInUse: 0, noOrigins: checker.noOrigins, membership: ListMembership.create(), baseHandles: OptionalElementIndexColumn.absent(valueCount), heldHandles: OptionalElementIndexColumn.create(), containerHandles: OptionalElementIndexColumn.create(), edgeHolders: OriginList.create(0), edgeOps: EntryIndexArray.create(0), edgeIds: OriginByKey.create(), fieldStoreOps: body.fieldStoreOps, fieldStoreOpsByLine: body.fieldStoreOpsByLine, originEvents: OptionalElementIndexColumn.create(), fieldEvents: HandleByKey.create(), eventOps: EntryIndexArray.create(0), eventRecords: EntryIndexArray.create(0), forwarded: body.forwarded, opPositions: body.opPositions, successors: body.successors, reachFrom: body.reachFrom, elementSites: body.elementSites, operands: ValueIdArray.create(0), returned: ValueIdArray.create(0), scratch: BoolArray.create(0), cycles: ClosureCycles.create(), changed: true, mode: CycleTraceMode.propagate, row: TracedCycleRow.create(func.paramCount)}
 	end 'over'
 
 	function bodyIndex() returns CycleBodyIndex
@@ -1997,21 +1998,22 @@ type CycleTrace implements SummaryCallWalker
 	end 'holdingsOf'
 
 	function addContainerEdge(record OriginIndex, holder OriginIndex, opIdx ElementIndex)
-		let edges = self.handleIn(self.containerHandles, key: record)
+		self.addToList(self.handleIn(self.containerHandles, key: record), origin: self.edgeOf(holder, opIdx: opIdx))
+	end 'addContainerEdge'
 
-		for k in 0 upto self.listCount(edges) 'eachEdge'
-			let edge = self.listItem(edges, at: k)
+	function edgeOf(holder OriginIndex, opIdx ElementIndex) returns OriginIndex
+		let key = keyOf(holder, low: opIdx)
 
-			if self.edgeHolderAt(edge) == holder and self.edgeOpAt(edge) == opIdx 'alreadyFiled'
-				return
-			end 'alreadyFiled'
-		end 'eachEdge'
+		if let edge = try self.edgeIds.get(key) 'filed'
+			return edge
+		end 'filed'
 
 		let edge = self.edgeOps.count() as OriginIndex
 		self.edgeHolders.push(holder)
 		self.edgeOps.push(opIdx)
-		self.addToList(edges, origin: edge)
-	end 'addContainerEdge'
+		self.edgeIds.upsert(key, value: edge)
+		return edge
+	end 'edgeOf'
 
 	function edgeHolderAt(edge OriginIndex) returns OriginIndex
 		return try self.edgeHolders.get(edge) otherwise panic("CycleTrace.edgeHolderAt: edge {edge} was never filed")

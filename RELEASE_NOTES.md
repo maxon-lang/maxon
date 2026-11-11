@@ -15,6 +15,10 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- A type that declares two fields of one name is E3006 (`Duplicate field 'count' in type 'Counter'`), reported
+  at the second; the type keeps the first.
+  Fix: rename or remove the repeated field.
+
 - A block may not reuse the label of a block that encloses it, and the name of the enclosing function, method,
   `type`, `enum`, `union`, `interface` or `extension` counts as that block's label: `if x 'flipped'` inside
   `function flipped`, a `while … 'scan'` inside another `'scan'`, or a block labelled `'Shade'` in a method of

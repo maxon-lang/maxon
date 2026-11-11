@@ -149,11 +149,12 @@ An instance method called with no receiver is [E3193](/docs/cli/error-codes/#e31
 a bare call to it from a static method or a file-scope initializer, or
 `Type.name()` with no arguments. `Type.name(value, …)` calls it on `value`.
 
-A type declares each method name once. A static and an instance method of one name, a method in the type's
-body and one an `extension` of it adds, and a field and a method are each two declarations of one name, and
-the second is [E3006](/docs/cli/error-codes/#e3006--duplicatedefinition), in any file and for a
-standard-library type too (`Duplicate method 'add' in type 'Counter'`, `'total' names both a field and a
-method of type 'Counter'`). Give the second its own name. An [interface extension](#interface-extensions)'s
+A type declares each field and method name once. Two fields of one name, a static and an instance method of
+one name, a method in the type's body and one an `extension` of it adds, and a field and a method are each two
+declarations of one name, and the second is [E3006](/docs/cli/error-codes/#e3006--duplicatedefinition), in
+any file and for a standard-library type too (`Duplicate field 'count' in type 'Counter'`, `Duplicate method
+'add' in type 'Counter'`, `'total' names both a field and a method of type 'Counter'`). Give the second its own
+name. An [interface extension](#interface-extensions)'s
 method is a default: a conforming type may declare its own method of that name, and its values call that
 one.
 

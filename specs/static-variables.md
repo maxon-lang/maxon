@@ -1448,7 +1448,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:21:37: cannot pass the result of 'expose', which may share storage with a module-level `let`, to a function that writes parameter 'xs' (in main$closure_0); pass a clone()
+error E3159: <fragment>:21:37: cannot pass the result of 'expose', which may share storage with a module-level `let`, to a function that writes parameter 'xs' (in the closure at <fragment>:21:20); pass a clone()
 error E3207: <fragment>:21:42: 'grow' writes 'xs' (line 12: `xs.push("zz")`); 'expose()' is immutable
 ```
 

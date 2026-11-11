@@ -2385,7 +2385,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:18:27: cannot pass 'n' to a function that writes parameter 'dest' (in Counter.setter$closure_0): the closure holds its own copy of 'n', so a write through 'dest' cannot reach the original; pass a clone()
+error E3159: <fragment>:18:27: cannot pass 'n' to a function that writes parameter 'dest' (in the closure at <fragment>:18:10): the closure holds its own copy of 'n', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 ### A captured Promise
@@ -4593,7 +4593,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:24:16: 'main$closure_0' writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
+error E3207: <fragment>:24:16: the closure at <fragment>:21:15 writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
 ```
 
 <!-- test: closure-capture.a-call-through-a-local-closure-that-only-reads-takes-a-frozen-argument-beside-a-writer -->
@@ -4666,7 +4666,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:26:11: 'main$closure_0' writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
+error E3207: <fragment>:26:11: the closure at <fragment>:20:15 writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
 ```
 
 <!-- test: closure-capture.error.a-call-through-a-loop-carried-closure-value-is-judged-against-every-closure-of-its-shape -->
@@ -4702,7 +4702,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:24:20: 'main$closure_1' writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
+error E3207: <fragment>:24:20: the closure at <fragment>:25:7 writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
 ```
 
 <!-- test: closure-capture.error.a-call-through-a-merged-closure-value-is-judged-against-the-whole-shape-even-when-only-readers-reach-it -->
@@ -4740,7 +4740,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:26:20: 'main$closure_0' writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
+error E3207: <fragment>:26:20: the closure at <fragment>:21:15 writes 'b' (it calls 'bump', which writes 'b'); 'box' is immutable
 ```
 
 ### A refused kept argument names the closure that keeps it
@@ -4785,7 +4785,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:30:16: 'main$closure_1' needs 'b' frozen (it calls 'create', which needs 'held' frozen); 'v' is mutable. Freeze it first
+error E3207: <fragment>:30:16: the closure at <fragment>:27:15 needs 'b' frozen (it calls 'create', which needs 'held' frozen); 'v' is mutable. Freeze it first
 ```
 
 <!-- test: closure-capture.error.a-refused-kept-argument-of-a-merged-closure-call-names-the-closure-that-keeps-it -->
@@ -4829,7 +4829,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:33:11: 'main$closure_1' needs 'b' frozen (it calls 'create', which needs 'held' frozen); 'v' is mutable. Freeze it first
+error E3207: <fragment>:33:11: the closure at <fragment>:27:15 needs 'b' frozen (it calls 'create', which needs 'held' frozen); 'v' is mutable. Freeze it first
 ```
 
 <!-- test: closure-capture.error.a-refused-kept-argument-of-a-merged-closure-call-names-the-first-closure-that-keeps-it -->
@@ -4879,7 +4879,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:39:11: 'main$closure_1' needs 'b' frozen (it calls 'create', which needs 'held' frozen); 'v' is mutable. Freeze it first
+error E3207: <fragment>:39:11: the closure at <fragment>:27:16 needs 'b' frozen (it calls 'create', which needs 'held' frozen); 'v' is mutable. Freeze it first
 ```
 
 ### A closure that stores into state a module-level `let` holds
