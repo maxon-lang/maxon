@@ -25,10 +25,7 @@
 // holds no `Project`, which rules out every
 // `Project` table (`DerivedOrigins` buffers its rows, the target facts come in as two enums and the cost
 // tables as a `PoolPhaseCosts` the driver folds) and the trace-span stack (`PhaseProbe.beginCounters`
-// opens none). It may not call a closure — an indirect dispatch marks every address-taken function in
-// the program message-reachable, and `ServiceGlobalAccessCheck` refuses a message-reachable read of a
-// `let` no share walk can mark (E3163). It may not await, and it never
-// sends.
+// opens none). It may not await, and it never sends.
 //
 // ⛔ **THE MESSAGE'S ERROR SET IS EMPTY, AND THAT IS A PREMISE OF THE PIPELINE'S ERROR GATE.** None of
 // the fanned-out passes raises a diagnostic; `specs/pass-fan-out-order.md` pins the nearest pass that
@@ -141,7 +138,7 @@ export type StdPassWorker
 		let idle = swap self.slot with unit
 
 		modify self.slot 'work'
-			var body = try self.slot.holder.pop() otherwise panic("StdPassWorker.run: the unit for function {self.slot.funcIndex} carried no body — `StdUnit.extract` pushes exactly one")
+			let body = try self.slot.holder.pop() otherwise panic("StdPassWorker.run: the unit for function {self.slot.funcIndex} carried no body — `StdUnit.extract` pushes exactly one")
 			let answer = self.runSteps(body)
 			self.slot.answers.push(answer)
 		end 'work'
@@ -152,17 +149,17 @@ export type StdPassWorker
 	// Every step of the schedule over the unit's one function, each bracketed on this thread's counters.
 	// The workspaces, the tallies the scratches write into and the costs are this function's own.
 	module function runSteps(body StdUnitBody) returns StdUnitAnswer
-		var tallies = StdPassTallyArray.create(self.schedule.count(), zeroed: false)
-		var workspaces = StepWorkspaceArray.create(self.schedule.count(), zeroed: false)
+		let tallies = StdPassTallyArray.create(self.schedule.count(), zeroed: false)
+		let workspaces = StepWorkspaceArray.create(self.schedule.count(), zeroed: false)
 
 		for step in self.schedule 'eachStep'
-			var tally = StdPassTally.create()
+			let tally = StdPassTally.create()
 			tallies.push(tally)
 			workspaces.push(workspaceFor(step, tally: tally))
 		end 'eachStep'
 
-		var costs = PoolPhaseCosts.create(self.schedule.count())
-		var probe = PhaseProbe.beginCounters()
+		let costs = PoolPhaseCosts.create(self.schedule.count())
+		let probe = PhaseProbe.beginCounters()
 		var answer = VersioningAnswer.unasked
 
 		for k in 0 upto workspaces.count() 'eachStep'
@@ -246,18 +243,18 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 		compilerLogger(CompilerLogGroup.codegen).debug(sizing.line(PoolKind.stdFanOut))
 	end 'debugging'
 
-	var tallies = StdPassTallyArray.create(members.count(), zeroed: false)
+	let tallies = StdPassTallyArray.create(members.count(), zeroed: false)
 
 	for _ in members 'eachStep'
 		tallies.push(StdPassTally.create())
 	end 'eachStep'
 
-	var landedOrigins = DerivedOriginsArray.create(0)
-	var slots = LandingSlots.create(funcCount)
+	let landedOrigins = DerivedOriginsArray.create(0)
+	let slots = LandingSlots.create(funcCount)
 
 	if funcCount > 0 'somethingToRun'
 		let poolSize = workerCount as PoolSize
-		var workers = StdPassWorkerHandleArray.create(workerCount, zeroed: false)
+		let workers = StdPassWorkerHandleArray.create(workerCount, zeroed: false)
 
 		for _ in 0 upto workerCount 'eachWorker'
 			workers.push(spawn StdPassWorker.create(project.target.cpu, os: project.target.os, steps: freeze members.clone()))
@@ -275,7 +272,7 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 	end 'somethingToRun'
 
 	for funcIndex in 0 upto funcCount 'foldOriginsInIndexOrder'
-		view origins = try landedOrigins.get(slots.slotOf(funcIndex)) otherwise panic("runStdPassesOnAWorkerPool: landedOrigins.get OOB for function {funcIndex}")
+		let origins = try landedOrigins.get(slots.slotOf(funcIndex)) otherwise panic("runStdPassesOnAWorkerPool: landedOrigins.get OOB for function {funcIndex}")
 		origins.foldInto(project.valueOrigins, funcIndex: funcIndex)
 	end 'foldOriginsInIndexOrder'
 
@@ -311,12 +308,12 @@ export function runStdPassesOverTheBand(project Project, module StdModule, membe
 	for k in 0 upto members.count() 'eachStep'
 		let step = try members.get(k) otherwise panic("runStdPassesOverTheBand: members.get OOB at {k}")
 		let probe = PhaseProbe.beginPhase(project, phase: bandPhaseOfStep(step))
-		var tally = StdPassTally.create()
-		var workspace = workspaceFor(step, tally: tally)
+		let tally = StdPassTally.create()
+		let workspace = workspaceFor(step, tally: tally)
 		announceStep(step, into: irLog, firstFuncIndex: firstFuncIndex, funcCount: funcCount, reducesDivision: reducesDivision)
 
 		for funcIndex in firstFuncIndex upto funcCount 'eachFunc'
-			var origins = DerivedOrigins.create()
+			let origins = DerivedOrigins.create()
 			var answer = VersioningAnswer.unasked
 			answer = runFanOutStep(workspace, module: module, funcIndex: funcIndex, tally: tally, origins: origins, reducesDivision: reducesDivision, budget: budget, answer: answer)
 			origins.foldInto(project.valueOrigins, funcIndex: funcIndex)
@@ -393,7 +390,7 @@ function foldUnitAnswer(project Project, answer StdUnitAnswer, members StdFanOut
 	for k in 0 upto members.count() 'eachStep'
 		let step = try members.get(k) otherwise panic("foldUnitAnswer: members.get OOB at {k}")
 		foldPoolPhaseDelta(project, phase: compilePhaseOfPass(passKindOfFanOutStep(step)), driver: CompilePhase.stdFanOut, delta: answer.costs.accumulated(k))
-		var tally = try tallies.get(k) otherwise panic("foldUnitAnswer: tallies.get OOB at {k}")
+		let tally = try tallies.get(k) otherwise panic("foldUnitAnswer: tallies.get OOB at {k}")
 		tally.absorb(try answer.tallies.get(k) otherwise panic("foldUnitAnswer: answer.tallies.get OOB at {k} after the count check"))
 	end 'eachStep'
 end 'foldUnitAnswer'
@@ -404,11 +401,11 @@ end 'foldUnitAnswer'
 // error, exit 75), `awaitAny` keeps the pool busy, and the dispatch order is longest-first
 // (`fillLongestFirstOrder`, which says why that order cannot reach the output).
 function drainTheStdPool(project Project, module StdModule, members StdFanOutStepArray, workers StdPassWorkerHandleArray, workerCount PoolSize, landedOrigins DerivedOriginsArray, slots LandingSlots, tallies StdPassTallyArray)
-	var scratch = SpliceScratch.create()
+	let scratch = SpliceScratch.create()
 
-	var dispatch = PoolDispatch.create(functionOpTallies(module.functions, blocks: module.blocks), workerCount: workerCount, assignment: PoolAssignment.staticShare)
-	var replies = StdPassReplyArray.create(dispatch.pipelineDepth(), zeroed: false)
-	var arrivedUnits = StdArrivedUnits.create(module.funcCount(), spent: StdModule.create())
+	let dispatch = PoolDispatch.create(functionOpTallies(module.functions, blocks: module.blocks), workerCount: workerCount, assignment: PoolAssignment.staticShare)
+	let replies = StdPassReplyArray.create(dispatch.pipelineDepth(), zeroed: false)
+	let arrivedUnits = StdArrivedUnits.create(module.funcCount(), spent: StdModule.create())
 
 	for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
 		dispatchOneStdJob(module, workers: workers, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies)
@@ -420,8 +417,8 @@ function drainTheStdPool(project Project, module StdModule, members StdFanOutSte
 		let job = dispatch.land(ready, outstanding: replies.count())
 		let reply = try replies.remove(ready) otherwise panic("drainTheStdPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
-		var unit = await reply
-		var answer = unit.takeAnswer()
+		let unit = await reply
+		let answer = unit.takeAnswer()
 		slots.record(job, slot: landedOrigins.count())
 		arrivedUnits.arrive(answer.body.unitModule)
 		landedOrigins.push(answer.body.origins)
@@ -449,7 +446,7 @@ end 'spliceSettledStdUnits'
 // Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch`
 // just recorded the job in.
 function dispatchOneStdJob(module StdModule, workers StdPassWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies StdPassReplyArray)
-	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneStdJob: workers.get OOB at {workerSlot} below count {workers.count()}")
+	let worker = try workers.get(workerSlot) otherwise panic("dispatchOneStdJob: workers.get OOB at {workerSlot} below count {workers.count()}")
 	let funcIndex = dispatch.nextJob(workerSlot)
 	replies.push(try worker.run(StdUnit.extract(module, func: module.getFunc(funcIndex), funcIndex: funcIndex)) otherwise panic("{workerRefusedSendMessage("dispatchOneStdJob", subject: "the worker running function {funcIndex}")}"))
 end 'dispatchOneStdJob'

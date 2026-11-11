@@ -123,7 +123,7 @@ export typealias MetricsRowArray = Array with MetricsRow
 test 'every fixture program is staged by name from a case file'
 	let cases = caseFileSources()
 
-	var unstaged = StringArray.create(0)
+	let unstaged = StringArray.create(0)
 
 	for fixtureName in fixtureNames() 'eachFixture'
 		if not cases.contains("fixture: \"{fixtureName}\"") 'neverStaged'
@@ -161,7 +161,7 @@ export function spawnPinnedBuild(staged FilePath, label String, extraArguments S
 end 'spawnPinnedBuild'
 
 function pinnedEnvironment(staged FilePath, processors ProcessorPin, privateRunCache bool, runCacheDirName String) returns Environment
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 
 	match processors 'pin'
 		machine then break
@@ -187,7 +187,7 @@ end 'pinnedEnvironment'
 		let shell = try FilePath.from(PosixShellPath) otherwise panic("parallel-compile.test: {PosixShellPath} is a spellable path")
 		let build = buildArguments(staged.join(StagedProgramFileName), output: executableIn(staged, stem: OutputFileStem), extraArguments: metricsArguments(staged, extraArguments: StringArray.create(0)))
 
-		var arguments = [PauseShellCommandFlag, PauseScript, PauseShellName, staged.join(PrivateRunCacheDirName).toString(), pauseSeconds, testedCompilerPath().toString()]
+		let arguments = [PauseShellCommandFlag, PauseScript, PauseShellName, staged.join(PrivateRunCacheDirName).toString(), pauseSeconds, testedCompilerPath().toString()].clone()
 
 		for word in build 'eachWord'
 			arguments.push(word)
@@ -388,7 +388,7 @@ export function meteredBuild(staged FilePath, label String, extraArguments Strin
 end 'meteredBuild'
 
 function metricsArguments(staged FilePath, extraArguments StringArray) returns StringArray
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push("{MetricsOptionPrefix}{staged.join(MetricsFileName).toString()}")
 
 	for extra in extraArguments 'eachExtra'
@@ -413,7 +413,7 @@ end 'metricsTableOf'
 
 function metricsTableFrom(text String, label String) returns MetricsTable
 	var columns = StringArray.create(0)
-	var rows = MetricsRowArray.create(0)
+	let rows = MetricsRowArray.create(0)
 
 	for raw in text.split(LineFeed) 'eachLine'
 		let line = raw.trimEnd()
@@ -451,7 +451,7 @@ function metricsTableFrom(text String, label String) returns MetricsTable
 end 'metricsTableFrom'
 
 function metricsColumnsFrom(headerFields StringArray) returns StringArray
-	var columns = StringArray.create(0)
+	let columns = StringArray.create(0)
 	columns.push(MetricsKindColumn)
 
 	for (iter, heading) in headerFields.withIterator() 'eachHeading'
@@ -516,7 +516,7 @@ end 'MetricsTable'
 // The fixture programs, read from the filesystem rather than from a constant, so a fixture added without
 // a case is one the guard above sees.
 function fixtureNames() returns StringArray
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 
 	for entry in listing(fixtureDir(FixturesDirName)) 'eachEntry'
 		if Directory.isDirectory(entry) 'aProgram'

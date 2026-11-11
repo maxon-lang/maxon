@@ -101,37 +101,22 @@ end 'SharedLet'
 
 export typealias SharedLetArray = Array with SharedLet
 
-// The `let`s of a program that spawns a service, split by whether a share walk can mark them.
-export type LetShareWalks
-	export let marked as SharedLetArray
-
-	// The `let`s no share walk can mark; what each holds that none can is its `threadReach`.
-	export let unmarkable as ManagedGlobalArray
-
-	static function create(marked SharedLetArray, unmarkable ManagedGlobalArray) returns LetShareWalks
-		return Self{marked: marked, unmarkable: unmarkable}
-	end 'create'
-end 'LetShareWalks'
-
 // ⭐ **ONLY A PROGRAM THAT SPAWNS A SERVICE HAS A SECOND GREEN THREAD THAT COUNTS A GLOBAL**, so a program that
-// spawns none marks nothing. An unmarkable `let` stays a plain count: `ServiceGlobalAccessCheck` refuses it where a
-// message can read it.
-export function letShareWalksOf(globals ManagedGlobalArray, spawnsAService bool) returns LetShareWalks
-	var marked = SharedLetArray.create(0)
-	var unmarkable = ManagedGlobalArray.create(0)
+// spawns none marks nothing.
+export function sharedLetsOf(globals ManagedGlobalArray, spawnsAService bool) returns SharedLetArray
+	let marked = SharedLetArray.create(0)
 
 	if spawnsAService 'aSecondGreenThreadMayCount'
 		for global in globals 'eachGlobal'
 			match global.threadReach 'reach'
-				packedInItsSlot then continue
+				unmarked then continue
 				everyThreadThrough(callee) then marked.push(SharedLet.create(global, walk: callee))
-				everyThreadUnwalkable then unmarkable.push(global)
 			end 'reach'
 		end 'eachGlobal'
 	end 'aSecondGreenThreadMayCount'
 
-	return LetShareWalks.create(marked, unmarkable: unmarkable)
-end 'letShareWalksOf'
+	return marked
+end 'sharedLetsOf'
 
 // `__module_init()` — for each managed global, in the order it was handed: build its initial owned record
 // and store the record's address into its `.data` slot.
@@ -147,7 +132,7 @@ end 'letShareWalksOf'
 // it is the caller's to apply: this function emits the array it is handed, in the order it is handed. A
 // cycle has no such order and is refused there rather than reaching this loop.
 function buildModuleInit(module MaxonModule, project Project, globals ManagedGlobalArray, sharedLets SharedLetArray, defaults DefaultSlotArray, site SynthesizedSite)
-	var fn = SynthesizedFunction.open(module, project: project, name: ModuleInitName, returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create(0))
+	let fn = SynthesizedFunction.open(module, project: project, name: ModuleInitName, returnType: MaxonReturnType.void, paramTypes: MaxonTypeArray.create(0))
 
 	for global in globals 'eachGlobal'
 		let record = initialRecordOf(fn, global: global)
@@ -155,11 +140,11 @@ function buildModuleInit(module MaxonModule, project Project, globals ManagedGlo
 	end 'eachGlobal'
 
 	if sharedLets.count() > 0 'messagesReadTheLets'
-		markLetsShared(fn, sharedLets: sharedLets, site: site)
+		markLetsShared(fn, sharedLets: sharedLets)
 	end 'messagesReadTheLets'
 
 	// After the marks: a `default` may spawn, and a service started before them could step a plain
-	// count concurrently with the mark — E3164's reason. The order among the defaults is
+	// count concurrently with the mark. The order among the defaults is
 	// `GlobalInitOrder.dependencyOrderedDefaults`'.
 	for slot in defaults 'eachDefault'
 		buildDefault(fn, slot: slot)
@@ -183,7 +168,7 @@ function buildDefaultValue(fn SynthesizedFunction, value ValueId, slotAddr Value
 	// Marked before the install publishes it: from then on any thread may retain it.
 	emitDefaultShareWalk(fn, value: value, shareWalk: shareWalk, site: site)
 
-	var installArgs = ValueIdArray.create(0)
+	let installArgs = ValueIdArray.create(0)
 	installArgs.push(slotAddr)
 	installArgs.push(value)
 	installArgs.push(runtimeFunctionOrNone(fn, callee: dropCallee, site: site))
@@ -194,17 +179,11 @@ end 'buildDefaultValue'
 function emitDefaultShareWalk(fn SynthesizedFunction, value ValueId, shareWalk TransferWalk, site SynthesizedSite)
 	match shareWalk 'walk'
 		closed then return
-		walkedBy(callee) then emitSettledWalk(fn, value: value, walk: callee, site: site)
-		walkedAlone(callee) then fn.emitPositionalCallDiscarding(callee, args: argsOf(value), site: site)
+		walkedBy(callee) then fn.emitPositionalCallDiscarding(callee, args: argsOf(value), site: site)
 		walkedThroughWitness then panic("emitDefaultShareWalk: a registry value is a declared struct, and a declared struct's graph is walked by its own per-type walk rather than through a witness")
 		refused then panic("emitDefaultShareWalk: `Parser.requireShareableRegistryValue` refuses a key no share walk can mark (E3171)")
 	end 'walk'
 end 'emitDefaultShareWalk'
-
-function emitSettledWalk(fn SynthesizedFunction, value ValueId, walk ByteArray, site SynthesizedSite)
-	let visits = fn.emitPositionalCall(walk, args: twoArgs(value, second: fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, site: site)), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: site)
-	fn.emitPositionalCallDiscarding(WalkSettleName, args: argsOf(visits), site: site)
-end 'emitSettledWalk'
 
 function runtimeFunctionOrNone(fn SynthesizedFunction, callee OwnershipCallee, site SynthesizedSite) returns ValueId
 	return match callee 'callee'
@@ -214,21 +193,14 @@ function runtimeFunctionOrNone(fn SynthesizedFunction, callee OwnershipCallee, s
 end 'runtimeFunctionOrNone'
 
 // ⭐⭐ **EVERY MARKABLE `let` RECORD IS MARKED SHARED BEFORE `main` RUNS**, so the count every message steps on it
-// is atomic; no other green thread exists yet, because a `spawn` a global initializer can reach is refused
-// (`ServiceGlobalAccessCheck`). One visit table serves every `let`, because a record two of them reach has both
-// slots as owners; `__mm_walk_settle` aborts on an owner no `let` holds.
-// It runs after the LAST store, when no initializer temporary holds a record any more. A program with no
-// walked `let` opens no table: `__mm_walk_settle` is installed only beside a walk.
-function markLetsShared(fn SynthesizedFunction, sharedLets SharedLetArray, site SynthesizedSite)
-	var visits = fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, site: site)
-
+// is atomic; no other green thread exists yet, because a global initializer calls nothing (E3220). It runs
+// after the LAST store, when no initializer temporary holds a record any more.
+function markLetsShared(fn SynthesizedFunction, sharedLets SharedLetArray)
 	for shared in sharedLets 'eachLet'
 		let record = fn.mintOfType(shared.global.valueType)
 		fn.emit(MaxonOp.loadIndirect(record, addr: fn.emitSlotAddr(shared.global), offset: GlobalSlotOffset, valueType: declaredAggregateSlotWidth()), site: globalSite(shared.global))
-		visits = fn.emitPositionalCall(shared.walk, args: twoArgs(record, second: visits), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: globalSite(shared.global))
+		fn.emitPositionalCallDiscarding(shared.walk, args: argsOf(record), site: globalSite(shared.global))
 	end 'eachLet'
-
-	fn.emitPositionalCallDiscarding(WalkSettleName, args: argsOf(visits), site: site)
 end 'markLetsShared'
 
 // The OWNED value a managed global's slot starts life holding — either a record this function MATERIALIZES,
@@ -310,7 +282,7 @@ end 'literalStorageType'
 // Every decref is unconditional and nothing here tests a slot for null: `__module_init` fills every slot in
 // this list before `main`, so a null guard would test a condition the program cannot be in.
 function buildGlobalCleanup(module MaxonModule, project Project, globals ManagedGlobalArray, site SynthesizedSite)
-	var fn = openExitCodePassThrough(module, project: project, name: GlobalCleanupName)
+	let fn = openExitCodePassThrough(module, project: project, name: GlobalCleanupName)
 
 	for global in globals 'eachGlobal'
 		match global.cleanupDrop 'drop'
@@ -329,13 +301,13 @@ function emitGlobalCleanupDrop(fn SynthesizedFunction, global ManagedGlobal, dro
 end 'emitGlobalCleanupDrop'
 
 function openExitCodePassThrough(module MaxonModule, project Project, name ByteArray) returns SynthesizedFunction
-	var paramTypes = MaxonTypeArray.create(0)
+	let paramTypes = MaxonTypeArray.create(0)
 	paramTypes.push(MaxonType.integer)
 	return SynthesizedFunction.open(module, project: project, name: name, returnType: MaxonReturnType.value(MaxonType.integer), paramTypes: paramTypes)
 end 'openExitCodePassThrough'
 
 function buildRegistryRelease(module MaxonModule, project Project, defaults DefaultSlotArray, site SynthesizedSite)
-	var fn = openExitCodePassThrough(module, project: project, name: RegistryReleaseName)
+	let fn = openExitCodePassThrough(module, project: project, name: RegistryReleaseName)
 
 	for slot in defaults 'eachDefault'
 		let slotAddr = fn.emitLabelAddr(slot.label, site: defaultSite(slot))
@@ -424,11 +396,11 @@ export type SynthesizedFunction
 	// columns with the parameters — whose ids (`0..paramCount-1`) the value numbering RESERVES rather than
 	// mints, exactly as `Parser.recordValueType` does for a parsed function's parameters.
 	export static function open(module MaxonModule, project Project, name ByteArray, returnType MaxonReturnType, paramTypes MaxonTypeArray) returns SynthesizedFunction
-		var valueTags = ValueTypeTagArray.create(paramTypes.count(), zeroed: false)
-		var valueNameIds = TypeNameIdArray.create(paramTypes.count(), zeroed: false)
-		var valueBrandIds = TypeNameIdArray.create(paramTypes.count(), zeroed: false)
-		var valueCapabilities = ValueCapabilityArray.create(paramTypes.count(), zeroed: false)
-		var valueMintedSole = BoolArray.create(paramTypes.count(), zeroed: false)
+		let valueTags = ValueTypeTagArray.create(paramTypes.count(), zeroed: false)
+		let valueNameIds = TypeNameIdArray.create(paramTypes.count(), zeroed: false)
+		let valueBrandIds = TypeNameIdArray.create(paramTypes.count(), zeroed: false)
+		let valueCapabilities = ValueCapabilityArray.create(paramTypes.count(), zeroed: false)
+		let valueMintedSole = BoolArray.create(paramTypes.count(), zeroed: false)
 
 		for paramType in paramTypes 'eachParam'
 			valueTags.push(maxonTypeTag(paramType))
@@ -444,7 +416,7 @@ export type SynthesizedFunction
 		// `DeadFunctionElimination.markCompilerOwnedRoot` (E4015 again, for a program that installs neither and
 		// so has no pair to count) and at `TargetPrinter.isRuntimeFunction`. Both functions run on `main`'s green
 		// thread in a program with green threads, so both carry its stack guard (`IrFunction.needsGreenThreadStackGuard`).
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, typeSites: project.readerAnchors.functions.noTypeSites, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueCapabilities: valueCapabilities, valueMintedSole: valueMintedSole, valueWitnessIds: ValueIdArray.create(0), declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
+		let func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramTypes.count() as ParamCount, maxonParamTypes: paramTypes, typeSites: project.readerAnchors.functions.noTypeSites, valueTags: valueTags, valueNameIds: valueNameIds, valueBrandIds: valueBrandIds, valueCapabilities: valueCapabilities, valueMintedSole: valueMintedSole, valueWitnessIds: ValueIdArray.create(0), declaredAt: SourcePosition.synthesized(), placeholders: project.readerAnchors.functions, needsGreenThreadStackGuard: true)
 		let funcIndex = module.funcCount()
 		module.pushFunc(func)
 
@@ -502,7 +474,7 @@ export type SynthesizedFunction
 			return nameId
 		end 'carriesNoNameToCross'
 
-		var signatures = try queryProgramSignatures(self.project) otherwise panic("ModuleInit.projectScopedNameId: queryProgramSignatures failed while synthesizing a module initializer — it is computed and memoized before the pipeline runs, so it cannot fail fresh here")
+		let signatures = try queryProgramSignatures(self.project) otherwise panic("ModuleInit.projectScopedNameId: queryProgramSignatures failed while synthesizing a module initializer — it is computed and memoized before the pipeline runs, so it cannot fail fresh here")
 		return self.project.typeNames.intern(signatures.indexSpaceTypeName(maxonTypeOfTag(tag, nameId: nameId)))
 	end 'projectScopedNameId'
 
@@ -560,7 +532,7 @@ export type SynthesizedFunction
 	// control flow and there is no default that is right for both a fall-through and a two-way branch;
 	// leaving it unset makes a forgotten terminator a loud IR failure rather than a silently invented edge.
 	export function openBlock(label ByteArray) returns IrBlock
-		var opened = self.module.addBlock(self.func, label: label, heat: BlockHeat.normal)
+		let opened = self.module.addBlock(self.func, label: label, heat: BlockHeat.normal)
 		self.block = opened
 		return opened
 	end 'openBlock'
@@ -605,7 +577,7 @@ export type SynthesizedFunction
 		self.project.valueOrigins.record(self.funcIndex, valueId: id, opIndex: opIndex)
 	end 'recordOpTables'
 
-	// ⭐ **A `literal`** — a visit table, a null runtime function, an allocation size, a sentinel. Every
+	// ⭐ **A `literal`** — a null runtime function, an allocation size, a sentinel. Every
 	// caller passes `MaxonType.integer`, because the Maxon tier has no pointer or size type: a machine word
 	// is an integer here, the same reading `emitSlotAddr` above gives an ADDRESS.
 	//
@@ -634,7 +606,7 @@ export type SynthesizedFunction
 	// through `__maxon_global_cleanup` or through a destructor cascade. That difference is why the two are
 	// twins rather than one function on a shared carrier.
 	function emitBoxAlloc(sizeBytes FullRangeInt, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
-		var allocArgs = ValueIdArray.create(0)
+		let allocArgs = ValueIdArray.create(0)
 		allocArgs.push(self.emitTypedLiteral(sizeBytes, valueType: MaxonType.integer, site: site))
 		allocArgs.push(self.emitTypedLiteral(TrivialDestructor, valueType: MaxonType.integer, site: site))
 		return self.emitPositionalCall(MmAllocName, args: allocArgs, resultTag: resultTag, resultNameId: resultNameId, site: site)
@@ -672,7 +644,7 @@ export type SynthesizedFunction
 	// match, AND a global's initializer function, which takes no arguments at all.
 	export function emitPositionalCall(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
 		let result = self.mint(resultTag, nameId: resultNameId)
-		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: WriteBlameArray.create(0), defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted), site: site)
+		self.emit(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: NameRoster.create(0), mint: CalleeMint.notMinted), site: site)
 		return result
 	end 'emitPositionalCall'
 

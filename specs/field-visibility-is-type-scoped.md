@@ -228,7 +228,7 @@ extension Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(40)
+	let c = Counter.create(40)
 	c.bump()
 	return c.peek() as ExitCode
 end 'main'

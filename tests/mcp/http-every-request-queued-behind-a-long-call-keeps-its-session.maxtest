@@ -4,18 +4,18 @@ let SecondQueueLeadMs = 300
 
 let EveryQueuedSleepMs = 3000
 
-function postedToolsList(server StreamingHttpMcpServer, sessionId McpSession, id RequestId) returns HttpAnswer
-	return server.post(toolsListRequest(id), sessionId: sessionId)
+function postedToolsList(address HttpMcpAddress, sessionId McpSession, id RequestId) returns HttpAnswer
+	return address.post(toolsListRequest(id), sessionId: sessionId)
 end 'postedToolsList'
 
 function everyQueuedBehindALongCall(listening StreamingHttpMcpServer, program FilePath, longSession McpSession, firstQueuedSession McpSession, secondQueuedSession McpSession) returns (JsonDoc, HttpAnswer, HttpAnswer) throws TestFailure
-	let longCall = async httpToolCall(listening, sessionId: longSession, id: 2, name: ExecuteTool, argumentsJson: pathArgument(program))
+	let longCall = async httpToolCall(listening.address, sessionId: longSession, id: 2, name: ExecuteTool, argumentsJson: pathArgument(program))
 	sleep(FirstQueueLeadMs)
 
-	let firstQueued = async postedToolsList(listening, sessionId: firstQueuedSession, id: 3)
+	let firstQueued = async postedToolsList(listening.address, sessionId: firstQueuedSession, id: 3)
 	sleep(SecondQueueLeadMs)
 
-	let secondQueued = listening.post(toolsListRequest(4), sessionId: secondQueuedSession)
+	let secondQueued = listening.address.post(toolsListRequest(4), sessionId: secondQueuedSession)
 	let first = await firstQueued
 	let ran = await longCall
 	try listening.stop()
@@ -25,7 +25,7 @@ end 'everyQueuedBehindALongCall'
 test 'every request that waits behind another session s long call keeps its own session, not only the first one served'
 	let program = stagedProgram(HttpEveryRequestQueuedBehindALongCallKeepsItsSessionQueuedStagingDir, fileName: "main.maxon", source: sleepingProgramSource(EveryQueuedSleepMs))
 
-	var server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
+	let server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
 	let (_, longSession) = server.initializeSession()
 	let (_, firstQueuedSession) = server.initializeSession()
 	let (_, secondQueuedSession) = server.initializeSession()

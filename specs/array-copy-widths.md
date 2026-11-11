@@ -26,7 +26,7 @@ function expectedAt(index Count) returns Byte
 end 'expectedAt'
 
 function patterned(count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for i in 0 upto count 'eachByte'
 		bytes.push(expectedAt(i))
@@ -46,7 +46,7 @@ function main() returns ExitCode
 		let source = patterned(length)
 
 		for lead in 0 upto 4 'eachLead'
-			var destination = ByteArray.create(0)
+			let destination = ByteArray.create(0)
 
 			for _ in 0 upto lead 'eachLeadByte'
 				destination.push(200)
@@ -88,7 +88,7 @@ function expectedAt(index Count) returns Byte
 end 'expectedAt'
 
 function patterned(count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for i in 0 upto count 'eachByte'
 		bytes.push(expectedAt(i))
@@ -105,7 +105,7 @@ function main() returns ExitCode
 	var wrong = 0 as Count
 
 	for length in 0 upto 131 'eachLength'
-		var shifted = patterned(length)
+		let shifted = patterned(length)
 		shifted.insert(0, value: 255)
 
 		if shifted.count() != length + 1 'wrongInsertCount'
@@ -122,7 +122,7 @@ function main() returns ExitCode
 			end 'eachShiftedUp'
 		end 'rightInsertCount'
 
-		var shrunk = patterned(length + 1)
+		let shrunk = patterned(length + 1)
 		let removed = try shrunk.remove(0) otherwise panic("a non-empty array has a front element")
 
 		if removed != expectedAt(0) 'wrongRemoved'
@@ -170,7 +170,7 @@ function expectedAt(index Count) returns Byte
 end 'expectedAt'
 
 function patterned(count Count) returns Bytes
-	var elements = Bytes.create(0)
+	let elements = Bytes.create(0)
 
 	for i in 0 upto count 'eachElement'
 		elements.push(expectedAt(i))
@@ -188,7 +188,7 @@ function main() returns ExitCode
 
 	for length in 0 upto 41 'eachLength'
 		for at in 0 to length 'eachInsertPosition'
-			var grown = patterned(length)
+			let grown = patterned(length)
 			grown.insert(at, value: Marker)
 
 			if grown.count() != length + 1 'wrongInsertCount'
@@ -213,7 +213,7 @@ function main() returns ExitCode
 		end 'eachInsertPosition'
 
 		for at in 0 upto length 'eachRemovePosition'
-			var shrunk = patterned(length)
+			let shrunk = patterned(length)
 			let removed = try shrunk.remove(at) otherwise panic("the position is below the count")
 
 			if removed != expectedAt(at) 'wrongRemoved'
@@ -268,7 +268,7 @@ function expectedAt(index Count) returns Byte
 end 'expectedAt'
 
 function patterned(count Count) returns Bytes
-	var elements = Bytes.create(0)
+	let elements = Bytes.create(0)
 
 	for i in 0 upto count 'eachElement'
 		elements.push(expectedAt(i))
@@ -286,7 +286,7 @@ function main() returns ExitCode
 
 	for length in 0 upto 41 'eachLength'
 		for at in 0 to length 'eachInsertPosition'
-			var grown = patterned(length)
+			let grown = patterned(length)
 			grown.insert(at, value: Marker)
 
 			if grown.count() != length + 1 'wrongInsertCount'
@@ -311,7 +311,7 @@ function main() returns ExitCode
 		end 'eachInsertPosition'
 
 		for at in 0 upto length 'eachRemovePosition'
-			var shrunk = patterned(length)
+			let shrunk = patterned(length)
 			let removed = try shrunk.remove(at) otherwise panic("the position is below the count")
 
 			if removed != expectedAt(at) 'wrongRemoved'
@@ -366,7 +366,7 @@ function expectedAt(index Count) returns Byte
 end 'expectedAt'
 
 function patterned(count Count) returns Bytes
-	var elements = Bytes.create(0)
+	let elements = Bytes.create(0)
 
 	for i in 0 upto count 'eachElement'
 		elements.push(expectedAt(i))
@@ -384,7 +384,7 @@ function main() returns ExitCode
 
 	for length in 0 upto 41 'eachLength'
 		for at in 0 to length 'eachInsertPosition'
-			var grown = patterned(length)
+			let grown = patterned(length)
 			grown.insert(at, value: Marker)
 
 			if grown.count() != length + 1 'wrongInsertCount'
@@ -409,7 +409,7 @@ function main() returns ExitCode
 		end 'eachInsertPosition'
 
 		for at in 0 upto length 'eachRemovePosition'
-			var shrunk = patterned(length)
+			let shrunk = patterned(length)
 			let removed = try shrunk.remove(at) otherwise panic("the position is below the count")
 
 			if removed != expectedAt(at) 'wrongRemoved'

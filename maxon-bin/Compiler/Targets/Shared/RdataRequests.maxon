@@ -90,13 +90,13 @@ function patchChunkRdataLabels(chunk FunctionCodeChunk, labels RdataLabelMap)
 	end 'nothingToPatch'
 
 	for i in 0 upto chunk.rdataRelocs.count() 'eachReloc'
-		var reloc = try chunk.rdataRelocs.get(i) otherwise panic("patchChunkRdataLabels: rdataRelocs.get OOB at {i} of {chunk.rdataRelocs.count()}")
+		let reloc = try chunk.rdataRelocs.get(i) otherwise panic("patchChunkRdataLabels: rdataRelocs.get OOB at {i} of {chunk.rdataRelocs.count()}")
 		let registered = try labels.get(reloc.rdataLabel.toByteArray()) otherwise continue
 		reloc.rdataLabel = String.from(registered)
 	end 'eachReloc'
 
 	for i in 0 upto chunk.jumpTableRelocs.count() 'eachTable'
-		var table = try chunk.jumpTableRelocs.get(i) otherwise panic("patchChunkRdataLabels: jumpTableRelocs.get OOB at {i} of {chunk.jumpTableRelocs.count()}")
+		let table = try chunk.jumpTableRelocs.get(i) otherwise panic("patchChunkRdataLabels: jumpTableRelocs.get OOB at {i} of {chunk.jumpTableRelocs.count()}")
 		let registered = try labels.get(table.tableLabel.toByteArray()) otherwise continue
 		table.tableLabel = String.from(registered)
 	end 'eachTable'
@@ -105,7 +105,7 @@ end 'patchChunkRdataLabels'
 // Perform one function's requests against the table in the order the worker made them, and answer the
 // real label of every placeholder. A float island answers no placeholder — its op already names it.
 function registerRdataRequests(globalData GlobalDataTable, requests RdataRequestArray) returns RdataLabelMap
-	var labels = RdataLabelMap.create()
+	let labels = RdataLabelMap.create()
 
 	for (iter, request) in requests.withIterator() 'eachRequest'
 		let ordinal = iter.index() as RdataRequestOrdinal
@@ -128,7 +128,7 @@ function patchRdataLabels(module TargetModule, func IrFunction, labels RdataLabe
 	end 'nothingToPatch'
 
 	for blockRef in func.blockRefs 'eachBlock'
-		view block = module.getBlock(blockRef)
+		let block = module.getBlock(blockRef)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			patchRdataLabelAt(module, opIdx: opIdx, labels: labels)

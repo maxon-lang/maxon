@@ -11,8 +11,8 @@
 // appends them to the real module by index arithmetic.
 //
 // ⛔⛔ **EVERY RECORD REACHABLE FROM A REPLY IS THE REPLY'S ALONE, AND THAT IS A RUN-TIME CONTRACT WITH A
-// LOUD FAILURE.** A reply MOVES: the send walks the whole graph and a record with a second owner aborts
-// the process with exit 96 (`RuntimeAbort.transferredRecordNotSole`). The Target module's blocks are built
+// LOUD FAILURE.** A reply MOVES: in a seed-built runtime the send walks the whole graph and a record with a
+// second owner aborts the process with exit 96. The Target module's blocks are built
 // off the unit's own Std blocks and die with them; a block a pass mints copies the inline site it inherits
 // (`addOrderedBlock`, `addSplitBlock`); the isel's scratch hands the module over and keeps no reference
 // (`lowerUnit`); and the orphans a rewrite leaves in the flat `ops` array are compacted away before the
@@ -66,8 +66,8 @@ export type SpanLineTable
 	end 'empty'
 
 	export static function covering(wanted SpanIdArray, table DebugSpanTable) returns SpanLineTable
-		var spans = SpanIdArray.create(0)
-		var lineKeys = SpanKeyColumn.create(0)
+		let spans = SpanIdArray.create(0)
+		let lineKeys = SpanKeyColumn.create(0)
 		wanted.sort()
 
 		for span in wanted 'eachWanted'
@@ -116,12 +116,12 @@ export type FunctionEncodingFacts
 	export var pinsItsThread as bool
 
 	export static function of(func IrFunction, blocks IrBlockArray, spans DebugSpanColumn, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns FunctionEncodingFacts
-		var siteCallSpans = SpanIdArray.create(0)
+		let siteCallSpans = SpanIdArray.create(0)
 		var siteParentKeys = DebugSiteKeyColumn.create(0)
 		var lines = SpanLineTable.empty()
 
 		if spans.armed 'carriesLines'
-			var wanted = SpanIdArray.create(0)
+			let wanted = SpanIdArray.create(0)
 			collectOpSpans(func, blocks: blocks, spans: spans, into: wanted)
 			siteCallSpans.reserve(func.inlineSites.count())
 
@@ -191,7 +191,7 @@ export function debugSiteKeyOf(site InlineSiteRef) returns DebugSiteKey
 end 'debugSiteKeyOf'
 
 function siteParentKeysOf(func IrFunction) returns DebugSiteKeyColumn
-	var parentKeys = DebugSiteKeyColumn.create(func.inlineSites.count(), zeroed: false)
+	let parentKeys = DebugSiteKeyColumn.create(func.inlineSites.count(), zeroed: false)
 
 	for (iter, site) in func.inlineSites.withIterator() 'eachSite'
 		requireParentRecordedEarlier(site.parent, site: iter.index())
@@ -237,18 +237,18 @@ export type DebugValueRoster
 			return Self.empty()
 		end 'nothingNamed'
 
-		var valueIds = ValueIdArray.create(tally, zeroed: false)
-		var siteKeys = DebugSiteKeyColumn.create(tally, zeroed: false)
-		var groups = DebugNameGroupColumn.create(tally, zeroed: false)
-		var versionKinds = DebugVersionKindArray.create(tally, zeroed: false)
-		var versionBlocks = BlockIdArray.create(tally, zeroed: false)
-		var versionAnchors = ValueIdArray.create(tally, zeroed: false)
-		var decls = DebugDeclColumn.create(tally, zeroed: false)
-		var scopeFirst = DebugDeclColumn.create(tally, zeroed: false)
-		var scopeCount = DebugDeclColumn.create(tally, zeroed: false)
-		var scopeLost = BoolArray.create(tally, zeroed: false)
-		var scopeEndBlocks = BlockIdArray.create(0)
-		var groupByNameAndSite = DebugNameGroupByKey.create()
+		let valueIds = ValueIdArray.create(tally, zeroed: false)
+		let siteKeys = DebugSiteKeyColumn.create(tally, zeroed: false)
+		let groups = DebugNameGroupColumn.create(tally, zeroed: false)
+		let versionKinds = DebugVersionKindArray.create(tally, zeroed: false)
+		let versionBlocks = BlockIdArray.create(tally, zeroed: false)
+		let versionAnchors = ValueIdArray.create(tally, zeroed: false)
+		let decls = DebugDeclColumn.create(tally, zeroed: false)
+		let scopeFirst = DebugDeclColumn.create(tally, zeroed: false)
+		let scopeCount = DebugDeclColumn.create(tally, zeroed: false)
+		let scopeLost = BoolArray.create(tally, zeroed: false)
+		let scopeEndBlocks = BlockIdArray.create(0)
+		let groupByNameAndSite = DebugNameGroupByKey.create()
 		let byId = module.blockIndexById(func) if debugLocalsLeaveTheirScopes(func) else BlockIndexById.create()
 
 		for (declAt, local) in func.debugLocals.withIterator() 'eachBinding'
@@ -320,7 +320,7 @@ export type BackendUnit
 	end 'awaitingABody'
 
 	export static function extract(module StdModule, func IrFunction, funcIndex ElementIndex, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns isolated BackendUnit
-		var unit = BackendUnit.awaitingABody(funcIndex) as isolated BackendUnit
+		let unit = BackendUnit.awaitingABody(funcIndex) as isolated BackendUnit
 
 		modify unit 'fill'
 			unit.holder.push(BackendUnitBody.extract(module, func: func, runtimeTier: runtimeTier, spanTable: spanTable))
@@ -446,7 +446,7 @@ export function spliceBackendUnit(module TargetModule, func IrFunction, unitModu
 	func.blockRefs.clear()
 
 	for unitRef in unitFunc.blockRefs 'eachBlock'
-		var block = unitModule.getBlock(unitRef)
+		let block = unitModule.getBlock(unitRef)
 		block.shiftOpIndices(opOffset)
 		func.blockRefs.push(module.blocks.count())
 		module.blocks.push(block)
@@ -475,7 +475,7 @@ module function resolveDebugRanges(unitModule TargetModule, unitFunc IrFunction)
 	let liveOps = unitModule.liveOpIndices(unitFunc)
 
 	for i in 0 upto unitFunc.debugLocalRanges.count() 'eachRange'
-		var range = try unitFunc.debugLocalRanges.get(i) otherwise panic("resolveDebugRanges: debugLocalRanges.get OOB at {i} of {unitFunc.debugLocalRanges.count()}")
+		let range = try unitFunc.debugLocalRanges.get(i) otherwise panic("resolveDebugRanges: debugLocalRanges.get OOB at {i} of {unitFunc.debugLocalRanges.count()}")
 		range.first = opOfOrdinal(liveOps, ordinal: range.first)
 		range.last = opOfOrdinal(liveOps, ordinal: range.last)
 	end 'eachRange'

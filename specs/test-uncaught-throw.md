@@ -716,7 +716,7 @@ function items(hit bool) returns TallyArray throws ApiError
 		throw ApiError.notFound
 	end 'miss'
 
-	var found = TallyArray.create(0)
+	let found = TallyArray.create(0)
 	found.push(1)
 	found.push(2)
 	return found
@@ -795,7 +795,7 @@ end 'Level'
 typealias LevelArray = Array with Level
 
 test 'counts up from a stored level'
-	var levels = LevelArray.create(0)
+	let levels = LevelArray.create(0)
 	levels.push(Level.high)
 	var total = 0 as FullRangeInt
 
@@ -1006,7 +1006,7 @@ function items(hit bool) returns IntArray throws ApiError
 		throw ApiError.notFound
 	end 'miss'
 
-	var found = IntArray.create(0)
+	let found = IntArray.create(0)
 	found.push(4)
 	found.push(5)
 	return found

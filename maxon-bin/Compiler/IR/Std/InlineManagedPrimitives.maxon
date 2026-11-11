@@ -233,7 +233,7 @@ end 'InlineFrame'
 //
 // ⚠ **IT NAMES THE BLOCK BY ITS REF AND NOT BY `IrBlock`.** An `IrBlock` held in a `let` field is
 // read-only for the record's whole life, and the emitters all MUTATE the block they are given
-// (E3159). The ref is an `int`, so `blockAt` hands back a block the emitter may write: the same
+// (E3207). The ref is an `int`, so `blockAt` hands back a block the emitter may write: the same
 // discipline the expanders already had, one indirection wider.
 type StrideArm
 	export let blockRef as ElementIndex
@@ -290,7 +290,7 @@ export function inlineManagedPrimitives(project Project, module StdModule, usesG
 			continue
 		end 'notInTheProgram'
 
-		var inliner = PrimitiveInliner.create(module, func: func, usesGreenThreads: usesGreenThreads, traced: project.debugStream, road: createRoadOf(project), target: project.target, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites, globalData: project.globalData)
+		let inliner = PrimitiveInliner.create(module, func: func, usesGreenThreads: usesGreenThreads, traced: project.debugStream, road: createRoadOf(project), target: project.target, funcIndex: funcIndex, origins: project.valueOrigins, strides: project.stdOpElementStrides, trivialElements: project.stdOpTrivialElementSites, globalData: project.globalData)
 		inliner.run()
 		expanded = expanded + inliner.expanded
 	end 'eachFunc'
@@ -671,9 +671,9 @@ type PrimitiveInliner
 			return blockRef
 		end 'notInline'
 
-		var carve = self.carveContinuation(blockRef, pos: pos)
-		var head = self.blockAt(blockRef)
-		var created = emitCoAllocatedCreate(self.module, func: self.func, cur: head, traced: self.traced, road: self.road, target: self.buildTarget, shape: shape, elementSize: stampId, length: lengthId, elementDestroy: destroyId, ids: self.valueIds())
+		let carve = self.carveContinuation(blockRef, pos: pos)
+		let head = self.blockAt(blockRef)
+		let created = emitCoAllocatedCreate(self.module, func: self.func, cur: head, traced: self.traced, road: self.road, target: self.buildTarget, shape: shape, elementSize: stampId, length: lengthId, elementDestroy: destroyId, ids: self.valueIds())
 		attachBlockArgs(carve.cont, valueIds: argsOf(resultId), argType: StdType.i64)
 		self.module.setTerminator(created.block, op: StdOp.branch(carve.cont.id))
 		attachEdge(created.block, targetId: carve.cont.id, argIds: argsOf(created.record))
@@ -682,7 +682,7 @@ type PrimitiveInliner
 	end 'expandCoAllocatedCreate'
 
 	function constantDefinedBefore(blockRef ElementIndex, pos ElementIndex, valueId ValueId) returns FullRangeInt throws AbsentError
-		var def = StdFoldableDef.create()
+		let def = StdFoldableDef.create()
 		var scanned = 0 as ElementIndex
 
 		while scanned < pos and scanned < MostOpsScannedForAConstant 'eachEarlierOp'
@@ -773,7 +773,7 @@ type PrimitiveInliner
 			noFastArm then return blockRef
 		end 'plan'
 
-		view frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
+		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan, roster: ForkRoster.element, forStore: false) 'eachArm'
 			self.emitLoadArmToCont(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, cont: frame.carve.cont)
@@ -794,8 +794,8 @@ type PrimitiveInliner
 	// no insert — the continuation takes the ORIGINAL result id as its block arg exactly as `closeFrame` does,
 	// so no op after the site changes, and `elimTrivialBlockArgs` folds the single-predecessor arg away.
 	function expandUncheckedGetUnguarded(blockRef ElementIndex, pos ElementIndex, arr ValueId, index ValueId, resultId ValueId, stride SingleOpStride) returns ElementIndex
-		var carve = self.carveContinuation(blockRef, pos: pos)
-		var head = self.blockAt(blockRef)
+		let carve = self.carveContinuation(blockRef, pos: pos)
+		let head = self.blockAt(blockRef)
 		let value = self.emitElementLoad(head, arr: arr, index: index, stride: stride)
 		attachBlockArgs(carve.cont, valueIds: argsOf(resultId), argType: StdType.i64)
 		self.module.setTerminator(head, op: StdOp.branch(carve.cont.id))
@@ -835,12 +835,12 @@ type PrimitiveInliner
 		let trivialElement = self.trivialElements.contains(site)
 
 		// The fast arm reads every element; the slow arm is an index out of range or an empty managed slot.
-		view frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
-		var inRange = self.guardIndexInRange(self.blockAt(blockRef), arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: frame.slow, next: InlineLoadLabel)
+		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
+		let inRange = self.guardIndexInRange(self.blockAt(blockRef), arr: arr, index: index, limitOffset: ManagedRecordLengthOffset, slow: frame.slow, next: InlineLoadLabel)
 		let arms = self.openStrideArms(registeredBlockRef(self.module, func: self.func, block: inRange), arr: arr, slow: frame.slow.id, plan: plan, roster: ForkRoster.element, forStore: false)
 		let loaded = self.emitLoadArms(arms, arr: arr, index: index)
 
-		var tail = self.blockAt(loaded.blockRef)
+		let tail = self.blockAt(loaded.blockRef)
 		let noError = emitConst(self.module, block: tail, value: NoErrorFlag, ids: self.valueIds())
 		self.emitElementReadTail(tail, arr: arr, value: loaded.value, frame: frame, trivialElement: trivialElement, exit: ElementReadExit.valueAndFlag(noError))
 
@@ -854,13 +854,13 @@ type PrimitiveInliner
 	function emitLoadArms(arms StrideArmArray, arr ValueId, index ValueId) returns LoadedElement
 		if arms.count() == 1 'oneKnownWidth'
 			let only = try arms.get(0) otherwise panic("emitLoadArms: a one-arm plan produced an empty arm list")
-			var loadBlock = self.blockAt(only.blockRef)
+			let loadBlock = self.blockAt(only.blockRef)
 			let value = self.emitElementLoad(loadBlock, arr: arr, index: index, stride: only.stride)
 
 			return LoadedElement.create(only.blockRef, value: value)
 		end 'oneKnownWidth'
 
-		var loaded = self.module.addBlock(self.func, label: InlineLoadedLabel, heat: BlockHeat.normal)
+		let loaded = self.module.addBlock(self.func, label: InlineLoadedLabel, heat: BlockHeat.normal)
 		let loadedRef = registeredBlockRef(self.module, func: self.func, block: loaded)
 		let value = self.valueIds().mint()
 
@@ -890,12 +890,12 @@ type PrimitiveInliner
 
 		let trivialElement = self.trivialElements.contains(site)
 
-		view frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
+		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 
-		var head = self.blockAt(blockRef)
+		let head = self.blockAt(blockRef)
 		let position = emitLoadField(self.module, block: head, record: cursor, offset: CursorPositionOffset, ids: self.valueIds())
 		let source = emitLoadField(self.module, block: head, record: cursor, offset: CursorSourceOffset, ids: self.valueIds())
-		var inRange = self.guardCursorInRange(head, source: source, position: position, slow: frame.slow, next: InlineLoadLabel)
+		let inRange = self.guardCursorInRange(head, source: source, position: position, slow: frame.slow, next: InlineLoadLabel)
 		let arms = self.openStrideArms(registeredBlockRef(self.module, func: self.func, block: inRange), arr: source, slow: frame.slow.id, plan: plan, roster: ForkRoster.cursor, forStore: false)
 		let loaded = self.emitLoadArms(arms, arr: source, index: position)
 
@@ -908,12 +908,12 @@ type PrimitiveInliner
 		let cursor = argAt(args, index: 0, callee: callee)
 
 		// Cold, unlike `current`'s slow arm: only an out-of-range move reaches it, and the call there throws.
-		view frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: BlockHeat.cold)
+		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: BlockHeat.cold)
 
-		var head = self.blockAt(blockRef)
+		let head = self.blockAt(blockRef)
 		let target = emitCursorStepTarget(self.module, block: head, cursor: cursor, step: step, ids: self.valueIds())
 		let source = emitLoadField(self.module, block: head, record: cursor, offset: CursorSourceOffset, ids: self.valueIds())
-		var move = self.guardCursorInRange(head, source: source, position: target, slow: frame.slow, next: InlineMoveLabel)
+		let move = self.guardCursorInRange(head, source: source, position: target, slow: frame.slow, next: InlineMoveLabel)
 
 		emitStoreField(self.module, block: move, record: cursor, offset: CursorPositionOffset, value: target)
 		self.emitVoidOkExit(move, cont: frame.carve.cont, errorFlagId: ManagedCallFlag.flag(errorFlagId))
@@ -950,7 +950,7 @@ type PrimitiveInliner
 			let destroy = emitLoadField(self.module, block: cur, record: arr, offset: ManagedRecordElementDestroyOffset, ids: self.valueIds())
 			let managed = emitSlotMustBeFilled(self.module, block: cur, destroy: destroy, ids: self.valueIds(), greenThreads: self.usesGreenThreads)
 
-			var checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel, heat: BlockHeat.normal)
+			let checkEmpty = self.module.addBlock(self.func, label: InlineEmptyLabel, heat: BlockHeat.normal)
 			self.module.setTerminator(cur, op: StdOp.condBranch(managed, thenBlockId: checkEmpty.id, elseBlockId: frame.carve.cont.id))
 
 			// `value`, and for `get` the `noError` its caller defined in `cur`, are readable here: `cur` either
@@ -1000,11 +1000,11 @@ type PrimitiveInliner
 		// A managed element's every `set` takes the slow arm (`emitDetachingStoreGuards`), which is then
 		// the common path.
 		let slowHeat = self.slowArmHeat(plan, fastArmServesEveryElement: trivialElement)
-		view frame = self.openStoreFrame(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: slowHeat, refusalOnly: storesOnTheFastArmOnly)
+		let frame = self.openStoreFrame(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: slowHeat, refusalOnly: storesOnTheFastArmOnly)
 		let guarded = self.emitDetachingStoreGuards(self.blockAt(blockRef), arr: arr, index: index, bound: bound, slow: frame.slow, occupantOwesNoDrop: trivialElement)
 
 		for arm in self.openStrideArms(guarded.blockRef, arr: arr, slow: frame.slow.id, plan: plan, roster: ForkRoster.element, forStore: true) 'eachArm'
-			var armBlock = self.blockAt(arm.blockRef)
+			let armBlock = self.blockAt(arm.blockRef)
 			emitStrideSlotStore(self.module, block: armBlock, buffer: guarded.buffer, index: index, value: value, stride: arm.stride, ids: self.valueIds())
 			self.emitVoidOkExit(armBlock, cont: frame.carve.cont, errorFlagId: errorFlagId)
 		end 'eachArm'
@@ -1013,11 +1013,11 @@ type PrimitiveInliner
 	end 'expandElementStore'
 
 	function expandProvenStore(blockRef ElementIndex, pos ElementIndex, arr ValueId, index ValueId, value ValueId, resultId ValueId, errorFlagId ManagedCallFlag, stride SingleOpStride) returns ElementIndex
-		var carve = self.carveContinuation(blockRef, pos: pos)
+		let carve = self.carveContinuation(blockRef, pos: pos)
 		attachBlockArgs(carve.cont, valueIds: carriedResults(resultId, errorFlagId: errorFlagId), argType: StdType.i64)
 
 		let joined = self.emitDetachUnlessOwned(self.blockAt(blockRef), arr: arr, absent: self.missingBufferExit().id)
-		var store = self.blockAt(joined.blockRef)
+		let store = self.blockAt(joined.blockRef)
 		emitStrideSlotStore(self.module, block: store, buffer: joined.buffer, index: index, value: value, stride: stride, ids: self.valueIds())
 		self.emitVoidOkExit(store, cont: carve.cont, errorFlagId: errorFlagId)
 
@@ -1025,7 +1025,7 @@ type PrimitiveInliner
 	end 'expandProvenStore'
 
 	function openStoreFrame(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ManagedCallFlag, slowHeat BlockHeat, refusalOnly bool) returns InlineFrame
-		var frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
+		let frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
 
 		match errorFlagId 'shape'
 			none then self.attachPlainSlowCall(frame, callee: callee, args: args, resultId: resultId)
@@ -1050,9 +1050,9 @@ type PrimitiveInliner
 		let at = argAt(args, index: 1, callee: callee)
 		let entry = try wordEntryNamed(callee) otherwise panic("expandWordGet: '{String.from(callee)}' passed `isWordGetCallee` and is not a word entry")
 
-		view frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: BlockHeat.cold)
-		var spanned = self.guardWordSpan(self.blockAt(blockRef), arr: arr, at: at, width: entry.width, slow: frame.slow)
-		var load = self.guardByteStride(spanned, arr: arr, slow: frame.slow)
+		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: BlockHeat.cold)
+		let spanned = self.guardWordSpan(self.blockAt(blockRef), arr: arr, at: at, width: entry.width, slow: frame.slow)
+		let load = self.guardByteStride(spanned, arr: arr, slow: frame.slow)
 
 		let buffer = emitLoadField(self.module, block: load, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
 		let slot = emitSlotAddr(self.module, block: load, buffer: buffer, index: at, elementSize: emitConst(self.module, block: load, value: singleOpStrideBytes(SingleOpStride.byte), ids: self.valueIds()), ids: self.valueIds())
@@ -1072,14 +1072,14 @@ type PrimitiveInliner
 		let word = argAt(args, index: 1, callee: callee)
 		let entry = try wordEntryNamed(callee) otherwise panic("expandWordPut: '{String.from(callee)}' passed `isWordPutCallee` and is not a word entry")
 
-		view frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: BlockHeat.cold)
+		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: BlockHeat.cold)
 
-		var head = self.blockAt(blockRef)
+		let head = self.blockAt(blockRef)
 		let length = emitLoadField(self.module, block: head, record: arr, offset: ManagedRecordLengthOffset, ids: self.valueIds())
 		let spanLessOne = emitConst(self.module, block: head, value: wordByteCount(entry.width) - 1, ids: self.valueIds())
 		let lastIndex = emitBin(self.module, block: head, a: length, b: spanLessOne, opcode: StdBinOpcode.add, ids: self.valueIds())
 		let guarded = self.emitElementStoreGuards(head, arr: arr, index: lastIndex, slow: frame.slow, occupantOwesNoDrop: true)
-		var store = self.guardByteStride(self.blockAt(guarded.blockRef), arr: arr, slow: frame.slow)
+		let store = self.guardByteStride(self.blockAt(guarded.blockRef), arr: arr, slow: frame.slow)
 
 		let slot = emitSlotAddr(self.module, block: store, buffer: guarded.buffer, index: length, elementSize: emitConst(self.module, block: store, value: singleOpStrideBytes(SingleOpStride.byte), ids: self.valueIds()), ids: self.valueIds())
 		let stored = self.inOrder(store, word: word, order: entry.order, width: entry.width)
@@ -1091,8 +1091,8 @@ type PrimitiveInliner
 
 	// The span check is `ManagedWordRuntime.emitSpanGuards`', shared with the runtime word read.
 	function guardWordSpan(cur IrBlock, arr ValueId, at ValueId, width WordBytes, slow IrBlock) returns IrBlock
-		var inside = self.module.addBlock(self.func, label: InlineBoundsLabel, heat: BlockHeat.normal)
-		var next = self.module.addBlock(self.func, label: InlineLoadLabel, heat: BlockHeat.normal)
+		let inside = self.module.addBlock(self.func, label: InlineBoundsLabel, heat: BlockHeat.normal)
+		let next = self.module.addBlock(self.func, label: InlineLoadLabel, heat: BlockHeat.normal)
 
 		emitSpanGuards(self.module, entry: cur, inside: inside, next: next, refused: slow, arr: arr, at: at, byteCount: wordByteCount(width), ids: self.valueIds())
 
@@ -1208,10 +1208,10 @@ type PrimitiveInliner
 	end 'guardManagedElement'
 
 	function emitDetachUnlessOwned(cur IrBlock, arr ValueId, absent BlockId) returns GuardedBuffer
-		var detach = self.module.addBlock(self.func, label: InlineDetachLabel, heat: BlockHeat.cold)
-		var checkBuffer = self.module.addBlock(self.func, label: InlineOwnedLabel, heat: BlockHeat.normal)
-		var checkShared = self.module.addBlock(self.func, label: InlineViewedLabel, heat: BlockHeat.normal)
-		var joined = self.module.addBlock(self.func, label: InlineDetachedLabel, heat: BlockHeat.normal)
+		let detach = self.module.addBlock(self.func, label: InlineDetachLabel, heat: BlockHeat.cold)
+		let checkBuffer = self.module.addBlock(self.func, label: InlineOwnedLabel, heat: BlockHeat.normal)
+		let checkShared = self.module.addBlock(self.func, label: InlineViewedLabel, heat: BlockHeat.normal)
+		let joined = self.module.addBlock(self.func, label: InlineDetachedLabel, heat: BlockHeat.normal)
 		let joinedRef = registeredBlockRef(self.module, func: self.func, block: joined)
 		let joinedBuffer = self.valueIds().mint()
 
@@ -1229,7 +1229,7 @@ type PrimitiveInliner
 
 	function missingBufferExit() returns IrBlock
 		if not self.missingBufferMade 'firstUse'
-			view exit = appendPanicBlock(self.module, func: self.func, globalData: self.globalData, label: InlineMissingLabel, message: MissingBufferPanicText, ids: self.valueIds())
+			let exit = appendPanicBlock(self.module, func: self.func, globalData: self.globalData, label: InlineMissingLabel, message: MissingBufferPanicText, ids: self.valueIds())
 			self.missingBufferRef = registeredBlockRef(self.module, func: self.func, block: exit)
 			self.missingBufferMade = true
 		end 'firstUse'
@@ -1252,9 +1252,9 @@ type PrimitiveInliner
 			return blockRef
 		end 'aRecordThisChainCreated'
 
-		view frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
+		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 
-		var head = self.blockAt(blockRef)
+		let head = self.blockAt(blockRef)
 		let length = emitLoadField(self.module, block: head, record: arr, offset: ManagedRecordLengthOffset, ids: self.valueIds())
 
 		// The slot at `length` holds no element, so a push destroys nothing whatever the element type —
@@ -1319,7 +1319,7 @@ type PrimitiveInliner
 		let stamp = emitLoadElementStamp(self.module, block: self.blockAt(blockRef), record: arr, ids: self.valueIds())
 		let chain = emitStrideChain(self.module, func: self.func, cur: self.blockAt(blockRef), stamp: stamp, strides: forkRosterStrides(roster), signedSharesUnsignedArm: forStore, other: slow, armLabelPrefix: InlineArmLabelPrefix, checkLabel: InlineStrideLabel, ids: self.valueIds())
 
-		var arms = StrideArmArray.create(chain.count(), zeroed: false)
+		let arms = StrideArmArray.create(chain.count(), zeroed: false)
 
 		for arm in chain 'eachArm'
 			arms.push(StrideArm.create(arm.ref, stride: arm.stride))
@@ -1363,7 +1363,7 @@ type PrimitiveInliner
 	// into a fresh block the caller goes on emitting into. `cur` is TERMINATED here, so every body op the
 	// caller wanted in it must already be there.
 	function guard(cur IrBlock, refused ValueId, slow IrBlock, next ByteArray) returns IrBlock
-		var ok = self.module.addBlock(self.func, label: next, heat: BlockHeat.normal)
+		let ok = self.module.addBlock(self.func, label: next, heat: BlockHeat.normal)
 		self.module.setTerminator(cur, op: StdOp.condBranch(refused, thenBlockId: slow.id, elseBlockId: ok.id))
 		return ok
 	end 'guard'
@@ -1391,7 +1391,7 @@ type PrimitiveInliner
 	// (`IrModule.ops` is append-only and retains what block-rebuilding passes replace), and it is why every
 	// reader asks `liveOpIndices` rather than scanning the array.
 	function openPlain(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, slowHeat BlockHeat) returns InlineFrame
-		var frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
+		let frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
 		self.attachPlainSlowCall(frame, callee: callee, args: args, resultId: resultId)
 
 		return frame
@@ -1407,7 +1407,7 @@ type PrimitiveInliner
 	// fresh on the slow arm and both become continuation block args. It differs from its twin in exactly
 	// that — the op and the arity — which is why the carve and the wiring either side of it are shared.
 	function openThrowing(blockRef ElementIndex, pos ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, errorFlagId ValueId, slowHeat BlockHeat) returns InlineFrame
-		var frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
+		let frame = self.carveFrame(blockRef, pos: pos, slowHeat: slowHeat)
 		self.attachThrowingSlowCall(frame, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId)
 
 		return frame
@@ -1429,8 +1429,8 @@ type PrimitiveInliner
 	// valid only while the continuation is the function's LAST-registered block, and the `addBlock` below is
 	// precisely what ends that — so the order between them may not be left to argument evaluation.
 	function carveFrame(blockRef ElementIndex, pos ElementIndex, slowHeat BlockHeat) returns InlineFrame
-		var carve = self.carveContinuation(blockRef, pos: pos)
-		var slow = self.module.addBlock(self.func, label: ManagedSlowLabel, heat: slowHeat)
+		let carve = self.carveContinuation(blockRef, pos: pos)
+		let slow = self.module.addBlock(self.func, label: ManagedSlowLabel, heat: slowHeat)
 		return InlineFrame.create(carve, slow: slow)
 	end 'carveFrame'
 
@@ -1472,7 +1472,7 @@ type PrimitiveInliner
 		// depends on the call still being live, and the carve two lines down is what ends that.
 		_ = self.valueIds()
 
-		var cont = self.carve(blockRef, pos: pos)
+		let cont = self.carve(blockRef, pos: pos)
 
 		// Read immediately, and CHECKED by identity — `carve` is the one moment the continuation is the
 		// function's last-registered block, and the `addBlock` on the next line ends it. The check is not
@@ -1489,8 +1489,8 @@ type PrimitiveInliner
 	// results, and the continuation takes the ORIGINAL ones as its block args. That pairing is the whole
 	// reason no op after the site has to change — every one of them still names the value it always did.
 	function closeFrame(frame InlineFrame, carried ValueIdArray, slowCarried ValueIdArray)
-		var slow = frame.slow
-		var cont = frame.carve.cont
+		let slow = frame.slow
+		let cont = frame.carve.cont
 		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
 		attachEdge(slow, targetId: cont.id, argIds: slowCarried)
 
@@ -1508,7 +1508,7 @@ type PrimitiveInliner
 	// is moving the block's whole EXIT (terminator, conditional branch and outgoing edge args) onto the
 	// continuation while leaving the head un-terminated, and that is one rule with one home.
 	function carve(blockRef ElementIndex, pos ElementIndex) returns IrBlock
-		var head = self.blockAt(blockRef)
+		let head = self.blockAt(blockRef)
 		let cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: ManagedContLabel)
 		head.truncateBodyOps(pos)
 		return cont
@@ -1581,7 +1581,7 @@ end 'firstQuestionLabel'
 // `openStrideArms`' one-arm answer. A free function so that the `match` arm above it stays the single
 // statement a `match` arm is.
 function singleStrideArm(blockRef ElementIndex, stride SingleOpStride) returns StrideArmArray
-	var arms = StrideArmArray.create(0)
+	let arms = StrideArmArray.create(0)
 	arms.push(StrideArm.create(blockRef, stride: stride))
 	return arms
 end 'singleStrideArm'

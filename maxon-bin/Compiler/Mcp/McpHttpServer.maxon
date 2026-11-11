@@ -78,11 +78,6 @@ end 'McpHttpSession'
 typealias McpHttpSessionList = List with McpHttpSession
 typealias SessionEnds = function(McpHttpSession) returns bool
 
-union SessionLookup
-	found(session McpHttpSession)
-	unknown
-end 'SessionLookup'
-
 union OfferedSession
 	absent
 	named(id String)
@@ -113,7 +108,7 @@ type McpStdinWatcher
 	end 'create'
 
 	export function untilClosed()
-		var stdin = Console.stdin()
+		let stdin = Console.stdin()
 		var open = true
 
 		while open 'drain'
@@ -191,7 +186,7 @@ type McpHttpHandler
 	end 'create'
 
 	static function bindAndServe(devMode bool, exePath FilePath, options McpHttpOptions, stop McpStopSwitch) returns McpHttpEnd
-		var server = try HttpServer.bind(McpLoopbackAddress, port: options.port) otherwise (e) 'noListener'
+		let server = try HttpServer.bind(McpLoopbackAddress, port: options.port) otherwise (e) 'noListener'
 			return McpHttpEnd.unbound(e)
 		end 'noListener'
 
@@ -201,9 +196,9 @@ type McpHttpHandler
 		// written there would be parsed as that handshake.
 		print("\{\"endpoint\":\"http://{McpLoopbackAddress}:{boundPort}{McpRoutePath}\"\}\n")
 
-		var caps = options.clone()
+		let caps = options.clone()
 		caps.port = boundPort
-		var handler = McpHttpHandler.create(devMode, exePath: exePath, caps: caps, port: boundPort, server: server, watchesStdin: options.exitOnStdinEof, stop: stop)
+		let handler = McpHttpHandler.create(devMode, exePath: exePath, caps: caps, port: boundPort, server: server, watchesStdin: options.exitOnStdinEof, stop: stop)
 
 		return McpHttpHandler.servedSessions(handler)
 	end 'bindAndServe'
@@ -231,7 +226,7 @@ type McpHttpHandler
 
 	function serveUntilEnded() returns HttpServeEnd
 		while true 'accepting'
-			var exchange = try self.server.accept() otherwise (fault) 'refused'
+			let exchange = try self.server.accept() otherwise (fault) 'refused'
 				match fault 'why'
 					listenerClosed then return HttpServeEnd.closed
 					acceptFailed then return HttpServeEnd.listenerFailed
@@ -287,7 +282,7 @@ type McpHttpHandler
 	end 'settleAfterHandling'
 
 	function answer(exchange HttpExchange) throws HttpServerError
-		view request = exchange.request()
+		let request = exchange.request()
 
 		if not hostNamesThisServer(request, port: self.port) 'foreignHost'
 			try refuse(exchange, code: StatusCode.forbidden, reason: "this transport serves {McpLoopbackAddress} and {McpLocalhostName} only")
@@ -375,10 +370,12 @@ function acceptDeadlineFor(sessions McpHttpSessionList, idleMs SessionMillis) re
 end 'acceptDeadlineFor'
 
 function reapSessions(sessions McpHttpSessionList, ending SessionEnds) returns SessionTally
-	var kept = McpHttpSessionList.create()
+	let kept = McpHttpSessionList.create()
 	var reaped = 0 as SessionTally
 
-	for session in sessions 'eachSession'
+	while not sessions.isEmpty() 'eachSession'
+		let session = try sessions.removeFirst() otherwise panic("reapSessions: a list that is not empty has a first session")
+
 		if ending(session) 'itEnds'
 			_ = session.debug.reap(DebugSessionEnding.terminateTheProgram)
 			reaped = reaped + 1
@@ -388,21 +385,15 @@ function reapSessions(sessions McpHttpSessionList, ending SessionEnds) returns S
 		kept.append(session)
 	end 'eachSession'
 
-	if reaped == 0 'nothingReaped'
-		return reaped
-	end 'nothingReaped'
-
-	sessions.clear()
-
-	for session in kept 'eachKept'
-		sessions.append(session)
+	while not kept.isEmpty() 'eachKept'
+		sessions.append(try kept.removeFirst() otherwise panic("reapSessions: a list that is not empty has a first session"))
 	end 'eachKept'
 
 	return reaped
 end 'reapSessions'
 
 function servePostedMessage(exchange HttpExchange, request HttpRequest, sessions McpHttpSessionList, devMode bool, exePath FilePath, caps McpHttpOptions) throws HttpServerError
-	var posted = postedMessageOf(request.body())
+	let posted = postedMessageOf(request.body())
 
 	match posted 'posted'
 		notOneObject then try refuse(exchange, code: StatusCode.badRequest, reason: "the body is not one JSON-RPC object")
@@ -433,12 +424,16 @@ function serveMessage(exchange HttpExchange, doc JsonDoc, offered OfferedSession
 		return
 	end 'initializing'
 
-	var lookup = findSession(sessions, offered: offered)
+	var served = false
 
-	match lookup 'known'
-		unknown then try refuse(exchange, code: StatusCode.notFound, reason: "unknown session")
-		found(session) then try serveOnSession(exchange, doc: doc, session: session, devMode: devMode, exePath: exePath, minted: OfferedSession.absent)
-	end 'known'
+	match offered 'which'
+		absent then break
+		named(id) then served = try serveOnSessionNamed(exchange, doc: doc, id: id, sessions: sessions, devMode: devMode, exePath: exePath, minted: OfferedSession.absent)
+	end 'which'
+
+	if not served 'unknownSession'
+		try refuse(exchange, code: StatusCode.notFound, reason: "unknown session")
+	end 'unknownSession'
 end 'serveMessage'
 
 // An `initialize` carrying any session id is refused: honoured under a live id, it would replace
@@ -456,10 +451,12 @@ function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSess
 		return
 	end 'full'
 
-	var session = McpHttpSession.create(mintSessionId(), nowMs: Clock.nowMs() as SessionMillis)
-	sessions.append(session)
+	let id = mintSessionId()
+	sessions.append(McpHttpSession.create(id, nowMs: Clock.nowMs() as SessionMillis))
 
-	try serveOnSession(exchange, doc: doc, session: session, devMode: devMode, exePath: exePath, minted: OfferedSession.named(session.id))
+	if not (try serveOnSessionNamed(exchange, doc: doc, id: id, sessions: sessions, devMode: devMode, exePath: exePath, minted: OfferedSession.named(id))) 'lostTheNewSession'
+		panic("serveInitialize: the session just appended is not in the list")
+	end 'lostTheNewSession'
 end 'serveInitialize'
 
 function serveOnSession(exchange HttpExchange, doc JsonDoc, session McpHttpSession, devMode bool, exePath FilePath, minted OfferedSession) throws HttpServerError
@@ -488,7 +485,7 @@ function serveSessionDelete(exchange HttpExchange, request HttpRequest, sessions
 end 'serveSessionDelete'
 
 function answerWith(exchange HttpExchange, code StatusCode, body McpAnswerBody, minted OfferedSession) throws HttpServerError
-	var headers = HttpHeaders.create()
+	let headers = HttpHeaders.create()
 
 	match minted 'session'
 		absent then break
@@ -527,22 +524,27 @@ function sessionOfferedBy(request HttpRequest) returns OfferedSession
 	return OfferedSession.named(id)
 end 'sessionOfferedBy'
 
-function findSession(sessions McpHttpSessionList, offered OfferedSession) returns SessionLookup
-	match offered 'which'
-		absent then return SessionLookup.unknown
-		named(id) then return sessionNamed(sessions, id: id)
-	end 'which'
-end 'findSession'
+function sessionPosition(sessions McpHttpSessionList, id String) returns ElementIndex throws AbsentError
+	var position = 0 as ElementIndex
 
-function sessionNamed(sessions McpHttpSessionList, id String) returns SessionLookup
 	for session in sessions 'eachSession'
 		if session.id.equals(id) 'hit'
-			return SessionLookup.found(session)
+			return position
 		end 'hit'
+
+		position = position + 1
 	end 'eachSession'
 
-	return SessionLookup.unknown
-end 'sessionNamed'
+	throw AbsentError.absent
+end 'sessionPosition'
+
+function serveOnSessionNamed(exchange HttpExchange, doc JsonDoc, id String, sessions McpHttpSessionList, devMode bool, exePath FilePath, minted OfferedSession) returns bool throws HttpServerError
+	let position = try sessionPosition(sessions, id: id) otherwise return false
+
+	try serveOnSession(exchange, doc: doc, session: try sessions.get(position) otherwise panic("serveOnSessionNamed: the position was just found in this list"), devMode: devMode, exePath: exePath, minted: minted)
+
+	return true
+end 'serveOnSessionNamed'
 
 // A DNS name pointed at 127.0.0.1 reaches a loopback server, and the `Host` header is what tells
 // the two apart: a browser sets it from the URL and cannot forge it.

@@ -263,11 +263,7 @@ typealias StringArray = Array with String
 type Registry
 	export var items as StringArray
 
-	static let current = Registry.create()
-
-	static function create() returns Self
-		return Self{items: StringArray.create(0)}
-	end 'create'
+	static let current = Registry{items: StringArray from ["a"]}
 end 'Registry'
 
 function main() returns ExitCode
@@ -276,5 +272,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:15:25: 'push' needs a writable receiver; 'items' is immutable
+error E3207: <fragment>:11:25: 'push' needs a writable receiver; 'items' is immutable
 ```

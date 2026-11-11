@@ -53,7 +53,7 @@ never given — and the count below would not be the length.
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(false)
 	arr.push(true)
 	arr.push(false)
@@ -79,7 +79,7 @@ a fill that skipped the read-modify-write would leave one standing.
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.refill(9, value: true)
 	arr.refill(9, value: false)
 	var lit = 0 as Count
@@ -105,7 +105,7 @@ typealias Quarter = int(0 to 3)
 typealias QuarterArray = Array with Quarter
 
 function main() returns ExitCode
-	var arr = QuarterArray.create(0)
+	let arr = QuarterArray.create(0)
 	arr.push(1 as Quarter)
 	arr.refill(7, value: 3 as Quarter)
 	var total = 0 as FullRangeInt
@@ -128,7 +128,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -155,7 +155,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.refill(3, value: 16909060)
 	var total = 0 as Integer
 	for v in arr 'sum'
@@ -180,7 +180,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(5)
 	arr.push(6)
 	arr.refill(0, value: 9)
@@ -200,7 +200,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.growFilled(5, value: 9)
@@ -224,7 +224,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(4)
 	arr.push(5)
 	arr.growFilled(2, value: 9)
@@ -248,7 +248,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.refill(4, value: 7)
 	arr.refill(2, value: 7)
 	arr.resize(4)
@@ -270,7 +270,7 @@ short would hand the old bytes straight back to the grow. The case above is the 
 two 8-byte elements is sixteen bytes, two whole words and no tail at all.
 ```maxon
 function main() returns ExitCode
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	var i = 0 as Count
 	while i < 5 'fill'
 		b.push(9)
@@ -300,7 +300,7 @@ double-frees.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("alpha")
 	arr.push("beta")
 	arr.refill(4, value: "zeta")
@@ -335,7 +335,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create(0)
+	let arr = SlotArray.create(0)
 	arr.push(Slot.create(1))
 	arr.refill(3, value: Slot.create(4))
 	var total = 0 as Integer
@@ -357,7 +357,7 @@ already holds and only the added slots take new ones.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("ab")
 	arr.growFilled(4, value: "cde")
 	var hits = 0 as Count
@@ -395,7 +395,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create(0)
+	let arr = SlotArray.create(0)
 	arr.push(Slot.create(6))
 	arr.growFilled(3, value: Slot.create(7))
 	var total = 0 as Integer
@@ -420,7 +420,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -451,7 +451,7 @@ it was handed is still the caller's to drop.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("alpha")
 	arr.push("beta")
 	let applied = try arr.managed.fill(0, count: 2, value: "zeta") otherwise panic("fill: [0, 2) is exactly the live range")
@@ -477,7 +477,7 @@ slots a reader is entitled to read back, so a window ending above the length wou
 had length for.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	let applied = try mm.fill(1, count: 3, value: 7) otherwise return 8
 	if applied 'itMustNotHaveApplied'
@@ -497,7 +497,7 @@ end 'main'
 the address it would then compute sits BEFORE the buffer. The negative test is its own compare.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	let applied = try mm.fill(-1, count: 1, value: 7) otherwise return 8
 	if applied 'itMustNotHaveApplied'
@@ -518,7 +518,7 @@ than a fault: `start + count` is below the length for every negative count, the 
 and the call would report that it had applied.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	let applied = try mm.fill(0, count: -1, value: 7) otherwise return 8
 	if applied 'itMustNotHaveApplied'
@@ -543,7 +543,7 @@ reached by arithmetic instead of by an argument. The window's end is asked throu
 test (`emitBoundaryPositionOutOfRange`), whose negative disjunct IS this guard.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	let applied = try mm.fill(1, count: 9223372036854775807, value: 7) otherwise return 8
 	if applied 'itMustNotHaveApplied'
@@ -564,7 +564,7 @@ its high one — a fill that started at 0 whatever it was asked would rewrite th
 to preserve.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(4) otherwise return 2
 	try mm.set(0, value: 5) otherwise return 3
 	let applied = try mm.fill(1, count: 3, value: 2) otherwise return 4
@@ -595,7 +595,7 @@ value back, so a filled window reads correct however wide the store was. What do
 whatever the window did not cover — here slots 3 and 4, which a word store at slot 2 would erase.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
 	try mm.setLength(5) otherwise return 2
 	try mm.set(3, value: 4) otherwise return 3
 	try mm.set(4, value: 5) otherwise return 4

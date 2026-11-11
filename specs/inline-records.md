@@ -88,7 +88,7 @@ end 'Pair'
 typealias PairArray = Array with Pair
 
 function main() returns ExitCode
-	var holder = PairArray.create(0)
+	let holder = PairArray.create(0)
 	holder.reserve(100)
 
 	let before = HeapStats.allocationsLive()
@@ -206,7 +206,7 @@ end 'Pair'
 typealias PairArray = Array with Pair
 
 function main() returns ExitCode
-	var arr = PairArray.create(0)
+	let arr = PairArray.create(0)
 	arr.reserve(500)
 
 	let before = HeapStats.allocationsLive()
@@ -268,7 +268,7 @@ typealias PointArray = Array with Point
 typealias PointMap = Map with (Point, Coord)
 
 function main() returns ExitCode
-	var keys = PointArray.create(0)
+	let keys = PointArray.create(0)
 	keys.reserve(500)
 
 	let before = HeapStats.allocationsLive()
@@ -277,7 +277,7 @@ function main() returns ExitCode
 	end 'build'
 	let after = HeapStats.allocationsLive()
 
-	var m = PointMap.create()
+	let m = PointMap.create()
 	for k in keys 'insert'
 		m.upsert(k, value: k.x)
 	end 'insert'
@@ -304,11 +304,10 @@ end 'main'
 0
 ```
 
-<!-- test: inline-records.module-level-let-is-image-data -->
-CONTROL: a module-level `let` of an inline record is a constant word laid down with the program, so
-nothing is live when `main` starts. A top-level `let` record is image data whether or not it is a word,
-with nothing for `__module_init` to run, and the case holds that property for a value that is not a record
-at all.
+<!-- test: inline-records.a-static-let-is-image-data -->
+CONTROL: a `static let` of an inline record is a constant word laid down with the program, so
+nothing is live when `main` starts. A `static let` record is image data whether or not it is a word, and
+the case holds that property for a value that is not a record at all.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -316,21 +315,17 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	static function create(lo Half, hi Half) returns Self
-		return Self{lo: lo, hi: hi}
-	end 'create'
+	static let origin = Pair{lo: 1, hi: 2}
 end 'Pair'
-
-let origin = Pair.create(1, hi: 2)
 
 function main() returns ExitCode
 	let live = HeapStats.allocationsLive()
 
-	if origin.lo != 1 'lo'
+	if Pair.origin.lo != 1 'lo'
 		return 90
 	end 'lo'
 
-	if origin.hi != 2 'hi'
+	if Pair.origin.hi != 2 'hi'
 		return 91
 	end 'hi'
 
@@ -648,7 +643,7 @@ typealias HalfBox = Box with Half
 typealias HalfBoxArray = Array with HalfBox
 
 function main() returns ExitCode
-	var holder = HalfBoxArray.create(0)
+	let holder = HalfBoxArray.create(0)
 	holder.reserve(4)
 
 	let before = HeapStats.allocationsLive()
@@ -974,31 +969,6 @@ end 'main'
 10
 ```
 
-<!-- test: inline-records.a-module-level-var-built-by-a-factory -->
-CONTROL: a module-level `var` is filled by `__module_init` from a real call, and an inline record's slot
-holds the word rather than a pointer — so the global reads back its fields and the program owes no cleanup.
-```maxon
-typealias Half = int(0 to u32.max)
-
-type Pair
-	export let lo as Half
-	export let hi as Half
-
-	static function create(lo Half, hi Half) returns Self
-		return Self{lo: lo, hi: hi}
-	end 'create'
-end 'Pair'
-
-let origin = Pair.create(4, hi: 5)
-
-function main() returns ExitCode
-	return (origin.lo + origin.hi) as ExitCode
-end 'main'
-```
-```exitcode
-9
-```
-
 <!-- test: inline-records.a-contested-alias-is-read-in-the-declaring-file -->
 A field's storage width is read through the alias the DECLARING file means, not through a fold over
 every file's declaration. `wide/wide.maxon` declares `Wide` as the whole signed span and never names `Packed`;
@@ -1063,9 +1033,9 @@ end 'main'
 8
 ```
 
-<!-- test: inline-records.a-module-level-factory-handed-another-inline-record-for-a-field -->
-A field declared at a ranged alias handed a whole inline record at file scope is the argument mismatch a
-function body gets, E3005, not a constant folded from the other record's word.
+<!-- test: inline-records.a-factory-handed-another-inline-record-for-a-field -->
+A field declared at a ranged alias handed a whole inline record is the argument mismatch, E3005, not a
+constant folded from the other record's word.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -1078,13 +1048,13 @@ type Pair
 	end 'create'
 end 'Pair'
 
-let inner = Pair.create(1, hi: 2)
-let outer = Pair.create(inner, hi: 3)
-
 function main() returns ExitCode
+	let inner = Pair.create(1, hi: 2)
+	let outer = Pair.create(inner, hi: 3)
+
 	return 0 if outer.hi == 3 else 1
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/inline-records/inline-records.a-module-level-factory-handed-another-inline-record-for-a-field.maxon:14:18: argument type mismatch for 'lo': expected 'Half', got 'Pair'
+error E3005: specs/inline-records/inline-records.a-factory-handed-another-inline-record-for-a-field.maxon:15:19: argument type mismatch for 'lo': expected 'Half', got 'Pair'
 ```

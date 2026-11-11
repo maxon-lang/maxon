@@ -26,7 +26,7 @@ let StubReapedAttachedSuffix = ".attached"
 let StubReapedEntitledName = "entitled"
 
 function entitledCopyOf(staged FilePath) returns FilePath
-	var session = sessionHeldAt(staged, anchor: BurstSpinAnchorName)
+	let session = sessionHeldAt(staged, anchor: BurstSpinAnchorName)
 	let entitled = staged.join(StubReapedEntitledName)
 	var copied = false
 
@@ -69,7 +69,7 @@ function stubHeard(socket TcpClient, needle String) returns String
 end 'stubHeard'
 
 function interruptText() returns String
-	var raw = ByteArray.create(1, zeroed: false)
+	let raw = ByteArray.create(1, zeroed: false)
 	raw.push(StubReapedInterruptByte)
 
 	return String.from(raw)
@@ -114,19 +114,19 @@ end 'awaitedHandBack'
 function heldProgramKilledThenAskedToKill(entitled FilePath, staged FilePath, round Count) throws TestFailure
 	let log = roundStubLog(staged, round: round)
 	let listener = try TcpListener.bind(StubReapedHost, port: 0) otherwise panic("the gate could not run — no port to listen on.")
-	var program = try StreamingSubprocess.spawnTraceable(Executable.path(entitled), arguments: StringArray.create(0), workingDirectory: staged, environment: Environment.inherit, traced: true) otherwise panic("the gate could not run — the traced spawn of the fixture was refused.")
+	let program = try StreamingSubprocess.spawnTraceable(Executable.path(entitled), arguments: StringArray.create(0), workingDirectory: staged, environment: Environment.inherit, traced: true) otherwise panic("the gate could not run — the traced spawn of the fixture was refused.")
 
 	program.closeStdin()
 
 	let pid = try program.processId() otherwise panic("the gate could not run — the spawned program has no process id.")
 	let stubFile = try FilePath.from(LoggedStubPath) otherwise panic("the gate could not run — the stub path is not a path.")
-	var stubArguments = [StubReapedReverseOption, "{StubReapedHost}:{listener.port()}", "{StubReapedAttachOption}{pid}"]
+	let stubArguments = [StubReapedReverseOption, "{StubReapedHost}:{listener.port()}", "{StubReapedAttachOption}{pid}"]
 
 	for option in stubLogArguments(log) 'eachLogOption'
 		stubArguments.push(option)
 	end 'eachLogOption'
 
-	var stub = try StreamingSubprocess.spawn(Executable.path(stubFile), arguments: stubArguments) otherwise panic("the gate could not run — the debug stub could not start.")
+	let stub = try StreamingSubprocess.spawn(Executable.path(stubFile), arguments: stubArguments) otherwise panic("the gate could not run — the debug stub could not start.")
 
 	stub.closeStdin()
 

@@ -76,7 +76,7 @@ end 'makeValue'
 
 function main() returns ExitCode
 	let maxSpins = 100
-	var arr = IntPromiseArray.create(0)
+	let arr = IntPromiseArray.create(0)
 	arr.push(async makeValue())
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
 	let before = p.isComplete()
@@ -118,7 +118,7 @@ function makeValue() returns Integer
 end 'makeValue'
 
 function main() returns ExitCode
-	var arr = IntPromiseArray.create(0)
+	let arr = IntPromiseArray.create(0)
 	arr.push(async makeValue())
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
 	let a = p.isComplete()
@@ -210,7 +210,7 @@ function makeValue() returns Integer
 end 'makeValue'
 
 function main() returns ExitCode
-	var arr = IntPromiseArray.create(0)
+	let arr = IntPromiseArray.create(0)
 	arr.push(async makeValue())
 	arr.push(async makeValue())
 	let first = try arr.get(0) otherwise panic("both promises were just pushed")
@@ -264,10 +264,10 @@ end 'makeValue'
 
 function main() returns ExitCode
 	let maxSpins = 100
-	var arr = IntPromiseArray.create(0)
+	let arr = IntPromiseArray.create(0)
 	arr.push(async makeValue())
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
-	view h = Holder.of(p)
+	let h = Holder.of(p)
 	let before = h.p.isComplete()
 	var spins = 0 as Count
 	var after = false

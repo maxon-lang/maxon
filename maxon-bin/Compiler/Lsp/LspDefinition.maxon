@@ -17,7 +17,7 @@
 // in `tests/lsp/definition-scope.maxtest` is what says so from the client's side.
 
 module function definitionServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create(0)
+	let served = LspMethodArray.create(0)
 	served.push(LspMethod.definition)
 	return served
 end 'definitionServedMethods'
@@ -115,7 +115,7 @@ end 'nameableTypeEndingAt'
 // enclosed by an `end` the walk has already stepped over, while a genuinely enclosing one (a closure's,
 // whose body does capture the outer locals) has none.
 function definitionLocalBinding(tokens TokenArray, before ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
-	var closedLabels = TokenIndexArray.create(0)
+	let closedLabels = TokenIndexArray.create(0)
 	var i = before
 
 	while i > 0 'walkBack'
@@ -218,7 +218,7 @@ module function definitionBoundTokensAt(tokens TokenArray, keyword Token, at Ele
 end 'definitionBoundTokensAt'
 
 function definitionBindingTokensAt(tokens TokenArray, at ElementIndex) returns TokenArray
-	var bound = TokenArray.create(0)
+	let bound = TokenArray.create(0)
 	let token = try tokens.get(at) otherwise return bound
 
 	if tokenCanBeAName(token) 'aName'
@@ -232,7 +232,7 @@ end 'definitionBindingTokensAt'
 // `for (key, value) in map`. A line break ends the search as well: an `in` that never arrives means the
 // buffer is mid-edit, not that the rest of the file is the binding list.
 function definitionLoopVariableTokens(tokens TokenArray, from ElementIndex) returns TokenArray
-	var bound = TokenArray.create(0)
+	let bound = TokenArray.create(0)
 	var i = from
 
 	while i < tokens.count() 'scan'
@@ -255,7 +255,7 @@ end 'definitionLoopVariableTokens'
 // A parameter name is the first token inside the parentheses and the one after each top-level comma;
 // everything else between them is a type, a default value, or a nested list.
 function definitionParameterTokens(tokens TokenArray, from ElementIndex) returns TokenArray
-	var bound = TokenArray.create(0)
+	let bound = TokenArray.create(0)
 	var i = from
 	var depth = 0 as NestingDepth
 	var sawTheList = false
@@ -408,11 +408,11 @@ function definitionDeclarationAt(tokens TokenArray, site LspDeclaringSite, name 
 end 'definitionDeclarationAt'
 
 function definitionLocationAnswer(uri String, source String, lines LspLineIndex, name Token) returns LspAnswer
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 
 	// The range an editor highlights on arrival is the declared NAME, not its line and not the whole
 	// declaration.
-	var location = LspJsonObject.create(doc)
+	let location = LspJsonObject.create(doc)
 	location.put(LspUriKey, value: JsonNode.stringNode(uri))
 	location.putNode(LspRangeKey, value: lspSpanRangeNode(doc, source: source, index: lines, span: LspSpan.create(name.startByte, endByte: name.endByte)))
 
@@ -426,7 +426,7 @@ function definitionAcrossFiles(request LspRequest, tokens TokenArray, offset Byt
 		return LspAnswer.nothing()
 	end 'notAName'
 
-	var corpus = lspDocumentCorpus(request.workspace, uri: request.uri)
+	let corpus = lspDocumentCorpus(request.workspace, uri: request.uri)
 
 	match corpus 'held'
 		loaded(project, _, _) then return project.definitionInTheCorpus(corpus, text: request.text, tokens: tokens, cursor: cursor)
@@ -453,9 +453,9 @@ extension Project
 	function definitionInAnotherFile(site LspDeclaringSite, name ByteArray) returns LspAnswer
 		let declFile = lspDeclaringSitePath(site)
 
-		view declTokens = try queryActiveTokens(self, path: declFile) otherwise return LspAnswer.nothing()
+		let declTokens = try queryActiveTokens(self, path: declFile) otherwise return LspAnswer.nothing()
 		let declared = try definitionDeclarationAt(declTokens, site: site, name: name) otherwise return LspAnswer.nothing()
-		view entry = try sourceEntryOf(self, path: declFile) otherwise return LspAnswer.nothing()
+		let entry = try sourceEntryOf(self, path: declFile) otherwise return LspAnswer.nothing()
 		let text = entry.content
 
 		return definitionLocationAnswer(lspFileUri(declFile), source: text, lines: LspLineIndex.build(text), name: declared)

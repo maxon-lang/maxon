@@ -398,7 +398,7 @@ export function emitBytesToCString(module StdModule, func IrFunction, cur IrBloc
 	let one = emitConst(module, block: cur, value: 1, ids: ids)
 	let size = emitBin(module, block: cur, a: len, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let scratch = emitRawAlloc(module, block: cur, byteCount: size, ids: ids)
-	var copied = emitForwardCopy(module, func: func, cur: cur, dest: scratch, src: buf, byteCount: len, ids: ids)
+	let copied = emitForwardCopy(module, func: func, cur: cur, dest: scratch, src: buf, byteCount: len, ids: ids)
 	module.setTerminator(copied, op: StdOp.branch(join.id))
 
 	let nulAddr = emitBin(module, block: join, a: scratch, b: len, opcode: StdBinOpcode.add, ids: ids)
@@ -421,6 +421,12 @@ export function emitRawAlloc(module StdModule, block IrBlock, byteCount ValueId,
 	return ptr
 end 'emitRawAlloc'
 
+export function emitHandleBoxAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
+	let box = emitRawAlloc(module, block: block, byteCount: byteCount, ids: ids)
+	emitMarkBoxShared(module, block: block, box: box, ids: ids)
+	return box
+end 'emitHandleBoxAlloc'
+
 export function emitRawAllocInto(module StdModule, block IrBlock, result ValueId, byteCount ValueId, ids ValueMinter)
 	let dtor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	emitMmAllocCall(module, block: block, result: result, size: byteCount, destructor: dtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
@@ -437,7 +443,7 @@ end 'emitRawAllocInto'
 // — the flat-namespace check governs cross-file top-level names and a private declaration is not one — so a
 // second spelling in a caller sits there unnoticed.
 export function cStringBytes(text String) returns ByteArray
-	var bytes = text.toByteArray()
+	let bytes = text.toByteArray()
 	bytes.push(0)
 	return bytes
 end 'cStringBytes'
@@ -510,9 +516,9 @@ end 'emitWin32BoolVerdict'
 // even though the READ is not: `specs/managed-file.md`'s own note records that Win32 `ERROR_FILE_NOT_FOUND`
 // and POSIX `ENOENT` are BOTH 2, so a POSIX lane reuses this unchanged and supplies only the calls.
 export function emitErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, notFoundFlag FullRangeInt, deniedFlag FullRangeInt, fallbackFlag FullRangeInt, ids ValueMinter)
-	var checkPath = emitThrowOnCode(module, func: func, block: block, err: err, code: ErrorFileNotFound, flag: notFoundFlag, ids: ids)
-	var checkDenied = emitThrowOnCode(module, func: func, block: checkPath, err: err, code: ErrorPathNotFound, flag: notFoundFlag, ids: ids)
-	var other = emitThrowOnCode(module, func: func, block: checkDenied, err: err, code: ErrorAccessDenied, flag: deniedFlag, ids: ids)
+	let checkPath = emitThrowOnCode(module, func: func, block: block, err: err, code: ErrorFileNotFound, flag: notFoundFlag, ids: ids)
+	let checkDenied = emitThrowOnCode(module, func: func, block: checkPath, err: err, code: ErrorPathNotFound, flag: notFoundFlag, ids: ids)
+	let other = emitThrowOnCode(module, func: func, block: checkDenied, err: err, code: ErrorAccessDenied, flag: deniedFlag, ids: ids)
 	emitErrorReturn(module, block: other, flag: fallbackFlag, ids: ids)
 end 'emitErrnoClassifiedThrow'
 
@@ -521,14 +527,14 @@ end 'emitErrnoClassifiedThrow'
 // `__ManagedFileError`, so these are a per-FILE fact rather than a per-call one; only the catch-all
 // differs.
 function emitFileErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, fallbackFlag FullRangeInt, ids ValueMinter)
-	var checkBusy = emitThrowOnCode(module, func: func, block: block, err: err, code: ErrorFileExists, flag: ManagedFileAlreadyExistsFlag, ids: ids)
-	var classify = emitThrowOnCode(module, func: func, block: checkBusy, err: err, code: ErrorSharingViolation, flag: ManagedFileBusyFlag, ids: ids)
+	let checkBusy = emitThrowOnCode(module, func: func, block: block, err: err, code: ErrorFileExists, flag: ManagedFileAlreadyExistsFlag, ids: ids)
+	let classify = emitThrowOnCode(module, func: func, block: checkBusy, err: err, code: ErrorSharingViolation, flag: ManagedFileBusyFlag, ids: ids)
 	emitErrnoClassifiedThrow(module, func: func, block: classify, err: err, notFoundFlag: ManagedFileNotFoundFlag, deniedFlag: ManagedFileAccessDeniedFlag, fallbackFlag: fallbackFlag, ids: ids)
 end 'emitFileErrnoClassifiedThrow'
 
 function emitThrowOnCode(module StdModule, func IrFunction, block IrBlock, err ValueId, code FullRangeInt, flag FullRangeInt, ids ValueMinter) returns IrBlock
-	var matched = module.addBlock(func, label: b"mfcode", heat: BlockHeat.normal)
-	var rest = module.addBlock(func, label: b"mfrest", heat: BlockHeat.normal)
+	let matched = module.addBlock(func, label: b"mfcode", heat: BlockHeat.normal)
+	let rest = module.addBlock(func, label: b"mfrest", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: block, value: err, pred: StdCmpPred.eq, against: code, whenTrue: matched, whenFalse: rest, ids: ids)
 
@@ -559,7 +565,7 @@ end 'emitThrowOnCode'
 export function emitLiveHandleOrClosedThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, record ValueId, handleOffset ByteOffset, closedSentinel FullRangeInt, closedFlag FullRangeInt, ids ValueMinter) returns ValueId
 	let slot = emitLoadField(module, block: entry, record: record, offset: handleOffset, ids: ids)
 	let isClosed = emitCompareWithConstant(module, block: entry, value: slot, pred: StdCmpPred.eq, against: closedSentinel, ids: ids)
-	var closedBlock = module.addBlock(func, label: b"closedthrow", heat: BlockHeat.normal)
+	let closedBlock = module.addBlock(func, label: b"closedthrow", heat: BlockHeat.normal)
 	module.setTerminator(entry, op: StdOp.condBranch(isClosed, thenBlockId: closedBlock.id, elseBlockId: join.id))
 	emitErrorReturn(module, block: closedBlock, flag: closedFlag, ids: ids)
 
@@ -620,13 +626,13 @@ end 'ManagedFileOpenMode'
 // the modes differ only in which Std op they emit, so the scratch copy, the failure classification
 // and the box are written once.
 function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFileOpenMode)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedFileThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedFileThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var afterCopy = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
-	var opened = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let afterCopy = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	let opened = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0
@@ -658,7 +664,7 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	// machinery drops it — and the drop it takes is `__mf_destruct`, which CLOSES the handle before freeing
 	// the memory (`SignatureIndex.managedNameDropCallee`). That is the whole RAII half of this type.
 	let boxSize = emitConst(module, block: opened, value: ManagedFileBoxBytes, ids: ids)
-	let box = emitRawAlloc(module, block: opened, byteCount: boxSize, ids: ids)
+	let box = emitHandleBoxAlloc(module, block: opened, byteCount: boxSize, ids: ids)
 	emitStoreHandleSlot(module, block: opened, record: box, handleOffset: ManagedFileHandleOffset, handle: handle, ids: ids)
 	emitOkReturn(module, block: opened, value: box, ids: ids)
 
@@ -675,12 +681,12 @@ end 'buildManagedFileOpen'
 // destructor close again" sequence safe rather than a double `CloseHandle` on a handle the OS may have
 // reused for something else.
 function buildManagedFileClose(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedFileCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var doClose = module.addBlock(func, label: b"mfdo", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"mfdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let doClose = module.addBlock(func, label: b"mfdo", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"mfdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
@@ -724,12 +730,12 @@ end 'buildManagedFileClose'
 // The skeleton is `MmRuntime.emitFieldCascadeDestructor`'s, minus the field walk: `emitRefcountCheckToLastOwner`
 // is shared with it, so "how many owners are left?" is asked one way by every destructor in the compiler.
 function buildManagedFileDestruct(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedFileDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
-	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	let drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -748,13 +754,13 @@ end 'buildManagedFileDestruct'
 // The 64-bit answer arrives through an out-param (a size cannot share RAX with a success flag), so a
 // scratch word is allocated for it and released before either exit.
 function buildManagedFileSize(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedFileThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedFileSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedFileThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var doSize = module.addBlock(func, label: b"mfsz", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
-	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let doSize = module.addBlock(func, label: b"mfsz", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	let ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -796,17 +802,17 @@ end 'buildManagedFileSize'
 // does. The byte conversion stays for the OWNED bound, where an Array counts ELEMENTS and a file counts
 // BYTES (`emitArrayByteExtent`); what it may not also do is answer the ownership question.
 function buildManagedFileRead(module StdModule, name ByteArray, placement ManagedFileReadPlacement)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedFileThrows())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedFileThrows())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkLow = module.addBlock(func, label: b"mfchklo", heat: BlockHeat.normal)
-	var checkOwned = module.addBlock(func, label: b"mfchkown", heat: BlockHeat.normal)
-	var checkCap = module.addBlock(func, label: b"mfchkcap", heat: BlockHeat.normal)
-	var tooBig = module.addBlock(func, label: b"mfbig", heat: BlockHeat.normal)
-	var doRead = module.addBlock(func, label: b"mfrd", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
-	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkLow = module.addBlock(func, label: b"mfchklo", heat: BlockHeat.normal)
+	let checkOwned = module.addBlock(func, label: b"mfchkown", heat: BlockHeat.normal)
+	let checkCap = module.addBlock(func, label: b"mfchkcap", heat: BlockHeat.normal)
+	let tooBig = module.addBlock(func, label: b"mfbig", heat: BlockHeat.normal)
+	let doRead = module.addBlock(func, label: b"mfrd", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	let ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let box = 0
@@ -898,13 +904,13 @@ end 'emitManagedFileReadStart'
 // path's capacity bound useless has no counterpart here — this site reads the one field that cannot carry a
 // provenance marker.
 function buildManagedFileWrite(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileWriteName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedFileThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedFileWriteName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedFileThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var doWrite = module.addBlock(func, label: b"mfwr", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
-	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let doWrite = module.addBlock(func, label: b"mfwr", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	let ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let box = 0
@@ -930,15 +936,15 @@ end 'buildManagedFileWrite'
 // Importing `GetFileAttributesW` would be a second entry point answering a question this record already
 // answers, and two can disagree.
 function buildManagedFileExists(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedFileExistsName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var afterCopy = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
-	var missing = module.addBlock(func, label: b"mfmiss", heat: BlockHeat.normal)
-	var found = module.addBlock(func, label: b"mffound", heat: BlockHeat.normal)
-	var isDir = module.addBlock(func, label: b"mfdir", heat: BlockHeat.normal)
-	var isFile = module.addBlock(func, label: b"mffile", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let afterCopy = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
+	let missing = module.addBlock(func, label: b"mfmiss", heat: BlockHeat.normal)
+	let found = module.addBlock(func, label: b"mffound", heat: BlockHeat.normal)
+	let isDir = module.addBlock(func, label: b"mfdir", heat: BlockHeat.normal)
+	let isFile = module.addBlock(func, label: b"mffile", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0
@@ -986,14 +992,14 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 		paramTypes = twoI64Params()
 	end 'twoPaths'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, throwsTypeName: managedFileThrows())
-	var ids = ValueMinter.create(paramCount)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, throwsTypeName: managedFileThrows())
+	let ids = ValueMinter.create(paramCount)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var afterFirst = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
-	var afterSecond = module.addBlock(func, label: b"mfterm2", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
-	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let afterFirst = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
+	let afterSecond = module.addBlock(func, label: b"mfterm2", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	let ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramCount)
 	let firstPath = emitPathToText(module, func: func, cur: entry, join: afterFirst, pathRec: 0, encoding: module.hostText, ids: ids)
@@ -1061,13 +1067,13 @@ end 'emitOptionalSecondPath'
 // bare `int`, so the ownership model cannot see it and the exit-101 leak gate WILL: a `stat` whose buffer
 // is never freed fails the suite, which is exactly the behaviour wanted.
 function buildManagedFileStat(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileStatName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedFileThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedFileStatName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedFileThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var afterCopy = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
-	var pack = module.addBlock(func, label: b"mfpack", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let afterCopy = module.addBlock(func, label: b"mfterm", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"mffail", heat: BlockHeat.normal)
+	let pack = module.addBlock(func, label: b"mfpack", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pathRec = 0
@@ -1111,8 +1117,8 @@ function buildManagedFileStat(module StdModule)
 
 	// [32]/[40] the two attribute BITS, published as 0 or 1 — never the raw mask.
 	let attrs = emitLoadDword(module, block: pack, record: findData, offset: FindDataAttributesOffset, ids: ids)
-	var afterDir = emitStoreAttributeFlag(module, func: func, cur: pack, out: out, offset: StatIsDirectoryOffset, attrs: attrs, mask: FileAttributeDirectory, ids: ids)
-	var afterReadOnly = emitStoreAttributeFlag(module, func: func, cur: afterDir, out: out, offset: StatIsReadOnlyOffset, attrs: attrs, mask: FileAttributeReadOnly, ids: ids)
+	let afterDir = emitStoreAttributeFlag(module, func: func, cur: pack, out: out, offset: StatIsDirectoryOffset, attrs: attrs, mask: FileAttributeDirectory, ids: ids)
+	let afterReadOnly = emitStoreAttributeFlag(module, func: func, cur: afterDir, out: out, offset: StatIsReadOnlyOffset, attrs: attrs, mask: FileAttributeReadOnly, ids: ids)
 
 	emitRawFree(module, block: afterReadOnly, ptr: findData, ids: ids)
 	emitOkReturn(module, block: afterReadOnly, value: out, ids: ids)
@@ -1147,9 +1153,9 @@ end 'emitFileTimeToUnixSeconds'
 // return blocks because there is no `setcc` in this tier — the shape `MmRuntime.emitConstReturn` states once
 // for every runtime predicate, and for the same reason.
 function emitStoreAttributeFlag(module StdModule, func IrFunction, cur IrBlock, out ValueId, offset ByteOffset, attrs ValueId, mask FullRangeInt, ids ValueMinter) returns IrBlock
-	var setBlock = module.addBlock(func, label: b"mfattr1", heat: BlockHeat.normal)
-	var clearBlock = module.addBlock(func, label: b"mfattr0", heat: BlockHeat.normal)
-	var cont = module.addBlock(func, label: b"mfattrc", heat: BlockHeat.normal)
+	let setBlock = module.addBlock(func, label: b"mfattr1", heat: BlockHeat.normal)
+	let clearBlock = module.addBlock(func, label: b"mfattr0", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"mfattrc", heat: BlockHeat.normal)
 
 	let maskConst = emitConst(module, block: cur, value: mask, ids: ids)
 	let bit = emitBin(module, block: cur, a: attrs, b: maskConst, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -1174,14 +1180,14 @@ end 'emitStoreAttributeFlag'
 // returns whatever sits 792 bytes past a 48-byte allocation — a silent wrong answer, the class this
 // runtime refuses to ship. `RuntimeAbort` owns the exit codes.
 function buildManagedFileStatField(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileStatFieldName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedFileStatFieldName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkIndex = module.addBlock(func, label: b"mfchki", heat: BlockHeat.normal)
-	var badBuffer = module.addBlock(func, label: b"mfbadbuf", heat: BlockHeat.normal)
-	var badIndex = module.addBlock(func, label: b"mfbadidx", heat: BlockHeat.normal)
-	var load = module.addBlock(func, label: b"mfload", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkIndex = module.addBlock(func, label: b"mfchki", heat: BlockHeat.normal)
+	let badBuffer = module.addBlock(func, label: b"mfbadbuf", heat: BlockHeat.normal)
+	let badIndex = module.addBlock(func, label: b"mfbadidx", heat: BlockHeat.normal)
+	let load = module.addBlock(func, label: b"mfload", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let buffer = 0
@@ -1193,7 +1199,7 @@ function buildManagedFileStatField(module StdModule)
 	// BOTH ENDS, in two compares: `StdCmpPred` is SIGNED throughout this tier (there is no unsigned
 	// predicate), so a lone `index >= fields` accepts a negative index and reads BELOW the buffer. This is
 	// `ManagedMemoryRuntime.emitIndexOutOfRange`'s shape and it is here for its reason.
-	var checkHigh = module.addBlock(func, label: b"mfchkhi", heat: BlockHeat.normal)
+	let checkHigh = module.addBlock(func, label: b"mfchkhi", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: checkIndex, value: index, pred: StdCmpPred.lt, against: 0, whenTrue: badIndex, whenFalse: checkHigh, ids: ids)
 
 	emitBranchOnCompare(module, block: checkHigh, value: index, pred: StdCmpPred.ge, against: StatBufferFields, whenTrue: badIndex, whenFalse: load, ids: ids)
@@ -1212,12 +1218,12 @@ end 'buildManagedFileStatField'
 // the reason `statField` does: `__mm_free` is not null-safe, so the alternative is a wild write to the
 // header eight bytes below address 0.
 function buildManagedFileStatFree(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFileStatFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedFileStatFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var badBuffer = module.addBlock(func, label: b"mfbadbuf", heat: BlockHeat.normal)
-	var release = module.addBlock(func, label: b"mfrel", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let badBuffer = module.addBlock(func, label: b"mfbadbuf", heat: BlockHeat.normal)
+	let release = module.addBlock(func, label: b"mfrel", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let buffer = 0
@@ -1257,7 +1263,7 @@ export function verifyManagedFileOrdinals(project Project)
 end 'verifyManagedFileOrdinals'
 
 function claimManagedFileOrdinals(project Project, declaration EnumLayout)
-	var fileErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedFileOrdinalInstaller)
+	let fileErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedFileOrdinalInstaller)
 	fileErrors.claim(ManagedFileNotFoundCaseName, ordinal: ManagedFileNotFoundOrdinal)
 	fileErrors.claim(ManagedFileAccessDeniedCaseName, ordinal: ManagedFileAccessDeniedOrdinal)
 	fileErrors.claim(ManagedFileOpenFailedCaseName, ordinal: ManagedFileOpenFailedOrdinal)

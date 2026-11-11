@@ -81,7 +81,7 @@ end 'LspFrameHeaders'
 
 // Read the next framed message off standard input.
 export function readLspMessage(stdin Stdin) returns isolated LspIncoming
-	var headers = LspFrameHeaders.create()
+	let headers = LspFrameHeaders.create()
 
 	while true 'headers'
 		// EOF anywhere before a complete message is the same event however far in it lands: the client is
@@ -100,7 +100,7 @@ end 'readLspMessage'
 
 function readLspBody(stdin Stdin, length LspContentLength) returns isolated LspIncoming
 	let contentLength = length as ElementIndex
-	var body = ByteArray.create(0)
+	let body = ByteArray.create(0)
 
 	while body.count() < contentLength 'fill'
 		let chunk = stdin.readBytes((contentLength - body.count()) as BytePos)
@@ -116,7 +116,7 @@ function readLspBody(stdin Stdin, length LspContentLength) returns isolated LspI
 end 'readLspBody'
 
 module function readChildMessage(reader StdoutReader) returns LspIncoming
-	var headers = LspFrameHeaders.create()
+	let headers = LspFrameHeaders.create()
 
 	while true 'headers'
 		let line = try reader.readLine() otherwise (e) 'unread'
@@ -167,7 +167,7 @@ end 'writeLspMessage'
 // The only CR a header line may carry is the first half of its CRLF terminator, so a CR is never
 // content; skipping it here also reads a client that sends bare LF.
 function readHeaderLine(stdin Stdin) returns String throws LspFramingError
-	var line = ByteArray.create(0)
+	let line = ByteArray.create(0)
 	var complete = false
 
 	while not complete 'scan'

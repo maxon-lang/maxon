@@ -307,7 +307,7 @@ function main() returns ExitCode
 	let a = spawn Marker.create(1)
 	let b = spawn Marker.create(2)
 	let c = spawn Marker.create(3)
-	var replies = ReplyPromiseArray.create(0)
+	let replies = ReplyPromiseArray.create(0)
 	replies.push(try a.rank() otherwise panic("an open mailbox with room takes the send"))
 	replies.push(try b.rank() otherwise panic("an open mailbox with room takes the send"))
 	replies.push(try c.rank() otherwise panic("an open mailbox with room takes the send"))
@@ -1023,7 +1023,7 @@ type Sink
 end 'Sink'
 
 function main() returns ExitCode
-	var sinks = SinkHandleArray.create(0)
+	let sinks = SinkHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < 300 'spawnEach'
@@ -1033,13 +1033,13 @@ function main() returns ExitCode
 
 	// Sink #1 is the thread the 257th push moved to the global queue. Nothing has been sent yet, so this
 	// asks the overflow's own victim to answer 0 — see the note above.
-	view first = try sinks.get(0) otherwise panic("sinks.get OOB at 0 — the loop above pushed 300")
+	let first = try sinks.get(0) otherwise panic("sinks.get OOB at 0 — the loop above pushed 300")
 	let beforeAnyRan = try await first.total() otherwise 0
 	print("beforeAnyRan={beforeAnyRan}\n")
 
 	var k = 0 as Integer
 	while k < 300 'sendEach'
-		view sink = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let sink = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		try sink.bump() otherwise panic("an open mailbox with room takes the send")
 		k = k + 1
 	end 'sendEach'
@@ -1047,7 +1047,7 @@ function main() returns ExitCode
 	var ran = 0 as Integer
 	var n = 0 as Integer
 	while n < 300 'collect'
-		view sink = try sinks.get(n as ElementIndex) otherwise panic("sinks.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		let sink = try sinks.get(n as ElementIndex) otherwise panic("sinks.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		ran = ran + (try await sink.total() otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -1240,7 +1240,7 @@ type Leaf
 end 'Leaf'
 
 function main() returns ExitCode
-	var leaves = LeafHandleArray.create(0)
+	let leaves = LeafHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < leafCount 'spawnEach'
@@ -1253,7 +1253,7 @@ function main() returns ExitCode
 	// Each leaf has replied and run on to its park on an empty mailbox, so the burst below is what publishes them.
 	var h = 0 as Integer
 	while h < leafCount 'helloEach'
-		view leaf = try leaves.get(h as ElementIndex) otherwise panic("leaves.get OOB at {h} — the loop is bounded by the count the pushes above filled")
+		let leaf = try leaves.get(h as ElementIndex) otherwise panic("leaves.get OOB at {h} — the loop is bounded by the count the pushes above filled")
 		_ = try await leaf.hello() otherwise panic("a leaf answers while its handle is held")
 		h = h + 1
 	end 'helloEach'
@@ -1262,7 +1262,7 @@ function main() returns ExitCode
 
 	var k = 0 as Integer
 	while k < leafCount 'sendEach'
-		view leaf = try leaves.get(k as ElementIndex) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let leaf = try leaves.get(k as ElementIndex) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		// A temporary argument moves, so each leaf gets its own reference to the collector.
 		try leaf.go(tally.clone()) otherwise panic("an open mailbox with room takes the send")
 		k = k + 1
@@ -1481,7 +1481,7 @@ type Work
 end 'Work'
 
 function main() returns ExitCode
-	var workers = WorkHandleArray.create(0)
+	let workers = WorkHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < 12 'spawnEach'
@@ -1493,7 +1493,7 @@ function main() returns ExitCode
 	while r < 100 'eachRound'
 		var k = 0 as Integer
 		while k < 12 'eachWorker'
-			view worker = try workers.get(k as ElementIndex) otherwise panic("workers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+			let worker = try workers.get(k as ElementIndex) otherwise panic("workers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 			try worker.go() otherwise panic("an open mailbox with room takes the send")
 			k = k + 1
 		end 'eachWorker'
@@ -1504,7 +1504,7 @@ function main() returns ExitCode
 	var done = 0 as Integer
 	var n = 0 as Integer
 	while n < 12 'collect'
-		view worker = try workers.get(n as ElementIndex) otherwise panic("workers.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		let worker = try workers.get(n as ElementIndex) otherwise panic("workers.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		done = done + (try await worker.total() otherwise 0)
 		n = n + 1
 	end 'collect'

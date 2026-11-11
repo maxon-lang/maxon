@@ -42,7 +42,7 @@ function pick(arr StringArray, flag bool) returns String
 end 'pick'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = pick(arr, flag: arr.count() == 1)
 	print("[{s}] {arr.count()}\n")
 	return 0
@@ -78,7 +78,7 @@ function pick(arr StringArray, flag bool) returns String
 end 'pick'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = pick(arr, flag: arr.count() == 1)
 	print("[{s}] {arr.count()}\n")
 	return 0

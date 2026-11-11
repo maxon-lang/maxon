@@ -244,7 +244,7 @@ function firstIndex() returns ElementIndex
 end 'firstIndex'
 
 function main() returns ExitCode
-	var arr = NarrowArray.create(0)
+	let arr = NarrowArray.create(0)
 	arr.push(4)
 	var n = arr.count() as ElementIndex
 	print("{n}")
@@ -268,7 +268,7 @@ function takesCount(n Count) returns Count
 end 'takesCount'
 
 function main() returns ExitCode
-	var arr = NarrowArray.create(0)
+	let arr = NarrowArray.create(0)
 	arr.push(4)
 	let list = List from [10, 20]
 	let map = [1: 10, 2: 20, 3: 30]
@@ -339,7 +339,7 @@ typealias Narrow = int(0 to 1000)
 typealias NarrowArray = Array with Narrow
 
 function main() returns ExitCode
-	var arr = NarrowArray.create(0)
+	let arr = NarrowArray.create(0)
 	arr.push(4)
 	arr.push(9)
 	let text = "a😀"
@@ -386,7 +386,7 @@ typealias Row = int(0 to 1000)
 typealias RowArray = Array with Row
 
 function main() returns ExitCode
-	var rows = RowArray.create(0)
+	let rows = RowArray.create(0)
 	rows.push(4)
 	rows.push(9)
 	let last = 1 as BlockId
@@ -604,7 +604,7 @@ end 'Holder'
 function main() returns ExitCode
 	let block = 8 as BlockId
 	let varId = 5 as VarId
-	var h = Holder.create()
+	let h = Holder.create()
 	h.block = block + varId
 	print("{h.block}")
 	return 0
@@ -779,7 +779,7 @@ function takesIndex(i ElementIndex) returns ElementIndex
 end 'takesIndex'
 
 function main() returns ExitCode
-	var rows = RowArray.create(0)
+	let rows = RowArray.create(0)
 	rows.push(4)
 	rows.push(9)
 	let foo = 1 as FooId
@@ -1629,7 +1629,7 @@ function narrowed() returns Narrow
 end 'narrowed'
 
 function main() returns ExitCode
-	var items = WideArray.create(0)
+	let items = WideArray.create(0)
 	let same = 3 as Wide
 	let plain = 4
 	let n = narrowed()

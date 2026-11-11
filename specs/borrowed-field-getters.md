@@ -49,8 +49,8 @@ type Shelf
 end 'Shelf'
 
 function main() returns ExitCode
-	var shelf = Shelf.create("first note built at run time {40 + 2}")
-	view kept = shelf.holding()
+	let shelf = Shelf.create("first note built at run time {40 + 2}")
+	let kept = shelf.holding()
 	shelf.replace("second note built at run time {40 + 3}")
 	print("[{kept.text}] [{shelf.holding().text}]\n")
 	return 0
@@ -100,7 +100,7 @@ function swapAndShow(shelf Shelf, item Note)
 end 'swapAndShow'
 
 function main() returns ExitCode
-	var shelf = Shelf.create("original built at run time {6 * 7 + 1}")
+	let shelf = Shelf.create("original built at run time {6 * 7 + 1}")
 	swapAndShow(shelf, item: shelf.holding())
 	return 0
 end 'main'
@@ -245,8 +245,8 @@ type Library
 end 'Library'
 
 function main() returns ExitCode
-	var library = Library.create()
-	view before = library.active()
+	let library = Library.create()
+	let before = library.active()
 	library.retire()
 	library.flip()
 	print("[{before.text}] [{library.active().text}] {library.active().weight}\n")
@@ -343,8 +343,8 @@ type Shelf
 end 'Shelf'
 
 function main() returns ExitCode
-	var shelf = Shelf.create("loop note built at run time {0 + 100}")
-	view first = shelf.holding()
+	let shelf = Shelf.create("loop note built at run time {0 + 100}")
+	let first = shelf.holding()
 
 	for trip in 1 to 3 'trips'
 		shelf.replace("loop note built at run time {trip + 100}", weight: trip as Count)
@@ -401,8 +401,8 @@ type Shelf
 end 'Shelf'
 
 function main() returns ExitCode
-	var shelf = Shelf.create("first note built at run time {40 + 2}")
-	view kept = shelf.holding(0)
+	let shelf = Shelf.create("first note built at run time {40 + 2}")
+	let kept = shelf.holding(0)
 	shelf.replace("second note built at run time {40 + 3}")
 	print("[{kept.text}] [{shelf.holding(0).text}]\n")
 	return 0
@@ -448,8 +448,8 @@ type Shelf uses Item
 end 'Shelf'
 
 function main() returns ExitCode
-	var shelf = NoteShelf.create(Note.create("first note built at run time {40 + 2}", weight: 1))
-	view kept = shelf.holding()
+	let shelf = NoteShelf.create(Note.create("first note built at run time {40 + 2}", weight: 1))
+	let kept = shelf.holding()
 	shelf.replace(Note.create("second note built at run time {40 + 3}", weight: 2))
 	print("[{kept.text}] [{shelf.holding().text}]\n")
 	return 0
@@ -494,7 +494,7 @@ type Shelf
 end 'Shelf'
 
 function main() returns ExitCode
-	var shelf = Shelf.create("first note built at run time {40 + 2}")
+	let shelf = Shelf.create("first note built at run time {40 + 2}")
 	let kept = shelf.describe()
 	shelf.replace("second note built at run time {40 + 3}")
 	print("[{kept.text}] {kept.weight} [{shelf.describe().text}]\n")
@@ -537,7 +537,7 @@ end 'Shelf'
 
 function main() returns ExitCode
 	var shelf = Shelf.create("first note built at run time {40 + 2}")
-	view kept = shelf.holding()
+	let kept = shelf.holding()
 	shelf = Shelf.create("second note built at run time {40 + 3}")
 	print("[{kept.text}] [{shelf.holding().text}]\n")
 	return 0

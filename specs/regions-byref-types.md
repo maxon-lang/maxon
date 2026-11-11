@@ -570,7 +570,7 @@ end 'Box'
 typealias WideBox = Box with Wide
 
 function main() returns ExitCode
-	var b = WideBox.create(2)
+	let b = WideBox.create(2)
 	var x = 3 as Narrow
 	b.fill(x)
 	print("{x}\n")

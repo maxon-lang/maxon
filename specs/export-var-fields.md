@@ -112,7 +112,7 @@ type Value
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value.create()
+	let v = Value.create()
 	v.n = 42
 	return v.n
 end 'main'
@@ -165,7 +165,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(40)
+	let c = Counter.create(40)
 	c.increment()
 	c.increment()
 	return c.getCount()

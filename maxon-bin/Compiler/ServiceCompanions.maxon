@@ -95,7 +95,7 @@ end 'cacheWriteServiceSpawnCandidateArray'
 
 module function cacheReadServiceSpawnCandidateArray(reader LibraryCacheReader) returns ServiceSpawnCandidateArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ServiceSpawnCandidateArray.create(count, zeroed: false)
+	let result = ServiceSpawnCandidateArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try ServiceSpawnCandidate.cacheRead(reader)
@@ -221,7 +221,7 @@ end 'cacheWriteDefaultDeclarationArray'
 
 module function cacheReadDefaultDeclarationArray(reader LibraryCacheReader) returns DefaultDeclarationArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DefaultDeclarationArray.create(count, zeroed: false)
+	let result = DefaultDeclarationArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try DefaultDeclaration.cacheRead(reader)
@@ -246,7 +246,7 @@ end 'cacheWriteLiveNameSet'
 
 module function cacheReadLiveNameSet(reader LibraryCacheReader) returns LiveNameSet throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = LiveNameSet.create()
+	let result = LiveNameSet.create()
 
 	for _ in 0 upto count 'eachItem'
 		let item = try reader.bytes()
@@ -277,7 +277,7 @@ end 'cacheWriteServiceSpawnCandidateKeyIndex'
 
 module function cacheReadServiceSpawnCandidateKeyIndex(reader LibraryCacheReader) returns ServiceSpawnCandidateKeyIndex throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ServiceSpawnCandidateKeyIndex.create()
+	let result = ServiceSpawnCandidateKeyIndex.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let key = try reader.bytes()
@@ -333,7 +333,7 @@ function sameNames(held LiveNameSet, other LiveNameSet) returns bool
 end 'sameNames'
 
 module function copiedNames(names LiveNameSet) returns LiveNameSet
-	var kept = LiveNameSet.create()
+	let kept = LiveNameSet.create()
 
 	for name in names 'eachName'
 		kept.insert(name)
@@ -410,7 +410,6 @@ function shareWalkIsRefused(walk TransferWalk) returns bool
 		refused gives true
 		closed or
 		walkedBy or
-		walkedAlone or
 		walkedThroughWitness gives false
 	end 'walk'
 end 'shareWalkIsRefused'
@@ -525,7 +524,7 @@ end 'serviceInstanceResolvedReturn'
 // ⭐ **DOES A CONCRETE INSTANTIATION STILL FIX ANYTHING IN THIS TYPE?** A bare `T`, and an instance whose
 // arguments still mention one (`Array with T`). Asked of a RESOLVED type: an inner alias is a `named` leaf
 // and answers for what it denotes rather than for itself.
-module function typeIsFixedByAnInstantiation(signatures ProgramSignatures, t MaxonType) returns bool
+function typeIsFixedByAnInstantiation(signatures ProgramSignatures, t MaxonType) returns bool
 	if maxonTypeTag(t) == ValueTypeTag.typeParameter 'opaqueFormal'
 		return true
 	end 'opaqueFormal'
@@ -575,15 +574,9 @@ module union ServiceRosterVerdict
 	// service really runs. Refusing it at the send would leave that body built.
 	messageReplyIsNotCarriable(methodName immutable ByteArray, noun String)
 
-	// A reply whose graph, at the type an instantiation substitutes, reaches a type no per-type walk can be
-	// built for. E3138, the refusal the handler's `return` raises for a type its body declares.
-	messageReplyGraphIsNotWalkable(methodName immutable ByteArray, noun String)
+	messageReplyIsNotTransferable(methodName immutable ByteArray, noun String)
 
-	messageReplyHoldsAPromise(methodName immutable ByteArray, noun String)
-
-	// A reply declared at a bare `T` that hands back the service's own state, at an instantiation resolving
-	// `T` to a managed type. E3137, the refusal a handler's `return` raises for a type its body declares.
-	messageReplyAliasesServiceState(methodName immutable ByteArray, replyTypeName String)
+	factoryParameterIsNotTransferable(factoryName immutable ByteArray, paramName immutable ByteArray, noun String)
 
 	messageDeclaresTheSendTimeoutLabel(methodName immutable ByteArray)
 
@@ -601,9 +594,8 @@ module union ServiceRosterVerdict
 
 			messageParameterIsNotTransferable or
 			messageReplyIsNotCarriable or
-			messageReplyGraphIsNotWalkable or
-			messageReplyHoldsAPromise or
-			messageReplyAliasesServiceState or
+			messageReplyIsNotTransferable or
+			factoryParameterIsNotTransferable or
 			messageDeclaresTheSendTimeoutLabel or
 			stateFieldHoldsAPromise or
 			messageParameterNeedsACapability or
@@ -641,7 +633,7 @@ end 'declaresTheSendTimeoutLabel'
 // Accepting only `structRef` here would make `returns Self` a service and `returns Calc` not one, which is
 // the same declaration written two ways.
 module function classifyServiceTarget(signatures ProgramSignatures, typeName ByteArray, member ByteArray) returns ServiceTargetVerdict
-	view declared = try serviceLayoutOf(signatures, typeName: typeName) otherwise return ServiceTargetVerdict.typeIsNotAStruct
+	let declared = try serviceLayoutOf(signatures, typeName: typeName) otherwise return ServiceTargetVerdict.typeIsNotAStruct
 
 	if not declared.whereConstraints.isEmpty() 'constrainedGeneric'
 		return ServiceTargetVerdict.typeIsAConstrainedGeneric
@@ -741,10 +733,10 @@ end 'ServiceCrossing'
 // FIRST offending message is the one named.** A stable answer matters: this decides the text of a
 // diagnostic that fires at a `spawn` in a different file from the method it names.
 module function classifyServiceRoster(signatures ProgramSignatures, typeName ByteArray, factory ByteArray, knowledge ServiceRosterKnowledge) returns ServiceRosterVerdict
-	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
+	let layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
-		view methodName = layout.messageMethodAt(i)
+		let methodName = layout.messageMethodAt(i)
 		let messageKey = qualifiedMethodName(typeName, methodName: methodName)
 		let decl = serviceDeclarationOf(signatures, key: messageKey)
 
@@ -757,20 +749,10 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 			refused(replyNoun) then return ServiceRosterVerdict.messageReplyIsNotCarriable(methodName, noun: replyNoun)
 		end 'replyCannotBeCarried'
 
-		match replyPromiseRefusal(signatures, returnType: decl.returnType, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyHoldsAPromise'
+		match replyTransferRefusal(signatures, returnType: decl.returnType, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyCannotCross'
 			acceptable then break
-			refused(promiseNoun) then return ServiceRosterVerdict.messageReplyHoldsAPromise(methodName, noun: promiseNoun)
-		end 'replyHoldsAPromise'
-
-		match instantiatedReplyGraphRefusal(signatures, returnType: decl.returnType, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyGraphCannotBeWalked'
-			acceptable then break
-			refused(graphNoun) then return ServiceRosterVerdict.messageReplyGraphIsNotWalkable(methodName, noun: graphNoun)
-		end 'replyGraphCannotBeWalked'
-
-		match instantiatedOpaqueReplyAliasesState(signatures, messageKey: messageKey, returnType: decl.returnType, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyAliasesTheServicesOwnState'
-			acceptable then break
-			refused(aliasedReplyType) then return ServiceRosterVerdict.messageReplyAliasesServiceState(methodName, replyTypeName: aliasedReplyType)
-		end 'replyAliasesTheServicesOwnState'
+			refused(replyCrossingNoun) then return ServiceRosterVerdict.messageReplyIsNotTransferable(methodName, noun: replyCrossingNoun)
+		end 'replyCannotCross'
 
 		for p in 0 upto decl.paramTypes.count() 'eachParam'
 			let declared = try decl.paramTypes.get(p) otherwise panic("classifyServiceRoster: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(typeName)}.{String.from(methodName)}'")
@@ -788,8 +770,39 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 		return stateVerdict
 	end 'stateRefused'
 
-	return capabilityVerdict(signatures, layout: layout, factory: factory)
+	let factoryVerdict = factoryTransferVerdict(signatures, layout: layout, factory: factory, knowledge: knowledge)
+
+	if not factoryVerdict.isDispatchable() 'factoryRefused'
+		return factoryVerdict
+	end 'factoryRefused'
+
+	return capabilityVerdict(signatures, layout: layout, factory: factory, knowledge: knowledge)
 end 'classifyServiceRoster'
+
+function factoryTransferVerdict(signatures ProgramSignatures, layout StructLayout, factory ByteArray, knowledge ServiceRosterKnowledge) returns ServiceRosterVerdict
+	let decl = serviceDeclarationOf(signatures, key: qualifiedMethodName(layout.name, methodName: factory))
+
+	for p in 0 upto decl.paramTypes.count() 'eachParam'
+		let declared = try decl.paramTypes.get(p) otherwise panic("factoryTransferVerdict: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(layout.name)}.{String.from(factory)}'")
+		let slot = serviceParamSlotType(signatures, declared: declared, into: signatures.indexTypeNames(), declFilePath: layout.declFilePath)
+
+		let resolved = match knowledge 'known'
+			declarationOnly gives slot
+			atInstance(instance) gives signatures.instanceResolvedSlotType(slot, declFilePath: layout.declFilePath, instance: instance)
+		end 'known'
+
+		if typeIsFixedByAnInstantiation(signatures, t: resolved) 'deferredToTheInstantiation'
+			continue
+		end 'deferredToTheInstantiation'
+
+		match transferRefusalOfType(signatures, resolved: resolved, declFilePath: layout.declFilePath) 'cannotCross'
+			acceptable then continue
+			refused(noun) then return ServiceRosterVerdict.factoryParameterIsNotTransferable(factory, paramName: serviceParamName(decl, index: p as ParamCount), noun: noun)
+		end 'cannotCross'
+	end 'eachParam'
+
+	return ServiceRosterVerdict.rosterIsDispatchable
+end 'factoryTransferVerdict'
 
 union UnmarkedParameter
 	allMarkedOrValues
@@ -799,17 +812,17 @@ end 'UnmarkedParameter'
 // Asked last, so a program an earlier rule refuses at the same `spawn` keeps that rule's code. Only
 // the factory the `spawn` names is judged: another factory's parameters never cross at this
 // `spawn`.
-function capabilityVerdict(signatures ProgramSignatures, layout StructLayout, factory ByteArray) returns ServiceRosterVerdict
+function capabilityVerdict(signatures ProgramSignatures, layout StructLayout, factory ByteArray, knowledge ServiceRosterKnowledge) returns ServiceRosterVerdict
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
-		view methodName = layout.messageMethodAt(i)
+		let methodName = layout.messageMethodAt(i)
 		let decl = serviceDeclarationOf(signatures, key: qualifiedMethodName(layout.name, methodName: methodName))
 
-		match firstUnmarkedParameter(signatures, decl: decl, declFilePath: layout.declFilePath) 'parameters'
+		match firstUnmarkedParameter(signatures, decl: decl, declFilePath: layout.declFilePath, knowledge: knowledge) 'parameters'
 			allMarkedOrValues then break
 			needsAWord(paramName, noun) then return ServiceRosterVerdict.messageParameterNeedsACapability(methodName, paramName: paramName, noun: noun)
 		end 'parameters'
 
-		match unmarkedReplyNoun(signatures, decl: decl, declFilePath: layout.declFilePath) 'reply'
+		match unmarkedReplyNoun(signatures, decl: decl, declFilePath: layout.declFilePath, knowledge: knowledge) 'reply'
 			acceptable then break
 			refused(noun) then return ServiceRosterVerdict.messageReplyNeedsACapability(methodName, noun: noun)
 		end 'reply'
@@ -817,20 +830,27 @@ function capabilityVerdict(signatures ProgramSignatures, layout StructLayout, fa
 
 	let factoryDecl = serviceDeclarationOf(signatures, key: qualifiedMethodName(layout.name, methodName: factory))
 
-	match firstUnmarkedParameter(signatures, decl: factoryDecl, declFilePath: layout.declFilePath) 'factoryParameters'
+	match firstUnmarkedParameter(signatures, decl: factoryDecl, declFilePath: layout.declFilePath, knowledge: knowledge) 'factoryParameters'
 		allMarkedOrValues then return ServiceRosterVerdict.rosterIsDispatchable
 		needsAWord(paramName, noun) then return ServiceRosterVerdict.factoryParameterNeedsACapability(factory, paramName: paramName, noun: noun)
 	end 'factoryParameters'
 end 'capabilityVerdict'
 
-function firstUnmarkedParameter(signatures ProgramSignatures, decl SweptDeclaration, declFilePath FilePath) returns UnmarkedParameter
+function resolvedAtKnowledge(signatures ProgramSignatures, declared MaxonType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns MaxonType
+	return match knowledge 'known'
+		declarationOnly gives declared
+		atInstance(instance) gives signatures.instanceResolvedSlotType(declared, declFilePath: declFilePath, instance: instance)
+	end 'known'
+end 'resolvedAtKnowledge'
+
+function firstUnmarkedParameter(signatures ProgramSignatures, decl SweptDeclaration, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns UnmarkedParameter
 	for p in 0 upto decl.paramTypes.count() 'eachParam'
 		if declaredCapabilityAt(decl.paramCapabilities, position: p as ParamCount) != ParamCapability.unmarked 'marked'
 			continue
 		end 'marked'
 
 		let declared = try decl.paramTypes.get(p) otherwise panic("firstUnmarkedParameter: paramTypes.get OOB at {p} below count {decl.paramTypes.count()}")
-		let resolved = serviceParamSlotType(signatures, declared: declared, into: signatures.indexTypeNames(), declFilePath: declFilePath)
+		let resolved = resolvedAtKnowledge(signatures, declared: serviceParamSlotType(signatures, declared: declared, into: signatures.indexTypeNames(), declFilePath: declFilePath), declFilePath: declFilePath, knowledge: knowledge)
 
 		if typeNeedsACapabilityWord(signatures, resolved: resolved) 'aRecord'
 			return UnmarkedParameter.needsAWord(serviceParamName(decl, index: p as ParamCount), noun: capabilityWordNoun(signatures, resolved: resolved))
@@ -840,12 +860,12 @@ function firstUnmarkedParameter(signatures ProgramSignatures, decl SweptDeclarat
 	return UnmarkedParameter.allMarkedOrValues
 end 'firstUnmarkedParameter'
 
-function unmarkedReplyNoun(signatures ProgramSignatures, decl SweptDeclaration, declFilePath FilePath) returns ServiceCrossing
+function unmarkedReplyNoun(signatures ProgramSignatures, decl SweptDeclaration, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
 	if maxonReturnTypeIsVoid(decl.returnType) or decl.returnCapability != ResultCapability.unmarked 'nothingToJudge'
 		return ServiceCrossing.acceptable
 	end 'nothingToJudge'
 
-	let resolved = declaredReplyType(signatures, returnType: decl.returnType, declFilePath: declFilePath)
+	let resolved = resolvedAtKnowledge(signatures, declared: declaredReplyType(signatures, returnType: decl.returnType, declFilePath: declFilePath), declFilePath: declFilePath, knowledge: knowledge)
 
 	if typeNeedsACapabilityWord(signatures, resolved: resolved) 'aRecord'
 		return ServiceCrossing.refused(capabilityWordNoun(signatures, resolved: resolved))
@@ -854,8 +874,8 @@ function unmarkedReplyNoun(signatures ProgramSignatures, decl SweptDeclaration, 
 	return ServiceCrossing.acceptable
 end 'unmarkedReplyNoun'
 
-// `function` and `typeParameter` answer false because a function value or a `T` parameter is
-// refused earlier (E3135), and a reply declared at `T` is legal.
+// `function` and `typeParameter` answer false because a function value or a `T` parameter is refused by the
+// transfer rule, and a `T` is judged at the instantiation that fixes it.
 function typeNeedsACapabilityWord(signatures ProgramSignatures, resolved MaxonType) returns bool
 	match maxonTypeTag(resolved) 'tag'
 		boolean or
@@ -965,24 +985,29 @@ function uncarriableReplyResultNoun(signatures ProgramSignatures, returnType Max
 	return uncarriableReplyNounOfType(declared)
 end 'uncarriableReplyResultNoun'
 
-function replyPromiseRefusal(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
+function replyTransferRefusal(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
 	if maxonReturnTypeIsVoid(returnType) 'nothingComesBack'
 		return ServiceCrossing.acceptable
 	end 'nothingComesBack'
 
-	let declared = declaredReplyType(signatures, returnType: returnType, declFilePath: declFilePath)
+	let resolved = resolvedAtKnowledge(signatures, declared: declaredReplyType(signatures, returnType: returnType, declFilePath: declFilePath), declFilePath: declFilePath, knowledge: knowledge)
 
-	let resolved = match knowledge 'known'
-		declarationOnly gives declared
-		atInstance(instance) gives signatures.instanceResolvedSlotType(declared, declFilePath: declFilePath, instance: instance)
-	end 'known'
-
-	if maxonTypeTag(resolved) == ValueTypeTag.typeParameter 'deferredToTheInstantiation'
+	if typeIsFixedByAnInstantiation(signatures, t: resolved) 'deferredToTheInstantiation'
 		return ServiceCrossing.acceptable
 	end 'deferredToTheInstantiation'
 
-	return promiseHolderCrossing(signatures, held: resolved)
-end 'replyPromiseRefusal'
+	return transferRefusalOfType(signatures, resolved: resolved, declFilePath: declFilePath)
+end 'replyTransferRefusal'
+
+function transferRefusalOfType(signatures ProgramSignatures, resolved MaxonType, declFilePath FilePath) returns ServiceCrossing
+	let holder = promiseHolderCrossing(signatures, held: resolved)
+
+	if holder.isRefused() 'aHolderOfAPromise'
+		return holder
+	end 'aHolderOfAPromise'
+
+	return sendGraphCrossing(signatures, type: resolved, declFilePath: declFilePath)
+end 'transferRefusalOfType'
 
 function promiseHolderCrossing(signatures ProgramSignatures, held MaxonType) returns ServiceCrossing
 	if signatures.typeHoldsAPromise(held) 'aHolderOfOne'
@@ -998,84 +1023,32 @@ function declaredReplyType(signatures ProgramSignatures, returnType MaxonReturnT
 	return signatures.declaredSlotType(returned, into: signatures.indexTypeNames(), slotScopeFilePath: declFilePath)
 end 'declaredReplyType'
 
-// ⭐⭐ **WHY THE REPLY'S GRAPH AT AN INSTANTIATION CANNOT BE WALKED.** `__behave` walks the reply at the type the instantiation
-// substitutes (`ServiceBehaviour.publishReplyValue`). So the substituted graph is refused HERE, at the
-// `spawn` that fixes it, and the refused spawn emits no `serviceSpawn` op, so no `__behave` is built for
-// it. A declaration alone has nothing substituted to ask about.
-function instantiatedReplyGraphRefusal(signatures ProgramSignatures, returnType MaxonReturnType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
-	if maxonReturnTypeIsVoid(returnType) 'nothingComesBack'
-		return ServiceCrossing.acceptable
-	end 'nothingComesBack'
-
-	match knowledge 'known'
-		declarationOnly then return ServiceCrossing.acceptable
-		atInstance(instance) then return replyGraphRefusalOfType(signatures, replyType: signatures.instanceResolvedSlotType(declaredReplyType(signatures, returnType: returnType, declFilePath: declFilePath), declFilePath: declFilePath, instance: instance), declFilePath: declFilePath)
-	end 'known'
-end 'instantiatedReplyGraphRefusal'
-
-function instantiatedOpaqueReplyAliasesState(signatures ProgramSignatures, messageKey ByteArray, returnType MaxonReturnType, declFilePath FilePath, knowledge ServiceRosterKnowledge) returns ServiceCrossing
-	if maxonReturnTypeIsVoid(returnType) 'nothingComesBack'
-		return ServiceCrossing.acceptable
-	end 'nothingComesBack'
-
-	match knowledge 'known'
-		declarationOnly then return ServiceCrossing.acceptable
-		atInstance(instance) then return opaqueReplyAliasedStateType(signatures, messageKey: messageKey, returnType: returnType, declFilePath: declFilePath, instance: instance)
-	end 'known'
-end 'instantiatedOpaqueReplyAliasesState'
-
-// The freshness fact is the declaration SWEEP's (`signatures.returnsFreshValue`), never one the parser
-// records while it reads the body: a `spawn` in a file parsed before its handler would otherwise see nothing
-// and accept, which makes acceptance depend on file order. Unproven freshness refuses — the safe direction.
-function opaqueReplyAliasedStateType(signatures ProgramSignatures, messageKey ByteArray, returnType MaxonReturnType, declFilePath FilePath, instance ServiceStateInstance) returns ServiceCrossing
-	let declared = declaredReplyType(signatures, returnType: returnType, declFilePath: declFilePath)
-
-	if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'theDeclarationAlreadyJudgedIt'
-		return ServiceCrossing.acceptable
-	end 'theDeclarationAlreadyJudgedIt'
-
-	if signatures.returnsFreshValue(messageKey) 'theHandlerMintsWhatItHandsBack'
-		return ServiceCrossing.acceptable
-	end 'theHandlerMintsWhatItHandsBack'
-
-	let resolved = signatures.instanceResolvedSlotType(declared, declFilePath: declFilePath, instance: instance)
-
-	if not signatures.typeIsManaged(resolved, from: signatures.indexTypeNames()) 'aMachineWord'
-		return ServiceCrossing.acceptable
-	end 'aMachineWord'
-
-	return ServiceCrossing.refused(maxonTypeDisplayName(resolved, typeNames: signatures.indexTypeNames(), signatures: signatures))
-end 'opaqueReplyAliasedStateType'
-
-function replyGraphRefusalOfType(signatures ProgramSignatures, replyType MaxonType, declFilePath FilePath) returns ServiceCrossing
-	return match replyTransferWalk(signatures, replyType: replyType, declFilePath: declFilePath) 'graph'
-		closed or
-		walkedBy or
-		walkedAlone or
-		walkedThroughWitness gives ServiceCrossing.acceptable
-		refused(noun) gives ServiceCrossing.refused(noun)
-	end 'graph'
-end 'replyGraphRefusalOfType'
-
-// How a reply of `replyType` crosses to its awaiter: a MOVE, walked through `ProgramSignatures.transferWalkOf`
-// as a value's own type is at a send, read where the handler is declared. The `spawn` refuses on it and the
-// loop walks by it, so the two cannot come to ask different things.
-module function replyTransferWalk(signatures ProgramSignatures, replyType MaxonType, declFilePath FilePath) returns TransferWalk
-	match classifyUnionPayload(signatures, typeNames: signatures.indexTypeNames(), fieldType: replyType, slotScopeFilePath: declFilePath) 'class'
+// ⭐⭐ **WHETHER A TYPE'S GRAPH MAY CROSS TO ANOTHER GREEN THREAD — the one gate every message parameter, reply
+// and factory parameter asks, at the declaration or at the instantiation that fixes it.** A send is never
+// walked, so the type decides: a graph reaching a function value, an OS handle other than a socket or an
+// interface whose conformer does, is refused here and nowhere later.
+function sendGraphCrossing(signatures ProgramSignatures, type MaxonType, declFilePath FilePath) returns ServiceCrossing
+	match classifyUnionPayload(signatures, typeNames: signatures.indexTypeNames(), fieldType: type, slotScopeFilePath: declFilePath) 'class'
 		scalar or
-		greenThread then return TransferWalk.closed
-		managed(storage, _) then return declaredTransferWalk(signatures, walked: storage, declFilePath: declFilePath)
-		nestedUnion(storage) then return declaredTransferWalk(signatures, walked: storage, declFilePath: declFilePath)
+		greenThread then return ServiceCrossing.acceptable
+		managed(storage, _) then return sendGraphCrossingOfStorage(signatures, walked: storage, declFilePath: declFilePath)
+		nestedUnion(storage) then return sendGraphCrossingOfStorage(signatures, walked: storage, declFilePath: declFilePath)
 		existential or
 		typeParam or
-		undeclaredName then return declaredTransferWalk(signatures, walked: replyType, declFilePath: declFilePath)
+		undeclaredName then return sendGraphCrossingOfStorage(signatures, walked: type, declFilePath: declFilePath)
 	end 'class'
-end 'replyTransferWalk'
+end 'sendGraphCrossing'
 
-function declaredTransferWalk(signatures ProgramSignatures, walked MaxonType, declFilePath FilePath) returns TransferWalk
+function sendGraphCrossingOfStorage(signatures ProgramSignatures, walked MaxonType, declFilePath FilePath) returns ServiceCrossing
 	let subject = transferSubjectOf(maxonTypeTag(walked), nameId: typeNameIdOf(walked), typeNames: signatures.indexTypeNames())
-	return signatures.transferWalkOf(subject, action: CascadeAction.soleWalk, roots: TransferRoots.one, readerFilePath: declFilePath)
-end 'declaredTransferWalk'
+
+	return match signatures.transferWalkOf(subject, kind: TransferKind.send, readerFilePath: declFilePath) 'graph'
+		closed gives ServiceCrossing.acceptable
+		refused(noun) gives ServiceCrossing.refused(noun)
+		walkedBy or
+		walkedThroughWitness panic("sendGraphCrossingOfStorage: a send is never walked, yet `transferWalkOf` answered a walk for it")
+	end 'graph'
+end 'sendGraphCrossingOfStorage'
 
 // The verdict itself, over a type nothing can still fix. Split out because the two knowledge arms reach it
 // with types resolved to different depths and the SENTENCE must be one.
@@ -1169,24 +1142,26 @@ function untransferableParameterNoun(signatures ProgramSignatures, declared Maxo
 		typeParameter then return ServiceCrossing.refused(TypeParameterParameterNoun)
 
 		// Every remaining tag names a value with a layout the send site knows: a scalar, an exit code, an enum, a
-		// struct box, a String, a container instance, a character, a value held at an interface type. Each
-		// crosses.
-		named or
-		interfaceRef or
+		// struct box, a String, a container instance, a character, a value held at an interface type. It
+		// crosses unless its graph reaches what cannot (`sendGraphCrossing`).
 		boolean or
 		integer or
 		float or
 		exitCode or
 		unresolved or
-		void or
+		void then return ServiceCrossing.acceptable
+
+		named or
+		interfaceRef or
 		structRef or
 		string or
-		character then return ServiceCrossing.acceptable
+		character then return sendGraphCrossing(signatures, type: resolved, declFilePath: declFilePath)
 
 		// An instance whose arguments still name a type parameter (`Array with T` inside `type Box uses T`)
 		// is the SAME opacity one arm up wearing a container: the send knows neither the element's layout
-		// nor whether the record owns one. A fully concrete instance is an ordinary owned box and crosses.
-		genericInstance then return ServiceCrossing.refused(TypeParameterParameterNoun) if typeIsFixedByAnInstantiation(signatures, t: resolved) else ServiceCrossing.acceptable
+		// nor whether the record owns one. A fully concrete instance is an ordinary owned box and crosses
+		// unless its graph reaches what cannot.
+		genericInstance then return ServiceCrossing.refused(TypeParameterParameterNoun) if typeIsFixedByAnInstantiation(signatures, t: resolved) else sendGraphCrossing(signatures, type: resolved, declFilePath: declFilePath)
 
 		// ⭐ **A `cstring` MAY NOT CROSS A SEND.** It is a raw address into a buffer the SENDER owns, with no
 		// length and no ownership — the receiving green thread would read bytes another may free or grow.
@@ -1199,25 +1174,18 @@ end 'untransferableParameterNoun'
 // NEEDED TO BE SHARED.** Every other untransferable shape is refused at the message's DECLARATION and can
 // never be an argument to an accepted one, because its TYPE would not match. A Promise is the exception:
 // its value is a bare INTEGER handle, so `keep(n Integer)` accepts one without a word from the type checker.
-// `Parser.requireNoPromiseLeaves` therefore asks about the VALUE, and says the same thing this does.
-module let PromiseParameterNoun = "a Promise, which is a green-thread handle its awaiter owns"
+// `Parser.handOffTakeOf` therefore asks about the VALUE, and says the same thing this does.
+let PromiseParameterNoun = "a Promise, which is a green-thread handle its awaiter owns"
 module let PromiseSharedNoun = "a promise, which owns a green thread that exactly one owner may reclaim"
 module let FunctionValueCrossingNoun = "a function value, a closure record that owns what it captures and does not cross to another thread"
 
-module function promiseHolderNoun(signatures ProgramSignatures, held MaxonType) returns String
+function promiseHolderNoun(signatures ProgramSignatures, held MaxonType) returns String
 	return "a `{maxonTypeDisplayName(held, typeNames: signatures.indexTypeNames(), signatures: signatures)}` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it"
 end 'promiseHolderNoun'
 
 // ⭐ **THE OPAQUE-LAYOUT NOUN, shared by the bare `T` and by any instance whose arguments still name one** —
 // one finding about one shape.
 let TypeParameterParameterNoun = "an opaque type parameter, whose layout is not known at the send"
-
-// ⭐ **THE WORDS FOR A VALUE WHOSE TYPE MAY NOT CROSS, refused at the SEND rather than at the declaration.**
-// `serviceRosterRefusalMessage`'s twin one tier down: that one names a parameter the author DECLARED, this
-// names an argument they WROTE, and both end with the same three cures.
-module function serviceUntransferableValueMessage(blame String, noun String) returns String
-	return "{blame} is {noun}, and a send hands it to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message"
-end 'serviceUntransferableValueMessage'
 
 // ⭐⭐ **A MESSAGE PARAMETER'S DECLARED TYPE, RESOLVED — the one door the roster's rule and the request
 // payload both read.** `ProgramSignatures.normalizeSweptInterfaceTypes` re-tags a swept `named` that denotes an
@@ -1239,7 +1207,7 @@ function serviceParamTypeByIdentity(signatures ProgramSignatures, declared Maxon
 		return declared
 	end 'notAWrittenName'
 
-	var names = signatures.indexTypeNames()
+	let names = signatures.indexTypeNames()
 	let spelled = try names.nameOf(typeNameIdOf(declared)) otherwise panic("serviceParamTypeByIdentity: named id {typeNameIdOf(declared)} is not in the index interner the sweep recorded it against")
 
 	if not containsQualifier(spelled) 'anUnqualifiedName'
@@ -1405,9 +1373,8 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 	match verdict 'why'
 		rosterIsDispatchable then panic("serviceRosterRefusalMessage: asked for the words of a DISPATCHABLE roster on `type {String.from(typeName)}` — the caller refuses only the other arms")
 		messageParameterIsNotTransferable(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message"
-		messageReplyHoldsAPromise(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` returns {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose reply is handed to the green thread that awaits it. `await` the promise in the handler and return the result it yields, or drop the `returns` clause"
-		messageReplyGraphIsNotWalkable(methodName, noun) then return serviceUnclosedRecordTransferMessage(serviceReplyBlame(typeName, methodName: methodName), sourceClause: NoTransferSourceClause, noun: noun)
-		messageReplyAliasesServiceState(methodName, replyTypeName) then return serviceGenericReplyAliasesStateRefusal(typeName, methodName: methodName, replyTypeName: replyTypeName)
+		messageReplyIsNotTransferable(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` returns {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose reply is handed to the green thread that awaits it. `await` a promise in the handler and return the result it yields, return a value whose graph holds no function value or thread-bound handle, or drop the `returns` clause"
+		factoryParameterIsNotTransferable(factoryName, paramName, noun) then return "parameter `{String.from(paramName)}` of the factory `{String.from(typeName)}.{String.from(factoryName)}` is {noun}, and this `spawn` moves its arguments into the state of `{String.from(typeName)}`, a service — which another green thread runs. Pass a value whose graph holds no function value, promise or thread-bound handle, or drop the parameter from the factory"
 		messageDeclaresTheSendTimeoutLabel(methodName) then return "the message `{String.from(typeName)}.{String.from(methodName)}` declares a parameter named `{String.from(ServiceSendTimeoutLabel)}`, and this `spawn` makes `{String.from(typeName)}` a service. `{String.from(ServiceSendTimeoutLabel)}:` is reserved on every message call: it is the milliseconds a send waits for room in a full mailbox, and it never enters the request, so a call could not tell the parameter from the timeout. Rename the parameter"
 		stateFieldHoldsAPromise(fieldName, noun) then return "`{String.from(typeName)}.{String.from(fieldName)}` is {noun}. `{String.from(typeName)}` is a service, and a service's state is run by whichever green thread takes its next message, so a promise kept in it could be awaited or dropped by a strand that does not own its coroutine. `await` the promise (or `.cancel()` it) before the message or factory returns and keep its result in the field"
 		messageParameterNeedsACapability(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun} with no capability word, and this `spawn` makes `{String.from(typeName)}` a service — whose messages hand their arguments to another green thread, so what crosses must be owned by one side or read-only on both. {ServiceCapabilityCures} Write it `{String.from(methodName)}({String.from(paramName)} isolated …)` or `{String.from(methodName)}({String.from(paramName)} immutable …)`"
@@ -1417,60 +1384,14 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 	end 'why'
 end 'serviceRosterRefusalMessage'
 
-// ⭐⭐ **THE WORDS FOR A VALUE THAT MAY NOT CROSS TO A SERVICE — the OWNERSHIP refusal, where
-// the two above are about a DECLARATION.** `Parser.handOffTakeOf` decides; these say it, and they live
-// here because every other sentence a service refusal can end with lives here too.
-//
-// ⭐ **THE LESSON IS WRITTEN ONCE AND BOTH FINDINGS END WITH IT**, `borrowLaunderDoorClause`'s arrangement
-// and for its reason: the two differ in WHY this frame is not the value's only owner, and not at all in what a
-// send requires or in what the author does about it. Two copies would be free to drift into two rules.
-//
-// ⚠ **BOTH CURES ARE NAMED AND BOTH ARE PINNED**, because they are not interchangeable: `.clone()` needs the
-// type to have one, and building at the send needs nothing (`specs/services.md`'s
-// `a-borrowed-parameter-may-be-sent-as-a-clone` and `a-borrowed-parameter-may-be-sent-as-a-fresh-interpolation`).
-module let ServiceTransferLesson = "A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name"
-
-// The BORROWED half: this frame does not own the value at all. It names no type, because the rule is uniform
-// over borrows whatever their type (`Parser.handOffTakeOf`, ⚖ user ruling).
-module function serviceBorrowedTransferMessage(blame String, sourceClause String) returns String
-	return "{blame} is BORROWED{sourceClause} — read out of a field, an element or a parameter — so this frame does not own it. {ServiceTransferLesson}"
-end 'serviceBorrowedTransferMessage'
-
-module function serviceSharedParameterWrittenMessage(blame String) returns String
-	return "{blame} is a PARAMETER this function writes. A parameter nothing here writes is shared with the service — both threads read one record and every count in it steps atomically — but a record this function writes would change under the service while it reads. Send a `.clone()`, or stop writing the parameter"
-end 'serviceSharedParameterWrittenMessage'
-
-module function serviceSharedValueHandledMessage(blame String, handler String, parameter String, shared String) returns String
-	return "{blame} is {shared} shared with the service, and the handler `{handler}` writes or keeps its parameter `{parameter}`. A record both threads reach may be written by neither. Send a `.clone()`, or make `{handler}` only read `{parameter}`"
-end 'serviceSharedValueHandledMessage'
-
-// The CO-OWNED half: this frame owns a reference, but not provably the only one. Both arrivals are named
-// because the cure differs between them — a second reference taken HERE is one the author can see and remove,
-// while a value that crossed a frame boundary cannot be proven sole from here at all and needs the clone.
-module function sharedTransferMessage(blame String, sourceClause String, lesson String) returns String
-	return "{blame} cannot be proven to have exactly one owner{sourceClause}: this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). {lesson}"
-end 'sharedTransferMessage'
-
-// ⭐⭐ **THE THIRD HALF, AND THE ONLY ONE THAT IS ABOUT WHAT THE RECORD *HOLDS*.** The two sentences above
-// ask whether THIS box has one owner, and that is not enough: **SOLENESS IS NOT TRANSITIVE.** A box this frame
-// solely owns can hold a payload it only co-owns (`Parser.OwnedHeapExclusivity`), and handing it to a green
-// thread leaves that second owner behind on THIS one, stepping a count the service now steps too.
-//
-// ⚠⚠ **A GRAPH THAT MIGHT BE SHARED IS NOT WHAT THIS SENTENCE IS FOR — that is walked at RUN TIME**
-// (`ProgramSignatures.transferWalkOf`, the synthesized `__sole_<T>` and `__share_<T>` walks,
-// `RuntimeAbort.transferredRecordNotSole`). This is the refusal for the shapes no walk can be BUILT for, so it
-// names the shape and not a suspicion.
-//
-// ⚠ **IT NAMES NO `.clone()`, WHICH IS WHY IT DOES NOT QUOTE `ServiceTransferLesson`.** Every shape it
-// refuses is refused for a property of the TYPE, so a clone of the same type is refused identically.
-module function serviceUnclosedRecordTransferMessage(blame String, sourceClause String, noun String) returns String
-	return "{blame} is {noun}{sourceClause}. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it"
-end 'serviceUnclosedRecordTransferMessage'
-
 // The source binding named in parentheses, or `NoTransferSourceClause` when no binding holds the value (a
 // temporary, an element read). Split out because both sentences name the source and an author reading two
 // spellings of one fact would read them as two findings.
 module let NoTransferSourceClause = ""
+
+module function serviceUnclosedRecordTransferMessage(blame String, sourceClause String, noun String) returns String
+	return "{blame} is {noun}{sourceClause}. Sharing hands the graph to every green thread, and this compiler marks each record in it shared at run time — but it can only mark a graph whose every type has a per-type walk, and this one does not. Share the scalars the value is built from, or keep it on this side and share what is needed of it"
+end 'serviceUnclosedRecordTransferMessage'
 
 module function serviceTransferSourceClause(source String) returns String
 	return " (`{source}`)"
@@ -1504,10 +1425,6 @@ module function serviceReplyDroppedRefusal(message ByteArray) returns String
 	return "`{String.from(message)}` returns or throws, so a send of it delivers a reply, and as a statement the reply is dropped — and with it the value and any error the handler throws. Await it with `try await <handle>.<message>(…)`, keep it with `let reply = try <handle>.<message>(…)`, or discard it on purpose with `_ = try <handle>.<message>(…)`"
 end 'serviceReplyDroppedRefusal'
 
-module function serviceSendErrorNotSolelyOwnedRefusal(errorType ByteArray) returns String
-	return "`{String.from(errorType)}` is thrown from a value this function does not solely own, and its caller would take the arguments out of it as the only owner. Only the failed send's own error may be thrown: propagate it with a bare `try`, or `throw` the binding that caught it, which hands the error over and is not read again"
-end 'serviceSendErrorNotSolelyOwnedRefusal'
-
 module function serviceSendHasNoValueRefusal(message ByteArray) returns String
 	let member = match splitQualifiedName(message) 'shape'
 		parts(_, name) gives name
@@ -1522,34 +1439,6 @@ end 'serviceSendHasNoValueRefusal'
 module function serviceShutdownHasNoValueRefusal(typeName ByteArray) returns String
 	return "the value of `{String.from(typeName)}.{String.from(ServiceShutdownMethodName)}()` — `{String.from(ServiceShutdownMethodName)}` is the HANDLE's own method and not a message of `{String.from(typeName)}`, so no declaration says what it hands back and an expression has nothing to bind. Write `<handle>.{String.from(ServiceShutdownMethodName)}()` as a statement: it closes the mailbox once everything already queued has run, and dropping the last handle does the same"
 end 'serviceShutdownHasNoValueRefusal'
-
-// ⭐⭐ **THE WORDS FOR A REPLY THAT WOULD ALIAS SOMETHING THIS FRAME DOES NOT SOLELY OWN.** See
-// `Parser.requireServiceReplyDoesNotAliasState` for the rule and for why `.clone()` is the right answer
-// rather than a workaround. It names both populations the predicate refuses — the service's own state and a
-// message PARAMETER, which reaches nothing of the state at all — because a refusal's noun is what a reader takes
-// away.
-module function serviceReplyAliasesStateRefusal(typeName ByteArray, methodName ByteArray) returns String
-	return "{serviceReplyAliasesStateClaim(typeName, methodName: methodName)} makes `{String.from(typeName)}` a service. The caller would then hold a second reference to that box, on another green thread. {ServiceReplyAliasCure}"
-end 'serviceReplyAliasesStateRefusal'
-
-// The substituted type is named because a `spawn` shows the factory's arguments and not the `T` the message
-// declares — the noun is what tells the author which instantiation is refused.
-function serviceGenericReplyAliasesStateRefusal(typeName ByteArray, methodName ByteArray, replyTypeName String) returns String
-	return "{serviceReplyAliasesStateClaim(typeName, methodName: methodName)} makes `{String.from(typeName)}` a service over a `{replyTypeName}`, which is a value it would then share with the caller on another green thread. {ServiceReplyAliasCure}"
-end 'serviceGenericReplyAliasesStateRefusal'
-
-function serviceReplyAliasesStateClaim(typeName ByteArray, methodName ByteArray) returns String
-	return "`{String.from(typeName)}.{String.from(methodName)}` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn`"
-end 'serviceReplyAliasesStateClaim'
-
-let ServiceReplyAliasCure = "Return a `.clone()`, or return the scalars the caller needs"
-
-// ⭐ **WHAT THE NOTE ON A WHOLE-PROGRAM SERVICE DIAGNOSTIC SAYS, written once for every rule that carries
-// one.** The note's job is to answer the question the primary line raises — *"since when is this a
-// service?"* — so it says what the site IS rather than repeating the rule.
-module function serviceSpawnNoteText(typeName ByteArray) returns String
-	return "the `spawn` that makes `{String.from(typeName)}` a service"
-end 'serviceSpawnNoteText'
 
 // ⭐ **WHAT ONE MESSAGE ARGUMENT IS**, its twin one construct over. Here the author DID name the value's
 // destination, so the blame names the parameter and the message rather than the send.
@@ -1573,12 +1462,6 @@ module function serviceFactoryArgumentBlame(callee ByteArray, paramName ByteArra
 	return "argument `{String.from(paramName)}` of `spawn {String.from(callee)}(…)`"
 end 'serviceFactoryArgumentBlame'
 
-// The same blame on the REPLY road, where the value has no parameter name because the author wrote a
-// `return`. It exists so a graph refused on that road is not described as an argument of a send.
-module function serviceReplyBlame(typeName ByteArray, methodName ByteArray) returns String
-	return "the reply of the message `{String.from(typeName)}.{String.from(methodName)}`"
-end 'serviceReplyBlame'
-
 // ⚠⚠ **THE INTERNER IS A PARAMETER AND IT IS NOT OPTIONAL.** A payload type built below is a `MaxonType`, which carries a `TypeNameId` that is only a
 // number without its table: the layouts the SIGNATURE INDEX holds carry the index's ids, and a
 // `FileParseArtifact`'s carry that file's own. `ProgramSignatures.indexTypeNames`' header records what
@@ -1588,12 +1471,12 @@ end 'serviceReplyBlame'
 //
 // The request union: one variant per message in declaration order.
 module function buildServiceRequestUnion(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns EnumLayout
-	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
+	let layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 	let declFilePath = layout.declFilePath
-	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: NameRoster.create(0), visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
+	let request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: NameRoster.create(0), visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
 
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
-		view methodName = layout.messageMethodAt(i)
+		let methodName = layout.messageMethodAt(i)
 		addServiceRequestCase(request, caseName: methodName, payloads: serviceRequestPayloads(signatures, typeName: typeName, methodName: methodName, declFilePath: declFilePath, into: into))
 	end 'eachMessage'
 
@@ -1607,7 +1490,7 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 	let key = qualifiedMethodName(typeName, methodName: methodName)
 	let decl = serviceDeclarationOf(signatures, key: key)
 
-	var payloads = PayloadFieldArray.create(0)
+	let payloads = PayloadFieldArray.create(0)
 
 	for p in 0 upto decl.paramTypes.count() 'eachParam'
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
@@ -1672,7 +1555,7 @@ end 'serviceReplySlotIndex'
 // ⭐⭐ **IS THIS PAYLOAD SLOT THE ONE THE COMPILER FILLED ITSELF? — the one home of that test, because THREE
 // mechanisms turn on it and each of them is silently wrong if it drifts.** `serviceReplySlotIndex` above
 // finds the slot to mint a cell into; `Parser.moveMessagePayloads` SKIPS it, because a cell is not a
-// refcounted box and `handOffTakeOf` would refuse it as the author's own argument (E3135); and
+// refcounted box and `handOffTakeOf` would refuse it as the author's own argument; and
 // `Parser.emitEnumBox` skips its ARGUMENT TYPE CHECK, because the slot is declared `MaxonType.integer`
 // deliberately (a raw pointer the destructor cascade must not follow) while the cell it holds is typed
 // `Promise with (T, E)` — an E3005 on every reply-bearing send if it were asked.
@@ -1715,7 +1598,7 @@ end 'serviceReplyErrorLayout'
 // enum's — a literal here would be a second statement of the position and the two are free to disagree.
 function addServiceRequestCase(request EnumLayout, caseName ByteArray, payloads PayloadFieldArray)
 	let tag = request.caseCount()
-	request.addCase(caseName, tag: tag as FullRangeInt, rawValue: "{tag}", declaresRawValue: false, payloads: payloads, backingFields: EnumBackingFieldArray.create(0))
+	request.addCase(caseName, tag: tag as FullRangeInt, rawValue: "{tag}", declaresRawValue: false, payloads: payloads, backingFields: freeze EnumBackingFieldArray.create(0))
 end 'addServiceRequestCase'
 
 // The handle: ONE field holding the cown pointer. On `SignatureIndex.managedFileLayout`'s shape, and for
@@ -1726,7 +1609,7 @@ end 'addServiceRequestCase'
 // `module type Calc` does not leak its handle across the module boundary.
 module function buildServiceHandleStruct(signatures ProgramSignatures, typeName ByteArray) returns StructLayout
 	let owner = spawnTargetLayoutOf(signatures, typeName: typeName)
-	var handle = StructLayout.create(serviceHandleCompanionName(typeName), visibility: owner.visibility, declFilePath: owner.declFilePath)
+	let handle = StructLayout.create(serviceHandleCompanionName(typeName), visibility: owner.visibility, declFilePath: owner.declFilePath)
 
 	// ⭐⭐ **THE COMPANION TAKES ITS SERVICE'S `uses` LIST, WHICH IS WHAT MAKES `<T>.handle with <Args>`
 	// WRITABLE.** One companion still serves every instantiation — this adds no second declaration — but a
@@ -1809,7 +1692,7 @@ end 'cacheWriteServiceMessageIndex'
 
 module function cacheReadServiceMessageIndex(reader LibraryCacheReader) returns ServiceMessageIndex throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ServiceMessageIndex.create()
+	let result = ServiceMessageIndex.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let key = try reader.bytes()
@@ -1830,10 +1713,10 @@ end 'cacheReadServiceMessageIndex'
 //
 // A message is exactly a function `<T>.__behave` calls (`serviceBehaviourHandlerCallees`).
 module function serviceMessageIndexOf(signatures ProgramSignatures) returns ServiceMessageIndex
-	var index = ServiceMessageIndex.create()
+	let index = ServiceMessageIndex.create()
 
 	for typeName in serviceCompanionRoster(signatures) 'eachService'
-		view request = try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise continue
+		let request = try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise continue
 
 		for caseIndex in 0 upto request.caseCount() 'eachVariant'
 			let methodName = request.caseNameAt(caseIndex)
@@ -1872,7 +1755,7 @@ end 'serviceRequestLayoutOf'
 // `Parser.dispatchOnServiceHandle` has an arm per entry. The editor's offer set and the compiler's admit
 // set are one fact, so a fourth thing a handle accepts is owed to all three.
 module function serviceHandleSurface(request EnumLayout) returns NameRoster
-	var surface = NameRoster.create(0)
+	let surface = NameRoster.create(0)
 
 	for index in 0 upto request.caseCount() 'eachVariant'
 		surface.push(request.caseNameAt(index))
@@ -1895,7 +1778,7 @@ module function requireServiceRequestLayout(signatures ProgramSignatures, typeNa
 end 'requireServiceRequestLayout'
 
 module function serviceRequestStagingBytes(signatures ProgramSignatures) returns ByteOffset
-	var owners = serviceCompanionRoster(signatures)
+	let owners = serviceCompanionRoster(signatures)
 
 	for interfaceName in signatures.interfacesWithHandles() 'eachInterfaceHandle'
 		owners.push(interfaceName)
@@ -1920,7 +1803,7 @@ end 'serviceRequestStagingBytes'
 // and credits the `spawn` with this list instead.
 module function serviceBehaviourHandlerCallees(signatures ProgramSignatures, typeName ByteArray) returns NameRoster
 	let request = requireServiceRequestLayout(signatures, typeName: typeName)
-	var callees = NameRoster.create(request.caseCount(), zeroed: false)
+	let callees = NameRoster.create(request.caseCount(), zeroed: false)
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
 		callees.push(qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)))
@@ -1953,7 +1836,7 @@ end 'serviceCompanionRoster'
 // rewriting a container mid-walk is the one shape a `for … in` promises nothing about
 // (`ProgramSignatures.rewriteRecordedReturnTypes` collects first for the same reason).
 function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns NameRoster
-	var services = NameRoster.create(0)
+	let services = NameRoster.create(0)
 
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
 		let typeName = spawnedTypeNameOf(signatures, candidate: candidate)
@@ -2076,7 +1959,7 @@ function recordServiceSendErrors(signatures ProgramSignatures, errors EnumLayout
 end 'recordServiceSendErrors'
 
 module function buildServiceSendErrors(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns EnumLayoutArray
-	view owner = spawnTargetLayoutOf(signatures, typeName: typeName)
+	let owner = spawnTargetLayoutOf(signatures, typeName: typeName)
 	return buildSendErrorsOf(signatures, ownerName: typeName, visibility: owner.visibility, declFilePath: owner.declFilePath, into: into)
 end 'buildServiceSendErrors'
 
@@ -2085,8 +1968,8 @@ module function buildInterfaceSendErrors(signatures ProgramSignatures, interface
 end 'buildInterfaceSendErrors'
 
 function buildSendErrorsOf(signatures ProgramSignatures, ownerName ByteArray, visibility Visibility, declFilePath FilePath, into TypeNameInterner) returns EnumLayoutArray
-	view request = requireServiceRequestLayout(signatures, typeName: ownerName)
-	var errors = EnumLayoutArray.create(request.caseCount(), zeroed: false)
+	let request = requireServiceRequestLayout(signatures, typeName: ownerName)
+	let errors = EnumLayoutArray.create(request.caseCount(), zeroed: false)
 
 	for caseIndex in 0 upto request.caseCount() 'eachMessage'
 		let name = serviceSendErrorCompanionName(qualifiedMethodName(ownerName, methodName: request.caseNameAt(caseIndex)))
@@ -2098,7 +1981,7 @@ function buildSendErrorsOf(signatures ProgramSignatures, ownerName ByteArray, vi
 end 'buildSendErrorsOf'
 
 function adoptedPayloads(signatures ProgramSignatures, payloads PayloadFieldArray, into TypeNameInterner) returns PayloadFieldArray
-	var adopted = PayloadFieldArray.create(payloads.count(), zeroed: false)
+	let adopted = PayloadFieldArray.create(payloads.count(), zeroed: false)
 
 	for field in payloads 'eachField'
 		adopted.push(PayloadField.create(field.name, declaredType: signatures.adoptType(field.declaredType, into: into), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, capability: field.capability, typeSite: field.typeSite))
@@ -2108,7 +1991,7 @@ function adoptedPayloads(signatures ProgramSignatures, payloads PayloadFieldArra
 end 'adoptedPayloads'
 
 function serviceSendErrorPayloads(payloads PayloadFieldArray) returns PayloadFieldArray
-	var arguments = PayloadFieldArray.create(0)
+	let arguments = PayloadFieldArray.create(0)
 
 	for field in payloads 'eachField'
 		if not fieldIsTheServiceReplySlot(field) 'anArgument'
@@ -2120,14 +2003,14 @@ function serviceSendErrorPayloads(payloads PayloadFieldArray) returns PayloadFie
 end 'serviceSendErrorPayloads'
 
 function buildServiceSendErrorUnion(signatures ProgramSignatures, name ByteArray, payloads PayloadFieldArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
-	var errors = EnumLayout.create(name, isUnion: payloads.count() > 0, conformsTo: builtinErrorConformance(signatures.interfaceMap().spellingOf(BuiltinInterfaceKind.error)), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
+	let errors = EnumLayout.create(name, isUnion: payloads.count() > 0, conformsTo: builtinErrorConformance(signatures.interfaceMap().spellingOf(BuiltinInterfaceKind.error)), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
 	addServiceRequestCase(errors, caseName: ServiceSendMailboxFullCaseName, payloads: payloads)
 	addServiceRequestCase(errors, caseName: ServiceSendServiceStoppedCaseName, payloads: copiedPayloads(payloads))
 	return errors
 end 'buildServiceSendErrorUnion'
 
 function mintInterfaceHandlesOf(signatures ProgramSignatures, typeName immutable ByteArray)
-	view service = spawnTargetLayoutOf(signatures, typeName: typeName)
+	let service = spawnTargetLayoutOf(signatures, typeName: typeName)
 
 	if not service.typeParamNames.isEmpty() 'aGenericService'
 		return
@@ -2154,7 +2037,7 @@ module let InterfaceHandleTableOffset = 8 as ByteOffset
 module let InterfaceHandleBoxSize = 16 as FullRangeInt
 
 function buildInterfaceHandleStruct(interfaceName immutable ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-	var handle = StructLayout.create(serviceHandleCompanionName(interfaceName), visibility: visibility, declFilePath: declFilePath)
+	let handle = StructLayout.create(serviceHandleCompanionName(interfaceName), visibility: visibility, declFilePath: declFilePath)
 	handle.addField(ServiceHandleCownFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
 	handle.addField(InterfaceHandleTableFieldName, declaredType: MaxonType.integer, mutable: true, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: plainDeclaredSurface(), declaredBrand: EmptySourceText, spelledName: SpelledFieldName.unnamed)
 
@@ -2186,7 +2069,7 @@ function recordInterfaceRequestAndSendErrors(signatures ProgramSignatures, inter
 end 'recordInterfaceRequestAndSendErrors'
 
 function buildInterfaceRequestUnion(signatures ProgramSignatures, interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
-	var request = EnumLayout.create(serviceRequestCompanionName(interfaceName), isUnion: true, conformsTo: NameRoster.create(0), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
+	let request = EnumLayout.create(serviceRequestCompanionName(interfaceName), isUnion: true, conformsTo: NameRoster.create(0), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer, isSynthesized: true)
 	let requirements = try signatures.interfaceRequirementSlots(interfaceName) otherwise CollectedInterfaceMethodArray.create(0)
 
 	for requirement in requirements 'eachRequirement'
@@ -2205,8 +2088,8 @@ end 'buildInterfaceRequestUnion'
 // `CownInterface.installInterfaceHandleConversions` builds conversions over, so the services a send is
 // vetted against are exactly the services its handle can convert to.
 module function interfaceServiceImplementers(signatures ProgramSignatures, interfaceName ByteArray) returns NameRoster
-	view recorded = signatures.interfaceHandleRepresentative(interfaceName)
-	var implementers = NameRoster.create(0)
+	let recorded = signatures.interfaceHandleRepresentative(interfaceName)
+	let implementers = NameRoster.create(0)
 	implementers.push(recorded)
 
 	for service in serviceCompanionRoster(signatures) 'eachService'
@@ -2252,7 +2135,7 @@ module function interfaceMessageRepresentative(signatures ProgramSignatures, int
 end 'interfaceMessageRepresentative'
 
 function copiedPayloads(payloads PayloadFieldArray) returns PayloadFieldArray
-	var copy = PayloadFieldArray.create(payloads.count(), zeroed: false)
+	let copy = PayloadFieldArray.create(payloads.count(), zeroed: false)
 
 	for field in payloads 'eachField'
 		copy.push(field)

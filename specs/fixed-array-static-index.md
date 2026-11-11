@@ -53,7 +53,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	v.set(2, value: 33)
 	return v.get(2)
 end 'main'
@@ -71,7 +71,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	var i = 0 as Int
 	while i < 4 'fill'
 		try v.set(i as ElementIndex, value: i * 11) otherwise panic("test invariant: set OOB")
@@ -97,7 +97,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(0, value: 7)
 	return v.get(0)
 end 'main'
@@ -114,7 +114,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	var i = 0 as Int
 	while i < 3 'fill'
 		try v.set(i as ElementIndex, value: 4) otherwise panic("test invariant: set OOB")
@@ -139,7 +139,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	for i in 0 upto 4 'fill'
 		v.set(i, value: (i as Int) * 11)
 	end 'fill'
@@ -163,7 +163,7 @@ typealias Vec4 = FixedArray with 4 Int
 typealias Slot = int(0 to 3) implements ElementIndex
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	var total = 0 as Int
 	for i in 0 upto 10 'each'
 		if i < 4 'inside'
@@ -186,7 +186,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	for i in 0 upto countof(Vec4) 'fill'
 		v.set(i, value: 5)
 	end 'fill'
@@ -209,7 +209,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	v.set(2, value: 5)
 	v.set(3, value: 6)
 	var total = 0 as Int
@@ -251,7 +251,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	var total = 0 as Int
 	for i in 0 to 4 'sum'
 		total = total + (try v.get(i) otherwise 100)
@@ -293,7 +293,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	let slot = 3
 	v.set(slot, value: 19)
 	return v.get(slot)
@@ -310,7 +310,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	v.set(1 + 1, value: 23)
 	return v.get(4 - 2)
 end 'main'
@@ -327,7 +327,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	v.set(3, value: 44)
 	return v.get(3)
 end 'main'
@@ -348,7 +348,7 @@ function runtimeIndex(i ElementIndex) returns ElementIndex
 end 'runtimeIndex'
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	v.set(0, value: 7)
 	return try v.get(runtimeIndex(0)) otherwise 0
 end 'main'
@@ -370,7 +370,7 @@ function read(v Vec4, at Slot) returns Int
 end 'read'
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	v.set(3, value: 44)
 	return read(v, at: 3)
 end 'main'
@@ -392,7 +392,7 @@ function read(v Vec4, at Wide) returns Int
 end 'read'
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	let result = read(v, at: 4)
 	print("{result}\n")
 	return 0
@@ -483,7 +483,7 @@ function runtimeIndex(i ElementIndex) returns ElementIndex
 end 'runtimeIndex'
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	let result = try v.get(runtimeIndex(4)) otherwise -1
 	print("{result}\n")
 	return 0
@@ -521,7 +521,7 @@ function runtimeIndex(i ElementIndex) returns ElementIndex
 end 'runtimeIndex'
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	let result = try v.get(runtimeIndex(9)) otherwise -2
 	print("{result}\n")
 	return 0
@@ -577,7 +577,7 @@ function runtimeIndex(i ElementIndex) returns ElementIndex
 end 'runtimeIndex'
 
 function main() returns ExitCode
-	var v = Vec2.create()
+	let v = Vec2.create()
 	v.set(0, value: 5)
 	try v.set(runtimeIndex(9), value: 99) otherwise 'oob'
 		return v.get(0) + 60
@@ -598,7 +598,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var xs = IntArray.create(0)
+	let xs = IntArray.create(0)
 	let result = try xs.get(0) otherwise -3
 	print("{result}\n")
 	return 0
@@ -620,7 +620,7 @@ function slotOf(v Vec3, at Int) returns Int
 end 'slotOf'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(2, value: 21)
 	return slotOf(v, at: 2)
 end 'main'
@@ -640,7 +640,7 @@ function whichSlot() returns Int
 end 'whichSlot'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	try v.set(whichSlot() as ElementIndex, value: 18) otherwise panic("test invariant: set OOB")
 	return (try v.get(whichSlot() as ElementIndex) otherwise 0) as ExitCode
 end 'main'
@@ -661,7 +661,7 @@ function middle(v Vec3) returns Int
 end 'middle'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(1, value: 26)
 	return middle(v)
 end 'main'
@@ -678,7 +678,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec5 = FixedArray with 5 Int
 
 function main() returns ExitCode
-	var v = Vec5.create()
+	let v = Vec5.create()
 	v.set(0, value: 1)
 	v.set(1, value: 2)
 	v.set(2, value: 4)
@@ -704,7 +704,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteVec4 = FixedArray with 4 Byte
 
 function main() returns ExitCode
-	var v = ByteVec4.create()
+	let v = ByteVec4.create()
 	v.set(0, value: 200)
 	v.set(3, value: 55)
 	let a = v.get(0)
@@ -724,7 +724,7 @@ here cross a byte boundary.
 typealias Bits16 = FixedArray with 16 bool
 
 function main() returns ExitCode
-	var v = Bits16.create()
+	let v = Bits16.create()
 	v.set(0, value: true)
 	v.set(7, value: true)
 	v.set(8, value: true)
@@ -766,7 +766,7 @@ typealias Float = float(f64.min to f64.max)
 typealias Vec2F = FixedArray with 2 Float
 
 function main() returns ExitCode
-	var v = Vec2F.create()
+	let v = Vec2F.create()
 	v.set(0, value: 2.5)
 	v.set(1, value: 4.25)
 	let a = v.get(0)

@@ -89,7 +89,7 @@ typealias Age = int(0 to 150)
 typealias Ages = Map with (String, Age)
 
 function main() returns ExitCode
-	var ages = Ages.create()
+	let ages = Ages.create()
 	ages.upsert("ada", value: 36)
 	let known = try ages.get("ada") otherwise 0
 	let unknown = try ages.get("bob") otherwise 0
@@ -224,7 +224,7 @@ name.push(1)                  // E3207: 'push' needs a writable receiver; 'name'
 
 ```maxon
 var a = Point.create(1)
-var b = a
+let b = a
 b.x = 2
 print("{a.x}\n")              // E3102: use of moved value 'a'
 ```
@@ -365,8 +365,8 @@ These rules cover the mistakes code generators make most often when writing Maxo
 4. **Construct records through a static factory.** `Point{x: 1}` is legal only inside `Point`'s own body;
    elsewhere call `Point.create(1)`.
 
-5. **Prefer `let`.** A `var` that is never reassigned or mutated is an error. Every declared name must be
-   used; write `_` for one you do not need.
+5. **Prefer `let`.** A `var` that is never reassigned is an error, even when it is written through (`push`, a
+   field store). Every declared name must be used; write `_` for one you do not need.
 
 6. **Handle every throwing call.** Write `try call() otherwise <fallback>`, `otherwise panic("why")` when
    failure is impossible, or a bare `try` inside a function that `throws` the same error type.

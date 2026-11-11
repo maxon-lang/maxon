@@ -50,7 +50,7 @@ typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
-	var m = ColorMap.create()
+	let m = ColorMap.create()
 	try m.insert(Color.red, value: 10) otherwise ignore
 	try m.insert(Color.green, value: 20) otherwise ignore
 	try m.insert(Color.blue, value: 30) otherwise ignore
@@ -73,7 +73,7 @@ end 'HttpStatus'
 typealias StatusMap = Map with (HttpStatus, String)
 
 function main() returns ExitCode
-	var m = StatusMap.create()
+	let m = StatusMap.create()
 	try m.insert(HttpStatus.ok, value: "OK") otherwise ignore
 	try m.insert(HttpStatus.notFound, value: "Not Found") otherwise ignore
 	if m.contains(HttpStatus.notFound) 'check'
@@ -98,7 +98,7 @@ typealias Int = int(i64.min to i64.max)
 typealias PlanetMap = Map with (Planet, Int)
 
 function main() returns ExitCode
-	var m = PlanetMap.create()
+	let m = PlanetMap.create()
 	try m.insert(Planet.earth, value: 1) otherwise ignore
 	try m.insert(Planet.mars, value: 2) otherwise ignore
 	try m.insert(Planet.venus, value: 3) otherwise ignore
@@ -188,7 +188,7 @@ typealias Int = int(i64.min to i64.max)
 typealias GradeMap = Map with (Grade, Int)
 
 function main() returns ExitCode
-	var m = GradeMap.create()
+	let m = GradeMap.create()
 	try m.insert(Grade.excellent, value: 100) otherwise ignore
 	try m.insert(Grade.good, value: 85) otherwise ignore
 	let result = try m.get(Grade.excellent) otherwise 0
@@ -211,7 +211,7 @@ typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
-	var m = ColorMap.create()
+	let m = ColorMap.create()
 	try m.insert(Color.red, value: 10) otherwise ignore
 	try m.insert(Color.green, value: 20) otherwise ignore
 	_ = m.remove(Color.red)
@@ -250,7 +250,7 @@ function getCategoryLevel(categoryLevels CategoryLevelMap, category LogCategory)
 end 'getCategoryLevel'
 
 function main() returns ExitCode
-	var categoryLevels = CategoryLevelMap.create()
+	let categoryLevels = CategoryLevelMap.create()
 	setCategoryLevel(categoryLevels, category: LogCategory.compiler, level: LogLevel.INFO)
 	setCategoryLevel(categoryLevels, category: LogCategory.lexer, level: LogLevel.ERROR)
 	let compilerLevel = getCategoryLevel(categoryLevels, category: LogCategory.compiler)
@@ -284,7 +284,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var m = [Color.red: 10 as Count, Color.green: 20 as Count, Color.blue: 30 as Count]
+	let m = [Color.red: 10 as Count, Color.green: 20 as Count, Color.blue: 30 as Count]
 	let redVal = try m.get(Color.red) otherwise 0
 	m.upsert(Color.red, value: redVal + 1)
 	let result = try m.get(Color.red) otherwise 0

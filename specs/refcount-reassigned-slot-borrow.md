@@ -48,7 +48,7 @@ leak gate against the reciprocal over-retain.
 Reading a by-reference parameter, reassigning it, then using the pre-read borrow.
 ```maxon
 function swapIn(label mutable String) returns ExitCode
-	view old = label
+	let old = label
 	label = "second label, long enough to live on the heap {40 + 2}"
 	return 1 if old.startsWith("first") else 0
 end 'swapIn'
@@ -84,8 +84,8 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var o = Outer.create(Inner.create(6))
-	view old = o.inner
+	let o = Outer.create(Inner.create(6))
+	let old = o.inner
 	o.inner = Inner.create(9)
 	return old.tag
 end 'main'
@@ -98,7 +98,7 @@ end 'main'
 Loading one by-reference parameter read-only while a DIFFERENT one is reassigned stays balanced.
 ```maxon
 function swapOther(la String, lb mutable String) returns ExitCode
-	view a = la
+	let a = la
 	lb = "replacement label, long enough to live on the heap {40 + 2}"
 	return 3 if a.startsWith("third") else 0
 end 'swapOther'
@@ -122,7 +122,7 @@ function churn(label mutable String) returns Int
 	var sum = 0 as Int
 	var i = 0 as Int
 	while i < 3 'loop'
-		view old = label
+		let old = label
 		label = "label number {i + 1}, long enough to live on the heap"
 		if old.contains("number {i}") 'seen'
 			sum = sum + 1

@@ -72,7 +72,7 @@ function memoized(cache MemoMap, n Count) returns Count
 end 'memoized'
 
 function main() returns ExitCode
-	var cache = MemoMap.create()
+	let cache = MemoMap.create()
 	var sum = 0 as Count
 	// Round 0 misses (inserts each key); rounds 1-2 HIT (early-return path).
 	// Each memoized() returns n+1 for n in 0..2, every round -> sum = 3 * 6 = 18.

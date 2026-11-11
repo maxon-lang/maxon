@@ -109,7 +109,7 @@ reallocates the array stays valid.
 typealias Labels = Array with String
 
 function main() returns ExitCode
-	var arr = Labels.create(0)
+	let arr = Labels.create(0)
 	arr.push("growing element number {40 + 2}")
 	for s in arr 'l'
 		if arr.count() < 3 'grow'
@@ -155,8 +155,8 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var arr = ["first-{1}", "second-{2}", "third-{3}"]
-	var h = Holder.create(arr)
+	let arr = ["first-{1}", "second-{2}", "third-{3}"]
+	let h = Holder.create(arr)
 	var seen = 0 as Tally
 	for x in arr 'each'
 		h.grow()
@@ -188,7 +188,7 @@ function wipe(pending mutable Lines)
 end 'wipe'
 
 function main() returns ExitCode
-	var pending = Lines.create(0)
+	let pending = Lines.create(0)
 	pending.push("hello world this is a long string for heap allocation {40 + 2}")
 	for it in pending 'scan'
 		wipe(pending)

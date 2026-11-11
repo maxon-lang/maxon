@@ -616,7 +616,7 @@ export type Holder
 end 'Holder'
 
 export function makeHolder() returns Holder
-	var xs = ItemArray.create(0)
+	let xs = ItemArray.create(0)
 	xs.push(Item.create(7))
 	return Holder.create(xs)
 end 'makeHolder'
@@ -931,7 +931,7 @@ export type Holder
 end 'Holder'
 
 export function makeHolder() returns Holder
-	var xs = ItemArray.create(0)
+	let xs = ItemArray.create(0)
 	xs.push(Item.create(itemValue(Item.create(7)) as Integer))
 	return Holder.create(xs)
 end 'makeHolder'

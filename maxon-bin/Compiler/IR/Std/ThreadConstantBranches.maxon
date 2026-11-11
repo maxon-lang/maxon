@@ -137,15 +137,15 @@ module function threadConstantBranchesInFunc(module StdModule, func IrFunction, 
 		return
 	end 'noCandidate'
 
-	var analysis = FunctionAnalysis.gather(module, func: func, scratch: scratch)
+	let analysis = FunctionAnalysis.gather(module, func: func, scratch: scratch)
 	let bound = blockArgIdBound(module, func: func)
-	var argOwner = FixedValueIdArray.create(bound)
-	var argSlot = FixedValueIdArray.create(bound)
+	let argOwner = FixedValueIdArray.create(bound)
+	let argSlot = FixedValueIdArray.create(bound)
 
 	var admittedCount = 0 as ThreadedSiteCount
 
 	for index in 0 upto scratch.candidates.count() 'eachCandidate'
-		var candidate = try scratch.candidates.get(index) otherwise panic("threadConstantBranches: candidates.get OOB at {index}")
+		let candidate = try scratch.candidates.get(index) otherwise panic("threadConstantBranches: candidates.get OOB at {index}")
 
 		if admit(module, func: func, analysis: analysis, candidate: candidate) 'admitted'
 			candidate.admitted = true
@@ -228,10 +228,10 @@ type FunctionAnalysis
 	export var branch as StdBranchOperands
 
 	static function gather(module StdModule, func IrFunction, scratch ThreadScratch) returns FunctionAnalysis
-		var def = StdFoldableDef.create()
+		let def = StdFoldableDef.create()
 		let constMap = collectConstValues(module, opIndices: module.liveOpIndices(func), def: def)
-		var tree = StdDominatorTree.build(module, func: func)
-		var valueUses = StdValueUseSet.createTrackingRepeats()
+		let tree = StdDominatorTree.build(module, func: func)
+		let valueUses = StdValueUseSet.createTrackingRepeats()
 		collectFunctionValueUses(module, func: func, referenced: valueUses)
 		return Self{constMap: constMap, tree: tree, stamps: DominatorStamps.build(tree), valueUses: valueUses, positionById: module.blockIndexById(func), refusals: scratch.tally.threadRefusals, branch: scratch.branch}
 	end 'gather'
@@ -389,7 +389,7 @@ end 'candidateOwning'
 // must sit in a block the kept target dominates, or be an arg on the candidate's own edges. Any other
 // read refuses the candidate.
 function refuseEscapingReads(module StdModule, func IrFunction, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner FixedValueIdArray)
-	var reads = StdValueUseSet.createRecordingIds()
+	let reads = StdValueUseSet.createRecordingIds()
 
 	for position in 0 upto func.blockRefs.count() 'eachBlock'
 		let block = module.blockAtPosition(func, position: position)
@@ -452,8 +452,8 @@ end 'refuseIfOwnedReadEscapes'
 function applyAdmitted(module StdModule, func IrFunction, origins DerivedOrigins, analysis FunctionAnalysis, candidates ThreadCandidateArray, argOwner FixedValueIdArray, argSlot FixedValueIdArray) returns ThreadedSiteCount
 	// Seeded ONCE, before any rewrite, past every id the function uses; each duplicated compare mints
 	// its result from here.
-	var minter = ValueMinter.resuming(nextFreeValueId(module, func: func))
-	var doomedCompares = StdValueUseSet.create()
+	let minter = ValueMinter.resuming(nextFreeValueId(module, func: func))
+	let doomedCompares = StdValueUseSet.create()
 	var applied = 0 as ThreadedSiteCount
 
 	for index in 0 upto candidates.count() 'eachCandidate'
@@ -493,14 +493,14 @@ end 'applyAdmitted'
 // earlier rewrites in the same function and is still exact — see the header for why no rewrite
 // changes an admitted candidate's predecessors.
 function threadOne(module StdModule, func IrFunction, origins DerivedOrigins, analysis FunctionAnalysis, candidate ThreadCandidate, index ElementIndex, argOwner FixedValueIdArray, argSlot FixedValueIdArray, minter ValueMinter)
-	var join = module.getBlock(candidate.blockRef)
-	view dropped = module.blockAtPosition(func, position: analysis.positionOf(candidate.droppedTarget))
+	let join = module.getBlock(candidate.blockRef)
+	let dropped = module.blockAtPosition(func, position: analysis.positionOf(candidate.droppedTarget))
 	let droppedTakesArgs = dropped.blockArgs.count() != 0
-	view argsToDropped = edgeArgsTo(join, targetId: candidate.droppedTarget, takesArgs: droppedTakesArgs)
+	let argsToDropped = edgeArgsTo(join, targetId: candidate.droppedTarget, takesArgs: droppedTakesArgs)
 
 	for k in 0 upto analysis.tree.pred.degree(candidate.position as CsrIndex) 'eachPred'
 		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k)
-		var pred = module.blockAtPosition(func, position: predPosition)
+		let pred = module.blockAtPosition(func, position: predPosition)
 		let incoming = incomingArgAt(soleEdge(pred), k: candidate.testedSlot as ValueId, pred: pred, target: join)
 
 		if analysis.constMap.contains(incoming) 'decidedAtTheEdge'
@@ -535,8 +535,8 @@ end 'edgeArgsTo'
 // in C's then/else orientation with the dropped target's arm pointing there and the other arm at C, and
 // a fresh edge column — the edge to C it had, plus the edge to the dropped target when that takes args.
 function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandidate, index ElementIndex, incoming ValueId, argsToDropped ValueIdArray, droppedTakesArgs bool, argOwner FixedValueIdArray, argSlot FixedValueIdArray, origins DerivedOrigins, minter ValueMinter)
-	var predBlock = pred
-	view argsToJoin = soleEdge(predBlock).argIds
+	let predBlock = pred
+	let argsToJoin = soleEdge(predBlock).argIds
 
 	// The duplicated test answers to the statement the original compare did, and stands in for its result.
 	module.spans.current = module.spans.at(candidate.compareOpIdx)
@@ -549,7 +549,7 @@ function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandi
 	let elseId = candidate.droppedTarget if keptIsThen else candidate.blockId
 	try module.ops.set(predBlock.terminatorIndex(), value: StdOp.condBranch(condId, thenBlockId: thenId, elseBlockId: elseId)) otherwise panic("threadConstantBranches: ops.set OOB at terminator index {predBlock.terminatorIndex()}")
 
-	var edges = BranchEdgeArray.create(0)
+	let edges = BranchEdgeArray.create(0)
 	edges.push(BranchEdge.create(candidate.blockId, argIds: argsToJoin))
 
 	if droppedTakesArgs 'droppedTakesArgs'
@@ -563,7 +563,7 @@ end 'duplicateTestInto'
 // to that slot; anything else — including another join's block arg — is defined in a block dominating
 // C, hence P, and passes through.
 function substituteJoinArgs(argsToDropped ValueIdArray, incoming ValueIdArray, index ElementIndex, argOwner FixedValueIdArray, argSlot FixedValueIdArray) returns ValueIdArray
-	var substituted = ValueIdArray.create(0)
+	let substituted = ValueIdArray.create(0)
 
 	for argId in argsToDropped 'eachArg'
 		if not isOwnedByACandidate(argId, argOwner: argOwner) or candidateOwning(argId, argOwner: argOwner) != index 'definedAboveTheJoin'
@@ -584,10 +584,10 @@ end 'substituteJoinArgs'
 function dropTestedSlots(module StdModule, func IrFunction, candidates ThreadCandidateArray, applied ThreadedSiteCount)
 	let refByBlockId = buildBlockIdIndex(module, func: func)
 	let bound = blockArgIdBound(module, func: func)
-	var kept = flagColumn(bound)
+	let kept = flagColumn(bound)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		view block = module.getBlock(blockRef)
+		let block = module.getBlock(blockRef)
 
 		for arg in block.blockArgs 'eachArg'
 			setFlag(kept, v: arg.valueId)

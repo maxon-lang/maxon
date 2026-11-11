@@ -32,7 +32,7 @@ export type WasmFlowPlan
 
 		let tree = StdDominatorTree.build(module, func: func)
 		let order = tree.reverseOrder
-		var rpoIndex = BlockPositionColumn.create(blockCount)
+		let rpoIndex = BlockPositionColumn.create(blockCount)
 
 		for orderIndex in 0 upto order.count() 'rank'
 			let position = try order.get(orderIndex) otherwise panic("WasmFlowPlan.build: order.get OOB at {orderIndex}")
@@ -40,8 +40,8 @@ export type WasmFlowPlan
 		end 'rank'
 
 		let stamps = DominatorStamps.build(tree)
-		var forwardInEdges = IndexColumn.create(blockCount)
-		var loopHeader = BoolArray.create(blockCount)
+		let forwardInEdges = IndexColumn.create(blockCount)
+		let loopHeader = BoolArray.create(blockCount)
 		var reducible = true
 
 		for tail in order 'eachReachable'
@@ -66,8 +66,8 @@ export type WasmFlowPlan
 			end 'eachSuccessor'
 		end 'eachReachable'
 
-		var labelled = BoolArray.create(blockCount)
-		var subtreeSize = BlockPositionColumn.create(blockCount, zeroed: false)
+		let labelled = BoolArray.create(blockCount)
+		let subtreeSize = BlockPositionColumn.create(blockCount, zeroed: false)
 		subtreeSize.growFilled(blockCount, value: 1 as ElementIndex)
 
 		for position in order 'eachMerge'
@@ -102,7 +102,7 @@ export type WasmFlowPlan
 			return blockCount > 1
 		end 'notOneBlock'
 
-		var successors = BlockIdArray.create(0)
+		let successors = BlockIdArray.create(0)
 		collectStdBlockSuccessorIds(module, block: module.blockAtPosition(func, position: StdEntryBlockPosition), out: successors)
 		return successors.count() > 0
 	end 'branches'
@@ -181,7 +181,7 @@ export type WasmFlowState
 	export var taskTo as ElementIndex
 
 	export static function create(blockCount ElementIndex) returns WasmFlowState
-		var state = Self{level: 0, blockLevel: Wasm32IndexArray.create(0), loopLevel: Wasm32IndexArray.create(0), taskKinds: WasmFlowTaskArray.create(0), taskFroms: BlockPositionColumn.create(0), taskTos: BlockPositionColumn.create(0), task: WasmFlowTask.tree, taskFrom: 0, taskTo: 0}
+		let state = Self{level: 0, blockLevel: Wasm32IndexArray.create(0), loopLevel: Wasm32IndexArray.create(0), taskKinds: WasmFlowTaskArray.create(0), taskFroms: BlockPositionColumn.create(0), taskTos: BlockPositionColumn.create(0), task: WasmFlowTask.tree, taskFrom: 0, taskTo: 0}
 		state.blockLevel.growFilled(blockCount, value: 0 as Wasm32Index)
 		state.loopLevel.growFilled(blockCount, value: 0 as Wasm32Index)
 		return state

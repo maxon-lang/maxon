@@ -61,7 +61,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push(42)
 	let v = try b.items.get(0) otherwise 0
 	return v
@@ -90,7 +90,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push(42)
 	let v = try b.items.get(0) otherwise 0
 	return v
@@ -114,7 +114,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var pre = IntArray.create(0)
+	let pre = IntArray.create(0)
 	pre.push(7)
 	let b = Bag.createWith(pre)
 	let v = try b.items.get(0) otherwise 0
@@ -139,8 +139,8 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var a = Bag.create()
-	var b = Bag.create()
+	let a = Bag.create()
+	let b = Bag.create()
 	a.items.push(1)
 	a.items.push(2)
 	b.items.push(9)
@@ -342,7 +342,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.createWithTotal(5)
+	let b = Bag.createWithTotal(5)
 	b.items.push(10)
 	return b.total + (b.items.count() as Integer)
 end 'main'
@@ -583,7 +583,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	b.add(4)
 	b.add(9)
 	return b.size()
@@ -627,7 +627,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPairs = Pairs with (Integer, Integer)
 
 function main() returns ExitCode
-	var p = IntPairs.create()
+	let p = IntPairs.create()
 	p.add(1, value: 5)
 	p.add(2, value: 6)
 	p.add(3, value: 7)
@@ -658,7 +658,7 @@ type Basket uses Element
 	end 'create'
 
 	static function of(first Element, second Element) returns Self
-		var result = Self{}
+		let result = Self{}
 		result.add(first)
 		result.add(second)
 		return result
@@ -719,7 +719,7 @@ end 'Pairs'
 typealias StrIntPairs = Pairs with (String, Integer)
 
 function main() returns ExitCode
-	var p = StrIntPairs.create()
+	let p = StrIntPairs.create()
 	p.add("alpha", value: 1)
 	p.add("beta", value: 2)
 	return p.size()
@@ -761,7 +761,7 @@ end 'Pairs'
 typealias IntStrPairs = Pairs with (Integer, String)
 
 function main() returns ExitCode
-	var p = IntStrPairs.create()
+	let p = IntStrPairs.create()
 	p.add(1, value: "alpha")
 	p.add(2, value: "beta")
 	p.add(3, value: "gamma")
@@ -803,7 +803,7 @@ end 'Pairs'
 typealias StrStrPairs = Pairs with (String, String)
 
 function main() returns ExitCode
-	var p = StrStrPairs.create()
+	let p = StrStrPairs.create()
 	p.add("a", value: "alpha")
 	p.add("b", value: "beta")
 	return p.size()

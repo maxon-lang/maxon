@@ -112,7 +112,7 @@ function largestAcceptedSegmentNameBytes() returns BytePos
 	var accepted = 0 as BytePos
 
 	while name.byteLength() <= SegmentProbeMostBytes 'eachLength'
-		var segment = try SharedSegment.publish(name, bytes: SegmentBytes) otherwise break
+		let segment = try SharedSegment.publish(name, bytes: SegmentBytes) otherwise break
 
 		segment.close()
 		accepted = name.byteLength()
@@ -138,7 +138,7 @@ function segmentNameProblem(prefix String) returns String
 		return "{worstCase} is {worstCase.byteLength()} bytes and the shared-memory library accepts a segment name of at most {limit}"
 	end 'tooLong'
 
-	var segment = try SharedSegment.publish(worstCase, bytes: SegmentBytes) otherwise (e) 'refused'
+	let segment = try SharedSegment.publish(worstCase, bytes: SegmentBytes) otherwise (e) 'refused'
 		return "the shared-memory library refused the worst-case name {worstCase}: {e.name}"
 	end 'refused'
 
@@ -218,7 +218,7 @@ function hostSpellingProblem() returns String
 	let osWord = String.from(osCanonicalName(target.os))
 	let spelled = targetToString(target)
 	let expectedTriple = "{String.from(cpuCanonicalName(target.cpu))}{TripleSeparator}{osWord}"
-	var hosts = TargetArray.create(0)
+	let hosts = TargetArray.create(0)
 	hosts.push(target)
 
 	if spelled != expectedTriple or hosts.count() != 1 or executableExtension(target.os) != hostExecutableExtension() 'targetMisspelled'
@@ -232,7 +232,7 @@ function hostSpellingProblem() returns String
 end 'hostSpellingProblem'
 
 function distinctProblem() returns String
-	var seen = NameSet.create()
+	let seen = NameSet.create()
 
 	for _ in 0 upto MintCount 'eachMint'
 		let name = scratchNameFor(SnippetStem)

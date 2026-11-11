@@ -110,9 +110,9 @@ export type CarriedValues
 	var differs as FixedBoolArray
 
 	export static function create(bound ValueId) returns CarriedValues
-		var seen = FixedBoolArray.create(bound)
-		var only = FixedValueIdArray.create(bound)
-		var differs = FixedBoolArray.create(bound)
+		let seen = FixedBoolArray.create(bound)
+		let only = FixedValueIdArray.create(bound)
+		let differs = FixedBoolArray.create(bound)
 		return Self{seen: seen, only: only, differs: differs}
 	end 'create'
 
@@ -195,10 +195,10 @@ type FeedTriggers
 	var next as FixedValueIdArray
 
 	static function create(pairs PhiOperandPairs, bound ValueId) returns FeedTriggers
-		var head = FixedValueIdArray.create(bound)
-		var next = FixedValueIdArray.create(pairs.count())
+		let head = FixedValueIdArray.create(bound)
+		let next = FixedValueIdArray.create(pairs.count())
 
-		var triggers = Self{head: head, next: next}
+		let triggers = Self{head: head, next: next}
 
 		// A slot whose incoming value is AT OR ABOVE the block-arg id space is fed by an op result
 		// or a parameter. That value can never fold, so no fold will ever fire on it and the slot
@@ -260,7 +260,7 @@ module function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) re
 
 	// ONE pass over every edge slot in the function. Nothing has folded yet, so an incoming value
 	// stands for itself and no chain resolution is needed.
-	var carried = CarriedValues.create(bound)
+	let carried = CarriedValues.create(bound)
 
 	for i in 0 upto pairs.count() 'eachSlot'
 		carried.note(pairs.argAt(i), incoming: pairs.incomingAt(i))
@@ -275,12 +275,12 @@ module function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) re
 	// accumulator merges a different value on each path, every time). It stops before the feeder
 	// index, the user index, the fold chain and the whole-function rewrite are ever allocated, which
 	// is what keeps this pass's cost on ordinary code where the old re-sweep had it.
-	var queued = FixedBoolArray.create(bound)
+	let queued = FixedBoolArray.create(bound)
 
-	var worklist = ValueIdArray.create(0)
+	let worklist = ValueIdArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		view block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
 
 		for arg in block.blockArgs 'eachArg'
 			if carried.isTrivial(arg.valueId) 'trivial'
@@ -301,15 +301,15 @@ module function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) re
 	//                      re-reading the FUNCTION.
 	//   • `parent`       — the fold chain, as a union-find column seeded with the identity.
 	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound as CsrIndex)
-	var triggers = FeedTriggers.create(pairs, bound: bound)
+	let triggers = FeedTriggers.create(pairs, bound: bound)
 
-	var parent = ValueIdArray.create(bound)
+	let parent = ValueIdArray.create(bound)
 
 	for v in 0 upto bound 'identity'
 		try parent.set(v, value: v) otherwise panic("elimTrivialBlockArgs: parent.set({v}) OOB against a column of {bound}")
 	end 'identity'
 
-	var folded = FixedBoolArray.create(bound)
+	let folded = FixedBoolArray.create(bound)
 
 	while worklist.count() > 0 'settle'
 		let arg = try worklist.pop() otherwise panic("elimTrivialBlockArgs: pop from a non-empty worklist")
@@ -339,7 +339,7 @@ module function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) re
 	// inverting it here, once, is what lets both block-arg passes hand `dropBlockArgs` the same kind of
 	// column. A polarity flag on the dropper would be one more thing the two passes could disagree
 	// about, and the slot alignment it maintains is the one thing that cannot survive a disagreement.
-	var kept = flagColumn(bound)
+	let kept = flagColumn(bound)
 
 	for v in 0 upto bound 'survivors'
 		if not isFolded(folded, v: v) 'survives'

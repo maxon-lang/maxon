@@ -287,7 +287,7 @@ let Alpha = b"alpha"
 
 function main() returns ExitCode
 	let beta = b"be"
-	var names = NameArray.create(0)
+	let names = NameArray.create(0)
 	names.push(Alpha)
 	names.push(beta)
 	var total = 0 as Count
@@ -410,7 +410,7 @@ type Tok
 end 'Tok'
 
 function main() returns ExitCode
-	var buffer = ByteArray.create(0)
+	let buffer = ByteArray.create(0)
 	buffer.push(1)
 	buffer.push(2)
 	let t = Tok.create(buffer)
@@ -640,7 +640,7 @@ end 'Tok'
 
 function main() returns ExitCode
 	let t = Tok.create(b"abc")
-	var names = NameArray.create(0)
+	let names = NameArray.create(0)
 	names.push(b"de")
 	print("{t.value.count()} {names.count()}\n")
 	return 0
@@ -736,7 +736,7 @@ error E3207: <fragment>:4:7: 'push' needs a writable receiver; 'name' is immutab
 <!-- test: a-clone-of-a-byte-literal-is-mutable -->
 ```maxon
 function main() returns ExitCode
-	var name = b"abc".clone()
+	let name = b"abc".clone()
 	name.push(100)
 	print("{name.count()}\n")
 	return 0
@@ -781,10 +781,10 @@ type Credit
 end 'Credit'
 
 function main() returns ExitCode
-	var counts = CountMap.create()
+	let counts = CountMap.create()
 	counts.upsert(b"ab", value: 1)
 	counts.upsert(b"cde", value: 2)
-	var credits = CreditArray.create(0)
+	let credits = CreditArray.create(0)
 
 	for (name, _) in counts 'eachKey'
 		credits.push(Credit.create(name))
@@ -823,10 +823,10 @@ type Credit
 end 'Credit'
 
 function main() returns ExitCode
-	var names = NameSet.create()
+	let names = NameSet.create()
 	names.insert(b"ab")
 	names.insert(b"cde")
-	var credits = CreditArray.create(0)
+	let credits = CreditArray.create(0)
 
 	for name in names 'eachElement'
 		credits.push(Credit.create(name))
@@ -857,9 +857,9 @@ typealias CountMap = Map with (ByteArray, Count)
 typealias NameSet = Set with ByteArray
 
 function main() returns ExitCode
-	var counts = CountMap.create()
+	let counts = CountMap.create()
 	counts.upsert(freeze ByteArray.create(3), value: 7)
-	var names = NameSet.create()
+	let names = NameSet.create()
 	names.insert(freeze ByteArray.create(2))
 	print("{counts.count()} {names.count()}\n")
 	return 0
@@ -1014,8 +1014,8 @@ typealias TallyMap = Map with (Tally, Tally)
 typealias TallySet = Set with Tally
 
 function main() returns ExitCode
-	var map = TallyMap.create()
-	var seen = TallySet.create()
+	let map = TallyMap.create()
+	let seen = TallySet.create()
 	let key = 4 as Tally
 	map.upsert(key, value: 5)
 	seen.insert(key)
@@ -1245,9 +1245,9 @@ typealias CodeSet = Set with Code
 typealias CodeMap = Map with (Code, Count)
 
 function main() returns ExitCode
-	var codes = [1 as Code, 2 as Code, 3 as Code]
+	let codes = [1 as Code, 2 as Code, 3 as Code].clone()
 	let members = CodeSet from codes
-	var byCode = CodeMap.create()
+	let byCode = CodeMap.create()
 
 	for code in codes 'eachCode'
 		byCode.upsert(code, value: 1)
@@ -1284,7 +1284,7 @@ function lookup(byPath NameMap, path ByteArray) returns immutable ByteArray
 end 'lookup'
 
 function copyAll(names NameArray) returns NameArray
-	var out = NameArray.create(0)
+	let out = NameArray.create(0)
 
 	for name in names 'eachName'
 		out.push(name)
@@ -1294,9 +1294,9 @@ function copyAll(names NameArray) returns NameArray
 end 'copyAll'
 
 function main() returns ExitCode
-	var names = NameArray.create(0)
+	let names = NameArray.create(0)
 	names.push(Alpha)
-	var byPath = NameMap.create()
+	let byPath = NameMap.create()
 	byPath.upsert(Alpha, value: Alpha)
 	print("{firstOf(names).count()} {lookup(byPath, path: Alpha).count()} {copyAll(names).count()}\n")
 	return 0
@@ -1321,9 +1321,9 @@ typealias PathArray = Array with immutable ByteArray
 typealias PathMap = Map with (ByteArray, PathArray)
 
 function main() returns ExitCode
-	var byName = PathMap.create()
+	let byName = PathMap.create()
 	byName.upsert(Spelling, value: PathArray.create(0))
-	var sharers = try byName.get(Spelling) otherwise panic("main: the key was just inserted")
+	let sharers = try byName.get(Spelling) otherwise panic("main: the key was just inserted")
 	sharers.push(Declaring)
 	print("{sharers.count()}\n")
 	return 0
@@ -1395,7 +1395,7 @@ function measure(sigs Sigs) returns Count
 end 'measure'
 
 function main() returns ExitCode
-	var sigs = Sigs.create()
+	let sigs = Sigs.create()
 	let size = measure(sigs)
 	print("{size} {sigs.hits}\n")
 	return 0
@@ -1458,7 +1458,7 @@ function outer(sigs Sigs, written immutable ByteArray) returns Chain
 end 'outer'
 
 function main() returns ExitCode
-	var sigs = Sigs.create()
+	let sigs = Sigs.create()
 	let chain = outer(sigs, written: b"abc")
 	print("{chain.name.count()} {sigs.hits}\n")
 	return 0
@@ -1506,7 +1506,7 @@ function reframe(table Table) returns immutable ByteArray
 end 'reframe'
 
 function main() returns ExitCode
-	var table = Table.create()
+	let table = Table.create()
 	table.intern(b"xy")
 	let name = reframe(table)
 	print("{name.count()} {table.hits}\n")
@@ -1552,7 +1552,7 @@ function lookup(sigs Sigs) returns Chain
 end 'lookup'
 
 function main() returns ExitCode
-	var sigs = Sigs.create()
+	let sigs = Sigs.create()
 	let chain = lookup(sigs)
 	print("{chain.name.count()} {sigs.hits}\n")
 	return 0
@@ -1617,7 +1617,7 @@ type Window
 end 'Window'
 
 function main() returns ExitCode
-	var names = NameList.create(0)
+	let names = NameList.create(0)
 	names.push(b"outer")
 	let first = try names.get(0) otherwise panic("main: one name was pushed")
 	let window = Window.create(first, depth: 1)
@@ -1664,10 +1664,10 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var names = NameList.create(0)
+	let names = NameList.create(0)
 	names.push(b"unit")
 	let first = try names.get(0) otherwise panic("main: one name was pushed")
-	var holder = Holder.create()
+	let holder = Holder.create()
 	holder.keep(first)
 	print("{holder.size()}\n")
 	return 0
@@ -1700,7 +1700,7 @@ function weigh(shape Shape) returns Count
 end 'weigh'
 
 function main() returns ExitCode
-	var names = NameList.create(0)
+	let names = NameList.create(0)
 	names.push(b"ab")
 	names.push(b"cde")
 	let first = try names.get(0) otherwise panic("main: two names were pushed")
@@ -1734,14 +1734,14 @@ type Func
 	end 'create'
 
 	static function namesOf(functions FuncArray) returns NameSet
-		var names = NameSet.create()
+		let names = NameSet.create()
 		let func = try functions.get(0) otherwise panic("namesOf: the caller passes a function")
 		names.insert(func.name)
 		return names
 	end 'namesOf'
 
 	static function countsOf(functions FuncArray) returns NameMap
-		var counts = NameMap.create()
+		let counts = NameMap.create()
 		let func = try functions.get(0) otherwise panic("countsOf: the caller passes a function")
 		counts.upsert(func.name, value: 1)
 		return counts
@@ -1749,7 +1749,7 @@ type Func
 end 'Func'
 
 function main() returns ExitCode
-	var functions = FuncArray.create(0)
+	let functions = FuncArray.create(0)
 	functions.push(Func.create(b"alpha"))
 	print("{Func.namesOf(functions).count()} {Func.countsOf(functions).count()}\n")
 	return 0
@@ -1839,7 +1839,7 @@ typealias NameSet = Set with ByteArray
 typealias NameArray = Array with ByteArray
 
 function main() returns ExitCode
-	var names = NameArray.create(0)
+	let names = NameArray.create(0)
 	names.push(b"ab".clone())
 	let members = NameSet from names
 	names.push(b"cd".clone())
@@ -1848,7 +1848,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:8:16: cannot call 'Set.init' with a type whose values something may write: its body keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type
 error E3207: <fragment>:8:29: 'init' needs 'arr' frozen (it calls 'insert', which takes `immutable` 'element'); the argument is mutable. Freeze it first
 ```
 
@@ -1993,7 +1992,7 @@ function originOf(files LocationArray) returns Origin
 end 'originOf'
 
 function main() returns ExitCode
-	var files = LocationArray.create(0)
+	let files = LocationArray.create(0)
 	files.push(Location.create("a.maxon"))
 
 	match originOf(files) 'origin'
@@ -2019,10 +2018,10 @@ typealias PathSet = Set with FilePath
 typealias PathCounts = Map with (FilePath, Count)
 
 function main() returns ExitCode
-	var paths = PathSet.create()
+	let paths = PathSet.create()
 	paths.insert(FilePath from "a.txt")
 
-	var counts = PathCounts.create()
+	let counts = PathCounts.create()
 	counts.upsert(FilePath from "b.txt", value: 2)
 
 	let again = FilePath from "a.txt"
@@ -2162,10 +2161,10 @@ type Token
 end 'Token'
 
 function collect(tokens TokenArray) returns LinesMap
-	var built = LinesMap.create()
+	let built = LinesMap.create()
 
 	for tok in tokens 'eachToken'
-		var lines = try built.get(tok.value) otherwise CountArray.create(0)
+		let lines = try built.get(tok.value) otherwise CountArray.create(0)
 		lines.push(1)
 		built.upsert(tok.value, value: lines)
 	end 'eachToken'
@@ -2174,7 +2173,7 @@ function collect(tokens TokenArray) returns LinesMap
 end 'collect'
 
 function main() returns ExitCode
-	var tokens = TokenArray.create(0)
+	let tokens = TokenArray.create(0)
 	tokens.push(Token.create(b"a"))
 	tokens.push(Token.create(b"a"))
 	print("{collect(tokens).count()}\n")
@@ -2307,7 +2306,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var texts = NameRoster.create(1, zeroed: false)
+	let texts = NameRoster.create(1, zeroed: false)
 	texts.push(b"a")
 	let h = Holder.create(Base.over(Frozen.of(texts)))
 	let n = h.nameOf(0)
@@ -2343,7 +2342,7 @@ type Walker
 	var blocks as BlockArray
 
 	static function create() returns Walker
-		var blocks = BlockArray.create(0)
+		let blocks = BlockArray.create(0)
 		blocks.push(Block.create(0, heat: 0))
 		return Self{current: Block.create(9, heat: 0), blocks: blocks}
 	end 'create'
@@ -2357,7 +2356,7 @@ type Walker
 	end 'branch'
 
 	function go(heat Slot)
-		var (refused, accepted) = self.branch(heat)
+		let (refused, accepted) = self.branch(heat)
 		refused.heat = refused.heat + 1
 		self.current = accepted
 		self.current = refused
@@ -2365,7 +2364,7 @@ type Walker
 end 'Walker'
 
 function main() returns ExitCode
-	var walker = Walker.create()
+	let walker = Walker.create()
 	walker.go(3)
 	print("{walker.current.id} {walker.current.heat}\n")
 	return 0
@@ -2397,7 +2396,7 @@ end 'Token'
 typealias Tokens = Array with Token
 
 function frozenCopyOf(names Names) returns immutable Names
-	var frozen = Names.create(names.count(), zeroed: false) as isolated Names
+	let frozen = Names.create(names.count(), zeroed: false) as isolated Names
 
 	for name in names 'eachName'
 		frozen.push(name)
@@ -2407,15 +2406,15 @@ function frozenCopyOf(names Names) returns immutable Names
 end 'frozenCopyOf'
 
 function main() returns ExitCode
-	var tokens = Tokens.create(0)
+	let tokens = Tokens.create(0)
 	tokens.push(Token.create(b"generateRung"))
 	tokens.push(Token.create(b"abc"))
 
-	var counts = Counts.create()
+	let counts = Counts.create()
 	counts.upsert(b"generateRung", value: 1)
 	counts.upsert(b"abc", value: 2)
 
-	var names = Names.create(0)
+	let names = Names.create(0)
 
 	for token in tokens 'eachToken'
 		names.push(token.value)
@@ -2480,7 +2479,7 @@ end 'Box'
 typealias BoxCell = SharedValue with Box
 
 function main() returns ExitCode
-	var registry = Registry.create()
+	let registry = Registry.create()
 	registry.record(HashName, identity: identityOf(HashName))
 	registry.record(OrderName, identity: identityOf(OrderName))
 	let cell = BoxCell.create(Box.create(registry.clone()))
@@ -2515,7 +2514,7 @@ function measure(tok Tok) returns Count
 end 'measure'
 
 function built() returns immutable ByteArray
-	var bytes = ByteArray.create(0) as isolated ByteArray
+	let bytes = ByteArray.create(0) as isolated ByteArray
 
 	modify bytes 'fill'
 		bytes.push(1)

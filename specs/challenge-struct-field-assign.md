@@ -28,7 +28,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(10)
+	let c = Counter.create(10)
 	c.value = 42
 	return c.value
 end 'main'
@@ -86,7 +86,7 @@ end 'Outer'
 
 function main() returns ExitCode
 	let i = Inner.create(10)
-	var o = Outer.create(i)
+	let o = Outer.create(i)
 	o.inner.x = 42
 	return o.inner.x
 end 'main'

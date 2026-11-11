@@ -110,9 +110,9 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(3) otherwise return 2
-	view a = ByteArray.init(mm)
+	let a = ByteArray.init(mm)
 	if a.count() != mm.length() 'disagree'
 		return 4
 	end 'disagree'
@@ -132,12 +132,12 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	try mm.setByte(0, value: 7) otherwise return 3
 	try mm.setByte(1, value: 9) otherwise return 3
 	try mm.setByte(2, value: 11) otherwise return 3
-	view a = ByteArray.init(mm)
+	let a = ByteArray.init(mm)
 	let v0 = try a.get(0) otherwise return 4
 	let v1 = try a.get(1) otherwise return 4
 	let v2 = try a.get(2) otherwise return 4
@@ -159,8 +159,8 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
-	var a = ByteArray.init(mm)
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let a = ByteArray.init(mm)
 	a.push(5)
 	a.push(6)
 	return a.count() as ExitCode
@@ -181,9 +181,9 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
-	var a = ByteArray.init(mm)
+	let a = ByteArray.init(mm)
 	a.push(4)
 	try mm.setByte(0, value: 8) otherwise return 3
 	if mm.length() != 3 'lengthNotShared'
@@ -207,11 +207,11 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(0, value: 20) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
-	view a = Bytes.init(mm)
+	let a = Bytes.init(mm)
 	let v0 = try a.get(0) otherwise return 4
 	let v1 = try a.get(1) otherwise return 4
 	return (v0 + v1) as ExitCode
@@ -232,10 +232,10 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
 	try mm.setLength(4) otherwise return 2
-	view a = ByteArray.init(mm)
-	view b = ByteArray.init(mm)
+	let a = ByteArray.init(mm)
+	let b = ByteArray.init(mm)
 	if a.count() != 4 'badA'
 		return 3
 	end 'badA'
@@ -259,7 +259,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	if ByteArray.init(mm).count() != 2 'badTempCount'
 		return 3
@@ -282,7 +282,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function build() returns ByteArray
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
 	try mm.setLength(2) otherwise panic("setLength failed")
 	try mm.setByte(0, value: 6) otherwise panic("setByte failed")
 	try mm.setByte(1, value: 7) otherwise panic("setByte failed")
@@ -316,11 +316,11 @@ function wrap(managed __ManagedMemory) returns ByteArray
 end 'wrap'
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(0, value: 20) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
-	view a = wrap(mm)
+	let a = wrap(mm)
 	let v0 = try a.get(0) otherwise return 4
 	let v1 = try a.get(1) otherwise return 4
 	return (v0 + v1) as ExitCode
@@ -340,12 +340,12 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	var i = 0 as Count
 	var total = 0 as Count
 	while i < 64 'spin'
-		view a = ByteArray.init(mm)
+		let a = ByteArray.init(mm)
 		total = total + a.count()
 		i = i + 1
 	end 'spin'
@@ -370,9 +370,9 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(2, elementSize: 1) otherwise return 1
-	var a = ByteArray.init(mm)
-	var b = ByteArray.init(mm)
+	let mm = try __ManagedMemory.create(2, elementSize: 1) otherwise return 1
+	let a = ByteArray.init(mm)
+	let b = ByteArray.init(mm)
 	var i = 0 as Count
 	while i < 200 'fill'
 		a.push(1)
@@ -407,7 +407,7 @@ type Holder
 end 'Holder'
 
 function build() returns Holder
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
 	try mm.setLength(2) otherwise panic("setLength failed")
 	try mm.setByte(0, value: 30) otherwise panic("setByte failed")
 	try mm.setByte(1, value: 12) otherwise panic("setByte failed")
@@ -438,10 +438,10 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var src = ByteArray.create(0)
+	let src = ByteArray.create(0)
 	src.push(1)
 	src.push(2)
-	var b = ByteArray.init(src)
+	let b = ByteArray.init(src)
 	b.push(3)
 	return (src.count() * 10 + b.count()) as ExitCode
 end 'main'
@@ -469,7 +469,7 @@ function apply(f Counter, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	let length = mm.length()
 	let r = apply(function(n Integer) gives (ByteArray.init(mm).count() as Integer) + n, x: 5)
@@ -506,7 +506,7 @@ type Container uses Element
 	end 'push'
 
 	function drain() returns Count
-		view t = ElementArray.init(self.items)
+		let t = ElementArray.init(self.items)
 		self.items = ElementArray.create(0)
 		return t.count()
 	end 'drain'
@@ -515,7 +515,7 @@ end 'Container'
 typealias StrContainer = Container with String
 
 function main() returns ExitCode
-	var c = StrContainer.create()
+	let c = StrContainer.create()
 	c.push("ab")
 	c.push("cd")
 	let n = c.drain()
@@ -546,11 +546,11 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(0, value: 20) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
-	view h = Holder.wrap(mm)
+	let h = Holder.wrap(mm)
 	let v0 = try h.bytes.get(0) otherwise return 4
 	let v1 = try h.bytes.get(1) otherwise return 4
 	return (v0 + v1) as ExitCode
@@ -575,9 +575,9 @@ enum Boom implements Error
 end 'Boom'
 
 function adoptThenThrow(fail bool) returns Integer throws Boom
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
 	try mm.setLength(2) otherwise panic("setLength failed")
-	view a = ByteArray.init(mm)
+	let a = ByteArray.init(mm)
 	if fail 'boom'
 		throw Boom.bad
 	end 'boom'
@@ -622,7 +622,7 @@ function eat(xs ByteArray, fail bool) returns Integer throws Boom
 end 'eat'
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	var total = 0 as Integer
 	var i = 0 as Count

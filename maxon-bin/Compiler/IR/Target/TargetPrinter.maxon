@@ -88,7 +88,7 @@ function printDataSection(globalData GlobalDataTable) returns String
 		return ""
 	end 'noGlobals'
 
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 	out.append("data {OpenBrace}\n")
 
 	for entry in globalData.dataSection 'each'
@@ -152,7 +152,7 @@ end 'printDataSection'
 // trampoline have no OTHER gate of ANY kind, being the one part of an emitted program that neither an
 // exit code, nor the leak gate, nor a section pin, nor a fragment can see.
 export function printTargetModule(module TargetModule, globalData GlobalDataTable, runtimeNames RuntimeFunctionNameArray, codeChunks FunctionCodeChunkArray, libraryFunctions FunctionNameSet, runtimeTier FunctionNameSet) returns String throws CompileError
-	var body = StringBuilder.create()
+	let body = StringBuilder.create()
 	let dataText = printDataSection(globalData)
 	body.append(dataText)
 
@@ -172,7 +172,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	// rather than a compile error: the check says the name will render, the skip rule renders nothing, the
 	// pin is minted without the body, and the test claiming the gate goes green for ever. An edit to
 	// the skip rule cannot bypass the refusal, because there is no second rule to bypass.
-	var rendered = FixedBoolArray.create(runtimeNames.count())
+	let rendered = FixedBoolArray.create(runtimeNames.count())
 	let chunkPositions = chunkPositionsByName(codeChunks)
 
 	for func in module.functions 'eachFunc'
@@ -274,7 +274,7 @@ end 'markNamedBy'
 // red on an unrelated edit to the test's own `main` — the same reason a printed IR body shows a branch
 // LABEL rather than a displacement. (`CodeResult.codeChunks` carries this decision on the other side.)
 function printChunkBytes(chunk FunctionCodeChunk) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("{ChunkHeaderPrefix}{String.from(chunk.funcName)} {OpenBrace}\n")
 
 	let byteCount = chunk.code.count()
@@ -317,7 +317,7 @@ function hexOffset(offset CodeOffset) returns String
 		digits = digits + 1
 	end 'tooWide'
 
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 
 	for i in 0 upto digits 'eachDigit'
 		out.append(hexDigit((((offset shr ((digits - 1 - i) * BitsPerHexDigit)) and HexDigitMask) as MachineWord)))
@@ -357,7 +357,7 @@ end 'hexDigit'
 // callers hold BYTES, and `String.from` of a one-byte array is the shortest honest route to a
 // one-character String in a language whose String is UTF-8 and whose indices are byte positions.
 function oneByteText(b MachineWord) returns String
-	var one = ByteArray.create(0)
+	let one = ByteArray.create(0)
 	one.push(b as Byte)
 	return String.from(one)
 end 'oneByteText'
@@ -453,7 +453,7 @@ end 'payloadTextNote'
 // zero bytes at the end of most notes — alignment, in a note about content. A trace tag carries no
 // terminator of its own and simply reaches its pad, which stops this for the same reason.
 function quotedPayloadText(bytes ByteArray) returns String
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 	out.append(DoubleQuoteText)
 
 	var shown = 0 as ElementIndex
@@ -671,7 +671,7 @@ typealias BlockPrintNameSet = Set with String
 // readers of one question): a second derivation of "what is this block called" is exactly how a
 // header and a jump could come to disagree.
 function buildBlockPrintNames(funcBlocks IrBlockArray) returns BlockPrintNames
-	var occurrences = BlockLabelOccurrences.create()
+	let occurrences = BlockLabelOccurrences.create()
 
 	for block in funcBlocks 'countLabels'
 		var seen = 0 as ElementIndex
@@ -683,8 +683,8 @@ function buildBlockPrintNames(funcBlocks IrBlockArray) returns BlockPrintNames
 		occurrences.upsert(block.label, value: seen + 1)
 	end 'countLabels'
 
-	var names = BlockPrintNames.create()
-	var taken = BlockPrintNameSet.create()
+	let names = BlockPrintNames.create()
+	let taken = BlockPrintNameSet.create()
 
 	for block in funcBlocks 'nameEach'
 		let shared = try occurrences.get(block.label) otherwise panic("buildBlockPrintNames: label '{String.from(block.label)}' was counted and is now unreadable")
@@ -734,7 +734,7 @@ end 'blockPrintName'
 // `buildBlockPrintNames` — NOT its raw label, which is not unique) followed by
 // its ops (and terminator) one per line, then the closing brace.
 function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch, globalData GlobalDataTable, windows InlineRangeArray) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("{FuncHeaderPrefix}{String.from(func.name)} {OpenBrace}\n")
 
 	// The function's blocks in `blockRefs` order — the same public-API walk the
@@ -766,7 +766,7 @@ end 'printTargetFunction'
 typealias ChunkPositionByName = Map with (ByteArray, ElementIndex)
 
 function chunkPositionsByName(codeChunks FunctionCodeChunkArray) returns ChunkPositionByName
-	var positions = ChunkPositionByName.create()
+	let positions = ChunkPositionByName.create()
 
 	for (iter, chunk) in codeChunks.withIterator() 'eachChunk'
 		positions.upsert(chunk.funcName, value: iter.index())
@@ -1311,7 +1311,7 @@ function formatJumpTableSlots(caseTargets BlockIdArray, names BlockPrintNames) r
 		return ""
 	end 'empty'
 
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 	var afterFirst = false
 	var runStart = 0 as ElementIndex
 	var runTarget = try caseTargets.get(0) otherwise panic("formatJumpTableSlots: caseTargets.get(0) on non-empty")

@@ -39,7 +39,7 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 			throw TlsHandshakeError.internalError
 		end 'configuration'
 
-		var session = TlsSession.create(TlsRole.server, firstRecordVersion: tlsRecordVersion)
+		let session = TlsSession.create(TlsRole.server, firstRecordVersion: tlsRecordVersion)
 
 		return Self{config: config, entropy: entropy, peer: peer, storedSession: session, phase: TlsServerPhase.awaitingClientHello, tls12: Tls12ServerFlow.create(config, entropy: entropy, peer: peer, session: session)}
 	end 'create'
@@ -65,8 +65,8 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 	end 'dispatch'
 
 	function onClientHello(raw ByteArray) throws TlsHandshakeError
-		var hello = try tlsDecodeClientHello(raw)
-		var scan = TlsExtensionScan.ofBlock(hello.extensions().clone())
+		let hello = try tlsDecodeClientHello(raw)
+		let scan = TlsExtensionScan.ofBlock(hello.extensions().clone())
 
 		let protocol = try selectProtocol(hello, scan: scan)
 
@@ -87,7 +87,7 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 		storedSession.input.changeCipherSpecAllowed = true
 		storedSession.compatibility = hello.legacySessionId().count() != 0
 
-		var choice = try negotiate(hello, scan: scan)
+		let choice = try negotiate(hello, scan: scan)
 
 		storedSession.negotiation = TlsNegotiation.accepted(choice.suite)
 		storedSession.alpn = choice.alpn
@@ -189,8 +189,8 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 	end 'chooseGroup'
 
 	function requestRetry(choice TlsServerChoice, group TlsGroupCode) throws TlsHandshakeError
-		var retryExtensions = TlsExtensionArray from [TlsExtension.selectedGroup(group), TlsExtension.selectedVersion(tlsTls13VersionCode)]
-		var hello = TlsServerHello.create(tlsLegacyVersion, random: tlsHelloRetryRequestRandom.clone(), legacySessionIdEcho: choice.sessionId, cipherSuite: choice.suite.rawValue as TlsCipherSuiteCode, compressionMethod: tlsNullCompression, extensions: TlsExtensionBlock.listed(retryExtensions))
+		let retryExtensions = TlsExtensionArray from [TlsExtension.selectedGroup(group), TlsExtension.selectedVersion(tlsTls13VersionCode)]
+		let hello = TlsServerHello.create(tlsLegacyVersion, random: tlsHelloRetryRequestRandom.clone(), legacySessionIdEcho: choice.sessionId, cipherSuite: choice.suite.rawValue as TlsCipherSuiteCode, compressionMethod: tlsNullCompression, extensions: TlsExtensionBlock.listed(retryExtensions))
 		let encoded = try tlsEncodedMessage(TlsHandshakeMessage.helloRetryRequest(hello))
 
 		try storedSession.input.requireKeyBoundary()
@@ -205,13 +205,13 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 	function acceptKeyShare(choice TlsServerChoice, share TlsKeyShare) throws TlsHandshakeError
 		let suite = choice.suite
 		let named = try TlsNamedGroup.fromRawValue(share.group) otherwise throw TlsHandshakeError.internalError
-		var secret = try entropy.secret(share.group)
+		let secret = try entropy.secret(share.group)
 		let shared = try named.sharedSecret(secret.privateKey, peerShare: share.keyExchange())
 
 		try storedSession.input.requireKeyBoundary()
 
-		var serverExtensions = TlsExtensionArray from [TlsExtension.serverKeyShare(TlsKeyShare.create(share.group, keyExchange: secret.publicKey)), TlsExtension.selectedVersion(tlsTls13VersionCode)]
-		var hello = TlsServerHello.create(tlsLegacyVersion, random: entropy.random, legacySessionIdEcho: choice.sessionId, cipherSuite: suite.rawValue as TlsCipherSuiteCode, compressionMethod: tlsNullCompression, extensions: TlsExtensionBlock.listed(serverExtensions))
+		let serverExtensions = TlsExtensionArray from [TlsExtension.serverKeyShare(TlsKeyShare.create(share.group, keyExchange: secret.publicKey)), TlsExtension.selectedVersion(tlsTls13VersionCode)]
+		let hello = TlsServerHello.create(tlsLegacyVersion, random: entropy.random, legacySessionIdEcho: choice.sessionId, cipherSuite: suite.rawValue as TlsCipherSuiteCode, compressionMethod: tlsNullCompression, extensions: TlsExtensionBlock.listed(serverExtensions))
 		let encoded = try tlsEncodedMessage(TlsHandshakeMessage.serverHello(hello))
 
 		storedSession.transcript.append(encoded)
@@ -230,7 +230,7 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 
 	function sendFlight(choice TlsServerChoice, stage Tls13HandshakeStage) throws TlsHandshakeError
 		let suite = choice.suite
-		var flight = ByteArray.create(0)
+		let flight = ByteArray.create(0)
 
 		try storedSession.emit(flight, message: TlsHandshakeMessage.encryptedExtensions(encryptedExtensions(choice)))
 
@@ -263,7 +263,7 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 	end 'sendFlight'
 
 	function encryptedExtensions(choice TlsServerChoice) returns TlsExtensionArray
-		var extensions = TlsExtensionArray.create(0)
+		let extensions = TlsExtensionArray.create(0)
 
 		if choice.acknowledgesName 'name'
 			extensions.push(TlsExtension.serverNameAcknowledgement)
@@ -275,7 +275,7 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 	end 'encryptedExtensions'
 
 	function certificateRequest() returns TlsHandshakeMessage throws TlsHandshakeError
-		var extensions = TlsExtensionArray from [TlsExtension.signatureAlgorithms(try config.requestedSchemes())]
+		let extensions = TlsExtensionArray from [TlsExtension.signatureAlgorithms(try config.requestedSchemes())]
 
 		if not config.clientAuthorities.isEmpty() 'authorities'
 			let data = try tlsAuthorityNames(config.clientAuthorities) otherwise throw TlsHandshakeError.internalError
@@ -324,7 +324,7 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 	function acceptFinished(raw ByteArray) throws TlsHandshakeError
 		let verifyData = try tlsDecodeFinished(raw, protocol: TlsProtocol.tls13)
 		let suite = try storedSession.negotiatedSuite()
-		var (handshakeSecret, clientSecret, serverSecret) = try storedSession.flightSecrets()
+		let (handshakeSecret, clientSecret, serverSecret) = try storedSession.flightSecrets()
 
 		try storedSession.requireTls13Finished(verifyData, baseKey: handshakeSecret)
 		storedSession.transcript.append(raw)
@@ -347,13 +347,13 @@ public type TlsServerHandshake implements TlsEndpoint, TlsMessageHandler
 end 'TlsServerHandshake'
 
 function tlsAuthorityNames(authorities ByteArrays) returns ByteArray throws TlsEncodeError
-	var list = ByteArray.create(0)
+	let list = ByteArray.create(0)
 
 	for name in authorities 'eachName'
 		try appendVector(list, prefix: TlsLengthPrefix.uint16, contents: name)
 	end 'eachName'
 
-	var encoded = ByteArray.create(0)
+	let encoded = ByteArray.create(0)
 	try appendVector(encoded, prefix: TlsLengthPrefix.uint16, contents: list)
 
 	return encoded

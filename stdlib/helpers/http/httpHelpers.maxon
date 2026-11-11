@@ -145,7 +145,7 @@ public function httpBuildRequest(request HttpRequest, target HttpConnectTarget) 
 		path = "{path}?{query}"
 	end 'hasQuery'
 
-	var raw = StringBuilder.create()
+	let raw = StringBuilder.create()
 	raw.append("{httpMethodToString(request.method())} {path} {HttpSentVersion}{HttpLineBreak}")
 
 	if not request.headers().has(HostHeaderName) 'addHost'
@@ -186,7 +186,7 @@ public function httpBuildResponseHead(response HttpResponse) returns String thro
 		throw HttpServerError.invalidResponse
 	end 'badReason'
 
-	var raw = StringBuilder.create()
+	let raw = StringBuilder.create()
 	raw.append("{HttpSentVersion} {response.statusCode().number()} {response.reason()}{HttpLineBreak}")
 
 	if carriesContent 'statesItsLength'
@@ -224,7 +224,7 @@ function appendHeaderLines(raw StringBuilder, headers HttpHeaders, skipping Stri
 end 'appendHeaderLines'
 
 public function httpResponseWith(code StatusCode, body String, contentType String) returns HttpResponse
-	var headers = HttpHeaders.create()
+	let headers = HttpHeaders.create()
 	headers.set(HttpContentTypeHeaderName, value: contentType)
 
 	return HttpResponse.create(code, reasonPhrase: reasonPhraseOf(code), responseHeaders: headers, responseBody: body)
@@ -390,7 +390,7 @@ public function httpParseRequestHead(head String, scheme HttpUrlScheme) returns 
 	let hostRequired = try hostRequiredBy(version)
 	let method = try knownMethodSpelled(spelledMethod)
 
-	var headers = HttpHeaders.create()
+	let headers = HttpHeaders.create()
 	try parseHeaderLines(lines, from: 1, into: headers, side: HttpMessageSide.request) otherwise throw HttpServerError.malformedRequest
 
 	if headers.has(TransferEncodingHeaderName) 'chunked'
@@ -511,7 +511,7 @@ function finalCodingIsChunked(headers HttpHeaders) returns bool
 	var finalCoding = ""
 
 	for element in codings 'eachElement'
-		var coding = withoutFieldWhitespaceEnds(element, from: 0)
+		let coding = withoutFieldWhitespaceEnds(element, from: 0)
 
 		if not coding.isEmpty() 'aCoding'
 			finalCoding = coding.toLower()
@@ -543,7 +543,7 @@ public function httpResponseStatusOf(head String) returns HttpResponseStatus thr
 
 	let codeInt = (try int.fromString(codeText) otherwise panic("httpResponseStatusOf: three decimal digits parse as an integer")) as StatusNumber
 
-	var headers = HttpHeaders.create()
+	let headers = HttpHeaders.create()
 	try parseHeaderLines(lines, from: 1, into: headers, side: HttpMessageSide.response) otherwise throw HttpError.invalidResponse
 
 	// Asked before the interim range, which holds 101: the bytes after a 101 are another protocol's,
@@ -580,7 +580,7 @@ function parseHeaderLines(lines StringArray, from ElementIndex, into HttpHeaders
 end 'parseHeaderLines'
 
 function unfoldedFieldLines(lines StringArray, from ElementIndex, side HttpMessageSide) returns StringArray throws HeaderBlockFault
-	var logical = StringArray.create(0)
+	let logical = StringArray.create(0)
 	var lineIdx = from
 
 	while lineIdx < lines.count() 'eachLine'

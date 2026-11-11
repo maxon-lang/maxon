@@ -88,7 +88,7 @@ function foldInFunc(module StdModule, func IrFunction, scratch EstablishedScratc
 		return false
 	end 'nothingToFold'
 
-	var analysis = EstablishedFunction.build(module, func: func, scratch: scratch)
+	let analysis = EstablishedFunction.build(module, func: func, scratch: scratch)
 
 	if analysis.records.count == 0 'noRecordNamed'
 		return false
@@ -143,9 +143,9 @@ type EstablishedFunction
 	var boundElsePosition as BlockPositionColumn
 
 	static function build(module StdModule, func IrFunction, scratch EstablishedScratch) returns EstablishedFunction
-		var tree = StdDominatorTree.build(module, func: func)
-		var reader = StdShapeReader.create(module, func: func)
-		var analysis = Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, byId: module.blockIndexById(func), records: RecordIndex.sized(reader.defs.valueBound()), boundHead: OptionalElementIndexColumn.absent(reader.defs.valueBound()), boundNext: OptionalElementIndexColumn.create(), boundRecord: ValueIdArray.create(0), boundElsePosition: BlockPositionColumn.create(0)}
+		let tree = StdDominatorTree.build(module, func: func)
+		let reader = StdShapeReader.create(module, func: func)
+		let analysis = Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, byId: module.blockIndexById(func), records: RecordIndex.sized(reader.defs.valueBound()), boundHead: OptionalElementIndexColumn.absent(reader.defs.valueBound()), boundNext: OptionalElementIndexColumn.create(), boundRecord: ValueIdArray.create(0), boundElsePosition: BlockPositionColumn.create(0)}
 		analysis.gather(module, func: func, scratch: scratch)
 		return analysis
 	end 'build'
@@ -230,8 +230,8 @@ type RecordIndex
 	export var count = 0 as RecordSlot
 
 	static function sized(valueBound ValueId) returns RecordIndex
-		var slotOf = FixedRecordSlotColumn.create(valueBound)
-		var tracked = FixedBoolArray.create(valueBound)
+		let slotOf = FixedRecordSlotColumn.create(valueBound)
+		let tracked = FixedBoolArray.create(valueBound)
 		return Self{slotOf: slotOf, tracked: tracked}
 	end 'sized'
 
@@ -284,8 +284,8 @@ function transferBlock(module StdModule, func IrFunction, analysis EstablishedFu
 	classifyEstablishingEdge(analysis, scratch: scratch)
 
 	// The refusal of a guard, and the error arm of a flag test, learn nothing.
-	view thenEdge = scratch.edge if scratch.edge.establishesOnThen else scratch.plainEdge
-	view elseEdge = scratch.plainEdge if scratch.edge.establishesOnThen else scratch.edge
+	let thenEdge = scratch.edge if scratch.edge.establishesOnThen else scratch.plainEdge
+	let elseEdge = scratch.plainEdge if scratch.edge.establishesOnThen else scratch.edge
 	let thenMoved = scratch.state.meet(thenPosition, edge: thenEdge)
 	let elseMoved = scratch.state.meet(elsePosition, edge: elseEdge)
 	return thenMoved or elseMoved
@@ -384,7 +384,7 @@ end 'storeKeepsEveryFact'
 // on the bounded accessor `runBlockOps` remembered what that accessor's success proves. Any other test
 // establishes nothing on either arm. `scratch.branch` holds the terminator and `reader.arith` its compare.
 function classifyEstablishingEdge(analysis EstablishedFunction, scratch EstablishedScratch)
-	var reader = analysis.reader
+	let reader = analysis.reader
 	let condId = scratch.branch.condId
 
 	if classifyManagedGuard(reader, condId: condId, out: scratch.guard) 'aGuard'
@@ -484,18 +484,18 @@ end 'closingGuardOf'
 // effect. `reader.defs` is asked only about ids no round has removed: an op index it holds for a removed
 // id names an orphan.
 function retireGuardOperands(module StdModule, func IrFunction, reader StdShapeReader, scratch EstablishedScratch)
-	var doomedEver = StdValueUseSet.create()
-	var frontier = StdValueUseSet.createRecordingIds()
-	var next = StdValueUseSet.createRecordingIds()
+	let doomedEver = StdValueUseSet.create()
+	let frontier = StdValueUseSet.createRecordingIds()
+	let next = StdValueUseSet.createRecordingIds()
 
 	for i in 0 upto scratch.seeds.insertedIdCount() 'eachSeed'
 		frontier.insert(scratch.seeds.insertedIdAt(i))
 	end 'eachSeed'
 
 	while frontier.insertedIdCount() != 0 'eachRound'
-		var referenced = StdValueUseSet.create()
+		let referenced = StdValueUseSet.create()
 		collectFunctionValueUses(module, func: func, referenced: referenced)
-		var doomed = StdValueUseSet.create()
+		let doomed = StdValueUseSet.create()
 		next.clear()
 
 		for i in 0 upto frontier.insertedIdCount() 'eachCandidate'
@@ -505,7 +505,7 @@ function retireGuardOperands(module StdModule, func IrFunction, reader StdShapeR
 				continue
 			end 'stillReadOrNotAnOp'
 
-			view op = module.getOp(reader.defs.definingOp(valueId))
+			let op = module.getOp(reader.defs.definingOp(valueId))
 
 			if not op.rawValue.isPure and not reader.loadDefining(valueId) 'anEffect'
 				continue

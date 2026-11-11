@@ -54,7 +54,7 @@ that is the defect this block exists to catch.**
 <!-- MmTrace -->
 ```maxon
 function main() returns ExitCode
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("ab")
 	sb.append("cd")
 	let s = sb.build()
@@ -249,57 +249,6 @@ end 'main'
 
 ```
 
-<!-- test: module-let-scalar-struct-costs-no-allocation -->
-A module-scope `let` holding a struct of scalars is a constant like any other: every field is decided when
-the program is compiled, nothing about it can change while the program runs, and so it must cost no
-memory-manager event. The block is EMPTY.
-
-⭐ **THIS SHAPE CANNOT BE MARKED THE WAY THE ARRAYS ABOVE ARE, AND THAT IS WHY IT IS PINNED SEPARATELY.**
-An `Array`'s immortality is a sentinel in its own `capacity@16`, so `emitRecordIsImmortal` reads a slot the
-record already has. A user struct has no such slot — offset 16 is whatever the author declared there, and a
-test that read it would be comparing a field against a sentinel. The mark for a record of arbitrary shape
-has to live OUTSIDE the record, in the allocation header every managed box is addressed through, which for
-image data costs bytes in `.rdata` and nothing at run time because there is no allocator on that path.
-
-Built at run time rather than imaged, the single global below would cost:
-
-    mm_alloc Minter #1 size=8
-    mm_decref Minter #1 rc=0
-    mm_free Minter #1
-
-Eight bytes and a free, per process, for a value that never changes and that most programs holding it will
-never read.
-
-⚠ **The field is declared `var` deliberately, and reaching it for a write is already refused.** A mutable
-field on an immortal record is the shape that would write to a read-only page — and `var mine = Seed;
-mine.next = 9` does not compile: **E2015**, *"an aggregate has no owning COPY in the compiler, so the write would
-reach the global's own record"*. That refusal is what makes a `var` field on this
-record safe to place in `.rdata` rather than merely lucky.
-<!-- MmTrace -->
-```maxon
-typealias Count = int(0 to 1000)
-
-type Minter
-	export var next as Count
-
-	static function create(next Count) returns Self
-		return Self{next: next}
-	end 'create'
-end 'Minter'
-
-let Seed = Minter.create(7)
-
-function main() returns ExitCode
-	return (Seed.next + 9) as ExitCode
-end 'main'
-```
-```exitcode
-16
-```
-```mm-trace
-
-```
-
 <!-- test: module-let-string-array-costs-no-allocation -->
 A module-scope `let` holding an array of string LITERALS is a constant twice over: the array never changes,
 and neither does any element. So it must cost nothing, and the block is EMPTY.
@@ -338,51 +287,6 @@ end 'main'
 ```
 ```exitcode
 21
-```
-```mm-trace
-
-```
-
-<!-- test: module-let-empty-map-and-set-cost-no-allocation -->
-An empty `Map` and an empty `Set` at module scope are constants, and must cost nothing. The block is EMPTY.
-
-⭐ **THIS IS THE SHAPE WHOSE COST IS NOT ITS OWN RECORD.** `Map.create()` is `return Self{}` — as trivial as
-a factory gets — but a `Map` is a struct whose four container fields carry DEFAULTS, so constructing one
-builds four empty column arrays and then the struct that points at them. A `Set` builds three and its own.
-Built at run time, the two globals below would cost:
-
-    mm_alloc ArrayRecord #1 size=48      keys
-    mm_alloc ArrayRecord #2 size=48      values
-    mm_alloc ArrayRecord #3 size=48      states
-    mm_alloc ArrayRecord #4 size=48      hashes
-    mm_alloc Map #5 size=56
-    mm_alloc ArrayRecord #6 size=48
-    mm_alloc ArrayRecord #7 size=48
-    mm_alloc ArrayRecord #8 size=48
-    mm_alloc Set #9 size=48
-
-**Nine records, freed nine times, in a program that reads two counts.**
-
-⚠ **Nothing here is a new mechanism; it is a shape that needs three of them at once.** The mark
-cannot live in the record (a `Map`'s offset 16 is a field, not a capacity) so it needs the header. The
-struct's four slots address other image objects, so it needs the absolute data-to-data relocation. And the
-bytes are not in the source the way a literal's are — `Self{}` names four factory calls — so the compiler
-has to EVALUATE the construction rather than transcribe it. This case pins the third.
-<!-- MmTrace -->
-```maxon
-typealias Key = int(0 to 1000)
-typealias KeyMap = Map with (Key, Key)
-typealias KeySet = Set with Key
-
-let Empty = KeyMap.create()
-let Seen = KeySet.create()
-
-function main() returns ExitCode
-	return (Empty.count() as ExitCode) + (Seen.count() as ExitCode)
-end 'main'
-```
-```exitcode
-0
 ```
 ```mm-trace
 
@@ -482,51 +386,6 @@ mm_decref Slot #1 rc=0
 mm_free Slot #1
 ```
 
-<!-- test: module-let-struct-of-empty-containers-costs-no-allocation -->
-⭐ **A RECORD WHOSE EVERY FIELD IS IMAGE DATA IS ITSELF IMAGE DATA.** Each empty container here already
-images on its own — that is what `module-let-array-globals-cost-no-allocation-at-all` holds — and the struct
-adds nothing but two slots pointing at them. Built at run time, the one global below would cost:
-
-    mm_alloc ArrayRecord #1 size=48
-    mm_alloc ArrayRecord #2 size=48
-    mm_alloc Facts #3 size=16
-
-**Three records for a binding that computes nothing**, and the shape is the compiler's own:
-`Parser.sharedEmptyBorrowFacts` is a struct of five empty `Array` fields.
-
-⚠ **THE ADMISSION RULE IS "EVERY FIELD'S OWN BYTES ARE DECIDED AT COMPILE TIME", AND AN IMAGED FIELD
-MEETS IT EXACTLY AS A SCALAR DOES.** A managed field holds an address, and one `.rdata` object's address
-written into another is a data-to-data relocation, so an empty container, a nested construction and a
-payload-free union case are each admitted as a slot (`ProgramSignatures.constStructIsImageData`). A field
-that must be BUILT — anything that runs user code, or a container with members — keeps the whole record
-on the runtime path, because a half-imaged record is not a thing that can exist.
-<!-- MmTrace -->
-```maxon
-typealias Count = int(0 to 1000)
-typealias CountArray = Array with Count
-typealias NameArray = Array with String
-
-type Facts
-	export var counts = CountArray.create(0)
-	export var names = NameArray.create(0)
-	static function create() returns Facts
-		return Self{}
-	end 'create'
-end 'Facts'
-
-let SharedFacts = Facts.create()
-
-function main() returns ExitCode
-	return (SharedFacts.counts.count() + SharedFacts.names.count()) as ExitCode
-end 'main'
-```
-```exitcode
-0
-```
-```mm-trace
-
-```
-
 <!-- test: module-var-struct-of-empty-containers-still-allocates -->
 The negative control for its `let` sibling above, and the guard against over-imaging: the identical program
 with one keyword changed. A `var` is never image data — its slot is written before `main` and may be
@@ -567,50 +426,6 @@ mm_decref ArrayRecord #1 rc=0
 mm_free ArrayRecord #1
 mm_decref ArrayRecord #2 rc=0
 mm_free ArrayRecord #2
-```
-
-<!-- test: module-let-empty-array-as-a-map-miss-fallback-allocates-nothing -->
-A module-scope `let` empty array handed out as a map lookup's `otherwise` fallback is the image record itself,
-so a miss costs nothing and the block is EMPTY. A copy of the fallback per miss would cost, for each of the
-eight misses below:
-
-    mm_alloc ArrayRecord #1 size=48
-    mm_decref ArrayRecord #1 rc=0
-    mm_free ArrayRecord #1
-<!-- MmTrace -->
-```maxon
-typealias Key = int(0 to 1000)
-typealias Items = Array with Key
-typealias ItemIndex = Map with (Key, Items)
-
-let EmptyItems = Items.create(0)
-let NoItems = ItemIndex.create()
-let Misses = 8 as Key
-
-function main() returns ExitCode
-	var found = 0 as Key
-
-	for k in 0 upto Misses 'probe'
-		let items = try NoItems.get(k) otherwise EmptyItems
-		found = found + (items.count() as Key)
-	end 'probe'
-
-	if found != 0 'aMissFoundItems'
-		return 1
-	end 'aMissFoundItems'
-
-	print("every miss read the empty fallback\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-every miss read the empty fallback
-```
-```mm-trace
-
 ```
 
 <!-- test: a-cloned-service-handle-box-carries-its-tag -->
@@ -725,71 +540,6 @@ end 'main'
 ```mm-trace
 ```
 
-<!-- test: struct-field-default-array-of-zero-capacity-is-imaged-with-its-struct -->
-A struct whose field default is `Items.create(0)` is built into the image when a module-scope `let` constructs it, so the block is EMPTY: the field's default is a bare create whether the capacity is written or not.
-<!-- MmTrace -->
-```maxon
-typealias Key = int(0 to 1000)
-typealias Items = Array with Key
-
-type Bag
-	var items = Items.create(0)
-	var spare = Items.create(0, zeroed: false)
-
-	static function create() returns Bag
-		return Self{}
-	end 'create'
-
-	function size() returns Count
-		return self.items.count() + self.spare.count()
-	end 'size'
-end 'Bag'
-
-let NoBag = Bag.create()
-
-function main() returns ExitCode
-	return NoBag.size() as ExitCode
-end 'main'
-```
-```exitcode
-0
-```
-
-```mm-trace
-```
-
-<!-- test: struct-field-default-bare-array-create-is-imaged-with-its-struct -->
-The same struct with the no-argument default: the control for the case above.
-<!-- MmTrace -->
-```maxon
-typealias Key = int(0 to 1000)
-typealias Items = Array with Key
-
-type Bag
-	var items = Items.create(0)
-
-	static function create() returns Bag
-		return Self{}
-	end 'create'
-
-	function size() returns Count
-		return self.items.count()
-	end 'size'
-end 'Bag'
-
-let NoBag = Bag.create()
-
-function main() returns ExitCode
-	return NoBag.size() as ExitCode
-end 'main'
-```
-```exitcode
-0
-```
-
-```mm-trace
-```
-
 <!-- test: a-runtime-sized-fixed-array-is-one-allocation -->
 A fixed array never grows, so its buffer sits in its record's allocation at any size: 352 bytes is the 48-byte
 record, the 16 bytes before the buffer that hold its refcount word, and 352 bytes of elements in ONE `mm_alloc`. **If an `ElementBuffer`
@@ -799,7 +549,7 @@ line appears here, the buffer has an allocation of its own.**
 typealias Bytes = FixedArray with Byte
 
 function build(count Count) returns Bytes
-	var bytes = Bytes.create(count)
+	let bytes = Bytes.create(count)
 	try bytes.set(0, value: 7) otherwise panic("set")
 
 	return bytes
@@ -830,7 +580,7 @@ typealias Word = bits(64)
 typealias Wide = FixedArray with 40 Word
 
 function main() returns ExitCode
-	var wide = Wide.create()
+	let wide = Wide.create()
 	wide.set(39, value: 5)
 
 	return wide.get(39) as ExitCode
@@ -955,7 +705,7 @@ end 'Holder'
 typealias HolderArray = Array with Holder
 
 function main() returns ExitCode
-	var all = HolderArray.create(0)
+	let all = HolderArray.create(0)
 	all.push(Holder.holding(Body.create(7)))
 	all.push(Holder.empty)
 
@@ -988,14 +738,14 @@ out of the trace.
 <!-- MmTrace -->
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
+	let key = ByteArray.create(0)
 
 	for i in 0 upto 16 'eachByte'
 		key.push(i as Byte)
 	end 'eachByte'
 
 	let aes = try Aes.create(key) otherwise return 99
-	var block = ByteArray.create(0)
+	let block = ByteArray.create(0)
 
 	for _ in 0 upto 16 'eachBlockByte'
 		block.push(0)

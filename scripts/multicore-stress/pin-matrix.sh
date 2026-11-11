@@ -197,7 +197,7 @@
 # `refcount-service-refused.maxon` is that program, and it is in
 # `REFUSED_PROGRAMS` (`lib.sh`) rather than `PROGRAMS`: `compile-all.sh` asserts the
 # BUILD FAILS with **E3102** as its only error — `use of moved value`, which is sharper
-# than the transferability refusal E3138 because the first send did not merely
+# than a transferability refusal because the first send did not merely
 # threaten a second owner, it TOOK the reference.
 #
 # ⭐⭐ service-fanin-torture IS THE COWN QUEUE'S OTHER SIDE. `service-torture` is ONE

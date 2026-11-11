@@ -102,7 +102,7 @@ function total(a WordArray) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
@@ -134,7 +134,7 @@ function fill(a WordArray, n Word)
 end 'fill'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(0)
 	end 'seed'
@@ -226,7 +226,7 @@ function sumBytes(b ByteArray) returns Total
 end 'sumBytes'
 
 function main() returns ExitCode
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	for i in 0 upto 10 'seed'
 		b.push(i as Byte)
 	end 'seed'
@@ -262,7 +262,7 @@ function total(a RealArray) returns Real
 end 'total'
 
 function main() returns ExitCode
-	var a = RealArray.create(0)
+	let a = RealArray.create(0)
 	a.push(1.5)
 	a.push(2.25)
 	a.push(4.0)

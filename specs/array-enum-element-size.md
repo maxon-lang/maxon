@@ -27,7 +27,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function main() returns ExitCode
-		var ops = OpArray.create(0)
+		let ops = OpArray.create(0)
 		ops.push(Op.add(1))
 		ops.push(Op.sub(2))
 		ops.push(Op.nop)
@@ -55,12 +55,12 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function main() returns ExitCode
-		var ops = OpArray.create(0)
+		let ops = OpArray.create(0)
 		ops.push(Op.add(10))
 		ops.push(Op.sub(20))
 		ops.push(Op.add(30))
 
-		view first = try ops.get(0) otherwise Op.nop
+		let first = try ops.get(0) otherwise Op.nop
 		match first 'check'
 				add(v) then return v
 				sub then return 99
@@ -86,12 +86,12 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function main() returns ExitCode
-		var ops = OpArray.create(0)
+		let ops = OpArray.create(0)
 		ops.push(Op.add(10))
 		ops.push(Op.sub(20))
 		ops.push(Op.add(42))
 
-		view last = try ops.get(2) otherwise Op.nop
+		let last = try ops.get(2) otherwise Op.nop
 		match last 'check'
 				add(v) then return v
 				sub then return 99
@@ -138,7 +138,7 @@ function checkMid(ops IrOpArray) returns Integer
 end 'checkMid'
 
 function main() returns ExitCode
-		var ops = IrOpArray.create(0)
+		let ops = IrOpArray.create(0)
 		ops.push(IrOp.arith(10))
 		ops.push(IrOp.arith(20))
 		ops.push(IrOp.cf(CfOp.br(99)))
@@ -198,7 +198,7 @@ type Block
 end 'Block'
 
 function makeBlock() returns Block
-		var b = Block.create(1, ops: IrOpArray.create(0), terminator: IrOp.cf(CfOp.br(0)))
+		let b = Block.create(1, ops: IrOpArray.create(0), terminator: IrOp.cf(CfOp.br(0)))
 		b.ops.push(IrOp.arith(10))
 		b.ops.push(IrOp.arith(20))
 		b.ops.push(IrOp.arith(30))
@@ -272,7 +272,7 @@ function markNegative(s Signal) returns Signal
 end 'markNegative'
 
 function main() returns ExitCode
-	var a = Signals.create(0)
+	let a = Signals.create(0)
 	a.push(Signal.plus)
 	a.push(Signal.zero)
 	a.push(Signal.minus)
@@ -604,11 +604,11 @@ end 'Byte'
 typealias Bs = Array with Byte
 
 function main() returns ExitCode
-	var a = Bs.create(0)
+	let a = Bs.create(0)
 	a.push(Byte.c299)
 	a.push(Byte.c0)
 	a.push(Byte.c260)
-	var b = Bs.create(0)
+	let b = Bs.create(0)
 	b.push(Byte.c299)
 	b.push(Byte.c0)
 	b.push(Byte.c260)
@@ -639,11 +639,11 @@ end 'Byte'
 typealias Bs = Array with Byte
 
 function main() returns ExitCode
-	var a = Bs.create(0)
+	let a = Bs.create(0)
 	a.push(Byte.high)
 	a.push(Byte.low)
 	a.push(Byte.mid)
-	var b = Bs.create(0)
+	let b = Bs.create(0)
 	b.push(Byte.high)
 	b.push(Byte.low)
 	b.push(Byte.mid)

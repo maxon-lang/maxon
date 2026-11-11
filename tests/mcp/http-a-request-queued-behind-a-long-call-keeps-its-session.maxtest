@@ -4,10 +4,10 @@ let QueueLeadMs = 500
 let QueuedBehindSleepMs = 3000
 
 function queuedBehindALongCall(listening StreamingHttpMcpServer, program FilePath, longSession McpSession, queuedSession McpSession) returns (JsonDoc, HttpAnswer) throws TestFailure
-	let longCall = async httpToolCall(listening, sessionId: longSession, id: 2, name: ExecuteTool, argumentsJson: pathArgument(program))
+	let longCall = async httpToolCall(listening.address, sessionId: longSession, id: 2, name: ExecuteTool, argumentsJson: pathArgument(program))
 	sleep(QueueLeadMs)
 
-	let queued = listening.post(toolsListRequest(3), sessionId: queuedSession)
+	let queued = listening.address.post(toolsListRequest(3), sessionId: queuedSession)
 	let ran = await longCall
 	try listening.stop()
 	return (ran, queued)
@@ -16,7 +16,7 @@ end 'queuedBehindALongCall'
 test 'a request that waits behind another session s long call keeps its own session'
 	let program = stagedProgram(QueuedStagingDir, fileName: "main.maxon", source: sleepingProgramSource(QueuedBehindSleepMs))
 
-	var server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
+	let server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
 	let (_, longSession) = server.initializeSession()
 	let (_, queuedSession) = server.initializeSession()
 	let (ran, queued) = try queuedBehindALongCall(server, program: program, longSession: longSession, queuedSession: queuedSession)

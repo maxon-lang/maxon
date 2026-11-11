@@ -29,7 +29,7 @@ function getValue(m StringMap, key String) returns String throws TestError
 end 'getValue'
 
 function main() returns ExitCode
-		var m = StringMap.create()
+		let m = StringMap.create()
 		try m.insert("key", value: "hello") otherwise ignore
 		let got = try getValue(m, key: "key") otherwise "none"
 		if got == "hello" 'ok'
@@ -70,9 +70,9 @@ function getEntry(m EntryMap, key String) returns Entry throws TestError
 end 'getEntry'
 
 function main() returns ExitCode
-		var m = EntryMap.create()
+		let m = EntryMap.create()
 		try m.insert("key", value: Entry.create("hello", count: 7)) otherwise ignore
-		view got = try getEntry(m, key: "key") otherwise Entry.create("none", count: 0)
+		let got = try getEntry(m, key: "key") otherwise Entry.create("none", count: 0)
 		return got.count
 end 'main'
 ```
@@ -99,7 +99,7 @@ function bump(a CodeArray)
 end 'bump'
 
 function main() returns ExitCode
-		var a = CodeArray.create(0)
+		let a = CodeArray.create(0)
 		a.push(41)
 		bump(a)
 		return try a.get(0) otherwise 99

@@ -302,7 +302,7 @@ class Emitter:
         isolated = " as isolated %s" % name if frozen else ""
         out = ["%sfunction %s(reader LibraryCacheReader) returns %s throws LibraryCacheDamage" % (visibility, read_name, returns)]
         out.append("\tlet count = try reader.count()")
-        out.append("\tvar result = %s.create(%s)%s" % (name, "count, zeroed: false" if node.kind == "array" else "", isolated))
+        out.append("\tlet result = %s.create(%s)%s" % (name, "count, zeroed: false" if node.kind == "array" else "", isolated))
         out.append("")
 
         if node.kind == "map":
@@ -395,7 +395,7 @@ class Emitter:
         if not fills:
             out.append("\t\treturn %sSelf{%s}" % ("freeze " if frozen else "", literal))
         else:
-            out.append("\t\tvar built = Self{%s} as isolated Self" % literal)
+            out.append("\t\tlet built = Self{%s} as isolated Self" % literal)
 
             for field, node in fills:
                 out.append("")
@@ -468,7 +468,7 @@ class Emitter:
         out.append("\t\t\tlet %s = try reader.count()" % inner_count)
 
         if node.elem_readonly:
-            out.append("\t\t\tvar inner = %s as isolated %s" % (inner_create, element.alias))
+            out.append("\t\t\tlet inner = %s as isolated %s" % (inner_create, element.alias))
         else:
             out.append("\t\t\tbuilt.%s.%s(%s)" % (name, adder, inner_create))
 
@@ -659,7 +659,7 @@ class Emitter:
         out.append("end 'cacheWriteMaxonModule'")
         out.append("")
         out.append("export function cacheReadMaxonModule(reader LibraryCacheReader) returns MaxonModule throws LibraryCacheDamage")
-        out.append("\tvar assembled = MaxonModule.create()")
+        out.append("\tlet assembled = MaxonModule.create()")
         out.append("")
 
         for name, node in reads:

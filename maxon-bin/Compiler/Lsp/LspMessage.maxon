@@ -97,14 +97,14 @@ module function lspSpanRangeNode(doc JsonDoc, source String, index LspLineIndex,
 end 'lspSpanRangeNode'
 
 module function lspRangeNode(doc JsonDoc, startLine LspLineNumber, startCharacter LspCharacter, endLine LspLineNumber, endCharacter LspCharacter) returns JsonNodeId
-	var range = LspJsonObject.create(doc)
+	let range = LspJsonObject.create(doc)
 	range.putNode(LspStartKey, value: lspPositionNode(doc, line: startLine, character: startCharacter))
 	range.putNode(LspEndKey, value: lspPositionNode(doc, line: endLine, character: endCharacter))
 	return range.finish()
 end 'lspRangeNode'
 
 function lspPositionNode(doc JsonDoc, line LspLineNumber, character LspCharacter) returns JsonNodeId
-	var position = LspJsonObject.create(doc)
+	let position = LspJsonObject.create(doc)
 	position.put(LspLineKey, value: JsonNode.numberNode(line as JsonFloat))
 	position.put(LspCharacterKey, value: JsonNode.numberNode(character as JsonFloat))
 	return position.finish()
@@ -166,7 +166,7 @@ module function writeLspNotification(writer LspStdoutWriter.handle, doc JsonDoc,
 end 'writeLspNotification'
 
 module function lspNotificationText(doc JsonDoc, method String, params JsonNodeId) returns String
-	var envelope = beginJsonRpcMessage(doc)
+	let envelope = beginJsonRpcMessage(doc)
 	envelope.put(JsonRpcMethodKey, value: JsonNode.stringNode(method))
 	envelope.putNode(JsonRpcParamsKey, value: params)
 	return jsonRpcMessageText(doc, envelope: envelope)
@@ -175,9 +175,9 @@ end 'lspNotificationText'
 // Refuse the request `id`. `message` is the human-readable sentence the client displays; `code` is the
 // machine-readable reason it branches on.
 module function writeLspError(writer LspStdoutWriter.handle, id LspRequestId, code LspJsonRpcErrorCode, message String)
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 
-	var error = LspJsonObject.create(doc)
+	let error = LspJsonObject.create(doc)
 	error.put(JsonRpcErrorCodeKey, value: JsonNode.numberNode(code.rawValue as JsonFloat))
 	error.put(JsonRpcErrorMessageKey, value: JsonNode.stringNode(message))
 
@@ -188,7 +188,7 @@ end 'writeLspError'
 // to `id`, and write it. `memberKey` is `JsonRpcResultKey` for a success and `JsonRpcErrorKey` for a
 // failure; everything else about the envelope is identical, which is why one function writes it.
 function writeLspResponse(writer LspStdoutWriter.handle, doc JsonDoc, id LspRequestId, memberKey String, payload JsonNodeId)
-	var envelope = beginJsonRpcMessage(doc)
+	let envelope = beginJsonRpcMessage(doc)
 	envelope.put(JsonRpcIdKey, value: idNodeFor(id))
 	envelope.putNode(memberKey, value: payload)
 	submitToLspWriter(writer, command: LspWriterCommand.write(jsonRpcMessageText(doc, envelope: envelope)))
@@ -197,7 +197,7 @@ end 'writeLspResponse'
 // The one member EVERY JSON-RPC message carries, whichever direction it goes and whether or not it is
 // addressed to a request. What follows it is the caller's — an id and a result, or a method and params.
 function beginJsonRpcMessage(doc JsonDoc) returns LspJsonObject
-	var envelope = LspJsonObject.create(doc)
+	let envelope = LspJsonObject.create(doc)
 	envelope.put(JsonRpcVersionKey, value: JsonNode.stringNode(JsonRpcVersion))
 	return envelope
 end 'beginJsonRpcMessage'

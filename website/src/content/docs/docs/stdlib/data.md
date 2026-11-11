@@ -77,9 +77,9 @@ function main() returns ExitCode
 	let second = try doc.arrayAt(tags, index: 1) otherwise 0
 	print("{doc.rootKind()} {name} {stars} {doc.get(second).stringValue}\n")
 
-	var built = JsonDoc.create()
-	var keys = StringArray.create(0)
-	var children = JsonNodeIdArray.create(0)
+	let built = JsonDoc.create()
+	let keys = StringArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 	keys.push("ok")
 	children.push(built.add(JsonNode.boolNode(true)))
 	keys.push("score")
@@ -249,8 +249,8 @@ function hex(bytes ByteArray) returns String
 end 'hex'
 
 function main() returns ExitCode
-	var outer = DerReader.create(ByteArray from [0x30, 0x06, 0x02, 0x01, 0x05, 0x02, 0x01, 0x80])
-	var numbers = try outer.enterSequence() otherwise return 1
+	let outer = DerReader.create(ByteArray from [0x30, 0x06, 0x02, 0x01, 0x05, 0x02, 0x01, 0x80])
+	let numbers = try outer.enterSequence() otherwise return 1
 	let first = try numbers.readInteger() otherwise return 1
 	print("{hex(first)} {numbers.isAtEnd()}\n")
 
@@ -312,7 +312,7 @@ function hex(bytes ByteArray) returns String
 end 'hex'
 
 function main() returns ExitCode
-	var digest = Digest.create(HashAlgorithm.sha256)
+	let digest = Digest.create(HashAlgorithm.sha256)
 	digest.update("a".toByteArray())
 	digest.update("bc".toByteArray())
 
@@ -591,9 +591,9 @@ Both calls run in time independent of the private key. Derive keys from the shar
 
 ```maxon
 function main() returns ExitCode
-	var alice = ByteArray.create(0)
+	let alice = ByteArray.create(0)
 	alice.growFilled(32, value: 1)
-	var bob = ByteArray.create(0)
+	let bob = ByteArray.create(0)
 	bob.growFilled(32, value: 2)
 
 	try 'agree'
@@ -804,7 +804,7 @@ then `"bc"`. When hashing a sequence of parts, combine each part's length too.
 
 ```maxon
 function main() returns ExitCode
-	var hasher = Hasher.create()
+	let hasher = Hasher.create()
 	hasher.combineBytes("ab".toByteArray())
 	hasher.combine(7)
 

@@ -70,7 +70,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -98,7 +98,7 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function scheduleFor(key ByteArray) returns ByteArray
-	var schedule = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
 	schedule.resize((key.count() + 28) * 8)
 	__Builtins.aesExpandKey(schedule, key)
 
@@ -119,10 +119,10 @@ function vector(name String, keyHex String, plainHex String)
 	let key = fromHex(keyHex)
 	let schedule = scheduleFor(key)
 	let plain = fromHex(plainHex)
-	var sealed = ByteArray.create(0)
+	let sealed = ByteArray.create(0)
 	sealed.resize(16)
 	__Builtins.aesEncryptBlock(sealed, 0, schedule, plain, 0)
-	var opened = ByteArray.create(0)
+	let opened = ByteArray.create(0)
 	opened.resize(16)
 	__Builtins.aesDecryptBlock(opened, 0, schedule, sealed, 0)
 
@@ -168,7 +168,7 @@ Sixty-four pseudo-random blocks under each key size: the hardware cipher answers
 answers, in both directions, and decrypts what it encrypted.
 ```maxon
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -189,7 +189,7 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function encrypted(schedule ByteArray, block ByteArray) returns ByteArray
-	var sealed = ByteArray.create(0)
+	let sealed = ByteArray.create(0)
 	sealed.resize(16)
 	__Builtins.aesEncryptBlock(sealed, 0, schedule, block, 0)
 
@@ -197,7 +197,7 @@ function encrypted(schedule ByteArray, block ByteArray) returns ByteArray
 end 'encrypted'
 
 function decrypted(schedule ByteArray, block ByteArray) returns ByteArray
-	var opened = ByteArray.create(0)
+	let opened = ByteArray.create(0)
 	opened.resize(16)
 	__Builtins.aesDecryptBlock(opened, 0, schedule, block, 0)
 
@@ -217,7 +217,7 @@ function compare(keyBytes Count) returns Count
 	var mismatches = 0 as Count
 	let key = bytesFor(keyBytes, count: keyBytes)
 	let software = try AesBitsliced.create(key) otherwise panic("the key is valid")
-	var schedule = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
 	schedule.resize((keyBytes + 28) * 8)
 	__Builtins.aesExpandKey(schedule, key)
 
@@ -248,11 +248,11 @@ The input block is read from inside a longer array and the output block is writt
 around it are not touched, and encrypting in place over the same array gives the same block.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var input = ByteArray.create(0)
-	var output = ByteArray.create(0)
-	var block = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let input = ByteArray.create(0)
+	let output = ByteArray.create(0)
+	let block = ByteArray.create(0)
 
 	for position in 0 upto 16 'eachKeyByte'
 		key.push(position as Byte)
@@ -270,7 +270,7 @@ function main() returns ExitCode
 		block.push(try input.get(position) otherwise 0)
 	end 'eachBlockByte'
 
-	var aligned = ByteArray.create(0)
+	let aligned = ByteArray.create(0)
 	aligned.resize(16)
 	__Builtins.aesEncryptBlock(aligned, 0, schedule, block, 0)
 	__Builtins.aesEncryptBlock(output, 5, schedule, input, 9)
@@ -296,11 +296,11 @@ function main() returns ExitCode
 		end 'changed'
 	end 'eachSuffixByte'
 
-	var inPlace = ByteArray.create(0)
+	let inPlace = ByteArray.create(0)
 	inPlace.resize(16)
 	__Builtins.aesEncryptBlock(inPlace, 0, schedule, block, 0)
 	__Builtins.aesEncryptBlock(inPlace, 0, schedule, inPlace, 0)
-	var twice = ByteArray.create(0)
+	let twice = ByteArray.create(0)
 	twice.resize(16)
 	__Builtins.aesEncryptBlock(twice, 0, schedule, aligned, 0)
 
@@ -329,8 +329,8 @@ An output array copied from a literal is the program's own buffer, so the block 
 the literal it started from is unchanged.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
 
 	for position in 0 upto 16 'eachKeyByte'
 		key.push(position as Byte)
@@ -340,7 +340,7 @@ function main() returns ExitCode
 	__Builtins.aesExpandKey(schedule, key)
 
 	let original = b"0123456789abcdef0123456789abcdef"
-	var output = b"0123456789abcdef0123456789abcdef".clone()
+	let output = b"0123456789abcdef0123456789abcdef".clone()
 	let plain = b"00112233445566778899aabbccddeeff"
 	__Builtins.aesEncryptBlock(output, 3, schedule, plain, 0)
 
@@ -402,8 +402,8 @@ error E3207: <fragment>:15:13: 'aesEncryptBlock' needs a writable argument; 'out
 Twenty bytes are not a key.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
 	key.resize(20)
 	schedule.resize(352)
 	__Builtins.aesExpandKey(schedule, key)
@@ -423,9 +423,9 @@ fatal error: a hardware crypto routine was handed a buffer or schedule of the wr
 A schedule is exactly `32 * (rounds + 1)` bytes: one byte more is refused, for the expansion and for a block.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var block = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let block = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(353)
 	block.resize(16)
@@ -446,10 +446,10 @@ fatal error: a hardware crypto routine was handed a buffer or schedule of the wr
 The block must lie wholly inside its array: the last start that fits is the length minus sixteen.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var input = ByteArray.create(0)
-	var output = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let input = ByteArray.create(0)
+	let output = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	input.resize(32)
@@ -563,7 +563,7 @@ counters (zero, a middle one and the last one that fits), for each key size: the
 bitsliced key stream XORed in, and the bytes around it are not touched.
 ```maxon
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -584,7 +584,7 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function counterBlock(nonce ByteArray, counter Count) returns ByteArray
-	var block = ByteArray.create(0)
+	let block = ByteArray.create(0)
 	block.append(nonce)
 	block.push(((counter shr 24) and 0xFF) as Byte)
 	block.push(((counter shr 16) and 0xFF) as Byte)
@@ -610,7 +610,7 @@ function mismatches(keyBytes Count) returns Count
 	var wrong = 0 as Count
 	let key = bytesFor(keyBytes, count: keyBytes)
 	let software = try AesBitsliced.create(key) otherwise panic("the key is valid")
-	var schedule = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
 	schedule.resize((keyBytes + 28) * 8)
 	__Builtins.aesExpandKey(schedule, key)
 	let nonce = bytesFor(keyBytes + 7, count: 12)
@@ -622,7 +622,7 @@ function mismatches(keyBytes Count) returns Count
 			for mode in 0 upto 3 'eachCounter'
 				let counter = counterFor(mode, span: first + group)
 				let region = bytesFor(keyBytes + group + first * 3 + mode, count: group * 16)
-				var buffer = ByteArray.create(0)
+				let buffer = ByteArray.create(0)
 				buffer.append(b"abcde")
 				buffer.append(region)
 				buffer.append(b"xyz")
@@ -659,7 +659,7 @@ into the nonce: block `j` is the cipher of the nonce followed by `(counter + off
 the same as its low 32 bits. Every group size is tried from counters that wrap at each of its positions.
 ```maxon
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -680,7 +680,7 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function counterBlock(nonce ByteArray, counter Count) returns ByteArray
-	var block = ByteArray.create(0)
+	let block = ByteArray.create(0)
 	block.append(nonce)
 	block.push(((counter shr 24) and 0xFF) as Byte)
 	block.push(((counter shr 16) and 0xFF) as Byte)
@@ -694,7 +694,7 @@ function mismatches(keyBytes Count) returns Count
 	var wrong = 0 as Count
 	let key = bytesFor(keyBytes, count: keyBytes)
 	let software = try AesBitsliced.create(key) otherwise panic("the key is valid")
-	var schedule = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
 	schedule.resize((keyBytes + 28) * 8)
 	__Builtins.aesExpandKey(schedule, key)
 	let nonce = bytesFor(keyBytes + 7, count: 12)
@@ -706,11 +706,11 @@ function mismatches(keyBytes Count) returns Count
 		for back in 0 upto group + 1 'eachWrapPosition'
 			for offset in offsets 'eachOffset'
 				let counter = 4294967296 - back
-				var buffer = bytesFor(back + group, count: group * 16)
+				let buffer = bytesFor(back + group, count: group * 16)
 				let region = buffer.clone()
 				__Builtins.aesCtrXor(buffer, 0, schedule, counterBlock(nonce, counter: counter), offset, group)
 
-				var expected = ByteArray.create(0)
+				let expected = ByteArray.create(0)
 
 				for block in 0 upto group 'eachBlock'
 					let word = ((counter + offset + block) mod 4294967296) as AesCounter
@@ -749,7 +749,7 @@ Every length from 0 to 300 bytes covers each group size and the partial last blo
 counter one past that refuses.
 ```maxon
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -796,7 +796,7 @@ end 'streamedBySoftware'
 
 function pastMask(cipher Aes, nonce ByteArray, counter Count, data ByteArray) returns String
 	let first = counter as AesCounter
-	var output = ByteArray.create(0)
+	let output = ByteArray.create(0)
 	output.push(9)
 	output.push(8)
 	output.push(7)
@@ -809,7 +809,7 @@ end 'pastMask'
 
 function pastMaskBySoftware(cipher AesBitsliced, nonce ByteArray, counter Count, data ByteArray) returns String
 	let first = counter as AesCounter
-	var output = ByteArray.create(0)
+	let output = ByteArray.create(0)
 	output.push(9)
 	output.push(8)
 	output.push(7)
@@ -886,7 +886,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -943,10 +943,10 @@ true true
 A group is 1, 2, 4 or 8 blocks.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var buffer = ByteArray.create(0)
-	var counterBlock = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let buffer = ByteArray.create(0)
+	let counterBlock = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	buffer.resize(64)
@@ -975,10 +975,10 @@ The whole group must lie inside the buffer: four blocks starting at byte 16 of a
 byte 17 do not.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var buffer = ByteArray.create(0)
-	var counterBlock = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let buffer = ByteArray.create(0)
+	let counterBlock = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	buffer.resize(80)
@@ -1006,10 +1006,10 @@ fatal error: a hardware crypto routine was handed a buffer or schedule of the wr
 The counter block is exactly 16 bytes.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var buffer = ByteArray.create(0)
-	var counterBlock = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let buffer = ByteArray.create(0)
+	let counterBlock = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	buffer.resize(16)
@@ -1058,7 +1058,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1086,10 +1086,10 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function keyBlockFor(key ByteArray) returns ByteArray
-	var schedule = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
 	schedule.resize((key.count() + 28) * 8)
 	__Builtins.aesExpandKey(schedule, key)
-	var keyBlock = ByteArray.create(0)
+	let keyBlock = ByteArray.create(0)
 	keyBlock.resize(256 + (schedule.count() shr 1))
 	__Builtins.aesGcmInit(keyBlock, schedule)
 
@@ -1101,11 +1101,11 @@ function report(id String, keyHex String, nonceHex String, plainHex String, addi
 	let nonce = fromHex(nonceHex)
 	let plain = fromHex(plainHex)
 	let additional = fromHex(additionalHex)
-	var sealed = ByteArray.create(0)
+	let sealed = ByteArray.create(0)
 	sealed.resize(plain.count() + 16)
 	__Builtins.aesGcmSeal(sealed, 0, keyBlock, nonce, additional, plain)
 
-	var opened = ByteArray.create(0)
+	let opened = ByteArray.create(0)
 	opened.resize(plain.count())
 	let accepted = __Builtins.aesGcmOpen(opened, 0, keyBlock, nonce, additional, sealed)
 	print("{id} [{toHex(sealed)}] {accepted} {toHex(opened) == plainHex}\n")
@@ -1154,7 +1154,7 @@ block), the sealed bytes equal the bitsliced backing's, each backing opens the o
 backing refuses a forged tag, ciphertext and associated data every time.
 ```maxon
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -1165,7 +1165,7 @@ function bytesFor(seed Count, count Count) returns ByteArray
 end 'bytesFor'
 
 function flipped(sealed ByteArray, at Count) returns ByteArray
-	var forged = try sealed.slice(0, endIndex: sealed.count()) otherwise panic("a copy of the whole array")
+	let forged = try sealed.slice(0, endIndex: sealed.count()) otherwise panic("a copy of the whole array")
 	let original = try forged.get(at) otherwise panic("the forged byte lies inside the array")
 	try forged.set(at, value: original xor 1) otherwise panic("the forged byte lies inside the array")
 
@@ -1273,7 +1273,7 @@ backing seals, the open of that answers `true` and writes the plain text, the op
 the same, and a tag, cipher text or associated data with one bit changed answers `false`.
 ```maxon
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -1284,7 +1284,7 @@ function bytesFor(seed Count, count Count) returns ByteArray
 end 'bytesFor'
 
 function framed(bodyBytes Count) returns ByteArray
-	var array = ByteArray.create(0)
+	let array = ByteArray.create(0)
 
 	for _ in 0 upto 3 'eachLead'
 		array.push(0x5A)
@@ -1320,7 +1320,7 @@ function bodyOf(array ByteArray, bodyBytes Count) returns ByteArray
 end 'bodyOf'
 
 function flipped(bytes ByteArray, at Count) returns ByteArray
-	var forged = try bytes.slice(0, endIndex: bytes.count()) otherwise panic("a copy of the whole array")
+	let forged = try bytes.slice(0, endIndex: bytes.count()) otherwise panic("a copy of the whole array")
 	let original = try forged.get(at) otherwise panic("the forged byte lies inside the array")
 	try forged.set(at, value: original xor 1) otherwise panic("the forged byte lies inside the array")
 
@@ -1328,7 +1328,7 @@ function flipped(bytes ByteArray, at Count) returns ByteArray
 end 'flipped'
 
 function opens(keyBlock ByteArray, nonce ByteArray, additional ByteArray, sealed ByteArray) returns bool
-	var scratch = ByteArray.create(0)
+	let scratch = ByteArray.create(0)
 	scratch.resize(sealed.count() - 16)
 
 	return __Builtins.aesGcmOpen(scratch, 0, keyBlock, nonce, additional, sealed)
@@ -1338,20 +1338,20 @@ function wrongOutcomes(keyBlock ByteArray, nonce ByteArray, plain ByteArray, add
 	var wrong = 0 as Count
 	let bytes = plain.count()
 
-	var written = framed(bytes + 16)
+	let written = framed(bytes + 16)
 	__Builtins.aesGcmSeal(written, 3, keyBlock, nonce, additional, plain)
 
 	if not frameIntact(written, bodyBytes: bytes + 16) or not bodyOf(written, bodyBytes: bytes + 16).equals(expected) 'sealDiffers'
 		wrong = wrong + 1
 	end 'sealDiffers'
 
-	var read = framed(bytes)
+	let read = framed(bytes)
 
 	if not __Builtins.aesGcmOpen(read, 3, keyBlock, nonce, additional, expected) or not frameIntact(read, bodyBytes: bytes) or not bodyOf(read, bodyBytes: bytes).equals(plain) 'openDiffers'
 		wrong = wrong + 1
 	end 'openDiffers'
 
-	var inPlace = expected.clone()
+	let inPlace = expected.clone()
 
 	if not __Builtins.aesGcmOpen(inPlace, 0, keyBlock, nonce, additional, inPlace) or not (try inPlace.slice(0, endIndex: bytes) otherwise panic("the plain text lies inside the sealed array")).equals(plain) 'inPlaceDiffers'
 		wrong = wrong + 1
@@ -1374,10 +1374,10 @@ end 'wrongOutcomes'
 
 function compare(keyBytes Count) returns Count
 	let key = bytesFor(keyBytes, count: keyBytes)
-	var schedule = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
 	schedule.resize((keyBytes + 28) * 8)
 	__Builtins.aesExpandKey(schedule, key)
-	var keyBlock = ByteArray.create(0)
+	let keyBlock = ByteArray.create(0)
 	keyBlock.resize(256 + (schedule.count() shr 1))
 	__Builtins.aesGcmInit(keyBlock, schedule)
 	let software = try AesGcm.build(key, bitsliced: true) otherwise panic("the key is valid")
@@ -1415,8 +1415,8 @@ A key block or an output copied from a literal is the program's own buffer, so t
 literals they started from unchanged.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
 
 	for position in 0 upto 16 'eachKeyByte'
 		key.push(position as Byte)
@@ -1426,7 +1426,7 @@ function main() returns ExitCode
 	__Builtins.aesExpandKey(schedule, key)
 
 	let originalKeys = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	var keyBlock = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".clone()
+	let keyBlock = b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".clone()
 	__Builtins.aesGcmInit(keyBlock, schedule)
 
 	var keysChanged = false
@@ -1439,7 +1439,7 @@ function main() returns ExitCode
 
 	let plain = b"0123456789abcdef"
 	let originalBuffer = b"0123456789abcdef0123456789abcdef"
-	var buffer = b"0123456789abcdef0123456789abcdef".clone()
+	let buffer = b"0123456789abcdef0123456789abcdef".clone()
 	__Builtins.aesGcmSeal(buffer, 0, keyBlock, b"0123456789ab", b"hello", plain)
 
 	print("{keysChanged} {buffer.equals(originalBuffer)} {try originalBuffer.get(31) otherwise 0}\n")
@@ -1483,13 +1483,13 @@ error E3207: <fragment>:14:13: 'aesGcmInit' needs a writable argument; 'keyBlock
 A nonce is exactly 12 bytes: one fewer is refused.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var keyBlock = ByteArray.create(0)
-	var nonce = ByteArray.create(0)
-	var plain = ByteArray.create(0)
-	var additional = ByteArray.create(0)
-	var output = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let keyBlock = ByteArray.create(0)
+	let nonce = ByteArray.create(0)
+	let plain = ByteArray.create(0)
+	let additional = ByteArray.create(0)
+	let output = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	keyBlock.resize(432)
@@ -1522,13 +1522,13 @@ fatal error: a hardware crypto routine was handed a buffer or schedule of the wr
 15 are refused.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var keyBlock = ByteArray.create(0)
-	var nonce = ByteArray.create(0)
-	var sealed = ByteArray.create(0)
-	var additional = ByteArray.create(0)
-	var output = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let keyBlock = ByteArray.create(0)
+	let nonce = ByteArray.create(0)
+	let sealed = ByteArray.create(0)
+	let additional = ByteArray.create(0)
+	let output = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	keyBlock.resize(432)
@@ -1563,13 +1563,13 @@ fatal error: a hardware crypto routine was handed a buffer or schedule of the wr
 48-byte array holds them at 0 and does not at 1.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var keyBlock = ByteArray.create(0)
-	var nonce = ByteArray.create(0)
-	var plain = ByteArray.create(0)
-	var additional = ByteArray.create(0)
-	var output = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let keyBlock = ByteArray.create(0)
+	let nonce = ByteArray.create(0)
+	let plain = ByteArray.create(0)
+	let additional = ByteArray.create(0)
+	let output = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	keyBlock.resize(432)
@@ -1601,12 +1601,12 @@ fatal error: a hardware crypto routine was handed a buffer or schedule of the wr
 they overlap without being the same.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var keyBlock = ByteArray.create(0)
-	var nonce = ByteArray.create(0)
-	var sealed = ByteArray.create(0)
-	var additional = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let keyBlock = ByteArray.create(0)
+	let nonce = ByteArray.create(0)
+	let sealed = ByteArray.create(0)
+	let additional = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	keyBlock.resize(432)
@@ -1638,12 +1638,12 @@ it reads overlaps nothing: the call answers the verdict, `false` here because th
 is not the all-zero one received, and leaves the array as it was.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var keyBlock = ByteArray.create(0)
-	var nonce = ByteArray.create(0)
-	var sealed = ByteArray.create(0)
-	var additional = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let keyBlock = ByteArray.create(0)
+	let nonce = ByteArray.create(0)
+	let sealed = ByteArray.create(0)
+	let additional = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	keyBlock.resize(432)
@@ -1676,9 +1676,9 @@ A key block is 256 bytes of product table followed by the round keys of the sche
 `32 * (rounds + 1)` bytes is `256 + 16 * (rounds + 1)` bytes: one more is refused.
 ```maxon
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var schedule = ByteArray.create(0)
-	var keyBlock = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let keyBlock = ByteArray.create(0)
 	key.resize(16)
 	schedule.resize(352)
 	keyBlock.resize(432)
@@ -1706,8 +1706,8 @@ fatal error: a hardware crypto routine was handed a buffer or schedule of the wr
 The schedule `aesGcmInit` copies the round keys from is exactly `32 * (rounds + 1)` bytes.
 ```maxon
 function main() returns ExitCode
-	var schedule = ByteArray.create(0)
-	var keyBlock = ByteArray.create(0)
+	let schedule = ByteArray.create(0)
+	let keyBlock = ByteArray.create(0)
 	schedule.resize(353)
 	keyBlock.resize(432)
 	__Builtins.aesGcmInit(keyBlock, schedule)
@@ -1787,7 +1787,7 @@ Messages of 1000, 4096, 16384, 16385 and 65553 bytes under 3000 bytes of associa
 8-block loop many times: the hardware backing seals what the bitsliced backing seals and opens it.
 ```maxon
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -1841,7 +1841,7 @@ the `ByteArray` calls give.
 typealias Bytes = FixedArray with Byte
 
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -1852,7 +1852,7 @@ function bytesFor(seed Count, count Count) returns ByteArray
 end 'bytesFor'
 
 function blank(count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.resize(count)
 
 	return bytes
@@ -1887,41 +1887,41 @@ function main() returns ExitCode
 	let additional = bytesFor(5, count: 20)
 	let message = bytesFor(6, count: 40)
 
-	var byteSchedule = blank(352)
+	let byteSchedule = blank(352)
 	__Builtins.aesExpandKey(byteSchedule, key)
-	var fixedSchedule = fixed(352)
+	let fixedSchedule = fixed(352)
 	__Builtins.aesExpandKey(fixedSchedule, key)
 	print("schedule {same(fixedSchedule, right: byteSchedule)}\n")
 
-	var byteSealed = blank(16)
+	let byteSealed = blank(16)
 	__Builtins.aesEncryptBlock(byteSealed, 0, byteSchedule, plain, 0)
-	var fixedSealed = fixed(16)
+	let fixedSealed = fixed(16)
 	__Builtins.aesEncryptBlock(fixedSealed, 0, fixedSchedule, plain, 0)
 	print("encrypt {same(fixedSealed, right: byteSealed)}\n")
 
-	var opened = fixed(16)
+	let opened = fixed(16)
 	__Builtins.aesDecryptBlock(opened, 0, fixedSchedule, fixedSealed, 0)
 	print("decrypt {same(opened, right: plain)}\n")
 
-	var byteStream = blank(32)
+	let byteStream = blank(32)
 	__Builtins.aesCtrXor(byteStream, 0, byteSchedule, counterBlock, 0, 2)
-	var fixedStream = fixed(32)
+	let fixedStream = fixed(32)
 	__Builtins.aesCtrXor(fixedStream, 0, fixedSchedule, counterBlock, 0, 2)
 	print("ctr {same(fixedStream, right: byteStream)}\n")
 
-	var byteKeys = blank(432)
+	let byteKeys = blank(432)
 	__Builtins.aesGcmInit(byteKeys, byteSchedule)
-	var fixedKeys = fixed(432)
+	let fixedKeys = fixed(432)
 	__Builtins.aesGcmInit(fixedKeys, fixedSchedule)
 	print("keys {same(fixedKeys, right: byteKeys)}\n")
 
-	var byteBox = blank(56)
+	let byteBox = blank(56)
 	__Builtins.aesGcmSeal(byteBox, 0, byteKeys, nonce, additional, message)
-	var fixedBox = fixed(56)
+	let fixedBox = fixed(56)
 	__Builtins.aesGcmSeal(fixedBox, 0, fixedKeys, nonce, additional, message)
 	print("seal {same(fixedBox, right: byteBox)}\n")
 
-	var recovered = fixed(40)
+	let recovered = fixed(40)
 	let authentic = __Builtins.aesGcmOpen(recovered, 0, fixedKeys, nonce, additional, fixedBox)
 	print("open {authentic} {same(recovered, right: message)}\n")
 
@@ -1964,7 +1964,7 @@ end 'Bag'
 typealias ByteBag = Bag with Byte
 
 function bagOf(bytes ByteArray) returns ByteBag
-	var bag = ByteBag.create()
+	let bag = ByteBag.create()
 
 	for byte in bytes 'each'
 		bag.add(byte)
@@ -1974,7 +1974,7 @@ function bagOf(bytes ByteArray) returns ByteBag
 end 'bagOf'
 
 function zeros(count Count) returns ByteBag
-	var bag = ByteBag.create()
+	let bag = ByteBag.create()
 
 	for _ in 0 upto count 'each'
 		bag.add(0)
@@ -1994,8 +1994,8 @@ function dump(label String, bag ByteBag)
 end 'dump'
 
 function main() returns ExitCode
-	var key = ByteArray.create(0)
-	var plain = ByteArray.create(0)
+	let key = ByteArray.create(0)
+	let plain = ByteArray.create(0)
 
 	for index in 0 upto 16 'eachByte'
 		key.push(index as Byte)
@@ -2004,9 +2004,9 @@ function main() returns ExitCode
 
 	let keyBag = bagOf(key)
 	let plainBag = bagOf(plain)
-	var schedule = zeros(352)
-	var sealed = zeros(16)
-	var opened = zeros(16)
+	let schedule = zeros(352)
+	let sealed = zeros(16)
+	let opened = zeros(16)
 
 	__Builtins.aesExpandKey(schedule.items, keyBag.items)
 	__Builtins.aesEncryptBlock(sealed.items, 0, schedule.items, plainBag.items, 0)
@@ -2042,7 +2042,7 @@ typealias Recovered = FixedArray with 40 Byte
 typealias Bytes = FixedArray with Byte
 
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -2053,7 +2053,7 @@ function bytesFor(seed Count, count Count) returns ByteArray
 end 'bytesFor'
 
 function blank(count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.resize(count)
 
 	return bytes
@@ -2084,41 +2084,41 @@ function main() returns ExitCode
 	let additional = bytesFor(5, count: 20)
 	let message = bytesFor(6, count: 40)
 
-	var byteSchedule = blank(352)
+	let byteSchedule = blank(352)
 	__Builtins.aesExpandKey(byteSchedule, key)
-	var fixedSchedule = Schedule.create()
+	let fixedSchedule = Schedule.create()
 	__Builtins.aesExpandKey(fixedSchedule, key)
 	print("schedule {same(fixedSchedule, right: byteSchedule)}\n")
 
-	var byteSealed = blank(16)
+	let byteSealed = blank(16)
 	__Builtins.aesEncryptBlock(byteSealed, 0, byteSchedule, plain, 0)
-	var fixedSealed = Block.create()
+	let fixedSealed = Block.create()
 	__Builtins.aesEncryptBlock(fixedSealed, 0, fixedSchedule, plain, 0)
 	print("encrypt {same(fixedSealed, right: byteSealed)}\n")
 
-	var opened = Block.create()
+	let opened = Block.create()
 	__Builtins.aesDecryptBlock(opened, 0, fixedSchedule, fixedSealed, 0)
 	print("decrypt {same(opened, right: plain)}\n")
 
-	var byteStream = blank(32)
+	let byteStream = blank(32)
 	__Builtins.aesCtrXor(byteStream, 0, byteSchedule, counterBlock, 0, 2)
-	var fixedStream = Stream.create()
+	let fixedStream = Stream.create()
 	__Builtins.aesCtrXor(fixedStream, 0, fixedSchedule, counterBlock, 0, 2)
 	print("ctr {same(fixedStream, right: byteStream)}\n")
 
-	var byteKeys = blank(432)
+	let byteKeys = blank(432)
 	__Builtins.aesGcmInit(byteKeys, byteSchedule)
-	var fixedKeys = Keys.create()
+	let fixedKeys = Keys.create()
 	__Builtins.aesGcmInit(fixedKeys, fixedSchedule)
 	print("keys {same(fixedKeys, right: byteKeys)}\n")
 
-	var byteBox = blank(56)
+	let byteBox = blank(56)
 	__Builtins.aesGcmSeal(byteBox, 0, byteKeys, nonce, additional, message)
-	var fixedBox = Box.create()
+	let fixedBox = Box.create()
 	__Builtins.aesGcmSeal(fixedBox, 0, fixedKeys, nonce, additional, message)
 	print("seal {same(fixedBox, right: byteBox)}\n")
 
-	var recovered = Recovered.create()
+	let recovered = Recovered.create()
 	let authentic = __Builtins.aesGcmOpen(recovered, 0, fixedKeys, nonce, additional, fixedBox)
 	print("open {authentic} {same(recovered, right: message)}\n")
 

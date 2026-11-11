@@ -23,13 +23,13 @@ export function expandRuntimeLocks(module StdModule, firstFuncIndex ElementIndex
 
 	for funcIndex in firstFuncIndex upto module.functions.count() 'eachFunc'
 		let func = try module.functions.get(funcIndex) otherwise panic("expandRuntimeLocks: functions.get OOB at {funcIndex}")
-		var expander = RuntimeLockExpander.create(module, func: func, sites: sites, dropOnly: dropOnly)
+		let expander = RuntimeLockExpander.create(module, func: func, sites: sites, dropOnly: dropOnly)
 		expander.run()
 	end 'eachFunc'
 end 'expandRuntimeLocks'
 
 function runtimeLockSiteMap(module StdModule) returns RuntimeLockSiteByOp
-	var sites = RuntimeLockSiteByOp.create()
+	let sites = RuntimeLockSiteByOp.create()
 
 	for site in module.runtimeLockSites 'eachSite'
 		sites.upsert(site.opIndex, value: site)
@@ -75,8 +75,8 @@ type RuntimeLockExpander
 	end 'run'
 
 	function dropMarksFrom(blockRef ElementIndex)
-		var block = self.blockAt(blockRef)
-		var kept = OpIndexArray.create(0)
+		let block = self.blockAt(blockRef)
+		let kept = OpIndexArray.create(0)
 		var dropped = false
 
 		for pos in 0 upto block.bodyOpCount() 'eachOp'
@@ -115,8 +115,8 @@ type RuntimeLockExpander
 	function expand(blockRef ElementIndex, pos ElementIndex, site RuntimeLockSite) returns ElementIndex
 		_ = self.valueIds()
 
-		var head = self.blockAt(blockRef)
-		var cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: ExpandedLockContLabel)
+		let head = self.blockAt(blockRef)
+		let cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: ExpandedLockContLabel)
 		head.truncateBodyOps(pos)
 		let contRef = registeredBlockRef(self.module, func: self.func, block: cont)
 
@@ -134,12 +134,12 @@ type RuntimeLockExpander
 
 	function openByteExchange(block IrBlock, cont IrBlock, lock ValueId, callee ByteArray, stores FullRangeInt, displacing FullRangeInt, taken IrBlock)
 		let prior = self.exchangeByte(block, lock: lock, value: stores)
-		var slow = self.slowArm(block, cont: cont, callee: callee, lock: lock, prior: prior)
+		let slow = self.slowArm(block, cont: cont, callee: callee, lock: lock, prior: prior)
 		emitBranchOnCompare(self.module, block: block, value: prior, pred: StdCmpPred.eq, against: displacing, whenTrue: taken, whenFalse: slow, ids: self.valueIds())
 	end 'openByteExchange'
 
 	function openEnterRecursive(head IrBlock, cont IrBlock, lock ValueId)
-		var owned = self.module.addBlock(self.func, label: ExpandedLockOwnedLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
+		let owned = self.module.addBlock(self.func, label: ExpandedLockOwnedLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
 
 		let token = self.valueIds().mint()
 		self.module.appendOp(head, op: StdOp.osThreadToken(token))
@@ -150,9 +150,9 @@ type RuntimeLockExpander
 	end 'openEnterRecursive'
 
 	function openLeaveRecursive(head IrBlock, cont IrBlock, lock ValueId)
-		var nested = self.module.addBlock(self.func, label: ExpandedLockNestedLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
-		var outermost = self.module.addBlock(self.func, label: ExpandedLockOutermostLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
-		var ids = self.valueIds()
+		let nested = self.module.addBlock(self.func, label: ExpandedLockNestedLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
+		let outermost = self.module.addBlock(self.func, label: ExpandedLockOutermostLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
+		let ids = self.valueIds()
 
 		let depth = emitLoadField(self.module, block: head, record: lock, offset: RtLockOffDepth, ids: ids)
 		emitBranchOnCompare(self.module, block: head, value: depth, pred: StdCmpPred.eq, against: 0, whenTrue: outermost, whenFalse: nested, ids: ids)
@@ -167,14 +167,14 @@ type RuntimeLockExpander
 	end 'openLeaveRecursive'
 
 	function slowArm(head IrBlock, cont IrBlock, callee ByteArray, lock ValueId, prior ValueId) returns IrBlock
-		var slow = self.module.addBlock(self.func, label: ExpandedLockSlowLabel, heat: BlockHeat.cold, inlineSite: head.inlineSite)
+		let slow = self.module.addBlock(self.func, label: ExpandedLockSlowLabel, heat: BlockHeat.cold, inlineSite: head.inlineSite)
 		self.module.appendOp(slow, op: StdOp.call(self.valueIds().mint(), callee: callee, args: twoArgs(lock, second: prior)))
 		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
 		return slow
 	end 'slowArm'
 
 	function exchangeByte(block IrBlock, lock ValueId, value FullRangeInt) returns ValueId
-		var ids = self.valueIds()
+		let ids = self.valueIds()
 
 		return emitRtLockExchangeByte(self.module, block: block, lock: lock, value: emitConst(self.module, block: block, value: value, ids: ids), ids: ids)
 	end 'exchangeByte'

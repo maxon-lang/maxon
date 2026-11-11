@@ -446,7 +446,7 @@ type Label
 end 'Label'
 
 function main() returns ExitCode
-	var l = Label.create("aébcdé")
+	let l = Label.create("aébcdé")
 	let needle = "cd"
 	print("{l.head()} {l.width()} {l.upTo(needle)}\n")
 	return 0

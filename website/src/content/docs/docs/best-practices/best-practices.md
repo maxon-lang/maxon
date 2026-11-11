@@ -68,8 +68,8 @@ Maxon only allows widening casts. For narrowing conversions, use explicit functi
 
 ```maxon
 // Good: intent is obvious
-var rounded = round(3.7)    // 4
-var truncated = trunc(3.7)  // 3
+let rounded = round(3.7)    // 4
+let truncated = trunc(3.7)  // 3
 
 // The compiler also rejects bare primitive cast targets — cast through a
 // named ranged typealias instead (e.g. `var x = 3.7 as Tally`).
@@ -273,8 +273,8 @@ end 'process'
 
 // Avoid: declaring everything at the top of the function
 var score = 0 as Score
-var temp = ""
-var found = false
+let temp = ""
+let found = false
 // ... 30 lines later ...
 score = computeScore(item)
 ```
@@ -306,12 +306,12 @@ end 'check'
 Struct assignment creates a reference (alias), not a copy. Mutating through one variable affects all aliases.
 
 ```maxon
-var a = Point.create(1, y: 2)
-var b = a          // b is an alias for a
+let a = Point.create(1, y: 2)
+let b = a          // b is an alias for a
 b.x = 99          // a.x is now 99 too
 
 // Use clone for an independent copy
-var c = a.clone()
+let c = a.clone()
 c.x = 50          // a.x is still 99
 ```
 
@@ -321,7 +321,7 @@ If you need to mutate a value without affecting the original, clone it. Maxon ma
 
 ```maxon
 function sortedCopy(items ItemArray) returns ItemArray
-	var copy = items.clone()
+	let copy = items.clone()
 	sortInPlace(copy)
 	return copy
 end 'sortedCopy'
@@ -334,7 +334,7 @@ end 'sortedCopy'
 ```maxon
 // Good: the defaults are frozen and shared; only the edited copy is cloned
 let defaults = freeze loadDefaults()
-var edited = defaults.clone()
+let edited = defaults.clone()
 edited.retries = 5
 
 // Bad: writing through frozen data
@@ -563,7 +563,7 @@ end 'handle'
 When you know how many elements you will add, create the array with that capacity to avoid repeated reallocations. `create(n, zeroed: false)` makes an empty array with room for `n` elements, in one allocation when they take at most 256 bytes; `reserve` grows an array that already exists.
 
 ```maxon
-var results = ResultArray.create(inputCount, zeroed: false)
+let results = ResultArray.create(inputCount, zeroed: false)
 for item in inputs 'process'
 	results.push(transform(item))
 end 'process'
@@ -588,16 +588,16 @@ let first = try list.first() otherwise emptyItem
 
 ```maxon
 // Array: ordered data with index access
-var scores = ScoreArray.create(0)
+let scores = ScoreArray.create(0)
 
 // Map: fast lookup by key
-var userCache = UserMap.create()
+let userCache = UserMap.create()
 
 // Set: track unique items
-var visited = CitySet.create()
+let visited = CitySet.create()
 
 // List: queue with O(1) push/pop at both ends
-var taskQueue = TaskList.create()
+let taskQueue = TaskList.create()
 ```
 
 ### Iterate Collections Directly
@@ -657,12 +657,12 @@ type Connection
 end 'Connection'
 
 // Clear at the call site
-var conn = Connection.createSecure("example.com")
+let conn = Connection.createSecure("example.com")
 ```
 
 ### Use Static Fields for Shared Precomputed Values
 
-A static field's initializer runs once, before `main`, and every read afterwards shares the result. Use this for lookup tables, precomputed data, and singleton-like values instead of rebuilding them on each call. Prefer `static let`: a value decided at compile time is image data and costs nothing at run time. Every initializer runs whether or not anything reads the field, so a static nothing reads is pure startup cost.
+A `static let` is image data laid down before `main`, and every read shares the one `immutable` copy. Use it for lookup tables and precomputed constants, which no call rebuilds. Its initializer calls nothing (E3220): write a literal, or build a value that needs a call in a function where it is used. `.clone()` gives a mutable copy.
 
 ```maxon
 type Classifier

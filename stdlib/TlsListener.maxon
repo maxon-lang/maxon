@@ -56,7 +56,7 @@ public type TlsServerOptions
 	end 'authenticateClients'
 
 	module function listenerConfig() returns TlsServerConfig throws TlsError
-		var config = settings.clone()
+		let config = settings.clone()
 
 		config.cipherSuites = tlsEnabledSuites(config.cipherSuites, protocols: config.protocols)
 
@@ -103,8 +103,8 @@ public type TlsListener
 		end 'refused'
 
 		let entropy = try TlsServerEntropy.fresh(config) otherwise throw TlsError.entropyUnavailable
-		var peer = TlsX509Peer.create(clientRoots.clone(), now: verificationTime.seconds(), purpose: X509Purpose.clientAuth)
-		var endpoint = try TlsServerHandshake.create(config.clone(), entropy: entropy, peer: peer) otherwise throw TlsError.invalidConfiguration
+		let peer = TlsX509Peer.create(clientRoots.clone(), now: verificationTime.seconds(), purpose: X509Purpose.clientAuth)
+		let endpoint = try TlsServerHandshake.create(config.clone(), entropy: entropy, peer: peer) otherwise throw TlsError.invalidConfiguration
 
 		return TlsStream.unshaken(transport, endpoint: endpoint, peer: peer, deadlineMs: handshakeDeadlineMs)
 	end 'accept'

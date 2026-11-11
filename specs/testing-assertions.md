@@ -500,7 +500,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Word = Array with Integer
 
 function main() returns ExitCode
-	var xs = Word.create(0)
+	let xs = Word.create(0)
 	xs.push(1)
 	xs.push(2)
 	xs.push(3)

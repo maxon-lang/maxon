@@ -417,7 +417,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	var ps = IntPromiseArray.create(0)
+	let ps = IntPromiseArray.create(0)
 	ps.push(try h.double(21) otherwise panic("send double"))
 
 	let p = try ps.pop() otherwise panic("the push above filled it")

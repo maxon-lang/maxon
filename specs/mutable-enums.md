@@ -67,7 +67,7 @@ function bump(s Slot)
 end 'bump'
 
 function main() returns ExitCode
-	var s = Slot.holding(Counter.create(10))
+	let s = Slot.holding(Counter.create(10))
 	bump(s)
 	match s 'read'
 		holding(c) then return c.n
@@ -111,7 +111,7 @@ function bump(s Slot)
 end 'bump'
 
 function main() returns ExitCode
-	var s = Slot.holding(Counter.create(10))
+	let s = Slot.holding(Counter.create(10))
 	bump(s)
 	match s 'read'
 		holding(c) then return c.n
@@ -242,7 +242,7 @@ type Registry
 end 'Registry'
 
 function main() returns ExitCode
-	var registry = Registry.create()
+	let registry = Registry.create()
 	registry.run(3)
 	return registry.held.count() as ExitCode
 end 'main'
@@ -284,13 +284,13 @@ type Registry
 	end 'keep'
 
 	function run(count Integer)
-		var settle = Settle.someMoved(count)
+		let settle = Settle.someMoved(count)
 		self.keep(settle)
 	end 'run'
 end 'Registry'
 
 function main() returns ExitCode
-	var registry = Registry.create()
+	let registry = Registry.create()
 	registry.run(3)
 	return registry.held.count() as ExitCode
 end 'main'
@@ -332,14 +332,14 @@ type Registry
 	end 'keep'
 
 	function run(count Integer)
-		var settle = Settle.someMoved(count)
+		let settle = Settle.someMoved(count)
 		self.keep(settle)
 		self.keep(settle)
 	end 'run'
 end 'Registry'
 
 function main() returns ExitCode
-	var registry = Registry.create()
+	let registry = Registry.create()
 	registry.run(3)
 	return registry.held.count() as ExitCode
 end 'main'
@@ -383,8 +383,8 @@ type Registry
 	end 'keep'
 
 	function run(count Integer)
-		var settle = Settle.someMoved(count)
-		var spare = SettleArray.create(0)
+		let settle = Settle.someMoved(count)
+		let spare = SettleArray.create(0)
 		spare.push(settle)
 		self.keep(settle)
 		spare.clear()
@@ -392,7 +392,7 @@ type Registry
 end 'Registry'
 
 function main() returns ExitCode
-	var registry = Registry.create()
+	let registry = Registry.create()
 	registry.run(3)
 	return registry.held.count() as ExitCode
 end 'main'
@@ -430,7 +430,7 @@ function makeSlot() returns Slot
 end 'makeSlot'
 
 function main() returns ExitCode
-	var s = makeSlot()
+	let s = makeSlot()
 	var seen = 0 as Integer
 
 	match s 'step'

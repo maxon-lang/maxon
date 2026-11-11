@@ -15,7 +15,7 @@ test 'a step main posted, overtaken by a service hitting its breakpoint, still r
 
 	try Expect.isTrue(first < last, message: "the start line's code lies before the next line's, so every instruction start between them is one main executes in order")
 
-	var script = StringArray.create(0)
+	let script = StringArray.create(0)
 
 	for offset in first to last 'eachCandidate'
 		script.push("{BreakCommand} {exactOffsetTarget(offset)}")
@@ -30,7 +30,7 @@ test 'a step main posted, overtaken by a service hitting its breakpoint, still r
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	var armed = SidecarNumberArray.create(0)
+	let armed = SidecarNumberArray.create(0)
 
 	for answer in eventsOfKind(events, kind: BreakpointEventName) 'eachAnswer'
 		if textOf(answer, node: answer.root, key: ActionKey) == SetAction and textOf(answer, node: answer.root, key: FunctionKey) == MainFunctionName 'anInstructionOfMain'
@@ -40,7 +40,7 @@ test 'a step main posted, overtaken by a service hitting its breakpoint, still r
 
 	try Expect.atLeast(armed.count(), than: 3, message: "every instruction start from the start line to the next line's first is armed, and a line of arithmetic is several instructions. It printed: {listedLines(eventKinds(events))}. {said}")
 
-	var reached = SidecarNumberArray.create(0)
+	let reached = SidecarNumberArray.create(0)
 
 	for stop in eventsOfKind(events, kind: StopEventName) 'eachStop'
 		if textOf(stop, node: stop.root, key: FunctionKey) == MainFunctionName 'aStopOfMain'
@@ -54,7 +54,7 @@ test 'a step main posted, overtaken by a service hitting its breakpoint, still r
 end 'a step main posted, overtaken by a service hitting its breakpoint, still reports the armed instruction it lands on'
 
 function renderedOffsets(offsets SidecarNumberArray) returns String
-	var spelled = StringArray.create(0)
+	let spelled = StringArray.create(0)
 
 	for offset in offsets 'eachOffset'
 		spelled.push(hexSpelling(offset))

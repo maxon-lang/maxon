@@ -526,7 +526,7 @@ end 'passBanner'
 // No `project` is threaded here: a coverage point is minted in the PARSER, above every fold, so by the
 // time a pass list exists the instrumentation is already in the IR.
 export function buildMaxonTierPasses() returns PassKindArray
-	var passes = PassKindArray.create(0)
+	let passes = PassKindArray.create(0)
 
 	// ⚠ The first two are ordered, and neither order is recoverable from the passes themselves.
 	// `reportDeferredNames` drains diagnostics the merge deferred, and on an unreadable type universe
@@ -553,14 +553,14 @@ end 'buildMaxonTierPasses'
 // order and hold on the pool exactly as they held serially, because a worker runs the members in this
 // order over each function.
 export function buildFrontEndLoweringPasses() returns PassKindArray
-	var passes = PassKindArray.create(0)
+	let passes = PassKindArray.create(0)
 	passes.push(PassKind.lowerMaxonToStd)
 	passes.push(PassKind.insertRangeChecks)
 	return passes
 end 'buildFrontEndLoweringPasses'
 
 export function buildLoweringPasses() returns PassKindArray
-	var passes = buildFrontEndLoweringPasses()
+	let passes = buildFrontEndLoweringPasses()
 	passes.push(PassKind.inlineManagedPrimitives)
 	passes.push(PassKind.inlineLeaves)
 	passes.push(PassKind.noteFoldedRecords)
@@ -568,7 +568,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.borrowReturnedParameters)
 	passes.push(PassKind.cancelRetainRelease)
 
-	var members = StdFanOutStepArray.create(0)
+	let members = StdFanOutStepArray.create(0)
 	members.push(StdFanOutStep.pruneDeadBlockArgs)
 	members.push(StdFanOutStep.elimTrivialBlockArgs)
 	members.push(StdFanOutStep.foldConstants)
@@ -641,7 +641,7 @@ end 'buildLoweringPasses'
 // `cmpImm` on a block arg, which is the shape a `try`'s continuation makes — minted by the Maxon lowering,
 // by no builder, and unreachable by splicing because the called-once rule refuses a `throwing` callee.
 export function buildEmittedBandPasses() returns StdFanOutStepArray
-	var members = StdFanOutStepArray.create(0)
+	let members = StdFanOutStepArray.create(0)
 
 	// The block-arg cleanups FIRST, for the register-allocator invariant `buildLoweringPasses` states: the
 	// band's round of `inlineLeaves` has just spliced bodies in, and a splice is what mints a continuation
@@ -908,7 +908,7 @@ export type PassPipeline
 	// frees its ops, blocks and spans and nothing else. The Maxon-tier COLUMNS ride on functions the back
 	// end still holds.
 	export function releaseMaxonTier()
-		var emptyScope = Scope.create()
+		let emptyScope = Scope.create()
 
 		for func in self.stdModule.functions 'eachFunc'
 			func.releaseMaxonTierData(emptyScope)

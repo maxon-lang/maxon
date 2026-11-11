@@ -21,7 +21,7 @@ let Arm64UnclassifiedAnswer = "unclassified"
 test 'the arm64 classifier answers a length, a class, a target and a frame step for every instruction class the step planner and the stack unwinder read'
 	let staged = builtFixture(Arm64ClassifierCaseLabel, fixture: HeaplessFixtureName)
 
-	var probes = Arm64ProbeArray.create(0)
+	let probes = Arm64ProbeArray.create(0)
 	probes.push(Arm64Probe.create("c0035fd6", expected: "len=4 class={ReturnClass} cond={NoCondition} target={NoTarget} reg=30 frame={NoFrameStep}", what: "`ret` — the class that ends a function, and the register it returns through, which on every frame this compiler emits is x30"))
 	probes.push(Arm64Probe.create("c0031fd6", expected: "len=4 class={ReturnClass} cond={NoCondition} target={NoTarget} reg=30 frame={NoFrameStep}", what: "`br x30` — the return a frame that can resume after a green-thread switch ends in, which the unwinder and a step must read as the function's return rather than as a jump they cannot follow"))
 	probes.push(Arm64Probe.create("60003fd6", expected: "len=4 class={IndirectCallClass} cond={NoCondition} target={NoTarget} reg=3 frame={NoFrameStep}", what: "`blr x3` — the indirect call this compiler emits for a call through a function value, whose register a step into the call has to read because the callee is only knowable at the stop"))
@@ -63,7 +63,7 @@ test 'the arm64 classifier answers a length, a class, a target and a frame step 
 	probes.push(Arm64Probe.create("c0035f", expected: Arm64UnclassifiedAnswer, what: "three bytes of a `ret` — every arm64 instruction is four bytes wide, so a shorter sequence is not an instruction and must be refused rather than read past its end"))
 
 	var spelled = ""
-	var wanted = StringArray.create(0)
+	let wanted = StringArray.create(0)
 
 	for probe in probes 'eachProbe'
 		spelled = probe.bytes if spelled.isEmpty() else "{spelled}{Arm64ClassifySeparator}{probe.bytes}"
@@ -72,7 +72,7 @@ test 'the arm64 classifier answers a length, a class, a target and a frame step 
 
 	let run = spawnCompiler([DebugSubcommandName, "{ClassifyArm64Option}{spelled}"], staged: staged, what: "`{DebugSubcommandName} {ClassifyArm64Option}`")
 	let said = renderedEvents(run.stdout, stderr: run.stderr)
-	var answered = StringArray.create(0)
+	let answered = StringArray.create(0)
 
 	for rawLine in withoutCarriageReturns(run.stdout).split(LineFeed) 'eachLine'
 		if not rawLine.trim().isEmpty() 'anAnswer'
@@ -83,7 +83,7 @@ test 'the arm64 classifier answers a length, a class, a target and a frame step 
 	Expect.equal(run.exitCode(), expected: 0, message: "`{ClassifyArm64Option}` reads no program and runs nothing, so it cannot fail. {said}")
 	Expect.equal(answered.count(), expected: probes.count(), message: "{probes.count()} byte sequences are {probes.count()} answers, one per line. It answered: {listedLines(answered)}. {said}")
 
-	var wrong = StringArray.create(0)
+	let wrong = StringArray.create(0)
 
 	for (iter, probe) in probes.withIterator() 'eachAnswer'
 		let got = try answered.get(iter.index()) otherwise AbsentEventText

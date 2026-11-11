@@ -60,17 +60,17 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		end 'calc_cap'
 
 		// Allocate internal arrays with preallocated capacity
-		var ks = KeyArray{}
+		let ks = KeyArray{}
 		ks.resize(cap)
-		var vs = ValueArray{}
+		let vs = ValueArray{}
 		vs.resize(cap)
-		var sts = StateArray{}
+		let sts = StateArray{}
 		sts.resize(cap)
-		var hs = HashSlotArray{}
+		let hs = HashSlotArray{}
 		hs.resize(cap)
 
 		// Create the map with arrays and preallocated capacity (count defaults to 0)
-		var result = Self{keys: ks, values: vs, states: sts, hashes: hs, capacity: cap}
+		let result = Self{keys: ks, values: vs, states: sts, hashes: hs, capacity: cap}
 
 		// Insert each key-value pair from the init arrays
 		for i in 0 upto numElements 'insert_loop'
@@ -359,20 +359,20 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		end 'handle_zero'
 
 		// Allocate new arrays with preallocated capacity
-		var newKeys = KeyArray{}
+		let newKeys = KeyArray{}
 		newKeys.resize(newCapacity)
-		var newValues = ValueArray{}
+		let newValues = ValueArray{}
 		newValues.resize(newCapacity)
-		var newStates = StateArray{}
+		let newStates = StateArray{}
 		newStates.resize(newCapacity)
-		var newHashes = HashSlotArray{}
+		let newHashes = HashSlotArray{}
 		newHashes.resize(newCapacity)
 
 		// Save old arrays for rehashing, then replace with new ones
-		var oldKeys = keys
-		var oldValues = values
-		var oldStates = states
-		var oldHashes = hashes
+		let oldKeys = keys
+		let oldValues = values
+		let oldStates = states
+		let oldHashes = hashes
 		keys = newKeys
 		values = newValues
 		states = newStates
@@ -398,8 +398,8 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			end 'so1'
 
 			if isOccupied 'occupied'
-				var key = try oldKeys.get(i) otherwise panic("Map.rehash: an occupied slot holds a key")
-				var value = try oldValues.get(i) otherwise panic("Map.rehash: an occupied slot holds a value")
+				let key = try oldKeys.get(i) otherwise panic("Map.rehash: an occupied slot holds a key")
+				let value = try oldValues.get(i) otherwise panic("Map.rehash: an occupied slot holds a value")
 				let hash = try oldHashes.get(i) otherwise panic("Map.rehash: oldHashes.get OOB — the hash column is parallel to the states")
 				var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 				var currentState = try states.get(index as ElementIndex) otherwise panic("Map.rehash: states.get OOB — index is masked into [0, capacity)")
@@ -445,7 +445,7 @@ public type MapIterator uses Key, Value implements Iterator with Entry where Key
 	var capacity as TableCapacity
 
 	public static function create(keys IterKeyArray, values IterValueArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
-		var stateCursor = try states.managed.createCursor() otherwise throw IterationError.exhausted
+		let stateCursor = try states.managed.createCursor() otherwise throw IterationError.exhausted
 		let first = try findNextOccupied(stateCursor, capacity: capacity, from: 0)
 		return Self{keys: KeySlots.over(keys.managed, at: first), values: ValueSlots.over(values.managed, at: first), states: stateCursor, capacity: capacity}
 	end 'create'

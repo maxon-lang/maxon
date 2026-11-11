@@ -100,11 +100,11 @@ end 'main'
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-Command")
 	argv.push("$PID")
-	var child = try StreamingSubprocess.spawn(Executable.name("powershell"), arguments: argv) otherwise return 2
+	let child = try StreamingSubprocess.spawn(Executable.name("powershell"), arguments: argv) otherwise return 2
 	let line = try child.readStdoutLine() otherwise return 4
 	let pid = try int.fromString(line.trim()) otherwise return 5
 	let code = try child.wait() otherwise return 6
@@ -128,7 +128,7 @@ end 'main'
 function main() returns ExitCode
 	#if os(Windows)
 	let exe = Executable.name("cmd")
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("exit")
 	argv.push("0")
@@ -160,7 +160,7 @@ let ChildPollMs = 50
 
 function main() returns ExitCode
 	#if os(Windows)
-	var config = Configuration.create(Executable.name("ping"))
+	let config = Configuration.create(Executable.name("ping"))
 	config.arguments.push("-n")
 	config.arguments.push("3")
 	config.arguments.push("127.0.0.1")
@@ -197,7 +197,7 @@ let ChildPollMs = 50
 
 function main() returns ExitCode
 	#if os(Windows)
-	var config = Configuration.create(Executable.name("cmd"))
+	let config = Configuration.create(Executable.name("cmd"))
 	config.arguments.push("/c")
 	config.arguments.push("exit")
 	config.arguments.push("0")

@@ -28,7 +28,7 @@ typealias Word = bits(64)
 typealias Planes = FixedArray with 8 Word
 
 function churn() returns Word
-	var planes = Planes.create()
+	let planes = Planes.create()
 	planes.set(3, value: 40)
 
 	return planes.get(3)
@@ -68,7 +68,7 @@ typealias Word = bits(64)
 typealias Wide = FixedArray with 64 Word
 
 function churn() returns Word
-	var wide = Wide.create()
+	let wide = Wide.create()
 	wide.set(63, value: 7)
 
 	return wide.get(63)
@@ -107,7 +107,7 @@ record and its buffer live in one operating-system mapping. Both ends of the lar
 typealias Bytes = FixedArray with Byte
 
 function churn(count Count) returns Byte
-	var bytes = Bytes.create(count)
+	let bytes = Bytes.create(count)
 	let first = try bytes.get(0) otherwise panic("first")
 	let last = try bytes.get(count - 1) otherwise panic("last")
 	try bytes.set(count - 1, value: 9) otherwise panic("set")
@@ -154,7 +154,7 @@ typealias Word = bits(64)
 typealias Cells = FixedArray with Word
 
 function dirty(count ElementIndex) returns Word
-	var cells = Cells.create(count)
+	let cells = Cells.create(count)
 	try cells.set(0, value: 0xFFFF) otherwise panic("set")
 	try cells.set(count - 1, value: 0xEEEE) otherwise panic("set")
 
@@ -220,7 +220,7 @@ extension FixedArray
 	end 'windowCount'
 
 	function clearedWindowLeavesTheArray(start ElementIndex, stop ElementIndex) returns bool
-		var window = try managed.slice(start, stop) otherwise panic("slice")
+		let window = try managed.slice(start, stop) otherwise panic("slice")
 		let before = managed.length()
 		window.clear()
 
@@ -232,7 +232,7 @@ type Holder
 	export var cells as Cells
 
 	static function around(count ElementIndex) returns Self
-		var cells = Cells.create(count)
+		let cells = Cells.create(count)
 		try cells.set(1, value: 5) otherwise panic("set")
 		try cells.set(count - 1, value: 6) otherwise panic("set")
 
@@ -241,8 +241,8 @@ type Holder
 end 'Holder'
 
 function check(count ElementIndex) returns ExitCode
-	var original = Holder.around(count)
-	var copy = original.clone()
+	let original = Holder.around(count)
+	let copy = original.clone()
 
 	try copy.cells.set(1, value: 99) otherwise panic("set")
 	try original.cells.set(count - 1, value: 77) otherwise panic("set")
@@ -295,7 +295,7 @@ type Config
 	export var cells as Cells
 
 	static function create(count ElementIndex) returns Self
-		var cells = Cells.create(count)
+		let cells = Cells.create(count)
 		try cells.set(1, value: 5) otherwise panic("set")
 
 		return Self{cells: cells}
@@ -306,7 +306,7 @@ typealias ConfigCell = SharedValue with Config
 
 function check(count ElementIndex) returns ExitCode
 	let cell = ConfigCell.create(Config.create(count))
-	var mine = cell.current().clone()
+	let mine = cell.current().clone()
 
 	try mine.cells.set(1, value: 9) otherwise panic("set")
 	try mine.cells.set(2, value: 4) otherwise panic("set")
@@ -362,7 +362,7 @@ end 'Keeper'
 
 function check(count ElementIndex) returns ExitCode
 	let keeper = spawn Keeper.create()
-	var cells = Cells.create(count) as isolated Cells
+	let cells = Cells.create(count) as isolated Cells
 	try cells.set(1, value: 5) otherwise panic("set")
 
 	let total = try await keeper.adopt(cells, last: count - 1) otherwise 0
@@ -396,7 +396,7 @@ typealias Word = bits(64)
 typealias Planes = FixedArray with 8 Word
 
 function dirty() returns Word
-	var planes = Planes.create()
+	let planes = Planes.create()
 	planes.set(0, value: 0xFFFF)
 	planes.set(7, value: 0xEEEE)
 
@@ -437,7 +437,7 @@ A sub-byte-packed element sizes the buffer in bits, and the single allocation ho
 typealias Flags = FixedArray with 16 bool
 
 function churn() returns bool
-	var flags = Flags.create()
+	let flags = Flags.create()
 	flags.set(3, value: true)
 	flags.set(15, value: true)
 
@@ -474,7 +474,7 @@ typealias Wide = FixedArray with 300 Byte
 typealias Runtime = FixedArray with Byte
 
 function sized() returns Byte
-	var wide = Wide.create()
+	let wide = Wide.create()
 	wide.set(299, value: 5)
 
 	return wide.get(299)
@@ -485,7 +485,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function runtime() returns Byte
-	var bytes = Runtime.create(launder(300))
+	let bytes = Runtime.create(launder(300))
 	try bytes.set(299, value: 5) otherwise panic("set")
 
 	return try bytes.get(299) otherwise panic("get")
@@ -528,35 +528,35 @@ typealias Crumbs = FixedArray with 100 Crumb
 typealias Nibbles = FixedArray with 100 Nibble
 
 function halves() returns Half
-	var cells = Halves.create()
+	let cells = Halves.create()
 	cells.set(99, value: 7)
 
 	return cells.get(99)
 end 'halves'
 
 function wides() returns Wide
-	var cells = Wides.create()
+	let cells = Wides.create()
 	cells.set(99, value: 7)
 
 	return cells.get(99)
 end 'wides'
 
 function flags() returns bool
-	var cells = Flags.create()
+	let cells = Flags.create()
 	cells.set(99, value: true)
 
 	return cells.get(99)
 end 'flags'
 
 function crumbs() returns Crumb
-	var cells = Crumbs.create()
+	let cells = Crumbs.create()
 	cells.set(99, value: 3)
 
 	return cells.get(99)
 end 'crumbs'
 
 function nibbles() returns Nibble
-	var cells = Nibbles.create()
+	let cells = Nibbles.create()
 	cells.set(99, value: 15)
 
 	return cells.get(99)
@@ -686,7 +686,7 @@ mm_free Cells #8
 `__ManagedMemory.create(capacity, elementSize)` is the sized creation the standard library's own buffers use.
 ```maxon
 function churn() returns ExitCode
-	var memory = try __ManagedMemory.create(16, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(16, 1) otherwise return 1
 	try memory.setLength(16) otherwise return 2
 
 	let bytes = ByteArray.init(memory)
@@ -728,10 +728,10 @@ and the whole thing is released with no leak.
 typealias Total = int(0 to u64.max)
 
 function main() returns ExitCode
-	var memory = try __ManagedMemory.create(8, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(8, 1) otherwise return 1
 	try memory.setLength(8) otherwise return 2
 
-	var bytes = ByteArray.init(memory)
+	let bytes = ByteArray.init(memory)
 	var index = 0 as Total
 
 	while index < 8 'fill'
@@ -777,15 +777,15 @@ end 'main'
 `clone` copies a co-allocated array rather than viewing it, so a write on either side never reaches the other.
 ```maxon
 function main() returns ExitCode
-	var memory = try __ManagedMemory.create(8, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(8, 1) otherwise return 1
 	try memory.setLength(8) otherwise return 2
 
-	var original = ByteArray.init(memory)
+	let original = ByteArray.init(memory)
 
 	try original.set(0, value: 10) otherwise return 3
 	try original.set(1, value: 11) otherwise return 3
 
-	var copy = original.clone()
+	let copy = original.clone()
 
 	try copy.set(0, value: 99) otherwise return 4
 	try original.set(1, value: 77) otherwise return 5
@@ -814,7 +814,7 @@ end 'main'
 <!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
-	var memory = try __ManagedMemory.create(8, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(8, 1) otherwise return 1
 	try memory.setLength(8) otherwise return 2
 
 	let original = ByteArray.init(memory)
@@ -842,10 +842,10 @@ end 'main'
 The array that the slice was cut from is released before the slice is read and written.
 ```maxon
 function cut() returns ByteArray
-	var memory = try __ManagedMemory.create(8, 1) otherwise panic("create")
+	let memory = try __ManagedMemory.create(8, 1) otherwise panic("create")
 	try memory.setLength(8) otherwise panic("setLength")
 
-	var source = ByteArray.init(memory)
+	let source = ByteArray.init(memory)
 
 	try source.set(2, value: 20) otherwise panic("set")
 	try source.set(3, value: 30) otherwise panic("set")
@@ -855,7 +855,7 @@ function cut() returns ByteArray
 end 'cut'
 
 function main() returns ExitCode
-	var part = cut()
+	let part = cut()
 
 	if part.count() != 3 'count'
 		return 1
@@ -889,10 +889,10 @@ end 'main'
 <!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
-	var memory = try __ManagedMemory.create(8, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(8, 1) otherwise return 1
 	try memory.setLength(8) otherwise return 2
 
-	var source = ByteArray.init(memory)
+	let source = ByteArray.init(memory)
 
 	try source.set(1, value: 5) otherwise return 3
 
@@ -919,7 +919,7 @@ A constant array literal is image data, not a co-allocation; cloning it and writ
 ```maxon
 function main() returns ExitCode
 	let literal = b"hello"
-	var copy = literal.clone()
+	let copy = literal.clone()
 
 	try copy.set(0, value: 72) otherwise return 1
 
@@ -951,7 +951,7 @@ once.
 typealias Names = Array with String
 
 function build() returns Names
-	var names = Names.create(0)
+	let names = Names.create(0)
 	var index = 0 as ElementIndex
 
 	while index < 6 'each'
@@ -963,9 +963,9 @@ function build() returns Names
 end 'build'
 
 function main() returns ExitCode
-	var original = build()
+	let original = build()
 	let allocsBefore = HeapStats.threadAllocations()
-	var copy = original.clone()
+	let copy = original.clone()
 	let allocs = HeapStats.threadAllocations() - allocsBefore
 
 	if allocs != 7 'allocs'
@@ -1009,7 +1009,7 @@ end 'main'
 typealias Names = Array with String
 
 function build() returns Names
-	var names = Names.create(0)
+	let names = Names.create(0)
 	var index = 0 as ElementIndex
 
 	while index < 6 'each'
@@ -1027,7 +1027,7 @@ function cut() returns Names
 end 'cut'
 
 function main() returns ExitCode
-	var part = cut()
+	let part = cut()
 
 	if part.count() != 3 'count'
 		return 1
@@ -1063,7 +1063,7 @@ type Holder
 	export let planes as Planes
 
 	static function around() returns Self
-		var planes = Planes.create()
+		let planes = Planes.create()
 		planes.set(1, value: 5)
 		planes.set(3, value: 9)
 
@@ -1207,7 +1207,7 @@ end 'main'
 `grow` is the exact-capacity reallocation of the buffer surface; the bytes written before it are still there after.
 ```maxon
 function main() returns ExitCode
-	var memory = try __ManagedMemory.create(8, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(8, 1) otherwise return 1
 	try memory.setLength(8) otherwise return 2
 
 	var index = 0 as ElementIndex
@@ -1241,7 +1241,7 @@ end 'main'
 <!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
-	var memory = try __ManagedMemory.create(8, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(8, 1) otherwise return 1
 	try memory.setLength(8) otherwise return 2
 
 	var index = 0 as ElementIndex
@@ -1309,7 +1309,7 @@ extension FixedArray
 	end 'windowOnes'
 
 	function clearedWindowLeavesTheArray(start ElementIndex, stop ElementIndex) returns bool
-		var window = try managed.slice(start, stop) otherwise panic("slice")
+		let window = try managed.slice(start, stop) otherwise panic("slice")
 		window.clear()
 
 		return window.length() == 0 and managed.length() == 16
@@ -1317,7 +1317,7 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var flags = Flags.create()
+	let flags = Flags.create()
 	flags.set(2, value: true)
 	flags.set(3, value: true)
 	flags.set(9, value: true)
@@ -1357,7 +1357,7 @@ type Config
 	export var planes as Planes
 
 	static function create() returns Self
-		var planes = Planes.create()
+		let planes = Planes.create()
 		planes.set(1, value: 5)
 
 		return Self{planes: planes}
@@ -1368,7 +1368,7 @@ typealias ConfigCell = SharedValue with Config
 
 function main() returns ExitCode
 	let cell = ConfigCell.create(Config.create())
-	var mine = cell.current().clone()
+	let mine = cell.current().clone()
 
 	mine.planes.set(1, value: 9)
 	mine.planes.set(2, value: 4)
@@ -1395,10 +1395,10 @@ end 'main'
 `resize` past the capacity reallocates; the part below the old length is carried across.
 ```maxon
 function main() returns ExitCode
-	var memory = try __ManagedMemory.create(4, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(4, 1) otherwise return 1
 	try memory.setLength(4) otherwise return 2
 
-	var bytes = ByteArray.init(memory)
+	let bytes = ByteArray.init(memory)
 
 	try bytes.set(0, value: 1) otherwise return 3
 	try bytes.set(3, value: 4) otherwise return 3
@@ -1440,10 +1440,10 @@ typealias Words = Array with Word
 typealias Rows = Array with Words
 
 function main() returns ExitCode
-	var rows = Rows.create(0)
+	let rows = Rows.create(0)
 
 	for row in 0 upto 64 'eachRow'
-		var words = Words.create(0)
+		let words = Words.create(0)
 		words.reserve(6)
 		words.push(row as Word)
 		rows.push(words)
@@ -1473,7 +1473,7 @@ zero: the zeroing contract holds on that road as on the call's. **If the recycle
 reads the first one's bytes.**
 ```maxon
 function leaveFilled() returns Count
-	var bytes = ByteArray.create(16)
+	let bytes = ByteArray.create(16)
 
 	for i in 0 upto 16 'fill'
 		try bytes.set(i, value: 255) otherwise panic("set")

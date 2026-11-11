@@ -288,7 +288,7 @@ type TrackedDecls
 	// `upsert`, not `insert`: a contested bare name is a legal program, not a collision — see
 	// `TrackedDeclIndexMap`.
 	function indexUnder(index TrackedDeclIndexMap, key ByteArray, at ElementIndex)
-		var claimants = TrackedDeclIndexArray.create(0)
+		let claimants = TrackedDeclIndexArray.create(0)
 
 		if let existing = try index.get(key) 'alreadyClaimed'
 			claimants.append(existing)
@@ -314,7 +314,7 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 
 	let entryPoints = try entryPointNamesOf(project, userFiles: sources.userFiles)
 
-	var tracked = TrackedDecls.create(sources.libraryFiles, globalLabels: indexGlobalLabels(signatures))
+	let tracked = TrackedDecls.create(sources.libraryFiles, globalLabels: indexGlobalLabels(signatures))
 	seedFunctions(module, signatures: signatures, entryPoints: entryPoints, tracked: tracked)
 	try seedTypes(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
 	seedBindings(signatures, tracked: tracked)
@@ -334,10 +334,10 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 end 'checkUnusedExports'
 
 module function splitSourcePaths(project Project) returns SourcePathSplit
-	var paths = FilePathArray.create(0)
-	var stdlibPaths = FilePathArray.create(0)
-	var libraryFiles = LibrarySourcePathSet.create()
-	var unauditedFiles = LibrarySourcePathSet.create()
+	let paths = FilePathArray.create(0)
+	let stdlibPaths = FilePathArray.create(0)
+	let libraryFiles = LibrarySourcePathSet.create()
+	let unauditedFiles = LibrarySourcePathSet.create()
 
 	for path in project.db.sourcePaths 'eachFile'
 		if isStdlibSourceFile(project, path: path) 'stdlibFile'
@@ -365,7 +365,7 @@ end 'splitSourcePaths'
 // slots — but the tie is broken here anyway, so the answer can never come to depend on which of two
 // claimants a map happened to keep.
 function indexGlobalLabels(signatures ProgramSignatures) returns GlobalLabelIndexMap
-	var labels = GlobalLabelIndexMap.create()
+	let labels = GlobalLabelIndexMap.create()
 
 	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
 		let decl = signatures.declAt(i)
@@ -430,7 +430,7 @@ end 'namesWithinAUnionCasesCompanion'
 // others by name. They are read through the driver's own `taskNamesIn`, so the two cannot disagree
 // on what one is.
 module function entryPointNamesOf(project Project, userFiles FilePathArray) returns EntryPointNameSet throws CompileError
-	var names = EntryPointNameSet.create()
+	let names = EntryPointNameSet.create()
 	names.insert(project.entryFunctionName)
 
 	for path in userFiles 'eachFile'
@@ -506,7 +506,7 @@ end 'namesAMethodOnATrackedType'
 // order, and the tier is looked up per name.
 function seedTypes(project Project, signatures ProgramSignatures, userFiles FilePathArray, tracked TrackedDecls) throws CompileError
 	for path in userFiles 'eachFile'
-		view artifact = try queryParseOps(project, path: path)
+		let artifact = try queryParseOps(project, path: path)
 
 		for decl in artifact.typeNameDecls 'eachTypeName'
 			seedOneTypeName(signatures, decl: decl, tracked: tracked)
@@ -765,7 +765,7 @@ end 'noteOpReferences'
 // the other two.
 function collectFileTypeReferences(project Project, signatures ProgramSignatures, userFiles FilePathArray, tracked TrackedDecls) throws CompileError
 	for path in userFiles 'eachFile'
-		view artifact = try queryParseOps(project, path: path)
+		let artifact = try queryParseOps(project, path: path)
 		let reader = tracked.fileOf(path, signatures: signatures)
 		noteEveryTypeName(signatures, tracked: tracked, roster: artifact.usedTypeNames, denotation: Denotation.readIn(reader), reader: reader)
 		noteEveryTypeName(signatures, tracked: tracked, roster: artifact.memberAccessedTypeNames, denotation: Denotation.nominal, reader: reader)
@@ -827,7 +827,7 @@ function noteSpelledUnbuiltReferences(project Project, signatures ProgramSignatu
 end 'noteSpelledUnbuiltReferences'
 
 function unreadDeclSpellingsOf(tracked TrackedDecls, unauditedFiles LibrarySourcePathSet) returns TrackedDeclIndexMap
-	var spellings = TrackedDeclIndexMap.create()
+	let spellings = TrackedDeclIndexMap.create()
 
 	for i in 0 upto tracked.entries.count() 'eachTracked'
 		let decl = tracked.at(i)
@@ -844,14 +844,14 @@ end 'unreadDeclSpellingsOf'
 
 function noteSpelledNamesInUnbuiltBodies(project Project, signatures ProgramSignatures, tracked TrackedDecls, unread TrackedDeclIndexMap, files FilePathArray) throws CompileError
 	for path in files 'eachFile'
-		view artifact = try queryParseOps(project, path: path)
+		let artifact = try queryParseOps(project, path: path)
 
 		if artifact.unbuiltBodies.isEmpty() 'everyBodyIsBuilt'
 			continue
 		end 'everyBodyIsBuilt'
 
 		let reader = tracked.fileOf(path, signatures: signatures)
-		view tokens = try queryActiveTokens(project, path: path)
+		let tokens = try queryActiveTokens(project, path: path)
 
 		for body in artifact.unbuiltBodies 'eachBody'
 			for at in body.first upto body.limit 'eachToken'
@@ -1040,7 +1040,7 @@ function noteEveryPayloadType(signatures ProgramSignatures, tracked TrackedDecls
 
 	// The index's own layout again — `noteStructFieldTypes`' interner, for its reason. Taken once rather
 	// than per field: it is a handle to the index's table, and this is the innermost loop of the walk.
-	var payloadTypeNames = signatures.indexTypeNames()
+	let payloadTypeNames = signatures.indexTypeNames()
 
 	for payloadFields in layout.casePayloads 'eachCase'
 		for field in payloadFields 'eachField'
@@ -1097,7 +1097,7 @@ end 'noteComponentType'
 // itself arrived from — `ProgramSignatures.indexSpaceTypeName` is the door that says so. So this hop
 // RE-STATES the interner rather than forwarding its caller's.
 function noteInstanceArgs(signatures ProgramSignatures, tracked TrackedDecls, id GenericInstanceId, denotedBy AuditedFile, reader AuditedFile)
-	var argTypeNames = signatures.indexTypeNames()
+	let argTypeNames = signatures.indexTypeNames()
 
 	for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArg'
 		noteComponentType(signatures, tracked: tracked, type: signatures.substitutedInstanceArg(id, position: position), typeNames: argTypeNames, denotedBy: denotedBy, reader: reader)
@@ -1128,7 +1128,7 @@ end 'noteBindingName'
 // compiler minted for itself, and the same answer the scan's fall-through gave.
 function noteGlobalLabel(signatures ProgramSignatures, tracked TrackedDecls, label ByteArray, reader AuditedFile)
 	let index = try tracked.globalLabels.get(label) otherwise return
-	view decl = signatures.declAt(index)
+	let decl = signatures.declAt(index)
 	noteBindingName(signatures, tracked: tracked, name: decl.name, reader: reader)
 	noteSlotType(signatures, tracked: tracked, index: index, reader: reader)
 end 'noteGlobalLabel'
@@ -1141,7 +1141,7 @@ end 'noteGlobalLabel'
 // keeps a declaration downgradable — which is why the equality case is excluded here rather than left
 // to `moduleDirectoryContains`, whose own answer includes it.
 function noteRead(tracked TrackedDecls, index ElementIndex, reader AuditedFile)
-	var decl = tracked.at(index)
+	let decl = tracked.at(index)
 
 	// Both bits only ever widen, so a declaration already read from outside its subtree has nothing left to learn.
 	if decl.sawOutsideModule or decl.declFile.index == reader.index 'nothingToWidenOrItsOwnFile'
@@ -1200,9 +1200,9 @@ typealias DemandedTierMap = Map with (ByteArray, Visibility)
 // `Visibility.file` is the "no reached demand" value and no demand can carry it — the pass never judges a
 // file-private surface.
 function reachedSignatureDemands(project Project, tracked TrackedDecls) returns DemandedTierMap
-	var demanded = DemandedTierMap.create()
-	var awaiting = DemandsAwaitingOwnerMap.create()
-	var widened = SignatureTypeDemandArray.create(0)
+	let demanded = DemandedTierMap.create()
+	let awaiting = DemandsAwaitingOwnerMap.create()
+	let widened = SignatureTypeDemandArray.create(0)
 
 	for demand in project.signatureTypeDemands 'eachDemand'
 		if demandIsReached(tracked, demand: demand) 'itsDemanderIsReachedFromOutside'
@@ -1218,7 +1218,7 @@ function reachedSignatureDemands(project Project, tracked TrackedDecls) returns 
 		let owner = (try widened.get(next) otherwise panic("reachedSignatureDemands: widened.get OOB at {next} inside its own count")).typeName
 		next = next + 1
 		let waiting = try awaiting.get(owner) otherwise continue
-		var stillWaiting = SignatureTypeDemandArray.create(0)
+		let stillWaiting = SignatureTypeDemandArray.create(0)
 
 		for demand in waiting 'eachWaiting'
 			if ownerIsCredited(tracked, demand: demand, owner: owner, demanded: demanded) 'itsOwnerIsNowCredited'
@@ -1283,7 +1283,7 @@ function awaitCreditOf(owner ByteArray, demand SignatureTypeDemand, awaiting Dem
 		return
 	end 'aTypeCannotWidenItself'
 
-	var waiting = try awaiting.get(owner) otherwise SignatureTypeDemandArray.create(0)
+	let waiting = try awaiting.get(owner) otherwise SignatureTypeDemandArray.create(0)
 	waiting.push(demand)
 	awaiting.upsert(owner, value: waiting)
 end 'awaitCreditOf'

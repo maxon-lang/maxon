@@ -26,7 +26,7 @@ function stamp(arr WordArray)
 end 'stamp'
 
 function main() returns ExitCode
-	var arr = WordArray from [10, 20, 30]
+	let arr = WordArray from [10, 20, 30]
 	let view = try arr.slice(0, endIndex: 3) otherwise panic("slice: 0..3 of a three-element array")
 	stamp(arr)
 
@@ -55,7 +55,7 @@ function stamp(arr WordArray)
 end 'stamp'
 
 function main() returns ExitCode
-	var arr = WordArray from [10, 20, 30]
+	let arr = WordArray from [10, 20, 30]
 	let view = try arr.slice(0, endIndex: 3) otherwise panic("slice: 0..3 of a three-element array")
 	stamp(arr)
 
@@ -83,7 +83,7 @@ function stamp(arr WordArray)
 end 'stamp'
 
 function main() returns ExitCode
-	var arr = WordArray from [10, 20, 30]
+	let arr = WordArray from [10, 20, 30]
 	let view = try arr.slice(0, endIndex: 3) otherwise panic("slice: 0..3 of a three-element array")
 	stamp(arr)
 
@@ -117,11 +117,11 @@ function stampNext(arr WordArray)
 end 'stampNext'
 
 function main() returns ExitCode
-	var widest = WordArray from [10, 20, 30]
+	let widest = WordArray from [10, 20, 30]
 	let widestView = try widest.slice(0, endIndex: 3) otherwise panic("slice: 0..3 of a three-element array")
 	stampWidest(widest)
 
-	var next = WordArray from [10, 20, 30]
+	let next = WordArray from [10, 20, 30]
 	let nextView = try next.slice(0, endIndex: 3) otherwise panic("slice: 0..3 of a three-element array")
 	stampNext(next)
 
@@ -154,7 +154,7 @@ function stamp(arr WordArray, at Count, tag Word) returns Word
 end 'stamp'
 
 function main() returns ExitCode
-	var arr = WordArray from [10, 20, 30]
+	let arr = WordArray from [10, 20, 30]
 	let view = try arr.slice(0, endIndex: 3) otherwise panic("slice: 0..3 of a three-element array")
 	let answer = stamp(arr, at: 2, tag: 41)
 
@@ -199,7 +199,7 @@ function stamp(arr WordArray, seed Word) returns bool
 end 'stamp'
 
 function main() returns ExitCode
-	var arr = WordArray from [10, 20, 30]
+	let arr = WordArray from [10, 20, 30]
 
 	if not stamp(arr, seed: 7) 'views'
 		return 1
@@ -239,11 +239,11 @@ function stamp(arr WordArray, flag Word) returns Word
 end 'stamp'
 
 function main() returns ExitCode
-	var taken = WordArray from [10, 20, 30]
+	let taken = WordArray from [10, 20, 30]
 	let takenView = try taken.slice(0, endIndex: 3) otherwise panic("slice: 0..3 of a three-element array")
 	let viaEdge = stamp(taken, flag: 1)
 
-	var skipped = WordArray from [10, 20, 30]
+	let skipped = WordArray from [10, 20, 30]
 	let skippedView = try skipped.slice(0, endIndex: 3) otherwise panic("slice: 0..3 of a three-element array")
 	let direct = stamp(skipped, flag: 0)
 

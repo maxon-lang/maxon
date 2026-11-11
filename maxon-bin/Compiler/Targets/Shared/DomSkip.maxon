@@ -16,19 +16,19 @@ export type DominatorTree
 
 	export static function of(topo FuncTopology) returns DominatorTree
 		let n = topo.numBlocks
-		var visited = FixedBoolArray.create(n)
-		var postorder = CfgIndexArray.create(n, zeroed: false)
+		let visited = FixedBoolArray.create(n)
+		let postorder = CfgIndexArray.create(n, zeroed: false)
 		rpoDfs(topo, root: EntryBlockLocal, visited: visited, postorder: postorder)
 
-		var postIndex = FixedCfgIndexArray.create(n)
+		let postIndex = FixedCfgIndexArray.create(n)
 
 		for (position, block) in postorder.withIterator() 'eachReached'
 			try postIndex.set(block, value: position.index()) otherwise panic("DominatorTree.of: postIndex.set OOB at {block}")
 		end 'eachReached'
 
-		var idom = CfgIndexArray.create(n, zeroed: false)
+		let idom = CfgIndexArray.create(n, zeroed: false)
 		idom.refill(n, value: EntryBlockLocal)
-		var settled = BoolArray.create(n)
+		let settled = BoolArray.create(n)
 		try settled.set(EntryBlockLocal, value: true) otherwise panic("DominatorTree.of: settled.set OOB at the entry")
 		var changed = true
 
@@ -69,8 +69,8 @@ export type DominatorTree
 			end 'eachInReversePostorder'
 		end 'untilStable'
 
-		var childOf = CsrColumn.create(0)
-		var children = CsrColumn.create(0)
+		let childOf = CsrColumn.create(0)
+		let children = CsrColumn.create(0)
 
 		for block in postorder 'eachDominated'
 			if block != EntryBlockLocal 'notTheEntry'
@@ -80,11 +80,11 @@ export type DominatorTree
 		end 'eachDominated'
 
 		let tree = buildCsr(childOf, to: children, nodeCount: n as CsrIndex)
-		var pre = CfgIndexArray.create(n)
-		var size = CfgIndexArray.create(n, zeroed: false)
+		let pre = CfgIndexArray.create(n)
+		let size = CfgIndexArray.create(n, zeroed: false)
 		size.refill(n, value: 1)
-		var blockAt = CfgIndexArray.create(postorder.count(), zeroed: false)
-		var stack = CfgIndexArray.create(0)
+		let blockAt = CfgIndexArray.create(postorder.count(), zeroed: false)
+		let stack = CfgIndexArray.create(0)
 		stack.push(EntryBlockLocal)
 
 		while stack.count() > 0 'preorder'
@@ -106,7 +106,7 @@ export type DominatorTree
 			end 'notTheEntryEither'
 		end 'eachSubtree'
 
-		var tree = Self{pre: pre, size: size, reached: settled, blockAt: blockAt, idom: idom, reducible: true}
+		let tree = Self{pre: pre, size: size, reached: settled, blockAt: blockAt, idom: idom, reducible: true}
 		tree.reducible = tree.everyRetreatingEdgeIsABackEdge(topo, postIndex: postIndex, postorder: postorder)
 		return tree
 	end 'of'
@@ -238,8 +238,8 @@ export type LayoutBounds
 	static function build(topo FuncTopology) returns LayoutBounds
 		let n = topo.numBlocks
 		let leafBase = roundUpToPowerOfTwo(n as BytePos)
-		var highestPred = CfgIndexArray.create(leafBase + leafBase)
-		var nearestForwardSucc = CfgIndexArray.create(leafBase + leafBase)
+		let highestPred = CfgIndexArray.create(leafBase + leafBase)
+		let nearestForwardSucc = CfgIndexArray.create(leafBase + leafBase)
 
 		for y in 0 upto n 'eachBlock'
 			var highest = 0 as ElementIndex
@@ -308,14 +308,14 @@ export type PredLevels
 			levelCount = levelCount + 1
 		end 'eachLevel'
 
-		var blockStart = CfgIndexArray.create(leafBase + 1, zeroed: false)
+		let blockStart = CfgIndexArray.create(leafBase + 1, zeroed: false)
 		blockStart.refill(leafBase + 1, value: edgeCount)
 
 		for z in 0 upto n 'eachBlockStart'
 			try blockStart.set(z, value: try topo.pred.start.get(z) otherwise panic("PredLevels.build: pred.start.get OOB at block {z}")) otherwise panic("PredLevels.build: blockStart.set OOB at block {z}")
 		end 'eachBlockStart'
 
-		var sorted = CfgIndexArray.create(levelCount * edgeCount)
+		let sorted = CfgIndexArray.create(levelCount * edgeCount)
 
 		for z in 0 upto n 'eachBlock'
 			let degree = topo.pred.degree(z as CsrIndex)

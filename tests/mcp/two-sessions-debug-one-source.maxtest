@@ -13,21 +13,21 @@ test 'two debug sessions of one source each stop in their own build, and closing
 	let cache = stagedDirNamed("{TwoSessionsStagingDir}/{CacheDirName}")
 	let builds = cache.join(CacheVendorDirName).join(DebugBuildDirName)
 
-	var server = StreamingHttpMcpServer.start(StringArray.create(0), environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()]))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0), environment: Environment.inheritUpdating([CacheRootVariable: cache.toString()]))
 	let (firstInitialized, first) = server.initializeSession()
 	let (secondInitialized, second) = server.initializeSession()
 
-	let firstStarted = httpToolCall(server, sessionId: first, id: 2, name: DebugStartTool, argumentsJson: sourceArgument(program.toString()))
-	let secondStarted = httpToolCall(server, sessionId: second, id: 2, name: DebugStartTool, argumentsJson: sourceArgument(program.toString()))
-	_ = httpToolCall(server, sessionId: first, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
-	_ = httpToolCall(server, sessionId: second, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
-	let firstContinued = httpToolCall(server, sessionId: first, id: 4, name: DebugContinueTool)
-	let secondContinued = httpToolCall(server, sessionId: second, id: 4, name: DebugContinueTool)
+	let firstStarted = httpToolCall(server.address, sessionId: first, id: 2, name: DebugStartTool, argumentsJson: sourceArgument(program.toString()))
+	let secondStarted = httpToolCall(server.address, sessionId: second, id: 2, name: DebugStartTool, argumentsJson: sourceArgument(program.toString()))
+	_ = httpToolCall(server.address, sessionId: first, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	_ = httpToolCall(server.address, sessionId: second, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	let firstContinued = httpToolCall(server.address, sessionId: first, id: 4, name: DebugContinueTool)
+	let secondContinued = httpToolCall(server.address, sessionId: second, id: 4, name: DebugContinueTool)
 	let imagesWhileLive = imagesIn(builds)
 
-	_ = httpToolCall(server, sessionId: first, id: 5, name: DebugStopTool)
+	_ = httpToolCall(server.address, sessionId: first, id: 5, name: DebugStopTool)
 	let imagesAfterFirst = imagesIn(builds)
-	_ = httpToolCall(server, sessionId: second, id: 5, name: DebugStopTool)
+	_ = httpToolCall(server.address, sessionId: second, id: 5, name: DebugStopTool)
 	let leftAfterBoth = entriesIn(builds)
 
 	try server.stop()
@@ -46,7 +46,7 @@ test 'two debug sessions of one source each stop in their own build, and closing
 end 'two debug sessions of one source each stop in their own build, and closing one removes its build'
 
 function imagesIn(directory FilePath) returns StringArray
-	var images = StringArray.create(0)
+	let images = StringArray.create(0)
 
 	for entry in entriesIn(directory) 'eachEntry'
 		if not entry.endsWith(SidecarSuffix) 'anImage'
@@ -58,7 +58,7 @@ function imagesIn(directory FilePath) returns StringArray
 end 'imagesIn'
 
 function entriesIn(directory FilePath) returns StringArray
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 
 	if not Directory.isDirectory(directory) 'nothingBuiltThere'
 		return names

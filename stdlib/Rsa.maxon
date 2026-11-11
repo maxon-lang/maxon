@@ -69,7 +69,7 @@ let rsaSha384DigestInfo = ByteArray from [0x30, 0x41, 0x30, 0x0D, 0x06, 0x09, 0x
 let rsaSha512DigestInfo = ByteArray from [0x30, 0x51, 0x30, 0x0D, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03, 0x05, 0x00, 0x04, 0x40]
 
 function rsaZeroLimbs(count Count) returns RsaLimbs
-	var limbs = RsaLimbs.create(count, zeroed: false)
+	let limbs = RsaLimbs.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachLimb'
 		limbs.push(0)
@@ -79,7 +79,7 @@ function rsaZeroLimbs(count Count) returns RsaLimbs
 end 'rsaZeroLimbs'
 
 function rsaOne(count Count) returns RsaLimbs
-	var limbs = rsaZeroLimbs(count)
+	let limbs = rsaZeroLimbs(count)
 	try limbs.set(0, value: rsaLowBit) otherwise panic("a limb array holds at least one limb")
 	return limbs
 end 'rsaOne'
@@ -89,7 +89,7 @@ function rsaLimbCount(bytes ByteArray) returns Count
 end 'rsaLimbCount'
 
 function rsaLimbsFromBytes(bytes ByteArray, count Count) returns RsaLimbs
-	var limbs = rsaZeroLimbs(count)
+	let limbs = rsaZeroLimbs(count)
 	let last = bytes.count() - 1
 
 	for (iter, byte) in bytes.withIterator() 'eachByte'
@@ -103,7 +103,7 @@ function rsaLimbsFromBytes(bytes ByteArray, count Count) returns RsaLimbs
 end 'rsaLimbsFromBytes'
 
 function rsaBytesFromLimbs(limbs RsaLimbs, count Count) returns ByteArray
-	var bytes = ByteArray.create(count, zeroed: false)
+	let bytes = ByteArray.create(count, zeroed: false)
 
 	for offset in 0 upto count 'eachByte'
 		let fromEnd = count - 1 - offset
@@ -119,7 +119,7 @@ function rsaValueLimbs(bytes ByteArray) returns RsaLimbs
 end 'rsaValueLimbs'
 
 function rsaResized(limbs RsaLimbs, count Count) returns RsaLimbs
-	var resized = rsaZeroLimbs(count)
+	let resized = rsaZeroLimbs(count)
 
 	for (iter, limb) in limbs.withIterator() 'eachLimb'
 		if iter.index() < count 'kept'
@@ -214,7 +214,7 @@ end 'rsaWiderCount'
 
 function rsaBelowBit(left RsaLimbs, right RsaLimbs) returns RsaLimb
 	let width = rsaWiderCount(left, right: right)
-	var difference = rsaResized(left, count: width)
+	let difference = rsaResized(left, count: width)
 	return rsaSubtractMasked(difference, subtrahend: right, mask: rsaLimbMask)
 end 'rsaBelowBit'
 
@@ -233,13 +233,13 @@ function rsaEqual(left RsaLimbs, right RsaLimbs) returns bool
 end 'rsaEqual'
 
 function rsaReduceOnce(value RsaLimbs, modulus RsaLimbs)
-	var difference = value.clone()
+	let difference = value.clone()
 	let borrow = rsaSubtractMasked(difference, subtrahend: modulus, mask: rsaLimbMask)
 	rsaSelectInto(value, source: difference, mask: rsaMask(rsaLowBit - borrow))
 end 'rsaReduceOnce'
 
 function rsaReduce(value RsaLimbs, modulus RsaLimbs) returns RsaLimbs
-	var remainder = rsaZeroLimbs(modulus.count() + 1)
+	let remainder = rsaZeroLimbs(modulus.count() + 1)
 	let last = value.count() - 1
 
 	for offset in 0 upto value.count() 'eachLimb'
@@ -272,7 +272,7 @@ function rsaMultiplyAccumulate(target RsaLimbs, source RsaLimbs, factor RsaLimb,
 end 'rsaMultiplyAccumulate'
 
 function rsaMultiply(left RsaLimbs, right RsaLimbs) returns RsaLimbs
-	var product = rsaZeroLimbs(left.count() + right.count())
+	let product = rsaZeroLimbs(left.count() + right.count())
 
 	for (iter, factor) in right.withIterator() 'eachFactor'
 		rsaMultiplyAccumulate(product, source: left, factor: factor, offset: iter.index())
@@ -312,14 +312,14 @@ type RsaMontgomery
 			inverse = (inverse * ((rsaNewtonTwo - lowest * inverse) and rsaLimbMask)) and rsaLimbMask
 		end 'eachStep'
 
-		var radix = rsaZeroLimbs(2 * modulus.count() + 1)
+		let radix = rsaZeroLimbs(2 * modulus.count() + 1)
 		try radix.set(2 * modulus.count(), value: rsaLowBit) otherwise panic("the radix has its top limb")
 
 		return RsaMontgomery{modulus: modulus, negatedInverse: (rsaLimbBase - inverse) and rsaLimbMask, squaredRadix: rsaReduce(radix, modulus: modulus)}
 	end 'create'
 
 	function multiply(left RsaLimbs, right RsaLimbs) returns RsaLimbs
-		var accumulator = rsaZeroLimbs(modulus.count() + rsaMontgomeryHeadroomLimbs)
+		let accumulator = rsaZeroLimbs(modulus.count() + rsaMontgomeryHeadroomLimbs)
 
 		for factor in right 'eachFactor'
 			rsaMultiplyAccumulate(accumulator, source: left, factor: factor, offset: 0)
@@ -368,11 +368,11 @@ type RsaMontgomery
 
 	function powerTable(base RsaLimbs) returns RsaLimbTable
 		let factor = toMontgomery(base)
-		var table = RsaLimbTable.create(0)
+		let table = RsaLimbTable.create(0)
 		table.push(toMontgomery(rsaOne(modulus.count())))
 
 		for _ in 1 upto rsaTableEntries 'eachEntry'
-			view previous = try table.get(table.count() - 1) otherwise panic("the table starts with one entry")
+			let previous = try table.get(table.count() - 1) otherwise panic("the table starts with one entry")
 			table.push(multiply(previous, right: factor))
 		end 'eachEntry'
 
@@ -386,7 +386,7 @@ type RsaMontgomery
 			squared = multiply(squared, right: squared)
 		end 'eachSquaring'
 
-		var selected = rsaZeroLimbs(modulus.count())
+		let selected = rsaZeroLimbs(modulus.count())
 
 		for (iter, entry) in table.withIterator() 'eachEntry'
 			let difference = (iter.index() as RsaLimb) xor digit
@@ -414,10 +414,10 @@ type RsaMontgomery
 	end 'secretPower'
 
 	function invert(value RsaLimbs) returns RsaLimbs throws RsaBlindingError
-		var remaining = value.clone()
-		var divisor = modulus.clone()
-		var remainingFactor = rsaOne(modulus.count())
-		var divisorFactor = rsaZeroLimbs(modulus.count())
+		let remaining = value.clone()
+		let divisor = modulus.clone()
+		let remainingFactor = rsaOne(modulus.count())
+		let divisorFactor = rsaZeroLimbs(modulus.count())
 
 		for _ in 0 upto 2 * rsaLimbBits * modulus.count() 'eachStep'
 			let odd = (try remaining.get(0) otherwise panic("a value has its lowest limb")) and rsaLowBit
@@ -459,7 +459,7 @@ function rsaFieldLimbs(integers RsaIntegers, field RsaPrivateKeyField) returns R
 end 'rsaFieldLimbs'
 
 function rsaAlgorithm(reader DerReader) returns ByteArray throws DerError
-	var algorithm = try reader.enterSequence()
+	let algorithm = try reader.enterSequence()
 	let identifier = try algorithm.readObjectIdentifier()
 	try algorithm.readNull()
 	try algorithm.finish()
@@ -467,9 +467,9 @@ function rsaAlgorithm(reader DerReader) returns ByteArray throws DerError
 end 'rsaAlgorithm'
 
 function rsaIntegers(encoding ByteArray, count Count) returns RsaIntegers throws DerError
-	var sequence = try DerReader.wholeSequence(encoding)
+	let sequence = try DerReader.wholeSequence(encoding)
 
-	var integers = RsaIntegers.create(0)
+	let integers = RsaIntegers.create(0)
 
 	for _ in 0 upto count 'eachInteger'
 		integers.push(try sequence.readInteger())
@@ -480,7 +480,7 @@ function rsaIntegers(encoding ByteArray, count Count) returns RsaIntegers throws
 end 'rsaIntegers'
 
 function rsaPublicKeyParts(der ByteArray) returns (ByteArray, DerBitString) throws DerError
-	var info = try DerReader.wholeSequence(der)
+	let info = try DerReader.wholeSequence(der)
 
 	let algorithm = try rsaAlgorithm(info)
 	let key = try info.readBitString()
@@ -489,7 +489,7 @@ function rsaPublicKeyParts(der ByteArray) returns (ByteArray, DerBitString) thro
 end 'rsaPublicKeyParts'
 
 function rsaPrivateKeyParts(der ByteArray) returns (ByteArray, ByteArray, ByteArray) throws DerError
-	var info = try DerReader.wholeSequence(der)
+	let info = try DerReader.wholeSequence(der)
 
 	let version = try info.readInteger()
 	let algorithm = try rsaAlgorithm(info)
@@ -516,7 +516,7 @@ end 'rsaIsZero'
 
 function rsaMatchesPrime(prime RsaLimbs, publicExponent RsaLimbs, privateExponent RsaLimbs, crtExponent RsaLimbs) returns bool
 	let one = rsaOne(1)
-	var order = prime.clone()
+	let order = prime.clone()
 	_ = rsaSubtractMasked(order, subtrahend: one, mask: rsaLimbMask)
 
 	return rsaEqual(rsaReduce(privateExponent, modulus: order), right: crtExponent) and rsaEqual(rsaReduce(rsaMultiply(publicExponent, right: privateExponent), modulus: order), right: one)
@@ -559,7 +559,7 @@ function rsaTopBits(modulusBits Count) returns RsaTopBits
 end 'rsaTopBits'
 
 function rsaZeroBytes(count Count) returns ByteArray
-	var bytes = ByteArray.create(count, zeroed: false)
+	let bytes = ByteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachByte'
 		bytes.push(0)
@@ -579,7 +579,7 @@ end 'rsaDigestInfo'
 function rsaPkcs1Block(hash HashAlgorithm, message ByteArray, length Count) returns ByteArray
 	let prefix = rsaDigestInfo(hash)
 	let digest = sha2Once(hash, data: message)
-	var block = ByteArray.create(length, zeroed: false)
+	let block = ByteArray.create(length, zeroed: false)
 	block.push(0)
 	block.push(rsaPkcs1BlockType)
 
@@ -594,11 +594,11 @@ function rsaPkcs1Block(hash HashAlgorithm, message ByteArray, length Count) retu
 end 'rsaPkcs1Block'
 
 function rsaMgf1(hash HashAlgorithm, seed ByteArray, length Count) returns ByteArray
-	var mask = ByteArray.create(length, zeroed: false)
+	let mask = ByteArray.create(length, zeroed: false)
 	var counter = 0 as RsaLimb
 
 	while mask.count() < length 'eachBlock'
-		var digest = Digest.create(hash)
+		let digest = Digest.create(hash)
 		digest.update(seed)
 		digest.update(rsaBytesFromLimbs(RsaLimbs from [counter], count: rsaMgfCounterBytes))
 
@@ -616,7 +616,7 @@ end 'rsaMgf1'
 
 function rsaMaskBlock(hash HashAlgorithm, seed ByteArray, block ByteArray, topBits RsaTopBits) returns ByteArray
 	let mask = rsaMgf1(hash, seed: seed, length: block.count())
-	var masked = ByteArray.create(block.count(), zeroed: false)
+	let masked = ByteArray.create(block.count(), zeroed: false)
 
 	for (iter, byte) in block.withIterator() 'eachByte'
 		masked.push(byte xor (try mask.get(iter.index()) otherwise panic("the mask is as long as the block")))
@@ -628,7 +628,7 @@ function rsaMaskBlock(hash HashAlgorithm, seed ByteArray, block ByteArray, topBi
 end 'rsaMaskBlock'
 
 function rsaPssDigest(hash HashAlgorithm, message ByteArray, salt ByteArray) returns ByteArray
-	var digest = Digest.create(hash)
+	let digest = Digest.create(hash)
 	digest.update(rsaZeroBytes(rsaPssZeroPrefixBytes))
 	digest.update(sha2Once(hash, data: message))
 	digest.update(salt)
@@ -638,11 +638,11 @@ end 'rsaPssDigest'
 function rsaPssEncode(hash HashAlgorithm, message ByteArray, salt ByteArray, modulusBits Count) returns ByteArray
 	let encodedLength = rsaEncodedLength(modulusBits)
 	let seed = rsaPssDigest(hash, message: message, salt: salt)
-	var block = rsaZeroBytes(encodedLength - salt.count() - seed.count() - rsaPssFramingBytes)
+	let block = rsaZeroBytes(encodedLength - salt.count() - seed.count() - rsaPssFramingBytes)
 	block.push(rsaPssSeparator)
 	block.append(salt)
 
-	var encoded = rsaMaskBlock(hash, seed: seed, block: block, topBits: rsaTopBits(modulusBits))
+	let encoded = rsaMaskBlock(hash, seed: seed, block: block, topBits: rsaTopBits(modulusBits))
 	encoded.append(seed)
 	encoded.push(rsaPssTrailer)
 	return encoded
@@ -829,11 +829,11 @@ module type RsaPrivateKey
 	function chineseRemainder(value RsaLimbs) returns RsaLimbs
 		let first = primeOneMontgomery.secretPower(rsaReduce(value, modulus: primeOne), exponent: exponentOne)
 		let second = primeTwoMontgomery.secretPower(rsaReduce(value, modulus: primeTwo), exponent: exponentTwo)
-		var difference = first.clone()
+		let difference = first.clone()
 		let borrow = rsaSubtractMasked(difference, subtrahend: rsaReduce(second, modulus: primeOne), mask: rsaLimbMask)
 		_ = rsaAddMasked(difference, addend: primeOne, mask: rsaMask(borrow))
 
-		var signature = rsaMultiply(primeTwo, right: primeOneMontgomery.product(difference, right: coefficient))
+		let signature = rsaMultiply(primeTwo, right: primeOneMontgomery.product(difference, right: coefficient))
 		_ = rsaAddMasked(signature, addend: second, mask: rsaLimbMask)
 		return rsaResized(signature, count: publicKey.width())
 	end 'chineseRemainder'

@@ -100,8 +100,8 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// the backends. So an index taken here describes the array all three backends will walk — which is what
 	// lets their per-callee maps take the INDEX as an argument instead of the module, and stop resting on a
 	// uniqueness guarantee none of them stated.
-	var survivors = try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
-	var funcNames = survivors.funcNames
+	let survivors = try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
+	let funcNames = survivors.funcNames
 	registerReachedRuntimeAbortMessages(stdModule, globalData: globalData, survivors: funcNames)
 	recordPhase(project, phase: CompilePhase.deadFunctions, probe: dfeProbe)
 
@@ -171,7 +171,7 @@ end 'buildBackend'
 // `pushRuntimeGlobal`). ⚠ **`ClockRuntime` CONTRIBUTES NO `.data` SLOT** — its host read takes FRAME
 // scratch, which is what a multi-M runtime requires.
 export function dataSectionRoster(userGlobals DataSectionEntryArray, usage RuntimeUsage, target Target) returns DataSectionEntryArray
-	var roster = DataSectionEntryArray.create(0)
+	let roster = DataSectionEntryArray.create(0)
 	appendDataSectionEntries(roster, entries: userGlobals)
 	appendDataSectionEntries(roster, entries: gtRuntimeGlobals(usage, target: target))
 	appendDataSectionEntries(roster, entries: schedRuntimeGlobals(usage, target: target))
@@ -202,7 +202,7 @@ export let ProgramStartedLabel = b"__mrt_program_started"
 export let ProgramStartedMark = 1
 
 function programStartedGlobals(target Target) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create(0)
+	let out = DataSectionEntryArray.create(0)
 
 	if target.cpu == CpuArch.wasm32 'noDebuggerAttachesHere'
 		return out
@@ -277,8 +277,8 @@ end 'buildWasmBackend'
 // augmentation → the prepended functions' and the hand-assembled runtime's machine code → link →
 // CodeResult.
 function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
-	var chunks = FunctionCodeChunkArray.create(0)
-	var targetModule = try encodeOnTheBackendPool(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames, chunks: chunks)
+	let chunks = FunctionCodeChunkArray.create(0)
+	let targetModule = try encodeOnTheBackendPool(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames, chunks: chunks)
 
 	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
 	let userFunctionCount = targetModule.funcCount()
@@ -293,12 +293,12 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// The functions `augmentWithRuntime` prepended lead the module and are the only ones encoded here:
 	// every user function's chunk came home from the pool, and follows them in `.text`.
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encodeRuntime)
-	var prependedChunks = FunctionCodeChunkArray.create(targetModule.funcCount() - userFunctionCount, zeroed: false)
+	let prependedChunks = FunctionCodeChunkArray.create(targetModule.funcCount() - userFunctionCount, zeroed: false)
 
 	for position in 0 upto targetModule.funcCount() - userFunctionCount 'eachPrependedFunc'
-		var func = targetModule.getFunc(position)
+		let func = targetModule.getFunc(position)
 		let encoding = FunctionEncodingFacts.of(func, blocks: targetModule.blocks, spans: targetModule.spans, runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
-		var chunk = emitFunctionChunk(targetModule, func: func, frame: x64PrologueFrameOf(targetModule, func: func), encoding: encoding, usesGt: usage.usesGt, target: target)
+		let chunk = emitFunctionChunk(targetModule, func: func, frame: x64PrologueFrameOf(targetModule, func: func), encoding: encoding, usesGt: usage.usesGt, target: target)
 		attachInlineSites(chunk, func: func)
 		prependedChunks.push(chunk)
 	end 'eachPrependedFunc'
@@ -391,7 +391,7 @@ end 'recordChunkLabel'
 // Runs before anything keys the chunks by name, the unguarded-chain walk among them: a duplicate that
 // reached the walk first would panic there instead of reporting E4015.
 module function requireChunkNamesAreClaimedOnce(chunks FunctionCodeChunkArray, project Project, funcNames FunctionNameIndex) throws CompileError
-	var claimed = FunctionNameSet.create()
+	let claimed = FunctionNameSet.create()
 
 	for chunk in chunks 'eachChunk'
 		let before = claimed.count()
@@ -498,8 +498,8 @@ end 'augmentWithRuntime'
 // walk's `.text` bound is what discards it. When `main` is a green thread the same line
 // comes from `mrt_main_entry` instead — see `prependMainThreadEntry`.
 function prependEntryStub(module TargetModule, target Target, checkLeaks bool, initGlobals bool, drainGreenThreads bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, entryFunction ByteArray)
-	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	module.appendOp(block, op: TargetOp.pushReg(X64Register.rbp))
 	module.appendOp(block, op: framePointerSetupOp())
@@ -589,8 +589,8 @@ end 'appendGlobalStore'
 // leaves a fresh green thread's zero rbp in place, so `main`'s saved rbp ends the walk there — the
 // same `in main` / `in mrt_start` a program without green threads prints.
 function prependMainThreadEntry(module TargetModule, initGlobals bool, gatesDescendants bool, entryFunction ByteArray)
-	var func = IrFunction.createFromStd(MainThreadEntryName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = IrFunction.createFromStd(MainThreadEntryName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	module.appendOp(block, op: TargetOp.prologue(MainThreadEntryFrameBytes))
 	appendMainCall(module, block: block, initGlobals: initGlobals, releasesGlobals: false, entryFunction: entryFunction)
@@ -758,8 +758,8 @@ end 'appendExitCodePassThroughCall'
 // and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
 // terminates cleanly without this stub setting one up.
 function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, entryFunction ByteArray)
-	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let block = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	// Install the fault handler (rt_sigaction) before any user code runs, exactly as the Windows
 	// stub calls `mrt_runtime_init` first. `RuntimeInitName` resolves to the LINUX init
@@ -844,7 +844,7 @@ end 'appendLinuxEnvpCapture'
 // `.text`. Block refs are flat `module.blocks` indices, so reordering the
 // function list never invalidates them.
 function prependFunction(module TargetModule, func IrFunction)
-	var reordered = IrFunctionArray.create(0)
+	let reordered = IrFunctionArray.create(0)
 	reordered.push(func)
 
 	for existing in module.functions 'eachFunc'

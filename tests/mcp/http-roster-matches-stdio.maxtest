@@ -1,5 +1,5 @@
 function rosterOverHttp(server StreamingHttpMcpServer, sessionId McpSession) returns StringArray
-	let answer = server.post(toolsListRequest(2), sessionId: sessionId)
+	let answer = server.address.post(toolsListRequest(2), sessionId: sessionId)
 
 	if answer.statusCode != OkStatus 'refused'
 		panic("mcp http tests: `tools/list` over HTTP answered {answer.statusCode}: {answer.body}")
@@ -21,7 +21,7 @@ function missingFrom(roster StringArray, other StringArray) returns String
 end 'missingFrom'
 
 test 'the http transport serves the same tool roster as stdio'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
 	let overHttp = rosterOverHttp(server, sessionId: sessionId)
 	try server.stop()

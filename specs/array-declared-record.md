@@ -149,7 +149,7 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	if a.count() != 0 'notEmpty'
 		return 1
 	end 'notEmpty'
@@ -186,11 +186,11 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	a.push(4 as Num)
 	a.push(5 as Num)
 	a.push(6 as Num)
-	view b = NumArray.init(a.managed)
+	let b = NumArray.init(a.managed)
 	if b.count() != a.count() 'disagree'
 		return 1
 	end 'disagree'
@@ -228,10 +228,10 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var built = NumArray.create(0)
+	let built = NumArray.create(0)
 	built.push(20 as Num)
 	built.push(22 as Num)
-	view adopted = NumArray.init(built.managed)
+	let adopted = NumArray.init(built.managed)
 	let head = try adopted.get(0) otherwise return 1
 	let tail = try adopted.get(1) otherwise return 2
 	return (head + tail) as ExitCode
@@ -271,10 +271,10 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	a.push(300 as Num)
 	a.push(301 as Num)
-	var b = a.clone()
+	let b = a.clone()
 	b.push(302 as Num)
 	let borrowed = try b.get(1) otherwise return 1
 	if borrowed != 301 'stride'
@@ -318,10 +318,10 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha")
 	a.push("beta")
-	var b = a.clone()
+	let b = a.clone()
 	b.push("gamma")
 	let first = try b.get(0) otherwise "?"
 	let last = try b.get(2) otherwise "?"
@@ -363,7 +363,7 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	a.push(9 as Num)
 	return a.clone().count() as ExitCode
 end 'main'
@@ -453,7 +453,7 @@ end 'Bag'
 typealias NumBag = Bag with Num
 
 function main() returns ExitCode
-	var b = NumBag.create()
+	let b = NumBag.create()
 	b.push(4 as Num)
 	b.push(5 as Num)
 	let second = try b.get(1) otherwise panic("get: index 1 was just pushed")
@@ -489,7 +489,7 @@ end 'Bag'
 typealias StringBag = Bag with String
 
 function main() returns ExitCode
-	var b = StringBag.create()
+	let b = StringBag.create()
 	b.push("alpha")
 	b.push("beta")
 	let second = try b.get(1) otherwise panic("get: index 1 was just pushed")
@@ -528,7 +528,7 @@ end 'Bag'
 typealias StringBag = Bag with String
 
 function main() returns ExitCode
-	var mine = StringBag.create()
+	let mine = StringBag.create()
 	mine.push("xy")
 
 	var total = mine.count()
@@ -595,7 +595,7 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	a.push(17 as Num)
 	a.push(25 as Num)
 	return (a.at(0) + a.at(1)) as ExitCode
@@ -638,7 +638,7 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	a.push(30 as Num)
 	a.push(12 as Num)
 	return a.headPlusTail()
@@ -685,7 +685,7 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	a.push(41 as Num)
 	a.push(42 as Num)
 	a.push(43 as Num)
@@ -735,7 +735,7 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	a.push(19 as Num)
 	a.push(23 as Num)
 	return a.count() as ExitCode
@@ -784,7 +784,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha")
 	a.push("beta")
 	let head = a.at(0)
@@ -852,7 +852,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha")
 	a.push("beta")
 	print("{a.at(0)} {a.at(1)} {a.count()}\n")
@@ -900,10 +900,10 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha")
 	a.push("beta")
-	view b = a.buffer()
+	let b = a.buffer()
 	print("{b.length()} {a.count()}")
 	return 0
 end 'main'
@@ -993,14 +993,14 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha")
 	a.push("beta")
 	a.push("gamma")
 
 	var seen = 0 as Slot
 	for _ in 0 upto 50 'rounds'
-		var b = a.clone()
+		let b = a.clone()
 		b.push("delta")
 		let head = b.at(0)
 		let tail = b.lastOne()
@@ -1079,7 +1079,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha")
 
 	// The third buffer spelling, from OUTSIDE the declaration, and the third record one beside it.
@@ -1160,7 +1160,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha")
 	a.push("beta")
 	a.push("gamma")
@@ -1250,7 +1250,7 @@ end 'Array'
 typealias MyBytes = Array with Byte
 
 function main() returns ExitCode
-	var mine = MyBytes.create(0)
+	let mine = MyBytes.create(0)
 	mine.push(72 as Byte)
 	mine.push(105 as Byte)
 	mine.push(33 as Byte)
@@ -1292,7 +1292,7 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var mine = NumArray.create(0)
+	let mine = NumArray.create(0)
 	mine.push(4 as Num)
 	mine.push(5 as Num)
 
@@ -1654,7 +1654,7 @@ end 'List'
 typealias NumList = List with Num
 
 function main() returns ExitCode
-	var l = NumList.create()
+	let l = NumList.create()
 	l.resize(9)
 	return l.count() as ExitCode
 end 'main'
@@ -1785,7 +1785,7 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	a.push(42 as Num)
 	return (try a.get("") otherwise 7) as ExitCode
 end 'main'
@@ -1936,7 +1936,7 @@ end 'Array'
 typealias NumArray = Array with Num
 
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	a.push(40 as Num)
 	a.push(2 as Num)
 	return ((try a.get(End.front) otherwise 0) + (try a.get(End.back) otherwise 0)) as ExitCode
@@ -2061,7 +2061,7 @@ type Array uses Element implements BuiltinArrayLiteral, Equatable, Hashable
 end 'Array'
 typealias NumArray = Array with Num
 function main() returns ExitCode
-	var a = NumArray.create(0)
+	let a = NumArray.create(0)
 	a.push(9 as Num)
 	let b = NumArray.create(0)
 	print("{a.hash()} {a.equals(b)} {a == b}\n")
@@ -2092,7 +2092,7 @@ end 'Array'
 typealias Integer = int(i64.min to i64.max)
 typealias Index = Map with (StringArray, Integer)
 function main() returns ExitCode
-	var m = Index.create()
+	let m = Index.create()
 	try m.insert(freeze ("a,b".split(",")), value: 7) otherwise ignore
 	let found = try m.get("a,b".split(",")) otherwise 0
 	print("{found}\n")
@@ -2130,7 +2130,7 @@ end 'Array'
 typealias Integer = int(i64.min to i64.max)
 typealias Index = Map with (StringArray, Integer)
 function main() returns ExitCode
-	var m = Index.create()
+	let m = Index.create()
 	try m.insert(freeze ("a,b".split(",")), value: 7) otherwise ignore
 	let found = try m.get("c,d".split(",")) otherwise 0
 	print("{found}\n")

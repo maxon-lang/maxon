@@ -50,7 +50,7 @@ typealias Q = int(0 to 3)
 typealias QArray = Array with Q
 
 function main() returns ExitCode
-	var a = QArray.create(0)
+	let a = QArray.create(0)
 	a.push(0)
 	a.push(1)
 	a.push(2)
@@ -79,7 +79,7 @@ typealias N = int(0 to 15)
 typealias NArray = Array with N
 
 function main() returns ExitCode
-	var a = NArray.create(0)
+	let a = NArray.create(0)
 	a.push(15)
 	a.push(1)
 	a.push(8)
@@ -100,7 +100,7 @@ typealias U = int(0 to 1)
 typealias UArray = Array with U
 
 function main() returns ExitCode
-	var a = UArray.create(0)
+	let a = UArray.create(0)
 	a.push(1)
 	a.push(0)
 	a.push(1)
@@ -121,7 +121,7 @@ typealias W = int(0 to 16)
 typealias WArray = Array with W
 
 function main() returns ExitCode
-	var a = WArray.create(0)
+	let a = WArray.create(0)
 	a.push(16)
 	if a.managed.elementSize() != 1 'shouldBeByte'
 		return 99
@@ -140,7 +140,7 @@ typealias Octet = int(0 to 255)
 typealias OctetArray = Array with Octet
 
 function main() returns ExitCode
-	var a = OctetArray.create(0)
+	let a = OctetArray.create(0)
 	a.push(200)
 	if a.managed.elementSize() != 1 'shouldBeByte'
 		return 99
@@ -159,7 +159,7 @@ typealias Offset = int(1 to 3)
 typealias OffsetArray = Array with Offset
 
 function main() returns ExitCode
-	var a = OffsetArray.create(0)
+	let a = OffsetArray.create(0)
 	a.push(2)
 	if a.managed.elementSize() != 1 'shouldBeByte'
 		return 99
@@ -177,7 +177,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var a = BoolArray.create(0)
+	let a = BoolArray.create(0)
 	a.push(true)
 	a.push(false)
 	a.push(true)
@@ -198,7 +198,7 @@ typealias Q = int(0 to 3)
 typealias QArray = Array with Q
 
 function main() returns ExitCode
-	var a = QArray.create(0)
+	let a = QArray.create(0)
 	var i = 0 as ElementIndex
 	while i < 40 'fill'
 		a.push((i mod 4) as Q)

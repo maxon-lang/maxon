@@ -656,7 +656,7 @@ end 'FullRangeInt'
 typealias ValueBoxes = Array with FullRangeInt
 
 function main() returns ExitCode
-	var boxes = ValueBoxes.create(0)
+	let boxes = ValueBoxes.create(0)
 	boxes.push(FullRangeInt.create(3))
 	boxes.push(FullRangeInt.create(4))
 

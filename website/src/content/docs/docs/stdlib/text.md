@@ -163,7 +163,7 @@ keeps the capacity for reuse; build with it and take the finished `String` at th
 
 ```maxon
 function main() returns ExitCode
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 
 	for i in 1 to 3 'each'
 		out.append("item {i};")
@@ -293,7 +293,7 @@ data, read as `CharacterSet.letters` with no call. `from` builds a set of exactl
 typealias Letters = Set with Character
 
 function main() returns ExitCode
-	var members = Letters.create()
+	let members = Letters.create()
 	members.insert('x')
 	members.insert('y')
 	let xy = CharacterSet.from(members)

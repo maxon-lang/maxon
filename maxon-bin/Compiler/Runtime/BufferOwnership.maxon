@@ -218,7 +218,7 @@ export let ManagedRecordSlotBytes = 8 as BytePos
 // Each slot is appended at its named offset and the appender asserts it lands there, so the offsets the
 // runtime loads by and the offsets this writes are one set of constants that cannot drift.
 export function immortalRecordBytes(blobOffset ByteOffset, length FullRangeInt, elementSize FullRangeInt, elementDestroy FullRangeInt) returns ByteArray
-	var record = ByteArray.create(0)
+	let record = ByteArray.create(0)
 	appendRecordSlot(record, expectedOffset: ManagedRecordBufferOffset, value: blobOffset as FullRangeInt)
 	appendRecordSlot(record, expectedOffset: ManagedRecordLengthOffset, value: length)
 	appendRecordSlot(record, expectedOffset: ManagedRecordCapacityOffset, value: ImmortalRecordCapacity as FullRangeInt)
@@ -286,7 +286,7 @@ function immortalRecordPayload(record ByteArray, kind RdataPayloadKind, debugStr
 		panic("immortalRecordPayload: a {record.count()}-byte managed record is being given the immortal HEADER without ImmortalRecordCapacity at capacity@16 — the two marks are read by different runtime entries, so a record carrying one of them is skipped by half the readers and counted by the other half")
 	end 'markSplit'
 
-	var payload = immortalBoxHeaderBytes(debugStream, recordBytes: record.count() as FullRangeInt) as isolated ByteArray
+	let payload = immortalBoxHeaderBytes(debugStream, recordBytes: record.count() as FullRangeInt) as isolated ByteArray
 
 	modify payload 'fill'
 		payload.append(record)
@@ -546,9 +546,9 @@ export function emitRouteOnVouchedTerminatorSlot(module StdModule, func IrFuncti
 
 	// `cur` dominates all three, so the one `capacity` load serves every arm — the same dominance argument
 	// `ManagedFileRuntime.emitBytesToCString` makes for its own `len`.
-	var checkRdata = module.addBlock(func, label: b"vouchrdata", heat: BlockHeat.normal)
-	var checkInline = module.addBlock(func, label: b"vouchinline", heat: BlockHeat.normal)
-	var checkImmortal = module.addBlock(func, label: b"vouchimmortal", heat: BlockHeat.normal)
+	let checkRdata = module.addBlock(func, label: b"vouchrdata", heat: BlockHeat.normal)
+	let checkInline = module.addBlock(func, label: b"vouchinline", heat: BlockHeat.normal)
+	let checkImmortal = module.addBlock(func, label: b"vouchimmortal", heat: BlockHeat.normal)
 
 	emitBranchOnCompareValues(module, block: cur, a: capacity, pred: StdCmpPred.gt, b: length, whenTrue: vouched, whenFalse: checkRdata, ids: ids)
 
@@ -604,8 +604,8 @@ end 'emitRouteOnCapacitySentinel'
 // base is read before the record is republished and spent only after the copy — so a fused helper would
 // serve some call sites and quietly invite the ones that must not fuse them to do so.
 export function emitOwedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
-	var viewBase = module.addBlock(func, label: b"vbase", heat: BlockHeat.normal)
-	var ownBase = module.addBlock(func, label: b"obase", heat: BlockHeat.normal)
+	let viewBase = module.addBlock(func, label: b"vbase", heat: BlockHeat.normal)
+	let ownBase = module.addBlock(func, label: b"obase", heat: BlockHeat.normal)
 
 	let notOwned = emitBufferNotOwned(module, block: cur, record: record, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(notOwned, thenBlockId: viewBase.id, elseBlockId: ownBase.id))
@@ -650,7 +650,7 @@ end 'emitClearBufferParent'
 // `buffer@0` points into bytes it does not allocate, such as an `.rdata` blob that may sit at exactly
 // `record + coAllocatedBufferOffset()`.
 export function emitRouteOnOwnedBuffer(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, absent IrBlock, coAllocated IrBlock, separate IrBlock, ids ValueMinter)
-	var probe = module.addBlock(func, label: b"obufprobe", heat: BlockHeat.normal)
+	let probe = module.addBlock(func, label: b"obufprobe", heat: BlockHeat.normal)
 
 	let isAbsent = emitBufferAbsent(module, block: cur, buffer: buffer, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(isAbsent, thenBlockId: absent.id, elseBlockId: probe.id))
@@ -660,8 +660,8 @@ export function emitRouteOnOwnedBuffer(module StdModule, func IrFunction, cur Ir
 end 'emitRouteOnOwnedBuffer'
 
 export function emitCarryOwnedBufferBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, buffer ValueId, ids ValueMinter)
-	var coAllocated = module.addBlock(func, label: b"obaseco", heat: BlockHeat.normal)
-	var separate = module.addBlock(func, label: b"obasesep", heat: BlockHeat.normal)
+	let coAllocated = module.addBlock(func, label: b"obaseco", heat: BlockHeat.normal)
+	let separate = module.addBlock(func, label: b"obasesep", heat: BlockHeat.normal)
 
 	emitRouteOnOwnedBuffer(module, func: func, cur: cur, record: record, buffer: buffer, absent: separate, coAllocated: coAllocated, separate: separate, ids: ids)
 
@@ -683,8 +683,8 @@ end 'emitCarryOwnedBufferBase'
 // allocation back to the slab — a use-after-free. A new non-owned-buffer kind must be taught to the drop
 // path, not only to the write check.
 export function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlock, base ValueId, callee ByteArray, ids ValueMinter) returns IrBlock
-	var step = module.addBlock(func, label: b"rcstep", heat: BlockHeat.normal)
-	var cont = module.addBlock(func, label: b"rccont", heat: BlockHeat.normal)
+	let step = module.addBlock(func, label: b"rcstep", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"rccont", heat: BlockHeat.normal)
 
 	emitRouteOnOwedBase(module, block: cur, base: base, whenOwed: step, whenNone: cont, ids: ids)
 
@@ -752,14 +752,14 @@ end 'emitRouteOnOwedBase'
 // record — and the view's `__managed_decref` then `__mm_decref`s it, which for an inline String is exactly
 // right because it owes nothing else. NOTHING-HOSTS-IT: nothing happens, twice.
 export function emitBufferHostAllocation(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
-	var viewed = module.addBlock(func, label: b"hostview", heat: BlockHeat.normal)
-	var owned = module.addBlock(func, label: b"hostown", heat: BlockHeat.normal)
-	var separate = module.addBlock(func, label: b"hostsep", heat: BlockHeat.normal)
-	var viewedParent = module.addBlock(func, label: b"hostparent", heat: BlockHeat.normal)
-	var noSeparate = module.addBlock(func, label: b"hostnosep", heat: BlockHeat.normal)
-	var inlineBytes = module.addBlock(func, label: b"hostinline", heat: BlockHeat.normal)
-	var nothingHosts = module.addBlock(func, label: b"hostnone", heat: BlockHeat.normal)
-	var coAllocated = module.addBlock(func, label: b"hostco", heat: BlockHeat.normal)
+	let viewed = module.addBlock(func, label: b"hostview", heat: BlockHeat.normal)
+	let owned = module.addBlock(func, label: b"hostown", heat: BlockHeat.normal)
+	let separate = module.addBlock(func, label: b"hostsep", heat: BlockHeat.normal)
+	let viewedParent = module.addBlock(func, label: b"hostparent", heat: BlockHeat.normal)
+	let noSeparate = module.addBlock(func, label: b"hostnosep", heat: BlockHeat.normal)
+	let inlineBytes = module.addBlock(func, label: b"hostinline", heat: BlockHeat.normal)
+	let nothingHosts = module.addBlock(func, label: b"hostnone", heat: BlockHeat.normal)
+	let coAllocated = module.addBlock(func, label: b"hostco", heat: BlockHeat.normal)
 
 	let base = ids.mint()
 	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
@@ -851,11 +851,11 @@ end 'emitBufferHostAllocation'
 // is a legal empty box, and skipping would leave a sentinel capacity on a pointer that has no header for the
 // next reallocation to read), and the fresh buffer comes from `__mm_alloc`, which zeroes.
 export function buildMmCowDetach(module StdModule)
-	var func = IrFunction.createFromStd(MmCowDetachName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(MmCowDetachName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var baseJoin = module.addBlock(func, label: b"basejoin", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let baseJoin = module.addBlock(func, label: b"basejoin", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let record = 0
@@ -874,7 +874,7 @@ export function buildMmCowDetach(module StdModule)
 	let newBuf = ids.mint()
 	emitMmAllocCall(module, block: baseJoin, result: newBuf, size: askBytes, destructor: bufferDtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
 	let oldBuf = emitLoadField(module, block: baseJoin, record: record, offset: ManagedRecordBufferOffset, ids: ids)
-	var afterCopy = emitForwardCopy(module, func: func, cur: baseJoin, dest: newBuf, src: oldBuf, byteCount: liveBytes, ids: ids)
+	let afterCopy = emitForwardCopy(module, func: func, cur: baseJoin, dest: newBuf, src: oldBuf, byteCount: liveBytes, ids: ids)
 
 	// afterCopy: publish the private buffer. `parent@32` returns to `NoOwedAllocation` — a record that has
 	// just copied its bytes into an allocation of its own owes nothing to anyone else.

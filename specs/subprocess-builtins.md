@@ -177,7 +177,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "echo")
@@ -498,7 +498,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "echo hi")
@@ -541,7 +541,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more & echo oops 1>&2")
@@ -729,7 +729,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "ping -n 20 127.0.0.1 > nul")
@@ -834,7 +834,7 @@ function main() returns ExitCode
 		try File.delete(marker) otherwise panic("a marker left by an earlier run must not decide this case")
 	end 'stale'
 
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "cmd")
@@ -941,7 +941,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "start /b ping -n 5 127.0.0.1 & exit 3")
@@ -1214,7 +1214,7 @@ function collector(h FullRangeInt, parkedFrom ParkMark) returns ExitCode
 end 'collector'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	#if os(Windows)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
@@ -1311,7 +1311,7 @@ function collector(h FullRangeInt, parkedFrom ParkMark) returns ExitCode
 end 'collector'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	#if os(Windows)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
@@ -1395,7 +1395,7 @@ function allEnded(pids PidArray) returns bool
 end 'allEnded'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "exit")
@@ -1403,7 +1403,7 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 	print("positive={pid > 0}")
-	var pids = PidArray.create(0)
+	let pids = PidArray.create(0)
 
 	if pid > 0 'started'
 		pids.push(pid as Pid)
@@ -1553,7 +1553,7 @@ function allEnded(pids PidArray) returns bool
 end 'allEnded'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "exit")
@@ -1561,7 +1561,7 @@ function main() returns ExitCode
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	var spawned = 0 as Count
 	var firstFailure = -1 as FullRangeInt
-	var pids = PidArray.create(0)
+	let pids = PidArray.create(0)
 	for i in 0 upto 65 'detachLoop'
 		let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 		if pid > 0 'counted'
@@ -1811,7 +1811,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function runEcho(word String, outKind Integer) returns Integer
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: word)
@@ -1923,7 +1923,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "echo")
@@ -1970,7 +1970,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "for /L %i in (1,1,200) do @echo 0123456789012345678901234567890123456789")
@@ -2065,7 +2065,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "for /L %i in (1,1,200) do @echo 0123456789012345678901234567890123456789")
@@ -2112,12 +2112,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	var envBlock = ByteArray.create(0)
+	let envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "ping\n"
@@ -2172,12 +2172,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	var envBlock = ByteArray.create(0)
+	let envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "abcdefghij\n"
@@ -2226,12 +2226,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	var envBlock = ByteArray.create(0)
+	let envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "first\nabcdefghij\n"
@@ -2285,12 +2285,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	var envBlock = ByteArray.create(0)
+	let envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "abcdefghij\n"
@@ -2339,12 +2339,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "more")
 	let empty = ""
-	var envBlock = ByteArray.create(0)
+	let envBlock = ByteArray.create(0)
 	envBlock.push(0)
 	let h = __Builtins.subprocessSpawnStreaming(argv, 3, empty.cstr(), 0, envBlock, 1)
 	let payload = "abc\n"
@@ -2425,10 +2425,10 @@ function waitAfterRelease(child StreamingSubprocess) returns String
 end 'waitAfterRelease'
 
 function main() returns ExitCode
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("more")
-	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: argv) otherwise return 3
+	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: argv) otherwise return 3
 	try child.writeStdinLine("abc") otherwise return 4
 	child.closeStdin()
 	let line = try child.readStdoutLine() otherwise return 5
@@ -2511,7 +2511,7 @@ end 'appendToken'
 
 function main() returns ExitCode
 	let clean = String.init(__Builtins.subprocessLastErrorMessage())
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "definitely-not-a-real-executable-xyz.exe")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
@@ -2562,13 +2562,13 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "echo")
 	appendToken(argv, token: "%MAXON_ENV_PROBE%")
 
-	var env = ByteArray.create(0)
+	let env = ByteArray.create(0)
 	appendToken(env, token: "MAXON_ENV_PROBE=seen")
 	env.push(0)
 
@@ -2757,7 +2757,7 @@ execute. Between them the stdlib's `Configuration` + `runConfiguration` path —
 `specs` exercises — is covered on both lanes the `subprocess` facility serves.
 ```maxon
 function main() returns ExitCode
-	var config = Configuration.create(Executable.name("cmd"))
+	let config = Configuration.create(Executable.name("cmd"))
 	config.arguments = ["/c", "echo ok"]
 	config.workingDirectory = try FilePath.from("") otherwise return 1
 	let r = try Subprocess.runConfiguration(config) otherwise return 2

@@ -52,7 +52,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -100,7 +100,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -233,7 +233,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -281,7 +281,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -424,7 +424,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -472,7 +472,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -575,7 +575,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -623,7 +623,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -746,7 +746,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -794,7 +794,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -937,7 +937,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -985,7 +985,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1128,7 +1128,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1176,7 +1176,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1289,7 +1289,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1337,7 +1337,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1450,7 +1450,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1498,7 +1498,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1601,7 +1601,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1649,7 +1649,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1782,7 +1782,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1830,7 +1830,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -2013,7 +2013,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2061,7 +2061,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")

@@ -418,7 +418,7 @@ function pick(k Index) returns Box
 	let a = Box.create(build(1), weight: 1)
 	let b = Box.create(build(2), weight: 2)
 	let c = Box.create(build(3), weight: 3)
-	var d = Box.create(build(4), weight: 4)
+	let d = Box.create(build(4), weight: 4)
 	let e = Box.create(build(5), weight: 5)
 	let f = Box.create(build(6), weight: 6)
 	d.weight = d.weight + k + c.weight

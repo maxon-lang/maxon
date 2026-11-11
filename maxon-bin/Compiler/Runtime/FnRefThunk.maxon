@@ -30,7 +30,7 @@ export function cellPositionsAsWords(declared MaxonTypeArray, byReference ParamP
 		return declared
 	end 'everyPositionIsAValue'
 
-	var words = MaxonTypeArray.create(declared.count(), zeroed: false)
+	let words = MaxonTypeArray.create(declared.count(), zeroed: false)
 
 	for i in 0 upto declared.count() 'eachPosition'
 		words.push(wordAtCellPosition(try declared.get(i) otherwise panic("cellPositionsAsWords: declared.get OOB at {i}"), isCell: maskHasParam(byReference, param: i as ParamCount)))
@@ -170,8 +170,8 @@ end 'isFunctionValueBodyName'
 // post-pipeline by `installFnRefThunks`; the walk mirrors `StringRuntime.scanRuntimeUsage`'s — one linear pass
 // over the Maxon ops. `funcSignatures` rides along for that one predicate.
 export function collectFnRefThunkTargets(module MaxonModule, funcSignatures FuncSignatureMap) returns NameRoster
-	var seen = FnRefThunkSet.create()
-	var targets = NameRoster.create(0)
+	let seen = FnRefThunkSet.create()
+	let targets = NameRoster.create(0)
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -337,10 +337,10 @@ export type UncheckedCallPaths
 	end 'noteUncheckedWitnessDispatch'
 
 	export static function collect(module MaxonModule, project Project, signatures ProgramSignatures) returns UncheckedCallPaths
-		var paths = UncheckedCallPaths.none()
+		let paths = UncheckedCallPaths.none()
 		var tableSendUnchecked = false
-		var conformers = ConformersByInterface.create()
-		var witnessSlots = WitnessSlotsByDeclIndex.create()
+		let conformers = ConformersByInterface.create()
+		let witnessSlots = WitnessSlotsByDeclIndex.create()
 
 		for func in module.functions 'eachFunc'
 			if signatures.namesAServiceMessage(func.name) 'aServiceHandler'
@@ -410,11 +410,11 @@ end 'checkedCallMarksOf'
 function uncheckedCallPathOf(op MaxonOp, marks ValueMarkColumn) returns CallPath
 	return match op 'op'
 		indirectCall(result, _, args, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.indirect(userArityOfIndirectCall(args))
-		asyncCall(result, callee, _, _, _, _, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.named(callee)
+		asyncCall(result, callee, _, _, _, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.named(callee)
 		serviceSend(result, _, callee, _, _, _, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.named(callee)
 		witnessDispatch(result, _, _, _, methodIndex, interfaceDeclIndex, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.witness(interfaceDeclIndex, methodIndex: methodIndex)
 		witnessTryDispatch(result, _, _, _, _, methodIndex, interfaceDeclIndex, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.witness(interfaceDeclIndex, methodIndex: methodIndex)
-		call(result, callee, _, _, _, _, _, _) gives CallPath.tableSend if callee.equals(CownInterfaceSendName) and not valueIsMarked(marks, value: result) else CallPath.none
+		call(result, callee, _, _, _, _, _) gives CallPath.tableSend if callee.equals(CownInterfaceSendName) and not valueIsMarked(marks, value: result) else CallPath.none
 		literal or
 		ret or
 		retVoid or
@@ -502,7 +502,7 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	let ret = try project.funcReturnTypes.get(targetName) otherwise panic("synthesizeFnRefThunk: no return type for '{String.from(targetName)}'")
 	let userParamCount = sig.paramCount()
 	let thunkParamCount = userParamCount + FunctionRecordArgCount
-	var targetReturn = maxonReturnTypeToStdReturnType(ret)
+	let targetReturn = maxonReturnTypeToStdReturnType(ret)
 	let byReference = sig.byRefParams
 	let forwardsRecord = isLiftedClosureName(targetName)
 
@@ -530,7 +530,7 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	// A position its arity's convention passes as a cell is an address in the thunk's signature, an
 	// i64, whatever the declared type. A target that takes it by value reads the cell the address names
 	// and forwards the occupant; one that takes it by reference forwards the address itself.
-	var paramTypes = StdTypeArray.create(0)
+	let paramTypes = StdTypeArray.create(0)
 
 	for word in cellPositionsAsWords(sig.paramTypes, byReference: byReference) 'eachUserParamType'
 		paramTypes.push(maxonTypeToStdType(word))
@@ -545,16 +545,16 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	// `call_indirect` type check demands the funcref present exactly the one result the caller declares
 	// (`emitCallIndirect` always `local.set`s it), and `LowerMaxonToStd.indirectResultType` declares that
 	// result an i64 for a void function value — so the thunk must return an i64 to match.
-	var func = IrFunction.createFromStd(fnRefThunkName(targetName), returnType: fnRefThunkReturnType(targetReturn), paramCount: thunkParamCount, paramTypes: paramTypes)
+	let func = IrFunction.createFromStd(fnRefThunkName(targetName), returnType: fnRefThunkReturnType(targetReturn), paramCount: thunkParamCount, paramTypes: paramTypes)
 
 	// A panic trace through a function value names this frame between the caller and the target, so a
 	// tail jump must not remove it.
 	func.keepsItsOwnFrame = true
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitTypedParams(module, block: entry, paramTypes: paramTypes)
 
-	var values = ValueMinter.create(thunkParamCount)
-	var userArgs = ValueIdArray.create(userParamCount + 1, zeroed: false)
+	let values = ValueMinter.create(thunkParamCount)
+	let userArgs = ValueIdArray.create(userParamCount + 1, zeroed: false)
 
 	for i in 0 upto userParamCount 'eachArg'
 		userArgs.push(valueIdAtParamPosition(i))

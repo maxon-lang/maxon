@@ -61,7 +61,7 @@ end 'cacheWriteScopeMarkArray'
 
 function cacheReadScopeMarkArray(reader LibraryCacheReader) returns ScopeMarkArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ScopeMarkArray.create(count, zeroed: false)
+	let result = ScopeMarkArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ElementIndex
@@ -240,17 +240,17 @@ export type Scope
 	// compared against `boundValue` at the next rebind and again when the function's roster is
 	// published.
 	export function setValue(name ByteArray, value ValueId, ledger MoveLedger)
-		var info = try vars.get(name) otherwise panic("Scope.setValue: '{String.from(name)}' not declared — caller must establish the binding before rebinding it")
+		let info = try vars.get(name) otherwise panic("Scope.setValue: '{String.from(name)}' not declared — caller must establish the binding before rebinding it")
 		info.setBoundValue(value, ledger: ledger)
 	end 'setValue'
 
 	export function setBrandKey(name ByteArray, key ByteArray)
-		var info = try vars.get(name) otherwise panic("Scope.setBrandKey: '{String.from(name)}' not declared — caller must establish the binding before keying it")
+		let info = try vars.get(name) otherwise panic("Scope.setBrandKey: '{String.from(name)}' not declared — caller must establish the binding before keying it")
 		info.brandKey = key
 	end 'setBrandKey'
 
 	export function adoptBrand(name ByteArray, brandId TypeNameId)
-		var info = try vars.get(name) otherwise panic("Scope.adoptBrand: '{String.from(name)}' not declared — caller must establish the binding before branding it")
+		let info = try vars.get(name) otherwise panic("Scope.adoptBrand: '{String.from(name)}' not declared — caller must establish the binding before branding it")
 		info.brandId = brandId
 	end 'adoptBrand'
 
@@ -310,11 +310,11 @@ export type Scope
 		let mark = try frameMarks.pop() otherwise panic("Scope.popScope: frameMarks is empty (unmatched popScope)")
 
 		while declNames.count() > mark 'drain'
-			view name = try declNames.pop() otherwise panic("Scope.popScope: declNames.pop failed above the frame mark {mark}")
+			let name = try declNames.pop() otherwise panic("Scope.popScope: declNames.pop failed above the frame mark {mark}")
 			let shadowed = try declShadowed.pop() otherwise panic("Scope.popScope: declShadowed.pop failed — it must stay parallel to declNames")
 
 			if shadowed 'restoreOuter'
-				var outer = try shadowedInfos.pop() otherwise panic("Scope.popScope: shadowedInfos.pop failed — one entry per declaration marked as shadowing")
+				let outer = try shadowedInfos.pop() otherwise panic("Scope.popScope: shadowedInfos.pop failed — one entry per declaration marked as shadowing")
 				vars.upsert(name, value: outer)
 			end 'restoreOuter' else 'removeOnly'
 				_ = vars.remove(name)

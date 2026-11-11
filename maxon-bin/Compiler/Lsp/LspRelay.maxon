@@ -89,15 +89,15 @@ function lspMessageIsResponse(doc JsonDoc) returns bool
 end 'lspMessageIsResponse'
 
 function relayDidOpenText(uri String, document LspRelayDocument) returns String
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 
-	var item = LspJsonObject.create(doc)
+	let item = LspJsonObject.create(doc)
 	item.put(LspUriKey, value: JsonNode.stringNode(uri))
 	item.put(RelayLanguageIdKey, value: JsonNode.stringNode(RelayLanguageId))
 	item.put(VersionKey, value: JsonNode.numberNode(document.replayedVersion() as JsonFloat))
 	item.put(TextKey, value: JsonNode.stringNode(document.text))
 
-	var params = LspJsonObject.create(doc)
+	let params = LspJsonObject.create(doc)
 	params.putNode(TextDocumentKey, value: item.finish())
 
 	return lspNotificationText(doc, method: MethodDidOpen, params: params.finish())
@@ -165,9 +165,19 @@ module type LspSlotStamp
 	end 'agrees'
 end 'LspSlotStamp'
 
-module type LspChildLink
+type LspChildProcess
 	module let generation as LspChildGeneration
 	module let process as StreamingSubprocess
+
+	static function create(generation LspChildGeneration, process StreamingSubprocess) returns LspChildProcess
+		return Self{generation: generation, process: process}
+	end 'create'
+end 'LspChildProcess'
+
+typealias LspChildProcessList = List with LspChildProcess
+
+module type LspChildLink
+	module let generation as LspChildGeneration
 	module let reader as StdoutReader
 	module let errorReader as StderrReader
 	module let swallowed as LspRelayIdSet
@@ -176,13 +186,9 @@ module type LspChildLink
 	module var pendingStderr as String
 	module var omittedStderrLines as Count
 
-	module static function create(generation LspChildGeneration, process StreamingSubprocess, reader StdoutReader, errorReader StderrReader) returns LspChildLink
-		return Self{generation: generation, process: process, reader: reader, errorReader: errorReader, swallowed: LspRelayIdSet.create(), stdoutOpen: true, stderrOpen: true, pendingStderr: "", omittedStderrLines: 0}
+	module static function create(generation LspChildGeneration, reader StdoutReader, errorReader StderrReader) returns LspChildLink
+		return Self{generation: generation, reader: reader, errorReader: errorReader, swallowed: LspRelayIdSet.create(), stdoutOpen: true, stderrOpen: true, pendingStderr: "", omittedStderrLines: 0}
 	end 'create'
-
-	module function send(body String)
-		try self.process.writeStdinLine("Content-Length: {body.byteLength() + RelayAppendedLineFeedBytes}\r\n\r\n{body}") otherwise ignore
-	end 'send'
 
 	module function noteStderrLine(line String)
 		if self.pendingStderr.byteLength() >= RelayStderrPendingCapBytes 'full'
@@ -208,12 +214,6 @@ module type LspChildLink
 	module function drained() returns bool
 		return not self.stdoutOpen and not self.stderrOpen
 	end 'drained'
-
-	module function reap()
-		try self.process.reclaimStdout() otherwise panic("LspChildLink.reap: the stdout of a child whose output ended was not out with its reader")
-		try self.process.reclaimStderr() otherwise panic("LspChildLink.reap: the stderr of a child whose error output ended was not out with its reader")
-		self.process.release()
-	end 'reap'
 end 'LspChildLink'
 
 module type LspRelay
@@ -226,6 +226,7 @@ module type LspRelay
 	var inFlight as LspRelayInFlightMap
 	var current as LspRelayChild
 	var retired as LspChildLinkArray
+	var processes as LspChildProcessList
 	var nextGeneration as LspChildGeneration
 	var attached as LspSlotStamp
 	var observed as LspSlotStamp
@@ -233,7 +234,7 @@ module type LspRelay
 	var unreadableTold as StatedText
 
 	module static function create(slot FilePath, initializeBody String, initializeId LspRequestId) returns LspRelay
-		return Self{slot: slot, initializeBody: initializeBody, initializeId: initializeId, initializedBody: StatedText.unstated, stateNotices: StringArray.create(0), documents: LspRelayDocumentMap.create(), inFlight: LspRelayInFlightMap.create(), current: LspRelayChild.none, retired: LspChildLinkArray.create(0), nextGeneration: 0, attached: LspSlotStamp.absent(), observed: LspSlotStamp.absent(), spawnFailed: LspSlotStamp.absent(), unreadableTold: StatedText.unstated}
+		return Self{slot: slot, initializeBody: initializeBody, initializeId: initializeId, initializedBody: StatedText.unstated, stateNotices: StringArray.create(0), documents: LspRelayDocumentMap.create(), inFlight: LspRelayInFlightMap.create(), current: LspRelayChild.none, retired: LspChildLinkArray.create(0), processes: LspChildProcessList.create(), nextGeneration: 0, attached: LspSlotStamp.absent(), observed: LspSlotStamp.absent(), spawnFailed: LspSlotStamp.absent(), unreadableTold: StatedText.unstated}
 	end 'create'
 
 	module function armTick(workspace LspWorkspaceState)
@@ -383,17 +384,51 @@ module type LspRelay
 	end 'childStderrFailed'
 
 	function endGracefully(link LspChildLink, workspace LspWorkspaceState)
-		link.process.closeStdin()
-
-		try link.process.waitWithTimeout(RelayChildExitDeadlineMs) otherwise (failure) 'notExited'
-			self.report("the compiler at {self.slot.path} did not end when its input closed: {failure.displayReason()}", workspace: workspace)
-		end 'notExited'
-
+		self.awaitExit(try self.processes.get(self.processPosition(link.generation)) otherwise panic("LspRelay.endGracefully: a link names a child process the relay no longer holds"), workspace: workspace)
 		self.retireLink(link, workspace: workspace)
 	end 'endGracefully'
 
+	function awaitExit(held LspChildProcess, workspace LspWorkspaceState)
+		held.process.closeStdin()
+
+		try held.process.waitWithTimeout(RelayChildExitDeadlineMs) otherwise (failure) 'notExited'
+			self.report("the compiler at {self.slot.path} did not end when its input closed: {failure.displayReason()}", workspace: workspace)
+		end 'notExited'
+	end 'awaitExit'
+
+	function processPosition(generation LspChildGeneration) returns ElementIndex
+		var position = 0 as ElementIndex
+
+		for held in self.processes 'eachProcess'
+			if held.generation == generation 'found'
+				return position
+			end 'found'
+
+			position = position + 1
+		end 'eachProcess'
+
+		panic("LspRelay.processPosition: a link names a child process the relay no longer holds")
+	end 'processPosition'
+
+	function sendTo(generation LspChildGeneration, body String)
+		try (try self.processes.get(self.processPosition(generation)) otherwise panic("LspRelay.sendTo: a link names a child process the relay no longer holds")).process.writeStdinLine("Content-Length: {body.byteLength() + RelayAppendedLineFeedBytes}\r\n\r\n{body}") otherwise ignore
+	end 'sendTo'
+
+	function reapProcess(generation LspChildGeneration)
+		let position = self.processPosition(generation)
+
+		self.releaseChild(try self.processes.get(position) otherwise panic("LspRelay.reapProcess: the position was just found in the process list"))
+		_ = try self.processes.remove(position) otherwise panic("LspRelay.reapProcess: the position was just found in the process list")
+	end 'reapProcess'
+
+	function releaseChild(held LspChildProcess)
+		try held.process.reclaimStdout() otherwise panic("LspRelay.releaseChild: the stdout of a child whose output ended was not out with its reader")
+		try held.process.reclaimStderr() otherwise panic("LspRelay.releaseChild: the stderr of a child whose error output ended was not out with its reader")
+		held.process.release()
+	end 'releaseChild'
+
 	function retireLink(link LspChildLink, workspace LspWorkspaceState)
-		let treeEnd = link.process.endTree()
+		let treeEnd = (try self.processes.get(self.processPosition(link.generation)) otherwise panic("LspRelay.retireLink: a link names a child process the relay no longer holds")).process.endTree()
 
 		match treeEnd 'ended'
 			ended then break
@@ -412,7 +447,7 @@ module type LspRelay
 		for (position, held) in self.retired.withIterator() 'eachRetired'
 			if held.generation == link.generation 'reapable'
 				self.tellStderr(held, workspace: workspace)
-				held.reap()
+				self.reapProcess(held.generation)
 				_ = try self.retired.remove(position.index()) otherwise panic("LspRelay.reapIfDrained: a retired link was found at a position of the array")
 				return
 			end 'reapable'
@@ -435,7 +470,8 @@ module type LspRelay
 		let reader = try process.takeStdout() otherwise panic("LspRelay.attach: the stdout of a child that was just spawned was already out")
 		let errorReader = try process.takeStderr() otherwise panic("LspRelay.attach: the stderr of a child that was just spawned was already out")
 		self.nextGeneration = self.nextGeneration + 1
-		let link = LspChildLink.create(self.nextGeneration, process: process, reader: reader, errorReader: errorReader)
+		let link = LspChildLink.create(self.nextGeneration, reader: reader, errorReader: errorReader)
+		self.processes.append(LspChildProcess.create(self.nextGeneration, process: process))
 
 		self.retireCurrent(workspace)
 		self.current = LspRelayChild.running(link)
@@ -483,19 +519,19 @@ module type LspRelay
 			link.swallowed.insert(lspRelayIdKey(self.initializeId))
 		end 'swallowed'
 
-		link.send(self.initializeBody)
+		self.sendTo(link.generation, body: self.initializeBody)
 
 		match self.initializedBody 'initialized'
-			stated(body) then link.send(body)
+			stated(body) then self.sendTo(link.generation, body: body)
 			unstated then break
 		end 'initialized'
 
 		for notice in self.stateNotices 'eachNotice'
-			link.send(notice)
+			self.sendTo(link.generation, body: notice)
 		end 'eachNotice'
 
 		for (uri, document) in self.documents 'eachDocument'
-			link.send(relayDidOpenText(uri, document: document))
+			self.sendTo(link.generation, body: relayDidOpenText(uri, document: document))
 		end 'eachDocument'
 	end 'replay'
 
@@ -521,7 +557,7 @@ module type LspRelay
 
 	function failInFlight(workspace LspWorkspaceState, sparesInitialize bool)
 		let initializeKey = lspRelayIdKey(self.initializeId)
-		var spared = LspRelayInFlightMap.create()
+		let spared = LspRelayInFlightMap.create()
 
 		for (key, request) in self.inFlight 'eachRequest'
 			if sparesInitialize and key == initializeKey 'answeredByTheNextChild'
@@ -620,14 +656,14 @@ module type LspRelay
 
 	function forward(body String)
 		match self.current 'child'
-			running(link) then link.send(body)
+			running(link) then self.sendTo(link.generation, body: body)
 			none then return
 		end 'child'
 	end 'forward'
 
 	function forwardTo(link LspChildLink, body String, id LspRequestId, method String)
 		self.recordInFlight(id, method: method)
-		link.send(body)
+		self.sendTo(link.generation, body: body)
 	end 'forwardTo'
 
 	function recordInFlight(id LspRequestId, method String)

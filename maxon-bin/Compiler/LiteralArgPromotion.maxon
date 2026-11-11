@@ -80,7 +80,7 @@ export function promoteArgsNeedingAWritableRecord(project Project, module MaxonM
 	end 'alreadyRefused'
 
 	for i in 0 upto module.functions.count() 'eachFunc'
-		var func = try module.functions.get(i) otherwise panic("promoteArgsNeedingAWritableRecord: module.functions.get OOB at {i}")
+		let func = try module.functions.get(i) otherwise panic("promoteArgsNeedingAWritableRecord: module.functions.get OOB at {i}")
 
 		// The same reachability gate `scanRuntimeUsage` and `lowerMaxonToStd` apply: a stdlib body no back
 		// end will receive is not worth rewriting, and an op inserted into one would sit in front of a scan
@@ -107,7 +107,7 @@ function promoteInFunction(project Project, module MaxonModule, func IrFunction,
 	end 'writesNothingItWasHanded'
 
 	let provenance = ArgProvenance.of(module, func: func)
-	var minter = PromotedValueMinter.over(func)
+	let minter = PromotedValueMinter.over(func)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		promoteInBlock(project, module: module, block: try module.blocks.get(blockRef) otherwise panic("promoteInFunction: blockRef from func.blockRefs not in module.blocks"), func: func, funcIndex: funcIndex, provenance: provenance, minter: minter, mutationSummary: mutationSummary)
@@ -137,7 +137,7 @@ end 'callsAWritingCallee'
 // of the gate.
 function opCallsAWritingCallee(op MaxonOp, mutationSummary ParamMutationSummary) returns bool
 	return match op 'op'
-		call(_, callee, _, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoParamPositions
+		call(_, callee, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoParamPositions
 		literal or
 		ret or
 		retVoid or
@@ -150,7 +150,7 @@ function opCallsAWritingCallee(op MaxonOp, mutationSummary ParamMutationSummary)
 		loadIndirect or
 		storeIndirect or
 		stringLiteral gives false
-		tryCall(_, _, callee, _, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoParamPositions
+		tryCall(_, _, callee, _, _, _, _, _) gives mutationSummary.maskOf(callee) != NoParamPositions
 		throwError or
 		propagateError or
 		panicAbort or
@@ -231,7 +231,7 @@ type ArgProvenance
 	var isMergedByteRecord as FixedBoolArray
 
 	static function of(module MaxonModule, func IrFunction) returns ArgProvenance
-		var provenance = Self{isImmortal: FixedBoolArray.create(func.valueTags.count()), isMergedByteRecord: FixedBoolArray.create(func.valueTags.count())}
+		let provenance = Self{isImmortal: FixedBoolArray.create(func.valueTags.count()), isMergedByteRecord: FixedBoolArray.create(func.valueTags.count())}
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("ArgProvenance.of: blockRef from func.blockRefs not in module.blocks")
@@ -344,7 +344,7 @@ end 'ArgProvenance'
 // rebuilt fresh by `relocateIrBlock`, so this block's belongs to the merged module alone. It is the same
 // split `IrBlock`'s header states for the phi model.
 function promoteInBlock(project Project, module MaxonModule, block IrBlock, func IrFunction, funcIndex ElementIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary)
-	var newRefs = OpIndexArray.create(0)
+	let newRefs = OpIndexArray.create(0)
 	var promotedAny = false
 
 	for opIdx in block.bodyOps() 'eachOp'
@@ -362,10 +362,10 @@ end 'promoteInBlock'
 // by its releases when this op is a call that needs them — and answers whether anything was spliced in.
 // Same arm list, same band discipline and same `asyncCall` exclusion as the gate above.
 function promoteCallAt(project Project, module MaxonModule, opIdx ElementIndex, func IrFunction, funcIndex ElementIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
-	view op = try module.ops.get(opIdx) otherwise panic("promoteCallAt: opIdx {opIdx} not in module.ops")
+	let op = try module.ops.get(opIdx) otherwise panic("promoteCallAt: opIdx {opIdx} not in module.ops")
 
 	match op 'op'
-		call(_, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
+		call(_, callee, args, argLabels, _, _, _) then return promoteArgsOf(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
 		literal or
 		ret or
 		retVoid or
@@ -378,7 +378,7 @@ function promoteCallAt(project Project, module MaxonModule, opIdx ElementIndex, 
 		loadIndirect or
 		storeIndirect or
 		stringLiteral then break
-		tryCall(_, _, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
+		tryCall(_, _, callee, args, argLabels, _, _, _) then return promoteArgsOf(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
 		throwError or
 		propagateError or
 		panicAbort or
@@ -431,7 +431,7 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 		return false
 	end 'noWrittenPositionToFill'
 
-	view sig = try project.funcSignatures.get(callee) otherwise panic("promoteArgsOf: funcSignatures has no entry for '{String.from(callee)}' one line after `contains` answered true for it")
+	let sig = try project.funcSignatures.get(callee) otherwise panic("promoteArgsOf: funcSignatures has no entry for '{String.from(callee)}' one line after `contains` answered true for it")
 
 	// Asked before anything is built, because a call to a writing callee is common and a literal or a merge
 	// AT one of its written positions is not: without it every such call would claim four arrays to discover
@@ -441,10 +441,10 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 		return false
 	end 'nothingToPromote'
 
-	var promotedArgs = ValueIdArray.create(args.count(), zeroed: false)
-	var promoted = ValueIdArray.create(0)
-	var sources = ValueIdArray.create(0)
-	var callees = NameRoster.create(0)
+	let promotedArgs = ValueIdArray.create(args.count(), zeroed: false)
+	let promoted = ValueIdArray.create(0)
+	let sources = ValueIdArray.create(0)
+	let callees = NameRoster.create(0)
 
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("promoteArgsOf: args.get OOB at {i}")
@@ -479,8 +479,8 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 		newRefs.push(appendPromotionRuntimeCall(module, project: project, funcIndex: funcIndex, result: try promoted.get(i) otherwise panic("promoteArgsOf: promoted.get OOB at {i}"), callee: try callees.get(i) otherwise panic("promoteArgsOf: callees.get OOB at {i} — the three columns are pushed together"), arg: try sources.get(i) otherwise panic("promoteArgsOf: sources.get OOB at {i} — the three columns are pushed together"), range: range))
 	end 'eachPromotion'
 
-	var original = try module.ops.get(opIdx) otherwise panic("promoteArgsOf: module.ops.get OOB at {opIdx}")
-	var rewritten = withRewrittenArgs(original, args: promotedArgs, argImmutableNames: callArgImmutableNamesOf(original).clone())
+	let original = try module.ops.get(opIdx) otherwise panic("promoteArgsOf: module.ops.get OOB at {opIdx}")
+	let rewritten = withRewrittenArgs(original, args: promotedArgs)
 	try module.ops.set(opIdx, value: rewritten) otherwise panic("promoteArgsOf: module.ops.set OOB at {opIdx}")
 	newRefs.push(opIdx)
 
@@ -507,7 +507,7 @@ end 'anyArgNeedsAWritableRecord'
 // `none` when it fills any other position, whatever its own provenance is.
 //
 // ⚠ **IT READS THE SOURCE-ORDER COLUMNS AND BRIDGES THEM WITH `argSlotPosition`, exactly as
-// `checkImmutableArgToMutatingParam` must** — the value is a fact about the argument the SOURCE wrote,
+// `checkCallArguments` must** — the value is a fact about the argument the SOURCE wrote,
 // while the mask is indexed by DECLARATION position, and `grow(1, dest: "x")` writes parameter 1 with the
 // offending argument at source position 1 only by coincidence. Inverting the permutation by hand would be
 // a second slotting.
@@ -539,7 +539,7 @@ end 'promotionAtWrittenPosition'
 function appendPromotionRuntimeCall(module MaxonModule, project Project, funcIndex ElementIndex, result ValueId, callee ByteArray, arg ValueId, range SourceRange) returns ElementIndex
 	let args = argsOf(arg)
 	let opIndex = module.opCount()
-	module.ops.push(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: WriteBlameArray.create(0), defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted))
+	module.ops.push(MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NameRoster.create(0), mint: CalleeMint.notMinted))
 	project.opRanges.record(opIndex, range: range)
 	project.valueOrigins.record(funcIndex, valueId: result, opIndex: opIndex)
 	return opIndex

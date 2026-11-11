@@ -39,7 +39,7 @@ type ChunkNameList
 	end 'count'
 
 	function joined() returns String
-		var text = StringBuilder.create()
+		let text = StringBuilder.create()
 
 		for name in self.names 'eachName'
 			text.append("'{String.from(name)}' ")
@@ -56,7 +56,7 @@ end 'ChunkNameList'
 // could bound and is refused outright. With the codegen debug log on, every overflow is logged and
 // the first one is refused at the end.
 export function requireUnguardedChainsFitTheGuardMargin(project Project, module TargetModule, globalData GlobalDataTable, funcNames FunctionNameIndex, chunks FunctionCodeChunkArray, target Target) throws CompileError
-	var walk = UnguardedChainWalk.create(project, funcNames: funcNames, chunks: chunks, target: target, margin: gtStackGuardMargin(target) as StackSize)
+	let walk = UnguardedChainWalk.create(project, funcNames: funcNames, chunks: chunks, target: target, margin: gtStackGuardMargin(target) as StackSize)
 	walk.notePointerCallers(module)
 	walk.noteIndirectTargets(globalData)
 	try walk.measureIndirectTargets()
@@ -253,14 +253,14 @@ type UnguardedChainWalk
 	var overflowed as bool
 
 	static function create(project Project, funcNames FunctionNameIndex, chunks FunctionCodeChunkArray, target Target, margin StackSize) returns UnguardedChainWalk
-		var indexOf = ChunkIndexByName.create()
-		var viaPointer = BoolArray.create(chunks.count(), zeroed: false)
-		var addressTaken = BoolArray.create(chunks.count(), zeroed: false)
-		var reachesPointer = BoolArray.create(chunks.count(), zeroed: false)
-		var visits = ChainVisitColumn.create(chunks.count(), zeroed: false)
-		var depths = StackSizeColumn.create(chunks.count(), zeroed: false)
-		var deepest = ChunkIndexColumn.create(chunks.count(), zeroed: false)
-		var hasDeepest = BoolArray.create(chunks.count(), zeroed: false)
+		let indexOf = ChunkIndexByName.create()
+		let viaPointer = BoolArray.create(chunks.count(), zeroed: false)
+		let addressTaken = BoolArray.create(chunks.count(), zeroed: false)
+		let reachesPointer = BoolArray.create(chunks.count(), zeroed: false)
+		let visits = ChainVisitColumn.create(chunks.count(), zeroed: false)
+		let depths = StackSizeColumn.create(chunks.count(), zeroed: false)
+		let deepest = ChunkIndexColumn.create(chunks.count(), zeroed: false)
+		let hasDeepest = BoolArray.create(chunks.count(), zeroed: false)
 
 		for index in 0 upto chunks.count() 'eachChunk'
 			let chunk = try chunks.get(index) otherwise panic("UnguardedChainWalk.create: chunks.get OOB at {index}")
@@ -278,7 +278,7 @@ type UnguardedChainWalk
 	end 'create'
 
 	function notePointerCallers(module TargetModule)
-		var verdicts = PointerCallMemo.create()
+		let verdicts = PointerCallMemo.create()
 
 		for position in 0 upto module.funcCount() 'eachFunction'
 			let func = module.getFunc(position)
@@ -302,7 +302,7 @@ type UnguardedChainWalk
 		end 'eachRdataSlot'
 
 		for index in 0 upto self.chunks.count() 'eachChunk'
-			view chunk = self.chunkAt(index)
+			let chunk = self.chunkAt(index)
 
 			for fixup in chunk.callFixups 'eachFixup'
 				if fixup.takesAddressOnly 'addressOnly'
@@ -409,7 +409,7 @@ type UnguardedChainWalk
 	end 'stoppedThreadTreeBytes'
 
 	function edgeBytes(callee ElementIndex) returns StackSize throws CompileError
-		var chunk = self.chunkAt(callee)
+		let chunk = self.chunkAt(callee)
 
 		if chunk.checksStack 'guardedCallee'
 			return StackWordBytes as StackSize
@@ -426,8 +426,8 @@ type UnguardedChainWalk
 	end 'edgeBytes'
 
 	function edgesOf(index ElementIndex) returns ChainEdgeArray throws CompileError
-		view chunk = self.chunkAt(index)
-		var edges = ChainEdgeArray.create(0)
+		let chunk = self.chunkAt(index)
+		let edges = ChainEdgeArray.create(0)
 
 		for fixup in chunk.callFixups 'eachCall'
 			if fixup.takesAddressOnly 'notACall'
@@ -499,11 +499,11 @@ type UnguardedChainWalk
 			unvisited then break
 		end 'visit'
 
-		view chunk = self.chunkAt(index)
+		let chunk = self.chunkAt(index)
 		try self.visits.set(index, value: ChainVisit.visiting) otherwise panic("UnguardedChainWalk.depthBelow: visits.set OOB at {index}")
 		self.path.push(index)
 
-		var lowest = DeepestBelow.create()
+		let lowest = DeepestBelow.create()
 		var sawPointer = self.callsThroughAPointer(index)
 		let edges = try self.edgesOf(index)
 
@@ -555,7 +555,7 @@ type UnguardedChainWalk
 	end 'hasDeepestOf'
 
 	function framedNames(indices ChunkIndexColumn) returns String
-		var text = StringBuilder.create()
+		let text = StringBuilder.create()
 
 		for index in indices 'eachIndex'
 			let chunk = self.chunkAt(index)
@@ -566,7 +566,7 @@ type UnguardedChainWalk
 	end 'framedNames'
 
 	function namesOf(indices ChunkIndexColumn, expandInlined bool) returns NameRoster
-		var names = NameRoster.create(0)
+		let names = NameRoster.create(0)
 
 		for index in indices 'eachIndex'
 			let chunk = self.chunkAt(index)
@@ -587,7 +587,7 @@ type UnguardedChainWalk
 	end 'namesOf'
 
 	function refuseRecursion(index ElementIndex) throws CompileError
-		var cycle = ChunkIndexColumn.create(0)
+		let cycle = ChunkIndexColumn.create(0)
 		var inCycle = false
 
 		for onPath in self.path 'eachOnPath'
@@ -609,7 +609,7 @@ type UnguardedChainWalk
 	end 'surveying'
 
 	function chainFrom(root ElementIndex) returns ChunkIndexColumn
-		var chain = ChunkIndexColumn.create(0)
+		let chain = ChunkIndexColumn.create(0)
 		var current = root
 		chain.push(current)
 
@@ -712,7 +712,7 @@ type UnguardedChainWalk
 end 'UnguardedChainWalk'
 
 export function quotedNames(names NameRoster) returns String
-	var text = StringBuilder.create()
+	let text = StringBuilder.create()
 
 	for position in 0 upto names.count() 'eachName'
 		let name = try names.get(position) otherwise panic("quotedNames: names.get OOB at {position}")

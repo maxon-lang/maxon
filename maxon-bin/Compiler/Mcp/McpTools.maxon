@@ -345,7 +345,7 @@ function executeBuildToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Optional
 		return toolErrorText(reqDoc, idNode: idNode, message: "build: {target.error}", repoRoot: ctx.repoRootLabel)
 	end 'badSource'
 
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push(BuildSubcommandName)
 
 	// Naming nothing is legal here: it builds the working directory's manifest.
@@ -390,7 +390,7 @@ function executeExecuteToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Option
 		return toolErrorText(reqDoc, idNode: idNode, message: "execute: give either `path` or `source`.", repoRoot: ctx.repoRootLabel)
 	end 'nothingToRun'
 
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push(ExecuteCommandName)
 	argv.push(target.file.path)
 
@@ -423,7 +423,7 @@ function boundSecondsOf(parse TargetSecondsParse) returns TargetSeconds
 end 'boundSecondsOf'
 
 function executeTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push(TestCommandName)
 
 	let pathArg = getOptionalStringArg(reqDoc, args: args, key: "path", defaultVal: ".")
@@ -456,7 +456,7 @@ function executeFmtToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNo
 		return toolErrorText(reqDoc, idNode: idNode, message: "fmt: {target.error}", repoRoot: ctx.repoRootLabel)
 	end 'badSource'
 
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push(FmtCommandName)
 
 	// ⚠ With no path `fmt` formats the whole working directory. That is its documented default.
@@ -478,8 +478,8 @@ function formatStagedSnippet(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext,
 end 'formatStagedSnippet'
 
 function formattedSnippetReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, staged FilePath, res CollectedOutput) returns String
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
+	let doc = JsonDoc.create()
+	let payload = JsonObjectBuilder.create()
 	var succeeded = res.succeeded()
 
 	if succeeded 'readBack'
@@ -511,17 +511,17 @@ end 'InProcessCompile'
 // a buffer. The capture keeps the pipeline's diagnostics off this server's own streams.
 function compileInProcess(reqDoc JsonDoc, args OptionalNode, rendersTargetIr bool, fileMemos SharedFileMemoMap) returns InProcessCompile
 	let pathArg = requiredStringArg(reqDoc, args: args, key: "path")
-	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
+	let session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
 
 	let path = try FilePath.from(pathArg) otherwise 'badPath'
 		session.diagnostics.emit("error: invalid path: {pathArg}")
 		return InProcessCompile.refused(session.diagnostics.text())
 	end 'badPath'
 
-	var paths = MaxonSourcePathArray.create(0)
+	let paths = MaxonSourcePathArray.create(0)
 	paths.push(path)
 
-	var project = try loadProject(paths, target: detectHostTarget(), session: session) otherwise (e) 'notLoaded'
+	let project = try loadProject(paths, target: detectHostTarget(), session: session) otherwise (e) 'notLoaded'
 		reportCompileError(e, sink: session.diagnostics)
 		return InProcessCompile.refused(session.diagnostics.text())
 	end 'notLoaded'
@@ -560,8 +560,8 @@ function addInProcessAttribution(doc JsonDoc, payload JsonObjectBuilder, exePath
 end 'addInProcessAttribution'
 
 export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, fileMemos SharedFileMemoMap) returns String
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
+	let doc = JsonDoc.create()
+	let payload = JsonObjectBuilder.create()
 	let succeeded = addCompileOutcome(doc, payload: payload, compile: compileInProcess(reqDoc, args: args, rendersTargetIr: false, fileMemos: fileMemos))
 	addInProcessAttribution(doc, payload: payload, exePath: exePath)
 
@@ -569,8 +569,8 @@ export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args Optiona
 end 'executeCheckTool'
 
 export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, fileMemos SharedFileMemoMap) returns String
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
+	let doc = JsonDoc.create()
+	let payload = JsonObjectBuilder.create()
 	let compile = compileInProcess(reqDoc, args: args, rendersTargetIr: true, fileMemos: fileMemos)
 	let succeeded = addCompileOutcome(doc, payload: payload, compile: compile)
 	addInProcessAttribution(doc, payload: payload, exePath: exePath)
@@ -585,8 +585,8 @@ export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args Option
 end 'executeDumpIrTool'
 
 export function executeInfoTool(reqDoc JsonDoc, idNode JsonNodeId, exePath FilePath) returns String
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
+	let doc = JsonDoc.create()
+	let payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: true)
 	payload.addString(doc, key: "name", value: CompilerProductName)
 	payload.addString(doc, key: "version", value: CompilerVersion)
@@ -642,8 +642,8 @@ function projectDirectoryNamedBy(path FilePath) returns FilePath throws AbsentEr
 end 'projectDirectoryNamedBy'
 
 function breakingChangesReply(reqDoc JsonDoc, idNode JsonNodeId, recorded RecordedRelease) returns String
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
+	let doc = JsonDoc.create()
+	let payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: true)
 
 	match recorded 'standing'
@@ -658,10 +658,10 @@ function breakingChangesReply(reqDoc JsonDoc, idNode JsonNodeId, recorded Record
 end 'breakingChangesReply'
 
 function breakingChangeArray(doc JsonDoc, changes BreakingChangeArray) returns JsonNodeId
-	var ids = JsonNodeIdArray.create(changes.count(), zeroed: false)
+	let ids = JsonNodeIdArray.create(changes.count(), zeroed: false)
 
 	for change in changes 'eachChange'
-		var entry = JsonObjectBuilder.create()
+		let entry = JsonObjectBuilder.create()
 		entry.addString(doc, key: "version", value: change.version)
 		entry.addString(doc, key: "change", value: change.change)
 		entry.addString(doc, key: "fix", value: change.fix)
@@ -780,7 +780,7 @@ function shardVerdict(text String) returns SpecSelectionVerdict
 end 'shardVerdict'
 
 function specTestArgv(reqDoc JsonDoc, args OptionalNode, directory String, filterPatterns FilterPatternArray, shard ShardSelection) returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push(SpecTestCommandName)
 
 	let updateRequired = getOptionalBoolArg(reqDoc, args: args, key: "updateRequired", defaultVal: false)
@@ -819,7 +819,7 @@ function runWithResultDocument(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContex
 
 	sweepLeftoversOfEndedOwners(resultDir, livenessOf: function(entry) gives family.livenessOf(entry), keyOf: leftoverIsItsOwnKey, discardKeyed: removeOwnedFile)
 
-	var ranArgv = StringArray.create(0)
+	let ranArgv = StringArray.create(0)
 	ranArgv.append(argv)
 	ranArgv.push("{ResultJsonFlagPrefix}{resultPath.path}")
 
@@ -870,8 +870,8 @@ function parsedResultReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, a
 end 'parsedResultReply'
 
 function unusableResultReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, why String) returns String
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
+	let doc = JsonDoc.create()
+	let payload = JsonObjectBuilder.create()
 	addTimedRunFields(doc, payload: payload, ctx: ctx, argv: argv, res: res, durationMs: durationMs)
 	payload.addBool(doc, key: "success", value: false)
 	payload.addString(doc, key: "error", value: why)
@@ -888,8 +888,8 @@ end 'specReportReply'
 function specTestReply(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, report SpecReport) returns String
 	let listed = listedFailureCount(report.failures, limit: failureLimitOf(reqDoc, args: args) as Count)
 
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
+	let doc = JsonDoc.create()
+	let payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: res.succeeded())
 	addTimedRunFields(doc, payload: payload, ctx: ctx, argv: argv, res: res, durationMs: durationMs)
 	payload.addNumber(doc, key: "passed", value: report.tally.passed as JsonFloat)
@@ -910,7 +910,7 @@ function specTestReply(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx
 end 'specTestReply'
 
 function harnessErrorArrayNode(doc JsonDoc, harnessErrors StringArray) returns JsonNodeId
-	var nodeIds = JsonNodeIdArray.create(harnessErrors.count(), zeroed: false)
+	let nodeIds = JsonNodeIdArray.create(harnessErrors.count(), zeroed: false)
 
 	for text in harnessErrors 'eachError'
 		nodeIds.push(doc.add(JsonNode.stringNode(text)))
@@ -920,10 +920,10 @@ function harnessErrorArrayNode(doc JsonDoc, harnessErrors StringArray) returns J
 end 'harnessErrorArrayNode'
 
 function caseArrayNode(doc JsonDoc, tests SpecTestEntryArray) returns JsonNodeId
-	var nodeIds = JsonNodeIdArray.create(tests.count(), zeroed: false)
+	let nodeIds = JsonNodeIdArray.create(tests.count(), zeroed: false)
 
 	for t in tests 'eachTest'
-		var entry = JsonObjectBuilder.create()
+		let entry = JsonObjectBuilder.create()
 		entry.addString(doc, key: "spec", value: t.spec)
 		entry.addString(doc, key: "test", value: t.name)
 		entry.addString(doc, key: "status", value: t.verdict.rawValue)
@@ -949,14 +949,14 @@ function listedFailureCount(failures SpecFailureSummaryArray, limit Count) retur
 end 'listedFailureCount'
 
 function failureArrayNode(doc JsonDoc, failures SpecFailureSummaryArray, listed Count) returns JsonNodeId
-	var nodeIds = JsonNodeIdArray.create(listed, zeroed: false)
+	let nodeIds = JsonNodeIdArray.create(listed, zeroed: false)
 
 	for (iter, f) in failures.withIterator() 'eachFailure'
 		if iter.index() >= listed 'pastWhatIsListed'
 			break
 		end 'pastWhatIsListed'
 
-		var entry = JsonObjectBuilder.create()
+		let entry = JsonObjectBuilder.create()
 		entry.addString(doc, key: "spec", value: f.spec)
 		entry.addString(doc, key: "test", value: f.test)
 		entry.addString(doc, key: "message", value: firstBytesMarked(f.message, max: FailureMessageMaxBytes))
@@ -967,7 +967,7 @@ function failureArrayNode(doc JsonDoc, failures SpecFailureSummaryArray, listed 
 end 'failureArrayNode'
 
 function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, ctx ToolContext) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push(ScaleTestCommandName)
 
 	argv.append(wholeOptionOf(reqDoc, args: args, key: RungsOption, prefix: RungsFlagPrefix))
@@ -980,8 +980,8 @@ function executeScaleTestToolWithin(reqDoc JsonDoc, idNode JsonNodeId, args Opti
 end 'executeScaleTestToolWithin'
 
 function scaleTestReply(reqDoc JsonDoc, idNode JsonNodeId, ctx ToolContext, argv StringArray, res CollectedOutput, durationMs DurationMs, parsed JsonDoc) returns String
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
+	let doc = JsonDoc.create()
+	let payload = JsonObjectBuilder.create()
 	addTimedRunFields(doc, payload: payload, ctx: ctx, argv: argv, res: res, durationMs: durationMs)
 	payload.addBool(doc, key: "success", value: res.succeeded())
 	payload.addNode("result", node: copyJsonNode(parsed, srcId: parsed.root, dst: doc))

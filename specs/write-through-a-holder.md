@@ -57,7 +57,7 @@ type Env
 end 'Env'
 
 function bump(b Box) returns Count
-	var e = Env.create(b)
+	let e = Env.create(b)
 	return e.run()
 end 'bump'
 
@@ -121,7 +121,7 @@ function zeroHeld(e Env) returns Count
 end 'zeroHeld'
 
 function bump(b Box) returns Count
-	var e = Env.create(b)
+	let e = Env.create(b)
 	return zeroHeld(e)
 end 'bump'
 
@@ -168,7 +168,7 @@ function zeroFirst(t (Box, Count)) returns Count
 end 'zeroFirst'
 
 function bump(b Box) returns Count
-	var t = (b, 1 as Count)
+	let t = (b, 1 as Count)
 	return zeroFirst(t)
 end 'bump'
 
@@ -232,7 +232,7 @@ function make(b Box) returns Env
 end 'make'
 
 function bump(b Box) returns Count
-	var e = make(b)
+	let e = make(b)
 	return zero(e.b)
 end 'bump'
 
@@ -286,7 +286,7 @@ type Slot
 end 'Slot'
 
 function bump(b Box) returns Count
-	var s = Slot.create()
+	let s = Slot.create()
 	s.attach(b)
 	return s.run()
 end 'bump'
@@ -346,7 +346,7 @@ function relay(e Env) returns Count
 end 'relay'
 
 function bump(b Box) returns Count
-	var e = Env.create(b)
+	let e = Env.create(b)
 	return relay(e)
 end 'bump'
 
@@ -403,7 +403,7 @@ end 'Env'
 
 function main() returns ExitCode
 	let a = Box.create(2)
-	var e = Env.create(a)
+	let e = Env.create(a)
 	let r = e.run()
 	print("{a.n}{r}\n")
 	return 0
@@ -444,7 +444,7 @@ end 'Env'
 
 function main() returns ExitCode
 	let a = Box.create(2)
-	var e = Env.create(a)
+	let e = Env.create(a)
 	e.bump()
 	print("{a.n}\n")
 	return 0
@@ -486,7 +486,7 @@ end 'Env'
 
 function main() returns ExitCode
 	let a = Box.create(2)
-	var e = Env.create(a)
+	let e = Env.create(a)
 	e.bump()
 	print("{a.n}\n")
 	return 0
@@ -536,7 +536,7 @@ type Env
 end 'Env'
 
 function bump(b Box) returns Count
-	var e = Env.create(b)
+	let e = Env.create(b)
 	e.bumpHits()
 	return e.hits
 end 'bump'
@@ -589,7 +589,7 @@ end 'Pair'
 
 function bump(b Box) returns Count
 	let other = Box.create(5)
-	var p = Pair.create(b, second: other)
+	let p = Pair.create(b, second: other)
 	return p.clearSecond()
 end 'bump'
 
@@ -723,7 +723,7 @@ type Reg
 end 'Reg'
 
 function zeroFirst(reg Reg)
-	var w = try reg.items.get(0) otherwise return
+	let w = try reg.items.get(0) otherwise return
 	w.n = 0
 end 'zeroFirst'
 
@@ -733,7 +733,7 @@ function stashAfterZero(reg Reg, b Box)
 end 'stashAfterZero'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let a = Box.create(2)
 	stashAfterZero(reg, b: a)
 	print("{a.n}\n")
@@ -771,7 +771,7 @@ type Reg
 end 'Reg'
 
 function zeroFirst(reg Reg)
-	var w = try reg.items.get(0) otherwise return
+	let w = try reg.items.get(0) otherwise return
 	w.n = 0
 end 'zeroFirst'
 
@@ -785,7 +785,7 @@ function stashArms(reg Reg, b Box, first bool)
 end 'stashArms'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let a = Box.create(2)
 	stashArms(reg, b: a, first: true)
 	print("{a.n}\n")
@@ -835,7 +835,7 @@ function growAndKeep(reg Reg)
 end 'growAndKeep'
 
 function growAndBump(reg Reg)
-	var fresh = reg.add(1)
+	let fresh = reg.add(1)
 	fresh.n = 2
 end 'growAndBump'
 
@@ -845,7 +845,7 @@ function parkAndGrow(reg Reg, b Box)
 end 'parkAndGrow'
 
 function main() returns ExitCode
-	var reg = Reg.create(Box.create(0))
+	let reg = Reg.create(Box.create(0))
 	growAndKeep(reg)
 	let a = Box.create(5)
 	parkAndGrow(reg, b: a)
@@ -884,7 +884,7 @@ type Reg
 end 'Reg'
 
 function zeroFirst(reg Reg)
-	var w = try reg.items.get(0) otherwise return
+	let w = try reg.items.get(0) otherwise return
 	w.n = 0
 end 'zeroFirst'
 
@@ -894,7 +894,7 @@ function stashAndZero(reg Reg, b Box)
 end 'stashAndZero'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let a = Box.create(2)
 	stashAndZero(reg, b: a)
 	print("{a.n}\n")
@@ -932,7 +932,7 @@ type Reg
 end 'Reg'
 
 function zeroFirst(reg Reg)
-	var w = try reg.items.get(0) otherwise return
+	let w = try reg.items.get(0) otherwise return
 	w.n = 0
 end 'zeroFirst'
 
@@ -948,7 +948,7 @@ function stashLoop(reg Reg, b Box, times Count)
 end 'stashLoop'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let a = Box.create(2)
 	stashLoop(reg, b: a, times: 3)
 	print("{a.n}\n")

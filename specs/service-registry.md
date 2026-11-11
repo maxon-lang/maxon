@@ -22,7 +22,7 @@ fields, `Array`s and `Map`s, and every read — `Key.current()`, `cell.current()
 either — hands back the published value as immutable data, the same as a module-level `let`'s
 record. Every write through it is refused: assigning a field of it or of anything reached through it, also
 through a `var` bound to it (E3197); calling a method that writes its receiver on it or on anything reached
-through it (E3207); passing it to a parameter the callee writes (E3159 and E3207, naming the root binding the
+through it (E3207); passing it to a parameter the callee writes (E3207, naming the root binding the
 read was bound to); storing it, or anything reached through it, into a field not declared `immutable` (E3196),
 since the function that later writes the field cannot see where its value came from; and a function that hands
 it back declares `returns immutable` (E3209). A store written on the read itself, `cell.current().inner.x = 9`, is not a statement at
@@ -134,9 +134,9 @@ function main() returns ExitCode
 	let holder = Holder.create(spawn Fixed.create(4))
 	let fromField = try await holder.source.value() otherwise 0
 
-	var sources = SourceArray.create(0)
+	let sources = SourceArray.create(0)
 	sources.push(spawn Fixed.create(8))
-	view element = try sources.get(0) otherwise panic("sources.get(0)")
+	let element = try sources.get(0) otherwise panic("sources.get(0)")
 	let fromElement = try await element.value() otherwise 0
 
 	let relay = spawn Relay.create()
@@ -1239,8 +1239,8 @@ abc x7
 ```
 
 <!-- test: error.current-reached-through-a-function-from-a-global-initializer -->
-The refusal follows calls: `limit`'s initializer reaches `Config.current()` through `Limits.read`. A global
-initializer may call a type's static factory but not a free function (E2045), so the road runs through one.
+A global initializer that calls anything is refused (E3220), including a call that reaches `Config.current()`: `limit`'s
+initializer calls `Limits.read`, which reads the registry.
 ```maxon
 type Config
 	export let n as Integer
@@ -1268,7 +1268,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3173: <fragment>:16:18: `Config.current()` is reached from the initializer of `limit`, which runs before any `default` is built — call it from `main`, or from a function `main` calls
+error E3220: <fragment>:20:13: the initializer of 'limit' calls 'Limits.read': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-key-type-declaring-its-own-current -->
@@ -1799,7 +1799,7 @@ end 'B'
 typealias PingerHandles = Array with Pinger.handle
 
 function main() returns ExitCode
-	var handles = PingerHandles.create(0)
+	let handles = PingerHandles.create(0)
 	handles.push((spawn A.create()) as Pinger.handle)
 	let b = spawn B.create()
 	let w = try await b.ping() otherwise 0
@@ -1849,7 +1849,7 @@ end 'B'
 typealias PingerHandles = Array with Pinger.handle
 
 function main() returns ExitCode
-	var handles = PingerHandles.create(0)
+	let handles = PingerHandles.create(0)
 	handles.push((spawn A.create()) as Pinger.handle)
 	let b = spawn B.create()
 	let w = try await b.ping() otherwise 0
@@ -2309,6 +2309,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
+error E3220: <fragment>:12:13: the initializer of 'first' calls 'Config.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 error E3173: <fragment>:13:15: `Config.register()` is reached from the initializer of `swapped`, which runs before any `default` is built — call it from `main`, or from a function `main` calls
 ```
 
@@ -2366,7 +2367,7 @@ function main() returns ExitCode
 	let cell = ConfigCell.create(Config.create(2))
 	let reader = spawn Reader.create(cell.clone())
 	let before = try await reader.read() otherwise 0
-	var next = Config.create(2)
+	let next = Config.create(2)
 	next.n = next.n + 5
 	cell.publish(next)
 	let after = try await reader.read() otherwise 0
@@ -2440,7 +2441,7 @@ type Board
 	export let scores as Scores
 
 	static function create(top Integer) returns Self
-		var scores = Scores.create(0)
+		let scores = Scores.create(0)
 		scores.push(top)
 		scores.push(top * 2)
 		return Self{scores: scores}
@@ -2492,7 +2493,7 @@ type Ladder
 	export let ranks as Ranks
 
 	static function create(first Integer) returns Self
-		var ranks = Ranks.create()
+		let ranks = Ranks.create()
 		ranks.upsert("first", value: first)
 		return Self{ranks: ranks}
 	end 'create'
@@ -2745,7 +2746,6 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:26:2: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'i' (in main); pass a clone()
 error E3207: <fragment>:26:7: 'bump' writes 'i' (line 21: `i.x = 9`); 'cell' is immutable
 ```
 
@@ -2780,7 +2780,6 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:25:2: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'i' (in main); pass a clone()
 error E3207: <fragment>:25:7: 'bump' writes 'i' (line 21: `i.x = 9`); 'Config' is immutable
 ```
 
@@ -2935,7 +2934,7 @@ typealias ConfigCell = SharedValue with Config
 
 function main() returns ExitCode
 	let cell = ConfigCell.create(Config.create(1))
-	var w = cell.current().clone()
+	let w = cell.current().clone()
 	w.inner.x = 9
 	print("copy={w.inner.x} shared={cell.current().inner.x}\n")
 	return cell.current().inner.x as ExitCode
@@ -2970,7 +2969,7 @@ end 'Config'
 default Config = Config.create(1)
 
 function main() returns ExitCode
-	var w = Config.current().clone()
+	let w = Config.current().clone()
 	w.inner.x = 9
 	print("copy={w.inner.x} registry={Config.current().inner.x}\n")
 	return Config.current().inner.x as ExitCode
@@ -3092,7 +3091,6 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:29:2: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'i' (in main); pass a clone()
 error E3207: <fragment>:29:7: 'bump' writes 'i' (line 25: `i.x = 9`); 'read' is immutable
 ```
 
@@ -3236,7 +3234,7 @@ end 'poke'
 
 function main() returns ExitCode
 	let cell = ConfigCell.create(Config.create(1))
-	var h = Holder.create()
+	let h = Holder.create()
 	adopt(h, cell: cell)
 	poke(h)
 	print("{cell.current().inner.x} {h.inner.x}\n")
@@ -3317,7 +3315,7 @@ default Config = Config.create(1)
 function main() returns ExitCode
 	var fresh = Config.create(3)
 	fresh = Config.create(4)
-	view w = fresh
+	let w = fresh
 	Config.register(fresh)
 	return (w.n + Config.current().n) as ExitCode
 end 'main'
@@ -3328,7 +3326,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.a-registered-writable-value-that-has-been-viewed -->
-`Config` has a `var` field, so its record may be written, and `view w = fresh` moves `fresh` into `w`: publishing `fresh` afterwards would hand every thread a record `w` still reaches, so the publish is refused as a use of a moved value.
+`Config` has a `var` field, so its record may be written, and `let w = fresh` moves `fresh` into `w`: publishing `fresh` afterwards would hand every thread a record `w` still reaches, so the publish is refused as a use of a moved value.
 ```maxon
 type Config
 	export var n as Integer
@@ -3343,7 +3341,7 @@ default Config = Config.create(1)
 function main() returns ExitCode
 	var fresh = Config.create(3)
 	fresh.n = 4
-	view w = fresh
+	let w = fresh
 	Config.register(fresh)
 	return (w.n + Config.current().n) as ExitCode
 end 'main'

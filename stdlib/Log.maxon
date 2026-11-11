@@ -38,7 +38,7 @@ public type LogField
 	end 'dottedKey'
 
 	function under(outer LogGroupPath) returns LogField
-		var path = LogGroupPath.create(0)
+		let path = LogGroupPath.create(0)
 
 		for group in outer 'eachOuter'
 			path.push("{group}")
@@ -76,15 +76,15 @@ public type LogAttr
 	end 'bool'
 
 	public static function group(name String, attrs LogAttrArray) returns LogAttr
-		var path = LogGroupPath.create(0)
+		let path = LogGroupPath.create(0)
 		path.push(name)
-		var collected = LogFieldArray.create(0)
+		let collected = LogFieldArray.create(0)
 		appendLogFields(attrs, groups: path, into: collected)
 		return LogAttr{fields: collected}
 	end 'group'
 
 	static function single(key String, value LogValue) returns LogAttr
-		var collected = LogFieldArray.create(0)
+		let collected = LogFieldArray.create(0)
 		collected.push(LogField.create(key, value: value, groups: LogGroupPath.create(0)))
 		return LogAttr{fields: collected}
 	end 'single'
@@ -217,19 +217,19 @@ public type LogLevels
 	end 'withLevel'
 
 	public function withGroupLevel(group String, level LogLevel) returns LogLevels
-		var changed = self.copiedOverrides()
+		let changed = self.copiedOverrides()
 		changed.upsert(group, value: level)
 		return LogLevels{floor: self.floor, overrides: changed}
 	end 'withGroupLevel'
 
 	public function withoutGroupLevel(group String) returns LogLevels
-		var changed = self.copiedOverrides()
+		let changed = self.copiedOverrides()
 		_ = changed.remove(group)
 		return LogLevels{floor: self.floor, overrides: changed}
 	end 'withoutGroupLevel'
 
 	function copiedOverrides() returns LogLevelOverrides
-		var copied = LogLevelOverrides.create()
+		let copied = LogLevelOverrides.create()
 
 		for (group, level) in self.overrides 'eachOverride'
 			copied.upsert(group, value: level)
@@ -327,7 +327,7 @@ end 'LogSink'
 let LogHandOverTimeoutMs = 10000 as Milliseconds
 
 function ownedLogRecord(time UnixNanos, level LogLevel, message String, bound LogFieldArray, attrs LogAttrArray, groups LogGroupPath, file String, line SourceLineNumber) returns immutable LogRecord
-	var fields = LogFieldArray.create(0) as isolated LogFieldArray
+	let fields = LogFieldArray.create(0) as isolated LogFieldArray
 
 	modify fields 'fill'
 		for field in bound 'eachBound'
@@ -426,7 +426,7 @@ public type Logger
 
 	/// A logger that adds `attrs` to every record.
 	public function withAttrs(attrs LogAttrArray) returns Logger
-		var extended = self.bound.clone()
+		let extended = self.bound.clone()
 		appendLogFields(attrs, groups: self.groups, into: extended)
 		return Logger{sink: self.sink, bound: extended, groups: self.groups, levelKeys: self.levelKeys}
 	end 'withAttrs'
@@ -434,7 +434,7 @@ public type Logger
 	/// A logger that nests every later attribute under `name`. Its records obey the level set for that
 	/// group, the most deeply nested override winning.
 	public function withGroup(name String) returns Logger
-		var nestedKeys = self.levelKeys.clone()
+		let nestedKeys = self.levelKeys.clone()
 
 		if let outer = try self.levelKeys.get(0) 'insideAGroup'
 			nestedKeys.insert(0, value: "{outer}.{name}")
@@ -442,7 +442,7 @@ public type Logger
 			nestedKeys.insert(0, value: name)
 		end 'outermost'
 
-		var nested = self.groups.clone()
+		let nested = self.groups.clone()
 		nested.push(name)
 		return Logger{sink: self.sink, bound: self.bound, groups: nested, levelKeys: nestedKeys}
 	end 'withGroup'

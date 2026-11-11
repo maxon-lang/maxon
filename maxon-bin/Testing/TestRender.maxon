@@ -405,9 +405,9 @@ end 'TestRunEmptiness'
 // must not say less: "no tests exist" and "no test matched the filter" are different problems with the
 // same exit code, and a machine reader that cannot tell them apart cannot act.
 export function testRunJson(report TestRunReport, showTiming bool, emptiness TestRunEmptiness) returns String
-	var doc = JsonDoc.create()
-	var keys = StringArray.create(0)
-	var children = JsonNodeIdArray.create(0)
+	let doc = JsonDoc.create()
+	let keys = StringArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 
 	match emptiness 'nothingRan'
 		hasResults then break
@@ -437,7 +437,7 @@ export function testRunJson(report TestRunReport, showTiming bool, emptiness Tes
 		pushJsonBool(doc, keys: keys, children: children, key: "bailed", value: true)
 	end 'stoppedClaimingWorkEarly'
 
-	var results = JsonNodeIdArray.create(tally.total as ElementIndex, zeroed: false)
+	let results = JsonNodeIdArray.create(tally.total as ElementIndex, zeroed: false)
 
 	for file in report.files 'eachFile'
 		for result in file.results 'eachResult'
@@ -453,8 +453,8 @@ export function testRunJson(report TestRunReport, showTiming bool, emptiness Tes
 end 'testRunJson'
 
 function testResultNode(doc JsonDoc, path FilePath, result UnitTestResult, showTiming bool) returns JsonNodeId
-	var keys = StringArray.create(0)
-	var children = JsonNodeIdArray.create(0)
+	let keys = StringArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 
 	pushJsonString(doc, keys: keys, children: children, key: "file", value: reportPathDisplay(path))
 	pushJsonString(doc, keys: keys, children: children, key: "name", value: result.test.displayName)
@@ -481,8 +481,8 @@ function testResultNode(doc JsonDoc, path FilePath, result UnitTestResult, showT
 end 'testResultNode'
 
 function pushThrownNode(doc JsonDoc, keys StringArray, children JsonNodeIdArray, error ThrownTestError)
-	var thrownKeys = StringArray.create(4, zeroed: false)
-	var thrownChildren = JsonNodeIdArray.create(4, zeroed: false)
+	let thrownKeys = StringArray.create(4, zeroed: false)
+	let thrownChildren = JsonNodeIdArray.create(4, zeroed: false)
 
 	pushJsonString(doc, keys: thrownKeys, children: thrownChildren, key: "errorType", value: error.errorType)
 	pushJsonString(doc, keys: thrownKeys, children: thrownChildren, key: "errorCase", value: error.errorCase)
@@ -495,8 +495,8 @@ end 'pushThrownNode'
 
 // The roster a machine reads, over the same selection `testListText` walks.
 export function testListJson(groups TestFileGroupArray, selected TestSelection, binary TestBinaryListing) returns String
-	var doc = JsonDoc.create()
-	var listed = JsonNodeIdArray.create(0)
+	let doc = JsonDoc.create()
+	let listed = JsonNodeIdArray.create(0)
 
 	for entry in reportFileOrder(groups) 'eachFile'
 		for member in entry.group.tests 'eachTest'
@@ -508,8 +508,8 @@ export function testListJson(groups TestFileGroupArray, selected TestSelection, 
 		end 'eachTest'
 	end 'eachFile'
 
-	var keys = StringArray.create(0)
-	var children = JsonNodeIdArray.create(0)
+	let keys = StringArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 
 	match binary 'builtBinary'
 		notBuilt then break
@@ -524,8 +524,8 @@ export function testListJson(groups TestFileGroupArray, selected TestSelection, 
 end 'testListJson'
 
 function listedTestNode(doc JsonDoc, path FilePath, member IndexedTest) returns JsonNodeId
-	var keys = StringArray.create(5, zeroed: false)
-	var children = JsonNodeIdArray.create(5, zeroed: false)
+	let keys = StringArray.create(5, zeroed: false)
+	let children = JsonNodeIdArray.create(5, zeroed: false)
 
 	pushJsonString(doc, keys: keys, children: children, key: "file", value: reportPathDisplay(path))
 	pushJsonString(doc, keys: keys, children: children, key: "name", value: member.test.displayName)

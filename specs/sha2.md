@@ -38,7 +38,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -143,7 +143,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -171,7 +171,7 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function report(id String, algorithm HashAlgorithm, chunks ChunkHexList)
-	var digest = Digest.create(algorithm)
+	let digest = Digest.create(algorithm)
 
 	for chunk in chunks 'eachChunk'
 		digest.update(fromHex(chunk))
@@ -260,7 +260,7 @@ end 'toHex'
 typealias Repetition = int(0 to 1000000)
 
 function letters(count Repetition) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachLetter'
 		bytes.push(0x61)
@@ -278,7 +278,7 @@ function oneShot(algorithm HashAlgorithm, data ByteArray) returns ByteArray
 end 'oneShot'
 
 function chunked(algorithm HashAlgorithm, chunk ByteArray) returns ByteArray
-	var digest = Digest.create(algorithm)
+	let digest = Digest.create(algorithm)
 
 	for _ in 0 upto 1000 'eachChunk'
 		digest.update(chunk)
@@ -315,7 +315,7 @@ sha512 chunked [e718483d0ce769644e2e42c7bc15b4638e1f98b13b2044285632a803afa973eb
 A second `finalize()` on one `Digest` is a programming error, so it panics rather than returning a digest.
 ```maxon
 function main() returns ExitCode
-	var d = Digest.create(HashAlgorithm.sha256)
+	let d = Digest.create(HashAlgorithm.sha256)
 	_ = d.finalize()
 	_ = d.finalize()
 	return 0
@@ -339,7 +339,7 @@ Stack trace:
 An `update()` after `finalize()` is a programming error, so it panics rather than extending a finished message.
 ```maxon
 function main() returns ExitCode
-	var d = Digest.create(HashAlgorithm.sha256)
+	let d = Digest.create(HashAlgorithm.sha256)
 	_ = d.finalize()
 	d.update([0x61])
 	return 0

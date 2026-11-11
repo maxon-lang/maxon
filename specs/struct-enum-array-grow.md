@@ -34,7 +34,7 @@ type Block
 end 'Block'
 
 function main() returns ExitCode
-		var b = Block.create(0, ops: IntArray.create(0), terminator: Op.add(42))
+		let b = Block.create(0, ops: IntArray.create(0), terminator: Op.add(42))
 		b.ops.push(1)
 		b.ops.push(2)
 		b.ops.push(3)
@@ -69,7 +69,7 @@ type Function
 end 'Function'
 
 function main() returns ExitCode
-		var f = Function.create(1, body: IntArray.create(0), terminator: Instruction.load(99), hasTerminator: true)
+		let f = Function.create(1, body: IntArray.create(0), terminator: Instruction.load(99), hasTerminator: true)
 		var i = 0 as Integer
 		while i < 20 'fill'
 				f.body.push(i)
@@ -104,14 +104,14 @@ end 'Entry'
 typealias EntryArray = Array with Entry
 
 function main() returns ExitCode
-		var entries = EntryArray.create(0)
+		let entries = EntryArray.create(0)
 		var i = 0 as Integer
 		while i < 10 'fill'
 				let e = Entry.create(i, tag: Tag.number(i * 10))
 				entries.push(e)
 				i = i + 1
 		end 'fill'
-		view last = try entries.get(9) otherwise Entry.create(0, tag: Tag.number(0))
+		let last = try entries.get(9) otherwise Entry.create(0, tag: Tag.number(0))
 		match last.tag 'check'
 				number(n) then return n
 				text then return 0
@@ -163,7 +163,7 @@ end 'Database'
 
 function main() returns ExitCode
 		let block = IrBlock.create(0, ops: IrOpArray.create(0), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
-		var db = Database.create(block, deps: DepArray.create(0))
+		let db = Database.create(block, deps: DepArray.create(0))
 		db.deps.push(1)
 		db.deps.push(2)
 		db.deps.push(3)
@@ -211,7 +211,7 @@ end 'Outer'
 
 function main() returns ExitCode
 		let inner = Inner.create(0, items: IntArray.create(0), names: StringArray.create(0), extra: IntArray.create(0))
-		var outer = Outer.create(inner, tag: Op.add(1), data: IntArray.create(0))
+		let outer = Outer.create(inner, tag: Op.add(1), data: IntArray.create(0))
 		outer.inner.items.push(10)
 		outer.inner.items.push(20)
 		outer.inner.items.push(30)
@@ -254,7 +254,7 @@ function makeOuter() returns Outer
 end 'makeOuter'
 
 function main() returns ExitCode
-		var o = makeOuter()
+		let o = makeOuter()
 		o.deps.push(1)
 		o.deps.push(2)
 		o.deps.push(3)
@@ -399,7 +399,7 @@ function createProject(rootPath String) returns Project
 end 'createProject'
 
 function main() returns ExitCode
-		var p = createProject("test")
+		let p = createProject("test")
 		p.db.dependencies.push(1)
 		p.db.dependencies.push(2)
 		p.db.dependencies.push(3)
@@ -435,7 +435,7 @@ end 'Dependency'
 typealias DependencyArray = Array with Dependency
 
 function main() returns ExitCode
-		var deps = DependencyArray.create(0)
+		let deps = DependencyArray.create(0)
 		let d1 = Dependency.create(QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon"))
 		deps.push(d1)
 		let d2 = Dependency.create(QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon"))
@@ -481,7 +481,7 @@ function initOuter(o Outer)
 end 'initOuter'
 
 function main() returns ExitCode
-		var o = Outer.create(Inner.create(IntArray.create(0), value: 0), initialized: false)
+		let o = Outer.create(Inner.create(IntArray.create(0), value: 0), initialized: false)
 		initOuter(o)
 		o.inner.items.push(1)
 		o.inner.items.push(2)
@@ -553,7 +553,7 @@ function useProject(p Project) returns Integer
 end 'useProject'
 
 function main() returns ExitCode
-		var p = Project.create(Database.create(Memo.create(Module.create(IntArray.create(0)), rev: 0), deps: IntArray.create(0)), ready: false)
+		let p = Project.create(Database.create(Memo.create(Module.create(IntArray.create(0)), rev: 0), deps: IntArray.create(0)), ready: false)
 		initProject(p)
 		return useProject(p)
 end 'main'
@@ -616,7 +616,7 @@ function createProject() returns Project
 end 'createProject'
 
 function main() returns ExitCode
-		var p = createProject()
+		let p = createProject()
 		p.db.deps.push(1)
 		p.db.deps.push(2)
 		p.db.deps.push(3)

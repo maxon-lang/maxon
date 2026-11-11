@@ -77,13 +77,13 @@ type Walker
 	end 'create'
 
 	function declareParam(name immutable ByteArray, kind Slot, line Slot)
-		var binding = self.scope.declare(name, kind: kind)
+		let binding = self.scope.declare(name, kind: kind)
 		self.candidates.push(Candidate.create(binding, line: line))
 	end 'declareParam'
 end 'Walker'
 
 function main() returns ExitCode
-	var walker = Walker.create()
+	let walker = Walker.create()
 	walker.declareParam(b"a", kind: 1, line: 2)
 	print("{walker.candidates.count()}\n")
 	return 0
@@ -151,7 +151,7 @@ type Walker
 end 'Walker'
 
 function main() returns ExitCode
-	var walker = Walker.create()
+	let walker = Walker.create()
 	walker.declareParam(b"a", kind: 1, line: 2)
 	print("{walker.candidates.count()}\n")
 	return 0
@@ -193,7 +193,7 @@ type Module
 	end 'create'
 
 	function add(label immutable ByteArray) returns Block
-		var made = Block.create(self.blocks.count() as Count, label: label)
+		let made = Block.create(self.blocks.count() as Count, label: label)
 		self.blocks.push(made)
 		return made
 	end 'add'
@@ -219,7 +219,7 @@ type Pass
 			if i == 1 'repeat'
 				self.module.append(current)
 			end 'repeat' else 'advance'
-				var next = self.module.add(b"next")
+				let next = self.module.add(b"next")
 				current = next
 			end 'advance'
 		end 'eachRound'
@@ -227,8 +227,8 @@ type Pass
 end 'Pass'
 
 function main() returns ExitCode
-	var pass = Pass.create()
-	var head = pass.module.add(b"head")
+	let pass = Pass.create()
+	let head = pass.module.add(b"head")
 	pass.cascade(head, rounds: 3)
 	print("{head.hits}\n")
 	return 0
@@ -266,7 +266,7 @@ type Module
 	end 'create'
 
 	function add(label immutable ByteArray) returns Block
-		var made = Block.create(self.blocks.count() as Count, label: label)
+		let made = Block.create(self.blocks.count() as Count, label: label)
 		self.blocks.push(made)
 		return made
 	end 'add'
@@ -288,7 +288,7 @@ type Pass
 			if i == 1 'repeat'
 				current.hits = 6
 			end 'repeat' else 'advance'
-				var next = self.module.add(b"next")
+				let next = self.module.add(b"next")
 				current = next
 			end 'advance'
 		end 'eachRound'
@@ -296,8 +296,8 @@ type Pass
 end 'Pass'
 
 function main() returns ExitCode
-	var pass = Pass.create()
-	var head = pass.module.add(b"head")
+	let pass = Pass.create()
+	let head = pass.module.add(b"head")
 	pass.mark(head, rounds: 3)
 	print("{head.hits}\n")
 	return 0
@@ -665,7 +665,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let picked = holder.pick(true)
 	print("{picked.n}\n")
 	return 0
@@ -703,8 +703,8 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
-	var picked = holder.mine()
+	let holder = Holder.create()
+	let picked = holder.mine()
 	picked.n = 9
 	print("{holder.mine().n}\n")
 	return 0

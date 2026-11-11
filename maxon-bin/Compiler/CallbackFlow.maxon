@@ -1,7 +1,6 @@
 typealias FlowKey = int(0 to u64.max)
 typealias FlowKeySet = Set with FlowKey
 typealias FlowLandingMemo = Map with (FlowKey, CallLandingBodies)
-typealias FlowSiteMemo = Map with (FlowKey, CallbackSites)
 typealias BodyIndexSet = Set with ElementIndex
 typealias PhiIncomingMap = Map with (ValueId, ValueIdArray)
 typealias LandingBodiesArray = Array with CallLandingBodies
@@ -53,9 +52,9 @@ end 'FlowCallShape'
 
 function flowCallShapeOf(op MaxonOp) returns FlowCallShape
 	return match op 'op'
-		call(_, callee, args, argLabels, _, _, _, _) gives FlowCallShape.direct(callee, args: args, labels: argLabels)
-		asyncCall(_, callee, args, argLabels, _, _, _, _) gives FlowCallShape.direct(callee, args: args, labels: argLabels)
-		tryCall(_, _, callee, args, argLabels, _, _, _, _) gives FlowCallShape.direct(callee, args: args, labels: argLabels)
+		call(_, callee, args, argLabels, _, _, _) gives FlowCallShape.direct(callee, args: args, labels: argLabels)
+		asyncCall(_, callee, args, argLabels, _, _, _) gives FlowCallShape.direct(callee, args: args, labels: argLabels)
+		tryCall(_, _, callee, args, argLabels, _, _, _) gives FlowCallShape.direct(callee, args: args, labels: argLabels)
 		indirectCall(_, callee, args, _) gives FlowCallShape.indirect(callee, args: args)
 		witnessDispatch(_, args, _, _, methodIndex, interfaceDeclIndex, _, _) gives FlowCallShape.witness(args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		witnessTryDispatch(_, _, args, _, _, methodIndex, interfaceDeclIndex, _) gives FlowCallShape.witness(args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
@@ -110,7 +109,7 @@ type PhiIncomings
 	function incomingOf(module MaxonModule, func IrFunction, phi ValueId) returns ValueIdArray throws MapError
 		if not self.built 'notYetBuilt'
 			self.built = true
-			var edges = MergeEdges.create()
+			let edges = MergeEdges.create()
 			noteMergeEdges(module, func: func, into: edges)
 
 			for index in 0 upto edges.count() 'eachMerge'
@@ -122,60 +121,25 @@ type PhiIncomings
 	end 'incomingOf'
 
 	function noteIncoming(phi ValueId, incoming ValueId)
-		var known = try self.byPhi.get(phi) otherwise ValueIdArray.create(0)
+		let known = try self.byPhi.get(phi) otherwise ValueIdArray.create(0)
 		known.push(incoming)
 		self.byPhi.upsert(phi, value: known)
 	end 'noteIncoming'
 end 'PhiIncomings'
-
-module type CallbackSites
-	var ops as FuncIndexArray
-	var callers as FuncIndexArray
-	var writers as FuncIndexArray
-
-	module static function create() returns CallbackSites
-		return Self{ops: FuncIndexArray.create(0), callers: FuncIndexArray.create(0), writers: FuncIndexArray.create(0)}
-	end 'create'
-
-	module function count() returns ElementIndex
-		return self.ops.count()
-	end 'count'
-
-	module function opAt(k ElementIndex) returns ElementIndex
-		return try self.ops.get(k) otherwise panic("CallbackSites.opAt: ops.get OOB at {k}")
-	end 'opAt'
-
-	module function callerAt(k ElementIndex) returns ElementIndex
-		return try self.callers.get(k) otherwise panic("CallbackSites.callerAt: callers.get OOB at {k}")
-	end 'callerAt'
-
-	module function writerAt(k ElementIndex) returns ElementIndex
-		return try self.writers.get(k) otherwise panic("CallbackSites.writerAt: writers.get OOB at {k}")
-	end 'writerAt'
-
-	function record(op ElementIndex, caller ElementIndex, writer ElementIndex)
-		self.ops.push(op)
-		self.callers.push(caller)
-		self.writers.push(writer)
-	end 'record'
-end 'CallbackSites'
 
 module type CallbackFlows
 	var built as bool
 	var kinds as FlowContributionKindArray
 	var firsts as FuncIndexArray
 	var seconds as FuncIndexArray
-	var siteCallers as FuncIndexArray
-	var siteOps as FuncIndexArray
 	var targetFuncs as CsrColumn
 	var targetPositions as FuncIndexArray
 	var byTargetFunc as CsrGraph
 	var unions as LandingBodiesArray
 	var landings as FlowLandingMemo
-	var sites as FlowSiteMemo
 
 	module static function create() returns CallbackFlows
-		return Self{built: false, kinds: FlowContributionKindArray.create(0), firsts: FuncIndexArray.create(0), seconds: FuncIndexArray.create(0), siteCallers: FuncIndexArray.create(0), siteOps: FuncIndexArray.create(0), targetFuncs: CsrColumn.create(0), targetPositions: FuncIndexArray.create(0), byTargetFunc: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0)), unions: LandingBodiesArray.create(0), landings: FlowLandingMemo.create(), sites: FlowSiteMemo.create()}
+		return Self{built: false, kinds: FlowContributionKindArray.create(0), firsts: FuncIndexArray.create(0), seconds: FuncIndexArray.create(0), targetFuncs: CsrColumn.create(0), targetPositions: FuncIndexArray.create(0), byTargetFunc: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0)), unions: LandingBodiesArray.create(0), landings: FlowLandingMemo.create()}
 	end 'create'
 
 	module function settle(project Project, module MaxonModule, calls CallSummaryIndex)
@@ -193,7 +157,7 @@ module type CallbackFlows
 			end 'aReadableBody'
 		end 'eachCaller'
 
-		var rows = CsrColumn.create(self.kinds.count(), zeroed: false)
+		let rows = CsrColumn.create(self.kinds.count(), zeroed: false)
 
 		for k in 0 upto self.kinds.count() 'eachContribution'
 			rows.push(k as CsrIndex)
@@ -203,32 +167,32 @@ module type CallbackFlows
 	end 'settle'
 
 	function noteCaller(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex)
-		var merges = PhiIncomings.unbuilt()
+		let merges = PhiIncomings.unbuilt()
 
 		for opIdx in module.liveOpIndices(caller) 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("CallbackFlows.noteCaller: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
 			match flowCallShapeOf(op) 'shape'
 				noCall then continue
-				direct(callee, args, labels) then self.noteDirectCall(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, opIdx: opIdx, callee: callee, args: args, labels: labels)
-				indirect(callee, args) then self.noteIndirectCall(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, opIdx: opIdx, callee: callee, args: args)
-				witness(args, methodIndex, interfaceDeclIndex) then self.noteWitnessCall(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, opIdx: opIdx, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+				direct(callee, args, labels) then self.noteDirectCall(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, callee: callee, args: args, labels: labels)
+				indirect(callee, args) then self.noteIndirectCall(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, callee: callee, args: args)
+				witness(args, methodIndex, interfaceDeclIndex) then self.noteWitnessCall(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 			end 'shape'
 		end 'eachOp'
 	end 'noteCaller'
 
-	function noteDirectCall(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, merges PhiIncomings, opIdx ElementIndex, callee ByteArray, args ValueIdArray, labels NameRoster)
+	function noteDirectCall(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, merges PhiIncomings, callee ByteArray, args ValueIdArray, labels NameRoster)
 		let calleeIndex = try calls.functionIndexNamed(callee) otherwise return
 		let signature = try project.funcSignatures.get(callee) otherwise panic("CallbackFlows.noteDirectCall: '{String.from(callee)}' is a function of this module and has no signature — a contribution to it cannot be placed")
 
 		for i in 0 upto args.count() 'eachArg'
 			let label = try labels.get(i) otherwise panic("CallbackFlows.noteDirectCall: labels.get OOB at {i} — a call's argument columns are parallel by construction")
 			let position = try argSlotPosition(signature.paramNames, argIndex: i as ParamCount, label: label) otherwise continue
-			self.noteHandedValue(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, opIdx: opIdx, calleeIndex: calleeIndex, position: position, value: try args.get(i) otherwise panic("CallbackFlows.noteDirectCall: args.get OOB at {i}"))
+			self.noteHandedValue(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, calleeIndex: calleeIndex, position: position, value: try args.get(i) otherwise panic("CallbackFlows.noteDirectCall: args.get OOB at {i}"))
 		end 'eachArg'
 	end 'noteDirectCall'
 
-	function noteIndirectCall(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, merges PhiIncomings, opIdx ElementIndex, callee ValueId, args ValueIdArray)
+	function noteIndirectCall(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, merges PhiIncomings, callee ValueId, args ValueIdArray)
 		let handed = self.functionValuePositions(caller, args: args, count: userArityOfIndirectCall(args))
 
 		if handed.count() == 0 'handsNoFunctionValue'
@@ -237,7 +201,7 @@ module type CallbackFlows
 
 		for calleeIndex in self.bodiesAnIndirectCallReaches(project, calls: calls, caller: caller, callee: callee).impls 'eachBody'
 			for position in handed 'eachHandedPosition'
-				self.classify(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, opIdx: opIdx, calleeIndex: calleeIndex, position: position, value: try args.get(position) otherwise panic("CallbackFlows.noteIndirectCall: args.get OOB at {position}"), depth: 0)
+				self.classify(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, calleeIndex: calleeIndex, position: position, value: try args.get(position) otherwise panic("CallbackFlows.noteIndirectCall: args.get OOB at {position}"), depth: 0)
 			end 'eachHandedPosition'
 		end 'eachBody'
 	end 'noteIndirectCall'
@@ -253,7 +217,7 @@ module type CallbackFlows
 		return calls.functionValueBodiesCalledThrough(caller, callee: callee)
 	end 'bodiesAnIndirectCallReaches'
 
-	function noteWitnessCall(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, merges PhiIncomings, opIdx ElementIndex, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex)
+	function noteWitnessCall(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, merges PhiIncomings, args ValueIdArray, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex)
 		let handed = self.functionValuePositions(caller, args: args, count: args.count() as ParamCount)
 
 		if handed.count() == 0 'handsNoFunctionValue'
@@ -262,13 +226,13 @@ module type CallbackFlows
 
 		for calleeIndex in calls.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex).impls 'eachImpl'
 			for position in handed 'eachHandedPosition'
-				self.classify(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, opIdx: opIdx, calleeIndex: calleeIndex, position: position, value: try args.get(position) otherwise panic("CallbackFlows.noteWitnessCall: args.get OOB at {position}"), depth: 0)
+				self.classify(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, calleeIndex: calleeIndex, position: position, value: try args.get(position) otherwise panic("CallbackFlows.noteWitnessCall: args.get OOB at {position}"), depth: 0)
 			end 'eachHandedPosition'
 		end 'eachImpl'
 	end 'noteWitnessCall'
 
 	function functionValuePositions(caller IrFunction, args ValueIdArray, count ParamCount) returns ParamCountArray
-		var found = ParamCountArray.create(0)
+		let found = ParamCountArray.create(0)
 
 		for i in 0 upto count 'eachArg'
 			if self.holdsAFunctionValue(caller, value: try args.get(i) otherwise panic("CallbackFlows.functionValuePositions: args.get OOB at {i}")) 'aFunctionValue'
@@ -283,54 +247,52 @@ module type CallbackFlows
 		return (try caller.valueTags.get(value) otherwise panic("CallbackFlows.holdsAFunctionValue: v{value} has no type tag in '{String.from(caller.name)}'")) == ValueTypeTag.function
 	end 'holdsAFunctionValue'
 
-	function noteHandedValue(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, merges PhiIncomings, opIdx ElementIndex, calleeIndex ElementIndex, position ParamCount, value ValueId)
+	function noteHandedValue(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, merges PhiIncomings, calleeIndex ElementIndex, position ParamCount, value ValueId)
 		if not self.holdsAFunctionValue(caller, value: value) 'notAFunctionValue'
 			return
 		end 'notAFunctionValue'
 
-		self.classify(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, opIdx: opIdx, calleeIndex: calleeIndex, position: position, value: value, depth: 0)
+		self.classify(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, calleeIndex: calleeIndex, position: position, value: value, depth: 0)
 	end 'noteHandedValue'
 
-	function classify(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, merges PhiIncomings, opIdx ElementIndex, calleeIndex ElementIndex, position ParamCount, value ValueId, depth ElementIndex)
+	function classify(project Project, module MaxonModule, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, merges PhiIncomings, calleeIndex ElementIndex, position ParamCount, value ValueId, depth ElementIndex)
 		if let name = try calls.functionRefTargetOf(caller, value: value) 'aFunctionReference'
 			if calls.declaresFunction(name) and isFunctionValueBodyName(name, funcSignatures: project.funcSignatures) 'aBodyOfThisModule'
-				self.contribute(FlowContributionKind.handedBody, first: calls.functionIndexOf(name), second: 0, calleeIndex: calleeIndex, position: position, callerIndex: callerIndex, opIdx: opIdx)
+				self.contribute(FlowContributionKind.handedBody, first: calls.functionIndexOf(name), second: 0, calleeIndex: calleeIndex, position: position)
 				return
 			end 'aBodyOfThisModule'
 
-			self.contribute(FlowContributionKind.handedForeignBody, first: 0, second: 0, calleeIndex: calleeIndex, position: position, callerIndex: callerIndex, opIdx: opIdx)
+			self.contribute(FlowContributionKind.handedForeignBody, first: 0, second: 0, calleeIndex: calleeIndex, position: position)
 			return
 		end 'aFunctionReference'
 
 		if value < valueIdAtParamPosition(caller.paramCount) 'oneOfTheCallersParameters'
-			self.contribute(FlowContributionKind.handedParameter, first: callerIndex, second: paramPositionOfValueId(value), calleeIndex: calleeIndex, position: position, callerIndex: callerIndex, opIdx: opIdx)
+			self.contribute(FlowContributionKind.handedParameter, first: callerIndex, second: paramPositionOfValueId(value), calleeIndex: calleeIndex, position: position)
 			return
 		end 'oneOfTheCallersParameters'
 
 		if depth < MaxPhiChaseDepth 'mayStillChaseAMerge'
 			if let incoming = try merges.incomingOf(module, func: caller, phi: value) 'aMerge'
 				for arm in incoming 'eachArm'
-					self.classify(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, opIdx: opIdx, calleeIndex: calleeIndex, position: position, value: arm, depth: depth + 1)
+					self.classify(project, module: module, calls: calls, caller: caller, callerIndex: callerIndex, merges: merges, calleeIndex: calleeIndex, position: position, value: arm, depth: depth + 1)
 				end 'eachArm'
 
 				return
 			end 'aMerge'
 		end 'mayStillChaseAMerge'
 
-		self.contributeShapeUnion(project, calls: calls, caller: caller, callerIndex: callerIndex, opIdx: opIdx, calleeIndex: calleeIndex, position: position, value: value)
+		self.contributeShapeUnion(project, calls: calls, caller: caller, calleeIndex: calleeIndex, position: position, value: value)
 	end 'classify'
 
-	function contributeShapeUnion(project Project, calls CallSummaryIndex, caller IrFunction, callerIndex ElementIndex, opIdx ElementIndex, calleeIndex ElementIndex, position ParamCount, value ValueId)
+	function contributeShapeUnion(project Project, calls CallSummaryIndex, caller IrFunction, calleeIndex ElementIndex, position ParamCount, value ValueId)
 		self.unions.push(calls.functionValueBodiesOfType(functionValueOwnTypeName(project, func: caller, value: value), readerFilePath: caller.sourceFilePath))
-		self.contribute(FlowContributionKind.handedShapeUnion, first: self.unions.count() - 1, second: 0, calleeIndex: calleeIndex, position: position, callerIndex: callerIndex, opIdx: opIdx)
+		self.contribute(FlowContributionKind.handedShapeUnion, first: self.unions.count() - 1, second: 0, calleeIndex: calleeIndex, position: position)
 	end 'contributeShapeUnion'
 
-	function contribute(kind FlowContributionKind, first ElementIndex, second ElementIndex, calleeIndex ElementIndex, position ParamCount, callerIndex ElementIndex, opIdx ElementIndex)
+	function contribute(kind FlowContributionKind, first ElementIndex, second ElementIndex, calleeIndex ElementIndex, position ParamCount)
 		self.kinds.push(kind)
 		self.firsts.push(first)
 		self.seconds.push(second)
-		self.siteCallers.push(callerIndex)
-		self.siteOps.push(opIdx)
 		self.targetFuncs.push(calleeIndex as CsrIndex)
 		self.targetPositions.push(position)
 	end 'contribute'
@@ -343,10 +305,10 @@ module type CallbackFlows
 			return memoized
 		end 'asked'
 
-		var leaves = FlowLeaves.create()
-		var visiting = FlowKeySet.create()
+		let leaves = FlowLeaves.create()
+		let visiting = FlowKeySet.create()
 		self.collectLeavesInto(funcIndex, position: position, into: leaves, visiting: visiting)
-		var found = self.landingOfLeaves(leaves, calls: calls)
+		let found = self.landingOfLeaves(leaves, calls: calls)
 		self.landings.upsert(key, value: found)
 		return found
 	end 'landingOf'
@@ -362,8 +324,8 @@ module type CallbackFlows
 			return interned
 		end 'anotherPositionLandsTheSame'
 
-		var contents = LandingContents.create()
-		var seenBodies = BodyIndexSet.create()
+		let contents = LandingContents.create()
+		let seenBodies = BodyIndexSet.create()
 
 		for k in 0 upto leaves.count() 'eachLeaf'
 			match leaves.kindAt(k) 'kind'
@@ -442,7 +404,7 @@ module type CallbackFlows
 	end 'markForeign'
 
 	function contributionsTo(funcIndex ElementIndex, position ParamCount) returns FuncIndexArray
-		var found = FuncIndexArray.create(0)
+		let found = FuncIndexArray.create(0)
 
 		for slot in 0 upto self.byTargetFunc.degree(funcIndex as CsrIndex) 'eachContribution'
 			let k = self.byTargetFunc.neighbour(funcIndex as CsrIndex, k: slot)
@@ -470,52 +432,4 @@ module type CallbackFlows
 	function unionAt(k ElementIndex) returns CallLandingBodies
 		return try self.unions.get(k) otherwise panic("CallbackFlows.unionAt: unions.get OOB at {k}")
 	end 'unionAt'
-
-	module function writerSitesOf(project Project, module MaxonModule, calls CallSummaryIndex, funcIndex ElementIndex, position ParamCount, mutationSummary ParamMutationSummary) returns CallbackSites
-		self.settle(project, module: module, calls: calls)
-		let key = flowKeyOf(funcIndex, position: position)
-
-		if let memoized = try self.sites.get(key) 'asked'
-			return memoized
-		end 'asked'
-
-		var found = CallbackSites.create()
-		var visiting = FlowKeySet.create()
-		self.collectSitesInto(module, funcIndex: funcIndex, position: position, mutationSummary: mutationSummary, into: found, visiting: visiting)
-		self.sites.upsert(key, value: found)
-		return found
-	end 'writerSitesOf'
-
-	function collectSitesInto(module MaxonModule, funcIndex ElementIndex, position ParamCount, mutationSummary ParamMutationSummary, into CallbackSites, visiting FlowKeySet)
-		if not self.enter(funcIndex, position: position, visiting: visiting) 'alreadyVisited'
-			return
-		end 'alreadyVisited'
-
-		for k in self.contributionsTo(funcIndex, position: position) 'eachContribution'
-			match self.kindAt(k) 'kind'
-				handedBody then self.recordIfWriter(module, body: self.firstAt(k), contribution: k, mutationSummary: mutationSummary, into: into)
-				handedParameter then self.collectSitesInto(module, funcIndex: self.firstAt(k), position: self.secondAt(k) as ParamCount, mutationSummary: mutationSummary, into: into, visiting: visiting)
-				handedShapeUnion then self.recordWritersOf(module, union: self.unionAt(self.firstAt(k)), contribution: k, mutationSummary: mutationSummary, into: into)
-				handedForeignBody then continue
-			end 'kind'
-		end 'eachContribution'
-	end 'collectSitesInto'
-
-	function recordIfWriter(module MaxonModule, body ElementIndex, contribution ElementIndex, mutationSummary ParamMutationSummary, into CallbackSites)
-		let func = try module.functions.get(body) otherwise panic("CallbackFlows.recordIfWriter: function index {body} is past the module's functions")
-
-		let (mask, recordWriteMask) = mutationSummary.writesOf(func.name)
-
-		if mask == NoParamPositions and recordWriteMask == NoParamPositions 'writesNothing'
-			return
-		end 'writesNothing'
-
-		into.record(try self.siteOps.get(contribution) otherwise panic("CallbackFlows.recordIfWriter: siteOps.get OOB at {contribution}"), caller: try self.siteCallers.get(contribution) otherwise panic("CallbackFlows.recordIfWriter: siteCallers.get OOB at {contribution}"), writer: body)
-	end 'recordIfWriter'
-
-	function recordWritersOf(module MaxonModule, union CallLandingBodies, contribution ElementIndex, mutationSummary ParamMutationSummary, into CallbackSites)
-		for body in union.impls 'eachBody'
-			self.recordIfWriter(module, body: body, contribution: contribution, mutationSummary: mutationSummary, into: into)
-		end 'eachBody'
-	end 'recordWritersOf'
 end 'CallbackFlows'

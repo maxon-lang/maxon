@@ -3726,7 +3726,7 @@ function shift(limbs Limbs, s Limb, n ElementIndex)
 end 'shift'
 
 function main() returns ExitCode
-	var limbs = Limbs.create(0)
+	let limbs = Limbs.create(0)
 	limbs.push(0xFFFFFFFF)
 	limbs.push(1)
 	shift(limbs, s: 4, n: 1)

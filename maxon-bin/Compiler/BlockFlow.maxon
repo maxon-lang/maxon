@@ -1,0 +1,91 @@
+module typealias BlockPositionRows = Array with EntryIndexArray
+module typealias OpPositionMap = Map with (ElementIndex, OriginKey)
+module typealias BlockReachMemo = Map with (ElementIndex, BoolArray)
+
+module type BlockFlow
+	let func as IrFunction
+	module let blockIndex as BlockIndexById
+	module let successors as BlockPositionRows
+	let opPositions as OpPositionMap
+	let reachFrom as BlockReachMemo
+
+	module static function over(module MaxonModule, func IrFunction) returns BlockFlow
+		let blockIndex = BlockIndexById.create()
+		module.refillBlockIndexById(func, into: blockIndex)
+		let successors = BlockPositionRows.create(0)
+		let opPositions = OpPositionMap.create()
+		let targets = BlockIdArray.create(0)
+
+		for (blockIter, blockRef) in func.blockRefs.withIterator() 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("BlockFlow.over: blockRef {blockRef} of '{String.from(func.name)}' is not in module.blocks")
+			let row = EntryIndexArray.create(0)
+			targets.clear()
+			collectMaxonBlockSuccessors(module, block: block, into: targets)
+
+			for target in targets 'eachSuccessor'
+				row.push(try blockIndex.get(target) otherwise panic("BlockFlow.over: block {target} is not a block of '{String.from(func.name)}'"))
+			end 'eachSuccessor'
+
+			successors.push(row)
+
+			for (opIter, opIdx) in block.bodyOps().withIterator() 'eachOp'
+				opPositions.upsert(opIdx, value: keyOf(blockIter.index(), low: opIter.index()))
+			end 'eachOp'
+		end 'eachBlock'
+
+		return Self{func: func, blockIndex: blockIndex, successors: successors, opPositions: opPositions, reachFrom: BlockReachMemo.create()}
+	end 'over'
+
+	module function positionOfOp(opIdx ElementIndex) returns OriginKey
+		return try self.opPositions.get(opIdx) otherwise panic("BlockFlow.positionOfOp: op {opIdx} is no op of '{String.from(self.func.name)}'")
+	end 'positionOfOp'
+
+	module function blockPositionOfOp(opIdx ElementIndex) returns ElementIndex
+		return highHalfOf(self.positionOfOp(opIdx))
+	end 'blockPositionOfOp'
+
+	module function positionOfBlock(blockId BlockId) returns ElementIndex
+		return try self.blockIndex.get(blockId) otherwise panic("BlockFlow.positionOfBlock: block {blockId} is not a block of '{String.from(self.func.name)}'")
+	end 'positionOfBlock'
+
+	module function blockReaches(from ElementIndex, to ElementIndex) returns bool
+		return try self.reachableFrom(from).get(to) otherwise panic("BlockFlow.blockReaches: block {to} is past the reach of '{String.from(self.func.name)}'")
+	end 'blockReaches'
+
+	module function mayReach(store ElementIndex, read ElementIndex) returns bool
+		let stored = self.positionOfOp(store)
+		let reading = self.positionOfOp(read)
+
+		if highHalfOf(stored) == highHalfOf(reading) and lowHalfOf(stored) <= lowHalfOf(reading) 'earlierInTheBlock'
+			return true
+		end 'earlierInTheBlock'
+
+		return self.blockReaches(highHalfOf(stored), to: highHalfOf(reading))
+	end 'mayReach'
+
+	function reachableFrom(block ElementIndex) returns BoolArray
+		if let memoized = try self.reachFrom.get(block) 'asked'
+			return memoized
+		end 'asked'
+
+		let reached = BoolArray.create(self.successors.count())
+		let pending = EntryIndexArray.create(0)
+		pending.push(block)
+		var head = 0 as ElementIndex
+
+		while head < pending.count() 'eachPending'
+			let at = try pending.get(head) otherwise panic("BlockFlow.reachableFrom: pending.get OOB at {head}")
+			head = head + 1
+
+			for next in try self.successors.get(at) otherwise panic("BlockFlow.reachableFrom: block {at} has no successor row") 'eachSuccessor'
+				if not (try reached.get(next) otherwise panic("BlockFlow.reachableFrom: reached.get OOB at {next}")) 'firstVisit'
+					try reached.set(next, value: true) otherwise panic("BlockFlow.reachableFrom: reached.set OOB at {next}")
+					pending.push(next)
+				end 'firstVisit'
+			end 'eachSuccessor'
+		end 'eachPending'
+
+		self.reachFrom.upsert(block, value: reached)
+		return reached
+	end 'reachableFrom'
+end 'BlockFlow'

@@ -1064,11 +1064,11 @@ function main() returns ExitCode
 	let a = pieces("one,two,three")
 	print("{a.count()}\n")
 
-	var h = Holder.create(pieces("p,q"))
+	let h = Holder.create(pieces("p,q"))
 	let first = try h.parts.get(0) otherwise panic("two elements were pushed")
 	print("[{first}]\n")
 
-	var derived = ["seed"]
+	let derived = ["seed"]
 	for round in 0 upto 200 'rounds'
 		let tmp = "{round},x,{round}"
 		for p in tmp.split(",") 'each'
@@ -1108,7 +1108,7 @@ function takesPieces(p Pieces) returns Integer
 end 'takesPieces'
 
 function main() returns ExitCode
-	var literal = ["seed"]
+	let literal = ["seed"]
 	let fromSplit = "a,b,c".split(",")
 	print("{takesPieces(fromSplit as Pieces)}\n")
 	print("{takesPieces(literal)}\n")

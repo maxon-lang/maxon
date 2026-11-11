@@ -351,8 +351,8 @@ end 'Token'
 typealias TokenArray = Array with Token
 
 function main() returns ExitCode
-	var ticket = Token.create(1)
-	var box = TokenArray.create(0)
+	let ticket = Token.create(1)
+	let box = TokenArray.create(0)
 	ticket.stash(box)
 	print("{ticket.n}\n")
 	return 0
@@ -434,7 +434,7 @@ function wrap(p Box) returns Wrapper
 end 'wrap'
 
 function main() returns ExitCode
-	var frozen = freeze Box.create(1)
+	let frozen = freeze Box.create(1)
 	let wrapper = wrap(frozen)
 	print("{wrapper.row.n}\n")
 	return 0
@@ -701,10 +701,10 @@ function countAfterYield(items TallyArray) returns Tally
 end 'countAfterYield'
 
 function main() returns ExitCode
-	var items = TallyArray.create(0)
+	let items = TallyArray.create(0)
 	items.push(1)
 
-	var promises = TallyPromiseArray.create(0)
+	let promises = TallyPromiseArray.create(0)
 	promises.push(async countAfterYield(items.clone()))
 	items.push(2)
 	items.push(3)
@@ -743,7 +743,7 @@ end 'waitForFlag'
 
 function main() returns ExitCode
 	let flag = Flag.create(false)
-	var promises = FlagPromiseArray.create(0)
+	let promises = FlagPromiseArray.create(0)
 	promises.push(async waitForFlag(flag.clone()))
 	flag.publish(true)
 
@@ -1028,7 +1028,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var outer = Outer.create()
+	let outer = Outer.create()
 	print("{outer.bump()}\n")
 	return 0
 end 'main'
@@ -1435,8 +1435,8 @@ type Node
 end 'Node'
 
 function main() returns ExitCode
-	var a = Node.create(3)
-	var log = Log.create()
+	let a = Node.create(3)
+	let log = Log.create()
 	a.note(log)
 	print("{a.n} {log.last}\n")
 	return 0
@@ -1623,8 +1623,8 @@ function pick(a Box, b Box) returns Box
 end 'pick'
 
 function main() returns ExitCode
-	var batch = LineArray.create(0) as isolated LineArray
-	var other = Box.create(1)
+	let batch = LineArray.create(0) as isolated LineArray
+	let other = Box.create(1)
 
 	modify batch 'fill'
 		let chosen = pick(other, b: Box.create(0))

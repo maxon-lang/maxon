@@ -87,15 +87,15 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var items = ItemArray.create(0)
+	let items = ItemArray.create(0)
 	items.push(Item.create(Color.red))
 	items.push(Item.create(Color.green))
 	items.push(Item.create(Color.blue))
 
 	// Verify enum values are stored correctly (not pointers)
-	view item0 = try items.get(0) otherwise Item.create(Color.blue)
-	view item1 = try items.get(1) otherwise Item.create(Color.blue)
-	view item2 = try items.get(2) otherwise Item.create(Color.red)
+	let item0 = try items.get(0) otherwise Item.create(Color.blue)
+	let item1 = try items.get(1) otherwise Item.create(Color.blue)
+	let item2 = try items.get(2) otherwise Item.create(Color.red)
 
 	// red=0, green=1, blue=2 — base-5 packing keeps the result inside ExitCode (0..125)
 	return item0.color.rawValue + item1.color.rawValue * 5 + item2.color.rawValue * 25
@@ -125,7 +125,7 @@ end 'Task'
 typealias TaskArray = Array with Task
 
 function main() returns ExitCode
-	var tasks = TaskArray.create(0)
+	let tasks = TaskArray.create(0)
 	tasks.push(Task.create(Status.pending))
 	tasks.push(Task.create(Status.active))
 	tasks.push(Task.create(Status.done))

@@ -151,8 +151,8 @@ function copyIt(c Cloneable) returns Cloneable
 end 'copyIt'
 
 function main() returns ExitCode
-	var src = Nested.create(0)
-	var inner = StrArr.create(0)
+	let src = Nested.create(0)
+	let inner = StrArr.create(0)
 	inner.push("ab")
 	src.push(inner)
 	_ = copyIt(src)
@@ -424,12 +424,12 @@ typealias IntArr = Array with Val
 typealias IntArrArr = Array with IntArr
 
 function main() returns ExitCode
-	var outer = IntArrArr.create(0)
-	var inner = IntArr.create(0)
+	let outer = IntArrArr.create(0)
+	let inner = IntArr.create(0)
 	inner.push(3)
 	outer.push(inner)
-	var other = IntArrArr.create(0)
-	var innerOther = IntArr.create(0)
+	let other = IntArrArr.create(0)
+	let innerOther = IntArr.create(0)
 	innerOther.push(3)
 	other.push(innerOther)
 	let h = outer.hash()

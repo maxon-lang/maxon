@@ -415,7 +415,7 @@ let CopyDeleteRetryMs = 50
 function main() returns ExitCode
 	if CommandLine.args().count() > 1 'theRunningCopy'
 		print("running\n")
-		var input = Console.stdin()
+		let input = Console.stdin()
 		_ = try input.readLine() otherwise return 0
 		return 0
 	end 'theRunningCopy'
@@ -438,9 +438,9 @@ function main() returns ExitCode
 end 'main'
 
 function verdictOverARunningCopy(copy FilePath) returns ExitCode
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("hold")
-	var running = try StreamingSubprocess.spawn(Executable.path(copy), arguments: argv) otherwise return 4
+	let running = try StreamingSubprocess.spawn(Executable.path(copy), arguments: argv) otherwise return 4
 	let verdict = verdictWhileItRuns(running, copy: copy)
 	running.closeStdin()
 	let ended = endedCleanly(running)
@@ -580,7 +580,7 @@ end 'main'
 function main() returns ExitCode
 	let path = FilePath from "test_binary.bin"
 	// Create a byte array with known values
-	var data = ByteArray.create(0)
+	let data = ByteArray.create(0)
 	data.push(65 as Byte)
 	data.push(66 as Byte)
 	data.push(67 as Byte)
@@ -644,7 +644,7 @@ function main() returns ExitCode
 	let src = FilePath from "test_rename_src.bin"
 	let dst = FilePath from "test_rename_dst.bin"
 
-	var data = ByteArray.create(0)
+	let data = ByteArray.create(0)
 	data.push(70 as Byte)
 	data.push(71 as Byte)
 

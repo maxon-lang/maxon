@@ -413,7 +413,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(0)
+	let c = Counter.create(0)
 	c.increment()
 	return c.value
 end 'main'
@@ -665,7 +665,7 @@ function removeFirst(arr IntArray, value Integer) returns bool
 end 'removeFirst'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(2)
 	a.push(5)
 	_ = removeFirst(a, value: 2)
@@ -707,7 +707,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var arr = TallyArray.create(0)
+	let arr = TallyArray.create(0)
 	arr.push(1)
 	_ = try arr.pop() otherwise 0
 	return arr.count()
@@ -767,7 +767,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyMap = Map with (String, Tally)
 
 function main() returns ExitCode
-	var m = TallyMap.create()
+	let m = TallyMap.create()
 	m.upsert("a", value: 1)
 	_ = m.remove("a")
 	return m.count()
@@ -808,7 +808,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var arr = TallyArray.create(0)
+	let arr = TallyArray.create(0)
 	arr.push(7)
 	arr.clone()
 	return arr.count() - 1
@@ -829,9 +829,9 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var src = TallyArray.create(0)
+	let src = TallyArray.create(0)
 	src.push(3)
-	var dst = TallyArray.create(0)
+	let dst = TallyArray.create(0)
 	dst.push(try src.get(0) otherwise panic("src holds one element"))
 	return dst.count() - 1
 end 'main'
@@ -852,7 +852,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var arr = TallyArray.create(0)
+	let arr = TallyArray.create(0)
 	arr.push(7)
 	_ = arr.clone()
 	return arr.count() - 1
@@ -958,7 +958,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var stack = TallyArray.create(0)
+	let stack = TallyArray.create(0)
 	stack.push(7)
 	_ = try stack.pop() otherwise panic("pushed one element")
 	return 0
@@ -1390,7 +1390,7 @@ function fill(target IntArray, count Integer) returns Integer
 end 'fill'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	_ = fill(values, count: 3)
 
 	if values.count() != 3 'wrong'
@@ -1450,14 +1450,14 @@ type Sink
 end 'Sink'
 
 function stash(sink Sink, count Integer) returns Integer
-	var extra = IntArray.create(0)
+	let extra = IntArray.create(0)
 	sink.attach(extra)
 	extra.push(count)
 	return count
 end 'stash'
 
 function main() returns ExitCode
-	var sink = Sink.create()
+	let sink = Sink.create()
 	_ = stash(sink, count: 4)
 
 	if sink.size() != 1 'wrong'
@@ -1643,7 +1643,7 @@ type Recorder
 end 'Recorder'
 
 function main() returns ExitCode
-	var recorder = Recorder.create()
+	let recorder = Recorder.create()
 	_ = try recorder.firstRecorded() otherwise return 1
 
 	if recorder.recorded() != 3 'wrong'
@@ -1817,18 +1817,18 @@ end 'Box'
 typealias BoxArray = Array with Box
 
 function enroll(registry mutable BoxArray) returns Box
-	var box = Box.create()
+	let box = Box.create()
 	registry.push(box)
 	return box
 end 'enroll'
 
 function tamper(registry mutable BoxArray) returns Integer
-	var box = enroll(registry)
+	let box = enroll(registry)
 	return box.bump()
 end 'tamper'
 
 function main() returns ExitCode
-	var registry = BoxArray.create(0)
+	let registry = BoxArray.create(0)
 	_ = tamper(registry)
 
 	if (try registry.get(0) otherwise return 2).read() != 1 'wrong'
@@ -1900,10 +1900,10 @@ function copyInto(values IntArray, target IntArray) returns Integer
 end 'copyInto'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	values.push(4)
 	values.push(5)
-	var target = IntArray.create(0)
+	let target = IntArray.create(0)
 	_ = copyInto(values, target: target)
 
 	if target.count() != 2 'wrong'
@@ -1934,7 +1934,7 @@ function show(values IntArray) returns Integer
 end 'show'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	values.push(7)
 	_ = show(values)
 	return 0
@@ -2103,7 +2103,7 @@ function show(values IntList) returns Integer
 end 'show'
 
 function main() returns ExitCode
-	var values = IntList.create()
+	let values = IntList.create()
 	values.append(4)
 
 	_ = show(values)
@@ -2136,10 +2136,10 @@ function copyInto(values IntList, target IntArray) returns Integer
 end 'copyInto'
 
 function main() returns ExitCode
-	var values = IntList.create()
+	let values = IntList.create()
 	values.append(4)
 	values.append(5)
-	var target = IntArray.create(0)
+	let target = IntArray.create(0)
 
 	_ = copyInto(values, target: target)
 
@@ -2248,7 +2248,7 @@ function show(values IntVector) returns Integer
 end 'show'
 
 function main() returns ExitCode
-	var values = IntVector.create()
+	let values = IntVector.create()
 	values.set(0, value: 4)
 	values.set(1, value: 5)
 	values.set(2, value: 6)
@@ -2285,11 +2285,11 @@ function copyInto(values IntVector, target IntArray) returns Integer
 end 'copyInto'
 
 function main() returns ExitCode
-	var values = IntVector.create()
+	let values = IntVector.create()
 	values.set(0, value: 4)
 	values.set(1, value: 5)
 	values.set(2, value: 6)
-	var target = IntArray.create(0)
+	let target = IntArray.create(0)
 
 	_ = copyInto(values, target: target)
 
@@ -2396,7 +2396,7 @@ function show(values IntSet) returns Integer
 end 'show'
 
 function main() returns ExitCode
-	var values = IntSet.create()
+	let values = IntSet.create()
 	values.insert(4)
 
 	_ = show(values)
@@ -2429,10 +2429,10 @@ function copyInto(values IntSet, target IntArray) returns Integer
 end 'copyInto'
 
 function main() returns ExitCode
-	var values = IntSet.create()
+	let values = IntSet.create()
 	values.insert(4)
 	values.insert(5)
-	var target = IntArray.create(0)
+	let target = IntArray.create(0)
 
 	_ = copyInto(values, target: target)
 
@@ -2542,7 +2542,7 @@ function show(table IntMap) returns Integer
 end 'show'
 
 function main() returns ExitCode
-	var table = IntMap.create()
+	let table = IntMap.create()
 	table.upsert(1, value: 4)
 
 	_ = show(table)
@@ -2575,11 +2575,11 @@ function copyInto(table IntMap, target IntMap) returns Integer
 end 'copyInto'
 
 function main() returns ExitCode
-	var table = IntMap.create()
+	let table = IntMap.create()
 	table.upsert(1, value: 4)
 	table.upsert(2, value: 5)
 
-	var target = IntMap.create()
+	let target = IntMap.create()
 	_ = copyInto(table, target: target)
 
 	if target.count() != 2 'wrong'
@@ -2672,13 +2672,13 @@ type Walker
 end 'Walker'
 
 function wiped(data IntArray) returns Integer
-	var walker = Walker.over(data)
+	let walker = Walker.over(data)
 	walker.wipe()
 	return 1
 end 'wiped'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	values.push(4)
 	_ = wiped(values)
 
@@ -2731,15 +2731,15 @@ type Parent
 end 'Parent'
 
 function bumped(target Box) returns Integer
-	var child = Child.create()
-	var parent = Parent.over(child)
+	let child = Child.create()
+	let parent = Parent.over(child)
 	parent.adopt(target)
 	child.bump()
 	return 1
 end 'bumped'
 
 function main() returns ExitCode
-	var target = Box.create(5)
+	let target = Box.create(5)
 	_ = bumped(target)
 
 	if target.number != 6 'wrong'
@@ -2826,13 +2826,13 @@ type Parent
 end 'Parent'
 
 function grown(target IntArray) returns Integer
-	var parent = Parent.over(target)
+	let parent = Parent.over(target)
 	parent.grow()
 	return 1
 end 'grown'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	_ = grown(values)
 	return 0 if values.count() == 1 else 1
 end 'main'
@@ -2868,13 +2868,13 @@ type Parent
 end 'Parent'
 
 function shortened(target IntArray) returns Integer
-	var parent = Parent.over(target)
+	let parent = Parent.over(target)
 	parent.shorten()
 	return 1
 end 'shortened'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	values.push(2)
 	values.push(1)
 	_ = shortened(values)
@@ -2918,12 +2918,12 @@ function run(action Action) returns Integer
 end 'run'
 
 function grown(target IntArray) returns Integer
-	var parent = Parent.over(target)
+	let parent = Parent.over(target)
 	return run(function() gives parent.growCount())
 end 'grown'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	_ = grown(values)
 	return 0 if values.count() == 1 else 1
 end 'main'
@@ -2966,13 +2966,13 @@ type Parent
 end 'Parent'
 
 function bumped(target Box) returns Integer
-	var parent = Parent.over(Child.over(target))
+	let parent = Parent.over(Child.over(target))
 	parent.bump()
 	return 1
 end 'bumped'
 
 function main() returns ExitCode
-	var target = Box.create(5)
+	let target = Box.create(5)
 	_ = bumped(target)
 	return 0 if target.number == 6 else 1
 end 'main'
@@ -3020,20 +3020,20 @@ function relay(target Holder, items IntArray)
 end 'relay'
 
 function hand(target Holder, items IntArray)
-	var scratch = Wrapper.make()
+	let scratch = Wrapper.make()
 	scratch.touchChild()
 	relay(target, items: items)
 end 'hand'
 
 function grown(items IntArray) returns Integer
-	var holder = Holder.make()
+	let holder = Holder.make()
 	hand(holder, items: items)
 	holder.grow()
 	return 1
 end 'grown'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	_ = grown(values)
 	return 0 if values.count() == 1 else 1
 end 'main'
@@ -3088,20 +3088,20 @@ function relay(target Holder, box Box)
 end 'relay'
 
 function hand(target Holder, box Box)
-	var scratch = Wrapper.make()
+	let scratch = Wrapper.make()
 	scratch.touchChild()
 	relay(target, box: box)
 end 'hand'
 
 function bumped(box Box) returns Integer
-	var holder = Holder.make()
+	let holder = Holder.make()
 	hand(holder, box: box)
 	holder.bumpBox()
 	return 1
 end 'bumped'
 
 function main() returns ExitCode
-	var box = Box.create(5)
+	let box = Box.create(5)
 	_ = bumped(box)
 	return 0 if box.number == 6 else 1
 end 'main'
@@ -3142,19 +3142,19 @@ function apply(holder Holder, items IntArray, action Adopt)
 end 'apply'
 
 function made(items IntArray, action Adopt) returns Holder
-	var holder = Holder.create()
+	let holder = Holder.create()
 	apply(holder, items: items, action: action)
 	return holder
 end 'made'
 
 function grown(target IntArray) returns Integer
-	var holder = made(target, action: adoptInto)
+	let holder = made(target, action: adoptInto)
 	holder.grow()
 	return 1
 end 'grown'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	_ = grown(values)
 	return 0 if values.count() == 1 else 1
 end 'main'
@@ -3198,19 +3198,19 @@ function apply(holder Holder, box Box, action Adopt)
 end 'apply'
 
 function made(box Box, action Adopt) returns Holder
-	var holder = Holder.create()
+	let holder = Holder.create()
 	apply(holder, box: box, action: action)
 	return holder
 end 'made'
 
 function bumped(target Box) returns Integer
-	var holder = made(target, action: adoptInto)
+	let holder = made(target, action: adoptInto)
 	holder.bump()
 	return 1
 end 'bumped'
 
 function main() returns ExitCode
-	var target = Box.create(5)
+	let target = Box.create(5)
 	_ = bumped(target)
 	return 0 if target.number == 6 else 1
 end 'main'
@@ -3236,7 +3236,7 @@ type Shelf uses T
 
 	function adopt(fresh IntArray, scratchy bool)
 		if scratchy 'scratch'
-			var scratch = TArray.create(0)
+			let scratch = TArray.create(0)
 
 			if scratch.isEmpty() 'empty'
 				self.flagged = true
@@ -3247,7 +3247,7 @@ type Shelf uses T
 	end 'adopt'
 
 	static function filled(fresh IntArray) returns Self
-		var made = Self.create()
+		let made = Self.create()
 		made.adopt(fresh, scratchy: false)
 		return made
 	end 'filled'
@@ -3260,13 +3260,13 @@ end 'Shelf'
 typealias IntShelf = Shelf with Integer
 
 function grown(target IntArray) returns Integer
-	var shelf = IntShelf.filled(target)
+	let shelf = IntShelf.filled(target)
 	shelf.grow()
 	return 1
 end 'grown'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	_ = grown(values)
 	return 0 if values.count() == 1 else 1
 end 'main'
@@ -3282,7 +3282,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __ManagedList with Integer
 
 function steal(source IntChain) returns Integer
-	var mine = IntChain.create()
+	let mine = IntChain.create()
 
 	let node = try source.head() otherwise 'empty'
 		return 0
@@ -3293,7 +3293,7 @@ function steal(source IntChain) returns Integer
 end 'steal'
 
 function main() returns ExitCode
-	var chain = IntChain.create()
+	let chain = IntChain.create()
 	_ = chain.insertLast(5)
 	_ = steal(chain)
 	return 0 if chain.count() == 0 else 1
@@ -3310,7 +3310,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __ManagedList with Integer
 
 function takeFromShelf(shelf mutable IntChain) returns Integer
-	var mine = IntChain.create()
+	let mine = IntChain.create()
 
 	let node = try shelf.head() otherwise 'empty'
 		return 0
@@ -3350,9 +3350,9 @@ function scribble(shared mutable Box) returns Small
 	var i = 0 as Small
 
 	while i < 3 'loop'
-		var fresh = Box.create(0)
-		var b = held
-		var pick = fresh if i < 2 else b
+		let fresh = Box.create(0)
+		let b = held
+		let pick = fresh if i < 2 else b
 		other = pick
 		other.n = 7
 		held = shared
@@ -3363,7 +3363,7 @@ function scribble(shared mutable Box) returns Small
 end 'scribble'
 
 function main() returns ExitCode
-	var shared = Box.create(0)
+	let shared = Box.create(0)
 	_ = scribble(shared)
 	return 0 if shared.n == 7 else 1
 end 'main'
@@ -3429,7 +3429,7 @@ type Shelf
 	end 'left'
 
 	function steal() returns Integer
-		var mine = IntChain.create()
+		let mine = IntChain.create()
 
 		let node = try self.chain.head() otherwise 'empty'
 			return 0
@@ -3441,7 +3441,7 @@ type Shelf
 end 'Shelf'
 
 function main() returns ExitCode
-	var shelf = Shelf.create()
+	let shelf = Shelf.create()
 	shelf.stock()
 	_ = shelf.steal()
 	return 0 if shelf.left() == 0 else 1
@@ -3462,7 +3462,7 @@ end 'allocated'
 
 function main() returns ExitCode
 	let before = allocated()
-	var kept = ByteArray.create(0)
+	let kept = ByteArray.create(0)
 	kept.push(1)
 	_ = allocated()
 	return 0 if allocated() > before else 1
@@ -3523,13 +3523,13 @@ type Cursor
 end 'Cursor'
 
 function wipe(values IntArray) returns Integer
-	var cursor = Cursor.over(values)
+	let cursor = Cursor.over(values)
 	cursor.drop()
 	return 1
 end 'wipe'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	values.push(4)
 	_ = wipe(values)
 
@@ -3566,14 +3566,14 @@ type Cursor
 end 'Cursor'
 
 function reset(extra IntArray) returns Integer
-	var cursor = Cursor.over(IntArray.create(0))
+	let cursor = Cursor.over(IntArray.create(0))
 	cursor.adopt(extra)
 	cursor.drop()
 	return 1
 end 'reset'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	values.push(4)
 	_ = reset(values)
 
@@ -3612,7 +3612,7 @@ function worker(flag FlagCell) returns Integer
 end 'worker'
 
 function keep(flag FlagCell) returns Integer
-	var promise = async worker(flag.clone())
+	let promise = async worker(flag.clone())
 	let holder = Holder.wrap(promise)
 	_ = holder
 	return 1
@@ -3644,7 +3644,7 @@ function worker(flag FlagCell) returns Integer
 end 'worker'
 
 function park(flag FlagCell) returns Integer
-	var parked = PromiseArray.create(0)
+	let parked = PromiseArray.create(0)
 	parked.push(async worker(flag.clone()))
 	return 1
 end 'park'

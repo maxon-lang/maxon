@@ -151,8 +151,8 @@ end 'ServiceNodeLookup'
 //
 // ⚠ **THE GATE IS `serviceAwaitSites`, WHICH IS EMPTY FOR EVERY PROGRAM THAT AWAITS NO REPLY** — that is
 // every program with no service in it and every program that only sends fire-and-forget — and it
-// is asked by `checkServiceRules`, which owns the survey this check and `ServiceGlobalAccessCheck` share. Neither rule builds a
-// call graph of its own; see `ServiceProgramSurvey`.
+// is asked by `checkServiceRules`, which owns the survey this check reads, so the check builds no call
+// graph of its own; see `ServiceProgramSurvey`.
 module function checkServiceCallCycles(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
 	let graph = buildServiceBlockingGraph(signatures, funcNames: funcNames, survey: survey)
 	let onCycle = nodesOnACycle(graph.adjacency())
@@ -176,7 +176,7 @@ end 'checkServiceCallCycles'
 // closure is linear in the call graph, so `services` sweeps over one shared edge list is the cheaper shape
 // AND leaves the shared closure untouched.
 function buildServiceBlockingGraph(signatures ProgramSignatures, funcNames FunctionNameIndex, survey ServiceProgramSurvey) returns ServiceBlockingGraph
-	var graph = ServiceBlockingGraph.create(serviceCompanionRoster(signatures))
+	let graph = ServiceBlockingGraph.create(serviceCompanionRoster(signatures))
 
 	for awaited in 0 upto graph.nodeCount() 'eachAwaitedService'
 		addBlockingEdgesTo(graph, awaited: awaited, funcNames: funcNames, survey: survey)
@@ -185,9 +185,6 @@ function buildServiceBlockingGraph(signatures ProgramSignatures, funcNames Funct
 	return graph
 end 'buildServiceBlockingGraph'
 
-// ⚠ `module`, because `ServiceGlobalAccessCheck` seeds its forward closure from the very same question — *"is
-// this function a message, and of which service?"* — and a second spelling of it there would be free to
-// disagree about what a message is.
 module function messageOwnerNameOf(signatures ProgramSignatures, callee ByteArray) returns immutable ByteArray throws AbsentError
 	if let message = try signatures.serviceMessageOf(callee) 'aMessage'
 		return message.typeName
@@ -211,8 +208,8 @@ end 'serviceFactoryOwnerOf'
 // One awaited service's closure and the edges it produces. Split from the walk above so each half is one
 // statement of one idea, and because the seed column has to be rebuilt per service anyway.
 function addBlockingEdgesTo(graph ServiceBlockingGraph, awaited CsrIndex, funcNames FunctionNameIndex, survey ServiceProgramSurvey)
-	view awaitedName = graph.serviceNameOf(awaited)
-	var seeds = BoolArray.create(survey.funcCount())
+	let awaitedName = graph.serviceNameOf(awaited)
+	let seeds = BoolArray.create(survey.funcCount())
 	survey.awaits.seedFunctionsAwaiting(awaitedName, seeds: seeds)
 
 	let blocks = markSeededCallers(survey.edges, seeds: seeds, nodeCount: survey.funcCount())
@@ -258,9 +255,6 @@ end 'blockingSiteFor'
 //
 // Does this op hand control to a NAMED function in this frame?
 //
-// ⚠ `module`, and `ServiceProgramSurvey` is the one asker for both rules. The message closure's exclusion of a send is
-// right there for the same reason read from the other end: a send's handler runs on the SERVICE's green
-// thread, and that handler is already a seed of that walk in its own right.
 module function opIsACallGraphEdge(op MaxonOp) returns bool
 	if opIsAServiceSend(op) 'enqueuesRatherThanCalls'
 		return false

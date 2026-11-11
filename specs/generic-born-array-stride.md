@@ -87,7 +87,7 @@ type Bag uses Element
 	end 'addMemory'
 
 	function replayed() returns Self
-		var out = Self{items: Items.create(0)}
+		let out = Self{items: Items.create(0)}
 
 		for value in items 'each'
 			out.add(value)
@@ -146,7 +146,7 @@ function sumAt(bag ByteBag) returns Total
 end 'sumAt'
 
 function main() returns ExitCode
-	var bag = ByteBag.create()
+	let bag = ByteBag.create()
 
 	for i in 0 upto 300 'fill'
 		bag.add(value(i))
@@ -171,31 +171,31 @@ function main() returns ExitCode
 	bag.put(0, value: 1)
 	print("clone {snapshot.items.managed.elementSize()} count {snapshot.items.count()} sum {sumOf(snapshot)} first {(snapshot.at(0) as Total)} source first {(bag.at(0) as Total)}\n")
 
-	view part = bag.window(100, endIndex: 200)
+	let part = bag.window(100, endIndex: 200)
 	print("window {part.items.managed.elementSize()} count {part.items.count()} sum {sumOf(part)}\n")
 
-	var joined = part.cloned()
+	let joined = part.cloned()
 	joined.addAll(part)
 	print("append {joined.items.managed.elementSize()} count {joined.items.count()} sum {sumOf(joined)}\n")
 
-	var memory = part.cloned()
+	let memory = part.cloned()
 	memory.addMemory(part)
 	print("appendMemory {memory.items.managed.elementSize()} count {memory.items.count()} sum {sumOf(memory)}\n")
 
 	let replay = bag.replayed()
 	print("replay {replay.items.managed.elementSize()} count {replay.items.count()} sum {sumOf(replay)}\n")
 
-	var grown = ByteBag.create()
+	let grown = ByteBag.create()
 	grown.add(value(0))
 	grown.grownTo(70, value: 9)
 	print("grow {grown.items.managed.elementSize()} count {grown.items.count()} sum {sumOf(grown)} first {(grown.at(0) as Total)} last {(grown.lastOne() as Total)}\n")
 
-	var filled = ByteBag.create()
+	let filled = ByteBag.create()
 	filled.add(value(1))
 	filled.refilled(40, value: 3)
 	print("refill {filled.items.managed.elementSize()} count {filled.items.count()} sum {sumOf(filled)}\n")
 
-	var roomy = ByteBag.create()
+	let roomy = ByteBag.create()
 	roomy.add(value(1))
 	roomy.add(value(2))
 	roomy.add(value(3))
@@ -299,7 +299,7 @@ type Bag uses Element
 	end 'addMemory'
 
 	function replayed() returns Self
-		var out = Self{items: Items.create(0)}
+		let out = Self{items: Items.create(0)}
 
 		for value in items 'each'
 			out.add(value)
@@ -402,7 +402,7 @@ function nibbleSum(bag NibbleBag) returns Total
 end 'nibbleSum'
 
 function main() returns ExitCode
-	var half = HalfBag.create()
+	let half = HalfBag.create()
 
 	for i in 0 upto 300 'fillHalf'
 		half.add(halfValue(i))
@@ -421,18 +421,18 @@ function main() returns ExitCode
 
 	let halfCopy = half.cloned()
 	half.put(0, value: 1)
-	view halfPart = half.window(100, endIndex: 200)
-	var halfJoined = halfPart.cloned()
+	let halfPart = half.window(100, endIndex: 200)
+	let halfJoined = halfPart.cloned()
 	halfJoined.addAll(halfPart)
 	let halfReplay = half.replayed()
 	print("half clone {halfCopy.items.managed.elementSize()} {halfSum(halfCopy)} window {halfPart.items.managed.elementSize()} {halfSum(halfPart)} append {halfJoined.items.managed.elementSize()} {halfSum(halfJoined)} replay {halfReplay.items.managed.elementSize()} {halfSum(halfReplay)}\n")
 
-	var halfGrown = HalfBag.create()
+	let halfGrown = HalfBag.create()
 	halfGrown.add(halfValue(0))
 	halfGrown.grownTo(70, value: 777)
 	print("half grow {halfGrown.items.managed.elementSize()} count {halfGrown.items.count()} sum {halfSum(halfGrown)}\n")
 
-	var wide = WideBag.create()
+	let wide = WideBag.create()
 
 	for i in 0 upto 300 'fillWide'
 		wide.add(wideValue(i))
@@ -451,18 +451,18 @@ function main() returns ExitCode
 
 	let wideCopy = wide.cloned()
 	wide.put(0, value: 1)
-	view widePart = wide.window(100, endIndex: 200)
-	var wideJoined = widePart.cloned()
+	let widePart = wide.window(100, endIndex: 200)
+	let wideJoined = widePart.cloned()
 	wideJoined.addAll(widePart)
 	let wideReplay = wide.replayed()
 	print("wide clone {wideCopy.items.managed.elementSize()} {wideSum(wideCopy)} window {widePart.items.managed.elementSize()} {wideSum(widePart)} append {wideJoined.items.managed.elementSize()} {wideSum(wideJoined)} replay {wideReplay.items.managed.elementSize()} {wideSum(wideReplay)}\n")
 
-	var wideGrown = WideBag.create()
+	let wideGrown = WideBag.create()
 	wideGrown.add(wideValue(0))
 	wideGrown.grownTo(70, value: 777777)
 	print("wide grow {wideGrown.items.managed.elementSize()} count {wideGrown.items.count()} sum {wideSum(wideGrown)}\n")
 
-	var flag = FlagBag.create()
+	let flag = FlagBag.create()
 
 	for i in 0 upto 300 'fillFlag'
 		flag.add(flagValue(i))
@@ -481,18 +481,18 @@ function main() returns ExitCode
 
 	let flagCopy = flag.cloned()
 	flag.put(0, value: false)
-	view flagPart = flag.window(100, endIndex: 200)
-	var flagJoined = flagPart.cloned()
+	let flagPart = flag.window(100, endIndex: 200)
+	let flagJoined = flagPart.cloned()
 	flagJoined.addAll(flagPart)
 	let flagReplay = flag.replayed()
 	print("flag clone {flagCopy.items.managed.elementSize()} {flagSum(flagCopy)} window {flagPart.items.managed.elementSize()} {flagSum(flagPart)} append {flagJoined.items.managed.elementSize()} {flagSum(flagJoined)} replay {flagReplay.items.managed.elementSize()} {flagSum(flagReplay)}\n")
 
-	var flagGrown = FlagBag.create()
+	let flagGrown = FlagBag.create()
 	flagGrown.add(flagValue(0))
 	flagGrown.grownTo(70, value: true)
 	print("flag grow {flagGrown.items.managed.elementSize()} count {flagGrown.items.count()} sum {flagSum(flagGrown)}\n")
 
-	var crumb = CrumbBag.create()
+	let crumb = CrumbBag.create()
 
 	for i in 0 upto 300 'fillCrumb'
 		crumb.add(crumbValue(i))
@@ -511,18 +511,18 @@ function main() returns ExitCode
 
 	let crumbCopy = crumb.cloned()
 	crumb.put(0, value: 0)
-	view crumbPart = crumb.window(100, endIndex: 200)
-	var crumbJoined = crumbPart.cloned()
+	let crumbPart = crumb.window(100, endIndex: 200)
+	let crumbJoined = crumbPart.cloned()
 	crumbJoined.addAll(crumbPart)
 	let crumbReplay = crumb.replayed()
 	print("crumb clone {crumbCopy.items.managed.elementSize()} {crumbSum(crumbCopy)} window {crumbPart.items.managed.elementSize()} {crumbSum(crumbPart)} append {crumbJoined.items.managed.elementSize()} {crumbSum(crumbJoined)} replay {crumbReplay.items.managed.elementSize()} {crumbSum(crumbReplay)}\n")
 
-	var crumbGrown = CrumbBag.create()
+	let crumbGrown = CrumbBag.create()
 	crumbGrown.add(crumbValue(0))
 	crumbGrown.grownTo(70, value: 2)
 	print("crumb grow {crumbGrown.items.managed.elementSize()} count {crumbGrown.items.count()} sum {crumbSum(crumbGrown)}\n")
 
-	var nibble = NibbleBag.create()
+	let nibble = NibbleBag.create()
 
 	for i in 0 upto 300 'fillNibble'
 		nibble.add(nibbleValue(i))
@@ -541,13 +541,13 @@ function main() returns ExitCode
 
 	let nibbleCopy = nibble.cloned()
 	nibble.put(0, value: 2)
-	view nibblePart = nibble.window(100, endIndex: 200)
-	var nibbleJoined = nibblePart.cloned()
+	let nibblePart = nibble.window(100, endIndex: 200)
+	let nibbleJoined = nibblePart.cloned()
 	nibbleJoined.addAll(nibblePart)
 	let nibbleReplay = nibble.replayed()
 	print("nibble clone {nibbleCopy.items.managed.elementSize()} {nibbleSum(nibbleCopy)} window {nibblePart.items.managed.elementSize()} {nibbleSum(nibblePart)} append {nibbleJoined.items.managed.elementSize()} {nibbleSum(nibbleJoined)} replay {nibbleReplay.items.managed.elementSize()} {nibbleSum(nibbleReplay)}\n")
 
-	var nibbleGrown = NibbleBag.create()
+	let nibbleGrown = NibbleBag.create()
 	nibbleGrown.add(nibbleValue(0))
 	nibbleGrown.grownTo(70, value: 5)
 	print("nibble grow {nibbleGrown.items.managed.elementSize()} count {nibbleGrown.items.count()} sum {nibbleSum(nibbleGrown)}\n")
@@ -594,7 +594,7 @@ typealias Crumb = int(0 to 3)
 typealias CrumbMap = Map with (Crumb, Integer)
 
 function main() returns ExitCode
-	var bytes = ByteMap.create()
+	let bytes = ByteMap.create()
 
 	for i in 0 upto 200 'fillBytes'
 		bytes.upsert(((i * 7) mod 256) as Byte, value: i)
@@ -622,7 +622,7 @@ function main() returns ExitCode
 
 	print("byte count {bytes.count()} keys {byteKeys} values {byteValues}\n")
 
-	var halves = HalfMap.create()
+	let halves = HalfMap.create()
 
 	for i in 0 upto 300 'fillHalves'
 		halves.upsert(((i * 1237 + 5) mod 65521) as Half, value: i)
@@ -650,7 +650,7 @@ function main() returns ExitCode
 
 	print("half count {halves.count()} keys {halfKeys} values {halfValues}\n")
 
-	var crumbs = CrumbMap.create()
+	let crumbs = CrumbMap.create()
 	crumbs.upsert(0, value: 10)
 	crumbs.upsert(3, value: 11)
 	crumbs.upsert(1, value: 12)
@@ -707,7 +707,7 @@ type Bag uses Element
 	end 'create'
 
 	static function wrapping(source Items) returns Self
-		var own = Items.create(0)
+		let own = Items.create(0)
 		own.append(source)
 
 		return Self{items: own}
@@ -734,7 +734,7 @@ type Bag uses Element
 	end 'lastOne'
 
 	function peekedAt(ahead ElementIndex) returns Element
-		var cursor = try items.cursor() otherwise panic("Bag.peekedAt: empty")
+		let cursor = try items.cursor() otherwise panic("Bag.peekedAt: empty")
 
 		return try cursor.peek(ahead) otherwise panic("Bag.peekedAt: past the end")
 	end 'peekedAt'
@@ -748,7 +748,7 @@ type Bag uses Element
 	end 'removeAt'
 
 	function replayed() returns Self
-		var out = Self{items: Items.create(0)}
+		let out = Self{items: Items.create(0)}
 
 		for value in items 'each'
 			out.add(value)
@@ -815,7 +815,7 @@ function sumSignal(bag SignalBag) returns Integer
 end 'sumSignal'
 
 function probeSignal()
-	var bag = SignalBag.create()
+	let bag = SignalBag.create()
 	bag.add(Signal.plus)
 	bag.insertAt(0, value: Signal.minus)
 	bag.grownTo(4, value: Signal.minus)
@@ -824,7 +824,7 @@ function probeSignal()
 	print("signal refilled count {bag.items.count()} sum {sumSignal(bag)}\n")
 	bag.addAll(SignalBag.wrapping([Signal.minus, Signal.plus]))
 	print("signal appended literal count {bag.items.count()} third {bag.at(2).rawValue as Integer} sum {sumSignal(bag)}\n")
-	var concrete = SignalArray.create(0)
+	let concrete = SignalArray.create(0)
 	concrete.push(Signal.plus)
 	concrete.append([Signal.minus, Signal.plus])
 	var total = 0 as Integer
@@ -847,7 +847,7 @@ function sumMid(bag MidBag) returns Integer
 end 'sumMid'
 
 function probeMid()
-	var bag = MidBag.create()
+	let bag = MidBag.create()
 	bag.add(Mid.high)
 	bag.insertAt(0, value: Mid.low)
 	bag.grownTo(4, value: Mid.low)
@@ -856,7 +856,7 @@ function probeMid()
 	print("mid refilled count {bag.items.count()} sum {sumMid(bag)}\n")
 	bag.addAll(MidBag.wrapping([Mid.low, Mid.high]))
 	print("mid appended literal count {bag.items.count()} third {bag.at(2).rawValue as Integer} sum {sumMid(bag)}\n")
-	var concrete = MidArray.create(0)
+	let concrete = MidArray.create(0)
 	concrete.push(Mid.high)
 	concrete.append([Mid.low, Mid.high])
 	var total = 0 as Integer
@@ -879,7 +879,7 @@ function sumBig(bag BigBag) returns Integer
 end 'sumBig'
 
 function probeBig()
-	var bag = BigBag.create()
+	let bag = BigBag.create()
 	bag.add(Big.high)
 	bag.insertAt(0, value: Big.low)
 	bag.grownTo(4, value: Big.low)
@@ -888,7 +888,7 @@ function probeBig()
 	print("big refilled count {bag.items.count()} sum {sumBig(bag)}\n")
 	bag.addAll(BigBag.wrapping([Big.low, Big.high]))
 	print("big appended literal count {bag.items.count()} third {bag.at(2).rawValue as Integer} sum {sumBig(bag)}\n")
-	var concrete = BigArray.create(0)
+	let concrete = BigArray.create(0)
 	concrete.push(Big.high)
 	concrete.append([Big.low, Big.high])
 	var total = 0 as Integer
@@ -901,7 +901,7 @@ function probeBig()
 end 'probeBig'
 
 function main() returns ExitCode
-	var bag = SignalBag.create()
+	let bag = SignalBag.create()
 	bag.add(Signal.minus)
 	bag.add(Signal.zero)
 	bag.add(Signal.plus)
@@ -909,12 +909,12 @@ function main() returns ExitCode
 
 	let first = bag.at(0)
 	let copy = bag.cloned()
-	view replay = bag.replayed()
+	let replay = bag.replayed()
 	print("signal {bag.items.managed.elementSize()} first {first.rawValue as Integer} sum {sumOf(bag)} clone {sumOf(copy)} replay {sumOf(replay)}\n")
 
 	print("first {bag.firstOne().rawValue as Integer} peek {bag.peekedAt(3).rawValue as Integer} {bag.peekedAt(2).rawValue as Integer}\n")
 
-	var concrete = SignalArray.create(0)
+	let concrete = SignalArray.create(0)
 	concrete.push(Signal.minus)
 	concrete.push(Signal.plus)
 	try bag.items.set(2, value: Signal.minus) otherwise return 3
@@ -929,7 +929,7 @@ function main() returns ExitCode
 	let removed = bag.removeAt(1)
 	print("ends {last.rawValue as Integer} {popped.rawValue as Integer} {removed.rawValue as Integer} count {bag.items.count()}\n")
 
-	var map = SignalMap.create()
+	let map = SignalMap.create()
 	map.upsert(Signal.minus, value: 10)
 	map.upsert(Signal.plus, value: 20)
 	map.upsert(Signal.zero, value: 30)
@@ -948,7 +948,7 @@ function main() returns ExitCode
 
 	print("entries keys {keySum} values {valueSum}\n")
 
-	var set = SignalSet.create()
+	let set = SignalSet.create()
 	set.insert(Signal.minus)
 	set.insert(Signal.minus)
 	set.insert(Signal.plus)
@@ -1031,8 +1031,8 @@ typealias TextBag = Bag with String
 typealias StampBag = Bag with Stamp
 
 function main() returns ExitCode
-	var texts = TextBag.create()
-	var stamps = StampBag.create()
+	let texts = TextBag.create()
+	let stamps = StampBag.create()
 
 	for i in 0 upto 40 'fill'
 		texts.add("text {i}")

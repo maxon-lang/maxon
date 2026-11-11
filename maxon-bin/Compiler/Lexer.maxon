@@ -19,7 +19,7 @@ end 'cacheWriteLineNumberArray'
 
 module function cacheReadLineNumberArray(reader LibraryCacheReader) returns LineNumberArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = LineNumberArray.create(count, zeroed: false)
+	let result = LineNumberArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as LineNumber
@@ -44,7 +44,7 @@ end 'cacheWriteColumnNumberArray'
 
 module function cacheReadColumnNumberArray(reader LibraryCacheReader) returns ColumnNumberArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ColumnNumberArray.create(count, zeroed: false)
+	let result = ColumnNumberArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ColumnNumber
@@ -218,7 +218,6 @@ export enum TokenKind
 	// Declarations
 	returns = "returns"
 	var = "var"
-	view = "view"
 	modify = "modify"
 	type = "type"
 	union = "union"
@@ -347,7 +346,7 @@ export enum TokenKind
 end 'TokenKind'
 
 // @generated library-cache begin
-let CacheCasesTokenKind = [TokenKind.function, TokenKind.let, TokenKind.typealias, TokenKind.export, TokenKind.public, TokenKind.if, TokenKind.else, TokenKind.while, TokenKind.for, TokenKind.in, TokenKind.break, TokenKind.continue, TokenKind.return, TokenKind.panic, TokenKind.end, TokenKind.match, TokenKind.then, TokenKind.fallthrough, TokenKind.default, TokenKind.upto, TokenKind.gives, TokenKind.try, TokenKind.otherwise, TokenKind.throw, TokenKind.ignore, TokenKind.async, TokenKind.await, TokenKind.returns, TokenKind.var, TokenKind.view, TokenKind.modify, TokenKind.type, TokenKind.union, TokenKind.enum, TokenKind.static, TokenKind.interface, TokenKind.extension, TokenKind.extends, TokenKind.implements, TokenKind.uses, TokenKind.with, TokenKind.where, TokenKind.self, TokenKind.selfType, TokenKind.throws, TokenKind.from, TokenKind.to, TokenKind.mod, TokenKind.and, TokenKind.or, TokenKind.not, TokenKind.xor, TokenKind.shl, TokenKind.shr, TokenKind.as, TokenKind.is, TokenKind.sizeof, TokenKind.countof, TokenKind.true, TokenKind.false, TokenKind.int, TokenKind.float, TokenKind.bool, TokenKind.cstring, TokenKind.intLiteral, TokenKind.floatLiteral, TokenKind.charLiteral, TokenKind.stringLiteral, TokenKind.byteStringLiteral, TokenKind.stringInterpStart, TokenKind.stringInterpEnd, TokenKind.stringFormatSpec, TokenKind.identifier, TokenKind.leftParen, TokenKind.rightParen, TokenKind.leftBrace, TokenKind.rightBrace, TokenKind.leftBracket, TokenKind.rightBracket, TokenKind.equals, TokenKind.equalsEquals, TokenKind.bangEquals, TokenKind.lessThan, TokenKind.lessEquals, TokenKind.greaterThan, TokenKind.greaterEquals, TokenKind.plus, TokenKind.minus, TokenKind.star, TokenKind.slash, TokenKind.dot, TokenKind.colon, TokenKind.comma, TokenKind.at, TokenKind.hashIf, TokenKind.hashElse, TokenKind.hashEndif, TokenKind.docComment, TokenKind.newline, TokenKind.eof]
+let CacheCasesTokenKind = [TokenKind.function, TokenKind.let, TokenKind.typealias, TokenKind.export, TokenKind.public, TokenKind.if, TokenKind.else, TokenKind.while, TokenKind.for, TokenKind.in, TokenKind.break, TokenKind.continue, TokenKind.return, TokenKind.panic, TokenKind.end, TokenKind.match, TokenKind.then, TokenKind.fallthrough, TokenKind.default, TokenKind.upto, TokenKind.gives, TokenKind.try, TokenKind.otherwise, TokenKind.throw, TokenKind.ignore, TokenKind.async, TokenKind.await, TokenKind.returns, TokenKind.var, TokenKind.modify, TokenKind.type, TokenKind.union, TokenKind.enum, TokenKind.static, TokenKind.interface, TokenKind.extension, TokenKind.extends, TokenKind.implements, TokenKind.uses, TokenKind.with, TokenKind.where, TokenKind.self, TokenKind.selfType, TokenKind.throws, TokenKind.from, TokenKind.to, TokenKind.mod, TokenKind.and, TokenKind.or, TokenKind.not, TokenKind.xor, TokenKind.shl, TokenKind.shr, TokenKind.as, TokenKind.is, TokenKind.sizeof, TokenKind.countof, TokenKind.true, TokenKind.false, TokenKind.int, TokenKind.float, TokenKind.bool, TokenKind.cstring, TokenKind.intLiteral, TokenKind.floatLiteral, TokenKind.charLiteral, TokenKind.stringLiteral, TokenKind.byteStringLiteral, TokenKind.stringInterpStart, TokenKind.stringInterpEnd, TokenKind.stringFormatSpec, TokenKind.identifier, TokenKind.leftParen, TokenKind.rightParen, TokenKind.leftBrace, TokenKind.rightBrace, TokenKind.leftBracket, TokenKind.rightBracket, TokenKind.equals, TokenKind.equalsEquals, TokenKind.bangEquals, TokenKind.lessThan, TokenKind.lessEquals, TokenKind.greaterThan, TokenKind.greaterEquals, TokenKind.plus, TokenKind.minus, TokenKind.star, TokenKind.slash, TokenKind.dot, TokenKind.colon, TokenKind.comma, TokenKind.at, TokenKind.hashIf, TokenKind.hashElse, TokenKind.hashEndif, TokenKind.docComment, TokenKind.newline, TokenKind.eof]
 
 module function cacheReadTokenKind(reader LibraryCacheReader) returns TokenKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -480,13 +479,6 @@ module function tokenKindAt(tokens TokenArray, index ElementIndex) returns Token
 	return tok.kind
 end 'tokenKindAt'
 
-let ViewBindingWord = b"view"
-
-module function tokenSpellsView(tokens TokenArray, index ElementIndex) returns bool
-	let tok = try tokens.get(index) otherwise return false
-	return tok.kind == TokenKind.identifier and tok.value.equals(ViewBindingWord)
-end 'tokenSpellsView'
-
 function kindBefore(tokens TokenArray, index ElementIndex) returns TokenKind
 	if index == 0 'atFileStart'
 		return TokenKind.newline
@@ -498,14 +490,6 @@ end 'kindBefore'
 module function tokenFollowsAMemberDot(tokens TokenArray, index ElementIndex) returns bool
 	return kindBefore(tokens, index: index) == TokenKind.dot
 end 'tokenFollowsAMemberDot'
-
-function viewMayFollow(previous TokenKind) returns bool
-	return previous == TokenKind.newline or previous == TokenKind.if or previous == TokenKind.then
-end 'viewMayFollow'
-
-function tupleAssignMayFollow(previous TokenKind) returns bool
-	return previous == TokenKind.newline or previous == TokenKind.then
-end 'tupleAssignMayFollow'
 
 type ParenGroupFacts
 	export let close as ElementIndex
@@ -556,7 +540,7 @@ export type ParenGroups
 	end 'holdsTopLevelComma'
 
 	function factsAt(tokens TokenArray, open ElementIndex) returns ParenGroupFacts
-		var facts = self.factsForWrite()
+		let facts = self.factsForWrite()
 
 		if not facts.contains(open) 'unscanned'
 			self.scanFrom(tokens, open: open, into: facts)
@@ -581,9 +565,9 @@ export type ParenGroups
 			panic("ParenGroups.scanFrom: token {open} is not a `(` — a group's facts are meaningful only at its opener")
 		end 'notAGroup'
 
-		var opens = OpenParenStack.create(0)
-		var commas = OpenParenCommaFlags.create(0)
-		var brackets = OpenParenBracketDepths.create(0)
+		let opens = OpenParenStack.create(0)
+		let commas = OpenParenCommaFlags.create(0)
+		let brackets = OpenParenBracketDepths.create(0)
 		var i = open
 
 		while i < tokens.count() and tokenKindAt(tokens, index: i) != TokenKind.eof 'scan'
@@ -635,26 +619,6 @@ export type ParenGroups
 	end 'scanFrom'
 end 'ParenGroups'
 
-// The one rule for where `view` opens a binding. Both tmLanguage grammars
-// (`vscode-extension/syntaxes/`, `website/src/grammars/`) restate it by hand and nothing checks them.
-function viewOpensABindingAt(tokens TokenArray, groups ParenGroups, index ElementIndex) returns bool
-	if not tokenSpellsView(tokens, index: index) or not viewMayFollow(kindBefore(tokens, index: index)) 'notABindingHead'
-		return false
-	end 'notABindingHead'
-
-	let next = tokenKindAt(tokens, index: index + 1)
-
-	if next == TokenKind.identifier 'aNamedBinding'
-		return true
-	end 'aNamedBinding'
-
-	if next != TokenKind.leftParen 'notADestructure'
-		return false
-	end 'notADestructure'
-
-	return tokenKindAt(tokens, index: groups.closeOf(tokens, open: index + 1) + 1) == TokenKind.equals
-end 'viewOpensABindingAt'
-
 // ⭐⭐ **`( <target> , … ) =` — THE ONE READER OF A TUPLE ASSIGNMENT'S TARGET-LIST SHAPE**
 // (`specs/tuple-assign.md`). Returns the index of the `=` that closes the list, or `index` itself when
 // the tokens at `index` are not one — the same "the answer IS the start index when there is nothing
@@ -689,7 +653,7 @@ end 'viewOpensABindingAt'
 // tokens past the `(`, so `== index` is a value the successful case can never take. Copy the union when
 // the "none" value is one the domain admits; copy this when it is not.
 //
-// ⛔⛔ **A `(` DIRECTLY AFTER `let`/`var`/`view` OPENS THE DECLARING DESTRUCTURE AND IS REFUSED HERE, AT
+// ⛔⛔ **A `(` DIRECTLY AFTER `let`/`var` OPENS THE DECLARING DESTRUCTURE AND IS REFUSED HERE, AT
 // THE ONE READER.** `let (x, y) = t` and `(x, y) = f()` are the SAME token run from the `(` onwards — this
 // walk cannot tell them apart looking forward, and `Parser.tupleAssignTargetAt` cannot either, because it
 // reads the token before each NAME and in the declaring form the keyword sits before the PAREN, so every
@@ -699,7 +663,7 @@ end 'viewOpensABindingAt'
 // It is refused HERE rather than at the scan because it is a fact about the GRAMMAR — that `(` belongs to
 // another construct — and a guard at one call site is the rule the next caller forgets. `parseStatement`
 // is unaffected: it reaches this at a statement's first token, where the predecessor is a newline, and a
-// `let`/`var`/`view` there was consumed by its own arm two branches earlier.
+// `let`/`var` there was consumed by its own arm two branches earlier.
 module function tupleAssignEqualsIn(tokens TokenArray, open ElementIndex) returns ElementIndex
 	if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'notATargetList'
 		return open
@@ -707,7 +671,7 @@ module function tupleAssignEqualsIn(tokens TokenArray, open ElementIndex) return
 
 	let before = kindBefore(tokens, index: open)
 
-	if before == TokenKind.let or before == TokenKind.var or before == TokenKind.view 'opensADeclaringDestructure'
+	if before == TokenKind.let or before == TokenKind.var 'opensADeclaringDestructure'
 		return open
 	end 'opensADeclaringDestructure'
 
@@ -716,7 +680,7 @@ module function tupleAssignEqualsIn(tokens TokenArray, open ElementIndex) return
 	while at < tokens.count() 'eachTarget'
 		let qualifier = tokenKindAt(tokens, index: at)
 
-		if qualifier == TokenKind.let or qualifier == TokenKind.var or qualifier == TokenKind.view or (tokenSpellsView(tokens, index: at) and tokenKindAt(tokens, index: at + 1) == TokenKind.identifier) 'declaresANewBinding'
+		if qualifier == TokenKind.let or qualifier == TokenKind.var 'declaresANewBinding'
 			at = at + 1
 		end 'declaresANewBinding'
 
@@ -744,18 +708,6 @@ function retagAs(tokens TokenArray, index ElementIndex, kind TokenKind)
 	let word = try tokens.get(index) otherwise panic("retagAs: tokens.get({index}) failed at an index the scan just read")
 	try tokens.set(index, value: Token.create(kind, line: word.line, column: word.column, value: word.value, startByte: word.startByte, endByte: word.endByte)) otherwise panic("retagAs: tokens.set({index}) failed at an index the scan just read")
 end 'retagAs'
-
-function retagViewTargets(tokens TokenArray, open ElementIndex, equalsAt ElementIndex)
-	var at = open + 1
-
-	while at < equalsAt 'eachToken'
-		if tokenSpellsView(tokens, index: at) and tokenKindAt(tokens, index: at + 1) == TokenKind.identifier 'aViewTarget'
-			retagAs(tokens, index: at, kind: TokenKind.view)
-		end 'aViewTarget'
-
-		at = at + 1
-	end 'eachToken'
-end 'retagViewTargets'
 
 function modifyOpensABlockAt(tokens TokenArray, index ElementIndex) returns bool
 	let word = try tokens.get(index) otherwise return false
@@ -795,25 +747,10 @@ function modifyOpensABlockAt(tokens TokenArray, index ElementIndex) returns bool
 end 'modifyOpensABlockAt'
 
 function markContextualHeads(tokens TokenArray)
-	var groups = ParenGroups.create()
-	var index = 0 as ElementIndex
-
-	while index < tokens.count() 'eachToken'
-		let kind = tokenKindAt(tokens, index: index)
-
-		if kind == TokenKind.identifier and viewOpensABindingAt(tokens, groups: groups, index: index) 'aBindingHead'
-			retagAs(tokens, index: index, kind: TokenKind.view)
-		end 'aBindingHead' else if kind == TokenKind.identifier and modifyOpensABlockAt(tokens, index: index) 'aModifyBlock'
+	for index in 0 upto tokens.count() 'eachToken'
+		if tokenKindAt(tokens, index: index) == TokenKind.identifier and modifyOpensABlockAt(tokens, index: index) 'aModifyBlock'
 			retagAs(tokens, index: index, kind: TokenKind.modify)
-		end 'aModifyBlock' else if kind == TokenKind.leftParen and tupleAssignMayFollow(kindBefore(tokens, index: index)) 'aTargetList'
-			let equalsAt = tupleAssignEqualsIn(tokens, open: index)
-
-			if equalsAt != index 'aTupleAssignment'
-				retagViewTargets(tokens, open: index, equalsAt: equalsAt)
-			end 'aTupleAssignment'
-		end 'aTargetList'
-
-		index = index + 1
+		end 'aModifyBlock'
 	end 'eachToken'
 end 'markContextualHeads'
 
@@ -1079,7 +1016,7 @@ end 'cacheWriteTokenArray'
 
 module function cacheReadTokenArray(reader LibraryCacheReader) returns TokenArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = TokenArray.create(count, zeroed: false)
+	let result = TokenArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadToken(reader)
@@ -2543,7 +2480,7 @@ export function tokenize(source String, keywords KeywordTable) returns TokenArra
 		return TokenArray.create(0)
 	end 'emptySource'
 
-	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: false)
+	let lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: false)
 
 	return dropBracketedLayout(try lexer.run())
 end 'tokenize'
@@ -2702,9 +2639,9 @@ end 'restoreLineEndBefore'
 // line breaks of every declaration after it. `tokenizeWithComments` keeps every layout token:
 // `maxon fmt` reads where the author broke lines.
 function dropBracketedLayout(tokens TokenArray) returns TokenArray
-	var frames = LayoutFrameStack.create(0)
-	var groups = ParenGroups.create()
-	var kept = TokenArray.create(0)
+	let frames = LayoutFrameStack.create(0)
+	let groups = ParenGroups.create()
+	let kept = TokenArray.create(0)
 	var dropped = false
 	var inDirectiveCondition = false
 
@@ -2770,9 +2707,9 @@ export function tokenizeWithComments(source String, keywords KeywordTable) retur
 		return LexedSource.create(TokenArray.create(0), comments: CommentLog.recorded(CommentSpanArray.create(0)))
 	end 'emptySource'
 
-	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: true)
-	view tokens = try lexer.run()
-	view log = lexer.takeComments()
+	let lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: true)
+	let tokens = try lexer.run()
+	let log = lexer.takeComments()
 
 	return LexedSource.create(tokens, comments: log)
 end 'tokenizeWithComments'

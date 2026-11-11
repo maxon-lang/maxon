@@ -52,7 +52,7 @@ end 'arm64EmitPrintConstant'
 function buildArm64WriteStderrChunk(os Os) returns FunctionCodeChunk
 	let SlotBuf = 0
 	let SlotLen = 1
-	var asm = Arm64RuntimeAsm.beginFunction(2)
+	let asm = Arm64RuntimeAsm.beginFunction(2)
 
 	let lenLoop = asm.newLabel()
 	let lenDone = asm.newLabel()
@@ -108,7 +108,7 @@ end 'buildArm64WriteStderrChunk'
 // x2 = hi, x3 = lo, x4 = best, x5 = mid, x6 = the entry address, x7 = its `codeOffset`.
 function buildArm64SymtabIndexChunk() returns FunctionCodeChunk
 	assertSymtabStride()
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	let search = asm.newLabel()
 	let goLower = asm.newLabel()
@@ -166,7 +166,7 @@ function buildArm64PrintFrameChunk(globalData GlobalDataTable) returns FunctionC
 	let SlotTextOffset = 0
 	let SlotSymtable = 1
 	assertSymtabStride()
-	var asm = Arm64RuntimeAsm.beginFunction(2)
+	let asm = Arm64RuntimeAsm.beginFunction(2)
 
 	let unknown = asm.newLabel()
 	let newline = asm.newLabel()
@@ -221,7 +221,7 @@ function buildArm64PrintInlineFramesChunk(globalData GlobalDataTable) returns Fu
 	let SlotSite = 2
 	let SlotRangesEnd = 3
 	assertInlineTableStrides()
-	var asm = Arm64RuntimeAsm.beginFunction(4)
+	let asm = Arm64RuntimeAsm.beginFunction(4)
 
 	let scan = asm.newLabel()
 	let found = asm.newLabel()
@@ -314,7 +314,7 @@ function buildArm64WalkFramesChunk(globalData GlobalDataTable, greenThreads bool
 	let SlotCounter = 3
 	let SlotTextBase = 4
 	let SlotSymtable = 5
-	var asm = Arm64RuntimeAsm.beginFunction(6)
+	let asm = Arm64RuntimeAsm.beginFunction(6)
 
 	let loop = asm.newLabel()
 	let elided = asm.newLabel()
@@ -428,12 +428,12 @@ end 'emitArm64WalkStackBounds'
 //
 // ⭐⭐ **ON A GREEN THREAD IT GROWS THE STACK BEFORE STEP (1)** — see `arm64EmitPanicStackGuard`.
 function buildArm64PanicChunk(globalData GlobalDataTable, dumpCoverage bool, greenThreads bool, target Target) returns FunctionCodeChunk
-	var entry = ByteArray.create(0)
-	var callFixups = CallFixupArray.create(0)
-	var rdataRelocs = RdataRelocationArray.create(0)
+	let entry = ByteArray.create(0)
+	let callFixups = CallFixupArray.create(0)
+	let rdataRelocs = RdataRelocationArray.create(0)
 	arm64EmitPanicStackGuard(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, greenThreads: greenThreads, target: target)
 	let guardBytes = codeHere(entry)
-	var asm = Arm64RuntimeAsm.beginFunctionAfterEntry(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: 0)
+	let asm = Arm64RuntimeAsm.beginFunctionAfterEntry(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: 0)
 
 	// (1) The caller's message — already in x0.
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
@@ -454,7 +454,7 @@ function buildArm64PanicChunk(globalData GlobalDataTable, dumpCoverage bool, gre
 	// (5) exit(PanicExitCode) — the one step with an OS in it.
 	arm64EmitProcessExit(asm, os: target.os, exitCode: PanicExitCode)
 
-	var chunk = asm.finishChunk(PanicName, guarded: greenThreads)
+	let chunk = asm.finishChunk(PanicName, guarded: greenThreads)
 	chunk.asyncUnsafePrefixBytes = guardBytes
 
 	return chunk

@@ -2128,7 +2128,7 @@ end 'emitLoadCurrentPOrBail'
 function emitBailIfZero(module StdModule, block IrBlock, tested ValueId, bail IrBlock, bailValues FullRangeIntArray, otherwise IrBlock, ids ValueMinter)
 	let isZero = emitCompareWithConstant(module, block: block, value: tested, pred: StdCmpPred.eq, against: 0, ids: ids)
 
-	var edgeArgs = ValueIdArray.create(bailValues.count(), zeroed: false)
+	let edgeArgs = ValueIdArray.create(bailValues.count(), zeroed: false)
 
 	for value in bailValues 'eachBailValue'
 		edgeArgs.push(emitConst(module, block: block, value: value, ids: ids))
@@ -2204,15 +2204,15 @@ end 'emitLoadCurrentGt'
 // It terminates `cur` and returns the block to CONTINUE IN, whose two block args are the answers — the shape
 // every branching emit helper in this runtime uses, because the Std tier has no select.
 export function emitLoadCurrentGtAndProcIdOrZero(module StdModule, func IrFunction, cur IrBlock, gtId ValueId, procIdId ValueId, ids ValueMinter) returns IrBlock
-	var haveOffset = module.addBlock(func, label: b"gtoffset", heat: BlockHeat.normal)
-	var haveMachine = module.addBlock(func, label: b"gtmachine", heat: BlockHeat.normal)
-	var haveProc = module.addBlock(func, label: b"gtproc", heat: BlockHeat.normal)
-	var merge = module.addBlock(func, label: b"gtmerge", heat: BlockHeat.normal)
+	let haveOffset = module.addBlock(func, label: b"gtoffset", heat: BlockHeat.normal)
+	let haveMachine = module.addBlock(func, label: b"gtmachine", heat: BlockHeat.normal)
+	let haveProc = module.addBlock(func, label: b"gtproc", heat: BlockHeat.normal)
+	let merge = module.addBlock(func, label: b"gtmerge", heat: BlockHeat.normal)
 	merge.blockArgs.push(IrBlockArg.create(gtId, argType: StdType.i64))
 	merge.blockArgs.push(IrBlockArg.create(procIdId, argType: StdType.i64))
 
 	// The first two zeros are the shared walk's, and both answer 0 for BOTH halves.
-	var bothHalvesZero = FullRangeIntArray.create(0)
+	let bothHalvesZero = FullRangeIntArray.create(0)
 	bothHalvesZero.push(0)
 	bothHalvesZero.push(0)
 	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: merge, bailValues: bothHalvesZero, ids: ids)
@@ -2346,8 +2346,8 @@ end 'emitRequireAddressableTlsSlot'
 // at `index * 8 + WindowsTebTlsSlotsOffset` cannot reach: it would read and write some other TEB
 // field. `TLS_OUT_OF_INDEXES` fails the same test.
 function emitRequireTebTlsSlot(module StdModule, func IrFunction, cur IrBlock, tlsIndex ValueId, ids ValueMinter) returns IrBlock
-	var inTheTeb = module.addBlock(func, label: b"tlsinteb", heat: BlockHeat.normal)
-	var pastTheTeb = module.addBlock(func, label: b"tlspastteb", heat: BlockHeat.cold)
+	let inTheTeb = module.addBlock(func, label: b"tlsinteb", heat: BlockHeat.normal)
+	let pastTheTeb = module.addBlock(func, label: b"tlspastteb", heat: BlockHeat.cold)
 
 	emitBranchOnCompare(module, block: cur, value: tlsIndex, pred: StdCmpPred.lt, against: WindowsTebTlsSlotCount, whenTrue: inTheTeb, whenFalse: pastTheTeb, ids: ids)
 	emitRuntimeAbort(module, func: func, block: pastTheTeb, abort: RuntimeAbort.schedulerTlsSlotOutsideTheTeb, ids: ids)
@@ -2370,7 +2370,7 @@ let LinuxThreadPointerBase = 0 as FullRangeInt
 // (`SchedTlsTebOffsetLabel`, `SchedLockLabel` and the two preemption words) are `declared` on `usesGt`, the
 // gate the chunks ride, because a chunk's relocation needs the word whether or not any body survived.
 export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create(0)
+	let out = DataSectionEntryArray.create(0)
 
 	// ⭐ **SEEDED TO 1 IN `.data`, NOT BY AN INITIALIZER.** A program with no scheduler runs on exactly one M
 	// — its own — and never runs `__gt_init`, so the true answer must already be in the slot, and costs no code.
@@ -2834,11 +2834,11 @@ end 'emitSchedStepLockedCount'
 // ⚠ It terminates `cur` and answers the block to CONTINUE IN, which is the shape every branching emitter in
 // this runtime uses — the Std tier has no select, and an abort arm is a branch.
 function emitSchedPidlePutLocked(module StdModule, func IrFunction, cur IrBlock, p ValueId, holdsWorkLabel ByteArray, emptyLabel ByteArray, ids ValueMinter) returns IrBlock
-	var holdsWork = module.addBlock(func, label: holdsWorkLabel, heat: BlockHeat.normal)
-	var ringEmpty = module.addBlock(func, label: emptyLabel, heat: BlockHeat.normal)
-	var handOver = module.addBlock(func, label: b"pidleputregain", heat: BlockHeat.normal)
-	var idleIt = module.addBlock(func, label: b"pidleputidle", heat: BlockHeat.normal)
-	var placed = module.addBlock(func, label: b"pidleputplaced", heat: BlockHeat.normal)
+	let holdsWork = module.addBlock(func, label: holdsWorkLabel, heat: BlockHeat.normal)
+	let ringEmpty = module.addBlock(func, label: emptyLabel, heat: BlockHeat.normal)
+	let handOver = module.addBlock(func, label: b"pidleputregain", heat: BlockHeat.normal)
+	let idleIt = module.addBlock(func, label: b"pidleputidle", heat: BlockHeat.normal)
+	let placed = module.addBlock(func, label: b"pidleputplaced", heat: BlockHeat.normal)
 
 	let stillHasWork = emitSchedRunqIs(module, block: cur, p: p, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(stillHasWork, thenBlockId: holdsWork.id, elseBlockId: ringEmpty.id))
@@ -2868,14 +2868,14 @@ end 'emitSchedPidlePutLocked'
 // when `wakesMonitor` says this lane has one. The answer is defined in `cur`, so it is in scope at `got`
 // whichever road reaches it.
 function emitSchedPidleGetLocked(module StdModule, func IrFunction, cur IrBlock, got IrBlock, none IrBlock, wakesMonitor bool, ids ValueMinter) returns ValueId
-	var taken = module.addBlock(func, label: b"pidlegettaken", heat: BlockHeat.normal)
+	let taken = module.addBlock(func, label: b"pidlegettaken", heat: BlockHeat.normal)
 
 	let p = emitSchedListTakeHead(module, cur: cur, got: taken, none: none, head: SchedListHead.lockedWord(SchedPidleLabel), linkOffset: POffPidleNext, ids: ids)
 	emitSchedPidleClaimLocked(module, block: taken, p: p, ids: ids)
 	emitSchedStepLockedCount(module, block: taken, label: SchedNpidleLabel, delta: OneFewer, ids: ids)
 
 	if wakesMonitor 'monitorMayBeAsleep'
-		var wakeMonitor = module.addBlock(func, label: b"pidlegetsysmon", heat: BlockHeat.normal)
+		let wakeMonitor = module.addBlock(func, label: b"pidlegetsysmon", heat: BlockHeat.normal)
 		emitBranchOnCompare(module, block: taken, value: emitLoadGlobalWord(module, block: taken, label: SchedSysmonWaitLabel, ids: ids), pred: StdCmpPred.ne, against: 0, whenTrue: wakeMonitor, whenFalse: got, ids: ids)
 
 		emitStoreGlobalWord(module, block: wakeMonitor, label: SchedSysmonWaitLabel, value: emitConst(module, block: wakeMonitor, value: 0, ids: ids), ids: ids)
@@ -2933,8 +2933,8 @@ end 'emitSchedRegisterMLocked'
 // continue in, because the old head's back-link is a store only a non-empty list has. `m`'s own back-link is
 // already 0: a machine off the list always carries 0 there, which `emitSchedMidleUnlinkLocked` guarantees.
 function emitSchedMidlePutLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, ids ValueMinter) returns IrBlock
-	var linkBack = module.addBlock(func, label: b"mputlinkback", heat: BlockHeat.normal)
-	var joined = module.addBlock(func, label: b"mputjoined", heat: BlockHeat.normal)
+	let linkBack = module.addBlock(func, label: b"mputlinkback", heat: BlockHeat.normal)
+	let joined = module.addBlock(func, label: b"mputjoined", heat: BlockHeat.normal)
 
 	emitSchedStepLockedCount(module, block: cur, label: SchedNmidleLabel, delta: OneMore, ids: ids)
 	let oldHead = emitLoadGlobalWord(module, block: cur, label: SchedMidleLabel, ids: ids)
@@ -2967,11 +2967,11 @@ end 'emitSchedMidleHolds'
 // still pointing into the list splices a stale suffix back on at its next `mput` — one processor handed to two
 // machines — and a stale back-link would make `emitSchedMidleHolds` answer yes for a machine that is gone.
 function emitSchedMidleUnlinkLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, ids ValueMinter) returns IrBlock
-	var wasHead = module.addBlock(func, label: b"munlinkhead", heat: BlockHeat.normal)
-	var wasInner = module.addBlock(func, label: b"munlinkinner", heat: BlockHeat.normal)
-	var mendNext = module.addBlock(func, label: b"munlinkmend", heat: BlockHeat.normal)
-	var backLinkNext = module.addBlock(func, label: b"munlinknext", heat: BlockHeat.normal)
-	var cleared = module.addBlock(func, label: b"munlinkclear", heat: BlockHeat.normal)
+	let wasHead = module.addBlock(func, label: b"munlinkhead", heat: BlockHeat.normal)
+	let wasInner = module.addBlock(func, label: b"munlinkinner", heat: BlockHeat.normal)
+	let mendNext = module.addBlock(func, label: b"munlinkmend", heat: BlockHeat.normal)
+	let backLinkNext = module.addBlock(func, label: b"munlinknext", heat: BlockHeat.normal)
+	let cleared = module.addBlock(func, label: b"munlinkclear", heat: BlockHeat.normal)
 
 	emitSchedStepLockedCount(module, block: cur, label: SchedNmidleLabel, delta: OneFewer, ids: ids)
 
@@ -3064,21 +3064,21 @@ end 'emitSchedDequeueLocked'
 // The run-queue lock is allocated here because it guards the queue for every M, so a green-thread
 // program that never touches a pipe still needs it. See `SchedLockLabel`.
 function buildSchedInitProcs(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedInitProcsName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedInitProcsName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var settled = module.addBlock(func, label: b"procsettled", heat: BlockHeat.normal)
-	var loopHdr = module.addBlock(func, label: b"ploop", heat: BlockHeat.normal)
-	var loopBody = module.addBlock(func, label: b"pbody", heat: BlockHeat.normal)
-	var loopOffer = module.addBlock(func, label: b"poffer", heat: BlockHeat.normal)
-	var loopNext = module.addBlock(func, label: b"pnext", heat: BlockHeat.normal)
-	var adopt = module.addBlock(func, label: b"adopt", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let settled = module.addBlock(func, label: b"procsettled", heat: BlockHeat.normal)
+	let loopHdr = module.addBlock(func, label: b"ploop", heat: BlockHeat.normal)
+	let loopBody = module.addBlock(func, label: b"pbody", heat: BlockHeat.normal)
+	let loopOffer = module.addBlock(func, label: b"poffer", heat: BlockHeat.normal)
+	let loopNext = module.addBlock(func, label: b"pnext", heat: BlockHeat.normal)
+	let adopt = module.addBlock(func, label: b"adopt", heat: BlockHeat.normal)
 
 	// Every later read indexes the thread pointer by `index * 8 + tlsSlotArrayBase(target)`.
 	let tlsIndex = ids.mint()
 	module.appendOp(entry, op: StdOp.tlsAlloc(tlsIndex))
-	var slotHeld = emitRequireAddressableTlsSlot(module, func: func, cur: entry, tlsIndex: tlsIndex, target: target, ids: ids)
+	let slotHeld = emitRequireAddressableTlsSlot(module, func: func, cur: entry, tlsIndex: tlsIndex, target: target, ids: ids)
 	emitStoreGlobalWord(module, block: slotHeld, label: SchedTlsIndexLabel, value: tlsIndex, ids: ids)
 	let slotStride = emitConst(module, block: slotHeld, value: PointerSlotBytes as FullRangeInt, ids: ids)
 	let slotBytes = emitBin(module, block: slotHeld, a: tlsIndex, b: slotStride, opcode: StdBinOpcode.mul, ids: ids)
@@ -3141,7 +3141,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// written.
 	emitBranchOnCompare(module, block: loopBody, value: iterId, pred: StdCmpPred.eq, against: 0, whenTrue: loopNext, whenFalse: loopOffer, ids: ids)
 
-	var offered = emitSchedPidlePutLocked(module, func: func, cur: loopOffer, p: p, holdsWorkLabel: b"pofferheldwork", emptyLabel: b"poffered", ids: ids)
+	let offered = emitSchedPidlePutLocked(module, func: func, cur: loopOffer, p: p, holdsWorkLabel: b"pofferheldwork", emptyLabel: b"poffered", ids: ids)
 	module.setTerminator(offered, op: StdOp.branch(loopNext.id))
 
 	// No syscall stack is committed here: it is the M's, committed by the OS thread about to become
@@ -3364,14 +3364,14 @@ export let RequestedProcessorCountSign = 0x2B as FullRangeInt
 // FLOOR CARRIES EVERY PROGRAM, NOT ONLY THE ONES THAT SET THE VARIABLE**, because this reading IS the
 // default count.
 function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, settled IrBlock, ids ValueMinter)
-	var cpuFloor = module.addBlock(func, label: b"maxprocscpufloor", heat: BlockHeat.normal)
-	var cpuKnown = module.addBlock(func, label: b"maxprocscpuok", heat: BlockHeat.normal)
-	var reread = module.addBlock(func, label: b"maxprocsreread", heat: BlockHeat.normal)
-	var unfit = module.addBlock(func, label: b"maxprocsunfit", heat: BlockHeat.normal)
-	var parseStart = module.addBlock(func, label: b"maxprocsparse", heat: BlockHeat.normal)
-	var parsedCount = module.addBlock(func, label: b"maxprocsparsed", heat: BlockHeat.normal)
-	var parseRefused = module.addBlock(func, label: b"maxprocsrefused", heat: BlockHeat.normal)
-	var rejected = module.addBlock(func, label: b"maxprocsrejected", heat: BlockHeat.normal)
+	let cpuFloor = module.addBlock(func, label: b"maxprocscpufloor", heat: BlockHeat.normal)
+	let cpuKnown = module.addBlock(func, label: b"maxprocscpuok", heat: BlockHeat.normal)
+	let reread = module.addBlock(func, label: b"maxprocsreread", heat: BlockHeat.normal)
+	let unfit = module.addBlock(func, label: b"maxprocsunfit", heat: BlockHeat.normal)
+	let parseStart = module.addBlock(func, label: b"maxprocsparse", heat: BlockHeat.normal)
+	let parsedCount = module.addBlock(func, label: b"maxprocsparsed", heat: BlockHeat.normal)
+	let parseRefused = module.addBlock(func, label: b"maxprocsrefused", heat: BlockHeat.normal)
+	let rejected = module.addBlock(func, label: b"maxprocsrejected", heat: BlockHeat.normal)
 
 	let cpus = ids.mint()
 	module.appendOp(cur, op: StdOp.osCpuCount(cpus))
@@ -3476,10 +3476,10 @@ end 'emitByteAtEquals'
 // the opposite policy from `emitResolveMaxProcs`. The two compares read the terminator as well, and the
 // buffer is zeroed and larger than either literal, so both stay in bounds.
 function emitResolvePreemptSwitch(module StdModule, func IrFunction, cur IrBlock, settled IrBlock, ids ValueMinter)
-	var lengthOk = module.addBlock(func, label: b"preemptlen", heat: BlockHeat.normal)
-	var isSet = module.addBlock(func, label: b"preemptset", heat: BlockHeat.normal)
-	var notOff = module.addBlock(func, label: b"preemptnotoff", heat: BlockHeat.normal)
-	var unreadable = module.addBlock(func, label: b"preemptunreadable", heat: BlockHeat.normal)
+	let lengthOk = module.addBlock(func, label: b"preemptlen", heat: BlockHeat.normal)
+	let isSet = module.addBlock(func, label: b"preemptset", heat: BlockHeat.normal)
+	let notOff = module.addBlock(func, label: b"preemptnotoff", heat: BlockHeat.normal)
+	let unreadable = module.addBlock(func, label: b"preemptunreadable", heat: BlockHeat.normal)
 
 	let capacity = emitConst(module, block: cur, value: SchedEnvValueBufBytes, ids: ids)
 	let read = emitReadSchedEnvValue(module, block: cur, name: PreemptEnvName, capacity: capacity, ids: ids)
@@ -3504,11 +3504,11 @@ function emitResolvePreemptSwitch(module StdModule, func IrFunction, cur IrBlock
 end 'emitResolvePreemptSwitch'
 
 function emitParseRequestedProcessorCount(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, accepted IrBlock, rejected IrBlock, ids ValueMinter)
-	var signed = module.addBlock(func, label: b"reqprocssigned", heat: BlockHeat.normal)
-	var leading = module.addBlock(func, label: b"reqprocslead", heat: BlockHeat.normal)
-	var scanHdr = module.addBlock(func, label: b"reqprocsscan", heat: BlockHeat.normal)
-	var scanDigit = module.addBlock(func, label: b"reqprocsdigit", heat: BlockHeat.normal)
-	var ended = module.addBlock(func, label: b"reqprocsended", heat: BlockHeat.normal)
+	let signed = module.addBlock(func, label: b"reqprocssigned", heat: BlockHeat.normal)
+	let leading = module.addBlock(func, label: b"reqprocslead", heat: BlockHeat.normal)
+	let scanHdr = module.addBlock(func, label: b"reqprocsscan", heat: BlockHeat.normal)
+	let scanDigit = module.addBlock(func, label: b"reqprocsdigit", heat: BlockHeat.normal)
+	let ended = module.addBlock(func, label: b"reqprocsended", heat: BlockHeat.normal)
 
 	let leadIndex = ids.mint()
 	leading.blockArgs.push(IrBlockArg.create(leadIndex, argType: StdType.i64))
@@ -3526,7 +3526,7 @@ function emitParseRequestedProcessorCount(module StdModule, func IrFunction, cur
 	scanHdr.blockArgs.push(IrBlockArg.create(accId, argType: StdType.i64))
 
 	let leadByte = emitLoadByteIndexed(module, block: leading, base: cstr, index: leadIndex, ids: ids)
-	var leadIsDigit = emitRequireDecimalDigit(module, func: func, block: leading, ch: leadByte, rejected: rejected, ids: ids)
+	let leadIsDigit = emitRequireDecimalDigit(module, func: func, block: leading, ch: leadByte, rejected: rejected, ids: ids)
 	let emptyAcc = emitConst(module, block: leadIsDigit, value: 0, ids: ids)
 	emitBranchCarrying(module, from: leadIsDigit, to: scanHdr, values: twoArgs(leadIndex, second: emptyAcc))
 
@@ -3536,7 +3536,7 @@ function emitParseRequestedProcessorCount(module StdModule, func IrFunction, cur
 	emitBranchOnCompare(module, block: ended, value: accId, pred: StdCmpPred.lt, against: FewestRequestedProcessors as FullRangeInt, whenTrue: rejected, whenFalse: accepted, ids: ids)
 	pushBranchEdge(ended, to: accepted, values: argsOf(accId))
 
-	var scanStep = emitRequireDecimalDigit(module, func: func, block: scanDigit, ch: ch, rejected: rejected, ids: ids)
+	let scanStep = emitRequireDecimalDigit(module, func: func, block: scanDigit, ch: ch, rejected: rejected, ids: ids)
 	let asciiZero = emitConst(module, block: scanStep, value: AsciiZeroDigit, ids: ids)
 	let digit = emitBin(module, block: scanStep, a: ch, b: asciiZero, opcode: StdBinOpcode.sub, ids: ids)
 	let radix = emitConst(module, block: scanStep, value: DecimalRadix, ids: ids)
@@ -3555,8 +3555,8 @@ end 'emitParseRequestedProcessorCount'
 // the wrap trick would work — and it would also rest on the load's width, which is exactly the kind of
 // implicit dependency a later widening breaks silently. Two compares, no premise.
 function emitRequireDecimalDigit(module StdModule, func IrFunction, block IrBlock, ch ValueId, rejected IrBlock, ids ValueMinter) returns IrBlock
-	var notBelow = module.addBlock(func, label: b"decnotbelow", heat: BlockHeat.normal)
-	var isDigit = module.addBlock(func, label: b"decdigit", heat: BlockHeat.normal)
+	let notBelow = module.addBlock(func, label: b"decnotbelow", heat: BlockHeat.normal)
+	let isDigit = module.addBlock(func, label: b"decdigit", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: block, value: ch, pred: StdCmpPred.lt, against: AsciiZeroDigit, whenTrue: rejected, whenFalse: notBelow, ids: ids)
 
@@ -3703,25 +3703,25 @@ end 'emitSchedAnyRunnable'
 // push can overwrite them, because this function is the ring's only pusher and it has not pushed yet. A 1 KB
 // frame array avoided, and one fewer place for two copies of a batch to disagree.
 function buildSchedRunqPut(module StdModule, hold SchedLockHold)
-	var func = IrFunction.createFromStd(lockHoldNameOf(hold, whenFree: SchedRunqPutName, whenHeld: SchedRunqPutHeldName), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let func = IrFunction.createFromStd(lockHoldNameOf(hold, whenFree: SchedRunqPutName, whenHeld: SchedRunqPutHeldName), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	requireSchedLockHeldWhen(module, func: func, hold: hold)
-	var ids = ValueMinter.create(1)
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var globalOnly = module.addBlock(func, label: b"rqnoproc", heat: BlockHeat.normal)
-	var haveOffset = module.addBlock(func, label: b"rqoffset", heat: BlockHeat.normal)
-	var haveMachine = module.addBlock(func, label: b"rqmachine", heat: BlockHeat.normal)
-	var slotPut = module.addBlock(func, label: b"rqslot", heat: BlockHeat.normal)
-	var slotKick = module.addBlock(func, label: b"rqkick", heat: BlockHeat.normal)
-	var slotOnly = module.addBlock(func, label: b"rqslotonly", heat: BlockHeat.normal)
-	var retry = module.addBlock(func, label: b"rqretry", heat: BlockHeat.normal)
-	var push = module.addBlock(func, label: b"rqpush", heat: BlockHeat.normal)
-	var claim = module.addBlock(func, label: b"rqclaim", heat: BlockHeat.normal)
-	var moveLock = module.addBlock(func, label: b"rqmovelock", heat: BlockHeat.normal)
-	var moveHdr = module.addBlock(func, label: b"rqmovehdr", heat: BlockHeat.normal)
-	var moveBody = module.addBlock(func, label: b"rqmovebody", heat: BlockHeat.normal)
-	var moveNext = module.addBlock(func, label: b"rqmovenext", heat: BlockHeat.normal)
-	var moveDone = module.addBlock(func, label: b"rqmovedone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let globalOnly = module.addBlock(func, label: b"rqnoproc", heat: BlockHeat.normal)
+	let haveOffset = module.addBlock(func, label: b"rqoffset", heat: BlockHeat.normal)
+	let haveMachine = module.addBlock(func, label: b"rqmachine", heat: BlockHeat.normal)
+	let slotPut = module.addBlock(func, label: b"rqslot", heat: BlockHeat.normal)
+	let slotKick = module.addBlock(func, label: b"rqkick", heat: BlockHeat.normal)
+	let slotOnly = module.addBlock(func, label: b"rqslotonly", heat: BlockHeat.normal)
+	let retry = module.addBlock(func, label: b"rqretry", heat: BlockHeat.normal)
+	let push = module.addBlock(func, label: b"rqpush", heat: BlockHeat.normal)
+	let claim = module.addBlock(func, label: b"rqclaim", heat: BlockHeat.normal)
+	let moveLock = module.addBlock(func, label: b"rqmovelock", heat: BlockHeat.normal)
+	let moveHdr = module.addBlock(func, label: b"rqmovehdr", heat: BlockHeat.normal)
+	let moveBody = module.addBlock(func, label: b"rqmovebody", heat: BlockHeat.normal)
+	let moveNext = module.addBlock(func, label: b"rqmovenext", heat: BlockHeat.normal)
+	let moveDone = module.addBlock(func, label: b"rqmovedone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0
@@ -3851,14 +3851,14 @@ end 'buildSchedRunqPut'
 // CAS then fails to claim is harmless — the value is discarded — while reading it afterwards would be reading
 // a slot the winner may already have overwritten.
 function buildSchedRunqGet(module StdModule)
-	var func = IrFunction.createFromStd(SchedRunqGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SchedRunqGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var loopHdr = module.addBlock(func, label: b"rgloop", heat: BlockHeat.normal)
-	var take = module.addBlock(func, label: b"rgtake", heat: BlockHeat.normal)
-	var took = module.addBlock(func, label: b"rgtook", heat: BlockHeat.normal)
-	var emptyBlock = module.addBlock(func, label: b"rgempty", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let loopHdr = module.addBlock(func, label: b"rgloop", heat: BlockHeat.normal)
+	let take = module.addBlock(func, label: b"rgtake", heat: BlockHeat.normal)
+	let took = module.addBlock(func, label: b"rgtook", heat: BlockHeat.normal)
+	let emptyBlock = module.addBlock(func, label: b"rgempty", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let p = 0
@@ -3890,13 +3890,13 @@ end 'buildSchedRunqGet'
 // processor's machine ever stores a thread here and everybody else only ever clears it, so a CAS this machine
 // loses means a thief has taken the thread — and a second attempt could only read the 0 the thief left.
 function buildSchedRunqNext(module StdModule)
-	var func = IrFunction.createFromStd(SchedRunqNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SchedRunqNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var take = module.addBlock(func, label: b"rntake", heat: BlockHeat.normal)
-	var took = module.addBlock(func, label: b"rntook", heat: BlockHeat.normal)
-	var emptyBlock = module.addBlock(func, label: b"rnempty", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let take = module.addBlock(func, label: b"rntake", heat: BlockHeat.normal)
+	let took = module.addBlock(func, label: b"rntook", heat: BlockHeat.normal)
+	let emptyBlock = module.addBlock(func, label: b"rnempty", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let p = 0
@@ -3928,12 +3928,12 @@ end 'buildSchedRunqNext'
 // ⚠ **A FUNCTION AND NOT AN INLINE SEQUENCE**, because the retry is a loop and its four callers all sit inside
 // straight-line blocks — one of them (`__sched_any_work`) already inside a loop of its own.
 function buildSchedRunqEmpty(module StdModule)
-	var func = IrFunction.createFromStd(SchedRunqEmptyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SchedRunqEmptyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var loopHdr = module.addBlock(func, label: b"reloop", heat: BlockHeat.normal)
-	var settled = module.addBlock(func, label: b"resettled", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let loopHdr = module.addBlock(func, label: b"reloop", heat: BlockHeat.normal)
+	let settled = module.addBlock(func, label: b"resettled", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let p = 0
@@ -3964,15 +3964,15 @@ end 'buildSchedRunqEmpty'
 // thread already taken. Nothing refills either — `__sched_runq_put` only ever fills the processor its own
 // machine holds, and the caller is either `p`'s machine or `p` has none — so the loop terminates.
 function buildSchedDrainRunq(module StdModule)
-	var func = IrFunction.createFromStd(SchedDrainRunqName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let func = IrFunction.createFromStd(SchedDrainRunqName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
-	var ids = ValueMinter.create(1)
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var slotPop = module.addBlock(func, label: b"drslot", heat: BlockHeat.normal)
-	var ringPop = module.addBlock(func, label: b"drring", heat: BlockHeat.normal)
-	var moveIt = module.addBlock(func, label: b"drmove", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"drdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let slotPop = module.addBlock(func, label: b"drslot", heat: BlockHeat.normal)
+	let ringPop = module.addBlock(func, label: b"drring", heat: BlockHeat.normal)
+	let moveIt = module.addBlock(func, label: b"drmove", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"drdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let p = 0
@@ -4023,25 +4023,25 @@ end 'buildSchedDrainRunq'
 // answered 0, and the ring's only pusher is the very thread running this — so the free space is the whole ring
 // and the grab is at most half of one.
 function buildSchedSteal(module StdModule)
-	var func = IrFunction.createFromStd(SchedStealName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(SchedStealName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var grabHdr = module.addBlock(func, label: b"sgrab", heat: BlockHeat.normal)
-	var slotArm = module.addBlock(func, label: b"sslot", heat: BlockHeat.normal)
-	var slotBusy = module.addBlock(func, label: b"sslotbusy", heat: BlockHeat.normal)
-	var slotMachine = module.addBlock(func, label: b"sslotmachine", heat: BlockHeat.normal)
-	var slotBackoff = module.addBlock(func, label: b"sslotbackoff", heat: BlockHeat.normal)
-	var slotTake = module.addBlock(func, label: b"sslottake", heat: BlockHeat.normal)
-	var slotTook = module.addBlock(func, label: b"sslottook", heat: BlockHeat.normal)
-	var sized = module.addBlock(func, label: b"ssized", heat: BlockHeat.normal)
-	var copyHdr = module.addBlock(func, label: b"scopyhdr", heat: BlockHeat.normal)
-	var copyBody = module.addBlock(func, label: b"scopybody", heat: BlockHeat.normal)
-	var commit = module.addBlock(func, label: b"scommit", heat: BlockHeat.normal)
-	var publish = module.addBlock(func, label: b"spublish", heat: BlockHeat.normal)
-	var publishTail = module.addBlock(func, label: b"spubtail", heat: BlockHeat.normal)
-	var answer = module.addBlock(func, label: b"sanswer", heat: BlockHeat.normal)
-	var failBlock = module.addBlock(func, label: b"sfail", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let grabHdr = module.addBlock(func, label: b"sgrab", heat: BlockHeat.normal)
+	let slotArm = module.addBlock(func, label: b"sslot", heat: BlockHeat.normal)
+	let slotBusy = module.addBlock(func, label: b"sslotbusy", heat: BlockHeat.normal)
+	let slotMachine = module.addBlock(func, label: b"sslotmachine", heat: BlockHeat.normal)
+	let slotBackoff = module.addBlock(func, label: b"sslotbackoff", heat: BlockHeat.normal)
+	let slotTake = module.addBlock(func, label: b"sslottake", heat: BlockHeat.normal)
+	let slotTook = module.addBlock(func, label: b"sslottook", heat: BlockHeat.normal)
+	let sized = module.addBlock(func, label: b"ssized", heat: BlockHeat.normal)
+	let copyHdr = module.addBlock(func, label: b"scopyhdr", heat: BlockHeat.normal)
+	let copyBody = module.addBlock(func, label: b"scopybody", heat: BlockHeat.normal)
+	let commit = module.addBlock(func, label: b"scommit", heat: BlockHeat.normal)
+	let publish = module.addBlock(func, label: b"spublish", heat: BlockHeat.normal)
+	let publishTail = module.addBlock(func, label: b"spubtail", heat: BlockHeat.normal)
+	let answer = module.addBlock(func, label: b"sanswer", heat: BlockHeat.normal)
+	let failBlock = module.addBlock(func, label: b"sfail", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let p = 0
@@ -4317,9 +4317,9 @@ end 'runqTaintCarriesValue'
 // must settle over the whole module before any load is judged; and the second walk collects each function
 // again before refusing anything in it, because the value ids are dropped at every function's start.
 export function assertRunQueueObservationIsOrdered(module StdModule, firstFuncIndex ElementIndex)
-	var taint = RunqRingTaint.create()
+	let taint = RunqRingTaint.create()
 	let funcLimit = module.funcCount()
-	var opIndices = OpIndexArray.create(0)
+	let opIndices = OpIndexArray.create(0)
 	var settling = true
 
 	while settling 'toAFixedPoint'
@@ -4335,7 +4335,7 @@ export function assertRunQueueObservationIsOrdered(module StdModule, firstFuncIn
 	requireRingTaintReachedTheThief(taint)
 	requireMachineTaintReachedThePreemptor(taint)
 
-	var load = StdLoadOperands.create()
+	let load = StdLoadOperands.create()
 
 	for index in firstFuncIndex upto funcLimit 'eachFunc'
 		let func = module.getFunc(index)
@@ -4718,9 +4718,9 @@ export function assertPublishedWordAccessIsOrdered(module StdModule, entries Dat
 		return
 	end 'noSlotClaimsTheClass'
 
-	var present = BoolArray.create(labels.count(), zeroed: false)
-	var releases = BoolArray.create(labels.count(), zeroed: false)
-	var acquires = BoolArray.create(labels.count(), zeroed: false)
+	let present = BoolArray.create(labels.count(), zeroed: false)
+	let releases = BoolArray.create(labels.count(), zeroed: false)
+	let acquires = BoolArray.create(labels.count(), zeroed: false)
 
 	for _ in labels 'eachWord'
 		present.push(false)
@@ -4728,9 +4728,9 @@ export function assertPublishedWordAccessIsOrdered(module StdModule, entries Dat
 		acquires.push(false)
 	end 'eachWord'
 
-	var opIndices = OpIndexArray.create(0)
-	var access = StdAccessOperands.create()
-	var opUses = StdValueUseSet.createTrackingRepeats()
+	let opIndices = OpIndexArray.create(0)
+	let access = StdAccessOperands.create()
+	let opUses = StdValueUseSet.createTrackingRepeats()
 
 	for index in firstFuncIndex upto module.funcCount() 'eachFunc'
 		requireOrderedPublishedAccessIn(module, func: module.getFunc(index), labels: labels, present: present, releases: releases, acquires: acquires, opIndices: opIndices, access: access, opUses: opUses)
@@ -4740,7 +4740,7 @@ export function assertPublishedWordAccessIsOrdered(module StdModule, entries Dat
 end 'assertPublishedWordAccessIsOrdered'
 
 function publishedFromTheLockLabels(entries DataSectionEntryArray) returns NameRoster
-	var out = NameRoster.create(0)
+	let out = NameRoster.create(0)
 
 	for entry in entries 'eachSlot'
 		if entryIsPublishedFromTheLock(entry) 'itClaimsTheClass'
@@ -4768,8 +4768,8 @@ end 'entryIsPublishedFromTheLock'
 function requireOrderedPublishedAccessIn(module StdModule, func IrFunction, labels NameRoster, present BoolArray, releases BoolArray, acquires BoolArray, opIndices OpIndexArray, access StdAccessOperands, opUses StdValueUseSet)
 	module.collectLiveOpIndices(func, into: opIndices)
 
-	var addrValues = ValueIdArray.create(0)
-	var addrWords = NameRoster.create(0)
+	let addrValues = ValueIdArray.create(0)
+	let addrWords = NameRoster.create(0)
 
 	for opIdx in opIndices 'eachAddress'
 		classifyAccessOperands(liveRuntimeOpAt(module, opIdx: opIdx, reader: PublishedWordCheckName), access: access)
@@ -5000,35 +5000,35 @@ end 'emitUnsignedMod'
 // is a second structure to build at init and to size. The random START is kept, because that is what stops
 // every idle P from hammering P[0].
 function buildSchedFindRunnable(module StdModule)
-	var func = IrFunction.createFromStd(SchedFindRunnableName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SchedFindRunnableName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var fairPeek = module.addBlock(func, label: b"frfairpeek", heat: BlockHeat.normal)
-	var fairTake = module.addBlock(func, label: b"frfairtake", heat: BlockHeat.normal)
-	var localPop = module.addBlock(func, label: b"frlocal", heat: BlockHeat.normal)
-	var localRing = module.addBlock(func, label: b"frlocalring", heat: BlockHeat.normal)
-	var globalPeek = module.addBlock(func, label: b"frglobalpeek", heat: BlockHeat.normal)
-	var batchStart = module.addBlock(func, label: b"frbatch", heat: BlockHeat.normal)
-	var batchCapMax = module.addBlock(func, label: b"frbatchcapmax", heat: BlockHeat.normal)
-	var batchSized = module.addBlock(func, label: b"frbatchsized", heat: BlockHeat.normal)
-	var batchHdr = module.addBlock(func, label: b"frbatchhdr", heat: BlockHeat.normal)
-	var batchTake = module.addBlock(func, label: b"frbatchtake", heat: BlockHeat.normal)
-	var batchPublish = module.addBlock(func, label: b"frbatchpublish", heat: BlockHeat.normal)
-	var batchTail = module.addBlock(func, label: b"frbatchtail", heat: BlockHeat.normal)
-	var batchUnlock = module.addBlock(func, label: b"frbatchunlock", heat: BlockHeat.normal)
-	var spinGate = module.addBlock(func, label: b"frspingate", heat: BlockHeat.normal)
-	var spinCap = module.addBlock(func, label: b"frspincap", heat: BlockHeat.normal)
-	var spinClaim = module.addBlock(func, label: b"frspinclaim", heat: BlockHeat.normal)
-	var roundHdr = module.addBlock(func, label: b"frroundhdr", heat: BlockHeat.normal)
-	var roundNext = module.addBlock(func, label: b"frroundnext", heat: BlockHeat.normal)
-	var victimHdr = module.addBlock(func, label: b"frvictimhdr", heat: BlockHeat.normal)
-	var victimTest = module.addBlock(func, label: b"frvictimtest", heat: BlockHeat.normal)
-	var victimActive = module.addBlock(func, label: b"frvictimactive", heat: BlockHeat.normal)
-	var victimTry = module.addBlock(func, label: b"frvictimtry", heat: BlockHeat.normal)
-	var victimNext = module.addBlock(func, label: b"frvictimnext", heat: BlockHeat.normal)
-	var stole = module.addBlock(func, label: b"frstole", heat: BlockHeat.normal)
-	var candidate = module.addBlock(func, label: b"frcandidate", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let fairPeek = module.addBlock(func, label: b"frfairpeek", heat: BlockHeat.normal)
+	let fairTake = module.addBlock(func, label: b"frfairtake", heat: BlockHeat.normal)
+	let localPop = module.addBlock(func, label: b"frlocal", heat: BlockHeat.normal)
+	let localRing = module.addBlock(func, label: b"frlocalring", heat: BlockHeat.normal)
+	let globalPeek = module.addBlock(func, label: b"frglobalpeek", heat: BlockHeat.normal)
+	let batchStart = module.addBlock(func, label: b"frbatch", heat: BlockHeat.normal)
+	let batchCapMax = module.addBlock(func, label: b"frbatchcapmax", heat: BlockHeat.normal)
+	let batchSized = module.addBlock(func, label: b"frbatchsized", heat: BlockHeat.normal)
+	let batchHdr = module.addBlock(func, label: b"frbatchhdr", heat: BlockHeat.normal)
+	let batchTake = module.addBlock(func, label: b"frbatchtake", heat: BlockHeat.normal)
+	let batchPublish = module.addBlock(func, label: b"frbatchpublish", heat: BlockHeat.normal)
+	let batchTail = module.addBlock(func, label: b"frbatchtail", heat: BlockHeat.normal)
+	let batchUnlock = module.addBlock(func, label: b"frbatchunlock", heat: BlockHeat.normal)
+	let spinGate = module.addBlock(func, label: b"frspingate", heat: BlockHeat.normal)
+	let spinCap = module.addBlock(func, label: b"frspincap", heat: BlockHeat.normal)
+	let spinClaim = module.addBlock(func, label: b"frspinclaim", heat: BlockHeat.normal)
+	let roundHdr = module.addBlock(func, label: b"frroundhdr", heat: BlockHeat.normal)
+	let roundNext = module.addBlock(func, label: b"frroundnext", heat: BlockHeat.normal)
+	let victimHdr = module.addBlock(func, label: b"frvictimhdr", heat: BlockHeat.normal)
+	let victimTest = module.addBlock(func, label: b"frvictimtest", heat: BlockHeat.normal)
+	let victimActive = module.addBlock(func, label: b"frvictimactive", heat: BlockHeat.normal)
+	let victimTry = module.addBlock(func, label: b"frvictimtry", heat: BlockHeat.normal)
+	let victimNext = module.addBlock(func, label: b"frvictimnext", heat: BlockHeat.normal)
+	let stole = module.addBlock(func, label: b"frstole", heat: BlockHeat.normal)
+	let candidate = module.addBlock(func, label: b"frcandidate", heat: BlockHeat.normal)
 
 	// The candidate merge — every source of a green thread reaches it, and it is the only exit. `inherited` is
 	// 1 only for the `runnext` slot, and it is what the tick below is charged (or not) against.
@@ -5132,7 +5132,7 @@ function buildSchedFindRunnable(module StdModule)
 	let batchGt = ids.mint()
 	module.appendOp(batchTake, op: StdOp.call(batchGt, callee: GtDequeueName, args: ValueIdArray.create(0)))
 	let batchDrained = emitCompareWithConstant(module, block: batchTake, value: batchGt, pred: StdCmpPred.eq, against: 0, ids: ids)
-	var batchStore = module.addBlock(func, label: b"frbatchstore", heat: BlockHeat.normal)
+	let batchStore = module.addBlock(func, label: b"frbatchstore", heat: BlockHeat.normal)
 	module.setTerminator(batchTake, op: StdOp.condBranch(batchDrained, thenBlockId: batchPublish.id, elseBlockId: batchStore.id))
 	pushBranchEdge(batchTake, to: batchPublish, values: argsOf(batchCount))
 
@@ -5268,16 +5268,16 @@ end 'buildSchedFindRunnable'
 // the work already taken — one extra lap — or a publish too late for this read, which read the count after
 // the step and woke somebody itself.
 function buildSchedAnyWork(module StdModule)
-	var func = IrFunction.createFromStd(SchedAnyWorkName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedAnyWorkName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var loopHdr = module.addBlock(func, label: b"awhdr", heat: BlockHeat.normal)
-	var loopBody = module.addBlock(func, label: b"awbody", heat: BlockHeat.normal)
-	var ringTest = module.addBlock(func, label: b"awring", heat: BlockHeat.normal)
-	var loopNext = module.addBlock(func, label: b"awnext", heat: BlockHeat.normal)
-	var found = module.addBlock(func, label: b"awfound", heat: BlockHeat.normal)
-	var none = module.addBlock(func, label: b"awnone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let loopHdr = module.addBlock(func, label: b"awhdr", heat: BlockHeat.normal)
+	let loopBody = module.addBlock(func, label: b"awbody", heat: BlockHeat.normal)
+	let ringTest = module.addBlock(func, label: b"awring", heat: BlockHeat.normal)
+	let loopNext = module.addBlock(func, label: b"awnext", heat: BlockHeat.normal)
+	let found = module.addBlock(func, label: b"awfound", heat: BlockHeat.normal)
+	let none = module.addBlock(func, label: b"awnone", heat: BlockHeat.normal)
 
 	let numProcs = emitLoadAcquireGlobalWord(module, block: entry, label: SchedNumProcsLabel, ids: ids)
 	let globalHasWork = emitSchedGlobalQueueIs(module, block: entry, pred: StdCmpPred.ne, ids: ids)
@@ -5374,11 +5374,11 @@ end 'emitSchedBranchOnNoWork'
 // is what puts one there.
 
 function buildSchedSweepDropped(module StdModule)
-	var func = IrFunction.createFromStd(SchedSweepDroppedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedSweepDroppedName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var globalStart = module.addBlock(func, label: b"swglobalstart", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"swdone", heat: BlockHeat.normal)
+	let globalStart = module.addBlock(func, label: b"swglobalstart", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"swdone", heat: BlockHeat.normal)
 
 	// The global half — the SAME walk `GtRuntime.__gt_coro_sweep_dropped` is, off the two `.data` ends
 	// instead of an owner's two fields. Under the lock the head cannot move, so the peek and the dequeue
@@ -5449,9 +5449,9 @@ function emitGtFreeCellGlobalPush(module StdModule, cur IrBlock, gt ValueId, ids
 end 'emitGtFreeCellGlobalPush'
 
 function emitGtFreeRecordGlobalPush(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
-	var withStack = module.addBlock(func, label: b"gfpglobalstack", heat: BlockHeat.normal)
-	var withoutStack = module.addBlock(func, label: b"gfpglobalnostack", heat: BlockHeat.normal)
-	var pushed = module.addBlock(func, label: b"gfpglobalpushed", heat: BlockHeat.normal)
+	let withStack = module.addBlock(func, label: b"gfpglobalstack", heat: BlockHeat.normal)
+	let withoutStack = module.addBlock(func, label: b"gfpglobalnostack", heat: BlockHeat.normal)
+	let pushed = module.addBlock(func, label: b"gfpglobalpushed", heat: BlockHeat.normal)
 
 	let base = emitLoadField(module, block: cur, record: gt, offset: GtOffStackBase, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: withStack, whenFalse: withoutStack, ids: ids)
@@ -5466,7 +5466,7 @@ function emitGtFreeRecordGlobalPush(module StdModule, func IrFunction, cur IrBlo
 end 'emitGtFreeRecordGlobalPush'
 
 function emitGtFreeTakeOneList(module StdModule, func IrFunction, cur IrBlock, label ByteArray, merge IrBlock, none IrBlock, ids ValueMinter)
-	var got = module.addBlock(func, label: b"gfgglobalgot", heat: BlockHeat.normal)
+	let got = module.addBlock(func, label: b"gfgglobalgot", heat: BlockHeat.normal)
 
 	let taken = emitSchedListTakeHead(module, cur: cur, got: got, none: none, head: SchedListHead.lockedWord(label), linkOffset: GtOffNext, ids: ids)
 	emitBranchCarrying(module, from: got, to: merge, values: argsOf(taken))
@@ -5480,7 +5480,7 @@ function emitGtFreeTakeGlobal(module StdModule, func IrFunction, cur IrBlock, po
 end 'emitGtFreeTakeGlobal'
 
 function emitGtFreeTakeStackedFirst(module StdModule, func IrFunction, cur IrBlock, merge IrBlock, none IrBlock, ids ValueMinter)
-	var trySecond = module.addBlock(func, label: b"gfgglobaltrysecond", heat: BlockHeat.normal)
+	let trySecond = module.addBlock(func, label: b"gfgglobaltrysecond", heat: BlockHeat.normal)
 
 	emitGtFreeTakeOneList(module, func: func, cur: cur, label: SchedGtFreeHeadLabel, merge: merge, none: trySecond, ids: ids)
 	emitGtFreeTakeOneList(module, func: func, cur: trySecond, label: SchedGtFreeNoStackHeadLabel, merge: merge, none: none, ids: ids)
@@ -5493,20 +5493,20 @@ function buildGtFreePut(module StdModule, pool GtFreePool)
 		cells gives GtCellPutName
 	end 'name'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var local = module.addBlock(func, label: b"gfplocal", heat: BlockHeat.normal)
-	var keep = module.addBlock(func, label: b"gfpkeep", heat: BlockHeat.normal)
-	var shed = module.addBlock(func, label: b"gfpshed", heat: BlockHeat.normal)
-	var shedHdr = module.addBlock(func, label: b"gfpshedhdr", heat: BlockHeat.normal)
-	var shedBody = module.addBlock(func, label: b"gfpshedbody", heat: BlockHeat.normal)
-	var shedDone = module.addBlock(func, label: b"gfpsheddone", heat: BlockHeat.normal)
-	var globalOnly = module.addBlock(func, label: b"gfpglobal", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"gfpdone", heat: BlockHeat.normal)
-	var haveOffset = module.addBlock(func, label: b"gfoffset", heat: BlockHeat.normal)
-	var haveMachine = module.addBlock(func, label: b"gfmachine", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let local = module.addBlock(func, label: b"gfplocal", heat: BlockHeat.normal)
+	let keep = module.addBlock(func, label: b"gfpkeep", heat: BlockHeat.normal)
+	let shed = module.addBlock(func, label: b"gfpshed", heat: BlockHeat.normal)
+	let shedHdr = module.addBlock(func, label: b"gfpshedhdr", heat: BlockHeat.normal)
+	let shedBody = module.addBlock(func, label: b"gfpshedbody", heat: BlockHeat.normal)
+	let shedDone = module.addBlock(func, label: b"gfpsheddone", heat: BlockHeat.normal)
+	let globalOnly = module.addBlock(func, label: b"gfpglobal", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"gfpdone", heat: BlockHeat.normal)
+	let haveOffset = module.addBlock(func, label: b"gfoffset", heat: BlockHeat.normal)
+	let haveMachine = module.addBlock(func, label: b"gfmachine", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0
@@ -5538,14 +5538,14 @@ function buildGtFreePut(module StdModule, pool GtFreePool)
 	emitBranchOnCompare(module, block: shedHdr, value: remaining, pred: StdCmpPred.le, against: GtFreeLocalLow, whenTrue: shedDone, whenFalse: shedBody, ids: ids)
 
 	let moving = emitGtFreeLocalPop(module, block: shedBody, p: p, pool: pool, ids: ids)
-	var movedOn = emitGtFreeGlobalPush(module, func: func, cur: shedBody, gt: moving, pool: pool, ids: ids)
+	let movedOn = emitGtFreeGlobalPush(module, func: func, cur: shedBody, gt: moving, pool: pool, ids: ids)
 	module.setTerminator(movedOn, op: StdOp.branch(shedHdr.id))
 
 	emitLockWordLeave(module, block: shedDone, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(shedDone, op: StdOp.branch(doneBlock.id))
 
 	emitLockWordEnter(module, block: globalOnly, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
-	var globalPushed = emitGtFreeGlobalPush(module, func: func, cur: globalOnly, gt: gt, pool: pool, ids: ids)
+	let globalPushed = emitGtFreeGlobalPush(module, func: func, cur: globalOnly, gt: gt, pool: pool, ids: ids)
 	emitLockWordLeave(module, block: globalPushed, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(globalPushed, op: StdOp.branch(doneBlock.id))
 
@@ -5557,10 +5557,10 @@ end 'buildGtFreePut'
 // Emitted into `__gt_runner_done`'s body, never built as a function: one more frame in that call
 // chain exceeds x64-linux's unguarded-chain margin and fails the build with E5004.
 export function emitGtFreeStacks(module StdModule, func IrFunction, cur IrBlock, cont IrBlock, ids ValueMinter)
-	var walkHdr = module.addBlock(func, label: b"gfswalkhdr", heat: BlockHeat.normal)
-	var walkBody = module.addBlock(func, label: b"gfswalkbody", heat: BlockHeat.normal)
-	var walkStep = module.addBlock(func, label: b"gfswalkstep", heat: BlockHeat.normal)
-	var relist = module.addBlock(func, label: b"gfsrelist", heat: BlockHeat.normal)
+	let walkHdr = module.addBlock(func, label: b"gfswalkhdr", heat: BlockHeat.normal)
+	let walkBody = module.addBlock(func, label: b"gfswalkbody", heat: BlockHeat.normal)
+	let walkStep = module.addBlock(func, label: b"gfswalkstep", heat: BlockHeat.normal)
+	let relist = module.addBlock(func, label: b"gfsrelist", heat: BlockHeat.normal)
 
 	let stackedHead = SchedListHead.lockedWord(SchedGtFreeHeadLabel)
 	let stacklessHead = SchedListHead.lockedWord(SchedGtFreeNoStackHeadLabel)
@@ -5596,18 +5596,18 @@ end 'emitGtFreeStacks'
 // `carveWithoutProc` for a thread holding no processor, with `__gt_gfree_lock` held, which the carve
 // road leaves. The processor answered is defined on `carve`'s road and not on `carveWithoutProc`'s.
 function emitGtFreeAcquire(module StdModule, func IrFunction, entry IrBlock, pool GtFreePool, recycle IrBlock, carve IrBlock, carveWithoutProc IrBlock, ids ValueMinter) returns ValueId
-	var haveOffset = module.addBlock(func, label: b"gfgoffset", heat: BlockHeat.normal)
-	var haveMachine = module.addBlock(func, label: b"gfgmachine", heat: BlockHeat.normal)
-	var haveProc = module.addBlock(func, label: b"gfgproc", heat: BlockHeat.normal)
-	var refill = module.addBlock(func, label: b"gfgrefill", heat: BlockHeat.normal)
-	var refillHdr = module.addBlock(func, label: b"gfgrefillhdr", heat: BlockHeat.normal)
-	var refillPop = module.addBlock(func, label: b"gfgrefillpop", heat: BlockHeat.normal)
-	var refillPush = module.addBlock(func, label: b"gfgrefillpush", heat: BlockHeat.normal)
-	var refillDone = module.addBlock(func, label: b"gfgrefilldone", heat: BlockHeat.normal)
-	var refilled = module.addBlock(func, label: b"gfgrefilled", heat: BlockHeat.normal)
-	var localPop = module.addBlock(func, label: b"gfglocalpop", heat: BlockHeat.normal)
-	var noProc = module.addBlock(func, label: b"gfgnoproc", heat: BlockHeat.normal)
-	var globalPop = module.addBlock(func, label: b"gfgglobalpop", heat: BlockHeat.normal)
+	let haveOffset = module.addBlock(func, label: b"gfgoffset", heat: BlockHeat.normal)
+	let haveMachine = module.addBlock(func, label: b"gfgmachine", heat: BlockHeat.normal)
+	let haveProc = module.addBlock(func, label: b"gfgproc", heat: BlockHeat.normal)
+	let refill = module.addBlock(func, label: b"gfgrefill", heat: BlockHeat.normal)
+	let refillHdr = module.addBlock(func, label: b"gfgrefillhdr", heat: BlockHeat.normal)
+	let refillPop = module.addBlock(func, label: b"gfgrefillpop", heat: BlockHeat.normal)
+	let refillPush = module.addBlock(func, label: b"gfgrefillpush", heat: BlockHeat.normal)
+	let refillDone = module.addBlock(func, label: b"gfgrefilldone", heat: BlockHeat.normal)
+	let refilled = module.addBlock(func, label: b"gfgrefilled", heat: BlockHeat.normal)
+	let localPop = module.addBlock(func, label: b"gfglocalpop", heat: BlockHeat.normal)
+	let noProc = module.addBlock(func, label: b"gfgnoproc", heat: BlockHeat.normal)
+	let globalPop = module.addBlock(func, label: b"gfgglobalpop", heat: BlockHeat.normal)
 
 	let p = emitLoadCurrentPOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: haveProc, noProc: noProc, ids: ids)
 
@@ -5662,17 +5662,17 @@ end 'emitGtFreeAcquire'
 
 // See `GtFreeGetName`.
 function buildGtFreeGet(module StdModule)
-	var func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var recycle = module.addBlock(func, label: b"gfgrecycle", heat: BlockHeat.normal)
-	var recycledStack = module.addBlock(func, label: b"gfgrecycledstack", heat: BlockHeat.normal)
-	var needStack = module.addBlock(func, label: b"gfgneedstack", heat: BlockHeat.normal)
-	var stackRefused = module.addBlock(func, label: b"gfgstackrefused", heat: BlockHeat.cold)
-	var stackReady = module.addBlock(func, label: b"gfgstackready", heat: BlockHeat.normal)
-	var handBack = module.addBlock(func, label: b"gfghandback", heat: BlockHeat.normal)
-	var carve = module.addBlock(func, label: b"gfgcarve", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let recycle = module.addBlock(func, label: b"gfgrecycle", heat: BlockHeat.normal)
+	let recycledStack = module.addBlock(func, label: b"gfgrecycledstack", heat: BlockHeat.normal)
+	let needStack = module.addBlock(func, label: b"gfgneedstack", heat: BlockHeat.normal)
+	let stackRefused = module.addBlock(func, label: b"gfgstackrefused", heat: BlockHeat.cold)
+	let stackReady = module.addBlock(func, label: b"gfgstackready", heat: BlockHeat.normal)
+	let handBack = module.addBlock(func, label: b"gfghandback", heat: BlockHeat.normal)
+	let carve = module.addBlock(func, label: b"gfgcarve", heat: BlockHeat.normal)
 
 	let wantedSize = emitLoadGlobalWord(module, block: entry, label: GtSeedBytesLabel, ids: ids)
 
@@ -5693,7 +5693,7 @@ function buildGtFreeGet(module StdModule)
 
 	// A fresh record: carved under the hold every list above was consulted in.
 	let carved = emitGtArenaCarve(module, block: carve, itemBytes: GtStructSize as FullRangeInt, count: OneMore, ids: ids)
-	var registered = emitGtAllGAppend(module, func: func, cur: carve, gt: carved, ids: ids)
+	let registered = emitGtAllGAppend(module, func: func, cur: carve, gt: carved, ids: ids)
 	emitLockWordLeave(module, block: registered, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	emitBranchCarrying(module, from: registered, to: needStack, values: argsOf(carved))
 
@@ -5717,16 +5717,16 @@ function buildGtCellGet(module StdModule)
 		panic("buildGtCellGet: GtCellCarveBatch {GtCellCarveBatch} must be at least {GtCellCarveBatchMin} (the spare chain's loop ends at the last spare, which a one-cell batch never reaches) and at most GtFreeLocalHigh {GtFreeLocalHigh} (its spares land on an empty local list, which stays below the high mark)")
 	end 'batchBounds'
 
-	var func = IrFunction.createFromStd(GtCellGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(GtCellGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var recycle = module.addBlock(func, label: b"cgrecycle", heat: BlockHeat.normal)
-	var carveBatch = module.addBlock(func, label: b"cgcarvebatch", heat: BlockHeat.normal)
-	var carveOne = module.addBlock(func, label: b"cgcarveone", heat: BlockHeat.normal)
-	var chain = module.addBlock(func, label: b"cgchain", heat: BlockHeat.normal)
-	var chainStep = module.addBlock(func, label: b"cgchainstep", heat: BlockHeat.normal)
-	var chained = module.addBlock(func, label: b"cgchained", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let recycle = module.addBlock(func, label: b"cgrecycle", heat: BlockHeat.normal)
+	let carveBatch = module.addBlock(func, label: b"cgcarvebatch", heat: BlockHeat.normal)
+	let carveOne = module.addBlock(func, label: b"cgcarveone", heat: BlockHeat.normal)
+	let chain = module.addBlock(func, label: b"cgchain", heat: BlockHeat.normal)
+	let chainStep = module.addBlock(func, label: b"cgchainstep", heat: BlockHeat.normal)
+	let chained = module.addBlock(func, label: b"cgchained", heat: BlockHeat.normal)
 
 	let record = ids.mint()
 	recycle.blockArgs.push(IrBlockArg.create(record, argType: StdType.i64))
@@ -5784,12 +5784,12 @@ end 'emitGtArenaCarve'
 // (`__slab_assert_os_alloc`'s argument), and 0 against 0 — the state before the first carve — fails the test
 // and maps the first chunk.
 function buildSchedArenaCarve(module StdModule)
-	var func = IrFunction.createFromStd(SchedArenaCarveName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SchedArenaCarveName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var newChunk = module.addBlock(func, label: b"arenanewchunk", heat: BlockHeat.normal)
-	var carved = module.addBlock(func, label: b"arenacarved", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let newChunk = module.addBlock(func, label: b"arenanewchunk", heat: BlockHeat.normal)
+	let carved = module.addBlock(func, label: b"arenacarved", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let bytes = 0
@@ -5845,13 +5845,13 @@ function buildSchedPerProcSum(module StdModule, name ByteArray, offset ByteOffse
 		panic("buildSchedPerProcSum: '{String.from(name)}' is built as a per-P sum but is not on `isSchedPerProcSumCallee`'s roster — add it there, which is how it reaches `isSchedSubstrateQueryCallee`, the ONE membership `RuntimeUsage.recordCallUsage` (install the scheduler) and `TargetFacilities.calleeHostFacility` (E3104 off its substrate) both read")
 	end 'offRoster'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var loopHdr = module.addBlock(func, label: b"schdr", heat: BlockHeat.normal)
-	var loopBody = module.addBlock(func, label: b"scbody", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"scdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let loopHdr = module.addBlock(func, label: b"schdr", heat: BlockHeat.normal)
+	let loopBody = module.addBlock(func, label: b"scbody", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"scdone", heat: BlockHeat.normal)
 
 	let numProcs = emitLoadGlobalWord(module, block: entry, label: SchedNumProcsLabel, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -5902,10 +5902,10 @@ end 'emitSchedProcCountOne'
 // unlocked reads. `__gt_run_main` brings the scheduler up before `main`, so
 // each word has been counted before any program code can read it.
 function buildSchedLockedCountQuery(module StdModule, name ByteArray, label ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	module.setTerminator(entry, op: StdOp.ret(emitLoadGlobalWord(module, block: entry, label: label, ids: ids)))
 
 	module.functions.push(func)
@@ -5913,10 +5913,10 @@ end 'buildSchedLockedCountQuery'
 
 // `__sched_gt_stack_bytes() -> i64` — see `SchedGtStackBytesName`.
 function buildSchedGtStackBytes(module StdModule)
-	var func = IrFunction.createFromStd(SchedGtStackBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedGtStackBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	let running = emitLoadCurrentGt(module, block: entry, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(emitLoadField(module, block: entry, record: running, offset: GtOffStackSize, ids: ids)))
 
@@ -5927,13 +5927,13 @@ end 'buildSchedGtStackBytes'
 // `offset`; see `SchedParkWakeCountName` and `MOffGtLive`. The walk is unlocked, for `SchedAllMLabel`'s reason,
 // and each read is one aligned word some machine really stored, for `buildSchedPerProcSum`'s.
 function buildSchedPerMachineSum(module StdModule, name ByteArray, offset ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var loopHdr = module.addBlock(func, label: b"pwhdr", heat: BlockHeat.normal)
-	var loopBody = module.addBlock(func, label: b"pwbody", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"pwdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let loopHdr = module.addBlock(func, label: b"pwhdr", heat: BlockHeat.normal)
+	let loopBody = module.addBlock(func, label: b"pwbody", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"pwdone", heat: BlockHeat.normal)
 
 	let firstMachine = emitLoadGlobalWord(module, block: entry, label: SchedAllMLabel, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -5996,27 +5996,27 @@ end 'emitSchedGtLiveSum'
 // releases, and is not what the argument needs. What the argument needs is the
 // DISJOINTNESS, and that is true field by field.
 function buildSchedStartM(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedStartMName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(SchedStartMName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var notStopping = module.addBlock(func, label: b"smlive", heat: BlockHeat.normal)
-	var takeProc = module.addBlock(func, label: b"smtakep", heat: BlockHeat.normal)
-	var tookProc = module.addBlock(func, label: b"smtook", heat: BlockHeat.normal)
-	var haveProc = module.addBlock(func, label: b"smhavep", heat: BlockHeat.normal)
-	var noProc = module.addBlock(func, label: b"smnop", heat: BlockHeat.normal)
-	var pickMachine = module.addBlock(func, label: b"smpick", heat: BlockHeat.normal)
-	var wakeIt = module.addBlock(func, label: b"smwake", heat: BlockHeat.normal)
-	var handOver = module.addBlock(func, label: b"smhandover", heat: BlockHeat.normal)
-	var deliver = module.addBlock(func, label: b"smdeliver", heat: BlockHeat.normal)
-	var spawnIt = module.addBlock(func, label: b"smspawn", heat: BlockHeat.normal)
-	var tooManyMachines = module.addBlock(func, label: b"smmaxm", heat: BlockHeat.normal)
-	var spawnStart = module.addBlock(func, label: b"smspawnstart", heat: BlockHeat.normal)
-	var spawnSpin = module.addBlock(func, label: b"smspawnspin", heat: BlockHeat.normal)
-	var spawnCreate = module.addBlock(func, label: b"smspawncreate", heat: BlockHeat.normal)
-	var spawnOk = module.addBlock(func, label: b"smspawnok", heat: BlockHeat.normal)
-	var spawnFailed = module.addBlock(func, label: b"smspawnfailed", heat: BlockHeat.normal)
-	var spawnFailedDrained = module.addBlock(func, label: b"smfaileddrained", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let notStopping = module.addBlock(func, label: b"smlive", heat: BlockHeat.normal)
+	let takeProc = module.addBlock(func, label: b"smtakep", heat: BlockHeat.normal)
+	let tookProc = module.addBlock(func, label: b"smtook", heat: BlockHeat.normal)
+	let haveProc = module.addBlock(func, label: b"smhavep", heat: BlockHeat.normal)
+	let noProc = module.addBlock(func, label: b"smnop", heat: BlockHeat.normal)
+	let pickMachine = module.addBlock(func, label: b"smpick", heat: BlockHeat.normal)
+	let wakeIt = module.addBlock(func, label: b"smwake", heat: BlockHeat.normal)
+	let handOver = module.addBlock(func, label: b"smhandover", heat: BlockHeat.normal)
+	let deliver = module.addBlock(func, label: b"smdeliver", heat: BlockHeat.normal)
+	let spawnIt = module.addBlock(func, label: b"smspawn", heat: BlockHeat.normal)
+	let tooManyMachines = module.addBlock(func, label: b"smmaxm", heat: BlockHeat.normal)
+	let spawnStart = module.addBlock(func, label: b"smspawnstart", heat: BlockHeat.normal)
+	let spawnSpin = module.addBlock(func, label: b"smspawnspin", heat: BlockHeat.normal)
+	let spawnCreate = module.addBlock(func, label: b"smspawncreate", heat: BlockHeat.normal)
+	let spawnOk = module.addBlock(func, label: b"smspawnok", heat: BlockHeat.normal)
+	let spawnFailed = module.addBlock(func, label: b"smspawnfailed", heat: BlockHeat.normal)
+	let spawnFailedDrained = module.addBlock(func, label: b"smfaileddrained", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let handedProc = 0
@@ -6093,7 +6093,7 @@ function buildSchedStartM(module StdModule, target Target)
 	// machine a lock it must then wait for. Nothing is lost by the gap: the event is AUTO-reset, so a signal
 	// that arrives before the machine reaches its `osWaitHandle` is not lost, and one that arrives after it
 	// has already collected `MOffNextP` on another wake is a harmless spurious one.
-	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: wakeIt, m: chosenMachine, ids: ids)
+	let unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: wakeIt, m: chosenMachine, ids: ids)
 	emitBranchOnCompare(module, block: unlinked, value: credit, pred: StdCmpPred.eq, against: SchedStartMCredit.unreserved.rawValue, whenTrue: deliver, whenFalse: handOver, ids: ids)
 
 	emitSchedHandOverCredit(module, func: func, cur: handOver, m: chosenMachine, cont: deliver, ids: ids)
@@ -6148,7 +6148,7 @@ function buildSchedStartM(module StdModule, target Target)
 	// still hold the work it was handed over for, so its ring goes to the global queue first. A reserved wake has
 	// started nobody, so its credit goes back and `__sched_needspinning` goes up exactly as at `smnop`.
 	emitSchedDrainRunqLocked(module, block: spawnFailed, p: chosenProc, cont: spawnFailedDrained, ids: ids)
-	var spawnFailedIdled = emitSchedPidlePutLocked(module, func: func, cur: spawnFailedDrained, p: chosenProc, holdsWorkLabel: b"smfailedheldwork", emptyLabel: b"smfailedidle", ids: ids)
+	let spawnFailedIdled = emitSchedPidlePutLocked(module, func: func, cur: spawnFailedDrained, p: chosenProc, holdsWorkLabel: b"smfailedheldwork", emptyLabel: b"smfailedidle", ids: ids)
 	emitSchedGiveBackCredit(module, block: spawnFailedIdled, credit: credit, ids: ids)
 	emitSchedRaiseNeedSpinningIfReserved(module, block: spawnFailedIdled, credit: credit, ids: ids)
 	emitSchedLockLeave(module, block: spawnFailedIdled, ids: ids)
@@ -6185,13 +6185,13 @@ end 'emitSchedStartM'
 // does not take itself off on waking: one still on the list at that point was woken by nobody, and waits
 // again. `__sched_lock` held. It terminates `cur` and answers the block to continue in.
 function emitSchedSignalMachineLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, labelPrefix String, ids ValueMinter) returns IrBlock
-	var unlist = module.addBlock(func, label: freeze "{labelPrefix}unlist".toByteArray(), heat: BlockHeat.normal)
-	var signal = module.addBlock(func, label: freeze "{labelPrefix}wake".toByteArray(), heat: BlockHeat.normal)
+	let unlist = module.addBlock(func, label: freeze "{labelPrefix}unlist".toByteArray(), heat: BlockHeat.normal)
+	let signal = module.addBlock(func, label: freeze "{labelPrefix}wake".toByteArray(), heat: BlockHeat.normal)
 
 	let onList = emitSchedMidleHolds(module, block: cur, m: m, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: onList, pred: StdCmpPred.eq, against: 0, whenTrue: signal, whenFalse: unlist, ids: ids)
 
-	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: unlist, m: m, ids: ids)
+	let unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: unlist, m: m, ids: ids)
 	module.setTerminator(unlinked, op: StdOp.branch(signal.id))
 
 	emitSchedWakeMachine(module, block: signal, m: m, ids: ids)
@@ -6199,8 +6199,8 @@ function emitSchedSignalMachineLocked(module StdModule, func IrFunction, cur IrB
 end 'emitSchedSignalMachineLocked'
 
 export function emitSchedStartLockedMachine(module StdModule, func IrFunction, cur IrBlock, owner ValueId, strand ValueId, gave IrBlock, declined IrBlock, ids ValueMinter)
-	var examineProc = module.addBlock(func, label: b"slmproc", heat: BlockHeat.cold)
-	var giveIt = module.addBlock(func, label: b"slmgive", heat: BlockHeat.cold)
+	let examineProc = module.addBlock(func, label: b"slmproc", heat: BlockHeat.cold)
+	let giveIt = module.addBlock(func, label: b"slmgive", heat: BlockHeat.cold)
 
 	let waiting = emitLoadField(module, block: cur, record: owner, offset: MOffLockedPark, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: waiting, pred: StdCmpPred.eq, against: LockedPark.none.rawValue, whenTrue: declined, whenFalse: examineProc, ids: ids)
@@ -6209,7 +6209,7 @@ export function emitSchedStartLockedMachine(module StdModule, func IrFunction, c
 	let p = emitLoadField(module, block: examineProc, record: m, offset: MOffCurrentP, ids: ids)
 	emitBranchOnCompare(module, block: examineProc, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: declined, whenFalse: giveIt, ids: ids)
 
-	var ended = emitSchedLockedParkEndLocked(module, func: func, cur: giveIt, m: owner, ids: ids)
+	let ended = emitSchedLockedParkEndLocked(module, func: func, cur: giveIt, m: owner, ids: ids)
 	emitStoreField(module, block: ended, record: owner, offset: MOffLockedStrand, value: strand)
 	emitSchedGiveProcessorAndWake(module, block: ended, m: m, p: p, recipient: owner, ids: ids)
 	module.setTerminator(ended, op: StdOp.branch(gave.id))
@@ -6223,9 +6223,9 @@ function emitSchedGiveProcessorAndWake(module StdModule, block IrBlock, m ValueI
 end 'emitSchedGiveProcessorAndWake'
 
 function emitSchedLockedParkCountLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, ids ValueMinter) returns IrBlock
-	var counting = module.addBlock(func, label: b"lpcounting", heat: BlockHeat.cold)
-	var checking = module.addBlock(func, label: b"lpchecking", heat: BlockHeat.cold)
-	var counted = module.addBlock(func, label: b"lpcounted", heat: BlockHeat.cold)
+	let counting = module.addBlock(func, label: b"lpcounting", heat: BlockHeat.cold)
+	let checking = module.addBlock(func, label: b"lpchecking", heat: BlockHeat.cold)
+	let counted = module.addBlock(func, label: b"lpcounted", heat: BlockHeat.cold)
 
 	let state = emitLoadField(module, block: cur, record: m, offset: MOffLockedPark, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: state, pred: StdCmpPred.eq, against: LockedPark.waiting.rawValue, whenTrue: counting, whenFalse: counted, ids: ids)
@@ -6240,8 +6240,8 @@ function emitSchedLockedParkCountLocked(module StdModule, func IrFunction, cur I
 end 'emitSchedLockedParkCountLocked'
 
 function emitSchedLockedParkEndLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, ids ValueMinter) returns IrBlock
-	var uncounting = module.addBlock(func, label: b"lpuncounting", heat: BlockHeat.cold)
-	var ended = module.addBlock(func, label: b"lpended", heat: BlockHeat.cold)
+	let uncounting = module.addBlock(func, label: b"lpuncounting", heat: BlockHeat.cold)
+	let ended = module.addBlock(func, label: b"lpended", heat: BlockHeat.cold)
 
 	let state = emitLoadField(module, block: cur, record: m, offset: MOffLockedPark, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: state, pred: StdCmpPred.eq, against: LockedPark.counted.rawValue, whenTrue: uncounting, whenFalse: ended, ids: ids)
@@ -6254,11 +6254,11 @@ function emitSchedLockedParkEndLocked(module StdModule, func IrFunction, cur IrB
 end 'emitSchedLockedParkEndLocked'
 
 export function emitSchedHandProcessorToOwner(module StdModule, func IrFunction, cur IrBlock, owner ValueId, handedOff IrBlock, kept IrBlock, ids ValueMinter)
-	var examineOwner = module.addBlock(func, label: b"hpexamine", heat: BlockHeat.cold)
-	var giveIt = module.addBlock(func, label: b"hpgive", heat: BlockHeat.cold)
-	var drainIt = module.addBlock(func, label: b"hpdrain", heat: BlockHeat.cold)
-	var releaseIt = module.addBlock(func, label: b"hprelease", heat: BlockHeat.cold)
-	var keepIt = module.addBlock(func, label: b"hpkeep", heat: BlockHeat.cold)
+	let examineOwner = module.addBlock(func, label: b"hpexamine", heat: BlockHeat.cold)
+	let giveIt = module.addBlock(func, label: b"hpgive", heat: BlockHeat.cold)
+	let drainIt = module.addBlock(func, label: b"hpdrain", heat: BlockHeat.cold)
+	let releaseIt = module.addBlock(func, label: b"hprelease", heat: BlockHeat.cold)
+	let keepIt = module.addBlock(func, label: b"hpkeep", heat: BlockHeat.cold)
 
 	let m = emitLoadCurrentM(module, block: cur, ids: ids)
 	let p = emitLoadField(module, block: cur, record: m, offset: MOffCurrentP, ids: ids)
@@ -6267,19 +6267,19 @@ export function emitSchedHandProcessorToOwner(module StdModule, func IrFunction,
 	let onList = emitSchedMidleHolds(module, block: examineOwner, m: owner, ids: ids)
 	emitBranchOnCompare(module, block: examineOwner, value: onList, pred: StdCmpPred.eq, against: 0, whenTrue: drainIt, whenFalse: giveIt, ids: ids)
 
-	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: giveIt, m: owner, ids: ids)
+	let unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: giveIt, m: owner, ids: ids)
 	emitSchedGiveProcessorAndWake(module, block: unlinked, m: m, p: p, recipient: owner, ids: ids)
 	module.setTerminator(unlinked, op: StdOp.branch(handedOff.id))
 
 	emitSchedDrainRunqLocked(module, block: drainIt, p: p, cont: releaseIt, ids: ids)
 
-	var released = emitSchedReleaseProcLocked(module, func: func, cur: releaseIt, m: m, p: p, holdsWorkLabel: b"hpheldwork", emptyLabel: b"hpidled", ids: ids)
+	let released = emitSchedReleaseProcLocked(module, func: func, cur: releaseIt, m: m, p: p, holdsWorkLabel: b"hpheldwork", emptyLabel: b"hpidled", ids: ids)
 	emitSchedLockLeave(module, block: released, ids: ids)
 	emitSchedWakeMachine(module, block: released, m: owner, ids: ids)
 	module.appendOp(released, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create(0)))
 	module.setTerminator(released, op: StdOp.branch(handedOff.id))
 
-	var keepSignalled = emitSchedSignalMachineLocked(module, func: func, cur: keepIt, m: owner, labelPrefix: "hpkeep", ids: ids)
+	let keepSignalled = emitSchedSignalMachineLocked(module, func: func, cur: keepIt, m: owner, labelPrefix: "hpkeep", ids: ids)
 	emitSchedLockLeave(module, block: keepSignalled, ids: ids)
 	module.setTerminator(keepSignalled, op: StdOp.branch(kept.id))
 end 'emitSchedHandProcessorToOwner'
@@ -6331,7 +6331,7 @@ end 'emitSchedMainLoop'
 // each other. A break to a poller that is not the main machine, or to none, costs one early return.
 function emitSchedSignalMainMachine(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter) returns IrBlock
 	let mainMachine = emitLoadGlobalWord(module, block: cur, label: SchedMainMLabel, ids: ids)
-	var signalled = emitSchedSignalMachineLocked(module, func: func, cur: cur, m: mainMachine, labelPrefix: "signalmain", ids: ids)
+	let signalled = emitSchedSignalMachineLocked(module, func: func, cur: cur, m: mainMachine, labelPrefix: "signalmain", ids: ids)
 	module.appendOp(signalled, op: StdOp.call(ids.mint(), callee: NetpollBreakName, args: ValueIdArray.create(0)))
 	return signalled
 end 'emitSchedSignalMainMachine'
@@ -6405,23 +6405,23 @@ function emitSchedCheckdead(module StdModule, block IrBlock, m ValueId, road Sch
 end 'emitSchedCheckdead'
 
 function buildSchedCheckdead(module StdModule)
-	var func = IrFunction.createFromStd(SchedCheckdeadName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let func = IrFunction.createFromStd(SchedCheckdeadName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
-	var ids = ValueMinter.create(2)
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var countsKnown = module.addBlock(func, label: b"cdcounts", heat: BlockHeat.normal)
-	var inconsistent = module.addBlock(func, label: b"cdinconsistent", heat: BlockHeat.normal)
-	var nobodyRunning = module.addBlock(func, label: b"cdnobody", heat: BlockHeat.normal)
-	var nothingPending = module.addBlock(func, label: b"cdnothing", heat: BlockHeat.normal)
-	var mainNeverFinishes = module.addBlock(func, label: b"cdmainstuck", heat: BlockHeat.normal)
-	var quiescerGivesUp = module.addBlock(func, label: b"cdquiesce", heat: BlockHeat.normal)
-	var quiescerClaimed = module.addBlock(func, label: b"cdquiesceclaimed", heat: BlockHeat.normal)
-	var quiescerSignalled = module.addBlock(func, label: b"cdquiescesignalled", heat: BlockHeat.normal)
-	var notMainRunning = module.addBlock(func, label: b"cdnotmain", heat: BlockHeat.normal)
-	var deadlocked = module.addBlock(func, label: b"cddeadlock", heat: BlockHeat.normal)
-	var stuck = module.addBlock(func, label: b"cdstuck", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"cddone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let countsKnown = module.addBlock(func, label: b"cdcounts", heat: BlockHeat.normal)
+	let inconsistent = module.addBlock(func, label: b"cdinconsistent", heat: BlockHeat.normal)
+	let nobodyRunning = module.addBlock(func, label: b"cdnobody", heat: BlockHeat.normal)
+	let nothingPending = module.addBlock(func, label: b"cdnothing", heat: BlockHeat.normal)
+	let mainNeverFinishes = module.addBlock(func, label: b"cdmainstuck", heat: BlockHeat.normal)
+	let quiescerGivesUp = module.addBlock(func, label: b"cdquiesce", heat: BlockHeat.normal)
+	let quiescerClaimed = module.addBlock(func, label: b"cdquiesceclaimed", heat: BlockHeat.normal)
+	let quiescerSignalled = module.addBlock(func, label: b"cdquiescesignalled", heat: BlockHeat.normal)
+	let notMainRunning = module.addBlock(func, label: b"cdnotmain", heat: BlockHeat.normal)
+	let deadlocked = module.addBlock(func, label: b"cddeadlock", heat: BlockHeat.normal)
+	let stuck = module.addBlock(func, label: b"cdstuck", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"cddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let m = 0
@@ -6456,7 +6456,7 @@ function buildSchedCheckdead(module StdModule)
 	_ = emitGtReady(module, block: quiescerClaimed, gt: quiescer, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.held, ids: ids)
 	emitBranchOnCompare(module, block: quiescerClaimed, value: road, pred: StdCmpPred.eq, against: SchedParkRoad.ordinary.rawValue, whenTrue: quiescerSignalled, whenFalse: doneBlock, ids: ids)
 
-	var quiescerWoken = emitSchedSignalMachineLocked(module, func: func, cur: quiescerSignalled, m: m, labelPrefix: "cdquiesce", ids: ids)
+	let quiescerWoken = emitSchedSignalMachineLocked(module, func: func, cur: quiescerSignalled, m: m, labelPrefix: "cdquiesce", ids: ids)
 	module.setTerminator(quiescerWoken, op: StdOp.branch(doneBlock.id))
 
 	emitRuntimeAbort(module, func: func, block: deadlocked, abort: RuntimeAbort.schedulerDeadlock, ids: ids)
@@ -6464,7 +6464,7 @@ function buildSchedCheckdead(module StdModule)
 	let draining = emitSchedPhaseIs(module, block: notMainRunning, phase: phase, want: SchedPhase.draining, ids: ids)
 	module.setTerminator(notMainRunning, op: StdOp.condBranch(draining, thenBlockId: stuck.id, elseBlockId: doneBlock.id))
 
-	var stuckSignalled = emitSchedEnterPhaseLocked(module, func: func, cur: stuck, phase: SchedPhase.stuck, ids: ids)
+	let stuckSignalled = emitSchedEnterPhaseLocked(module, func: func, cur: stuck, phase: SchedPhase.stuck, ids: ids)
 	module.setTerminator(stuckSignalled, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -6493,69 +6493,69 @@ end 'emitSchedRunStrand'
 // in a worker a guard would consult a `currentGt` that does not exist until `emitSchedBecomeM` has run.**
 function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// A worker answers the DWORD its `CreateThread` callback owes, which nobody reads.
-	var func = match role 'funcOf'
+	let func = match role 'funcOf'
 		worker gives IrFunction.createFromStd(SchedWorkerLoopName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 		mainMachine gives IrFunction.createFromStd(SchedMainLoopName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	end 'funcOf'
 
-	var ids = ValueMinter.create(1)
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var loopTop = module.addBlock(func, label: b"wloop", heat: BlockHeat.normal)
-	var lockedCheck = module.addBlock(func, label: b"wlockedcheck", heat: BlockHeat.normal)
-	var lockedRelease = module.addBlock(func, label: b"wlockedrelease", heat: BlockHeat.cold)
-	var lockedHandOff = module.addBlock(func, label: b"wlockedhandoff", heat: BlockHeat.cold)
-	var lockedWait = module.addBlock(func, label: b"wlockedwait", heat: BlockHeat.cold)
-	var lockedWoke = module.addBlock(func, label: b"wlockedwoke", heat: BlockHeat.cold)
-	var lockedEnterCount = module.addBlock(func, label: b"wlockedentercount", heat: BlockHeat.cold)
-	var lockedCounting = module.addBlock(func, label: b"wlockedcounting", heat: BlockHeat.cold)
-	var lockedGave = module.addBlock(func, label: b"wlockedgave", heat: BlockHeat.cold)
-	var lockedSpurious = module.addBlock(func, label: b"wlockedspurious", heat: BlockHeat.cold)
-	var lockedRewait = module.addBlock(func, label: b"wlockedrewait", heat: BlockHeat.cold)
-	var lockedAdopt = module.addBlock(func, label: b"wlockedadopt", heat: BlockHeat.cold)
-	var lockedRun = module.addBlock(func, label: b"wlockedrun", heat: BlockHeat.cold)
-	var lockedStrandRun = module.addBlock(func, label: b"wlockedstrandrun", heat: BlockHeat.cold)
-	var checkTimers = module.addBlock(func, label: b"wchecktimers", heat: BlockHeat.normal)
-	var dequeue = module.addBlock(func, label: b"wdequeue", heat: BlockHeat.normal)
-	var sortWork = module.addBlock(func, label: b"wsortwork", heat: BlockHeat.normal)
-	var handedOffProc = module.addBlock(func, label: b"whandedoff", heat: BlockHeat.cold)
-	var handedOffLocking = module.addBlock(func, label: b"whandedofflock", heat: BlockHeat.cold)
-	var haveWork = module.addBlock(func, label: b"wrun", heat: BlockHeat.normal)
-	var foundWork = module.addBlock(func, label: b"wfound", heat: BlockHeat.normal)
-	var idlePoll = module.addBlock(func, label: b"widlepoll", heat: BlockHeat.normal)
-	var idleFire = module.addBlock(func, label: b"widlefire", heat: BlockHeat.normal)
-	var park = module.addBlock(func, label: b"wpark", heat: BlockHeat.normal)
-	var doRelease = module.addBlock(func, label: b"wrelease", heat: BlockHeat.normal)
-	var abandonPark = module.addBlock(func, label: b"wabandon", heat: BlockHeat.normal)
-	var abandonGlobal = module.addBlock(func, label: b"wabandonglobal", heat: BlockHeat.normal)
-	var parkGlobal = module.addBlock(func, label: b"wparkglobal", heat: BlockHeat.normal)
-	var parkNeed = module.addBlock(func, label: b"wparkneed", heat: BlockHeat.normal)
-	var parkRecheck = module.addBlock(func, label: b"wparkrecheck", heat: BlockHeat.normal)
-	var parkSpinRegain = module.addBlock(func, label: b"wparkspinregain", heat: BlockHeat.normal)
-	var parkSpinNoProc = module.addBlock(func, label: b"wparkspinnop", heat: BlockHeat.normal)
-	var parkTail = module.addBlock(func, label: b"wparktail", heat: BlockHeat.normal)
-	var parkCheck = module.addBlock(func, label: b"wparkcheck", heat: BlockHeat.normal)
-	var parkRegain = module.addBlock(func, label: b"wregain", heat: BlockHeat.normal)
-	var parkStopTest = module.addBlock(func, label: b"wstoptest", heat: BlockHeat.normal)
-	var idleTail = module.addBlock(func, label: b"wtail", heat: BlockHeat.normal)
-	var claimPoller = module.addBlock(func, label: b"wclaim", heat: BlockHeat.normal)
-	var claimSwap = module.addBlock(func, label: b"wclaimswap", heat: BlockHeat.normal)
-	var pollDeadline = module.addBlock(func, label: b"wpolldeadline", heat: BlockHeat.normal)
-	var pollWait = module.addBlock(func, label: b"wpoll", heat: BlockHeat.normal)
-	var polled = module.addBlock(func, label: b"wpolled", heat: BlockHeat.normal)
-	var polledStores = module.addBlock(func, label: b"wpolledstores", heat: BlockHeat.normal)
-	var parkSpinBecome = module.addBlock(func, label: b"wparkspinbecome", heat: BlockHeat.normal)
-	var parkResumed = module.addBlock(func, label: b"wresumed", heat: BlockHeat.normal)
-	var parkResumedWake = module.addBlock(func, label: b"wresumedwake", heat: BlockHeat.normal)
-	var breakCheck = module.addBlock(func, label: b"wbreakcheck", heat: BlockHeat.normal)
-	var breakPoller = module.addBlock(func, label: b"wbreak", heat: BlockHeat.normal)
-	var parkJoin = module.addBlock(func, label: b"wjoin", heat: BlockHeat.normal)
-	var doWait = module.addBlock(func, label: b"wdowait", heat: BlockHeat.normal)
-	var afterWait = module.addBlock(func, label: b"wafterwait", heat: BlockHeat.normal)
-	var rewait = module.addBlock(func, label: b"wrewait", heat: BlockHeat.normal)
-	var delivered = module.addBlock(func, label: b"wdelivered", heat: BlockHeat.normal)
-	var adoptGiven = module.addBlock(func, label: b"wadopt", heat: BlockHeat.normal)
-	var exitBlock = module.addBlock(func, label: b"wexit", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let loopTop = module.addBlock(func, label: b"wloop", heat: BlockHeat.normal)
+	let lockedCheck = module.addBlock(func, label: b"wlockedcheck", heat: BlockHeat.normal)
+	let lockedRelease = module.addBlock(func, label: b"wlockedrelease", heat: BlockHeat.cold)
+	let lockedHandOff = module.addBlock(func, label: b"wlockedhandoff", heat: BlockHeat.cold)
+	let lockedWait = module.addBlock(func, label: b"wlockedwait", heat: BlockHeat.cold)
+	let lockedWoke = module.addBlock(func, label: b"wlockedwoke", heat: BlockHeat.cold)
+	let lockedEnterCount = module.addBlock(func, label: b"wlockedentercount", heat: BlockHeat.cold)
+	let lockedCounting = module.addBlock(func, label: b"wlockedcounting", heat: BlockHeat.cold)
+	let lockedGave = module.addBlock(func, label: b"wlockedgave", heat: BlockHeat.cold)
+	let lockedSpurious = module.addBlock(func, label: b"wlockedspurious", heat: BlockHeat.cold)
+	let lockedRewait = module.addBlock(func, label: b"wlockedrewait", heat: BlockHeat.cold)
+	let lockedAdopt = module.addBlock(func, label: b"wlockedadopt", heat: BlockHeat.cold)
+	let lockedRun = module.addBlock(func, label: b"wlockedrun", heat: BlockHeat.cold)
+	let lockedStrandRun = module.addBlock(func, label: b"wlockedstrandrun", heat: BlockHeat.cold)
+	let checkTimers = module.addBlock(func, label: b"wchecktimers", heat: BlockHeat.normal)
+	let dequeue = module.addBlock(func, label: b"wdequeue", heat: BlockHeat.normal)
+	let sortWork = module.addBlock(func, label: b"wsortwork", heat: BlockHeat.normal)
+	let handedOffProc = module.addBlock(func, label: b"whandedoff", heat: BlockHeat.cold)
+	let handedOffLocking = module.addBlock(func, label: b"whandedofflock", heat: BlockHeat.cold)
+	let haveWork = module.addBlock(func, label: b"wrun", heat: BlockHeat.normal)
+	let foundWork = module.addBlock(func, label: b"wfound", heat: BlockHeat.normal)
+	let idlePoll = module.addBlock(func, label: b"widlepoll", heat: BlockHeat.normal)
+	let idleFire = module.addBlock(func, label: b"widlefire", heat: BlockHeat.normal)
+	let park = module.addBlock(func, label: b"wpark", heat: BlockHeat.normal)
+	let doRelease = module.addBlock(func, label: b"wrelease", heat: BlockHeat.normal)
+	let abandonPark = module.addBlock(func, label: b"wabandon", heat: BlockHeat.normal)
+	let abandonGlobal = module.addBlock(func, label: b"wabandonglobal", heat: BlockHeat.normal)
+	let parkGlobal = module.addBlock(func, label: b"wparkglobal", heat: BlockHeat.normal)
+	let parkNeed = module.addBlock(func, label: b"wparkneed", heat: BlockHeat.normal)
+	let parkRecheck = module.addBlock(func, label: b"wparkrecheck", heat: BlockHeat.normal)
+	let parkSpinRegain = module.addBlock(func, label: b"wparkspinregain", heat: BlockHeat.normal)
+	let parkSpinNoProc = module.addBlock(func, label: b"wparkspinnop", heat: BlockHeat.normal)
+	let parkTail = module.addBlock(func, label: b"wparktail", heat: BlockHeat.normal)
+	let parkCheck = module.addBlock(func, label: b"wparkcheck", heat: BlockHeat.normal)
+	let parkRegain = module.addBlock(func, label: b"wregain", heat: BlockHeat.normal)
+	let parkStopTest = module.addBlock(func, label: b"wstoptest", heat: BlockHeat.normal)
+	let idleTail = module.addBlock(func, label: b"wtail", heat: BlockHeat.normal)
+	let claimPoller = module.addBlock(func, label: b"wclaim", heat: BlockHeat.normal)
+	let claimSwap = module.addBlock(func, label: b"wclaimswap", heat: BlockHeat.normal)
+	let pollDeadline = module.addBlock(func, label: b"wpolldeadline", heat: BlockHeat.normal)
+	let pollWait = module.addBlock(func, label: b"wpoll", heat: BlockHeat.normal)
+	let polled = module.addBlock(func, label: b"wpolled", heat: BlockHeat.normal)
+	let polledStores = module.addBlock(func, label: b"wpolledstores", heat: BlockHeat.normal)
+	let parkSpinBecome = module.addBlock(func, label: b"wparkspinbecome", heat: BlockHeat.normal)
+	let parkResumed = module.addBlock(func, label: b"wresumed", heat: BlockHeat.normal)
+	let parkResumedWake = module.addBlock(func, label: b"wresumedwake", heat: BlockHeat.normal)
+	let breakCheck = module.addBlock(func, label: b"wbreakcheck", heat: BlockHeat.normal)
+	let breakPoller = module.addBlock(func, label: b"wbreak", heat: BlockHeat.normal)
+	let parkJoin = module.addBlock(func, label: b"wjoin", heat: BlockHeat.normal)
+	let doWait = module.addBlock(func, label: b"wdowait", heat: BlockHeat.normal)
+	let afterWait = module.addBlock(func, label: b"wafterwait", heat: BlockHeat.normal)
+	let rewait = module.addBlock(func, label: b"wrewait", heat: BlockHeat.normal)
+	let delivered = module.addBlock(func, label: b"wdelivered", heat: BlockHeat.normal)
+	let adoptGiven = module.addBlock(func, label: b"wadopt", heat: BlockHeat.normal)
+	let exitBlock = module.addBlock(func, label: b"wexit", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 
@@ -6603,7 +6603,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 
 	// A machine waiting for its pinned thread neither searches nor polls, so the work and the poller's
 	// deadline it leaves behind are handed to another machine before it waits.
-	var lockedCounted = emitSchedLockedParkCountLocked(module, func: func, cur: lockedCounting, m: m, ids: ids)
+	let lockedCounted = emitSchedLockedParkCountLocked(module, func: func, cur: lockedCounting, m: m, ids: ids)
 	emitSchedLockLeave(module, block: lockedCounted, ids: ids)
 	emitSchedWakeForWhatRemains(module, func: func, check: lockedCounted, cont: lockedWait, wakeLabel: b"wlockedwake", pollerLabel: b"wlockedpoller", ids: ids)
 
@@ -6620,7 +6620,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitSchedLockLeave(module, block: lockedGave, ids: ids)
 	module.setTerminator(lockedGave, op: StdOp.branch(lockedAdopt.id))
 
-	var lockedEnded = emitSchedLockedParkEndLocked(module, func: func, cur: lockedSpurious, m: m, ids: ids)
+	let lockedEnded = emitSchedLockedParkEndLocked(module, func: func, cur: lockedSpurious, m: m, ids: ids)
 	emitSchedLoopExitBranch(module, func: func, cur: lockedEnded, leave: leave, exitBlock: exitBlock, cont: lockedRewait, holdsLock: true, ids: ids)
 
 	emitStoreField(module, block: lockedRewait, record: m, offset: MOffLockedPark, value: emitConst(module, block: lockedRewait, value: LockedPark.waiting.rawValue, ids: ids))
@@ -6728,7 +6728,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitSchedLockLeave(module, block: abandonPark, ids: ids)
 	module.setTerminator(abandonPark, op: StdOp.branch(loopTop.id))
 
-	var released = emitSchedReleaseProcLocked(module, func: func, cur: doRelease, m: m, p: releasing, holdsWorkLabel: b"wparkheldwork", emptyLabel: b"wparkidled", ids: ids)
+	let released = emitSchedReleaseProcLocked(module, func: func, cur: doRelease, m: m, p: releasing, holdsWorkLabel: b"wparkheldwork", emptyLabel: b"wparkidled", ids: ids)
 	emitSchedLockLeave(module, block: released, ids: ids)
 	module.setTerminator(released, op: StdOp.condBranch(parkedSpinning, thenBlockId: parkRecheck.id, elseBlockId: parkTail.id))
 
@@ -6817,7 +6817,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 
 	// This machine is the poller. The deadline arrives as `wpolldeadline`'s own block argument once it is known.
 	let deadline = ids.mint()
-	var publishDeadline = module.addBlock(func, label: b"wpollpublish", heat: BlockHeat.normal)
+	let publishDeadline = module.addBlock(func, label: b"wpollpublish", heat: BlockHeat.normal)
 	publishDeadline.blockArgs.push(IrBlockArg.create(deadline, argType: StdType.i64))
 	emitSchedPollDeadline(module, cur: pollDeadline, cont: publishDeadline, ids: ids)
 
@@ -6860,7 +6860,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// earlier one armed since broke its wait; this re-check is Go's, and costs a break only in the window between
 	// an arm and that break.
 	let otherDeadline = ids.mint()
-	var compareDeadline = module.addBlock(func, label: b"wbreakcompare", heat: BlockHeat.normal)
+	let compareDeadline = module.addBlock(func, label: b"wbreakcompare", heat: BlockHeat.normal)
 	compareDeadline.blockArgs.push(IrBlockArg.create(otherDeadline, argType: StdType.i64))
 	emitSchedPollDeadline(module, cur: breakCheck, cont: compareDeadline, ids: ids)
 
@@ -6873,7 +6873,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 
 	// Go's `stopm`: `mput`, then Go's `checkdead`. This is the instant the machine becomes findable as idle, and
 	// it is the LAST thing done under the lock; the deadlock check sees this machine counted idle.
-	var joined = emitSchedMidlePutLocked(module, func: func, cur: parkJoin, m: m, ids: ids)
+	let joined = emitSchedMidlePutLocked(module, func: func, cur: parkJoin, m: m, ids: ids)
 	emitSchedCheckdead(module, block: joined, m: m, road: SchedParkRoad.ordinary, ids: ids)
 	emitSchedLockLeave(module, block: joined, ids: ids)
 	module.setTerminator(joined, op: StdOp.branch(doWait.id))
@@ -6923,7 +6923,7 @@ end 'buildSchedLoop'
 // the park road left it none; without one it enters at the final look (`noProc`), holding the lock that block
 // requires, and so either takes a processor back for queued work or parks like any idle machine.
 function emitSchedMainMachineEntry(module StdModule, func IrFunction, entry IrBlock, m ValueId, holdingProc IrBlock, noProc IrBlock, ids ValueMinter)
-	var enterIdle = module.addBlock(func, label: b"wentryidle", heat: BlockHeat.normal)
+	let enterIdle = module.addBlock(func, label: b"wentryidle", heat: BlockHeat.normal)
 
 	let p = emitLoadField(module, block: entry, record: m, offset: MOffCurrentP, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: enterIdle, whenFalse: holdingProc, ids: ids)
@@ -6938,7 +6938,7 @@ end 'emitSchedMainMachineEntry'
 // already counted, and otherwise leaves `__sched_needspinning` raised for the machine that parks next. It
 // terminates `cur`.
 function emitSchedHandOnTheLooking(module StdModule, func IrFunction, cur IrBlock, nothingSkipped ValueId, cont IrBlock, wakeLabel ByteArray, ids ValueMinter)
-	var wake = module.addBlock(func, label: wakeLabel, heat: BlockHeat.normal)
+	let wake = module.addBlock(func, label: wakeLabel, heat: BlockHeat.normal)
 
 	module.setTerminator(cur, op: StdOp.condBranch(nothingSkipped, thenBlockId: cont.id, elseBlockId: wake.id))
 
@@ -6959,8 +6959,8 @@ function emitSchedResetSpinning(module StdModule, func IrFunction, cur IrBlock, 
 end 'emitSchedResetSpinning'
 
 function emitSchedWakeForWhatRemains(module StdModule, func IrFunction, check IrBlock, cont IrBlock, wakeLabel ByteArray, pollerLabel ByteArray, ids ValueMinter)
-	var wake = module.addBlock(func, label: wakeLabel, heat: BlockHeat.normal)
-	var poller = module.addBlock(func, label: pollerLabel, heat: BlockHeat.normal)
+	let wake = module.addBlock(func, label: wakeLabel, heat: BlockHeat.normal)
+	let poller = module.addBlock(func, label: pollerLabel, heat: BlockHeat.normal)
 
 	emitSchedBranchOnNoWork(module, block: check, whenNoWork: poller, whenWork: wake, ids: ids)
 
@@ -6985,14 +6985,14 @@ end 'emitSchedBreakIdlePoller'
 // under it; the exit drain then cannot end until that wait's deadline passes, never for a wait with no
 // timer. The break makes the poller re-read the empty set and go idle.
 function buildSchedBreakIdlePoller(module StdModule)
-	var func = IrFunction.createFromStd(SchedBreakIdlePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let func = IrFunction.createFromStd(SchedBreakIdlePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	requireRuntimeLockHeld(module, func: func, lockLabel: SchedLockLabel)
-	var ids = ValueMinter.create(0)
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var pollerBlocked = module.addBlock(func, label: b"ibpblocked", heat: BlockHeat.normal)
-	var breakIt = module.addBlock(func, label: b"ibpbreak", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"ibpdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let pollerBlocked = module.addBlock(func, label: b"ibpblocked", heat: BlockHeat.normal)
+	let breakIt = module.addBlock(func, label: b"ibpbreak", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"ibpdone", heat: BlockHeat.normal)
 
 	module.setTerminator(entry, op: StdOp.condBranch(emitGtStoresPending(module, block: entry, ids: ids), thenBlockId: doneBlock.id, elseBlockId: pollerBlocked.id))
 	module.setTerminator(pollerBlocked, op: StdOp.condBranch(emitSchedNobodyPolls(module, block: pollerBlocked, ids: ids), thenBlockId: doneBlock.id, elseBlockId: breakIt.id))
@@ -7017,7 +7017,7 @@ end 'emitSchedPollerOwed'
 // reads it as *"somebody is already looking"*. So the credit comes back as `wfound` gives it back — with the
 // re-check a spinner owes. It keeps its processor if it holds one, which the next loop's entry takes.
 function emitSchedMainMachineExit(module StdModule, func IrFunction, exitBlock IrBlock, m ValueId, ids ValueMinter)
-	var left = module.addBlock(func, label: b"wexitdone", heat: BlockHeat.normal)
+	let left = module.addBlock(func, label: b"wexitdone", heat: BlockHeat.normal)
 
 	let wasSpinning = emitSchedSpinningTransition(module, block: exitBlock, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
 	let heldNoCredit = emitCasLost(module, block: exitBlock, result: wasSpinning, ids: ids)
@@ -7064,7 +7064,7 @@ function emitSchedLoopExitBranch(module StdModule, func IrFunction, cur IrBlock,
 	let stopping = emitSchedLoopExitTest(module, block: cur, leave: leave, underTheLock: holdsLock, ids: ids)
 
 	if holdsLock 'releaseOnTheWayOut'
-		var parkExit = module.addBlock(func, label: b"wparkexit", heat: BlockHeat.normal)
+		let parkExit = module.addBlock(func, label: b"wparkexit", heat: BlockHeat.normal)
 		emitSchedLockLeave(module, block: parkExit, ids: ids)
 		module.setTerminator(parkExit, op: StdOp.branch(exitBlock.id))
 		module.setTerminator(cur, op: StdOp.condBranch(stopping, thenBlockId: parkExit.id, elseBlockId: cont.id))
@@ -7154,7 +7154,7 @@ end 'emitSchedMainLoopUntilMet'
 // Continues at `resumeAt` uncredited: a credit makes `wfound` pay a wake, which only `wparkspinbecome`'s
 // road owes, and that block takes the credit itself.
 function emitSchedRegainProcessor(module StdModule, func IrFunction, cur IrBlock, m ValueId, resumeAt IrBlock, none IrBlock, resumeLabel ByteArray, target Target, ids ValueMinter)
-	var resume = module.addBlock(func, label: resumeLabel, heat: BlockHeat.normal)
+	let resume = module.addBlock(func, label: resumeLabel, heat: BlockHeat.normal)
 
 	let regained = emitSchedPidleGetLocked(module, func: func, cur: cur, got: resume, none: none, wakesMonitor: targetBracketsBlockingSyscalls(target), ids: ids)
 	emitSchedLockLeave(module, block: resume, ids: ids)
@@ -7183,9 +7183,9 @@ end 'emitSchedPollDeadline'
 // there were — which is exactly the shape `emitGlobalAccumulate`'s contract note says lets the isel pick a
 // bare `lock add` with no destination register.
 function emitSchedWorkerExit(module StdModule, func IrFunction, exitBlock IrBlock, m ValueId, ids ValueMinter)
-	var exitRelease = module.addBlock(func, label: b"wexitrelease", heat: BlockHeat.normal)
-	var exitDrained = module.addBlock(func, label: b"wexitdrained", heat: BlockHeat.normal)
-	var exitDone = module.addBlock(func, label: b"wexitdone", heat: BlockHeat.normal)
+	let exitRelease = module.addBlock(func, label: b"wexitrelease", heat: BlockHeat.normal)
+	let exitDrained = module.addBlock(func, label: b"wexitdrained", heat: BlockHeat.normal)
+	let exitDone = module.addBlock(func, label: b"wexitdone", heat: BlockHeat.normal)
 
 	let negOne = emitConst(module, block: exitBlock, value: -1, ids: ids)
 	_ = emitGlobalAccumulate(module, block: exitBlock, label: SchedActiveWorkersLabel, delta: negOne, multiM: true, ids: ids)
@@ -7206,7 +7206,7 @@ function emitSchedWorkerExit(module StdModule, func IrFunction, exitBlock IrBloc
 	// Nothing runs it after shutdown wherever it goes, and `pidleput`'s assertion is what the drain satisfies.
 	emitSchedLockEnter(module, block: exitRelease, ids: ids)
 	emitSchedDrainRunqLocked(module, block: exitRelease, p: exitProc, cont: exitDrained, ids: ids)
-	var exitReleased = emitSchedReleaseProcLocked(module, func: func, cur: exitDrained, m: m, p: exitProc, holdsWorkLabel: b"wexitheldwork", emptyLabel: b"wexitidled", ids: ids)
+	let exitReleased = emitSchedReleaseProcLocked(module, func: func, cur: exitDrained, m: m, p: exitProc, holdsWorkLabel: b"wexitheldwork", emptyLabel: b"wexitidled", ids: ids)
 	emitSchedLockLeave(module, block: exitReleased, ids: ids)
 	module.setTerminator(exitReleased, op: StdOp.branch(exitDone.id))
 
@@ -7245,7 +7245,7 @@ end 'SpinningTransition'
 
 // A lost CAS is fatal rather than absorbed: `MOffSpinning` argues why the recipient cannot hold a credit.
 function emitSchedHandOverCredit(module StdModule, func IrFunction, cur IrBlock, m ValueId, cont IrBlock, ids ValueMinter)
-	var alreadySpinning = module.addBlock(func, label: b"handoveralreadyspinning", heat: BlockHeat.cold)
+	let alreadySpinning = module.addBlock(func, label: b"handoveralreadyspinning", heat: BlockHeat.cold)
 
 	let spinningAddr = emitFieldAddr(module, block: cur, record: m, offset: MOffSpinning, ids: ids)
 	let expected = emitConst(module, block: cur, value: MSpinningFree, ids: ids)
@@ -7297,7 +7297,7 @@ end 'emitSchedSpinningTransition'
 // Raise `__sched_max_active_workers` to `live` if `live` is higher, then continue at `cont`. See the entry
 // comment in `buildSchedLoop` for why this is deliberately not atomic.
 function emitSchedRaiseHighWater(module StdModule, func IrFunction, cur IrBlock, live ValueId, cont IrBlock, ids ValueMinter)
-	var raise = module.addBlock(func, label: b"whiwater", heat: BlockHeat.normal)
+	let raise = module.addBlock(func, label: b"whiwater", heat: BlockHeat.normal)
 
 	let mark = emitLoadGlobalWord(module, block: cur, label: SchedMaxActiveWorkersLabel, ids: ids)
 	emitBranchOnCompareValues(module, block: cur, a: live, pred: StdCmpPred.gt, b: mark, whenTrue: raise, whenFalse: cont, ids: ids)
@@ -7343,14 +7343,14 @@ end 'emitSchedRaiseHighWater'
 //
 // Unguarded, so an owed wake pays no prologue guard; E5004 proves its chain fits the margin.
 function buildSchedWakeOrSpawn(module StdModule)
-	var func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedWakeOrSpawnName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var spinTest = module.addBlock(func, label: b"spintest", heat: BlockHeat.normal)
-	var spinClaim = module.addBlock(func, label: b"spinclaim", heat: BlockHeat.normal)
-	var startIt = module.addBlock(func, label: b"wakestart", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let spinTest = module.addBlock(func, label: b"spintest", heat: BlockHeat.normal)
+	let spinClaim = module.addBlock(func, label: b"spinclaim", heat: BlockHeat.normal)
+	let startIt = module.addBlock(func, label: b"wakestart", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	// A shutdown in progress must start nothing and wake nobody. ⚠ This read is the FAST refusal and not the
 	// authoritative one: `__sched_startm` reads the flag again inside `__sched_lock`, which is the same
@@ -7416,14 +7416,14 @@ end 'emitSchedSpinningPlusIdle'
 // next poll one early return, and the machine that ended it looks again itself; a stale "nobody polls" wakes a
 // parked machine that finds the poller taken and parks again.
 function buildSchedWakeNetpoller(module StdModule)
-	var func = IrFunction.createFromStd(SchedWakeNetpollerName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SchedWakeNetpollerName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var polling = module.addBlock(func, label: b"wnppolling", heat: BlockHeat.normal)
-	var breakIt = module.addBlock(func, label: b"wnpbreak", heat: BlockHeat.normal)
-	var wakeOne = module.addBlock(func, label: b"wnpwake", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"wnpdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let polling = module.addBlock(func, label: b"wnppolling", heat: BlockHeat.normal)
+	let breakIt = module.addBlock(func, label: b"wnpbreak", heat: BlockHeat.normal)
+	let wakeOne = module.addBlock(func, label: b"wnpwake", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"wnpdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let when = 0
@@ -7465,15 +7465,15 @@ end 'emitSchedPollerLate'
 // after it reaches the idle tail with the deadline pending and nobody polling, and claims the poller itself
 // rather than joining the list.
 function buildSchedWakePoller(module StdModule)
-	var func = IrFunction.createFromStd(SchedWakePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedWakePollerName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var peek = module.addBlock(func, label: b"wppeek", heat: BlockHeat.normal)
-	var take = module.addBlock(func, label: b"wptake", heat: BlockHeat.normal)
-	var unlink = module.addBlock(func, label: b"wpunlink", heat: BlockHeat.normal)
-	var noneParked = module.addBlock(func, label: b"wpnone", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"wpdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let peek = module.addBlock(func, label: b"wppeek", heat: BlockHeat.normal)
+	let take = module.addBlock(func, label: b"wptake", heat: BlockHeat.normal)
+	let unlink = module.addBlock(func, label: b"wpunlink", heat: BlockHeat.normal)
+	let noneParked = module.addBlock(func, label: b"wpnone", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"wpdone", heat: BlockHeat.normal)
 
 	module.setTerminator(entry, op: StdOp.condBranch(emitSchedPollerOwed(module, block: entry, ids: ids), thenBlockId: peek.id, elseBlockId: doneBlock.id))
 
@@ -7484,7 +7484,7 @@ function buildSchedWakePoller(module StdModule)
 	let parked = emitLoadGlobalWord(module, block: take, label: SchedMidleLabel, ids: ids)
 	emitBranchOnCompare(module, block: take, value: parked, pred: StdCmpPred.eq, against: 0, whenTrue: noneParked, whenFalse: unlink, ids: ids)
 
-	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: unlink, m: parked, ids: ids)
+	let unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: unlink, m: parked, ids: ids)
 	let parkEvent = emitLoadField(module, block: unlinked, record: parked, offset: MOffParkEvent, ids: ids)
 	emitSchedLockLeave(module, block: unlinked, ids: ids)
 	module.appendOp(unlinked, op: StdOp.osSetEvent(parkEvent))
@@ -7515,18 +7515,18 @@ end 'buildSchedWakePoller'
 // the processor its own machine holds — so a thief may still drain it but nobody can fill it. Arm 1's
 // unlocked read is therefore not merely a hint: an empty answer stays empty all the way to the assertion.
 function buildSchedHandoffP(module StdModule)
-	var func = IrFunction.createFromStd(SchedHandoffPName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SchedHandoffPName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var startIt = module.addBlock(func, label: b"hopstart", heat: BlockHeat.normal)
-	var recheck = module.addBlock(func, label: b"hoprecheck", heat: BlockHeat.normal)
-	var lockedStart = module.addBlock(func, label: b"hoplockedstart", heat: BlockHeat.normal)
-	var idleIt = module.addBlock(func, label: b"hopidle", heat: BlockHeat.normal)
-	var lastProc = module.addBlock(func, label: b"hoplastp", heat: BlockHeat.normal)
-	var spinArm = module.addBlock(func, label: b"hopspin", heat: BlockHeat.normal)
-	var spinClaim = module.addBlock(func, label: b"hopspinclaim", heat: BlockHeat.normal)
-	var spinStart = module.addBlock(func, label: b"hopspinstart", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let startIt = module.addBlock(func, label: b"hopstart", heat: BlockHeat.normal)
+	let recheck = module.addBlock(func, label: b"hoprecheck", heat: BlockHeat.normal)
+	let lockedStart = module.addBlock(func, label: b"hoplockedstart", heat: BlockHeat.normal)
+	let idleIt = module.addBlock(func, label: b"hopidle", heat: BlockHeat.normal)
+	let lastProc = module.addBlock(func, label: b"hoplastp", heat: BlockHeat.normal)
+	let spinArm = module.addBlock(func, label: b"hopspin", heat: BlockHeat.normal)
+	let spinClaim = module.addBlock(func, label: b"hopspinclaim", heat: BlockHeat.normal)
+	let spinStart = module.addBlock(func, label: b"hopspinstart", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let p = 0
@@ -7587,7 +7587,7 @@ function buildSchedHandoffP(module StdModule)
 
 	// Arm 5 — nothing to run anywhere: park the PROCESSOR, which is Go's `pidleput(pp, 0)` and the sentence
 	// `POffPidleNext` was created to make expressible.
-	var idled = emitSchedPidlePutLocked(module, func: func, cur: idleIt, p: p, holdsWorkLabel: b"hopheldwork", emptyLabel: b"hopidled", ids: ids)
+	let idled = emitSchedPidlePutLocked(module, func: func, cur: idleIt, p: p, holdsWorkLabel: b"hopheldwork", emptyLabel: b"hopidled", ids: ids)
 	emitSchedLockLeave(module, block: idled, ids: ids)
 	module.setTerminator(idled, op: StdOp.retVoid)
 
@@ -7625,26 +7625,26 @@ end 'buildSchedHandoffP'
 // runs inside it, so `MAXON_PREEMPT=off` withdraws both questions at one door rather than per processor.
 // The cost is the monitor's stated purpose: with it off, a CPU-bound strand starves `main` at one processor.
 function buildSchedRetake(module StdModule)
-	var func = IrFunction.createFromStd(SchedRetakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(SchedRetakeName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var switchedOff = module.addBlock(func, label: b"rtoff", heat: BlockHeat.normal)
-	var loopHdr = module.addBlock(func, label: b"rthdr", heat: BlockHeat.normal)
-	var askProc = module.addBlock(func, label: b"rtask", heat: BlockHeat.normal)
-	var haveMachine = module.addBlock(func, label: b"rtmachine", heat: BlockHeat.normal)
-	var noteTick = module.addBlock(func, label: b"rtnotetick", heat: BlockHeat.normal)
-	var sameStrand = module.addBlock(func, label: b"rtsamestrand", heat: BlockHeat.normal)
-	var preempt = module.addBlock(func, label: b"rtpreempt", heat: BlockHeat.normal)
-	var syscallArm = module.addBlock(func, label: b"rtsyscallarm", heat: BlockHeat.normal)
-	var inSyscall = module.addBlock(func, label: b"rtsyscall", heat: BlockHeat.normal)
-	var recordIt = module.addBlock(func, label: b"rtrecord", heat: BlockHeat.normal)
-	var ruleIt = module.addBlock(func, label: b"rtrule", heat: BlockHeat.normal)
-	var oldEnough = module.addBlock(func, label: b"rtold", heat: BlockHeat.normal)
-	var claimIt = module.addBlock(func, label: b"rtclaim", heat: BlockHeat.normal)
-	var tookIt = module.addBlock(func, label: b"rttook", heat: BlockHeat.normal)
-	var nextProc = module.addBlock(func, label: b"rtnext", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"rtdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let switchedOff = module.addBlock(func, label: b"rtoff", heat: BlockHeat.normal)
+	let loopHdr = module.addBlock(func, label: b"rthdr", heat: BlockHeat.normal)
+	let askProc = module.addBlock(func, label: b"rtask", heat: BlockHeat.normal)
+	let haveMachine = module.addBlock(func, label: b"rtmachine", heat: BlockHeat.normal)
+	let noteTick = module.addBlock(func, label: b"rtnotetick", heat: BlockHeat.normal)
+	let sameStrand = module.addBlock(func, label: b"rtsamestrand", heat: BlockHeat.normal)
+	let preempt = module.addBlock(func, label: b"rtpreempt", heat: BlockHeat.normal)
+	let syscallArm = module.addBlock(func, label: b"rtsyscallarm", heat: BlockHeat.normal)
+	let inSyscall = module.addBlock(func, label: b"rtsyscall", heat: BlockHeat.normal)
+	let recordIt = module.addBlock(func, label: b"rtrecord", heat: BlockHeat.normal)
+	let ruleIt = module.addBlock(func, label: b"rtrule", heat: BlockHeat.normal)
+	let oldEnough = module.addBlock(func, label: b"rtold", heat: BlockHeat.normal)
+	let claimIt = module.addBlock(func, label: b"rtclaim", heat: BlockHeat.normal)
+	let tookIt = module.addBlock(func, label: b"rttook", heat: BlockHeat.normal)
+	let nextProc = module.addBlock(func, label: b"rtnext", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"rtdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let now = 0
@@ -7820,15 +7820,15 @@ end 'buildSchedRetake'
 // to another thread, which then yields once for nothing, or to its scheduler context, whose next switch-in
 // restores the word (`GtRuntime.emitGtExecute`). Records are never freed, so the store always lands in one.
 function buildSchedPreemptOne(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedPreemptOneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SchedPreemptOneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var switchedOn = module.addBlock(func, label: b"poswitch", heat: BlockHeat.normal)
-	var running = module.addBlock(func, label: b"porunning", heat: BlockHeat.normal)
-	var onThread = module.addBlock(func, label: b"pothread", heat: BlockHeat.normal)
-	var request = module.addBlock(func, label: b"porequest", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"podone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let switchedOn = module.addBlock(func, label: b"poswitch", heat: BlockHeat.normal)
+	let running = module.addBlock(func, label: b"porunning", heat: BlockHeat.normal)
+	let onThread = module.addBlock(func, label: b"pothread", heat: BlockHeat.normal)
+	let request = module.addBlock(func, label: b"porequest", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"podone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let m = 0
@@ -7888,22 +7888,22 @@ end 'buildSchedPreemptOne'
 // The address compares are signed, like every other in this runtime: a green thread's stack is
 // `osAllocPages`'d user memory and the PC is inside this image, both far below the sign bit.
 function buildGtPreemptSafe(module StdModule, target Target)
-	var func = IrFunction.createFromStd(PreemptSafeName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(PreemptSafeName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var onThread = module.addBlock(func, label: b"psonthread", heat: BlockHeat.normal)
-	var asked = module.addBlock(func, label: b"psasked", heat: BlockHeat.normal)
-	var notInCall = module.addBlock(func, label: b"psnotincall", heat: BlockHeat.normal)
-	var unlocked = module.addBlock(func, label: b"psunlocked", heat: BlockHeat.normal)
-	var aboveFloor = module.addBlock(func, label: b"psabovefloor", heat: BlockHeat.normal)
-	var inStack = module.addBlock(func, label: b"psinstack", heat: BlockHeat.normal)
-	var inText = module.addBlock(func, label: b"psintext", heat: BlockHeat.normal)
-	var named = module.addBlock(func, label: b"psnamed", heat: BlockHeat.normal)
-	var flagged = module.addBlock(func, label: b"psflagged", heat: BlockHeat.normal)
-	var safe = module.addBlock(func, label: b"pssafe", heat: BlockHeat.normal)
-	var notSafe = module.addBlock(func, label: b"psnotsafe", heat: BlockHeat.normal)
-	var unsafeTable = module.addBlock(func, label: b"psunsafe", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let onThread = module.addBlock(func, label: b"psonthread", heat: BlockHeat.normal)
+	let asked = module.addBlock(func, label: b"psasked", heat: BlockHeat.normal)
+	let notInCall = module.addBlock(func, label: b"psnotincall", heat: BlockHeat.normal)
+	let unlocked = module.addBlock(func, label: b"psunlocked", heat: BlockHeat.normal)
+	let aboveFloor = module.addBlock(func, label: b"psabovefloor", heat: BlockHeat.normal)
+	let inStack = module.addBlock(func, label: b"psinstack", heat: BlockHeat.normal)
+	let inText = module.addBlock(func, label: b"psintext", heat: BlockHeat.normal)
+	let named = module.addBlock(func, label: b"psnamed", heat: BlockHeat.normal)
+	let flagged = module.addBlock(func, label: b"psflagged", heat: BlockHeat.normal)
+	let safe = module.addBlock(func, label: b"pssafe", heat: BlockHeat.normal)
+	let notSafe = module.addBlock(func, label: b"psnotsafe", heat: BlockHeat.normal)
+	let unsafeTable = module.addBlock(func, label: b"psunsafe", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let m = 0
@@ -7955,7 +7955,7 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	let flagsBase = emitBin(module, block: flagged, a: symtable, b: flagsOffset, opcode: StdBinOpcode.add, ids: ids)
 	let flagsByte = emitLoadByteIndexed(module, block: flagged, base: flagsBase, index: index, ids: ids)
 	let preemptible = emitBin(module, block: flagged, a: flagsByte, b: emitConst(module, block: flagged, value: SymtabPreemptibleBit, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	view cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: unsafeTable, target: target, ids: ids)
+	let cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: unsafeTable, target: target, ids: ids)
 	emitBranchOnCompare(module, block: flagged, value: preemptible, pred: StdCmpPred.eq, against: 0, whenTrue: notSafe, whenFalse: cleared, ids: ids)
 
 	emitGtPreemptSafeUnsafeWindowSearch(module, func: func, from: unsafeTable, textOffset: textOffset, notSafe: notSafe, safe: safe, ids: ids)
@@ -7967,12 +7967,12 @@ function buildGtPreemptSafe(module StdModule, target Target)
 end 'buildGtPreemptSafe'
 
 function emitGtPreemptSafeUnsafeWindowSearch(module StdModule, func IrFunction, from IrBlock, textOffset ValueId, notSafe IrBlock, safe IrBlock, ids ValueMinter)
-	var header = module.addBlock(func, label: b"psusearch", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"psubody", heat: BlockHeat.normal)
-	var right = module.addBlock(func, label: b"psuright", heat: BlockHeat.normal)
-	var left = module.addBlock(func, label: b"psuleft", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"psudone", heat: BlockHeat.normal)
-	var last = module.addBlock(func, label: b"psulast", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"psusearch", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"psubody", heat: BlockHeat.normal)
+	let right = module.addBlock(func, label: b"psuright", heat: BlockHeat.normal)
+	let left = module.addBlock(func, label: b"psuleft", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"psudone", heat: BlockHeat.normal)
+	let last = module.addBlock(func, label: b"psulast", heat: BlockHeat.normal)
 
 	let table = ids.mint()
 	module.appendOp(from, op: StdOp.funcAddr(table, funcName: AsyncUnsafeTableName))
@@ -8043,7 +8043,7 @@ function emitGtPreemptSafeLlscLookback(module StdModule, func IrFunction, pc Val
 	// ⚠ **ONE LABEL PER WORD, NOT ONE FOR ALL OF THEM.** An IR dump is read to tell which of the four
 	// lookbacks refused, and four blocks sharing a name are four blocks a reader cannot tell apart.
 	for back in 1 to Arm64ExclusiveLookbackWords 'eachPrecedingWord'
-		var check = module.addBlock(func, label: arm64LookbackBlockLabel(back), heat: BlockHeat.normal)
+		let check = module.addBlock(func, label: arm64LookbackBlockLabel(back), heat: BlockHeat.normal)
 		let word = emitLoadInstructionWord(module, block: check, pc: pc, wordsBack: back, ids: ids)
 		let group = emitBin(module, block: check, a: word, b: emitConst(module, block: check, value: Arm64ExclusiveLoadMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 		emitBranchOnCompare(module, block: check, value: group, pred: StdCmpPred.eq, against: Arm64ExclusiveLoadBits, whenTrue: notSafe, whenFalse: head, ids: ids)
@@ -8088,10 +8088,10 @@ end 'emitLoadInstructionWord'
 // declines, because this thread's PC is inside `__gt_preempt` and, a moment later, its lock depth is not
 // zero.
 function buildGtAsyncPreemptPark(module StdModule)
-	var func = IrFunction.createFromStd(AsyncPreemptParkName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(AsyncPreemptParkName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	let m = emitLoadCurrentM(module, block: entry, ids: ids)
 	let gt = emitLoadField(module, block: entry, record: m, offset: MOffCurrentGt, ids: ids)
@@ -8134,8 +8134,8 @@ export function emitSchedSysmonStart(module StdModule, func IrFunction, cur IrBl
 		return
 	end 'noMonitorOnThisLane'
 
-	var switchKnown = module.addBlock(func, label: b"sysmonswitch", heat: BlockHeat.normal)
-	var unstarted = module.addBlock(func, label: b"sysmonunstarted", heat: BlockHeat.normal)
+	let switchKnown = module.addBlock(func, label: b"sysmonswitch", heat: BlockHeat.normal)
+	let unstarted = module.addBlock(func, label: b"sysmonunstarted", heat: BlockHeat.normal)
 
 	let preemptOff = ids.mint()
 	switchKnown.blockArgs.push(IrBlockArg.create(preemptOff, argType: StdType.i64))
@@ -8176,28 +8176,28 @@ end 'emitSchedSysmonStart'
 // ⚠ **A DEEP SLEEP KEEPS THE LADDER WHERE IT WAS**, which is Go's rule for a wake that did not come from a
 // syscall: a process that sleeps most of the time should not buy fifty fast laps at every wake.
 function buildSysmon(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedSysmonName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SchedSysmonName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var started = module.addBlock(func, label: b"smonstarted", heat: BlockHeat.normal)
-	var loopTop = module.addBlock(func, label: b"smonloop", heat: BlockHeat.normal)
-	var nap = module.addBlock(func, label: b"smonnap", heat: BlockHeat.normal)
-	var deepSleep = module.addBlock(func, label: b"smondeep", heat: BlockHeat.normal)
-	var awake = module.addBlock(func, label: b"smonawake", heat: BlockHeat.normal)
-	var afterNap = module.addBlock(func, label: b"smonafternap", heat: BlockHeat.normal)
-	var claimPoll = module.addBlock(func, label: b"smonclaimpoll", heat: BlockHeat.normal)
-	var stalePoll = module.addBlock(func, label: b"smonpoll", heat: BlockHeat.normal)
-	var timerArm = module.addBlock(func, label: b"smontimer", heat: BlockHeat.normal)
-	var timerOverdue = module.addBlock(func, label: b"smontimeroverdue", heat: BlockHeat.normal)
-	var timerStart = module.addBlock(func, label: b"smontimerstart", heat: BlockHeat.normal)
-	var timerNoStart = module.addBlock(func, label: b"smontimernostart", heat: BlockHeat.normal)
-	var retakeBlock = module.addBlock(func, label: b"smonretake", heat: BlockHeat.normal)
-	var retook = module.addBlock(func, label: b"smonretook", heat: BlockHeat.normal)
-	var idled = module.addBlock(func, label: b"smonidle", heat: BlockHeat.normal)
-	var backOff = module.addBlock(func, label: b"smonbackoff", heat: BlockHeat.normal)
-	var keepPace = module.addBlock(func, label: b"smonkeep", heat: BlockHeat.normal)
-	var exitBlock = module.addBlock(func, label: b"smonexit", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let started = module.addBlock(func, label: b"smonstarted", heat: BlockHeat.normal)
+	let loopTop = module.addBlock(func, label: b"smonloop", heat: BlockHeat.normal)
+	let nap = module.addBlock(func, label: b"smonnap", heat: BlockHeat.normal)
+	let deepSleep = module.addBlock(func, label: b"smondeep", heat: BlockHeat.normal)
+	let awake = module.addBlock(func, label: b"smonawake", heat: BlockHeat.normal)
+	let afterNap = module.addBlock(func, label: b"smonafternap", heat: BlockHeat.normal)
+	let claimPoll = module.addBlock(func, label: b"smonclaimpoll", heat: BlockHeat.normal)
+	let stalePoll = module.addBlock(func, label: b"smonpoll", heat: BlockHeat.normal)
+	let timerArm = module.addBlock(func, label: b"smontimer", heat: BlockHeat.normal)
+	let timerOverdue = module.addBlock(func, label: b"smontimeroverdue", heat: BlockHeat.normal)
+	let timerStart = module.addBlock(func, label: b"smontimerstart", heat: BlockHeat.normal)
+	let timerNoStart = module.addBlock(func, label: b"smontimernostart", heat: BlockHeat.normal)
+	let retakeBlock = module.addBlock(func, label: b"smonretake", heat: BlockHeat.normal)
+	let retook = module.addBlock(func, label: b"smonretook", heat: BlockHeat.normal)
+	let idled = module.addBlock(func, label: b"smonidle", heat: BlockHeat.normal)
+	let backOff = module.addBlock(func, label: b"smonbackoff", heat: BlockHeat.normal)
+	let keepPace = module.addBlock(func, label: b"smonkeep", heat: BlockHeat.normal)
+	let exitBlock = module.addBlock(func, label: b"smonexit", heat: BlockHeat.normal)
 
 	// The `lpParameter` `osThreadCreate` hands this thread is its M record (`emitSchedSysmonStart`), whose
 	// `MOffPreemptOff` holds the resolved `MAXON_PREEMPT` switch: 1 for `off`. The rest of the monitor's state
@@ -8358,15 +8358,15 @@ let WordSignShift = 63
 // which may hold none, and such a call has no processor for a retake to take. `POffSyscallCount` carries why the
 // count must precede the announcement.
 function buildSchedEnterSyscall(module StdModule)
-	var func = IrFunction.createFromStd(SchedEnterSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedEnterSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var haveOffset = module.addBlock(func, label: b"esoff", heat: BlockHeat.normal)
-	var haveMachine = module.addBlock(func, label: b"esm", heat: BlockHeat.normal)
-	var haveProc = module.addBlock(func, label: b"esp", heat: BlockHeat.normal)
-	var announce = module.addBlock(func, label: b"esann", heat: BlockHeat.normal)
-	var noMachine = module.addBlock(func, label: b"esnone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let haveOffset = module.addBlock(func, label: b"esoff", heat: BlockHeat.normal)
+	let haveMachine = module.addBlock(func, label: b"esm", heat: BlockHeat.normal)
+	let haveProc = module.addBlock(func, label: b"esp", heat: BlockHeat.normal)
+	let announce = module.addBlock(func, label: b"esann", heat: BlockHeat.normal)
+	let noMachine = module.addBlock(func, label: b"esnone", heat: BlockHeat.normal)
 
 	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(0), ids: ids)
 
@@ -8402,14 +8402,14 @@ end 'buildSchedEnterSyscall'
 // is on — a handoff moves the PROCESSOR, never the machine — so the exit's guarded walk answers the same M
 // the entry's did, and a bail on one side is a bail on the other.
 function buildSchedExitSyscall(module StdModule)
-	var func = IrFunction.createFromStd(SchedExitSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedExitSyscallName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var haveOffset = module.addBlock(func, label: b"xsoff", heat: BlockHeat.normal)
-	var haveMachine = module.addBlock(func, label: b"xsm", heat: BlockHeat.normal)
-	var regainProc = module.addBlock(func, label: b"xsregain", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"xsdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let haveOffset = module.addBlock(func, label: b"xsoff", heat: BlockHeat.normal)
+	let haveMachine = module.addBlock(func, label: b"xsm", heat: BlockHeat.normal)
+	let regainProc = module.addBlock(func, label: b"xsregain", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"xsdone", heat: BlockHeat.normal)
 
 	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: FullRangeIntArray.create(0), ids: ids)
 
@@ -8497,24 +8497,24 @@ end 'buildSchedExitSyscall'
 // ⚠ **IT DOES NOT JOIN `__sched_midle`**, so `__sched_checkdead` counts it as running, which it is: it holds a
 // green thread it will run once it has a processor.
 function buildSchedSyscallRegain(module StdModule)
-	var func = IrFunction.createFromStd(SchedSyscallRegainName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedSyscallRegainName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var tryTop = module.addBlock(func, label: b"rgntry", heat: BlockHeat.normal)
-	var gotOne = module.addBlock(func, label: b"rgngot", heat: BlockHeat.normal)
-	var noneYet = module.addBlock(func, label: b"rgnnone", heat: BlockHeat.normal)
-	var enlist = module.addBlock(func, label: b"rgnenlist", heat: BlockHeat.normal)
-	var parkIt = module.addBlock(func, label: b"rgnwait", heat: BlockHeat.normal)
-	var woke = module.addBlock(func, label: b"rgnwoke", heat: BlockHeat.normal)
-	var handed = module.addBlock(func, label: b"rgnhanded", heat: BlockHeat.normal)
-	var stillWaiting = module.addBlock(func, label: b"rgnstill", heat: BlockHeat.normal)
-	var keepWaiting = module.addBlock(func, label: b"rgnagain", heat: BlockHeat.normal)
-	var leaveList = module.addBlock(func, label: b"rgnleave", heat: BlockHeat.normal)
-	var leftList = module.addBlock(func, label: b"rgnleft", heat: BlockHeat.normal)
-	var giveUp = module.addBlock(func, label: b"rgnexit", heat: BlockHeat.normal)
-	var resumeExit = module.addBlock(func, label: b"rgnnoproc", heat: BlockHeat.normal)
-	var parkForEver = module.addBlock(func, label: b"rgnpark", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let tryTop = module.addBlock(func, label: b"rgntry", heat: BlockHeat.normal)
+	let gotOne = module.addBlock(func, label: b"rgngot", heat: BlockHeat.normal)
+	let noneYet = module.addBlock(func, label: b"rgnnone", heat: BlockHeat.normal)
+	let enlist = module.addBlock(func, label: b"rgnenlist", heat: BlockHeat.normal)
+	let parkIt = module.addBlock(func, label: b"rgnwait", heat: BlockHeat.normal)
+	let woke = module.addBlock(func, label: b"rgnwoke", heat: BlockHeat.normal)
+	let handed = module.addBlock(func, label: b"rgnhanded", heat: BlockHeat.normal)
+	let stillWaiting = module.addBlock(func, label: b"rgnstill", heat: BlockHeat.normal)
+	let keepWaiting = module.addBlock(func, label: b"rgnagain", heat: BlockHeat.normal)
+	let leaveList = module.addBlock(func, label: b"rgnleave", heat: BlockHeat.normal)
+	let leftList = module.addBlock(func, label: b"rgnleft", heat: BlockHeat.normal)
+	let giveUp = module.addBlock(func, label: b"rgnexit", heat: BlockHeat.normal)
+	let resumeExit = module.addBlock(func, label: b"rgnnoproc", heat: BlockHeat.normal)
+	let parkForEver = module.addBlock(func, label: b"rgnpark", heat: BlockHeat.normal)
 
 	let selfMachine = emitLoadCurrentM(module, block: entry, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(tryTop.id))
@@ -8525,7 +8525,7 @@ function buildSchedSyscallRegain(module StdModule)
 
 	// The shutdown read is inside the lock the teardown sets the flag in, which is what makes it a decision
 	// rather than a race — `buildSchedLoop`'s `wstoptest` reads it in the same place for the same reason.
-	var stopUnlisted = module.addBlock(func, label: b"rgnstopunlisted", heat: BlockHeat.normal)
+	let stopUnlisted = module.addBlock(func, label: b"rgnstopunlisted", heat: BlockHeat.normal)
 	emitSchedBranchOnShutdown(module, cur: noneYet, stopping: stopUnlisted, live: enlist, ids: ids)
 	emitSchedLockLeave(module, block: stopUnlisted, ids: ids)
 	module.setTerminator(stopUnlisted, op: StdOp.branch(giveUp.id))
@@ -8606,12 +8606,12 @@ end 'emitSchedBranchOnShutdown'
 // machine out of the middle. `__sched_lock` held. It terminates `cur` and continues at `cont`; a walk that
 // reaches the end has lost a waiter, which is `schedulerRegainWaiterLost`.
 function emitSchedRegainUnlinkLocked(module StdModule, func IrFunction, cur IrBlock, m ValueId, cont IrBlock, ids ValueMinter)
-	var unlinkHead = module.addBlock(func, label: b"rgnunlinkhead", heat: BlockHeat.normal)
-	var walkHdr = module.addBlock(func, label: b"rgnunlinkhdr", heat: BlockHeat.normal)
-	var walkStep = module.addBlock(func, label: b"rgnunlinkstep", heat: BlockHeat.normal)
-	var unlinkInner = module.addBlock(func, label: b"rgnunlinkinner", heat: BlockHeat.normal)
-	var lost = module.addBlock(func, label: b"rgnunlinklost", heat: BlockHeat.normal)
-	var cleared = module.addBlock(func, label: b"rgnunlinkclear", heat: BlockHeat.normal)
+	let unlinkHead = module.addBlock(func, label: b"rgnunlinkhead", heat: BlockHeat.normal)
+	let walkHdr = module.addBlock(func, label: b"rgnunlinkhdr", heat: BlockHeat.normal)
+	let walkStep = module.addBlock(func, label: b"rgnunlinkstep", heat: BlockHeat.normal)
+	let unlinkInner = module.addBlock(func, label: b"rgnunlinkinner", heat: BlockHeat.normal)
+	let lost = module.addBlock(func, label: b"rgnunlinklost", heat: BlockHeat.normal)
+	let cleared = module.addBlock(func, label: b"rgnunlinkclear", heat: BlockHeat.normal)
 
 	let head = emitLoadGlobalWord(module, block: cur, label: SchedRegainHeadLabel, ids: ids)
 	emitBranchOnCompareValues(module, block: cur, a: head, pred: StdCmpPred.eq, b: m, whenTrue: unlinkHead, whenFalse: walkHdr, ids: ids)
@@ -8645,13 +8645,13 @@ end 'emitSchedRegainUnlinkLocked'
 // rest of the release even at one processor. Holding the processor, the readied thread waits on this machine's ring until the
 // drain loop is next entered. With no idle processor the machine goes on as it was.
 function buildSchedMainTakeProc(module StdModule, target Target)
-	var func = IrFunction.createFromStd(SchedMainTakeProcName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedMainTakeProcName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var takeIt = module.addBlock(func, label: b"maintake", heat: BlockHeat.normal)
-	var noneIdle = module.addBlock(func, label: b"maintakenone", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"maintakedone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let takeIt = module.addBlock(func, label: b"maintake", heat: BlockHeat.normal)
+	let noneIdle = module.addBlock(func, label: b"maintakenone", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"maintakedone", heat: BlockHeat.normal)
 
 	let m = emitLoadCurrentM(module, block: entry, ids: ids)
 	let held = emitLoadField(module, block: entry, record: m, offset: MOffCurrentP, ids: ids)
@@ -8712,18 +8712,18 @@ end 'buildSchedMainTakeProc'
 // ⚠ **M0's HANDLE IS ZERO AND IS SKIPPED BY THE SAME TEST ANY UNSTARTED MACHINE IS.** The main OS thread was
 // never created by this runtime, so there is no handle for it and joining it would be joining ourselves.
 function buildSchedStopWorkers(module StdModule)
-	var func = IrFunction.createFromStd(SchedStopWorkersName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SchedStopWorkersName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var wakeHdr = module.addBlock(func, label: b"stopwakehdr", heat: BlockHeat.normal)
-	var wakeBody = module.addBlock(func, label: b"stopwakebody", heat: BlockHeat.normal)
-	var joinStart = module.addBlock(func, label: b"stopjoinstart", heat: BlockHeat.normal)
-	var joinHdr = module.addBlock(func, label: b"stopjoinhdr", heat: BlockHeat.normal)
-	var joinBody = module.addBlock(func, label: b"stopjoinbody", heat: BlockHeat.normal)
-	var joinWait = module.addBlock(func, label: b"stopjoinwait", heat: BlockHeat.normal)
-	var joinNext = module.addBlock(func, label: b"stopjoinnext", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"stopdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let wakeHdr = module.addBlock(func, label: b"stopwakehdr", heat: BlockHeat.normal)
+	let wakeBody = module.addBlock(func, label: b"stopwakebody", heat: BlockHeat.normal)
+	let joinStart = module.addBlock(func, label: b"stopjoinstart", heat: BlockHeat.normal)
+	let joinHdr = module.addBlock(func, label: b"stopjoinhdr", heat: BlockHeat.normal)
+	let joinBody = module.addBlock(func, label: b"stopjoinbody", heat: BlockHeat.normal)
+	let joinWait = module.addBlock(func, label: b"stopjoinwait", heat: BlockHeat.normal)
+	let joinNext = module.addBlock(func, label: b"stopjoinnext", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"stopdone", heat: BlockHeat.normal)
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let one = emitConst(module, block: entry, value: 1, ids: ids)
@@ -8737,7 +8737,7 @@ function buildSchedStopWorkers(module StdModule)
 	// walks nothing — the same zero `__sched_steal_count` rests on.
 	emitBranchOnCompare(module, block: wakeHdr, value: wakeCursor, pred: StdCmpPred.eq, against: 0, whenTrue: joinStart, whenFalse: wakeBody, ids: ids)
 
-	var wakeSignalled = emitSchedSignalMachineLocked(module, func: func, cur: wakeBody, m: wakeCursor, labelPrefix: "stopwake", ids: ids)
+	let wakeSignalled = emitSchedSignalMachineLocked(module, func: func, cur: wakeBody, m: wakeCursor, labelPrefix: "stopwake", ids: ids)
 	let nextWake = emitLoadField(module, block: wakeSignalled, record: wakeCursor, offset: MOffAllNext, ids: ids)
 	emitBranchCarrying(module, from: wakeSignalled, to: wakeHdr, values: argsOf(nextWake))
 

@@ -6,6 +6,10 @@ module typealias ParamMaskByValue = Map with (ValueId, ParamPositionMask)
 
 module typealias SettlingOpByValue = Map with (ValueId, ElementIndex)
 
+module typealias LoadedFromMap = Map with (ValueId, ValueId)
+
+module typealias IncomingsByPhi = Map with (ValueId, ValueIdArray)
+
 module typealias PositionSlotKey = int(0 to 9223372036854775807)
 
 module typealias ParamMaskByCallArgument = Map with (PositionSlotKey, ParamPositionMask)
@@ -36,6 +40,16 @@ function noteCapturedLoad(captured CapturedLoadMap, op MaxonOp, addr ValueId, en
 		parameter(envPosition, env) then noteEnvironmentLoad(captured, op: op, addr: addr, env: env, envPosition: envPosition, offset: offset)
 	end 'environment'
 end 'noteCapturedLoad'
+
+function noteLoadedOccupant(captured CapturedLoadMap, func IrFunction, op MaxonOp, addr ValueId, environment CapturedEnvironment, offset ByteOffset)
+	if offset == ParameterCellValueOffset and valueIsAParameter(addr, paramCount: func.paramCount) and maskHasParam(func.reassignedParamMask, param: paramPositionOfValueId(addr)) 'theOccupantOfAByReferenceCell'
+		let loaded = try maxonOpDefinedValue(op) otherwise panic("noteLoadedOccupant: a load defines its result")
+		captured.upsert(loaded, value: paramPositionOfValueId(addr))
+		return
+	end 'theOccupantOfAByReferenceCell'
+
+	noteCapturedLoad(captured, op: op, addr: addr, environment: environment, offset: offset)
+end 'noteLoadedOccupant'
 
 function noteEnvironmentLoad(captured CapturedLoadMap, op MaxonOp, addr ValueId, env ValueId, envPosition ParamCount, offset ByteOffset)
 	if addr != env 'notTheEnvironment'
@@ -88,10 +102,11 @@ function scanParamAliases(ir MaxonModule, func IrFunction, captured CapturedLoad
 		let op = try ir.ops.get(opIdx) otherwise panic("scanParamAliases: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
 		match slotReadOfOp(op, opIndex: opIdx) 'read'
-			load(_, addr, offset) then noteCapturedLoad(captured, op: op, addr: addr, environment: environment, offset: offset)
+			load(_, addr, offset) then noteLoadedOccupant(captured, func: func, op: op, addr: addr, environment: environment, offset: offset)
 			retainOf(operand) then noteRetain(captured, retainedFrom: retainedFrom, func: func, op: op, operand: operand)
 			none or
-			store then break
+			store or
+			wordPayload then break
 		end 'read'
 	end 'eachOp'
 end 'scanParamAliases'
@@ -145,14 +160,19 @@ module type ParamNoteIndex
 			return shared
 		end 'nothingRecorded'
 
-		var joined = ParamMaskByValue.create()
-		var callArguments = ParamMaskByCallArgument.create()
-		var results = SettlingOpByValue.create()
-		var derived = SettlingOpByValue.create()
+		let joined = ParamMaskByValue.create()
+		let callArguments = ParamMaskByCallArgument.create()
+		let results = SettlingOpByValue.create()
+		let derived = SettlingOpByValue.create()
 		indexParamNotes(ir, func: func, joined: joined, callArguments: callArguments, results: results, derived: derived)
 		return Self{joined: joined, callArguments: callArguments, results: results, derived: derived}
 	end 'of'
 end 'ParamNoteIndex'
+
+function opIsADirectCall(op MaxonOp) returns bool
+	try directCallPartsOf(op) otherwise return false
+	return true
+end 'opIsADirectCall'
 
 function paramNotesAreRecorded(func IrFunction) returns bool
 	let notes = func.capabilityNotes
@@ -164,26 +184,326 @@ function paramNotesAreRecorded(func IrFunction) returns bool
 	return not (notes.joinedSources.isEmpty() and notes.callArgSources.isEmpty() and notes.undecidedResultOps.isEmpty() and notes.derivedResultValues.isEmpty())
 end 'paramNotesAreRecorded'
 
+module enum HolderWalk
+	within
+	withinThroughResults
+	opaqueElementSources
+end 'HolderWalk'
+
 module type ParamSources
 	module let project as Project
 	module let ir as MaxonModule
+	module let signatures as ProgramSignatures
 	module let funcIndexByName as FuncIndexByName
 	module let func as IrFunction
 	module let captured as CapturedLoadMap
 	module let retainedFrom as RetainedValueMap
 	let notes as ParamNoteIndex
 	var masks as ParamMaskByValue
+	var settledWithin as ParamMaskByValue
+	var settledThroughResults as ParamMaskByValue
+	var settledOpaqueElements as ParamMaskByValue
 	var walking as ValueMarkSet
+	let loadedFrom as LoadedFromMap
+	// Walked only by `withinThroughResults`: a word payload widens the written side alone, so it cannot ride
+	// in `loadedFrom`.
+	let payloadHolderOf as LoadedFromMap
+	let definingCall as SettlingOpByValue
+	let incomingsOf as IncomingsByPhi
+	var derivationsIndexed as bool
+	let elementHolders as ParamMaskByValue
+	var elementHoldersIndexed as bool
 
-	module static function of(project Project, ir MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, noNotes ParamNoteIndex) returns ParamSources
-		var captured = CapturedLoadMap.create()
-		var retainedFrom = RetainedValueMap.create()
+	module static function of(project Project, ir MaxonModule, funcIndexByName FuncIndexByName, func IrFunction, noNotes ParamNoteIndex, signatures ProgramSignatures) returns ParamSources
+		let captured = CapturedLoadMap.create()
+		let retainedFrom = RetainedValueMap.create()
 		scanParamAliases(ir, func: func, captured: captured, retainedFrom: retainedFrom)
-		return Self{project: project, ir: ir, funcIndexByName: funcIndexByName, func: func, captured: captured, retainedFrom: retainedFrom, notes: ParamNoteIndex.of(ir, func: func, shared: noNotes), masks: ParamMaskByValue.create(), walking: ValueMarkSet.create()}
+		return Self{project: project, ir: ir, signatures: signatures, funcIndexByName: funcIndexByName, func: func, captured: captured, retainedFrom: retainedFrom, notes: ParamNoteIndex.of(ir, func: func, shared: noNotes), masks: ParamMaskByValue.create(), settledWithin: ParamMaskByValue.create(), settledThroughResults: ParamMaskByValue.create(), settledOpaqueElements: ParamMaskByValue.create(), walking: ValueMarkSet.create(), loadedFrom: LoadedFromMap.create(), payloadHolderOf: LoadedFromMap.create(), definingCall: SettlingOpByValue.create(), incomingsOf: IncomingsByPhi.create(), derivationsIndexed: false, elementHolders: ParamMaskByValue.create(), elementHoldersIndexed: false}
 	end 'of'
+
+	function indexElementHolders()
+		if self.elementHoldersIndexed 'alreadyIndexed'
+			return
+		end 'alreadyIndexed'
+
+		self.elementHoldersIndexed = true
+		ViewedSources.over(self.signatures, sources: self).indexElementHolders(self.elementHolders)
+	end 'indexElementHolders'
+
+	function elementHoldersOf(value ValueId) returns ParamPositionMask
+		self.indexElementHolders()
+		return try self.elementHolders.get(value) otherwise NoParamPositions
+	end 'elementHoldersOf'
+
+	function indexDerivations()
+		if self.derivationsIndexed 'alreadyIndexed'
+			return
+		end 'alreadyIndexed'
+
+		self.derivationsIndexed = true
+
+		for opIdx in self.ir.liveOpIndices(self.func) 'eachOp'
+			let op = try self.ir.ops.get(opIdx) otherwise panic("ParamSources.indexDerivations: opIdx {opIdx} from liveOpIndices is not in module.ops")
+
+			if opIsADirectCall(op) 'aCall'
+				self.definingCall.upsert(try maxonOpDefinedValue(op) otherwise panic("ParamSources.indexDerivations: a direct call defines its result"), value: opIdx)
+			end 'aCall'
+
+			match slotReadOfOp(op, opIndex: opIdx) 'read'
+				load(_, addr, _) then self.noteLoad(op, addr: addr)
+				wordPayload(result, holder) then self.noteWordPayload(result, holder: holder)
+				store or
+				retainOf or
+				none then break
+			end 'read'
+		end 'eachOp'
+
+		let merges = MergeEdges.create()
+		noteMergeEdges(self.ir, func: self.func, into: merges)
+
+		for index in 0 upto merges.count() 'eachMergeEdge'
+			let phi = merges.phiAt(index)
+
+			if let known = try self.incomingsOf.get(phi) 'anotherIncoming'
+				known.push(merges.incomingAt(index))
+				continue
+			end 'anotherIncoming'
+
+			let first = ValueIdArray.create(0)
+			first.push(merges.incomingAt(index))
+			self.incomingsOf.upsert(phi, value: first)
+		end 'eachMergeEdge'
+	end 'indexDerivations'
+
+	function noteWordPayload(result ValueId, holder ValueId)
+		if valueCarriesACapability(self.project, func: self.func, value: result) 'aPayloadThatHoldsRecords'
+			self.payloadHolderOf.upsert(result, value: holder)
+		end 'aPayloadThatHoldsRecords'
+	end 'noteWordPayload'
+
+	function noteLoad(op MaxonOp, addr ValueId)
+		let loaded = try maxonOpDefinedValue(op) otherwise panic("ParamSources.noteLoad: a load defines its result")
+		let capability = try self.func.valueCapabilities.get(loaded) otherwise panic("ParamSources.noteLoad: valueCapabilities.get OOB at v{loaded} of '{String.from(self.func.name)}' — the column is minted in lockstep with the type columns")
+
+		if capability == ValueCapability.immutable 'frozenByItsOwnSlot'
+			return
+		end 'frozenByItsOwnSlot'
+
+		self.loadedFrom.upsert(loaded, value: addr)
+	end 'noteLoad'
+
+	module function maskWithin(value ValueId, throughResults bool) returns ParamPositionMask
+		if not valueCarriesACapability(self.project, func: self.func, value: value) 'aValueHasNoStorageToLieWithin'
+			return NoParamPositions
+		end 'aValueHasNoStorageToLieWithin'
+
+		return self.holdersReachedFrom(value, walk: HolderWalk.withinThroughResults if throughResults else HolderWalk.within)
+	end 'maskWithin'
+
+	module function holdersReachedFrom(value ValueId, walk HolderWalk) returns ParamPositionMask
+		self.indexDerivations()
+		let settled = self.settledHolders(walk)
+		var mask = NoParamPositions
+		let pending = ValueIdArray.create(0)
+		let seen = ValueMarkSet.create()
+		pending.push(value)
+
+		while not pending.isEmpty() 'towardTheHolders'
+			let current = self.rootOf(try pending.pop() otherwise panic("ParamSources.holdersReachedFrom: the pending list was tested non-empty"))
+
+			if seen.contains(current) 'alreadyWalked'
+				continue
+			end 'alreadyWalked'
+
+			seen.insert(current)
+
+			if let known = try settled.get(current) 'settledByAnEarlierWalk'
+				mask = mask or known
+				continue
+			end 'settledByAnEarlierWalk'
+
+			mask = mask or self.maskOf(current)
+
+			if let holder = try self.loadedFrom.get(current) 'aFieldLoad'
+				pending.push(holder)
+			end 'aFieldLoad'
+
+			if let incomings = try self.incomingsOf.get(current) 'aJoin'
+				pending.append(incomings)
+			end 'aJoin'
+
+			match walk 'walk'
+				within then break
+				withinThroughResults then mask = mask or self.expandThroughPayloadsAndResults(current, into: pending)
+				opaqueElementSources then self.expandThroughCallArguments(current, into: pending)
+			end 'walk'
+		end 'towardTheHolders'
+
+		settled.upsert(self.rootOf(value), value: mask)
+		return mask
+	end 'holdersReachedFrom'
+
+	function settledHolders(walk HolderWalk) returns ParamMaskByValue
+		return match walk 'walk'
+			within gives self.settledWithin
+			withinThroughResults gives self.settledThroughResults
+			opaqueElementSources gives self.settledOpaqueElements
+		end 'walk'
+	end 'settledHolders'
+
+	function expandThroughPayloadsAndResults(current ValueId, into ValueIdArray) returns ParamPositionMask
+		if let box = try self.payloadHolderOf.get(current) 'aWordPayload'
+			into.push(box)
+		end 'aWordPayload'
+
+		self.pushHoldersOfResult(current, into: into)
+		return self.elementHoldersOf(current)
+	end 'expandThroughPayloadsAndResults'
+
+	function expandThroughCallArguments(current ValueId, into ValueIdArray)
+		if let opIdx = try self.definingCall.get(current) 'aCallResult'
+			into.append(self.argumentsOfCall(opIdx))
+		end 'aCallResult'
+	end 'expandThroughCallArguments'
+
+	function pushHoldersOfResult(value ValueId, into ValueIdArray)
+		let opIdx = try self.settlingOpOf(value) otherwise return
+		let args = self.argumentsOfCall(opIdx)
+
+		for i in self.resultSourcePositions(opIdx) 'eachSourceArg'
+			into.push(try args.get(i) otherwise panic("ParamSources.pushHoldersOfResult: args.get OOB at {i} — a source position names an argument of this call"))
+		end 'eachSourceArg'
+	end 'pushHoldersOfResult'
+
+	module function writeSeeds() returns ParamWriteSeedRow
+		let row = ParamWriteSeedRow.empty()
+
+		for opIdx in self.ir.liveOpIndices(self.func) 'eachOp'
+			let op = try self.ir.ops.get(opIdx) otherwise panic("ParamSources.writeSeeds: opIdx {opIdx} from liveOpIndices is not in module.ops")
+
+			match slotReadOfOp(op, opIndex: opIdx) 'read'
+				store(addr, _, value) then self.noteStoredValue(row, addr: addr, value: value)
+				load or
+				wordPayload or
+				retainOf then break
+				none then self.noteRuntimeWrite(row, op: op)
+			end 'read'
+		end 'eachOp'
+
+		if row.rawWrite 'aRawResourceIsWritten'
+			row.identity = row.identity or self.rawWrittenParams()
+		end 'aRawResourceIsWritten'
+
+		return row
+	end 'writeSeeds'
+
+	module function valueMayHoldAUnique(value ValueId) returns bool
+		let tag = valueTagOf(self.func, value: value)
+
+		if tag == ValueTypeTag.typeParameter or tag == ValueTypeTag.interfaceRef or tag == ValueTypeTag.function 'aValueWhoseContentIsOpen'
+			return true
+		end 'aValueWhoseContentIsOpen'
+
+		let nameId = try self.func.valueNameIds.get(value) otherwise panic("ParamSources.valueMayHoldAUnique: v{value} of '{String.from(self.func.name)}' has no type name — the type columns are minted in lockstep")
+		return self.signatures.valueHoldsAUnique(tag, nameId: nameId, from: self.project.typeNames)
+	end 'valueMayHoldAUnique'
+
+	function noteMovedValue(row ParamWriteSeedRow, value ValueId, sources ParamPositionMask)
+		row.moved = row.moved or sources
+
+		if sources != NoParamPositions and self.valueMayHoldAUnique(value) 'mayMoveAUnique'
+			row.movedUnique = row.movedUnique or sources
+		end 'mayMoveAUnique'
+	end 'noteMovedValue'
+
+	function noteStoredValue(row ParamWriteSeedRow, addr ValueId, value ValueId)
+		self.noteMovedValue(row, value: value, sources: self.maskOf(value))
+
+		let holders = self.maskWithin(addr, throughResults: true)
+
+		if holders == NoParamPositions 'storesIntoNothingOfOurs'
+			return
+		end 'storesIntoNothingOfOurs'
+
+		row.within = row.within or holders
+		row.kept = row.kept or self.maskOf(value)
+	end 'noteStoredValue'
+
+	function noteRuntimeWrite(row ParamWriteSeedRow, op MaxonOp)
+		let parts = try directCallPartsOf(op) otherwise return
+		let callee = parts.0
+
+		if self.funcIndexByName.contains(callee) 'aBodyDescribesIt'
+			return
+		end 'aBodyDescribesIt'
+
+		if rawResourceWritingCallee(callee) 'aRawResourceIsWritten'
+			row.rawWrite = true
+		end 'aRawResourceIsWritten'
+
+		if receiverWritingRuntimeCallee(callee) 'theReceiverIsWritten'
+			let written = try parts.1.get(writtenOperandOf(callee)) otherwise panic("ParamSources.noteRuntimeWrite: '{String.from(callee)}' writes an operand its call does not pass")
+			row.identity = row.identity or self.maskOf(written)
+			row.within = row.within or self.maskWithin(written, throughResults: true)
+		end 'theReceiverIsWritten'
+
+		self.noteRuntimeStores(row, callee: callee, args: parts.1)
+	end 'noteRuntimeWrite'
+
+	function noteRuntimeStores(row ParamWriteSeedRow, callee ByteArray, args ValueIdArray)
+		let shape = runtimeCalleeStoreShape(callee)
+
+		for receiverIndex in 0 upto args.count() 'eachReceiver'
+			let receiver = try args.get(receiverIndex) otherwise panic("ParamSources.noteRuntimeStores: args.get OOB at {receiverIndex}")
+
+			if not shapeStoresInto(shape, receiverIndex: receiverIndex as ParamCount) 'storesNothing'
+				continue
+			end 'storesNothing'
+
+			let storesIntoOurs = self.maskWithin(receiver, throughResults: true) != NoParamPositions
+
+			for storedIndex in 0 upto args.count() 'eachStored'
+				if storedIndex != receiverIndex and shapeStoresOperand(shape, storedIndex: storedIndex as ParamCount) 'anotherOperand'
+					let storedValue = try args.get(storedIndex) otherwise panic("ParamSources.noteRuntimeStores: args.get OOB at {storedIndex}")
+					let stored = self.maskOf(storedValue)
+					self.noteMovedValue(row, value: storedValue, sources: stored)
+
+					if storesIntoOurs 'intoDataTheCallerReaches'
+						row.kept = row.kept or stored
+					end 'intoDataTheCallerReaches'
+				end 'anotherOperand'
+			end 'eachStored'
+		end 'eachReceiver'
+	end 'noteRuntimeStores'
+
+	function rawWrittenParams() returns ParamPositionMask
+		var records = NoParamPositions
+		var isAMethod = false
+
+		if let sig = try self.project.funcSignatures.get(self.func.name) 'declared'
+			isAMethod = sig.takesReceiver()
+		end 'declared'
+
+		for position in 0 upto self.func.paramCount 'eachParam'
+			if isAMethod and position != ReceiverParamPosition 'onlyTheReceiverOwnsTheResource'
+				break
+			end 'onlyTheReceiverOwnsTheResource'
+
+			let tag = valueTagOf(self.func, value: valueIdAtParamPosition(position))
+
+			if not tagIsAScalarWhateverIsDeclared(tag) and not tagIsByteRecord(tag) 'holdsAStructuredRecord'
+				records = maskWithParam(records, param: position)
+			end 'holdsAStructuredRecord'
+		end 'eachParam'
+
+		return records
+	end 'rawWrittenParams'
 
 	module function forgetMasks()
 		self.masks = ParamMaskByValue.create()
+		self.settledWithin = ParamMaskByValue.create()
+		self.settledThroughResults = ParamMaskByValue.create()
+		self.settledOpaqueElements = ParamMaskByValue.create()
 	end 'forgetMasks'
 
 	module function parameterBehind(value ValueId) returns ParamCount throws AbsentError
@@ -222,6 +542,12 @@ module type ParamSources
 		end 'alreadyAnswered'
 
 		if valueIsAnOpaqueElement(self.func, value: value) 'anElementOfAnOpaqueType'
+			let root = self.rootOf(value)
+
+			if root != value 'aRetainedCopyOfAnotherValue'
+				return self.maskOf(root)
+			end 'aRetainedCopyOfAnotherValue'
+
 			return NoParamPositions
 		end 'anElementOfAnOpaqueType'
 
@@ -253,29 +579,45 @@ module type ParamSources
 	end 'maskOfSettlingResult'
 
 	module function maskOfResult(opIdx ElementIndex) returns ParamPositionMask
-		let op = try self.ir.ops.get(opIdx) otherwise panic("ParamSources.maskOfResult: ops.get OOB at {opIdx}")
-		let parts = try directCallPartsOf(op) otherwise return NoParamPositions
+		let args = self.argumentsOfCall(opIdx)
+		var mask = NoParamPositions
+
+		for i in self.resultSourcePositions(opIdx) 'eachSourceArg'
+			mask = mask or self.maskOfCallArgument(opIdx, args: args, position: i)
+		end 'eachSourceArg'
+
+		return mask
+	end 'maskOfResult'
+
+	function argumentsOfCall(opIdx ElementIndex) returns ValueIdArray
+		let parts = try directCallPartsOf(try self.ir.ops.get(opIdx) otherwise panic("ParamSources.argumentsOfCall: ops.get OOB at {opIdx}")) otherwise return ValueIdArray.create(0)
+		return parts.1
+	end 'argumentsOfCall'
+
+	module function resultSourcePositions(opIdx ElementIndex) returns FuncIndexArray
+		let positions = FuncIndexArray.create(0)
+		let parts = try directCallPartsOf(try self.ir.ops.get(opIdx) otherwise panic("ParamSources.resultSourcePositions: ops.get OOB at {opIdx}")) otherwise return positions
 
 		if borrowedElementReadCallee(parts.0) 'anElementRead'
-			return self.maskOfCallArgument(opIdx, args: parts.1, position: 0)
+			positions.push(0)
+			return positions
 		end 'anElementRead'
 
-		let calleeIndex = try self.funcIndexByName.get(parts.0) otherwise return NoParamPositions
-		let callee = try self.ir.functions.get(calleeIndex) otherwise panic("ParamSources.maskOfResult: functions.get OOB at {calleeIndex}")
-		view sig = try self.project.funcSignatures.get(parts.0) otherwise return NoParamPositions
-		var mask = NoParamPositions
+		let calleeIndex = try self.funcIndexByName.get(parts.0) otherwise return positions
+		let callee = try self.ir.functions.get(calleeIndex) otherwise panic("ParamSources.resultSourcePositions: functions.get OOB at {calleeIndex}")
+		let sig = try self.project.funcSignatures.get(parts.0) otherwise return positions
 
 		for i in 0 upto parts.1.count() 'eachSourceArg'
 			let label = try parts.2.get(i) otherwise continue
 			let slot = try argSlotPosition(sig.paramNames, argIndex: i as ParamCount, label: label) otherwise continue
 
 			if maskHasParam(callee.resultFromParamMask, param: slot) 'aSource'
-				mask = mask or self.maskOfCallArgument(opIdx, args: parts.1, position: i)
+				positions.push(i)
 			end 'aSource'
 		end 'eachSourceArg'
 
-		return mask
-	end 'maskOfResult'
+		return positions
+	end 'resultSourcePositions'
 
 	module function resultIsUnknown(opIdx ElementIndex) returns bool
 		let op = try self.ir.ops.get(opIdx) otherwise panic("ParamSources.resultIsUnknown: ops.get OOB at {opIdx}")
@@ -292,15 +634,59 @@ module type ParamSources
 	end 'maskOfCallArgument'
 end 'ParamSources'
 
+module type ParamWriteSeedRow
+	module var identity as ParamPositionMask
+	module var within as ParamPositionMask
+	module var kept as ParamPositionMask
+	module var moved as ParamPositionMask
+	module var movedUnique as ParamPositionMask
+	module var rawWrite as bool
+
+	module static function empty() returns ParamWriteSeedRow
+		return Self{identity: NoParamPositions, within: NoParamPositions, kept: NoParamPositions, moved: NoParamPositions, movedUnique: NoParamPositions, rawWrite: false}
+	end 'empty'
+end 'ParamWriteSeedRow'
+
+module type ParamWriteSeeds
+	module let identity as ParamPositionMaskArray
+	module let within as ParamPositionMaskArray
+	module let kept as ParamPositionMaskArray
+	module let moved as ParamPositionMaskArray
+	module let movedUnique as ParamPositionMaskArray
+
+	module static function over(funcNames FunctionNameIndex, paramSources ParamSourceIndex) returns ParamWriteSeeds
+		let funcCount = funcNames.functions.count()
+		let seeds = Self{identity: emptySummaryColumn(funcCount), within: emptySummaryColumn(funcCount), kept: emptySummaryColumn(funcCount), moved: emptySummaryColumn(funcCount), movedUnique: emptySummaryColumn(funcCount)}
+
+		for index in 0 upto funcCount 'eachFunc'
+			let func = try funcNames.functions.get(index) otherwise panic("ParamWriteSeeds.over: functions.get OOB at {index} below its own count")
+
+			if func.paramCount == 0 or bodyIsUnreadable(func) 'nothingOfItsOwnToWrite'
+				continue
+			end 'nothingOfItsOwnToWrite'
+
+			let row = paramSources.of(index).writeSeeds()
+			_ = widenSummaryColumn(seeds.identity, index: index, by: row.identity)
+			_ = widenSummaryColumn(seeds.within, index: index, by: row.within)
+			_ = widenSummaryColumn(seeds.kept, index: index, by: row.kept)
+			_ = widenSummaryColumn(seeds.moved, index: index, by: row.moved)
+			_ = widenSummaryColumn(seeds.movedUnique, index: index, by: row.movedUnique)
+		end 'eachFunc'
+
+		return seeds
+	end 'over'
+end 'ParamWriteSeeds'
+
 module type ParamSourceIndex
 	let project as Project
 	let ir as MaxonModule
 	let funcNames as FunctionNameIndex
 	let noNotes as ParamNoteIndex
+	let signatures as ProgramSignatures
 	var built as ParamSourcesByFunction
 
-	module static function over(project Project, ir MaxonModule, funcNames FunctionNameIndex) returns ParamSourceIndex
-		return Self{project: project, ir: ir, funcNames: funcNames, noNotes: ParamNoteIndex.empty(), built: ParamSourcesByFunction.create()}
+	module static function over(project Project, ir MaxonModule, funcNames FunctionNameIndex, signatures ProgramSignatures) returns ParamSourceIndex
+		return Self{project: project, ir: ir, funcNames: funcNames, noNotes: ParamNoteIndex.empty(), signatures: signatures, built: ParamSourcesByFunction.create()}
 	end 'over'
 
 	module function of(funcIndex ElementIndex) returns ParamSources
@@ -309,7 +695,7 @@ module type ParamSourceIndex
 		end 'alreadyBuilt'
 
 		let func = try self.funcNames.functions.get(funcIndex) otherwise panic("ParamSourceIndex.of: functions.get OOB at {funcIndex}")
-		let sources = ParamSources.of(self.project, ir: self.ir, funcIndexByName: self.funcNames.byName, func: func, noNotes: self.noNotes)
+		let sources = ParamSources.of(self.project, ir: self.ir, funcIndexByName: self.funcNames.byName, func: func, noNotes: self.noNotes, signatures: self.signatures)
 		self.built.upsert(funcIndex, value: sources)
 		return sources
 	end 'of'
@@ -318,3 +704,57 @@ module type ParamSourceIndex
 		return self.of(try self.funcNames.byName.get(func.name) otherwise panic("ParamSourceIndex.ofFunction: '{String.from(func.name)}' is not in the function-name index"))
 	end 'ofFunction'
 end 'ParamSourceIndex'
+
+// What an op does with a field slot: reads it, stores into it, or retains a value — which a `let` bound out of a
+// rebindable slot is — or none of these.
+export union SlotRead
+	none
+	load(opIndex ElementIndex, addr ValueId, offset ByteOffset)
+	store(addr ValueId, offset ByteOffset, value ValueId)
+	retainOf(operand ValueId)
+	wordPayload(result ValueId, holder ValueId)
+end 'SlotRead'
+
+export function slotReadOfOp(op MaxonOp, opIndex ElementIndex) returns SlotRead
+	match op 'op'
+		loadIndirect(_, addr, offset, _) then return SlotRead.load(opIndex, addr: addr, offset: offset)
+		storeIndirect(addr, offset, value, _) then return SlotRead.store(addr, offset: offset, value: value)
+		call(_, callee, args, _, _, _, _) then return SlotRead.retainOf(try args.get(0) otherwise panic("slotReadOfOp: a retain has no operand")) if ownershipBookkeepingCallee(callee) and args.count() > 0 else SlotRead.none
+		holdValue(_, held, _, _, _) then return SlotRead.retainOf(held)
+		binOp(result, lhs, _, binary) then return SlotRead.wordPayload(result, holder: lhs) if binary == MaxonBinOp.sub else SlotRead.none
+		literal or
+		ret or
+		retVoid or
+		unaryOp or
+		compare or
+		condBranch or
+		branch or
+		globalAddr or
+		stringLiteral or
+		tryCall or
+		throwError or
+		propagateError or
+		panicAbort or
+		functionRef or
+		indirectCall or
+		asyncCall or
+		await or
+		tryAwait or
+		sizeofType or
+		constArrayLiteral or
+		switch or
+		witnessDispatch or
+		witnessTryDispatch or
+		panicAbortValue or
+		errorFlagEncode or
+		serviceSpawn or
+		serviceSend or
+		serviceReplyCell or
+		immortalStructRecord or
+		immortalStringTable or
+		covPoint or
+		rawIntrinsic or
+		existentialWitness or
+		holdEnd then return SlotRead.none
+	end 'op'
+end 'slotReadOfOp'

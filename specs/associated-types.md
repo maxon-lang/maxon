@@ -1107,7 +1107,7 @@ end 'Sack'
 
 function main() returns ExitCode
 	let s = Sack.create()
-	var f = AlsoIntArray.create(0)
+	let f = AlsoIntArray.create(0)
 	f.push(7)
 	return s.take(f as IntArray) as ExitCode
 end 'main'
@@ -3247,7 +3247,7 @@ end 'Box'
 typealias IntBox = Box with Integer
 
 function main() returns ExitCode
-	var box = IntBox.create(Runner.create(1))
+	let box = IntBox.create(Runner.create(1))
 	box.t = Runner.create(21)
 	return box.t.take(10) as ExitCode
 end 'main'
@@ -3886,7 +3886,7 @@ type Walker implements Cursor with Pos, BiCursor
 end 'Walker'
 
 function main() returns ExitCode
-	var w = Walker.create(8)
+	let w = Walker.create(8)
 	w.retreat()
 	print("{w.current()}\n")
 	return 0
@@ -3934,7 +3934,7 @@ type Walker implements BiCursor, Cursor with Pos
 end 'Walker'
 
 function main() returns ExitCode
-	var w = Walker.create(8)
+	let w = Walker.create(8)
 	w.retreat()
 	print("{w.current()}\n")
 	return 0
@@ -3984,7 +3984,7 @@ type Walker implements Cursor with Pos
 end 'Walker'
 
 function main() returns ExitCode
-	var w = Walker.create(8)
+	let w = Walker.create(8)
 	w.retreat()
 	print("{w.current()}\n")
 	return 0
@@ -4248,8 +4248,8 @@ type Crate implements Holder with Num
 end 'Crate'
 
 function main() returns ExitCode
-	var c = Crate.create()
-	var v = NumStore.create(0)
+	let c = Crate.create()
+	let v = NumStore.create(0)
 	v.push(4)
 	v.push(9)
 	c.absorb(v)
@@ -4291,7 +4291,7 @@ type Log implements Sink
 	end 'create'
 
 	static function single(v Byte) returns Bytes
-		var b = Bytes.create(0)
+		let b = Bytes.create(0)
 		b.push(v)
 		return b
 	end 'single'
@@ -4306,7 +4306,7 @@ type Log implements Sink
 end 'Log'
 
 function main() returns ExitCode
-	var l = Log.create()
+	let l = Log.create()
 	l.write(Log.single(7))
 	print("{l.count()}\n")
 	return 0
@@ -4355,9 +4355,9 @@ type Crate implements Holder with Num
 end 'Crate'
 
 function main() returns ExitCode
-	var c = Crate.create()
-	var outer = NumStoreStore.create(0)
-	var inner = NumStore.create(0)
+	let c = Crate.create()
+	let outer = NumStoreStore.create(0)
+	let inner = NumStore.create(0)
 	inner.push(3)
 	outer.push(inner)
 	c.absorb(outer)

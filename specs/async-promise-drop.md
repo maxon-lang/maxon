@@ -990,7 +990,7 @@ function completesUnderTheDrive(slots IntPromiseArray) returns bool
 end 'completesUnderTheDrive'
 
 function main() returns ExitCode
-	var slots = IntPromiseArray.create(0)
+	let slots = IntPromiseArray.create(0)
 
 	arm(slots, slot: 0, n: 11)
 	if not completesUnderTheDrive(slots) 'pushedThreadCancelled'
@@ -1053,7 +1053,7 @@ function completesUnderTheDrive(slots IntPromiseArray) returns bool
 end 'completesUnderTheDrive'
 
 function main() returns ExitCode
-	var slots = IntPromiseArray.create(0)
+	let slots = IntPromiseArray.create(0)
 
 	arm(slots, slot: 0, n: 11)
 	if not completesUnderTheDrive(slots) 'pushedThreadCancelled'
@@ -1093,7 +1093,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var s = IntPromiseArray.create(0)
+		let s = IntPromiseArray.create(0)
 		s.push(async plain())
 		return 0
 end 'main'
@@ -1119,7 +1119,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var s = IntPromiseArray.create(0)
+		let s = IntPromiseArray.create(0)
 		s.push(async plain())
 		let p = try s.pop() otherwise panic("just pushed one")
 		print("popped a thread complete={p.isComplete()}, array now {s.count()}")
@@ -1190,7 +1190,7 @@ type Holder
 	end 'of'
 end 'Holder'
 function main() returns ExitCode
-	var pr = async plain()
+	let pr = async plain()
 	let h = Holder.of(pr)
 	let again = Holder.of(async plain())
 	_ = h.p.isComplete()
@@ -1226,7 +1226,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:10: cannot consume with 'await' a promise held in a `let` field: consuming a promise empties the slot it was read from, and a `let` field is never reassigned; hold it in a `var` field
+error E2013: <fragment>:19:10: 'p' is a let field and cannot be reassigned
 ```
 
 <!-- test: async-promise-drop.error.cancelling-a-promise-held-in-a-let-field-is-refused -->
@@ -1254,7 +1254,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:6: cannot consume with 'cancel' a promise held in a `let` field: consuming a promise empties the slot it was read from, and a `let` field is never reassigned; hold it in a `var` field
+error E2013: <fragment>:19:6: 'p' is a let field and cannot be reassigned
 ```
 
 <!-- test: async-promise-drop.error.a-promise-element-read-through-a-borrow-door -->
@@ -1737,7 +1737,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var s = PromiseStack.create()
+	let s = PromiseStack.create()
 	s.push(async plain())
 	let p = s.pop()
 	return (await p) as ExitCode
@@ -1839,7 +1839,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var o = PromiseOuter.create()
+	let o = PromiseOuter.create()
 	o.push(async plain())
 	let p = o.pop()
 	return (await p) as ExitCode
@@ -2056,7 +2056,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var s = PromiseStack.create()
+	let s = PromiseStack.create()
 	s.push(async plain())
 	let p = s.pop()
 	return (await p) as ExitCode
@@ -2098,7 +2098,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var s = PromiseStack.create()
+	let s = PromiseStack.create()
 	s.push(async plain())
 	let p = s.take()
 	return (await p) as ExitCode
@@ -2151,9 +2151,9 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var s = IntPromiseArray.create(0)
+		let s = IntPromiseArray.create(0)
 		s.push(async plain())
-		view c = try s.cursor() otherwise panic("has one")
+		let c = try s.cursor() otherwise panic("has one")
 		let p = c.current()
 		return (await p) as ExitCode
 end 'main'
@@ -2177,7 +2177,7 @@ function plain() returns Integer
 end 'plain'
 
 function main() returns ExitCode
-		var s = IntPromiseArray.create(0)
+		let s = IntPromiseArray.create(0)
 		s.push(async plain())
 		let p = try s.pop() otherwise panic("has one")
 		return (await p) as ExitCode
@@ -2434,10 +2434,10 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var s = IntPromiseArray.create(0)
+	let s = IntPromiseArray.create(0)
 	s.push(async plain(5))
 	s.push(async plain(37))
-	view c = try s.cursor() otherwise panic("has two")
+	let c = try s.cursor() otherwise panic("has two")
 	let ahead = try c.peek(1) otherwise panic("has two")
 	let first = try s.get(0) otherwise panic("has two")
 	return ((await ahead) + (await first)) as ExitCode
@@ -2518,9 +2518,9 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var s = IntPromiseArray.create(0)
+	let s = IntPromiseArray.create(0)
 	s.push(async plain(4))
-	view c = try s.cursor() otherwise panic("has one")
+	let c = try s.cursor() otherwise panic("has one")
 	let a = c.current()
 	let b = c.current()
 	return ((await a) + (await b)) as ExitCode
@@ -2547,10 +2547,10 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var s = IntPromiseArray.create(0)
+	let s = IntPromiseArray.create(0)
 	s.push(async plain(4))
 	let a = try s.get(0) otherwise panic("has one")
-	view c = try s.cursor() otherwise panic("has one")
+	let c = try s.cursor() otherwise panic("has one")
 	let b = c.current()
 	return ((await a) + (await b)) as ExitCode
 end 'main'
@@ -2581,7 +2581,7 @@ function zero() returns Integer
 end 'zero'
 
 function main() returns ExitCode
-	var s = IntPromiseArray.create(0)
+	let s = IntPromiseArray.create(0)
 	s.push(async plain(4))
 	let a = try s.get(zero() as ElementIndex) otherwise panic("has one")
 	let b = try s.get(zero() as ElementIndex) otherwise panic("has one")
@@ -2685,7 +2685,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.of(async plain(4))
+	let h = Holder.of(async plain(4))
 	let a = await h.p
 	h.p = async plain(7)
 	let b = await h.p
@@ -2711,10 +2711,10 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create(0)
+	let a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
-	var b = IntPromiseArray.create(0)
+	let b = IntPromiseArray.create(0)
 	b.push(try a.get(0) otherwise panic("has one"))
 
 	let p = try b.get(0) otherwise panic("has one")
@@ -2814,13 +2814,13 @@ function pick() returns bool
 end 'pick'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create(0)
+	let a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	let p = try a.get(0) otherwise panic("has one")
 
-	var b = IntPromiseArray.create(0)
-	var c = IntPromiseArray.create(0)
+	let b = IntPromiseArray.create(0)
+	let c = IntPromiseArray.create(0)
 
 	if pick() 'x'
 		b.push(p)
@@ -3116,7 +3116,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create(0)
+	let a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
 	var acc = 0 as Integer
@@ -3152,10 +3152,10 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create(0)
+	let a = IntPromiseArray.create(0)
 	a.push(async plain(7))
 
-	var b = IntPromiseArray.create(0)
+	let b = IntPromiseArray.create(0)
 	var i = 0 as Integer
 
 	while i < 2 'loop'
@@ -3237,7 +3237,7 @@ end 'Holder'
 function main() returns ExitCode
 	let h = Holder.of(async plain(7))
 
-	var b = IntPromiseArray.create(0)
+	let b = IntPromiseArray.create(0)
 	var i = 0 as Integer
 
 	while i < 2 'loop'
@@ -3278,10 +3278,10 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create(0)
+	let a = IntPromiseArray.create(0)
 	a.push(async plain(1))
 
-	var h = Holder.of(async plain(10))
+	let h = Holder.of(async plain(10))
 
 	var acc = 0 as Integer
 	var i = 0 as Integer
@@ -3318,7 +3318,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create(0)
+	let a = IntPromiseArray.create(0)
 	var seed = 0 as Integer
 
 	while seed < 8 'fill'
@@ -3326,7 +3326,7 @@ function main() returns ExitCode
 		seed = seed + 1
 	end 'fill'
 
-	var b = IntPromiseArray.create(0)
+	let b = IntPromiseArray.create(0)
 	var acc = 0 as Integer
 	var i = 0 as Integer
 
@@ -4003,7 +4003,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var a = IntPromiseArray.create(0)
+	let a = IntPromiseArray.create(0)
 	a.push(async work(1))
 	let first = try a.get(0) otherwise panic("one")
 	let v = await first
@@ -4324,7 +4324,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = PairArray.create(0)
+	let held = PairArray.create(0)
 	held.push((1, async work(1)))
 	let (tag, p) = try held.pop() otherwise panic("one pushed")
 	let v = await p
@@ -4358,7 +4358,7 @@ function entryFor(n Integer) returns Pair
 end 'entryFor'
 
 function main() returns ExitCode
-	var held = PairArray.create(0)
+	let held = PairArray.create(0)
 	let entry = entryFor(2)
 	held.push(entry)
 	let (tag, p) = try held.pop() otherwise panic("one pushed")
@@ -4389,7 +4389,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = PairArray.create(0)
+	let held = PairArray.create(0)
 	held.push((1, async work(1)))
 	try held.set(0, value: (5, async work(5))) otherwise panic("index 0 exists")
 	let (tag, p) = try held.pop() otherwise panic("one held")
@@ -4421,7 +4421,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var m = PairMap.create()
+	let m = PairMap.create()
 	m.upsert("a", value: (3, async work(3)))
 	m.upsert("b", value: (4, async work(4)))
 	m.upsert("a", value: (5, async work(5)))
@@ -4451,7 +4451,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = TwinArray.create(0)
+	let held = TwinArray.create(0)
 	held.push((async work(1), async work(10)))
 	let (a, b) = try held.pop() otherwise panic("one pushed")
 	let x = await a
@@ -4623,7 +4623,7 @@ end 'keep'
 
 function main() returns ExitCode
 	let p = async work(1)
-	var i = 0 as Integer
+	let i = 0 as Integer
 
 	while i < 2 'loop'
 		let q = keep(p, v: i)

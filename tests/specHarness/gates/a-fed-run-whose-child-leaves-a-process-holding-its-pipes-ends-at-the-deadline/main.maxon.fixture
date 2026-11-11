@@ -77,24 +77,21 @@ function survivorModeFor(chatty bool) returns String
 end 'survivorModeFor'
 
 function startSurvivor(me FilePath, chatty bool)
-	var config = Configuration.create(Executable.name("sh"))
-	var arguments = StringArray.create(0)
-
 	#if os(Windows)
-		config = Configuration.create(Executable.name("cmd"))
-		arguments.push("/c")
-		arguments.push("start")
-		arguments.push("fed run survivor")
-		arguments.push("/b")
-		arguments.push(me.toString())
-		arguments.push(survivorModeFor(chatty))
+		let config = Configuration.create(Executable.name("cmd"))
+		config.arguments.push("/c")
+		config.arguments.push("start")
+		config.arguments.push("fed run survivor")
+		config.arguments.push("/b")
+		config.arguments.push(me.toString())
+		config.arguments.push(survivorModeFor(chatty))
 	#else
-		arguments.push("-c")
-		arguments.push("\"$0\" {survivorModeFor(chatty)} &")
-		arguments.push(me.toString())
+		let config = Configuration.create(Executable.name("sh"))
+		config.arguments.push("-c")
+		config.arguments.push("\"$0\" {survivorModeFor(chatty)} &")
+		config.arguments.push(me.toString())
 	#endif
 
-	config.arguments = arguments
 	config.standardOutput = OutputDestination.inherit
 	config.standardError = OutputDestination.inherit
 	_ = try config.run() otherwise panic("the survivor could not be started")
@@ -117,7 +114,7 @@ function runChild(mode String) returns ExitCode
 end 'runChild'
 
 function holderChild(chatty bool) returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 
 	#if os(Windows)
 		argv.push(ChattyChildMode if chatty else ChildMode)

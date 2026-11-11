@@ -228,7 +228,7 @@ typealias Payload = Array with Byte
 
 function main() returns ExitCode
 	let before = HeapStats.processAllocations()
-	var kept = Payload.create(0)
+	let kept = Payload.create(0)
 	kept.push(1)
 	let after = HeapStats.processAllocations()
 	print("{after > before} {HeapStats.slab().live > 0} {kept.count()}\n")
@@ -248,8 +248,8 @@ fields, `Array` and `Map` publish as well as scalars, strings and service handle
 a registry key's `default` ([`SharedValue`](/docs/language/async/#sharedvalue--a-live-value-made-at-run-time)).
 
 A value `current()` returns, like a registry `default`'s, is read-only all the way down: a write through it is
-[E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord) and binding it to a `var` is
-[E3078](/docs/cli/error-codes/#e3078--semanticvarfromimmutable); `clone()` gives a mutable copy. `publish` takes a
+[E3197](/docs/cli/error-codes/#e3197--semanticwritethroughreadonly), and handing it to a parameter the callee writes is
+[E3207](/docs/cli/error-codes/#e3207--semanticargumentcapabilityrefused); `clone()` gives a mutable copy. `publish` takes a
 value with no other owner ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned)); publish a fresh value
 or a `clone()`. A tuple of heap-free elements is published as a copy
 ([Moves and Sharing](/docs/language/memory-model/#moves-and-sharing)).

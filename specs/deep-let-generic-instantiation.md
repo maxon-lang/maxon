@@ -70,10 +70,10 @@ type Registry uses Key where Key is Hashable and Equatable
 end 'Registry'
 
 function main() returns ExitCode
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 	names.push("a")
 	names.push("b")
-	var registry = StringRegistry.create()
+	let registry = StringRegistry.create()
 	registry.remember(names)
 	return registry.size() as ExitCode
 end 'main'
@@ -83,7 +83,7 @@ end 'main'
 ```
 
 <!-- test: error.a-generic-body-keeping-its-type-parameter-refuses-a-writable-record -->
-The same type instantiated with a record that has a `var` field is refused at the call that instantiates the body, naming `Registry.remember`: a `Set` keeps `immutable` elements, and `counters` is mutable.
+The same type instantiated with a record that has a `var` field is refused at the call to `Registry.remember`: a `Set` keeps `immutable` elements, so `remember` needs `keys` frozen, and `counters` is mutable.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -128,15 +128,14 @@ type Registry uses Key where Key is Hashable and Equatable
 end 'Registry'
 
 function main() returns ExitCode
-	var counters = CounterArray.create(0)
+	let counters = CounterArray.create(0)
 	counters.push(Counter.create(1))
-	var registry = CounterRegistry.create()
+	let registry = CounterRegistry.create()
 	registry.remember(counters)
 	return registry.size() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:47:11: cannot call 'Registry.remember' with a type whose values something may write: its body keeps a value of its type parameter, and a kept value must have no other writer, which only a type nothing writes guarantees (a number, a String, or a record whose fields are all `let`); use such a type
 error E3207: <fragment>:47:20: 'remember' needs 'keys' frozen (it calls 'insert', which takes `immutable` 'element'); 'counters' is mutable. Freeze it first
 ```
 
@@ -204,7 +203,7 @@ type Counter implements Hashable, Equatable
 end 'Counter'
 
 function main() returns ExitCode
-	var members = CounterSet.create()
+	let members = CounterSet.create()
 	members.insert(freeze Counter.create(1))
 	members.insert(freeze Counter.create(2))
 
@@ -274,9 +273,9 @@ type Box uses Item
 end 'Box'
 
 function main() returns ExitCode
-	var counters = CounterArray.create(0)
+	let counters = CounterArray.create(0)
 	counters.push(Counter.create(1))
-	var box = CounterBox.create(try counters.get(0) otherwise panic("empty"))
+	let box = CounterBox.create(try counters.get(0) otherwise panic("empty"))
 
 	return box.peek().n as ExitCode
 end 'main'
@@ -308,7 +307,7 @@ type Box uses Item
 end 'Box'
 
 function main() returns ExitCode
-	var items = StringArray.create(0)
+	let items = StringArray.create(0)
 	items.push("abc")
 	let box = StringBox.first(items)
 
@@ -351,9 +350,9 @@ type Box uses Item
 end 'Box'
 
 function main() returns ExitCode
-	var items = CounterArray.create(0)
+	let items = CounterArray.create(0)
 	items.push(Counter.create(1))
-	var box = CounterBox.first(items)
+	let box = CounterBox.first(items)
 
 	return box.peek().n as ExitCode
 end 'main'
@@ -385,7 +384,7 @@ type Pair uses Item
 end 'Pair'
 
 function main() returns ExitCode
-	var pair = StringPair.create("a", two: "b")
+	let pair = StringPair.create("a", two: "b")
 	let extra = pair.mirror("c")
 
 	return extra.byteLength() as ExitCode
@@ -427,7 +426,7 @@ type Pair uses Item
 end 'Pair'
 
 function main() returns ExitCode
-	var pair = CounterPair.create(Counter.create(1), two: Counter.create(2))
+	let pair = CounterPair.create(Counter.create(1), two: Counter.create(2))
 	let extra = pair.mirror(Counter.create(3))
 
 	return extra.n as ExitCode
@@ -457,7 +456,7 @@ type Pair uses Item
 end 'Pair'
 
 function main() returns ExitCode
-	var pair = StringPair.create("a", two: "b")
+	let pair = StringPair.create("a", two: "b")
 	pair.mirror()
 
 	return 0
@@ -497,7 +496,7 @@ type Pair uses Item
 end 'Pair'
 
 function main() returns ExitCode
-	var pair = CounterPair.create(Counter.create(1), two: Counter.create(2))
+	let pair = CounterPair.create(Counter.create(1), two: Counter.create(2))
 	pair.mirror()
 
 	return 0
@@ -555,7 +554,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create(StringPair.create("a", two: "b"))
+	let holder = Holder.create(StringPair.create("a", two: "b"))
 	print("{holder.agrees()}\n")
 	holder.run()
 	print("{holder.agrees()}\n")
@@ -617,7 +616,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create(CounterPair.create(Counter.create(1), two: Counter.create(2)))
+	let holder = Holder.create(CounterPair.create(Counter.create(1), two: Counter.create(2)))
 	holder.run()
 
 	return 0
@@ -756,7 +755,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var counter = Counter.create(1)
+	let counter = Counter.create(1)
 	counter.n = 3
 	let box = Box.create(counter)
 
@@ -796,7 +795,7 @@ type Box uses Item
 end 'Box'
 
 function main() returns ExitCode
-	var counter = Counter.create(1)
+	let counter = Counter.create(1)
 	counter.n = 4
 	let box = CounterBox.create(counter)
 
@@ -835,7 +834,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var counter = Counter.create(1)
+	let counter = Counter.create(1)
 	let box = Box.create(counter)
 	let seen = counter.n
 
@@ -874,7 +873,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var counter = Counter.create(1)
+	let counter = Counter.create(1)
 	let box = Box.create(counter)
 	counter.n = 2
 
@@ -914,7 +913,7 @@ type Box uses Item
 end 'Box'
 
 function main() returns ExitCode
-	var counter = Counter.create(1)
+	let counter = Counter.create(1)
 	let box = CounterBox.create(counter)
 	counter.n = 2
 
@@ -961,8 +960,8 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var holder = Holder.create(1)
-	view view = holder.field
+	let holder = Holder.create(1)
+	let view = holder.field
 	let box = Box.create(view)
 	let seen = view.n
 	holder.field.n = 2
@@ -1002,7 +1001,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var a = Counter.create(1)
+	let a = Counter.create(1)
 	a.n = 2
 	let b = a
 	let box = Box.create(b)
@@ -1042,9 +1041,9 @@ type Box
 	let kept as Counter
 
 	static function create(n Integer) returns Self
-		var holder = Holder.create(n)
+		let holder = Holder.create(n)
 		holder.field.n = n + 1
-		view x = holder.field
+		let x = holder.field
 		return Self{kept: x}
 	end 'create'
 

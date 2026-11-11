@@ -182,23 +182,20 @@ belongs in a local `var` passed to a `mutable` parameter, in a field of a value 
 
 - A static field needs an initializer. Assigning to a `static let` is **E2013**; naming a static the type
   does not declare is **E2073**.
-- An initializer is any expression a function body accepts, read as though written inside the type's body:
-  a literal, a factory call (`static let shared = Cache.create()`), an array literal, or a struct literal of
-  the enclosing type. A struct literal of *another* type is **E3076** — call its factory. A scalar static is
-  a compile-time constant, so a call that makes its value unknown is **E2045**.
-- **Initializers run before `main`, exactly once**, whether or not the field is ever read, in dependency
-  order rather than declaration order: one that reads another static, directly or through a function it
-  calls, runs after it. Initializers that depend on each other in a cycle, or one that reads its own field,
-  are **E2012**.
-- A `static let` whose value is decided entirely at compile time — a scalar or byte-string literal, an array
-  literal of integers, an empty container, a payload-free union case, or a record whose every field is one of
-  these — is **image data**: its bytes are laid down in read-only memory and nothing creates it at run time, and
-  it is `immutable` (see [Constant Data](/docs/language/regions/#constant-data)). Any other `static let` is built before `main`.
+- An initializer is a value known before the program runs, read as though written inside the type's body: a
+  literal, an array or map literal, `Type from [...]`, another constant, or a struct literal of the enclosing
+  type. It **calls nothing**: `static let shared = Cache.create()` is **E3220**, and a call in the initializer
+  of a scalar static is **E2045**. A struct literal of *another* type is **E3076**.
+- **A `static let` is image data, laid down before `main`.** Nothing runs to build it, whether or not the field is
+  ever read, and an initializer that reads another static follows it in dependency order, whatever the
+  declaration order. Initializers that depend on each other in a cycle, or one that reads its own field, are **E2012**. Its
+  bytes sit in read-only memory as one copy that every function and thread reads, and it is `immutable` (see
+  [Constant Data](/docs/language/regions/#constant-data)); `.clone()` gives a mutable copy.
 - A static declared in `stdlib/` is kept only when reachable code reads it; one nothing reads is not emitted,
   and neither is its initializer.
 - A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer
-  may reach follows the [Top-Level Bindings](/docs/language/variables/#top-level-bindings) rules: a `spawn` reachable from any
-  global initializer is **E3164** — a [`default` declaration](/docs/language/async/#program-wide-defaults--default) starts a
+  may reach follows the [Top-Level Bindings](/docs/language/variables/#top-level-bindings) rules: a `spawn` in a global initializer is
+  **E3220** like any call — a [`default` declaration](/docs/language/async/#program-wide-defaults--default) starts a
   program-wide service before `main`.
 - A `let` without `static` in a type body is an ordinary field with a default.
 
@@ -382,7 +379,7 @@ end 'Cell'
 typealias CellNames = Map with (Cell, String)
 
 function main() returns ExitCode
-	var names = CellNames.create()
+	let names = CellNames.create()
 	names.upsert(Cell.create(1, col: 2), value: "b1")
 	let found = try names.get(Cell.create(1, col: 2)) otherwise "missing"
 	print("{found}\n")     // b1
@@ -398,7 +395,7 @@ returns a `HashDigest` (`bits(64)`):
 
 ```maxon
 function main() returns ExitCode
-	var hasher = Hasher.create()
+	let hasher = Hasher.create()
 	hasher.combineBytes("abc".toByteArray())
 	print("{hasher.finalize():016x}\n")     // e71fa2190541574b
 	return 0
@@ -723,7 +720,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq with Integer

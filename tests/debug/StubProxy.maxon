@@ -35,7 +35,7 @@ export function stubProxyDirectory(caseLabel String) returns FilePath
 end 'stubProxyDirectory'
 
 export function answeringProxyEnvironment(proxyDirectory FilePath, trace FilePath, after String, answer String) returns Environment
-	var overrides = proxyOverrides(proxyDirectory, trace: trace, mode: AnswerMode)
+	let overrides = proxyOverrides(proxyDirectory, trace: trace, mode: AnswerMode)
 	overrides.upsert(InjectAfterVariable, value: after)
 	overrides.upsert(InjectPayloadVariable, value: answer)
 
@@ -43,7 +43,7 @@ export function answeringProxyEnvironment(proxyDirectory FilePath, trace FilePat
 end 'answeringProxyEnvironment'
 
 export function silentProxyEnvironment(proxyDirectory FilePath, trace FilePath, after String) returns Environment
-	var overrides = proxyOverrides(proxyDirectory, trace: trace, mode: SilentMode)
+	let overrides = proxyOverrides(proxyDirectory, trace: trace, mode: SilentMode)
 	overrides.upsert(InjectAfterVariable, value: after)
 
 	return Environment.inheritUpdating(overrides)
@@ -57,7 +57,7 @@ export enum ProxiedAdvertising
 end 'ProxiedAdvertising'
 
 export function smallBufferProxyEnvironment(proxyDirectory FilePath, trace FilePath, packetBytes ProxiedPacketBytes, advertising ProxiedAdvertising) returns Environment
-	var overrides = proxyOverrides(proxyDirectory, trace: trace, mode: SmallBufferMode)
+	let overrides = proxyOverrides(proxyDirectory, trace: trace, mode: SmallBufferMode)
 	overrides.upsert(PacketSizeVariable, value: "{packetBytes}")
 	overrides.upsert(AdvertiseVariable, value: AdvertiseYes if advertising == ProxiedAdvertising.advertised else AdvertiseNo)
 
@@ -70,7 +70,7 @@ end 'lateHaltProxyEnvironment'
 
 function proxyOverrides(proxyDirectory FilePath, trace FilePath, mode String) returns EnvMap
 	let inherited = try Process.environmentVariable(PathVariableName) otherwise ""
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 	overrides.upsert(PathVariableName, value: "{proxyDirectory.toString()}{PathEntrySeparator}{inherited}")
 	overrides.upsert(RealStubVariable, value: realDebugServer().toString())
 	overrides.upsert(TraceVariable, value: trace.toString())
@@ -92,7 +92,7 @@ function realDebugServer() returns FilePath
 end 'realDebugServer'
 
 function realStubCandidates() returns StringArray
-	var candidates = StringArray.create(2, zeroed: false)
+	let candidates = StringArray.create(2, zeroed: false)
 	candidates.push(CommandLineToolsStub)
 
 	let asked = try Subprocess.run(Executable.name(DeveloperDirectoryCommand), arguments: [DeveloperDirectoryOption]) otherwise return candidates

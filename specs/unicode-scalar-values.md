@@ -217,7 +217,7 @@ first after block: 3 true
 
 ```maxon
 function main() returns ExitCode
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	utf8AppendCodepoint(65, out: out)
 	utf8AppendCodepoint(55296, out: out)
 	return out.count()

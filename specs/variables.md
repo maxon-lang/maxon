@@ -279,10 +279,10 @@ error E2004: <fragment>:3:10: A var cannot start from a bare number: write 'var 
 ```
 
 <!-- test: a-local-var-map-of-typed-numbers-is-accepted -->
-A `var` map whose columns are cast to an alias is a typed map, and can grow.
+A map whose columns are cast to an alias is a typed map, and its clone can grow.
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count]
+	let m = [1 as Count: 10 as Count].clone()
 	m.upsert(2, value: 20)
 	return m.count() as ExitCode
 end 'main'

@@ -185,43 +185,13 @@ napped=true took=1 parked=true
 0
 ```
 
-<!-- test: netpoll-idle.a-close-under-a-parked-accept-breaks-a-poller-it-leaves-nothing-to-wait-for -->
-<!-- procs: 2 -->
-**A CLOSE THAT READIES THE LAST WAITER BREAKS THE POLLER, NOT ONLY THE PARK THE CLOSE BEGINS WITH.** A coroutine of
-`main` is parked in `accept` on a listener nothing connects to, so the machine that ran it settles into the poller
-with no deadline. `main` waits until that has happened, starts a second coroutine and closes the listener. The close
-first yields (`__gt_io_park` is a timer park with a deadline of now), and that park breaks the poller; the second
-coroutine then holds the strand until the poller's wait has returned (`parkWakes` moves) and a spin has given it
-time to block again, so the poller is blocked on the accept again when the close goes on to ready the accept and
-leaves nothing pending. Only a break from that readiness can end the wait now. The poller machine counts as
-running in `__sched_checkdead`, so without it the exit drain never ends and the runner reports the case TIMED OUT:
-no elapsed time is compared to a threshold. The accepting coroutine's promise is tied to the listener `main`
-closes, so it lives in a local and is awaited after the close.
-
-⚠ **THE SPIN IS NOT AN ASSERTION.** It sets the order the case needs (the poller blocked again before the
-readiness), and a host fast enough to finish it early reads green rather than red.
+<!-- test: netpoll-idle.a-close-under-a-parked-accept-from-another-owner-is-refused -->
+**A LISTENER HAS ONE OWNER, SO NO OTHER COROUTINE CAN CLOSE IT UNDER A PARKED ACCEPT.** `async stall(listener)`
+lends the listener to the coroutine that accepts until the promise is awaited or cancelled, so `main` closing it in
+between (which is what ended a parked accept from outside) is a use of a lent value (E3102). The accepting coroutine
+closes its own listener when it returns, and it cannot do that while it is parked in `accept`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-
-let settleReads = 2000000
-
-function holdStrandUntilPollerReturns(wakesBefore SchedulerEventCount) returns Integer
-	var wakes = wakesBefore
-
-	while wakes == wakesBefore 'untilPollerReturns'
-		wakes = Scheduler.counters().parkWakes
-	end 'untilPollerReturns'
-
-	var reads = 0 as Integer
-	var idle = 0 as SchedulerEventCount
-
-	while reads < settleReads 'settle'
-		idle = Scheduler.counters().idleProcessors
-		reads = reads + 1
-	end 'settle'
-
-	return 1
-end 'holdStrandUntilPollerReturns'
 
 function stall(listener TcpListener) returns Integer
 	_ = try listener.accept() otherwise return 2
@@ -231,38 +201,17 @@ end 'stall'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("a loopback bind on an ephemeral port succeeds")
-	let before = Scheduler.counters().netpollBlocks
 	let accepter = async stall(listener)
 
-	while Scheduler.counters().netpollBlocks == before 'untilParked'
-		Scheduler.yield()
-	end 'untilParked'
-
-	var idle = 0 as SchedulerEventCount
-
-	while idle == 0 'untilPollerSettles'
-		idle = Scheduler.counters().idleProcessors
-	end 'untilPollerSettles'
-
-	var reads = 0 as Integer
-
-	while reads < settleReads 'settle'
-		idle = Scheduler.counters().idleProcessors
-		reads = reads + 1
-	end 'settle'
-
-	let holder = async holdStrandUntilPollerReturns(Scheduler.counters().parkWakes)
+	Scheduler.yield()
 	listener.close()
-	_ = await holder
 	_ = await accepter
 
 	print("released\n")
 	return 0
 end 'main'
 ```
-```stdout
-released
+```maxoncstderr
+error E3102: <fragment>:15:2: use of moved value 'listener': it is lent to the coroutine of the `async` call at 12:23 until that promise is awaited or cancelled
 ```
-```exitcode
-0
-```
+

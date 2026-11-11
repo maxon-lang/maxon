@@ -28,13 +28,13 @@
 // an edge is a wiring bug rather than a case to merge into — and carrying the existing edges across
 // "just in case" would be generality no call site can reach and no test can redden.
 module function attachEdge(pred IrBlock, targetId BlockId, argIds ValueIdArray)
-	var predBlock = pred
+	let predBlock = pred
 
 	if predBlock.branchEdges.count() != 0 'alreadyWired'
 		panic("attachEdge: block '{String.from(predBlock.label)}' already carries {predBlock.branchEdges.count()} outgoing edge(s) — every predecessor a splice wires is one it minted in the same breath")
 	end 'alreadyWired'
 
-	var edges = BranchEdgeArray.create(0)
+	let edges = BranchEdgeArray.create(0)
 	edges.push(BranchEdge.create(targetId, argIds: argIds))
 	predBlock.branchEdges = edges
 end 'attachEdge'
@@ -50,7 +50,7 @@ end 'attachEdge'
 // runtime signatures, while `inlineLeaves` carries an arbitrary callee's declared return type and must
 // leave a float-returning leaf's result in an XMM.
 module function attachBlockArgs(block IrBlock, valueIds ValueIdArray, argType StdType)
-	var blockArgs = IrBlockArgArray.create(valueIds.count(), zeroed: false)
+	let blockArgs = IrBlockArgArray.create(valueIds.count(), zeroed: false)
 
 	for valueId in valueIds 'each'
 		blockArgs.push(IrBlockArg.create(valueId, argType: argType))
@@ -60,7 +60,7 @@ module function attachBlockArgs(block IrBlock, valueIds ValueIdArray, argType St
 end 'attachBlockArgs'
 
 module function attachTypedBlockArgs(block IrBlock, blockArgs IrBlockArgArray)
-	var target = block
+	let target = block
 
 	if target.blockArgs.count() != 0 'alreadyHasArgs'
 		panic("attachTypedBlockArgs: block '{String.from(target.label)}' already carries {target.blockArgs.count()} block arg(s) — a continuation a splice minted has none")

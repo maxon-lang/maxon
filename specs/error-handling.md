@@ -1995,7 +1995,7 @@ type Keeper
 end 'Keeper'
 
 function main() returns ExitCode
-	var keeper = Keeper.create()
+	let keeper = Keeper.create()
 	try keeper.keep(3) otherwise return 1
 	try keeper.keep(40) otherwise return 2
 	try keeper.keep(900) otherwise (e) 'late'
@@ -2023,7 +2023,7 @@ union Fault implements Error
 	bad(text String, at Tally)
 end 'Fault'
 
-typealias FaultArray = Array with readonly Fault
+typealias FaultArray = Array with immutable Fault
 
 type Holder
 	export let fault as Fault
@@ -2053,7 +2053,7 @@ function keptBytes(kept FaultArray) returns Tally
 end 'keptBytes'
 
 function main() returns ExitCode
-	var kept = FaultArray.create(0)
+	let kept = FaultArray.create(0)
 	try Holder.keepInto(kept, at: 3) otherwise return 1
 	try Holder.keepInto(kept, at: 40) otherwise return 2
 	try Holder.keepInto(kept, at: 900) otherwise (e) 'late'

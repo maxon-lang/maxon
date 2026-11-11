@@ -572,7 +572,7 @@ type Point
 end 'Point'
 
 function pick(p Point) returns Integer
-	var q = p
+	let q = p
 	let r = q
 	return r.x
 end 'pick'

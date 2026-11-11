@@ -547,7 +547,7 @@ function pickLarger(a Number, b Number) returns Number
 end 'pickLarger'
 
 function main() returns ExitCode
-	var s = NumberSorter.create()
+	let s = NumberSorter.create()
 	let winner = s.compareAndSwap(10, b: 25, cmp: pickLarger)
 	if winner == 25 'check'
 		return 0
@@ -1064,7 +1064,7 @@ function narrow(x Integer)
 end 'narrow'
 
 function main() returns ExitCode
-	var passes = PassArray.create(0)
+	let passes = PassArray.create(0)
 	passes.push(PassEntry.create(widen))
 	passes.push(PassEntry.create(narrow))
 
@@ -1434,7 +1434,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	c.tick()
 	c.tick()
 	return c.n as ExitCode
@@ -1538,7 +1538,7 @@ function double(x Integer) returns Integer
 end 'double'
 
 function main() returns ExitCode
-	var h = Handler.create(double)
+	let h = Handler.create(double)
 	let bump = 20
 	h.op = function(n Integer) gives n + bump
 	return h.op(22)
@@ -2069,14 +2069,14 @@ function usesClosure(bump Integer) returns Integer
 end 'usesClosure'
 
 function storeIt(h Handler, op UnaryOp) returns Handler
-	var hh = h
+	let hh = h
 	hh.op = op
 	return hh
 end 'storeIt'
 
 function main() returns ExitCode
-	var h = Handler.create(double)
-	view h2 = storeIt(h, op: double)
+	let h = Handler.create(double)
+	let h2 = storeIt(h, op: double)
 	return h2.op(20) + usesClosure(1)
 end 'main'
 ```
@@ -3464,7 +3464,7 @@ end 'main'
 5
 ```
 
-<!-- test: a-module-scope-factory-through-a-generic-instance-alias-is-called -->
+<!-- test: a-factory-through-a-generic-instance-alias-is-called -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3478,9 +3478,9 @@ end 'Box'
 
 typealias IntBox = Box with Integer
 
-let b = IntBox.make(5)
-
 function main() returns ExitCode
+	let b = IntBox.make(5)
+
 	return b.item as ExitCode
 end 'main'
 ```
@@ -3566,7 +3566,7 @@ end 'main'
 error E2073: <fragment>:5:18: `Array` static method 'nope' — the compiler provides two: `create()` and `init(managed)`
 ```
 
-<!-- test: a-module-scope-call-through-a-directory-named-like-a-primitive-reaches-the-directory -->
+<!-- test: a-call-through-a-directory-named-like-a-primitive-reaches-the-directory -->
 ```maxon
 // --- file: byte/m.maxon
 export typealias Integer = int(i64.min to i64.max)
@@ -3584,9 +3584,9 @@ export function make() returns Pair
 end 'make'
 
 // --- file: main.maxon
-let h = byte.make()
-
 function main() returns ExitCode
+	let h = byte.make()
+
 	return h.n as ExitCode
 end 'main'
 ```
@@ -3702,22 +3702,14 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-type Pair
-	export var a as Integer
+typealias Integers = Array with Integer
 
-	static function make() returns Self
-		return Self{a: 6}
-	end 'make'
-
-	function get() returns Integer
-		return self.a
-	end 'get'
-end 'Pair'
-
-let byte = Pair.make()
+let byte = Integers from [6]
 
 function main() returns ExitCode
-	return byte.get() as ExitCode
+	let first = try byte.get(0) otherwise 0
+
+	return first as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -4650,7 +4642,7 @@ end 'plain'
 
 function main() returns ExitCode
 	let s = Slot.create(plain)
-	var w = SlotW.create(s)
+	let w = SlotW.create(s)
 	return w.put(5)
 end 'main'
 ```
@@ -4668,7 +4660,7 @@ typealias OpArray = Array with UnaryOp
 
 function main() returns ExitCode
 	let bump = 20
-	var a = OpArray.create(0)
+	let a = OpArray.create(0)
 	a.push(function(n Integer) gives n + bump)
 	var total = 0 as Integer
 
@@ -5992,7 +5984,7 @@ function nine() returns ExitCode
 end 'nine'
 
 function main() returns ExitCode
-	var a = ThunkArray.create(0)
+	let a = ThunkArray.create(0)
 	a.push(nine)
 	let f = try a.get(0) otherwise panic("a.get(0) on a one-element array")
 	return f()
@@ -6035,7 +6027,7 @@ typealias FieldArray = Array with Field
 typealias FieldsBuilder = function(Integer) returns FieldArray
 
 function buildFields(n Integer) returns FieldArray
-	var out = FieldArray.create(0)
+	let out = FieldArray.create(0)
 	out.push(Field.create(n))
 	return out
 end 'buildFields'
@@ -6047,7 +6039,7 @@ function apply(f FieldsBuilder) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var s = SmallArray.create(0)
+	let s = SmallArray.create(0)
 	s.push(3)
 	return (apply(buildFields) + (s.count() as Integer)) as ExitCode
 end 'main'
@@ -6084,13 +6076,13 @@ function countFields(fields FieldArray) returns Integer
 end 'countFields'
 
 function apply(f FieldConsumer) returns Integer
-	var fields = FieldArray.create(0)
+	let fields = FieldArray.create(0)
 	fields.push(Field.create(5))
 	return f(fields)
 end 'apply'
 
 function main() returns ExitCode
-	var s = SmallArray.create(0)
+	let s = SmallArray.create(0)
 	s.push(3)
 	return (apply(countFields) + (s.count() as Integer)) as ExitCode
 end 'main'
@@ -6247,13 +6239,13 @@ extension Field
 end 'Field'
 
 function buildFields(n Integer) returns FieldArray
-	var out = FieldArray.create(0)
+	let out = FieldArray.create(0)
 	out.push(Field.create(n))
 	return out
 end 'buildFields'
 
 function main() returns ExitCode
-	var s = SmallArray.create(0)
+	let s = SmallArray.create(0)
 	s.push(3)
 	let f = Field.create(1)
 	return (f.runIt(buildFields) + (s.count() as Integer)) as ExitCode
@@ -6434,7 +6426,7 @@ function whisper(s String) returns String
 end 'whisper'
 
 function main() returns ExitCode
-	var c = StrCell.make("stored", pick: shout)
+	let c = StrCell.make("stored", pick: shout)
 	c.pick = whisper
 	print("{c.pick(c.v)}\n")
 	return 0
@@ -7090,11 +7082,11 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	h.op = nine
-	var t = (seven as Thunk, 1 as Integer)
+	let t = (seven as Thunk, 1 as Integer)
 	t.0 = nine
-	var xs = ThunkArray from [seven, seven]
+	let xs = ThunkArray from [seven, seven]
 	xs.push(nine)
 	try xs.set(0, value: nine) otherwise panic("set")
 	let fromTuple = t.0
@@ -7386,7 +7378,7 @@ type Slot
 end 'Slot'
 
 function main() returns ExitCode
-	var s = Slot.create()
+	let s = Slot.create()
 	print("{s.show()}\n")
 	s.show = function() gives 9
 	print("{s.show()}\n")

@@ -353,7 +353,7 @@ export type LockHold
 	end 'touch'
 
 	function upkeep() returns PhaseDelta
-		var total = PhaseDelta.zero()
+		let total = PhaseDelta.zero()
 		self.checkout.addUpkeepTo(total)
 		self.output.addUpkeepTo(total)
 		return total
@@ -993,7 +993,7 @@ end 'deleteRecord'
 
 function takeClaim(claimPath FilePath) returns ClaimAttempt
 	let startedMs = Clock.nowMs()
-	var sweep = ClaimProgress.pending()
+	let sweep = ClaimProgress.pending()
 
 	while true 'claiming'
 		match claimStep(claimPath, startedMs: startedMs, sweep: sweep) 'step'
@@ -1523,7 +1523,7 @@ function freshToken() returns String
 end 'freshToken'
 
 function recordText(token String, sinceUnix UnixSeconds, heldSeconds LockSeconds, host HostIdentity) returns String
-	var text = StringBuilder.create()
+	let text = StringBuilder.create()
 	appendField(text, key: PidField, value: "{Process.id()}")
 	appendField(text, key: TokenField, value: token)
 	appendField(text, key: SinceField, value: "{sinceUnix}")
@@ -1547,7 +1547,7 @@ end 'appendField'
 // record whose fields can be forged by an argument is not a record.
 function joinArgs() returns String
 	let args = CommandLine.args()
-	var words = StringArray.create(args.count(), zeroed: false)
+	let words = StringArray.create(args.count(), zeroed: false)
 
 	for arg in args 'each'
 		words.push(arg.replace(RecordLineSeparator, with: ArgvWordSeparator))
@@ -1628,7 +1628,7 @@ end 'holderDescription'
 // caller's `\n` is the only one — a record ends with one, and two would put a blank line inside the
 // message.
 function indentedRecord(record String) returns String
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 
 	for line in record.split(RecordLineSeparator) 'eachLine'
 		if line.isEmpty() 'blank'

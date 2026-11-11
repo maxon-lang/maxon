@@ -30,17 +30,17 @@ export let Greeting = "hello"
 
 A top-level `let` initializer is any expression a function body accepts, parsed by the body's
 expression parser with the same meaning and the same diagnostics. A scalar binding must have a value known at
-compile time (E2045 names the call that makes it unknown). A record whose value is decided at compile time is
-laid down as read-only data; any other is built by `__module_init` before `main`, in dependency order. A struct
+compile time (E2045 names a call of a non-generic function that returns one; any other call is E3220). A record whose value is decided at compile time is
+laid down as read-only data. A struct
 literal is refused at file scope (E3076); inside a `type` body a static member may be initialized by a struct
-literal of that type (`specs/lazy-static.md`). What an initializer's calls may reach is restricted further: E3164, below and in `specs/green-thread-globals.md`.
+literal of that type (`specs/lazy-static.md`). An initializer calls nothing (E3220), so what a call may reach is not a question for it.
 
 A top-level `let`'s record is immutable data through every name that reaches it — a `let` bound to it, a field
 read off it, a parameter it was passed to. Calling a method that writes its receiver on it is E3207; passing it
-to a parameter the callee writes is E3159 and E3207; storing it into a field that is not declared `immutable` is
+to a parameter the callee writes is E3207; storing it into a field that is not declared `immutable` is
 E3196, at the store, since the function that later writes the field cannot see where its value came from. A
-function that hands the record back declares `returns immutable` (E3209), and a `var` bound to what it handed back
-is E3078. `.clone()` makes a record of one's own.
+function that hands the record back declares `returns immutable` (E3209), and a write through a `var` bound to what it handed back
+is refused. `.clone()` makes a record of one's own.
 
 ### Static Fields in Types
 
@@ -444,7 +444,8 @@ An `interface`-typed field is a widening site at module scope exactly as it is i
 declared interface names. Such a record is never laid down as image data, because that second word is an
 address only the lowering can name.
 
-<!-- test: static-struct-literal-interface-field -->
+<!-- test: error.static-struct-literal-interface-field -->
+The initializer of a module-level or `static` `let` calls `Square.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -481,8 +482,9 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
-16 77
+```maxoncstderr
+error E3220: <fragment>:24:19: the initializer of 'Holder.one' calls 'Square.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3209: <fragment>:27:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: static-struct-literal-interface-field-holding-a-string-literal -->
@@ -540,7 +542,8 @@ end 'main'
 error E3005: <fragment>:12:19: field type mismatch for 'Holder.s': type 'int' does not implement interface 'Sized'
 ```
 
-<!-- test: static-factory-initializer -->
+<!-- test: error.static-factory-initializer -->
+The initializer of a module-level or `static` `let` calls `Row.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -560,8 +563,8 @@ function main() returns ExitCode
 	return Cache.head.n as ExitCode
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3220: <fragment>:13:20: the initializer of 'Cache.head' calls 'Row.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: static-managed-members -->
@@ -587,7 +590,7 @@ hi3
 
 <!-- test: error.static-let-array-mutate -->
 ⭐⭐ **THE WRITE-THROUGH-AN-IMMUTABLE-STATIC GUARD.** A receiver-writing method
-on a `static let` array is E3207 (and E3159 at the call) — the SAME rule
+on a `static let` array is E3207 — the SAME rule
 `error.top-level-let-array-mutate` pins for a file-scope `let`, naming the qualified binding.
 
 The static read is routed through the receiver door so that the blame name reaches the check. Falling out
@@ -606,7 +609,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3207: <fragment>:7:14: 'pop' writes its receiver (line 256: `return try managed.remove(len - 1)`); 'Cache.xs' is immutable
-error E3159: <fragment>:7:23: cannot pass 'Cache.xs', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
 <!-- test: top-level-let-enum-initializer-cross-file -->
@@ -763,21 +765,20 @@ end 'main'
 A `let` array's record cannot be laundered into a mutable ALIAS. A borrowed managed aggregate bound to a
 `var` is promoted to owned by an INCREF of the same box — reference semantics, deliberately, because the
 alias is observable — so without this refusal `var b = A` then `b.push(9)` would grow `A`. A `var` is a
-writable name, and the record it would name is one the program declared `let`, so the BINDING is refused
-(E3078).
+writable name, and the record it would name is one the program declared `let`, so a write through it is
+refused (E3207).
 
-⚠ **THE REFUSAL IS ON THE BINDING.** `var b = A` is E3078; `let b = A` is legal and can only read
-(`top-level-let-array-let-alias`). The mark rides the VALUE and is CARRIED through the promotion, so the
-same refusal covers every door that hands a `var` the record — the direct binding, a reassignment, a
-ternary/`match` merge that joins it, an `if`/loop merge that REBINDS it, a cell it is spilled into and a
-closure that captures it, each pinned below — and, through a whole-program fact, a call that hands the
-record back.
+⚠ **THE REFUSAL IS ON THE WRITE.** `var b = A` followed by `b.push(9)` is E3207; `let b = A` is legal and can only read
+(`top-level-let-array-let-alias`). The same refusal covers every door that hands a `var` the record — the
+direct binding, a reassignment, a ternary/`match` merge that joins it, an `if`/loop merge that REBINDS it, a cell it
+is spilled into and a closure that captures it, each pinned below — and, through a whole-program fact, a call that
+hands the record back.
 
 ⚠ **A CALL BOUNDARY IS CROSSED BY THE CALLEE'S SUMMARY, NOT BY THE MARK.** A callee's parameter is a fresh
 value in a fresh space, so the mark does not enter it; what crosses is what the callee does with it.
-`g(A)` where `g(xs …)` binds `var b = xs` and writes `b` is E3159 at the call, because `g` writes `xs`.
-`var c = idBox(G)` where `idBox(x Box)` is `return x` is E3078, because the result may share storage with
-`G`. `Holder.of(G)` followed by `h.inner.n = 99` is E3159 at the write, because the record `h` holds is `G`'s.
+`g(A)` where `g(xs …)` binds `var b = xs` and writes `b` is refused at the call, because `g` writes `xs`.
+`var c = idBox(G)` where `idBox(x Box)` is `return x`, followed by a write through `c`, is refused, because the result may share storage with
+`G`. `Holder.of(G)` followed by `h.inner.n = 99` is refused at the write, because the record `h` holds is `G`'s.
 ```maxon
 let A = FullRangeIntArray from [1, 2]
 
@@ -788,7 +789,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:5:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3207: <fragment>:6:4: 'push' needs a writable receiver; 'b' is immutable
 ```
 
 <!-- test: error.top-level-let-array-var-reassign-alias -->
@@ -806,12 +807,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:6:2: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3207: <fragment>:7:4: 'push' needs a writable receiver; 'b' is immutable
 ```
 
 <!-- test: error.top-level-let-field-map-var-alias -->
-A FIELD of a `let` whose record `__module_init` builds is that `let`'s own storage: `H.index` is the `let`'s
-map, so a `var` made from it and written through is refused as one made from a field of a local `let` is.
+The initializer of a module-level or `static` `let` calls `Holder.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Key = int(0 to 1000)
 typealias Items = Array with Key
@@ -836,11 +836,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:19:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+error E3220: <fragment>:16:9: the initializer of 'H' calls 'Holder.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
-<!-- test: top-level-let-field-accessor-read-only -->
-An accessor may hand that field back, declaring the result `immutable`, and a caller that only reads it compiles and runs.
+<!-- test: error.top-level-let-field-accessor-read-only -->
+The initializer of a module-level or `static` `let` calls `Holder.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Key = int(0 to 1000)
 typealias Items = Array with Key
@@ -867,12 +867,13 @@ function main() returns ExitCode
 	return found.count() as ExitCode
 end 'main'
 ```
-```exitcode
-1
+```maxoncstderr
+error E3220: <fragment>:16:9: the initializer of 'H' calls 'Holder.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3209: <fragment>:19:2: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: error.top-level-let-field-accessor-result-write -->
-A `var` may not hold what the accessor handed back out of a module-level `let`, so the write through it is refused at the binding.
+The initializer of a module-level or `static` `let` calls `Holder.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Key = int(0 to 1000)
 typealias Items = Array with Key
@@ -901,7 +902,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:6: cannot assign the result of 'index', which may share storage with a module-level `let`, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+error E3220: <fragment>:16:9: the initializer of 'H' calls 'Holder.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3209: <fragment>:19:2: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 error E3207: <fragment>:24:2: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); 'm' is immutable
 ```
 
@@ -921,7 +923,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:6:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
+error E3207: <fragment>:7:7: 'push' needs a writable receiver; 'pick' is immutable
 ```
 
 <!-- test: error.top-level-let-array-match-arm-alias -->
@@ -947,7 +949,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:12:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
+error E3207: <fragment>:16:7: 'push' needs a writable receiver; 'pick' is immutable
 ```
 
 <!-- test: error.top-level-let-array-handed-back-as-a-map-miss-fallback -->
@@ -994,11 +996,8 @@ end 'main'
 2
 ```
 
-<!-- test: top-level-let-struct-accessor-read-only -->
-⭐ **READING AND RETURNING A `let` GLOBAL IS LEGAL; MUTATING THROUGH THE RESULT IS THE ERROR.** This is
-the family's control: an accessor that hands a `let`-declared global's record back to a caller that only
-READS it compiles and runs. It is the shape `stdlib/CharacterSet.maxon`'s eleven presets are declared in,
-so refusing the RETURN itself would stand between the library and its callers.
+<!-- test: error.top-level-let-struct-accessor-read-only -->
+The initializer of a module-level or `static` `let` calls `Box.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1021,16 +1020,13 @@ function main() returns ExitCode
 	return a.n as ExitCode
 end 'main'
 ```
-```exitcode
-1
+```maxoncstderr
+error E3220: <fragment>:7:22: the initializer of 'Box.shared' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3209: <fragment>:14:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: error.let-global-accessor-result-field-write -->
-And the binding is where it is refused. `Box.get()` may hand the record out; a `var` bound to what it
-handed back would be a writable name for a global declared `let`, so THAT is the diagnostic, on the
-binding's own line. The caller learns this from a whole-program fact — "may this function's return alias
-an immutable global?" — because the accessor's body may be in another file, which is exactly why the refusal
-could not stay at the return.
+The initializer of a module-level or `static` `let` calls `Box.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1055,15 +1051,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:19:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+error E3220: <fragment>:7:22: the initializer of 'Box.shared' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3209: <fragment>:14:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
+error E3197: <fragment>:20:2: cannot write 'n' through 'a', which is immutable
 ```
 
 <!-- test: error.let-global-accessor-result-two-hops-of-return -->
-⭐ **THE FACT IS A CLOSURE OVER RETURN-FORWARDING EDGES, NOT A ONE-HOP RULE, AND THIS IS THE CASE THAT
-SAYS SO.** `get()` returns what `inner()` returns, and only `inner()` names the global — so a rule that
-looked one call deep would accept this program and silently mutate `Box.shared`. Every shape the corpus
-writes today is single-hop, which is precisely why the two-hop case is pinned: *"nothing writes it yet"*
-is not a soundness argument.
+The initializer of a module-level or `static` `let` calls `Box.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1092,14 +1086,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+error E3220: <fragment>:7:22: the initializer of 'Box.shared' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3209: <fragment>:14:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
+error E3197: <fragment>:24:2: cannot write 'n' through 'a', which is immutable
 ```
 
 <!-- test: error.let-global-passed-to-field-writing-callee -->
-⛔ **A `let`-DECLARED GLOBAL HANDED STRAIGHT TO A CALLEE THAT WRITES A FIELD OF IT** — without the
-record-write column it silently mutates the global (`g 99`, where the program declares `G` a `let`).
-The narrow mask E3159 reads alone at a receiver slot records no field write, so it cannot see it; the
-record-write column is this program.
+The initializer of a module-level or `static` `let` calls `Box.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1123,14 +1116,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:19:7: 'bump' writes 'b' (line 15: `b.n = 99`); 'G' is immutable
+error E3220: <fragment>:12:9: the initializer of 'G' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-to-a-callee-that-calls-a-self-writing-method -->
-⚖ The same refusal ONE FRAME DOWN, where the callee writes nothing of its own and only calls a method that
-writes its own receiver. That write is exempt for a `let` BINDING — the exemption `parameter-mutation.md`
-documents — and a global is the subject it is NOT exempt for, so the record-write closure is taken twice and
-the call site reads whichever column its subject calls for. `G.bump()` written directly is refused too.
+The initializer of a module-level or `static` `let` calls `Box.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1158,12 +1148,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:23:7: 'tick' writes 'b' (it calls 'bump', which writes its receiver); 'G' is immutable
+error E3220: <fragment>:16:9: the initializer of 'G' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-to-a-callee-that-calls-a-self-writing-method-on-a-field -->
-The same refusal where the self-writing method is called on a record INSIDE what the callee was handed: the
-global's graph is written one record down, and nothing may write a global declared immutable.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1199,12 +1188,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:31:8: 'nudge' writes 't' (it calls 'bump', which writes its receiver); 'G' is immutable
+error E3220: <fragment>:24:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-to-a-callee-that-pushes-into-a-container-a-call-hands-back-from-inside-it -->
-The same refusal where the write is a built-in container method: `pick` hands back the array `t` holds, and
-`poke` pushes into it, so the global's graph is written one record down.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias CountArray = Array with Count
@@ -1233,12 +1221,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:24:7: 'poke' writes 'h'; 'G' is immutable
+error E3220: <fragment>:13:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-to-a-callee-that-pushes-into-a-var-merged-from-inside-it -->
-The same write through a `var` that may hold the array inside the parameter on one path and a fresh one on the
-other: what it may lie within is what the push writes.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias CountArray = Array with Count
@@ -1277,12 +1264,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:34:7: 'poke' writes 't' (line 30: `list.push(1)`); 'G' is immutable
+error E3220: <fragment>:21:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
-<!-- test: a-let-global-held-by-a-record-a-callee-builds-is-not-written-by-writing-that-record -->
-The control: `mint` stores `guards` in the record it builds and pushes into that record's own fresh array, which
-lies within nothing `guards` holds, so handing it the global is legal and the global is untouched.
+<!-- test: error.a-let-global-held-by-a-record-a-callee-builds-is-not-written-by-writing-that-record -->
+The initializer of a module-level or `static` `let` calls `Guards.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias CountArray = Array with Count
@@ -1317,14 +1303,13 @@ function main() returns ExitCode
 	return (b.subst.count() * 10 + Shared.cols.count()) as ExitCode
 end 'main'
 ```
-```exitcode
-10
+```maxoncstderr
+error E3220: <fragment>:13:14: the initializer of 'Shared' calls 'Guards.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3207: <fragment>:31:15: 'mint' takes `immutable` 'guards' (line 25: `var blocks = Blocks.create(guards)`); 'Shared' is mutable. Freeze it first
 ```
 
 <!-- test: error.let-global-accessor-result-to-field-writing-callee -->
-The same write one call away from a RETURNED alias — the shape that forces both halves at once: the
-accessor's whole-program return fact, and the callee's whole-program parameter-write fact. `bump` writes
-nothing of its own; it writes what it was handed.
+The initializer of a module-level or `static` `let` calls `Box.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1353,13 +1338,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+error E3220: <fragment>:7:22: the initializer of 'Box.shared' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3209: <fragment>:14:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
+error E3207: <fragment>:24:7: 'bump' writes 'b' (line 19: `b.n = 99`); 'a' is immutable
 ```
 
 <!-- test: error.let-global-to-callee-that-forwards-the-write -->
-⭐ **AND THE PARAMETER HALF IS A CLOSURE TOO.** `bump` writes nothing at all — it forwards its parameter
-to a `poke` that does — so the bit reaches `bump` only through the least fixpoint over the call graph.
-Two hops on the argument side, as the case above is two hops on the return side.
+The initializer of a module-level or `static` `let` calls `Box.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -1387,32 +1372,24 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:23:7: 'bump' writes 'b' (it calls 'poke', which writes 'c'); 'G' is immutable
+error E3220: <fragment>:12:9: the initializer of 'G' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-given-out-of-a-closure -->
-⭐ **THE INDIRECT-CALL BOUNDARY, STATED RATHER THAN LEFT SILENT.** A closure has no static callee, so no
-whole-program fact can say what calling one returns — and without that, a tainted value handed out of a
-closure would escape into a call the analysis cannot follow. So a closure keeps the refusal at the
-`gives`, which is the conservative answer, deliberately not widened. The remedy is the one the message
-names.
-
-⚠ **HONEST STATUS: this case is a REGRESSION GUARD.** What it pins is that the RETURN a named function
-may make does not widen to a closure. It goes red the day a fact is published for a closure
-without the analysis to back it. Its positive twin is `top-level-let-struct-accessor-read-only` above —
-the same shape, out of a NAMED function, which compiles.
+A closure hands out a read of a module-level `let`, and a write through the name bound to what the closure returns is
+refused as a write through immutable data, as it is for a named function.
 ```maxon
-let A = [1, 2]
+let A = ["a", "b"]
 
 function main() returns ExitCode
 	let f = function() gives A
-	var b = f()
-	b.push(9)
-	return A.count()
+	let b = f()
+	b.push("zz")
+	return A.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:21: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in the compiler, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+error E3207: <fragment>:7:4: 'push' needs a writable receiver; 'b' is immutable
 ```
 
 <!-- test: error.let-global-alias-captured-by-a-closure -->
@@ -1448,7 +1425,6 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:21:37: cannot pass the result of 'expose', which may share storage with a module-level `let`, to a function that writes parameter 'xs' (in the closure at <fragment>:21:20); pass a clone()
 error E3207: <fragment>:21:42: 'grow' writes 'xs' (line 12: `xs.push("zz")`); 'expose()' is immutable
 ```
 
@@ -1484,7 +1460,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:18:3: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3207: <fragment>:20:15: 'grow' writes 'xs' (line 11: `xs.push("zz")`); 'b' is read-only
 ```
 
 <!-- test: error.let-global-alias-carried-by-a-loop -->
@@ -1521,7 +1497,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:18:3: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3207: <fragment>:20:15: 'grow' writes 'xs' (line 11: `xs.push("zz")`); 'b' is read-only
 ```
 
 <!-- test: error.top-level-array-empty -->
@@ -1555,7 +1531,7 @@ error E3005: <fragment>:2:14: argument type mismatch for 'value': expected 'int'
 <!-- test: a-body-array-bool-element -->
 ```maxon
 function main() returns ExitCode
-	var flags = [true, false]
+	let flags = [true, false].clone()
 	flags.push(true)
 	return flags.count()
 end 'main'
@@ -1595,8 +1571,8 @@ Ada
 
 ### A `let` initializer may not reach a managed `var`
 
-<!-- test: a-let-initializer-may-read-another-let -->
-A `let` may hold what another `let` holds: both are fixed.
+<!-- test: error.a-let-initializer-may-read-another-let -->
+The initializer of a module-level or `static` `let` calls `Box.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 type Box
 	export var n as Integer
@@ -1619,22 +1595,20 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-0
-```
-```stdout
-a=7 b=7
+```maxoncstderr
+error E3209: <fragment>:10:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
+error E3220: <fragment>:14:9: the initializer of 'a' calls 'Box.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3220: <fragment>:15:9: the initializer of 'b' calls 'Box.current': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 ### A write through a record a call hands back out of a `let`
 
-A write, inside a function, through a record a call handed back out of a module-level `let` is E3159, and the
-function that hands it back declares `returns immutable` (E3209); a local `var` bound to that record is refused at
-the binding. The storage-provenance summary of the call answers it,
+A write, inside a function, through a record a call handed back out of a module-level `let` is E3207, and the
+function that hands it back declares `returns immutable` (E3209); a write through a local `var` bound to that record is refused. The storage-provenance summary of the call answers it,
 carried through calls, witness dispatches and calls through function values.
 
 <!-- test: error.a-local-var-may-not-write-through-a-lets-record-a-call-hands-back -->
-A local `var` bound to the record a call hands back out of a module-level `let` is refused at the binding.
+The initializer of a module-level or `static` `let` calls `Box.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 type Box
 	export var n as Integer
@@ -1659,11 +1633,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
+error E3209: <fragment>:10:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
+error E3220: <fragment>:14:9: the initializer of 'a' calls 'Box.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3197: <fragment>:18:2: cannot write 'n' through 'w', which is immutable
 ```
 
 <!-- test: error.a-lets-record-a-call-handed-back-may-not-go-to-a-writing-parameter -->
-`main` names no `let`, and hands `bump` the record `current` hands back out of `a`.
+The initializer of a module-level or `static` `let` calls `Box.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 type Box
 	export var n as Integer
@@ -1695,12 +1671,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:25:2: cannot pass the result of 'current', which may share storage with a module-level `let`, to a function that writes parameter 'b' (in main); pass a clone()
+error E3209: <fragment>:10:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
+error E3220: <fragment>:14:9: the initializer of 'a' calls 'Box.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 error E3207: <fragment>:25:7: 'bump' writes 'b' (line 17: `b.n = 9`); 'Box.current()' is immutable
 ```
 
 <!-- test: error.a-local-var-may-not-write-through-a-lets-record-an-await-hands-back -->
-The record reaches `b` through a promise, and a `var` may not hold a module-level `let`'s record.
+The initializer of a module-level or `static` `let` calls `Box.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 type Box
 	export var n as Integer
@@ -1734,11 +1711,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:26:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3209: <fragment>:10:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
+error E3220: <fragment>:14:9: the initializer of 'a' calls 'Box.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3197: <fragment>:27:2: cannot write 'n' through 'b', which is immutable
 ```
 
 <!-- test: error.a-local-var-may-not-write-through-a-lets-record-a-map-miss-hands-back -->
-`pick` hands back `a`'s own record whenever the lookup misses, through its `otherwise` fallback, so its result mixes frozen and mutable data and is read-only for the caller: the write through `var b` is E3197.
+The initializer of a module-level or `static` `let` calls `Box.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 type Box
 	export var n as Integer
@@ -1771,7 +1750,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3197: <fragment>:26:2: cannot write 'n' through 'b', which is read-only
+error E3220: <fragment>:12:9: the initializer of 'a' calls 'Box.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 ### A top-level `let` and a type of one name are one name declared twice
@@ -1864,7 +1843,7 @@ error E2013: <fragment>:5:2: 'origin' is a let and cannot be reassigned
 ```
 
 <!-- test: top-level-let-struct-reassign-error -->
-Reassigning an immutable top-level `let` struct variable should error.
+The initializer of a module-level or `static` `let` calls `Point.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias SmallInt = int(0 to u8.max)
 
@@ -1885,6 +1864,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3220: <fragment>:13:14: the initializer of 'origin' calls 'Point.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 error E2013: <fragment>:16:3: 'origin' is a let and cannot be reassigned
 ```
 
@@ -1951,7 +1931,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:14:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:15:7: cannot write through a read-only value, as it joins immutable and mutable data
 ```
 
 ### The returned-shape sweep — the INLINE CONDITIONAL
@@ -1986,13 +1966,13 @@ function pairable(bound Names, wanted Names) returns Names
 end 'pairable'
 
 function main() returns ExitCode
-	var a = Names.create(0)
+	let a = Names.create(0)
 	a.push(1)
-	var b = Names.create(0)
+	let b = Names.create(0)
 	b.push(2)
 	b.push(3)
-	view short = pairable(a, wanted: b)
-	view long = pairable(b, wanted: a)
+	let short = pairable(a, wanted: b)
+	let long = pairable(b, wanted: a)
 	print("short={short.count()} long={long.count()}")
 	return 0
 end 'main'
@@ -2034,7 +2014,7 @@ typealias Bits = Array with Integer
 let sharedEmptyBits = Bits.create(0)
 
 function withRootBits(base Bits, bits Integer) returns Bits
-	var out = Bits.create(0)
+	let out = Bits.create(0)
 	out.push((base.count() as Integer) + bits)
 	return out
 end 'withRootBits'
@@ -2076,14 +2056,14 @@ typealias Bits = Array with Integer
 let bits = Bits.create(0)
 
 function localWins() returns Bits
-	var bits = Bits.create(0)
+	let bits = Bits.create(0)
 	bits.push(7)
 	bits.push(9)
 	return bits
 end 'localWins'
 
 function main() returns ExitCode
-	var got = localWins()
+	let got = localWins()
 	got.push(11)
 	print("global={bits.count()} local={got.count()}")
 	return 0
@@ -2115,7 +2095,7 @@ that names the global THROUGH AN ACCESSOR (`= shared()`) reaches the helper's re
 call result, so it never touches the promotion and there is no refusal to fall back on — the mark would
 stop at the helper and the caller would get an untainted value: a `grow(names Names = shared())`
 whose body pushes would print `a=1 b=2 g=2`, mutating a `let` global, while the written-out `grow(shared())`
-one line over is E3159. So this door is a matter of SOUNDNESS and not only of lifting a refusal.
+one line over is refused. So this door is a matter of SOUNDNESS and not only of lifting a refusal.
 
 <!-- test: a-parameter-default-may-name-a-let-global -->
 The `sharedNoOpaqueParams` shape, and all three spellings of the same argument are exercised side by
@@ -2132,7 +2112,7 @@ function describe(names Names = sharedEmptyNames) returns Integer
 end 'describe'
 
 function main() returns ExitCode
-	var given = Names.create(0)
+	let given = Names.create(0)
 	given.push(7)
 	given.push(9)
 	print("omitted={describe()} written={describe(sharedEmptyNames)} given={describe(given)}")
@@ -2234,22 +2214,11 @@ error E3207: <fragment>:17:12: 'grow' writes 'names' (line 12: `names.push(1)`);
 ```
 
 <!-- test: a-field-default-naming-a-let-global-is-still-refused -->
-⛔⛔ **THE FIELD DEFAULT IS THE SAME HELPER MECHANISM AND IS DELIBERATELY *NOT* ADMITTED, WHICH IS A
-DECISION AND NOT AN OVERSIGHT.** Both doors drain through one `parseDefaultHelperBody`, and what separates
-them is the KEY it asks under: the sweep publishes a PARAMETER default's helper and not a FIELD's, so this
-answers false and the E2015 stands.
-
-⭐ **THE REASON IS WHERE THE RECORD LANDS.** A parameter default hands it to a call ARGUMENT, which is
-where the mark is read and where a mutating callee is refused. A field default hands it to a struct SLOT,
-and the mark does not survive a field store — `var h = Holder.make(sharedEmptyNames)` storing a
-global's record and then `h.names.push(1)` compiles clean and prints `g=1`.
-
-⚠ **THIS IS A HOLE IN THE `let`-GLOBAL RULE AS A WHOLE, AND NOT A DEFECT OF ONE ARM** — and that is
-precisely why the door stays shut rather than being widened. The rule is deliberately STRICT about a global's record reaching
-a mutating position (the case above is one), so publishing the field helper would open a route into the one part of the rule that
-cannot yet follow the record. A refusal is the direction this rule may err in; a silent acceptance is
-not. It is pinned here so the gap is visible rather than assumed, and it comes off the day a field store
-carries the mark.
+⛔⛔ **A FIELD DEFAULT THAT NAMES A MODULE-LEVEL `let` STORES THE GLOBAL'S RECORD INTO A MUTABLE FIELD, AND IS
+REFUSED.** A parameter default hands the record to a call argument, where a mutating callee is refused. A
+field default hands it to a struct slot, and a write through that field would mutate a global declared
+immutable, so the store is the refusal: the field is declared `immutable Names` when it is meant to hold the
+global's record.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Names = Array with Integer
@@ -2270,7 +2239,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:21: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in the compiler, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+error E3196: <fragment>:8:21: cannot store an immutable 'Names' into 'Holder.names', which holds a mutable 'Names'; declare the field `immutable Names`
 ```
 
 ### `<Type> from "…"` AS A TOP-LEVEL INITIALIZER
@@ -2572,7 +2541,7 @@ function tagOf(b Boxed) returns Integer
 end 'tagOf'
 
 function main() returns ExitCode
-	var xs = BoxedArray.create(0)
+	let xs = BoxedArray.create(0)
 	var i = 0 as Integer
 	var sum = 0 as Integer
 	while i < 4 'each'
@@ -2580,7 +2549,7 @@ function main() returns ExitCode
 		sum = sum + tagOf(sentinel)
 		i = i + 1
 	end 'each'
-	view first = try xs.get(0) otherwise Boxed.plain
+	let first = try xs.get(0) otherwise Boxed.plain
 	print("count={xs.count()} sum={sum} first={tagOf(first)}")
 	return 0
 end 'main'
@@ -2816,7 +2785,7 @@ end 'Op'
 let globalOps = [Op.add(7), Op.nop]
 
 function main() returns ExitCode
-	view first = try globalOps.get(0) otherwise Op.nop
+	let first = try globalOps.get(0) otherwise Op.nop
 	return match first 'check'
 		add(v) gives v
 		nop gives 99
@@ -2827,9 +2796,8 @@ end 'main'
 7
 ```
 
-<!-- test: global-bytestring-map-with-union-array -->
-Neither ingredient alone exposes the hole: the map supplies a live global whose producer chain
-runs through module init, and the union supplies the unscanned payload read.
+<!-- test: error.global-bytestring-map-with-union-array -->
+The initializer of a module-level or `static` `let` calls `KeywordInfo.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Kind = int(0 to 100)
 typealias Val = int(i64.min to i64.max)
@@ -2860,7 +2828,7 @@ function main() returns ExitCode
 	ops.push(Op.add(1))
 	ops.push(Op.nop)
 
-	view info = try keywordMap.get(b"if") otherwise KeywordInfo.create(0, helpText: "")
+	let info = try keywordMap.get(b"if") otherwise KeywordInfo.create(0, helpText: "")
 	if info.kind != 1 'badLookup'
 		return 1
 	end 'badLookup'
@@ -2868,8 +2836,8 @@ function main() returns ExitCode
 	return 0 if ops.count() == 2 and keywordMap.count() == 2 else 2
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E3220: <fragment>:21:18: the initializer of 'keywordMap' calls 'KeywordInfo.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: global-map-with-union-values -->
@@ -2889,7 +2857,7 @@ let opMap = [
 ]
 
 function main() returns ExitCode
-	view op = try opMap.get(b"add") otherwise Op.nop
+	let op = try opMap.get(b"add") otherwise Op.nop
 	return match op 'check'
 		add(v) gives v
 		nop gives 99
@@ -2900,10 +2868,8 @@ end 'main'
 5
 ```
 
-<!-- test: live-global-survives-dead-global-pruning -->
-A dead global is what makes the pruning pass run at all, and the pass then walks the whole module
-init block — so the live global's byte-string keys and interpolated strings, all pure producers,
-are exposed to the same scan.
+<!-- test: error.live-global-survives-dead-global-pruning -->
+The initializer of a module-level or `static` `let` calls `describe`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Kind = int(0 to 100)
 
@@ -2928,7 +2894,7 @@ let keywordMap = [
 public let unusedNames = StringArray.create(0)
 
 function main() returns ExitCode
-	view info = try keywordMap.get(b"else") otherwise KeywordInfo.create(0, helpText: "")
+	let info = try keywordMap.get(b"else") otherwise KeywordInfo.create(0, helpText: "")
 	if info.helpText != "kind 2" 'badHelp'
 		return 1
 	end 'badHelp'
@@ -2936,8 +2902,8 @@ function main() returns ExitCode
 	return 0 if keywordMap.count() == 2 and info.kind == 2 else 2
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E3220: <fragment>:17:18: the initializer of 'keywordMap' calls 'describe': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: module-union-read-initializer -->
@@ -2971,6 +2937,7 @@ as the same call in a function body reports it — at the factory's name — and
 twin.
 
 <!-- test: error.const-fold-union-case-into-enum-field -->
+The initializer of a module-level or `static` `let` calls `Mixed.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -3000,7 +2967,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:17: argument type mismatch for 'c': expected 'Colour', got 'Status'
+error E3220: <fragment>:23:11: the initializer of 'Bad' calls 'Mixed.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.union-case-into-enum-field-in-a-function-body -->
@@ -3040,6 +3007,7 @@ they are not the same record at all: read back through the array surface, `H.xs.
 second word as a `__ManagedMemory` length.
 
 <!-- test: error.const-fold-map-into-array-field -->
+The initializer of a module-level or `static` `let` calls `Map.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
@@ -3060,7 +3028,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:14:16: argument type mismatch for 'xs': expected 'NumArray', got 'Counts'
+error E3220: <fragment>:14:9: the initializer of 'H' calls 'Map.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.map-into-array-field-in-a-function-body -->
@@ -3087,8 +3055,7 @@ error E3005: <fragment>:15:17: argument type mismatch for 'xs': expected 'NumArr
 ```
 
 <!-- test: error.let-global-alias-receives-a-self-writing-container-method-on-a-field -->
-The direct `G.items.push(1)` is refused; a `let` naming `G` is the same record, so pushing through it is
-refused the same way.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias CountArray = Array with Count
@@ -3110,12 +3077,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:17:10: 'push' needs a writable receiver; 'items' is immutable
+error E3220: <fragment>:13:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-field-passed-to-a-writing-callee -->
-`bump(G)` is refused; a field of `G` is `G`'s own graph, so handing it to a callee that writes it is
-refused too.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -3147,12 +3113,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:27:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
-error E3207: <fragment>:27:7: 'bump' writes 'b' (line 23: `b.n = 99`); 'G' is immutable
+error E3220: <fragment>:20:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-alias-field-passed-to-a-writing-callee -->
-The same field reached through a `let` naming `G`.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -3185,12 +3150,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:28:2: cannot pass 'v', which is read-only (a module-level `let`), to a function that writes parameter 'b' (in main); pass a clone()
-error E3207: <fragment>:28:7: 'bump' writes 'b' (line 23: `b.n = 99`); 'v' is immutable
+error E3220: <fragment>:20:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-field-receives-a-self-writing-method -->
-A method that writes its own receiver, called on a field of `G`, writes `G`'s graph.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -3222,12 +3186,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:27:9: 'bump' writes its receiver (line 12: `self.n = self.n + 1`); 'G' is immutable
-error E3159: <fragment>:27:10: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
+error E3220: <fragment>:24:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-alias-field-receives-a-self-writing-method -->
-The same method call through a `let` naming `G`.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -3260,12 +3223,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:28:9: 'bump' writes its receiver (line 12: `self.n = self.n + 1`); 'v' is immutable
-error E3159: <fragment>:28:10: cannot pass 'v', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
+error E3220: <fragment>:24:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-container-field-passed-to-a-pushing-callee -->
-A container field of `G` handed to a callee that pushes into it.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias CountArray = Array with Count
@@ -3290,12 +3252,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:20:2: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'xs' (in main); pass a clone()
-error E3207: <fragment>:20:7: 'fill' writes 'xs' (line 16: `xs.push(1)`); 'G' is immutable
+error E3220: <fragment>:13:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-global-alias-container-field-passed-to-a-pushing-callee -->
-The same container field reached through a `let` naming `G`.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias CountArray = Array with Count
@@ -3321,13 +3282,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:21:2: cannot pass 'v', which is read-only (a module-level `let`), to a function that writes parameter 'xs' (in main); pass a clone()
-error E3207: <fragment>:21:7: 'fill' writes 'xs' (line 16: `xs.push(1)`); 'v' is immutable
+error E3220: <fragment>:13:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.let-binding-of-a-let-global-field-receives-a-self-writing-method -->
-A `let` binding's own record takes a self-writing method, but a `let` bound to a field of `G` holds
-`G`'s record, which nothing may write.
+The initializer of a module-level or `static` `let` calls `Holder.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -3360,14 +3319,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:28:2: 'bump' writes its receiver (line 12: `self.n = self.n + 1`); 'i' is immutable
-error E3159: <fragment>:28:4: cannot pass 'i', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
+error E3220: <fragment>:24:9: the initializer of 'G' calls 'Holder.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-let-global-stored-into-a-var-field-is-refused-at-the-store -->
-A `var` field may be written by any function the record reaches, and the function that writes it cannot
-see where the field's value came from. So storing `G`'s record into a `var` field is refused at the store:
-`adopt` puts `G` into `b.cfg`, and `poke`, which knows only a `Bag`, would write `G.level`.
+The initializer of a module-level or `static` `let` calls `Config.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -3405,11 +3361,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:23:10: cannot store an immutable 'Config' into 'cfg', which holds a mutable 'Config'; declare the field `immutable Config`
+error E3220: <fragment>:20:9: the initializer of 'G' calls 'Config.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
-<!-- test: a-clone-of-a-let-global-stored-into-a-var-field-may-be-written -->
-The same program storing a clone: `poke` writes the copy, and `G` keeps its level.
+<!-- test: error.a-clone-of-a-let-global-stored-into-a-var-field-may-be-written -->
+The initializer of a module-level or `static` `let` calls `Config.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -3447,11 +3403,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-1 99
+```maxoncstderr
+error E3220: <fragment>:20:9: the initializer of 'G' calls 'Config.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: a-top-level-let-map-with-cast-values-reads-back-typed -->
@@ -3520,7 +3473,8 @@ xé
 
 ### A static member's initializer ends at the line holding the closing bracket of a kept `match` block
 
-<!-- test: a-match-expression-in-a-call-argument-of-a-static-let -->
+<!-- test: error.a-match-expression-in-a-call-argument-of-a-static-let -->
+The initializer of a module-level or `static` `let` calls `tag`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 enum Mode
 	quiet
@@ -3544,11 +3498,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-loud! next
+```maxoncstderr
+error E3220: <fragment>:12:21: the initializer of 'Holder.LABEL' calls 'tag': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-return-in-a-handler-block-of-a-static-let-names-the-initializer -->

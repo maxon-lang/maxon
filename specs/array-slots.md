@@ -98,7 +98,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create(0)
+	let arr = SlotArray.create(0)
 	arr.growFilled(3, value: Slot.create(14))
 	var total = 0 as Integer
 	for s in arr 'sum'
@@ -128,9 +128,9 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create(0)
+	let arr = SlotArray.create(0)
 	arr.push(Slot.create(42))
-	view result = try arr.get(0) otherwise Slot.create(0)
+	let result = try arr.get(0) otherwise Slot.create(0)
 	return result.value
 end 'main'
 ```
@@ -147,7 +147,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(0)
 	arr.push(5)
 	arr.resize(4)
@@ -176,7 +176,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create(0)
+	let arr = SlotArray.create(0)
 	arr.reserve(2)
 	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
 	try arr.get(0) otherwise (e) 'handler'
@@ -200,7 +200,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntegerArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntegerArray.create(0)
+	let arr = IntegerArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	try arr.get(5) otherwise (e) 'handler'
@@ -256,7 +256,7 @@ function launder(n Integer) returns Integer
 end 'launder'
 
 function main() returns ExitCode
-	var arr = IntegerArray.create(0)
+	let arr = IntegerArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	try arr.get(launder(-1) as ElementIndex) otherwise (e) 'handler'
@@ -295,10 +295,10 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create(0)
+	let arr = SlotArray.create(0)
 	arr.reserve(3)
 	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
-	view result = try arr.first() otherwise Slot.create(77)
+	let result = try arr.first() otherwise Slot.create(77)
 	return result.value
 end 'main'
 ```
@@ -323,11 +323,11 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create(0)
+	let arr = SlotArray.create(0)
 	arr.push(Slot.create(1))
 	arr.reserve(3)
 	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
-	view result = try arr.last() otherwise Slot.create(55)
+	let result = try arr.last() otherwise Slot.create(55)
 	return result.value
 end 'main'
 ```
@@ -357,7 +357,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create(0)
+	let arr = SlotArray.create(0)
 	arr.push(Slot.create(5))
 	arr.reserve(3)
 	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
@@ -404,7 +404,7 @@ type Bag uses Element
 	end 'pad'
 
 	function visit() returns Integer
-		var kept = ElementArray.create(0)
+		let kept = ElementArray.create(0)
 
 		for e in self.items 'each'
 			kept.push(e)
@@ -417,7 +417,7 @@ end 'Bag'
 typealias NameBag = Bag with String
 
 function main() returns ExitCode
-	var bag = NameBag.create()
+	let bag = NameBag.create()
 	bag.pad(2)
 	print("visited {bag.visit()}\n")
 	return 0
@@ -454,7 +454,7 @@ type Bag uses Element
 	end 'pad'
 
 	function visit() returns Integer
-		var kept = ElementArray.create(0)
+		let kept = ElementArray.create(0)
 
 		for e in self.items 'each'
 			kept.push(e)
@@ -467,7 +467,7 @@ end 'Bag'
 typealias NumberBag = Bag with Integer
 
 function main() returns ExitCode
-	var bag = NumberBag.create()
+	let bag = NumberBag.create()
 	bag.pad(2)
 	print("visited {bag.visit()}\n")
 	return 0
@@ -513,7 +513,7 @@ typealias NameBag = Bag with String
 typealias NameArray = Array with String
 
 function main() returns ExitCode
-	var names = NameArray.create(0)
+	let names = NameArray.create(0)
 	names.push("a {names.count()}")
 	let seen = NameBag.keepFirstAfterClear(names)
 	print("{seen} {names.count()}\n")

@@ -112,8 +112,8 @@ function pick(p Box, fresh bool) returns Box
 end 'pick'
 
 function main() returns ExitCode
-	var row = Box.create(1)
-	var alias = pick(row, fresh: false)
+	let row = Box.create(1)
+	let alias = pick(row, fresh: false)
 	alias.n = 9
 	print("{row.n}\n")
 	return 0
@@ -147,8 +147,8 @@ end 'second'
 
 function main() returns ExitCode
 	let frozen = freeze Box.create(4)
-	var row = Box.create(1)
-	var r = second(frozen, q: row)
+	let row = Box.create(1)
+	let r = second(frozen, q: row)
 	r.n = 7
 	print("{row.n}\n")
 	return 0

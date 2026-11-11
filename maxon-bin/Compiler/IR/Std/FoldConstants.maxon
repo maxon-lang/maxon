@@ -137,7 +137,7 @@ end 'foldConstantsHeadline'
 // Fold one function, in place. `branch` is the caller's terminator record, refilled per block.
 module function foldConstantsInFunc(module StdModule, func IrFunction, branch StdBranchOperands)
 	let opIndices = module.liveOpIndices(func)
-	var constMap = ConstValueMap.create()
+	let constMap = ConstValueMap.create()
 
 	evaluateOps(module, opIndices: opIndices, constMap: constMap)
 
@@ -173,12 +173,12 @@ end 'foldConstantsInFunc'
 function evaluateOps(module StdModule, opIndices OpIndexArray, constMap ConstValueMap)
 	// ONE record of each kind for the whole walk, refilled per op and never re-created — see
 	// `StdArithOperands` and `StdFoldableDef` for why both answers are written into caller-owned records.
-	var operands = StdArithOperands.create()
-	var def = StdFoldableDef.create()
+	let operands = StdArithOperands.create()
+	let def = StdFoldableDef.create()
 
 	for opIdx in opIndices 'eachOp'
-		view op = try module.ops.get(opIdx) otherwise panic("foldConstants: live op index {opIdx} not in module.ops")
-		var folded = tryEvaluate(op, constMap: constMap, operands: operands)
+		let op = try module.ops.get(opIdx) otherwise panic("foldConstants: live op index {opIdx} not in module.ops")
+		let folded = tryEvaluate(op, constMap: constMap, operands: operands)
 		try module.ops.set(opIdx, value: folded) otherwise panic("foldConstants: ops.set OOB at {opIdx}")
 
 		// The FOLDED op, not the original — recording the result is what feeds the next op's operands.
@@ -633,7 +633,7 @@ function foldConstantBranches(module StdModule, func IrFunction, constMap ConstV
 	var folded = 0 as TallyCount
 
 	for position in 0 upto func.blockRefs.count() 'eachBlock'
-		var block = module.blockAtPosition(func, position: position)
+		let block = module.blockAtPosition(func, position: position)
 
 		if not block.hasTerminatorOp() 'noTerminator'
 			continue
@@ -700,7 +700,7 @@ module typealias CompareDecisionArray = Array with CompareDecision
 // arm a fold dropped goes with everything only it reached; the constants nothing reads any more are
 // retired. Answers how many branches folded.
 module function applyCompareDecisions(module StdModule, func IrFunction, decisions CompareDecisionArray, branch StdBranchOperands, def StdFoldableDef) returns TallyCount
-	var constMap = ConstValueMap.create()
+	let constMap = ConstValueMap.create()
 
 	for decision in decisions 'eachDecision'
 		let payload = boolPayload(decision.holds)
@@ -735,7 +735,7 @@ module let ConditionIsFalse = 0 as FullRangeInt
 // case, where it could have two, is refused by `foldCondBranch` and by `threadConstantBranches` alike,
 // which is the other pass that turns a `condBranch` into a `branch` and drops the arm's edge through here).
 module function edgesWithoutTarget(edges BranchEdgeArray, droppedTarget BlockId) returns BranchEdgeArray
-	var kept = BranchEdgeArray.create(edges.count(), zeroed: false)
+	let kept = BranchEdgeArray.create(edges.count(), zeroed: false)
 	var alreadyDropped = false
 
 	for edge in edges 'eachEdge'
@@ -785,7 +785,7 @@ module function dropUnreachableBlocks(module StdModule, func IrFunction)
 	end 'noBlocks'
 
 	let reachable = reachableBlockPositions(module, func: func)
-	var kept = BlockRefArray.create(0)
+	let kept = BlockRefArray.create(0)
 
 	for position in 0 upto blockCount 'eachBlock'
 		let survives = try reachable.get(position) otherwise panic("dropUnreachableBlocks: reachable.get OOB at {position}")
@@ -804,9 +804,9 @@ end 'dropUnreachableBlocks'
 module function reachableBlockPositions(module StdModule, func IrFunction) returns FixedBoolArray
 	let blockCount = func.blockRefs.count()
 	let byId = module.blockIndexById(func)
-	var reachable = FixedBoolArray.create(blockCount)
-	var stack = BlockRefIndexArray.create(0)
-	var successors = BlockIdArray.create(0)
+	let reachable = FixedBoolArray.create(blockCount)
+	let stack = BlockRefIndexArray.create(0)
+	let successors = BlockIdArray.create(0)
 
 	try reachable.set(0, value: true) otherwise panic("reachableBlockPositions: reachable.set OOB at the entry block")
 	stack.push(0)

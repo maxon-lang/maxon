@@ -19,7 +19,7 @@ These are the most common mistakes. NEVER use any of these:
 WRONG                          CORRECT
 ─────────────────────────────  ─────────────────────────────
 let x: int = 5                 let x = 5
-var y: String = "hi"           var y = "hi"
+let y: String = "hi"           let y = "hi"
 x += 1                         x = x + 1
 x++                            x = x + 1
 x % 5                          x mod 5
@@ -122,11 +122,11 @@ Wide ranges like `int(0 to u64.max)` are fine when no concrete upper bound exist
 ```maxon
 // WRONG — colon syntax does not exist (E2010)
 let x: int = 5
-var name: String = "hi"
+let name: String = "hi"
 
 // CORRECT — type is always inferred
 let x = 5
-var name = "hi"
+let name = "hi"
 ```
 
 ### 6. First argument is positional, all others MUST be named
@@ -250,10 +250,10 @@ NEVER use spaces for indentation.
 
 ```maxon
 // WRONG — no string concatenation operator
-var msg = "hello " + name
+let msg = "hello " + name
 
 // CORRECT
-var msg = "Hello, {name}!"
+let msg = "Hello, {name}!"
 
 // Format specifiers after colon
 print("{n:04x}")    // zero-padded hex
@@ -387,8 +387,11 @@ function f(x Coord) returns Coord
 - A file-private top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its
   file names is **E3219**: delete it. Declarations that only name each other, or a function that only calls
   itself, are dead together.
-- A `var` that is neither reassigned nor mutated (`push`, `append`, a field write…) is **E3077** — use `let`,
-  whatever the `var` was bound from.
+- A `var` that is never reassigned is **E3077** — use `let`, whatever the `var` was bound from and even when it
+  is written through (`push`, a field write, a callee that writes the parameter). What keeps a `var` is
+  reassigning the name: an assignment, passing it to a `mutable` parameter, or a `mutable self` method of a value
+  type (`s.append("!")` over a `String`). A `var` bound to a literal array or map that is written through is
+  `let items = [..].clone()`.
 - Assigning a value to itself (`x = x`, `p.x = p.x`) is **E3067**.
 - A pure function's result must be used, and an impure one's used or discarded with `_ =` — see
   [Purity and discarded results](#purity-and-discarded-results).
@@ -433,8 +436,7 @@ end 'MyType'
 
 **`let` means the name is never reassigned; `var` means it may be.** Writing through a `let` is legal: a field
 store, `push` and a callee that writes its parameter reach the record a `let` names. A number, `bool`, enum or
-`String` has nothing behind its name, so changing one is reassigning it, and it needs a `var`. `view` is
-another spelling of `let`.
+`String` has nothing behind its name, so changing one is reassigning it, and it needs a `var`.
 
 ```maxon
 let x = 42          // never reassigned (E2013: 'x' is a let and cannot be reassigned)
@@ -449,8 +451,9 @@ needs the alias: when every use would take the plain constant the same way, the 
 typed head (`TallyArray from [1, 2]`). A `for` counter takes the alias of its non-literal bound
 (`for i in 0 upto xs.count()` counts in `Count`) and is a `let` in the body.
 
-A variable you call mutating methods on (`push`, `set`, `remove`, `clear`, `append`, etc.) can be a `let`,
-because the call writes the array and not the name; use `var` for a name that is reassigned:
+A record or container you call mutating methods on (`push`, `set`, `remove`, `clear`, …) is a `let`, because the
+call writes the data and not the name (a `var` there is **E3077**); use `var` only for a name that is reassigned,
+a `String` you `append` to included:
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -492,7 +495,7 @@ type Point
 	end 'origin'
 end 'Point'
 
-var p = Point.create(1.5, y: 2.5)
+let p = Point.create(1.5, y: 2.5)
 p.x = 3.0
 let o = Point.origin()
 ```
@@ -547,8 +550,8 @@ union Result
 	pending
 end 'Result'
 
-var r = Result.success(42)
-var f = Result.failure(404, message: "Not found")
+let r = Result.success(42)
+let f = Result.failure(404, message: "Not found")
 ```
 
 `==` does NOT work on unions. Use `match`.
@@ -826,15 +829,15 @@ size — a `try` there is E3055 (see
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var arr = [1, 2, 3]
-var empty = IntArray.create(0)
+let arr = IntArray from [1, 2, 3]
+let empty = IntArray.create(0)
 
 arr.push(42)                              // append
 let n = arr.count()                       // length
 let val = try arr.get(0) otherwise 0      // access (ALWAYS use try)
 try arr.set(0, value: 100) otherwise ignore  // modify (throws)
-var sized = IntArray.create(50)           // 50 zero elements, one allocation up to 256 bytes
-var roomy = IntArray.create(100, zeroed: false)  // empty, room for 100, one allocation up to 256 bytes
+let sized = IntArray.create(50)           // 50 zero elements, one allocation up to 256 bytes
+let roomy = IntArray.create(100, zeroed: false)  // empty, room for 100, one allocation up to 256 bytes
 arr.reserve(100)                          // pre-allocate an existing array
 arr.resize(50)                            // set length
 let last = try arr.pop() otherwise 0      // remove last (throws)
@@ -853,8 +856,8 @@ arr.sortUnstableBy(cmp)                   // unstable sort with comparator
 typealias Integer = int(i64.min to i64.max)
 typealias StringIntMap = Map with (String, Integer)
 
-var m = ["hello": 42]
-var empty = StringIntMap.create()
+let m = ["hello": 42 as Integer].clone()
+let empty = StringIntMap.create()
 
 let val = try m.get("hello") otherwise 0  // access (ALWAYS use try)
 m.upsert("world", value: 99)              // insert or replace
@@ -870,7 +873,7 @@ let n = m.count()
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
-var list = IntList.create()
+let list = IntList.create()
 list.prepend(1)                                  // O(1) at either end
 list.append(2)
 let head = try list.first() otherwise 0          // throws
@@ -902,7 +905,7 @@ for (iter, v) in arr.withIterator() 'loop'
 end 'loop'
 
 // An explicit iterator, when you steer it yourself
-var it = try arr.createIterator() otherwise return 0   // throws on an empty collection
+let it = try arr.createIterator() otherwise return 0   // throws on an empty collection
 while true 'walk'
 	process(it.current())
 	try it.advance() otherwise break                   // throws past the last element
@@ -1095,8 +1098,8 @@ Tuples are fixed-size, ordered collections of values with potentially different 
 ```maxon
 // Creating tuples
 var t = (10, 20)
-var mixed = (42, "hello")
-var triple = (1, 2, 39)
+let mixed = (42, "hello")
+let triple = (1, 2, 39)
 
 // Element access with positional dot syntax
 t.0   // 10
@@ -1124,11 +1127,11 @@ end 'makePair'
 #### Destructuring declarations
 
 ```maxon
-var (x, y) = makePair(10, b: 32)   // creates new variables
-let (a, b) = (10, 20)              // immutable bindings
+let (x, y) = makePair(10, b: 32)   // creates new bindings
+let (a, b) = (10, 20)              // another pair of bindings
 
 // Discard elements with _
-var (result, _) = compute()
+let (result, _) = compute()
 ```
 
 #### Tuple assignment (to existing variables)
@@ -1149,7 +1152,7 @@ var y = 0 as Integer
 #### Destructuring in for loops
 
 ```maxon
-var m = ["a": 1, "b": 2]
+let m = ["a": 1, "b": 2]
 for (key, value) in m 'loop'
 	print("{key}: {value}\n")
 end 'loop'
@@ -1158,9 +1161,9 @@ end 'loop'
 ### Async/Await
 
 ```maxon
-var promise = async someFunction(arg1, arg2)
-var result = await promise
-var r = try await p otherwise 0    // throwing async
+let promise = async someFunction(arg1, arg2)
+let result = await promise
+let r = try await p otherwise 0    // throwing async
 p.cancel()                         // cancellation
 ```
 
@@ -1168,8 +1171,9 @@ Every promise held in a local is awaited, cancelled, stored or returned on every
 dropped, overwritten or `_ =`-discarded one is **E3213**. An `async` call given your mutable data (a record, an
 array, a variable at a `mutable` parameter) makes a tied promise: await it or `.cancel()` it before every
 `return`, `throw` and propagating `try`, and never return, store or pass it on (**E3212**); pass a `.clone()`
-to untie the call. A variable handed to a `mutable` parameter of an `async` callee is lent to the coroutine
-until the promise is awaited or cancelled, and reading it before then is **E3102**.
+to untie the call. A variable handed to a `mutable` parameter of an `async` callee, and a `unique` value
+handed to any `async` callee, is lent to the coroutine until the promise is awaited or cancelled, and reading
+it, calling `close()` on it or passing it before then is **E3102**.
 
 ### Visibility
 
@@ -1231,25 +1235,30 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
   mutating a collection while an element read from it is in use is safe
 - `@heap let p = Point.create(0.0, y: 0.0)` forces heap allocation
 - **`let` means the name is never reassigned; `var` means it may be.** A `let` binding, `let` field and `let`
-  payload can be written through (a field store, `push`, a callee that writes its parameter), and `view` is
-  another spelling of `let`. Reassigning one is **E2013** (`'x' is a let and cannot be reassigned`, field form
+  payload can be written through (a field store, `push`, a callee that writes its parameter), and a `var`
+  that is never reassigned is **E3077**, however it is written through. Reassigning a `let` is **E2013** (`'x' is a let and cannot be reassigned`, field form
   `'f' is a let field and cannot be reassigned`), and so is passing a `let` to a `mutable` parameter (`bind it
   to a var`).
 - Data nothing may write is separate from `let`: a constant (a `let` bound to a literal, a `b"…"` literal, a
-  constant record or array literal), a `freeze` result, a module-level `let` built by a call, a `SharedValue` or
-  registry read, a stored `Map` key or `Set` element, and a `readonly` element. A write through constant or
-  frozen data is **E3207**, through the others **E3159**; binding the others to a `var` or storing them where
-  something may write it is **E3078**.
+    constant record or array literal), a `freeze` result, every module-level `let` (its initializer calls nothing,
+  **E3220**), a `SharedValue` or registry read, a stored `Map` key or `Set` element, and an element of an
+  `immutable` slot (`Array with immutable T`). A write through constant or frozen data is **E3207** at a
+  parameter the callee writes and **E3197** at a field store or a writing method; storing it into a plain
+  field, element or payload is **E3196**. `.clone()` is the mutable copy.
 - Constant data is `immutable`: a holder says so. A field, array element or union payload that holds a
   `b"…"` literal or a constant `let` is declared `immutable ByteArray` (**E3196** names it otherwise); a result
   that returns one is declared `immutable` (**E3209**); a `Map` key or `Set` element is an `immutable` slot, so a
   key built at run time is `freeze`d where it is inserted. A mutable byte array comes from `ByteArray.create`
   and `push`, or `"text".toByteArray()`; a `var` bound to a literal and then written is E3207.
-- `var b = a` and `let b = a` from a `var` `a` **move** it: reading `a` afterwards is **E3102**. From a `let` `a`,
+- `let b = a` from a `var` `a` **moves** it: reading `a` afterwards is **E3102**. From a `let` `a`,
   `b` names the same record and `a` stays usable; `a.clone()` is the independent copy.
+- The OS handle types (`TcpClient`, `TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`,
+  `StreamingSubprocess`, `SharedSegment`) and every type holding one are `unique`: binding with `let`, pushing
+  into a container or handing to a `spawn` moves one (**E3102** on a later read), and `clone()` is **E3214**.
+  Read what you need from a handle before it moves; one owner holds it and lends it to calls.
 - A parameter is a `let`: reassigning it is **E2013**. A value-type parameter the function reassigns is marked
   `mutable` and is passed by reference; passing a `let` to it is **E2013** (bind the value to a `var`), and
-  passing other read-only data, a literal or an expression is **E3159**. The variable's declared type must be
+  passing a literal, an expression, a module-level `let` or a captured name is **E2013** too. The variable's declared type must be
   the parameter's type, alias included (**E3005**).
   Reading a local in a statement that also hands it to a `mutable` parameter the callee writes, with the read
   running before the write, is **E3186**: copy it into a `let` in an earlier statement. `mutable` before a
@@ -1264,7 +1273,7 @@ Ordinary records need no marker: they belong to the current region and alias fre
 capability word only where a value must change owners or be shared without a writer:
 
 - **Build, then freeze.** Fill a structure inside `modify`, then `freeze` it, and read the frozen result
-  from anywhere. `var b = Index.create() as isolated Index`, `modify b 'fill' … end 'fill'`,
+  from anywhere. `let b = Index.create() as isolated Index`, `modify b 'fill' … end 'fill'`,
   `return freeze b` with `returns immutable Index` (or a typealias of it).
 - **A field that owns a region** is `var index as isolated WordIndex`. Fill it in `modify self.index 'fill'`;
   take it out whole with `swap self.index with WordIndex.create()`; `Self{index: WordIndex.create()}` builds it.
@@ -1286,8 +1295,9 @@ capability word only where a value must change owners or be shared without a wri
   aggregate (every field a `let` of a value type) is a value: it needs no `freeze`, and `freeze` of it is E3200.
 - A service message parameter, message reply or factory parameter whose type is a record, a union with a
   payload, an array or an interface value is written `isolated T` (the sender builds it for this one send) or
-  `immutable T` (the sender passes `freeze x.clone()`). Numbers, `bool`, `String`, `Character`, enums, handles
-  and `SharedValue` cells need no word.
+  `immutable T` (the sender passes `freeze x.clone()`), or the spawn is **E3217**. Numbers, `bool`, `String`,
+  `Character`, enums, service handles, `SharedValue` cells and `unique` values need no word. A promise, a
+  function value, an opaque type parameter and a thread-bound handle cannot cross at all (**E3217**).
 
 Common refusals and their fixes:
 
@@ -1316,6 +1326,10 @@ Common refusals and their fixes:
 | **E3215** a type argument breaks a `where T is sendable` or `is isolated` bound | `immutable Job` or a value for `sendable`; a value or unique type for `isolated` |
 | **E3216** a service's state field can hold a promise | `await` or `.cancel()` the promise before the message or factory returns, and keep its result in the field |
 | **E3217** a service message or factory parameter, or a reply, is a record, payload union, array or interface value with no `isolated` or `immutable` | write `isolated T` and send a fresh value, or `immutable T` and send `freeze x.clone()` |
+| **E3217** a message or factory parameter or reply is a promise, a function value, an opaque type parameter or a thread-bound handle | send the scalar it is derived from, or `await` the promise and send its result |
+| **E3220** a call in the initializer of a module-level `let` or a `static let` | write a literal, or build the value in a function where it is used |
+| **E3077** a `var` that is never reassigned | write `let`; `let items = [..].clone()` for a literal container that is written through |
+| **E3102** a `unique` value, or a variable at a `mutable` parameter, read, closed or passed while an `async` call holds it | read it before the `async`, or after the `await` or `.cancel()`; stop a server with `.cancel()` on its promise, then `close()` it |
 | **E3186** a local read before a by-reference call writes it | copy it into a `let` in an earlier statement and read the copy |
 | **E3005** a `Narrow` variable at a `mutable Wide` parameter | declare the variable at the parameter's type |
 

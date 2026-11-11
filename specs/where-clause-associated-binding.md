@@ -1141,7 +1141,7 @@ type Tick implements Cursor with Ints
 	end 'create'
 
 	function current() returns Ints
-		var xs = Ints.create(0)
+		let xs = Ints.create(0)
 		xs.push(self.n)
 		xs.push(self.n)
 		return xs

@@ -75,7 +75,7 @@ function bump(row Row) returns Tally
 end 'bump'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	let later = async bump(row)
 	print("started\n")
 	_ = later
@@ -162,7 +162,7 @@ A `for` over a plain array that the loop pushes to is accepted; the iterator hol
 typealias LineArray = Array with String
 
 function main() returns ExitCode
-	var items = LineArray.create(0)
+	let items = LineArray.create(0)
 	items.push("a")
 
 	for item in items 'each'
@@ -233,7 +233,7 @@ function bump(row Row) returns Tally
 end 'bump'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	let later = async bump(row)
 	let n = await later
 	print("{n}\n")
@@ -371,7 +371,7 @@ function bump(row Row) returns Tally
 end 'bump'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	let later = async bump(row)
 
 	if row.n > 5 'sometimes'
@@ -747,7 +747,7 @@ function bump(row Row) returns Tally
 end 'bump'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	let later = async bump(row)
 	let before = row.n
 
@@ -831,7 +831,7 @@ function bump(row Row) returns Tally
 end 'bump'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	let later = async bump(row)
 	let mode = Mode.loud
 
@@ -879,7 +879,7 @@ function leave(row Row, early bool) returns Tally
 end 'leave'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	_ = leave(row, early: true)
 	print("{row.n}\n")
 	return 0
@@ -929,7 +929,7 @@ function leave(row Row, fail bool) returns Tally throws Refusal
 end 'leave'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	let total = try leave(row, fail: true) otherwise 0
 	print("{total} {row.n}\n")
 	return 0
@@ -972,7 +972,7 @@ function leave(row Row, early bool) returns Tally
 end 'leave'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	_ = leave(row, early: true)
 	print("{row.n}\n")
 	return 0
@@ -1022,7 +1022,7 @@ function leave(row Row, fail bool) returns Tally throws Refusal
 end 'leave'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	let attempt = try leave(row, fail: true) otherwise 0
 	print("{attempt} {row.n}\n")
 	return 0
@@ -1061,7 +1061,7 @@ function leave(row Row)
 end 'leave'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	leave(row)
 	print("{row.n}\n")
 	sleep(20)
@@ -1105,7 +1105,7 @@ function leave(row Row)
 end 'leave'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	leave(row)
 	print("{row.n}\n")
 	sleep(20)
@@ -1153,7 +1153,7 @@ function lap(row Row, started bool)
 end 'lap'
 
 function main() returns ExitCode
-	var row = Row.create(0)
+	let row = Row.create(0)
 	var expected = 0 as Tally
 	var started = false
 
@@ -1246,10 +1246,10 @@ function drain(spoke Cell) returns Tally
 end 'drain'
 
 function main() returns ExitCode
-	var cells = Cells.create(0)
+	let cells = Cells.create(0)
 	let five = 5 as Tally
 	cells.push(Cell.create(five))
-	var wakes = TallyPromises.create(0)
+	let wakes = TallyPromises.create(0)
 	wakes.push(async drain((try cells.get(0) otherwise panic("main: one cell was pushed")).clone()))
 	let woken = try wakes.pop() otherwise panic("main: one promise was pushed")
 	let n = await woken
@@ -1392,7 +1392,7 @@ function other(n Tally) returns Tally
 end 'other'
 
 function main() returns ExitCode
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 
 	modify batch 'window'
 		let n = settle(3)
@@ -1477,7 +1477,7 @@ function dispatch(drains mutable PromiseArray)
 end 'dispatch'
 
 function main() returns ExitCode
-	var drains = PromiseArray.create(0)
+	let drains = PromiseArray.create(0)
 	dispatch(drains)
 
 	for drained in drains 'each'

@@ -625,7 +625,7 @@ end '__float_bitsFromText'
 // a limb holds), so they are gathered in `pendingChunk` and folded in a chunk at a time.
 function __float_magnitudeBitsFromText(text String, startAt FullRangeInt) returns __FloatTextResult
 	let bytes = text.toByteArray()
-	var significandDigits = FullRangeIntArray.create(0)  // kept significant digits, as a magnitude
+	let significandDigits = FullRangeIntArray.create(0)  // kept significant digits, as a magnitude
 	var pendingChunk = 0 as FullRangeInt  // digits gathered but not yet folded into `significandDigits`
 	var pendingCount = 0 as DecimalScaleExponent
 	var droppedNonZeroDigit = false  // the sticky bit: a dropped digit past the budget was non-zero
@@ -856,8 +856,8 @@ function __float_bitsFromDecimal(significandDigits FullRangeIntArray, totalExp D
 	// The literal's kept prefix is now the EXACT rational `numerator / denominator`, and stays exact
 	// all the way to the significand; `droppedNonZeroDigit` carries everything below it. The limb
 	// representation, and why an i64 pair cannot do this job, are at BOUNDED-WIDTH MAGNITUDES below.
-	var numerator = significandDigits
-	var denominator = FullRangeIntArray.create(0)
+	let numerator = significandDigits
+	let denominator = FullRangeIntArray.create(0)
 	denominator.push(1)
 
 	if totalExp > 0 'scaleNumerator'
@@ -1244,7 +1244,7 @@ end '__digitText'
 // program's `Byte` is — which is all this array ever needed. `specs/bytearray-element-size.md`'s two
 // wide-`Byte` cases are what caught it, for the third time.
 function __singleDigit(digitValue DecimalDigit) returns DigitString
-	var digits = DigitString.create(0)
+	let digits = DigitString.create(0)
 	digits.push(digitValue)
 	return digits
 end '__singleDigit'
@@ -1253,7 +1253,7 @@ end '__singleDigit'
 // chunk at a time on the same nine-digit stride `__float_bitsFromText`'s scan uses, and for the same
 // reason: nine is the widest power of ten a limb holds.
 function __bigFromDigits(digits DigitString) returns FullRangeIntArray
-	var limbs = FullRangeIntArray.create(0)
+	let limbs = FullRangeIntArray.create(0)
 	var chunk = 0 as FullRangeInt
 	var pending = 0 as DecimalScaleExponent
 
@@ -1282,7 +1282,7 @@ end '__bigFromDigits'
 // rather than spelling the split-and-mask loop a second time — which also keeps that helper's "every
 // site that GROWS a magnitude ends here" true of this one.
 function __bigFromScalar(value FullRangeInt) returns FullRangeIntArray
-	var limbs = FullRangeIntArray.create(0)
+	let limbs = FullRangeIntArray.create(0)
 	__bigPushCarry(limbs, carry: value)
 	return limbs
 end '__bigFromScalar'
@@ -1291,7 +1291,7 @@ end '__bigFromScalar'
 // `"0"`). CONSUMES `limbs` — the repeated division that produces the digits is what destroys it.
 function __bigToDecimalDigits(limbs FullRangeIntArray) returns DigitString
 	let groupDivisor = __powOf(10, exponent: __Pow10ChunkDigits)
-	var groups = FullRangeIntArray.create(0)
+	let groups = FullRangeIntArray.create(0)
 
 	while not limbs.isEmpty() 'eachGroup'
 		groups.push(__bigDivModSmall(limbs, divisor: groupDivisor))
@@ -1301,7 +1301,7 @@ function __bigToDecimalDigits(limbs FullRangeIntArray) returns DigitString
 		return __singleDigit(0)
 	end 'zero'
 
-	var digits = DigitString.create(0)
+	let digits = DigitString.create(0)
 	var gi = groups.count()
 
 	while gi > 0 'emitGroups'
@@ -1333,7 +1333,7 @@ end '__decimalWidthOf'
 // least-significant first, so they are gathered and then emitted in reverse — which also keeps every
 // divisor a LITERAL ten, and so keeps the whole routine free of a can-throw division.
 function __appendDecimalGroup(digits DigitString, value FullRangeInt, width ElementIndex)
-	var reversed = DigitString.create(0)
+	let reversed = DigitString.create(0)
 	var remaining = value
 
 	for _ in 0 upto width 'eachDigit'
@@ -1559,7 +1559,7 @@ function __float_exactDigits(magnitude FullRangeInt) returns __ScaledDigits
 	// The EXACT decimal expansion, as an integer times a power of ten. A non-negative binary exponent
 	// scales an integer by a power of two and stays one; a negative one is `m / 2^k`, which is
 	// `m * 5^k / 10^k` — exact, and the reason base five earns its own chunk stride.
-	var digitsMagnitude = __bigFromScalar(significand)
+	let digitsMagnitude = __bigFromScalar(significand)
 	var pointExponent = 0 as DecimalPointScale
 
 	if binaryExponent >= 0 'scaleUp'
@@ -1686,7 +1686,7 @@ function __roundedToLength(digits DigitString, kept ElementIndex, scale DecimalP
 		return __ScaledDigits.create(digits.clone(), scale: scale)
 	end 'wholeString'
 
-	var prefix = try digits.slice(0, endIndex: kept) otherwise panic("__roundedToLength: kept < digits.count() by the guard above but slice(0, {kept}) failed")
+	let prefix = try digits.slice(0, endIndex: kept) otherwise panic("__roundedToLength: kept < digits.count() by the guard above but slice(0, {kept}) failed")
 
 	if not __roundsUp(digits, kept: kept) 'roundDown'
 		return __ScaledDigits.create(__withoutTrailingZeros(prefix), scale: scale)
@@ -2227,7 +2227,7 @@ public function __Character_toQuoted(value Character, width PadWidth) returns St
 end '__Character_toQuoted'
 
 function __quotedText(bytes ByteArray, delimiter __QuoteByte, escapesBraces bool, width PadWidth) returns String
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	out.push(delimiter)
 
 	for b in bytes 'eachByte'

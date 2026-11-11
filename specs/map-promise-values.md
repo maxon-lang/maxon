@@ -34,7 +34,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = PromiseMap.create()
+	let held = PromiseMap.create()
 	held.upsert("a", value: async work(1))
 	return 0
 end 'main'
@@ -111,7 +111,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = JobMap.create()
+	let held = JobMap.create()
 	held.upsert("a", value: Job.start(async work(1)))
 	return 0
 end 'main'
@@ -138,7 +138,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = SlotMap.create()
+	let held = SlotMap.create()
 	held.upsert("a", value: Slot.running(async work(1)))
 	return 0
 end 'main'
@@ -221,7 +221,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var shelf = PromiseMap.create()
+	let shelf = PromiseMap.create()
 	shelf.upsert("a", value: async work(1))
 
 	if shelf.remove("a") 'removed'

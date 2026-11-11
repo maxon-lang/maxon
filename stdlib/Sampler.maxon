@@ -3,8 +3,6 @@
 	public typealias SampledThreadId = int(0 to u64.max)
 	public typealias SampleIntervalNanos = int(1 to u64.max)
 	public typealias StackWindowOffset = int(0 to i64.max)
-	typealias CaptureSerial = int(0 to u64.max)
-	typealias CaptureSerialCell = SharedValue with CaptureSerial
 
 	public enum SamplerError implements Error
 		noSuchProcess
@@ -352,10 +350,6 @@
 			module function release()
 				self.table.release()
 			end 'release'
-
-			module function clone() returns Self
-				panic("SeizedThreads.clone: a seized set owns the detaching of its threads, which a second copy could neither share nor perform — hold it in one place")
-			end 'clone'
 		end 'SeizedThreads'
 	#endif
 
@@ -403,23 +397,22 @@
 			module let stackPointer as RegisterWord
 			module let linkRegister as LinkRegister
 			module let copied as RegisterWord
-			module let serial as CaptureSerial
 			module let cycles as SampleCycles
 
 			static function none() returns PendingStop
-				return Self{id: 0, kind: StopKind.nothing, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, serial: 0, cycles: 0}
+				return Self{id: 0, kind: StopKind.nothing, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, cycles: 0}
 			end 'none'
 
-			static function unreadable(id SampledThreadId, serial CaptureSerial, cycles SampleCycles) returns PendingStop
-				return Self{id: id, kind: StopKind.unreadable, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, serial: serial, cycles: cycles}
+			static function unreadable(id SampledThreadId, cycles SampleCycles) returns PendingStop
+				return Self{id: id, kind: StopKind.unreadable, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, cycles: cycles}
 			end 'unreadable'
 
 			static function lost(id SampledThreadId) returns PendingStop
-				return Self{id: id, kind: StopKind.gone, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, serial: 0, cycles: 0}
+				return Self{id: id, kind: StopKind.gone, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, cycles: 0}
 			end 'lost'
 
-			static function of(id SampledThreadId, kind StopKind, programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, linkRegister LinkRegister, copied RegisterWord, serial CaptureSerial, cycles SampleCycles) returns PendingStop
-				return Self{id: id, kind: kind, programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: linkRegister, copied: copied, serial: serial, cycles: cycles}
+			static function of(id SampledThreadId, kind StopKind, programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, linkRegister LinkRegister, copied RegisterWord, cycles SampleCycles) returns PendingStop
+				return Self{id: id, kind: kind, programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: linkRegister, copied: copied, cycles: cycles}
 			end 'of'
 		end 'PendingStop'
 	#endif
@@ -435,32 +428,26 @@
 		end 'spanning'
 	end 'SampledModule'
 
-	/// The stack bytes one `capture` copied. It reads as empty once its process is closed or a later
-	/// `capture` reuses the window.
+	/// The stack bytes one `capture` copied. The window holds its own copy, so it stays readable after
+	/// the process is closed and after later captures.
 	public type StackWindow
-		let pages as ScratchPages
+		let block as RegisterBlock
 		let copied as RegisterWord
-		let serial as CaptureSerial
-		let captures as CaptureSerialCell
 
-		static function over(pages ScratchPages, copied RegisterWord, serial CaptureSerial, captures CaptureSerialCell) returns StackWindow
-			return Self{pages: pages, copied: copied, serial: serial, captures: captures}
-		end 'over'
-
-		function readable() returns bool
-			return self.pages.held() and self.captures.current() == self.serial
-		end 'readable'
+		static function copyOf(pages ScratchPages, copied RegisterWord) returns StackWindow
+			return Self{block: RegisterBlock.readFrom(pages, at: 0, length: copied as ScratchBytes), copied: copied}
+		end 'copyOf'
 
 		public function byteCount() returns RegisterWord
-			return self.copied if self.readable() else 0
+			return self.copied
 		end 'byteCount'
 
 		public function word(offset StackWindowOffset) returns RegisterWord throws SamplerError
-			if not self.readable() or (offset as RegisterWord) > self.copied - (sizeof(RegisterWord) as RegisterWord) 'outsideTheCopy'
+			if (offset as RegisterWord) > self.copied - (sizeof(RegisterWord) as RegisterWord) 'outsideTheCopy'
 				throw SamplerError.outOfWindow
 			end 'outsideTheCopy'
 
-			return self.pages.word(offset as ScratchOffset)
+			return try self.block.wordAtAnyOffset(offset as RegisterOffset) otherwise throw SamplerError.outOfWindow
 		end 'word'
 	end 'StackWindow'
 
@@ -572,7 +559,6 @@
 		var scratch as ScratchPages
 		var window as ScratchPages
 		var openThreads as OpenThreadArray
-		let captures as CaptureSerialCell
 
 		#if not os(Windows)
 			var watches as ThreadWatchArray
@@ -629,7 +615,7 @@
 					throw SamplerError.noSuchProcess
 				end 'noSuchProcess'
 
-				var sampled = Self{process: process, pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(0), captures: CaptureSerialCell.create(0 as CaptureSerial)}
+				let sampled = Self{process: process, pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(0)}
 
 				if not sampled.scratch.held() or not sampled.window.held() 'noPages'
 					sampled.close()
@@ -641,8 +627,8 @@
 			#endif
 
 			#if os(Macos)
-				var scratch = ScratchPages.reserve(SampleProcessScratchBytes)
-				var window = ScratchPages.reserve(SampleWindowBytes as ScratchBytes)
+				let scratch = ScratchPages.reserve(SampleProcessScratchBytes)
+				let window = ScratchPages.reserve(SampleWindowBytes as ScratchBytes)
 
 				if not scratch.held() or not window.held() 'noPages'
 					scratch.release()
@@ -666,7 +652,7 @@
 					throw SamplerError.accessDenied
 				end 'refused'
 
-				let sampled = Self{process: __ManagedHandle.adopting(port), pid: pid as RegisterWord, scratch: scratch, window: window, openThreads: OpenThreadArray.create(0), captures: CaptureSerialCell.create(0 as CaptureSerial), watches: ThreadWatchArray.create(0), pending: PendingStop.none(), trampoline: TrampolineLocation.notYet}
+				let sampled = Self{process: __ManagedHandle.adopting(port), pid: pid as RegisterWord, scratch: scratch, window: window, openThreads: OpenThreadArray.create(0), watches: ThreadWatchArray.create(0), pending: PendingStop.none(), trampoline: TrampolineLocation.notYet}
 
 				return sampled
 			#endif
@@ -676,13 +662,13 @@
 					throw SamplerError.noSuchProcess
 				end 'gone'
 
-				var pin = MachinePin.acquire()
+				let pin = MachinePin.acquire()
 
 				if not pin.held() 'unpinnable'
 					throw SamplerError.threadNotPinned
 				end 'unpinnable'
 
-				var sampled = Self{pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(0), captures: CaptureSerialCell.create(0 as CaptureSerial), watches: ThreadWatchArray.create(0), pending: PendingStop.none(), trace: ProcessTrace.create(), seized: SeizedThreads.open(pid, pin: pin)}
+				let sampled = Self{pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(0), watches: ThreadWatchArray.create(0), pending: PendingStop.none(), trace: ProcessTrace.create(), seized: SeizedThreads.open(pid, pin: pin)}
 
 				if not sampled.scratch.held() or not sampled.window.held() or not sampled.trace.isReady() or not sampled.seized.held() 'noPages'
 					sampled.close()
@@ -717,7 +703,7 @@
 		end 'track'
 
 		public function threads() returns SampledThreadArray
-			var found = SampledThreadArray.create(0)
+			let found = SampledThreadArray.create(0)
 
 			#if os(Windows) and arch(x64)
 				var cursor = 0 as RegisterWord
@@ -798,7 +784,7 @@
 		end 'release'
 
 		function dropThread(index ElementIndex)
-			var dropped = try self.openThreads.remove(index) otherwise panic("SampledProcess.dropThread: index {index} came from a search of the table")
+			let dropped = try self.openThreads.remove(index) otherwise panic("SampledProcess.dropThread: index {index} came from a search of the table")
 			dropped.release()
 		end 'dropThread'
 
@@ -861,7 +847,7 @@
 			end 'startWatch'
 
 			function settledWatch(index ElementIndex, exact SampleCycles) returns SampleCycles
-				var watch = try self.watches.get(index) otherwise panic("SampledProcess.settledWatch: index {index} came from a search of the table")
+				let watch = try self.watches.get(index) otherwise panic("SampledProcess.settledWatch: index {index} came from a search of the table")
 
 				if exact > watch.cycles 'ranSinceTheLastReading'
 					watch.cycles = exact
@@ -876,7 +862,7 @@
 					return PendingStop.none()
 				end 'someoneElses'
 
-				let taken = PendingStop.of(self.pending.id, kind: self.pending.kind, programCounter: self.pending.programCounter, framePointer: self.pending.framePointer, stackPointer: self.pending.stackPointer, linkRegister: self.pending.linkRegister, copied: self.pending.copied, serial: self.pending.serial, cycles: self.pending.cycles)
+				let taken = PendingStop.of(self.pending.id, kind: self.pending.kind, programCounter: self.pending.programCounter, framePointer: self.pending.framePointer, stackPointer: self.pending.stackPointer, linkRegister: self.pending.linkRegister, copied: self.pending.copied, cycles: self.pending.cycles)
 				self.pending = PendingStop.none()
 
 				return taken
@@ -887,7 +873,7 @@
 					calling then throw SamplerError.callingThread
 					gone then return SampleCapture.threadGone
 					unreadable then return SampleCapture.unreadable(StackReservation.unreported, suspendedCycles: stop.cycles as RegisterWord)
-					registers then return self.capturedStack(stop.programCounter, framePointer: stop.framePointer, stackPointer: stop.stackPointer, linkRegister: stop.linkRegister, copied: stop.copied, serial: stop.serial, suspendedCycles: stop.cycles as RegisterWord)
+					registers then return self.capturedStack(stop.programCounter, framePointer: stop.framePointer, stackPointer: stop.stackPointer, linkRegister: stop.linkRegister, copied: stop.copied, suspendedCycles: stop.cycles as RegisterWord)
 					nothing then panic("SampledProcess.captureOfStop: a stop that stopped nothing reached a capture")
 				end 'which'
 			end 'captureOfStop'
@@ -904,7 +890,6 @@
 					throw SamplerError.callingThread
 				end 'suspendsItself'
 
-				let serial = self.nextCapture()
 				let windowBytes = __Builtins.profileSample(self.process.handle() as RegisterWord, thread.rawHandle(), self.scratch.addressOf(SampleContextSlot), self.scratch.addressOf(SampleRegionSlot), self.window.addressOf(0), SampleWindowBytes)
 
 				if windowBytes == ProfileSampleThreadGone 'exited'
@@ -918,7 +903,7 @@
 					return SampleCapture.unreadable(StackReservation.base(allocationBase), suspendedCycles: suspendedCycles)
 				end 'nothingToRead'
 
-				let copiedStack = StackWindow.over(self.window.readHandle(), copied: windowBytes as RegisterWord, serial: serial, captures: self.captures)
+				let copiedStack = StackWindow.copyOf(self.window, copied: windowBytes as RegisterWord)
 
 				return SampleCapture.captured(SampledStack.of(self.scratch.word(SampleContextRipSlot), framePointer: self.scratch.word(SampleContextRbpSlot), stackPointer: self.scratch.word(SampleContextRspSlot), linkRegister: LinkRegister.absent, reservation: StackReservation.base(allocationBase), suspendedCycles: suspendedCycles, window: copiedStack))
 			#endif
@@ -938,16 +923,9 @@
 			#endif
 		end 'capture'
 
-		function nextCapture() returns CaptureSerial
-			let next = self.captures.current() + 1
-			self.captures.publish(next)
-
-			return next
-		end 'nextCapture'
-
 		#if not os(Windows)
-			function capturedStack(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, linkRegister LinkRegister, copied RegisterWord, serial CaptureSerial, suspendedCycles RegisterWord) returns SampleCapture
-				let copiedStack = StackWindow.over(self.window.readHandle(), copied: copied, serial: serial, captures: self.captures)
+			function capturedStack(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, linkRegister LinkRegister, copied RegisterWord, suspendedCycles RegisterWord) returns SampleCapture
+				let copiedStack = StackWindow.copyOf(self.window, copied: copied)
 
 				return SampleCapture.captured(SampledStack.of(programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: linkRegister, reservation: StackReservation.unreported, suspendedCycles: suspendedCycles, window: copiedStack))
 			end 'capturedStack'
@@ -1007,10 +985,8 @@
 			end 'callerCycles'
 
 			function stopThread(thread SampledThread) returns PendingStop throws SamplerError
-				// Placed before the serial is taken: locating reads into the same window and steps the serial,
-				// which would invalidate the stack this stop copies.
+				// Placed first: locating reads into the same window this stop copies its stack to.
 				let placed = try self.signalTrampoline().placed()
-				let serial = self.nextCapture()
 				self.scratch.setWord(MachInfoSlot, value: 0)
 				self.scratch.setWord(MachInfoSecondSlot, value: 0)
 				self.scratch.setWord(MachStateTrampolineSlot, value: placed.entryAddress())
@@ -1022,16 +998,16 @@
 				end 'exited'
 
 				if windowBytes == ProfileSampleCallingThread 'callersOwn'
-					return PendingStop.of(thread.id, kind: StopKind.calling, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, serial: serial, cycles: self.callerCycles(thread))
+					return PendingStop.of(thread.id, kind: StopKind.calling, programCounter: 0, framePointer: 0, stackPointer: 0, linkRegister: LinkRegister.absent, copied: 0, cycles: self.callerCycles(thread))
 				end 'callersOwn'
 
 				let suspendedCycles = self.settleWatch(thread.id, exact: self.machInfoCpuNanos())
 
 				if windowBytes == ProfileSampleNoRegisters 'nothingToRead'
-					return PendingStop.unreadable(thread.id, serial: serial, cycles: suspendedCycles)
+					return PendingStop.unreadable(thread.id, cycles: suspendedCycles)
 				end 'nothingToRead'
 
-				return PendingStop.of(thread.id, kind: StopKind.registers, programCounter: self.scratch.word(MachStateProgramCounterSlot), framePointer: self.scratch.word(MachStateFramePointerSlot), stackPointer: self.scratch.word(MachStateStackPointerSlot), linkRegister: LinkRegister.holds(self.scratch.word(MachStateLinkRegisterSlot)), copied: windowBytes as RegisterWord, serial: serial, cycles: suspendedCycles)
+				return PendingStop.of(thread.id, kind: StopKind.registers, programCounter: self.scratch.word(MachStateProgramCounterSlot), framePointer: self.scratch.word(MachStateFramePointerSlot), stackPointer: self.scratch.word(MachStateStackPointerSlot), linkRegister: LinkRegister.holds(self.scratch.word(MachStateLinkRegisterSlot)), copied: windowBytes as RegisterWord, cycles: suspendedCycles)
 			end 'stopThread'
 		#endif
 
@@ -1102,11 +1078,10 @@
 			end 'copyStack'
 
 			function stopThread(thread SampledThread, stateKnown bool) returns PendingStop
-				let serial = self.nextCapture()
 				let id = thread.rawHandle() as DebuggeeThreadId
 
 				match self.seizeForStop(id, stateKnown: stateKnown) 'seized'
-					uninterruptible then return PendingStop.unreadable(thread.id, serial: serial, cycles: self.lastCycles(thread.id))
+					uninterruptible then return PendingStop.unreadable(thread.id, cycles: self.lastCycles(thread.id))
 					gone then return PendingStop.lost(thread.id)
 					held then break
 				end 'seized'
@@ -1134,10 +1109,10 @@
 				end 'settledByTheStop'
 
 				if not stopped 'nothingToRead'
-					return PendingStop.unreadable(thread.id, serial: serial, cycles: suspendedCycles)
+					return PendingStop.unreadable(thread.id, cycles: suspendedCycles)
 				end 'nothingToRead'
 
-				return PendingStop.of(thread.id, kind: StopKind.registers, programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: LinkRegister.absent, copied: copied, serial: serial, cycles: suspendedCycles)
+				return PendingStop.of(thread.id, kind: StopKind.registers, programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: LinkRegister.absent, copied: copied, cycles: suspendedCycles)
 			end 'stopThread'
 
 			function canBeTraced() returns TraceProbe
@@ -1277,7 +1252,7 @@
 
 		#if os(Macos)
 			function dyldImageList() returns DyldImageList
-				_ = self.nextCapture()
+				self.pending = PendingStop.none()
 				self.scratch.setWord(MachCountSlot, value: MachTaskDyldInfoWords)
 
 				if __Builtins.profileMachTaskInfo(self.process.handle() as RegisterWord, MachTaskDyldInfo, self.scratch.addressOf(MachDyldInfoSlot), self.scratch.addressOf(MachCountSlot)) != MachSuccess or not self.readRemote(self.scratch.word(MachDyldInfoSlot), windowOffset: 0, count: MachImageInfoHeaderBytes) 'noImageList'
@@ -1319,7 +1294,7 @@
 			end 'locatedOrUnplaced'
 
 			function loadedImages(imageCount RegisterWord, imageArray RegisterWord) returns SampledModuleArray
-				var modules = SampledModuleArray.create(0)
+				let modules = SampledModuleArray.create(0)
 				var index = 0 as RegisterWord
 
 				while index < imageCount and index < MachMaxModules 'eachImage'
@@ -1348,7 +1323,7 @@
 
 		#if os(Windows) and arch(x64)
 			function listedModules() returns SampledModuleArray
-				var modules = SampledModuleArray.create(0)
+				let modules = SampledModuleArray.create(0)
 				let snapshot = __Builtins.profileModuleSnapshot(self.pid) as RegisterWord
 
 				if snapshot == InvalidHandle or snapshot == 0 'notYet'
@@ -1370,7 +1345,7 @@
 			end 'listedModules'
 
 			function moduleName() returns String
-				var name = ByteArray.create(0)
+				let name = ByteArray.create(0)
 				var offset = ModuleEntryNameOffset as ScratchOffset
 
 				while offset < ModuleEntryBytes 'eachWord'
@@ -1556,7 +1531,7 @@
 			end 'machNameIs'
 
 			function machBaseName(path RegisterWord) returns String
-				var name = ByteArray.create(0)
+				let name = ByteArray.create(0)
 				var address = path
 
 				while address - path < MacosMaxPathLength 'eachChunk'
@@ -1586,10 +1561,6 @@
 				return String.from(name)
 			end 'machBaseName'
 		#endif
-
-		public function clone() returns Self
-			panic("SampledProcess.clone: a sampled process owns the handles of one process and one table of the threads opened on it, which a second copy could neither share nor close — hold it in one place")
-		end 'clone'
 
 		public function close()
 			#if os(Linux)

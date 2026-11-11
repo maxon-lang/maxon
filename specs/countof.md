@@ -88,8 +88,8 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var a = Vec3.create()
-	var b = Vec5.create()
+	let a = Vec3.create()
+	let b = Vec5.create()
 	return a.capacity() * 10 + b.capacity()
 end 'main'
 ```
@@ -113,7 +113,7 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	return v.byName()
 end 'main'
 ```
@@ -170,8 +170,8 @@ end 'FixedArray'
 
 function main() returns ExitCode
 	var trips = 0 as Int
-	var a = Vec3.create()
-	var b = Vec5.create()
+	let a = Vec3.create()
+	let b = Vec5.create()
 	let first = a.rebuild(trips)
 	let second = b.rebuild(trips)
 	return first + second + trips
@@ -203,8 +203,8 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var a = Vec3.create()
-	var b = Vec5.create()
+	let a = Vec3.create()
+	let b = Vec5.create()
 	print("{Vec3.slotsOf()} {Vec5.slotsOf()} {Vec3.scaled(2)} {Vec5.scaled(3)} {a.viaSelf()} {b.viaSelf()}\n")
 	return 0
 end 'main'
@@ -275,8 +275,8 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var a = Vec3.create()
-	var b = Vec5.create()
+	let a = Vec3.create()
+	let b = Vec5.create()
 	print("{a.slotsPlus(1)} {a.slotsBase()} {b.slotsPlus(1)} {b.slotsBase()}\n")
 	return 0
 end 'main'
@@ -325,7 +325,7 @@ extension FixedArray
 	end 'elementBytes'
 
 	function reach() returns Int
-		var v = Self.elementBytes()
+		let v = Self.elementBytes()
 		if v.count() > 0 'theStaticBuiltOne'
 			return 0
 		end 'theStaticBuiltOne'
@@ -334,7 +334,7 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	return v.reach()
 end 'main'
 ```
@@ -379,7 +379,7 @@ type Holder uses Element
 end 'Holder'
 
 function main() returns ExitCode
-	var h = IntHolder.create()
+	let h = IntHolder.create()
 	return h.size()
 end 'main'
 ```
@@ -554,8 +554,8 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var a = Vec3.create()
-	var b = Vec3.create()
+	let a = Vec3.create()
+	let b = Vec3.create()
 	return a.pairWith(b)
 end 'main'
 ```
@@ -582,7 +582,7 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	return v.viaClosure()
 end 'main'
 ```
@@ -622,7 +622,7 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	return v.chained()
 end 'main'
 ```
@@ -657,13 +657,13 @@ extension FixedArray
 	end 'dup'
 
 	function twice() returns Int
-		var other = self.dup()
+		let other = self.dup()
 		return other.capacity()
 	end 'twice'
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	return v.twice()
 end 'main'
 ```
@@ -720,8 +720,8 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var a = Vec3.create()
-	var b = Vec3.create()
+	let a = Vec3.create()
+	let b = Vec3.create()
 	return a.viaClosure(b)
 end 'main'
 ```
@@ -751,7 +751,7 @@ error E3005: <fragment>:8:15: operator '+' requires both operands to be the same
 typealias Vec3 = FixedArray with 3 Count
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(2, value: 42)
 	let last = countof(Vec3) - 1
 	return v.get(last) as ExitCode
@@ -803,7 +803,7 @@ typealias Vec4 = FixedArray with 4 Int
 let slots = countof(Vec4)
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	for i in 0 upto slots 'fill'
 		v.set(i, value: 5)
 	end 'fill'
@@ -896,7 +896,7 @@ function clamp(c Count) returns Count
 end 'clamp'
 
 function main() returns ExitCode
-	var v = V.create()
+	let v = V.create()
 	v.set(2, value: 42)
 	let n = countof(V)
 	print("{clamp(4)}\n")
@@ -924,7 +924,7 @@ function clamp(c Count) returns Count
 end 'clamp'
 
 function main() returns ExitCode
-	var v = V.create()
+	let v = V.create()
 	v.set(2, value: 42)
 	print("{clamp(4)}\n")
 	return v.get(n - 1) as ExitCode

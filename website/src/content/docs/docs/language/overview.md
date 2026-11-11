@@ -214,8 +214,6 @@ else:
 | `test` | at the top level, followed by a quoted name (see [Testing](/docs/language/testing/)) |
 | `spawn` | followed by a type's static factory call, optionally after `(capacity: n)` (see [Services](/docs/language/async/#services--spawn)) |
 | `bits` | followed by `(` on the right-hand side of a typealias |
-| `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=`; another spelling of `let` (see [Views](/docs/language/variables/#views-view)) |
-| `readonly` | before an element or value type argument of a container (see [Read-Only Values](/docs/language/memory-model/#read-only-values)); before any other type it is refused with **E2075** |
 | `mutable` | before a parameter's type, or a function-type parameter's, and as `mutable self` (see [Parameter Passing](/docs/language/functions/#parameter-passing)) |
 | `isolated`, `immutable` | before a type, and before `self` as a receiver capability; `isolated` also after `is` in a `where` constraint (see [Regions and Capabilities](/docs/language/regions/)) |
 | `modify` | at the start of a statement, followed by a name or `self` and ending its line with a label (see [`modify` Blocks](/docs/language/regions/#modify-blocks)) |
@@ -224,7 +222,7 @@ else:
 | `sendable` | after `is` in a `where` constraint of a generic type (see [Region Bounds](/docs/language/regions/#region-bounds)) |
 | `mutates`, `captures` | the clause `mutates captures` ending a function type (see [Capabilities at Function Types and Requirements](/docs/language/regions/#capabilities-at-function-types-and-requirements)) |
 
-`readonly`, `mutable`, `isolated` and `immutable` are qualifiers exactly where the grammar expects a type, and
+`mutable`, `isolated` and `immutable` are qualifiers exactly where the grammar expects a type, and
 ordinary names or operands everywhere else (see [Regions and Capabilities](/docs/language/regions/)).
 
 `__line__` and `__file__` are valid only as parameter defaults (see
@@ -390,8 +388,8 @@ typealias AgeArray = Array with Age
 
 let primes = [2, 3, 5, 7]              // a constant Array
 let ages = ["ada": 36, "alan": 41]     // a constant Map
-var known = ["ada": 36 as Age]         // a Map with (String, Age) that can grow
-var seen = AgeArray from [36, 41]      // an AgeArray that can grow
+let known = ["ada": 36 as Age].clone() // a Map with (String, Age) that can grow
+let seen = AgeArray from [36, 41]      // an AgeArray that can grow
 ```
 
 The element type comes from the first element (or pair), and every later element is converted to it the

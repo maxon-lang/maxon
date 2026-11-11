@@ -45,7 +45,7 @@ let quietWakes = 16
 let pollerParks = 1
 
 function main() returns ExitCode
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("sleep 1; echo hi")
 	let before = Scheduler.counters()
@@ -495,8 +495,8 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#36
-  __rl_cont#35:
+    x64.jcc notEqual, __rl_slow#34
+  __rl_cont#33:
     x64.loadRegBaseDisp.word64 r12, [rbx + 0]
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 24], rax
@@ -522,8 +522,8 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#42
-  __rl_cont#41:
+    x64.jcc notEqual, __rl_slow#40
+  __rl_cont#39:
     x64.aluBaseDispImm32.add [rax + 824], -1
     x64.movRegImm32 rcx, 10
     x64.movRegReg rdx, rbx
@@ -537,8 +537,8 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#44
-  __rl_cont#43:
+    x64.jcc notEqual, __rl_slow#42
+  __rl_cont#41:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.movRegImm32 r13, 0
@@ -554,8 +554,8 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#46
-  __rl_cont#45:
+    x64.jcc notEqual, __rl_slow#44
+  __rl_cont#43:
     x64.aluBaseDispImm32.add [rax + 824], -1
     x64.epilogue 72
     x64.popReg r15
@@ -583,7 +583,7 @@ func @__np_pd_wait_any {
     x64.leaRegRegImm32 rcx, rcx, 8
     x64.leaRegRegReg rcx, r8, rcx
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, npnopd#30
+    x64.jcc equal, npnopd#28
   npgaclearact:
     x64.loadRegBaseDisp.word64 rax, [r14 + 8]
     x64.loadRegBaseDisp.word64 rdx, [r8 + 48]
@@ -642,7 +642,7 @@ func @__np_pd_wait_any {
   npgaclearnext:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp npgaclearhdr
-  npnopd#30:
+  npnopd#28:
     x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     x64.movRegImm32 rdx, 54
     x64.movRegImm32 rax, 104
@@ -672,13 +672,13 @@ func @__np_pd_wait_any {
     x64.leaRegRegImm32 rcx, rcx, 8
     x64.leaRegRegReg rcx, r8, rcx
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, npnopd#29
+    x64.jcc equal, npnopd#27
   npgamarkact:
     x64.movRegImm32 rax, 2
     x64.storeBaseDispReg.word64 [rcx + 0], rax
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp npgamarkhdr
-  npnopd#29:
+  npnopd#27:
     x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     x64.movRegImm32 rdx, 54
     x64.movRegImm32 rax, 104
@@ -712,7 +712,7 @@ func @__np_pd_wait_any {
   npgalookact:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 1
-    x64.jcc notEqual, npwsnotready
+    x64.jcc notEqual, npgalooknext
   npgaready:
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rcx + 0], rax
@@ -723,8 +723,8 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#40
-  __rl_cont#39:
+    x64.jcc notEqual, __rl_slow#38
+  __rl_cont#37:
     x64.aluBaseDispImm32.add [rax + 824], -1
     x64.movRegImm32 r8, 1
     x64.movRegReg rcx, r13
@@ -737,26 +737,9 @@ func @__np_pd_wait_any {
     x64.popReg rbx
     x64.popReg rbp
     x64.retIndirect
-  npwsnotready:
-    x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, npwsdouble
   npgalooknext:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp npgalookhdr
-  npwsdouble:
-    x64.leaRegRdata rcx, [rip + __abort_msg_107]  ; "fatal error: runtime abort 107 (netpollDoubleWait)\x0a"
-    x64.movRegImm32 rdx, 51
-    x64.movRegImm32 rax, 107
-    x64.callDirect __rt_abort
-    x64.movRegImm32 r8, 0
-    x64.epilogue 72
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.retIndirect
   npnopd#26:
     x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     x64.movRegImm32 rdx, 54
@@ -808,8 +791,8 @@ func @__np_pd_wait_any {
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#38
-  __rl_cont#37:
+    x64.jcc notEqual, __rl_slow#36
+  __rl_cont#35:
     x64.aluBaseDispImm32.add [rax + 824], -1
     x64.movRegImm32 r8, 0
     x64.epilogue 72
@@ -834,35 +817,35 @@ func @__np_pd_wait_any {
     x64.popReg rbx
     x64.popReg rbp
     x64.retIndirect
-  __rl_slow#36:
+  __rl_slow#34:
     x64.callDirect __rtlock_acquire
-    x64.jmp __rl_cont#35
-  __rl_slow#42:
+    x64.jmp __rl_cont#33
+  __rl_slow#40:
     x64.storeSlotReg slot2, rax
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot2
+    x64.jmp __rl_cont#39
+  __rl_slow#42:
+    x64.callDirect __rtlock_acquire
     x64.jmp __rl_cont#41
   __rl_slow#44:
-    x64.callDirect __rtlock_acquire
-    x64.jmp __rl_cont#43
-  __rl_slow#46:
     x64.storeSlotReg slot2, rax
     x64.storeSlotReg slot3, r8
     x64.callDirect __rtlock_release
     x64.movRegReg rcx, r8
     x64.loadRegSlot rax, slot2
     x64.loadRegSlot r8, slot3
-    x64.jmp __rl_cont#45
-  __rl_slow#40:
-    x64.storeSlotReg slot2, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rax, slot2
-    x64.jmp __rl_cont#39
+    x64.jmp __rl_cont#43
   __rl_slow#38:
     x64.storeSlotReg slot2, rax
     x64.callDirect __rtlock_release
     x64.loadRegSlot rax, slot2
     x64.jmp __rl_cont#37
+  __rl_slow#36:
+    x64.storeSlotReg slot2, rax
+    x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot2
+    x64.jmp __rl_cont#35
 }
 ```
 
@@ -1292,8 +1275,8 @@ func @__np_pd_wait_any {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#36
-  __rl_cont#35:
+    arm64.b.ne __rl_slow#34
+  __rl_cont#33:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -1324,8 +1307,8 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#42
-  __rl_cont#41:
+    arm64.b.ne __rl_slow#40
+  __rl_cont#39:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x1 + 824], x0
@@ -1348,8 +1331,8 @@ func @__np_pd_wait_any {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#44
-  __rl_cont#43:
+    arm64.b.ne __rl_slow#42
+  __rl_cont#41:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x21, 0
@@ -1370,8 +1353,8 @@ func @__np_pd_wait_any {
     arm64.movImm x3, 0
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#46
-  __rl_cont#45:
+    arm64.b.ne __rl_slow#44
+  __rl_cont#43:
     arm64.loadRegBaseDisp.word64 x1, [x2 + 824]
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x2 + 824], x1
@@ -1395,7 +1378,7 @@ func @__np_pd_wait_any {
     arm64.lsl x2, x23, 3
     arm64.add x2, x2, 8
     arm64.add x2, x0, x2
-    arm64.cbz x1, npnopd#30
+    arm64.cbz x1, npnopd#28
   npgaclearact:
     arm64.loadRegBaseDisp.word64 x1, [x22 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 48]
@@ -1458,7 +1441,7 @@ func @__np_pd_wait_any {
   npgaclearnext:
     arm64.add x21, x21, 1
     arm64.b npgaclearhdr
-  npnopd#30:
+  npnopd#28:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
     arm64.movImm x2, 104
@@ -1484,13 +1467,13 @@ func @__np_pd_wait_any {
     arm64.lsl x2, x22, 3
     arm64.add x2, x2, 8
     arm64.add x0, x0, x2
-    arm64.cbz x1, npnopd#29
+    arm64.cbz x1, npnopd#27
   npgamarkact:
     arm64.movImm x1, 2
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.add x21, x21, 1
     arm64.b npgamarkhdr
-  npnopd#29:
+  npnopd#27:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
     arm64.movImm x2, 104
@@ -1520,7 +1503,7 @@ func @__np_pd_wait_any {
   npgalookact:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 1
-    arm64.b.ne npwsnotready
+    arm64.b.ne npgalooknext
   npgaready:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
@@ -1536,8 +1519,8 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#40
-  __rl_cont#39:
+    arm64.b.ne __rl_slow#38
+  __rl_cont#37:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x1 + 824], x0
@@ -1550,25 +1533,9 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x23, slot7
     arm64.epilogue 80
     arm64.retIndirect
-  npwsnotready:
-    arm64.cmp x1, 0
-    arm64.b.ne npwsdouble
   npgalooknext:
     arm64.add x21, x21, 1
     arm64.b npgalookhdr
-  npwsdouble:
-    arm64.leaRdata x0, __abort_msg_107  ; "fatal error: runtime abort 107 (netpollDoubleWait)\x0a"
-    arm64.movImm x1, 51
-    arm64.movImm x2, 107
-    arm64.bl __rt_abort
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.epilogue 80
-    arm64.retIndirect
   npnopd#26:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
@@ -1619,8 +1586,8 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#38
-  __rl_cont#37:
+    arm64.b.ne __rl_slow#36
+  __rl_cont#35:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x1 + 824], x0
@@ -1645,19 +1612,19 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x23, slot7
     arm64.epilogue 80
     arm64.retIndirect
-  __rl_slow#36:
+  __rl_slow#34:
     arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#35
-  __rl_slow#42:
+    arm64.b __rl_cont#33
+  __rl_slow#40:
     arm64.storeSlotReg slot0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#39
+  __rl_slow#42:
+    arm64.bl __rtlock_acquire
     arm64.b __rl_cont#41
   __rl_slow#44:
-    arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#43
-  __rl_slow#46:
     arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
@@ -1666,19 +1633,19 @@ func @__np_pd_wait_any {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot1
     arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#45
-  __rl_slow#40:
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x1, slot0
-    arm64.b __rl_cont#39
+    arm64.b __rl_cont#43
   __rl_slow#38:
     arm64.storeSlotReg slot0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.loadRegSlot x1, slot0
     arm64.b __rl_cont#37
+  __rl_slow#36:
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#35
 }
 ```
 
@@ -2116,8 +2083,8 @@ func @__np_pd_wait_any {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#36
-  __rl_cont#35:
+    arm64.b.ne __rl_slow#34
+  __rl_cont#33:
     arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
@@ -2148,8 +2115,8 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#42
-  __rl_cont#41:
+    arm64.b.ne __rl_slow#40
+  __rl_cont#39:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x1 + 824], x0
@@ -2172,8 +2139,8 @@ func @__np_pd_wait_any {
     arm64.movImm x1, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#44
-  __rl_cont#43:
+    arm64.b.ne __rl_slow#42
+  __rl_cont#41:
     arm64.movImm x0, 0
     arm64.storeBaseDispReg.word64 [x19 + 16], x0
     arm64.movImm x21, 0
@@ -2194,8 +2161,8 @@ func @__np_pd_wait_any {
     arm64.movImm x3, 0
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
     arm64.cmp x3, 1
-    arm64.b.ne __rl_slow#46
-  __rl_cont#45:
+    arm64.b.ne __rl_slow#44
+  __rl_cont#43:
     arm64.loadRegBaseDisp.word64 x1, [x2 + 824]
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x2 + 824], x1
@@ -2219,7 +2186,7 @@ func @__np_pd_wait_any {
     arm64.lsl x2, x23, 3
     arm64.add x2, x2, 8
     arm64.add x2, x0, x2
-    arm64.cbz x1, npnopd#30
+    arm64.cbz x1, npnopd#28
   npgaclearact:
     arm64.loadRegBaseDisp.word64 x1, [x22 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 48]
@@ -2282,7 +2249,7 @@ func @__np_pd_wait_any {
   npgaclearnext:
     arm64.add x21, x21, 1
     arm64.b npgaclearhdr
-  npnopd#30:
+  npnopd#28:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
     arm64.movImm x2, 104
@@ -2308,13 +2275,13 @@ func @__np_pd_wait_any {
     arm64.lsl x2, x22, 3
     arm64.add x2, x2, 8
     arm64.add x0, x0, x2
-    arm64.cbz x1, npnopd#29
+    arm64.cbz x1, npnopd#27
   npgamarkact:
     arm64.movImm x1, 2
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.add x21, x21, 1
     arm64.b npgamarkhdr
-  npnopd#29:
+  npnopd#27:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
     arm64.movImm x2, 104
@@ -2344,7 +2311,7 @@ func @__np_pd_wait_any {
   npgalookact:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.cmp x1, 1
-    arm64.b.ne npwsnotready
+    arm64.b.ne npgalooknext
   npgaready:
     arm64.movImm x1, 0
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
@@ -2360,8 +2327,8 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#40
-  __rl_cont#39:
+    arm64.b.ne __rl_slow#38
+  __rl_cont#37:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x1 + 824], x0
@@ -2374,25 +2341,9 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x23, slot7
     arm64.epilogue 80
     arm64.retIndirect
-  npwsnotready:
-    arm64.cmp x1, 0
-    arm64.b.ne npwsdouble
   npgalooknext:
     arm64.add x21, x21, 1
     arm64.b npgalookhdr
-  npwsdouble:
-    arm64.leaRdata x0, __abort_msg_107  ; "fatal error: runtime abort 107 (netpollDoubleWait)\x0a"
-    arm64.movImm x1, 51
-    arm64.movImm x2, 107
-    arm64.bl __rt_abort
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.loadRegSlot x23, slot7
-    arm64.epilogue 80
-    arm64.retIndirect
   npnopd#26:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
@@ -2443,8 +2394,8 @@ func @__np_pd_wait_any {
     arm64.movImm x2, 0
     arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
     arm64.cmp x2, 1
-    arm64.b.ne __rl_slow#38
-  __rl_cont#37:
+    arm64.b.ne __rl_slow#36
+  __rl_cont#35:
     arm64.loadRegBaseDisp.word64 x0, [x1 + 824]
     arm64.add x0, x0, -1
     arm64.storeBaseDispReg.word64 [x1 + 824], x0
@@ -2469,19 +2420,19 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x23, slot7
     arm64.epilogue 80
     arm64.retIndirect
-  __rl_slow#36:
+  __rl_slow#34:
     arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#35
-  __rl_slow#42:
+    arm64.b __rl_cont#33
+  __rl_slow#40:
     arm64.storeSlotReg slot0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#39
+  __rl_slow#42:
+    arm64.bl __rtlock_acquire
     arm64.b __rl_cont#41
   __rl_slow#44:
-    arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#43
-  __rl_slow#46:
     arm64.storeSlotReg slot1, x0
     arm64.storeSlotReg slot2, x2
     arm64.movRegReg x0, x1
@@ -2490,18 +2441,18 @@ func @__np_pd_wait_any {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot1
     arm64.loadRegSlot x2, slot2
-    arm64.b __rl_cont#45
-  __rl_slow#40:
-    arm64.storeSlotReg slot0, x1
-    arm64.movRegReg x1, x2
-    arm64.bl __rtlock_release
-    arm64.loadRegSlot x1, slot0
-    arm64.b __rl_cont#39
+    arm64.b __rl_cont#43
   __rl_slow#38:
     arm64.storeSlotReg slot0, x1
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
     arm64.loadRegSlot x1, slot0
     arm64.b __rl_cont#37
+  __rl_slow#36:
+    arm64.storeSlotReg slot0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __rtlock_release
+    arm64.loadRegSlot x1, slot0
+    arm64.b __rl_cont#35
 }
 ```

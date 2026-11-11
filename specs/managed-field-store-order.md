@@ -70,7 +70,7 @@ function assign(dst Blk, src Blk)
 end 'assign'
 
 function main() returns ExitCode
-	var a = Blk.create()
+	let a = Blk.create()
 	a.args.push(7)
 	assign(a, src: a)
 	let n = a.args.count()
@@ -109,7 +109,7 @@ type Blk
 end 'Blk'
 
 function main() returns ExitCode
-	var a = Blk.create()
+	let a = Blk.create()
 	a.args.push(7)
 	a.absorb(a)
 	let n = a.args.count()
@@ -150,7 +150,7 @@ function copyName(dst Rec, src Rec)
 end 'copyName'
 
 function main() returns ExitCode
-	var r = Rec.create("hello {40 + 2}")
+	let r = Rec.create("hello {40 + 2}")
 	copyName(r, src: r)
 	print("name={r.name}")
 	return 0

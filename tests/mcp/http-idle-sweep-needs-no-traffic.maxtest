@@ -6,11 +6,11 @@ test 'an idle session is reaped on time with no request arriving, and its debugg
 	let executable = buildStagedProgram(program)
 	let anchored = anchorLine(program, anchor: DebuggableProgramAnchor)
 
-	var server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
+	let server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
 	let (initialized, sessionId) = server.initializeSession()
-	let started = httpToolCall(server, sessionId: sessionId, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
-	_ = httpToolCall(server, sessionId: sessionId, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
-	let continued = httpToolCall(server, sessionId: sessionId, id: 4, name: DebugContinueTool)
+	let started = httpToolCall(server.address, sessionId: sessionId, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
+	_ = httpToolCall(server.address, sessionId: sessionId, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	let continued = httpToolCall(server.address, sessionId: sessionId, id: 4, name: DebugContinueTool)
 
 	sleep(PastIdleMs)
 
@@ -31,7 +31,7 @@ test 'an idle session is reaped on time with no request arriving, and its debugg
 end 'an idle session is reaped on time with no request arriving, and its debuggee with it'
 
 test 'closing stdin ends the http server with exit 0'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, _) = server.initializeSession()
 	try server.stop()
 

@@ -438,7 +438,7 @@ end 'keep'
 
 function main() returns ExitCode
 	var label = "original"
-	var h = Holder.create()
+	let h = Holder.create()
 	let k = h.mix2(put(label), text: label)
 	keep(k)
 	print("ok\n")
@@ -636,7 +636,7 @@ function keep(_ T) uses T
 end 'keep'
 
 function main() returns ExitCode
-	var w = Wrapper.create()
+	let w = Wrapper.create()
 	let p = PB.build(put(w.h.f), second: w.h.f)
 	keep(p)
 	print("ok\n")
@@ -1549,7 +1549,7 @@ function mix(h Holder) returns PA
 end 'mix'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	let p = mix(h)
 	keep(p)
 	print("{p.first}\n")
@@ -1623,7 +1623,7 @@ function keep(_ T) uses T
 end 'keep'
 
 function main() returns ExitCode
-	var label = "original"
+	let label = "original"
 	var other = "other"
 	let p = PA.build(label, second: put(other))
 	keep(p)
@@ -1769,7 +1769,7 @@ function keep(_ T) uses T
 end 'keep'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	let p = PB.build(put(h.f), second: h.f)
 	keep(p)
 	print("ok\n")
@@ -1942,7 +1942,7 @@ function keep(_ T) uses T
 end 'keep'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	let p = PB.build(put(h.f), second: h.g)
 	keep(p)
 	print("ok\n")
@@ -2094,7 +2094,7 @@ function useH2(k Tally, h Holder) returns Tally
 end 'useH2'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	let k = useH2(put(h.f), h: h)
 	keep(k)
 	print("ok\n")
@@ -2185,7 +2185,7 @@ function keep(_ T) uses T
 end 'keep'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	let k = h.f.byteLength() as Tally if put(h.f) > 0 else 0
 	keep(k)
 	print("ok\n")
@@ -2789,7 +2789,7 @@ function two3(text String, k Tally) returns Tally
 end 'two3'
 
 function main() returns ExitCode
-	var label = "original"
+	let label = "original"
 	let promise = async two3(label, k: wrap(label.byteLength() as Tally))
 	let k = await promise
 	keep(k)
@@ -3110,7 +3110,7 @@ end 'sum'
 
 function main() returns ExitCode
 	var label = "original"
-	var items = TallyArray.create(0)
+	let items = TallyArray.create(0)
 	items.push(sum(put(label), b: label.byteLength() as Tally))
 	items.push(label.byteLength() as Tally)
 	print("ok\n")
@@ -3154,7 +3154,7 @@ function put(text mutable String) returns Tally
 end 'put'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	h.g = "x" if put(h.g) > 0 else "y"
 	print("ok\n")
 	return 0
@@ -3502,7 +3502,7 @@ function keep(_ T) uses T
 end 'keep'
 
 function main() returns ExitCode
-	var items = HolderArray.create(0)
+	let items = HolderArray.create(0)
 	items.push(Holder.create())
 	for e in items 'each'
 		keep(PB.build(put(e.f), second: e.f))
@@ -3762,7 +3762,7 @@ end 'put'
 
 function main() returns ExitCode
 	var h = Holder.create()
-	view h2 = h
+	let h2 = h
 	h = Holder.create()
 	let p = PA.build(h2.g, second: put(h.f))
 	print("{p.first} {h.f}\n")
@@ -3808,7 +3808,7 @@ end 'put'
 
 function main() returns ExitCode
 	var h = Holder.create()
-	view h2 = h
+	let h2 = h
 	let n = "x".count()
 
 	if n > 5 'rebind'
@@ -4170,7 +4170,7 @@ end 'put'
 
 function main() returns ExitCode
 	var h = Holder.create()
-	view h2 = h
+	let h2 = h
 	h = Holder.create()
 	let n = "x".count()
 
@@ -4223,7 +4223,7 @@ end 'put'
 function run(start Holder) returns ExitCode
 	var h = start
 	let h2 = start
-	var o = h
+	let o = h
 	h = Holder.create()
 	let p = PA.build(h2.f, second: put(o.f))
 	print("{p.first} {o.f} {h.f}\n")
@@ -4311,7 +4311,7 @@ end 'put'
 
 function run(start Holder) returns ExitCode
 	var h = start
-	var o = h
+	let o = h
 	let h3 = start
 	h = Holder.create()
 	let p = PA.build(h3.f, second: put(o.f))
@@ -4371,7 +4371,7 @@ end 'put'
 function run(start Wrapper) returns ExitCode
 	var w = start
 	let w2 = start
-	var o = w
+	let o = w
 	w = Wrapper.create()
 	let p = PA.build(w2.inner.f, second: put(o.inner.f))
 	print("{p.first} {o.inner.f} {w.inner.f}\n")
@@ -4400,7 +4400,7 @@ type Holder
 	export var g as String
 
 	static function create() returns Self
-		var built = Self{f: "x", g: "y"}
+		let built = Self{f: "x", g: "y"}
 		built.f = "a"
 		built.g = "b"
 		return built
@@ -4424,7 +4424,7 @@ end 'put'
 
 function main() returns ExitCode
 	var h = Holder.create()
-	view h2 = h
+	let h2 = h
 	h = Holder.create()
 	let p = PA.build(h2.g, second: put(h.f))
 	print("{p.first} {h.f}\n")
@@ -4470,8 +4470,8 @@ end 'put'
 
 function main() returns ExitCode
 	var h = Holder.create()
-	var older = Holder.create()
-	view h2 = h
+	let older = Holder.create()
+	let h2 = h
 	h = older
 	let p = PA.build(h2.g, second: put(h.f))
 	print("{p.first} {h.f}\n")
@@ -4517,7 +4517,7 @@ end 'put'
 
 function main() returns ExitCode
 	var h = Holder.create()
-	view h2 = h
+	let h2 = h
 	h = Holder.create()
 	var i = 0 as Tally
 
@@ -4856,7 +4856,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	keep(h.run())
 	print("ok\n")
 	return 0
@@ -5654,7 +5654,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	h.run(Gauge.create())
 	print("{h.level}\n")
 	return 0
@@ -5768,7 +5768,7 @@ function two2(k Tally, text String) returns Tally
 end 'two2'
 
 function main() returns ExitCode
-	var c = Box.create()
+	let c = Box.create()
 	let f = function() gives two2(put(c.s), text: c.s)
 	keep(f())
 	print("ok\n")
@@ -5813,7 +5813,7 @@ function fill(a mutable StringArray, b StringArray)
 end 'fill'
 
 function main() returns ExitCode
-	var x = StringArray.create(0)
+	let x = StringArray.create(0)
 	fill(x, b: x)
 	print("{x.count()}\n")
 	return 0
@@ -5926,7 +5926,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create(5)
+	let h = Holder.create(5)
 	let copy = h.clone()
 	print("{copy.settle(h.n)} {h.n}\n")
 	return 0
@@ -5960,7 +5960,7 @@ function bump(n mutable Coord, text String) returns Coord
 end 'bump'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	let copy = h.a.clone()
 	let k = bump(h.n, text: copy)
 	print("{k}\n")
@@ -6075,7 +6075,7 @@ function swap(x mutable Coord, y mutable Coord)
 end 'swap'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	var a = h.a
 	swap(a, y: h.b)
 	h.a = a
@@ -6123,7 +6123,7 @@ end 'fresh'
 function main() returns ExitCode
 	let sink = spawn Store.create()
 	var a = fresh(1)
-	view v = a
+	let v = a
 	a = fresh(22)
 	let k = put(a)
 	let n = try await sink.keep(v) otherwise 0
@@ -7416,8 +7416,8 @@ end 'main'
 error E3186: <fragment>:14:15: argument 's' is read by another operand of this statement and passed by reference to 'spin' (parameter 'a') — a hold cannot protect a value its by-reference cell overwrites. Copy 's' into a `let` in an earlier statement (`.clone()` a record, array or string) and use the copy for the other operand
 ```
 
-<!-- test: write-based-stale-isolated-occupant-at-a-send-is-refused -->
-An isolated record read out of a cell that a later by-reference hand-over of the same call invalidates is refused at the send, never lowered with a stale occupant.
+<!-- test: write-based-isolated-occupant-at-a-send-beside-a-by-reference-hand-over-is-sent -->
+An isolated record sent in the same call as a by-reference hand-over of its own variable is sent: the send moves the box, and the service reads it.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -7438,14 +7438,15 @@ type Store
 	end 'create'
 
 	export function keep(box isolated Box, n Tally) returns Tally
-		self.seen = self.seen + n
+		let touched = box.n
+		self.seen = self.seen + n + touched
 
 		return 1
 	end 'keep'
 end 'Store'
 
 function look(box mutable isolated Box) returns Tally
-	return 1
+	return box.n
 end 'look'
 
 function main() returns ExitCode
@@ -7456,8 +7457,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3138: <fragment>:33:30: argument `box` of the message `Store.keep` is BORROWED — read out of a field, an element or a parameter — so this frame does not own it. A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```stdout
+1
+```
+```exitcode
+0
 ```
 
 <!-- test: write-based-write-through-keeps-a-pending-field-read-alive -->

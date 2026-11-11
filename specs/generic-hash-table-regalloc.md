@@ -110,19 +110,19 @@ type Tbl uses Key where Key is Hashable and Equatable
 			newCapacity = 16
 		end 'handle_zero'
 
-		var newKeys = KeyArray{}
+		let newKeys = KeyArray{}
 		newKeys.resize(newCapacity)
-		var newValues = ValueArray{}
+		let newValues = ValueArray{}
 		newValues.resize(newCapacity)
-		var newStates = StateArray{}
+		let newStates = StateArray{}
 		newStates.resize(newCapacity)
-		var newHashes = HashSlotArray{}
+		let newHashes = HashSlotArray{}
 		newHashes.resize(newCapacity)
 
-		view oldKeys = keys
-		view oldValues = values
-		view oldStates = states
-		view oldHashes = hashes
+		let oldKeys = keys
+		let oldValues = values
+		let oldStates = states
+		let oldHashes = hashes
 		keys = newKeys
 		values = newValues
 		states = newStates
@@ -141,7 +141,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 				Deleted gives false
 			end 'so1'
 			if isOccupied 'occupied'
-				view key = try oldKeys.get(i) otherwise 'skip_key'
+				let key = try oldKeys.get(i) otherwise 'skip_key'
 					continue
 				end 'skip_key'
 				let value = try oldValues.get(i) otherwise 'skip_val'
@@ -177,7 +177,7 @@ end 'Tbl'
 typealias T = Tbl with String
 
 function main() returns ExitCode
-	var t = T.create()
+	let t = T.create()
 	t.grow()
 	if t.slots() != 16 'wrongCapacity'
 		return 90
@@ -264,7 +264,7 @@ end 'Mixer'
 typealias IntMixer = Mixer with IntKey
 
 function main() returns ExitCode
-	var m = IntMixer.create(0)
+	let m = IntMixer.create(0)
 	if m.mix(5 as IntKey) != 330 'wrongSum'
 		return 90
 	end 'wrongSum'

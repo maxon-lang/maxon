@@ -58,7 +58,7 @@ export type PendingConsequence
 	end 'isExplainedBy'
 
 	function namesRead() returns NameRoster
-		var names = NameRoster.create(0)
+		let names = NameRoster.create(0)
 
 		match self.consequence 'consequence'
 			unrelated or
@@ -73,7 +73,7 @@ export type PendingConsequence
 	end 'namesRead'
 
 	function qualifiersRead() returns NameRoster
-		var qualifiers = NameRoster.create(0)
+		let qualifiers = NameRoster.create(0)
 
 		match self.consequence 'consequence'
 			subject(subjects) then addExtensionQualifiers(subjects, into: qualifiers)
@@ -197,7 +197,7 @@ export type DeclarationPoison
 	end 'create'
 
 	export function snapshot() returns Self
-		var copy = Self.create()
+		let copy = Self.create()
 		copy.restore(self)
 
 		return copy
@@ -597,13 +597,13 @@ module type ConsequenceWorklist
 	var next as ElementIndex
 
 	module static function over(held PendingConsequenceArray) returns ConsequenceWorklist
-		var byName = ConsequencePositionsByName.create()
-		var byQualifier = ConsequencePositionsByName.create()
-		var queue = ConsequencePositionArray.create(held.count(), zeroed: false)
-		var queued = FixedBoolArray.create(held.count())
+		let byName = ConsequencePositionsByName.create()
+		let byQualifier = ConsequencePositionsByName.create()
+		let queue = ConsequencePositionArray.create(held.count(), zeroed: false)
+		let queued = FixedBoolArray.create(held.count())
 
 		for position in 0 upto held.count() 'eachHeld'
-			view consequence = try held.get(position) otherwise panic("ConsequenceWorklist.over: held.get OOB at {position} below count {held.count()}")
+			let consequence = try held.get(position) otherwise panic("ConsequenceWorklist.over: held.get OOB at {position} below count {held.count()}")
 
 			for name in consequence.namesRead() 'eachNameRead'
 				filePositionUnder(byName, name: name, position: position)
@@ -671,7 +671,7 @@ module type ConsequenceWorklist
 end 'ConsequenceWorklist'
 
 function filePositionUnder(table ConsequencePositionsByName, name ByteArray, position ElementIndex)
-	var held = try table.get(name) otherwise ConsequencePositionArray.create(0)
+	let held = try table.get(name) otherwise ConsequencePositionArray.create(0)
 	held.push(position)
 	table.upsert(name, value: held)
 end 'filePositionUnder'
@@ -696,7 +696,7 @@ end 'RefusalKey'
 typealias RefusalKeyArray = Array with RefusalKey
 
 function refusalKeysOf(callee immutable ByteArray) returns RefusalKeyArray
-	var keys = RefusalKeyArray.create(3, zeroed: false)
+	let keys = RefusalKeyArray.create(3, zeroed: false)
 	keys.push(RefusalKey.create(callee, within: DeclaredWithin.anywhere))
 	keys.push(RefusalKey.create(qualifyingTypeName(callee), within: DeclaredWithin.anywhere))
 
@@ -719,10 +719,10 @@ function extensionQualifierOf(name ByteArray) returns immutable ByteArray throws
 end 'extensionQualifierOf'
 
 function extensionKeysReaching(qualifier ByteArray, signatures ProgramSignatures) returns NameRoster
-	var keys = NameRoster.create(0)
+	let keys = NameRoster.create(0)
 	keys.push(qualifier)
 
-	var implemented = InterfaceNameSet.create()
+	let implemented = InterfaceNameSet.create()
 	signatures.collectImplementedInterfaces(qualifier, into: implemented)
 
 	for interfaceName in implemented 'eachImplementedInterface'
@@ -854,10 +854,10 @@ export type DeclarationHeadIndex
 	// `end '<name>'`; an interface requirement has none (BNF §3.5). Every other line-start line of a type
 	// outside a body is type-level, because fields, typealiases and cases interleave with methods.
 	export static function build(tokens TokenArray) returns DeclarationHeadIndex
-		var readings = HeadReadingArray.create(0)
-		var headOrder = LineOrder.create()
-		var memberReadings = MemberReadingArray.create(0)
-		var memberOrder = LineOrder.create()
+		let readings = HeadReadingArray.create(0)
+		let headOrder = LineOrder.create()
+		let memberReadings = MemberReadingArray.create(0)
+		let memberOrder = LineOrder.create()
 		var lineStartColumn = 1 as ColumnNumber
 		var previousLine = 0 as LineNumber
 		var headHoldsMembers = false
@@ -866,7 +866,7 @@ export type DeclarationHeadIndex
 		var openMethodName = b""
 
 		for position in 0 upto tokens.count() 'eachToken'
-			view token = try tokens.get(position) otherwise panic("DeclarationHeadIndex.build: tokens.get OOB at {position} below count {tokens.count()}")
+			let token = try tokens.get(position) otherwise panic("DeclarationHeadIndex.build: tokens.get OOB at {position} below count {tokens.count()}")
 
 			if tokenKindIsSkippedLayout(token.kind) 'layout'
 				continue
@@ -899,7 +899,7 @@ export type DeclarationHeadIndex
 			end 'aTypeLevelMember'
 
 			if token.kind == TokenKind.function and lineStartColumn > DeclarationHeadColumn and functionDeclarationShapeIn(tokens, index: position) 'aNestedFunction'
-				view name = try tokens.get(position + 1) otherwise panic("DeclarationHeadIndex.build: the name of the function at {position} is missing, though its shape was just read")
+				let name = try tokens.get(position + 1) otherwise panic("DeclarationHeadIndex.build: the name of the function at {position} is missing, though its shape was just read")
 				memberReadings.push(MemberReading.method(name.value))
 				memberOrder.add(token.line)
 				methodBodyOpen = headMethodsHaveBodies
@@ -957,7 +957,7 @@ function methodBodyClosesAt(tokens TokenArray, index ElementIndex, methodName By
 		return false
 	end 'notACloser'
 
-	view label = try tokens.get(index + 1) otherwise panic("methodBodyClosesAt: the label after the closer at {index} is missing, though its shape was just read")
+	let label = try tokens.get(index + 1) otherwise panic("methodBodyClosesAt: the label after the closer at {index} is missing, though its shape was just read")
 
 	return label.value.equals(methodName)
 end 'methodBodyClosesAt'
@@ -980,14 +980,14 @@ function declarationIsWithin(declaration PoisonedDeclaration, within DeclaredWit
 end 'declarationIsWithin'
 
 module function singleName(name ByteArray) returns NameRoster
-	var names = NameRoster.create(0)
+	let names = NameRoster.create(0)
 	names.push(name)
 
 	return names
 end 'singleName'
 
 function copiedFailedFiles(paths FailedFileSet) returns FailedFileSet
-	var copied = FailedFileSet.create()
+	let copied = FailedFileSet.create()
 
 	for path in paths 'eachPath'
 		copied.insert(path)
@@ -997,7 +997,7 @@ function copiedFailedFiles(paths FailedFileSet) returns FailedFileSet
 end 'copiedFailedFiles'
 
 function copiedDuplicatedFunctions(names DuplicatedFunctionSet) returns DuplicatedFunctionSet
-	var copied = DuplicatedFunctionSet.create()
+	let copied = DuplicatedFunctionSet.create()
 
 	for name in names 'eachName'
 		copied.insert(name)
@@ -1007,7 +1007,7 @@ function copiedDuplicatedFunctions(names DuplicatedFunctionSet) returns Duplicat
 end 'copiedDuplicatedFunctions'
 
 function copiedLostHeads(names LostHeadNameSet) returns LostHeadNameSet
-	var copied = LostHeadNameSet.create()
+	let copied = LostHeadNameSet.create()
 
 	for name in names 'eachName'
 		copied.insert(name)
@@ -1017,7 +1017,7 @@ function copiedLostHeads(names LostHeadNameSet) returns LostHeadNameSet
 end 'copiedLostHeads'
 
 function copiedPoisonedDeclarations(table PoisonedDeclarationsByName) returns PoisonedDeclarationsByName
-	var copied = PoisonedDeclarationsByName.create()
+	let copied = PoisonedDeclarationsByName.create()
 
 	for (name, declarations) in table 'eachName'
 		copied.upsert(name, value: declarations.clone())
@@ -1027,7 +1027,7 @@ function copiedPoisonedDeclarations(table PoisonedDeclarationsByName) returns Po
 end 'copiedPoisonedDeclarations'
 
 function copiedBackedNames(names BackedNameArray) returns BackedNameArray
-	var copied = BackedNameArray.create(names.count(), zeroed: false)
+	let copied = BackedNameArray.create(names.count(), zeroed: false)
 
 	for name in names 'eachName'
 		copied.push(name.clone())
@@ -1037,7 +1037,7 @@ function copiedBackedNames(names BackedNameArray) returns BackedNameArray
 end 'copiedBackedNames'
 
 function copiedPendingConsequences(held PendingConsequenceArray) returns PendingConsequenceArray
-	var copied = PendingConsequenceArray.create(held.count(), zeroed: false)
+	let copied = PendingConsequenceArray.create(held.count(), zeroed: false)
 
 	for consequence in held 'eachConsequence'
 		copied.push(consequence.clone())
@@ -1047,7 +1047,7 @@ function copiedPendingConsequences(held PendingConsequenceArray) returns Pending
 end 'copiedPendingConsequences'
 
 function fileHeadUnder(table PoisonedDeclarationsByName, head DeclarationHead, file FilePath, backing PoisonBacking)
-	var held = try table.get(head.name) otherwise PoisonedDeclarationArray.create(0)
+	let held = try table.get(head.name) otherwise PoisonedDeclarationArray.create(0)
 	held.push(PoisonedDeclaration.create(file, reach: head.reach, nominal: head.nominal, backing: backing))
 	table.upsert(head.name, value: held)
 end 'fileHeadUnder'
@@ -1062,8 +1062,8 @@ end 'regionHeadAt'
 
 function lostFunctionHeadAt(tokens TokenArray, position ElementIndex) returns immutable ByteArray throws AbsentError
 	let nameAt = pastVisibilityModifiers(tokens, index: position)
-	view name = try tokens.get(nameAt) otherwise throw AbsentError.absent
-	view opener = try tokens.get(nameAt + 1) otherwise throw AbsentError.absent
+	let name = try tokens.get(nameAt) otherwise throw AbsentError.absent
+	let opener = try tokens.get(nameAt + 1) otherwise throw AbsentError.absent
 
 	if name.kind != TokenKind.identifier or opener.kind != TokenKind.leftParen 'notAFunctionHead'
 		throw AbsentError.absent
@@ -1078,8 +1078,8 @@ function declarationHeadAt(tokens TokenArray, position ElementIndex) returns Dec
 	end 'notADeclaration'
 
 	let keywordAt = pastVisibilityModifiers(tokens, index: position)
-	view keyword = try tokens.get(keywordAt) otherwise throw AbsentError.absent
-	view name = try tokens.get(keywordAt + 1) otherwise throw AbsentError.absent
+	let keyword = try tokens.get(keywordAt) otherwise throw AbsentError.absent
+	let name = try tokens.get(keywordAt + 1) otherwise throw AbsentError.absent
 
 	if not tokenCanBeAName(name) 'notNamed'
 		throw AbsentError.absent
@@ -1099,7 +1099,7 @@ function declarationHeadAt(tokens TokenArray, position ElementIndex) returns Dec
 end 'declarationHeadAt'
 
 function reachOfModifier(tokens TokenArray, position ElementIndex) returns Visibility
-	view token = try tokens.get(position) otherwise panic("reachOfModifier: tokens.get OOB at {position}")
+	let token = try tokens.get(position) otherwise panic("reachOfModifier: tokens.get OOB at {position}")
 
 	if token.kind == TokenKind.export 'exported'
 		return Visibility.global

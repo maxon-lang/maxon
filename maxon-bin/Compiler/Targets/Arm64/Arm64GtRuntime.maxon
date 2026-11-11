@@ -129,7 +129,7 @@ let Arm64GtTrampArgBufReg = Arm64Register.x11
 // nothing, its failure arms stash instead.
 function buildArm64GtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	assertArm64GtFrameConsistent(target)
-	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let asm = Arm64RuntimeAsm.beginRawFunction()
 
 	emitArm64GtSavedBlock(asm, gtReg: Arm64GtSwitchFromReg, direction: Arm64GtBlockDirection.push)
 
@@ -144,7 +144,7 @@ function buildArm64GtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	emitArm64GtSavedBlock(asm, gtReg: Arm64GtSwitchToReg, direction: Arm64GtBlockDirection.pop)
 	arm64EmitReturnTransfer(asm.code, transfer: ReturnTransfer.indirectJump)
 
-	var chunk = asm.finishChunk(GtContextSwitchName)
+	let chunk = asm.finishChunk(GtContextSwitchName)
 	chunk.leavesCallerStack(0)
 	return chunk
 end 'buildArm64GtContextSwitchChunk'
@@ -248,7 +248,7 @@ typealias Arm64GtSavedPairArray = Array with Arm64GtSavedPair
 // The encoding FIELD is the register's own number in both files (x19's GPR field is 19; d8's SIMD field is
 // 8, `Arm64FirstVectorRegister` having already been subtracted out of the bounds the prologue pass states).
 function arm64GtSavedPairs() returns Arm64GtSavedPairArray
-	var pairs = Arm64GtSavedPairArray.create(0)
+	let pairs = Arm64GtSavedPairArray.create(0)
 	arm64GtAppendPairs(pairs, file: Arm64GtRegisterFile.gpr, first: Arm64CalleeSavedGprLow, limit: Arm64CalleeSavedGprEnd)
 	arm64GtAppendPairs(pairs, file: Arm64GtRegisterFile.simd, first: Arm64CalleeSavedFpFirst, limit: Arm64CalleeSavedFpEnd)
 	return pairs
@@ -286,7 +286,7 @@ end 'arm64GtAppendPairs'
 // spawn wrote stack arguments, which the callee therefore finds at SP as it finds an ordinary
 // call's — and the callee opens its own frame.
 function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let asm = Arm64RuntimeAsm.beginRawFunction()
 
 	arm64EmitMovRuntimeReg(asm, dest: Arm64GtTrampGtReg, src: Arm64GtSwitchToReg)
 	arm64EmitLoadWord64At(asm, dest: Arm64GtTrampArgBufReg, base: Arm64GtTrampGtReg, byteOffset: GtOffArgBuf as MachineWord)
@@ -334,7 +334,7 @@ function buildArm64GtTrampolineChunk() returns FunctionCodeChunk
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtContextSwitchName)
 	arm64EmitBrk(asm.code)
 
-	var chunk = asm.finishChunk(GtTrampolineName)
+	let chunk = asm.finishChunk(GtTrampolineName)
 	chunk.leavesCallerStack(0)
 	return chunk
 end 'buildArm64GtTrampolineChunk'
@@ -493,7 +493,7 @@ typealias Arm64RegisterArray = Array with Arm64Register
 
 // The GPRs `__gt_morestack` saves, in slot order: the argument registers, the callee-saved file, then x29 and x30.
 function arm64MorestackSavedGprs() returns Arm64RegisterArray
-	var gprs = Arm64RegisterArray.create(0)
+	let gprs = Arm64RegisterArray.create(0)
 
 	for reg in arm64ArgRegisters 'arguments'
 		gprs.push(reg)
@@ -516,7 +516,7 @@ function arm64MorestackFrameBytes(savedGprs Arm64RegisterArray) returns StackSiz
 end 'arm64MorestackFrameBytes'
 
 function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let savedGprs = arm64MorestackSavedGprs()
 	let frameBytes = arm64MorestackFrameBytes(savedGprs)
 	let doubling = asm.newLabel()
@@ -615,7 +615,7 @@ function buildArm64GtMorestackChunk(target Target) returns FunctionCodeChunk
 	asm.placeLabel(refused)
 	arm64EmitProcessExit(asm, os: target.os, exitCode: RuntimeAbort.greenThreadStackAllocationFailed.rawValue as MachineWord)
 
-	var chunk = asm.finishChunk(GtMorestackName)
+	let chunk = asm.finishChunk(GtMorestackName)
 	chunk.leavesCallerStack(0)
 	return chunk
 end 'buildArm64GtMorestackChunk'
@@ -710,7 +710,7 @@ let Arm64RelocDstReg = Arm64Register.x15
 // It is FRAMED, unlike the grower, which keeps x30 in its register block: the release is a call, and the frame
 // record is where this chunk's own return address survives it.
 function buildArm64GtStackRelocateChunk(target Target) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(NoRelocateSlots)
+	let asm = Arm64RuntimeAsm.beginFunction(NoRelocateSlots)
 	let copyLoop = asm.newLabel()
 	let copyDone = asm.newLabel()
 
@@ -855,7 +855,7 @@ let Arm64GuardScratchReg = Arm64Register.x13
 // twin does, so it is invisible to the rendered Target IR and is verified by the run plus a
 // disassembly instead.
 export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin FullRangeInt, site GtGuardSite, target Target)
-	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let top = asm.newLabel()
 	let skip = asm.newLabel()
 	let mayPark = guardSiteMayPark(site)
@@ -928,7 +928,7 @@ end 'emitArm64BranchUnlessPreemptRequest'
 // keeps the x29 chain whole, so a stack moved while the thread is parked rebases this frame's link like any other.
 // With no request in the guard word the chunk branches to `__gt_morestack` with the contract untouched.
 function buildArm64GtGuardTrippedChunk() returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let grow = asm.newLabel()
 
 	emitArm64BranchUnlessPreemptRequest(asm, scratch: Arm64MoreTempA, unlessRequested: grow)
@@ -936,7 +936,7 @@ function buildArm64GtGuardTrippedChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(grow)
 	arm64EmitTailBranch(asm.code, callFixups: asm.callFixups, targetName: GtMorestackName)
-	var chunk = asm.finishChunk(GtGuardTrippedName)
+	let chunk = asm.finishChunk(GtGuardTrippedName)
 	chunk.spendsCallerStack(arm64GtPreemptArmStackBytes(), checks: false)
 	return chunk
 end 'buildArm64GtGuardTrippedChunk'
@@ -951,7 +951,7 @@ end 'arm64GtPreemptArmStackBytes'
 // The arm as a framed fragment, closed with its own `br x30`, for `__gt_guard_tripped` to splice in. The frame
 // record sits at SP, so the locals' SP displacements are their x29 ones.
 function buildArm64GtPreemptArm() returns Arm64RuntimeAsm
-	var arm = Arm64RuntimeAsm.beginFunction(arm64RegisterBlockSlots(arm64ArgRegisters, fps: arm64FpArgRegisters))
+	let arm = Arm64RuntimeAsm.beginFunction(arm64RegisterBlockSlots(arm64ArgRegisters, fps: arm64FpArgRegisters))
 	let locals = arm.slotOffset(0)
 	emitArm64RegisterBlock(arm, gprs: arm64ArgRegisters, fps: arm64FpArgRegisters, base: locals, direction: Arm64GtBlockDirection.push)
 	arm64EmitMovRuntimeReg(arm, dest: arm64ArgRegisterAt(0), src: Arm64MorestackEntryGtReg)
@@ -1016,7 +1016,7 @@ end 'emitArm64LoadCurrentMOrBailless'
 let DarwinLibcCallName = b"mrt_darwin_libc_call"
 
 export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let direct = asm.newLabel()
 	let elsewhere = asm.newLabel()
 	let notOnTheSystemStack = asm.newLabel()
@@ -1088,7 +1088,7 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 	asm.placeLabel(direct)
 	arm64EmitBranchReg(asm.code, reg: Arm64ImportAddressReg)
 
-	var chunk = asm.finishChunk(DarwinLibcCallName)
+	let chunk = asm.finishChunk(DarwinLibcCallName)
 	chunk.leavesCallerStack(Arm64ImportCallGtStackBytes)
 	return chunk
 end 'buildArm64DarwinLibcCallChunk'
@@ -1128,7 +1128,7 @@ function emitArm64DarwinBranchUnlessOnTheSignalStack(asm Arm64RuntimeAsm, onIt B
 end 'emitArm64DarwinBranchUnlessOnTheSignalStack'
 
 module function buildArm64GtSystemStackFatalChunk(globalData GlobalDataTable, os Os) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let asm = Arm64RuntimeAsm.beginFunction(0)
 	let reason = RuntimeAbortReason.fatal(RuntimeFatal.systemCallFromOutsideEveryKnownStack)
 
 	arm64EmitPrintConstant(asm, globalData: globalData, bytes: reason.message())
@@ -1198,7 +1198,7 @@ function arm64AppendResolvedFragment(asm Arm64RuntimeAsm, code ByteArray, callFi
 	end 'calls'
 
 	for reloc in asm.rdataRelocs 'rdata'
-		var rebased = RdataRelocation.create(base as CodeOffset + reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind)
+		let rebased = RdataRelocation.create(base as CodeOffset + reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind)
 
 		// `create` zeroes `rdataOffset` — carried across explicitly rather than left at that default, because
 		// a fragment that ever files a WITHIN-object displacement would otherwise have it silently dropped.
@@ -1230,7 +1230,7 @@ end 'arm64AppendResolvedFragment'
 // allocatable pool on both lanes, and restoring it would be the one way this chunk could corrupt it.
 // ⛔ **x15 IS ABSENT BECAUSE IT IS THE RESUME REGISTER** — see `Arm64AsyncPreemptScratch`.
 function arm64AsyncPreemptGprs() returns Arm64RegisterArray
-	var gprs = Arm64RegisterArray.create(0)
+	let gprs = Arm64RegisterArray.create(0)
 
 	for reg in 0 upto Arm64AsyncPreemptScratch 'callerSaved'
 		gprs.push(try Arm64Register.fromRawValue(reg) otherwise panic("arm64AsyncPreemptGprs: {reg} is below the GPR/vector boundary and so names a general register"))
@@ -1253,7 +1253,7 @@ function arm64AsyncPreemptFlagsSlot() returns MachineWord
 end 'arm64AsyncPreemptFlagsSlot'
 
 function arm64AsyncPreemptVectors() returns Arm64RegisterArray
-	var vectors = Arm64RegisterArray.create(vectorRegisterCount(arm64RegisterFile()), zeroed: false)
+	let vectors = Arm64RegisterArray.create(vectorRegisterCount(arm64RegisterFile()), zeroed: false)
 
 	for k in 0 upto vectorRegisterCount(arm64RegisterFile()) 'vectors'
 		vectors.push(try Arm64Register.fromRawValue((Arm64FirstVectorRegister + k) as RegNum) otherwise panic("arm64AsyncPreemptVectors: {k} vector registers past the boundary is inside a file of {vectorRegisterCount(arm64RegisterFile())}"))
@@ -1298,7 +1298,7 @@ end 'arm64GtAsyncPreemptStackBytes'
 // It runs on the green thread's own stack, so what it puts there is certified against the margin the
 // safe-point predicate demanded (`PreemptionDepth.requireAsyncPreemptionFitsItsMargin`).
 function buildArm64GtAsyncPreemptChunk() returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let asm = Arm64RuntimeAsm.beginRawFunction()
 	let blockBytes = arm64AsyncPreemptBlockBytes()
 
 	arm64EmitStackAlloc(asm.code, amount: blockBytes)
@@ -1313,7 +1313,7 @@ function buildArm64GtAsyncPreemptChunk() returns FunctionCodeChunk
 	arm64EmitStackFree(asm.code, amount: blockBytes + Arm64GtPairBytes)
 	arm64EmitBranchReg(asm.code, reg: arm64RuntimeReg(Arm64AsyncPreemptResumeReg))
 
-	var chunk = asm.finishChunk(AsyncPreemptName)
+	let chunk = asm.finishChunk(AsyncPreemptName)
 	chunk.spendsCallerStack(arm64GtAsyncPreemptStackBytes(), checks: false)
 	return chunk
 end 'buildArm64GtAsyncPreemptChunk'
@@ -1367,7 +1367,7 @@ function emitArm64AsyncPreemptGprs(asm Arm64RuntimeAsm, gprs Arm64RegisterArray,
 		pop gives gprs.count() - 1
 	end 'count'
 
-	var moved = Arm64RegisterArray.create(restored, zeroed: false)
+	let moved = Arm64RegisterArray.create(restored, zeroed: false)
 
 	for k in 0 upto restored 'gprs'
 		moved.push(try gprs.get(k) otherwise panic("emitArm64AsyncPreemptGprs: index derived from count is in range"))
@@ -1387,7 +1387,7 @@ end 'emitArm64AsyncPreemptGprs'
 function buildArm64PreemptSelfRegisterChunk(os Os) returns FunctionCodeChunk
 	let SlotMachine = 0
 	let SlotUniqueId = 1
-	var asm = Arm64RuntimeAsm.beginFunction(2)
+	let asm = Arm64RuntimeAsm.beginFunction(2)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)
 	arm64EmitOsPrimitive(asm, os: os, importSlot: OsImportSlot.pthreadSelf, syscallNumber: Arm64LinuxSyscallGettid)
@@ -1434,7 +1434,7 @@ function buildArm64PreemptMachineChunk(os Os) returns FunctionCodeChunk
 	let SlotMachine = 0
 	let SlotThread = 1
 	let SlotProcessInfo = PreemptFrameSlots as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(arm64PreemptFrameSlots(os))
+	let asm = Arm64RuntimeAsm.beginFunction(arm64PreemptFrameSlots(os))
 
 	let giveBack = asm.newLabel()
 	let done = asm.newLabel()
@@ -1546,7 +1546,7 @@ function buildArm64PreemptHandlerChunk(os Os) returns FunctionCodeChunk
 		panic("buildArm64PreemptHandlerChunk: this ABI declares a {Arm64RedZoneBytes}-byte red zone below SP, and an asynchronous stop pushes the interrupted link register there — the injected pair would overwrite live data of the interrupted function at every stop, silently. Push the pair below the red zone and teach `{String.from(AsyncPreemptName)}` to restore SP past it")
 	end 'aRedZone'
 
-	var asm = Arm64RuntimeAsm.beginFunction(2)
+	let asm = Arm64RuntimeAsm.beginFunction(2)
 
 	let decline = asm.newLabel()
 	let noMachine = asm.newLabel()

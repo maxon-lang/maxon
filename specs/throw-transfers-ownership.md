@@ -76,7 +76,7 @@ type Lex
 end 'Lex'
 
 function outer() returns N throws OuterErr
-	var lex = Lex.create()
+	let lex = Lex.create()
 	return try lex.run()
 end 'outer'
 
@@ -221,7 +221,7 @@ type Lex
 end 'Lex'
 
 function main() returns ExitCode
-	var lex = Lex.create()
+	let lex = Lex.create()
 	var caught = 0 as N
 	try lex.run() otherwise (e) 'fail'
 		match e 'k'
@@ -229,7 +229,7 @@ function main() returns ExitCode
 			unexpectedEof(line, column) then caught = 900
 		end 'k'
 	end 'fail'
-	view again = lex.pendingError
+	let again = lex.pendingError
 	match again 'k2'
 		unterminatedString(line, column) then return (caught + line + column)
 		unexpectedEof(line, column) then return (caught + 500)
@@ -337,7 +337,7 @@ function whyLen(e Err) returns Integer
 end 'whyLen'
 
 function main() returns ExitCode
-	var body = Body.create(Err.bad("a struct payload thrown out of a sole box, heap-long"))
+	let body = Body.create(Err.bad("a struct payload thrown out of a sole box, heap-long"))
 	let first = try probe(body) otherwise 7
 	let second = whyLen(body.e)
 	print("first={first} second={second}")

@@ -72,7 +72,7 @@ end 'CsrGraph'
 export function buildCsr(from CsrColumn, to CsrColumn, nodeCount CsrIndex) returns CsrGraph
 	let edgeCount = from.count()
 
-	var start = CsrColumn.create((nodeCount + 1) as ElementIndex)
+	let start = CsrColumn.create((nodeCount + 1) as ElementIndex)
 
 	for k in 0 upto edgeCount 'countDeg'
 		let f = try from.get(k) otherwise panic("buildCsr: from.get OOB")
@@ -86,10 +86,10 @@ export function buildCsr(from CsrColumn, to CsrColumn, nodeCount CsrIndex) retur
 		try start.set(n + 1, value: a + b) otherwise panic("buildCsr: prefix start.set OOB")
 	end 'prefix'
 
-	var list = CsrColumn.create(edgeCount)
+	let list = CsrColumn.create(edgeCount)
 
 	// Running fill cursor per key, seeded from `start[key]`.
-	var fill = CsrFillColumn.create(nodeCount)
+	let fill = CsrFillColumn.create(nodeCount)
 
 	for n in 0 upto nodeCount 'seedFill'
 		let s = try start.get(n) otherwise panic("buildCsr: seedFill start.get OOB")
@@ -125,8 +125,8 @@ end 'buildCsr'
 // "Re-scan every node until nothing changes" costs O(depth x (nodes + edges)) and the depth is the source
 // program's own, so the cost grows while not one token of the program changes.
 export function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns BoolArray
-	var marked = BoolArray.create(seeds.count(), zeroed: false)
-	var worklist = CsrColumn.create(0)
+	let marked = BoolArray.create(seeds.count(), zeroed: false)
+	let worklist = CsrColumn.create(0)
 
 	for i in 0 upto seeds.count() 'seed'
 		let isSeed = try seeds.get(i) otherwise panic("reverseReachabilityMark: seeds.get({i}) OOB")
@@ -170,11 +170,11 @@ end 'reverseReachabilityMark'
 // The DFS is iterated over an explicit stack rather than recursed: the depth is the graph's own, and a
 // chain of N generic aliases would be N native frames.
 export function nodesOnACycle(graph CsrGraph) returns FixedBoolArray
-	var walk = SccWalk.overNodes(graph.nodeCount())
+	let walk = SccWalk.overNodes(graph.nodeCount())
 
 	// The DFS stack, as parallel columns: the node, and how many of its neighbours it has walked.
-	var frameNode = CsrColumn.create(0)
-	var frameEdge = CsrColumn.create(0)
+	let frameNode = CsrColumn.create(0)
+	let frameEdge = CsrColumn.create(0)
 
 	for root in 0 upto graph.nodeCount() 'eachRoot'
 		if not walk.isUndiscovered(root) 'reachedFromAnEarlierRoot'
@@ -244,10 +244,10 @@ export function shortestCycleThrough(graph CsrGraph, start CsrIndex) returns Csr
 	// The BFS tree: `reached` is the visited set, `cameFrom` the parent each node was first reached from.
 	// Only nodes the search actually reached are ever read back out of `cameFrom`, so its zero fill is never
 	// mistaken for an answer.
-	var reached = FlagColumn.create(graph.nodeCount())
-	var cameFrom = FixedCsrColumn.create(graph.nodeCount())
+	let reached = FlagColumn.create(graph.nodeCount())
+	let cameFrom = FixedCsrColumn.create(graph.nodeCount())
 
-	var frontier = CsrColumn.create(0)
+	let frontier = CsrColumn.create(0)
 	frontier.push(start)
 	try reached.set(start, value: true) otherwise panic("shortestCycleThrough: start node {start} is outside the graph's own {graph.nodeCount()} nodes")
 
@@ -284,7 +284,7 @@ end 'shortestCycleThrough'
 // walk order. `closedBy == start` is the one-node cycle — a node that is its own neighbour — and falls out
 // of the same walk without a case of its own.
 function cycleThrough(cameFrom FixedCsrColumn, closedBy CsrIndex, start CsrIndex) returns CsrColumn
-	var backwards = CsrColumn.create(0)
+	let backwards = CsrColumn.create(0)
 	var at = closedBy
 
 	while at != start 'walkBackUpTheTree'
@@ -294,7 +294,7 @@ function cycleThrough(cameFrom FixedCsrColumn, closedBy CsrIndex, start CsrIndex
 
 	backwards.push(start)
 
-	var path = CsrColumn.create(backwards.count(), zeroed: false)
+	let path = CsrColumn.create(backwards.count(), zeroed: false)
 
 	for i in 0 upto backwards.count() 'eachNode'
 		let fromTheEnd = backwards.count() - 1 - i
@@ -306,10 +306,10 @@ end 'cycleThrough'
 
 // Iterated over an explicit stack for the reason `nodesOnACycle` gives.
 export function postorderOf(graph CsrGraph) returns CsrColumn
-	var order = CsrColumn.create(0)
-	var visited = FlagColumn.create(graph.nodeCount())
-	var frameNode = CsrColumn.create(0)
-	var frameEdge = CsrColumn.create(0)
+	let order = CsrColumn.create(0)
+	let visited = FlagColumn.create(graph.nodeCount())
+	let frameNode = CsrColumn.create(0)
+	let frameEdge = CsrColumn.create(0)
 
 	for root in 0 upto graph.nodeCount() 'eachRoot'
 		if (try visited.get(root) otherwise panic("postorderOf: visited.get({root}) below the node count")) 'reachedFromAnEarlierRoot'
@@ -352,9 +352,9 @@ end 'postorderOf'
 // components with no error.
 export function callerFirstRanks(graph CsrGraph, callers CsrGraph) returns FixedCsrColumn
 	let finished = postorderOf(graph)
-	var ranks = FixedCsrColumn.create(graph.nodeCount())
-	var assigned = FlagColumn.create(graph.nodeCount())
-	var members = CsrColumn.create(0)
+	let ranks = FixedCsrColumn.create(graph.nodeCount())
+	let assigned = FlagColumn.create(graph.nodeCount())
+	let members = CsrColumn.create(0)
 	var rank = 0 as CsrIndex
 	var position = finished.count()
 
@@ -430,11 +430,11 @@ type SccWalk
 	var nextDiscovery as CsrIndex
 
 	static function overNodes(nodeCount CsrIndex) returns SccWalk
-		var discovered = FixedCsrColumn.create(nodeCount)
-		var lowlink = FixedCsrColumn.create(nodeCount)
-		var openAt = FixedCsrColumn.create(nodeCount)
-		var isOpen = FixedBoolArray.create(nodeCount)
-		var onCycle = FixedBoolArray.create(nodeCount)
+		let discovered = FixedCsrColumn.create(nodeCount)
+		let lowlink = FixedCsrColumn.create(nodeCount)
+		let openAt = FixedCsrColumn.create(nodeCount)
+		let isOpen = FixedBoolArray.create(nodeCount)
+		let onCycle = FixedBoolArray.create(nodeCount)
 
 		return Self{discovered: discovered, lowlink: lowlink, openAt: openAt, isOpen: isOpen, onCycle: onCycle, componentStack: CsrColumn.create(0), nextDiscovery: 1}
 	end 'overNodes'

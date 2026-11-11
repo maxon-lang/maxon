@@ -25,13 +25,8 @@ export type SourcePosition
 	// A function the COMPILER built. The empty path is the discriminator the two readers above turn on, so
 	// this is a positive statement of provenance and not a default that fell through: a caller reaches it by
 	// naming it, and a reader grepping `synthesized` finds every site that claims it.
-	// ⚠ **`FilePath.empty()` AND NOT `FilePath from ""`, AND THE REASON IS REACHABILITY.** The full
-	// constructor resolves a file URL, which asks a `CharacterSet` — a `Set`, dispatching `hash` through a
-	// witness slot. This door is on the backend POOL WORKER path (`createFromStd` builds the function of
-	// every unit a worker is handed, `extractUnitModule`), and a message that dispatches somewhere the compiler
-	// cannot name makes every address-taken function in the program message-reachable
-	// (`ServiceGlobalAccessCheck`'s widening). The two constructions answer the identical value; see
-	// `FilePath.empty`.
+	// `FilePath.empty()` and not `FilePath from ""`: the full constructor resolves a file URL, which asks a
+	// `CharacterSet`. The two constructions answer the identical value; see `FilePath.empty`.
 	export static function synthesized() returns SourcePosition
 		return Self{filePath: FilePath.empty(), line: 0, column: 0}
 	end 'synthesized'
@@ -133,7 +128,7 @@ end 'cacheWriteValueExistentialInstanceMap'
 
 function cacheReadValueExistentialInstanceMap(reader LibraryCacheReader) returns ValueExistentialInstanceMap throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ValueExistentialInstanceMap.create()
+	let result = ValueExistentialInstanceMap.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let key = (try reader.unsigned()) as ValueId
@@ -160,7 +155,7 @@ end 'cacheWriteValueCallInstanceMap'
 
 function cacheReadValueCallInstanceMap(reader LibraryCacheReader) returns ValueCallInstanceMap throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ValueCallInstanceMap.create()
+	let result = ValueCallInstanceMap.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let key = (try reader.unsigned()) as ValueId
@@ -398,7 +393,7 @@ end 'cacheWriteLetCastReadArray'
 
 export function cacheReadLetCastReadArray(reader LibraryCacheReader) returns LetCastReadArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = LetCastReadArray.create(count, zeroed: false)
+	let result = LetCastReadArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try LetCastRead.cacheRead(reader)
@@ -461,7 +456,7 @@ end 'cacheWriteLiteralCastMap'
 
 function cacheReadLiteralCastMap(reader LibraryCacheReader) returns LiteralCastMap throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = LiteralCastMap.create()
+	let result = LiteralCastMap.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let key = (try reader.unsigned()) as ValueId
@@ -478,10 +473,9 @@ export type DeferredArgumentBinding
 	export let callResult as ValueId
 	export let column as ParamCount
 	export let cell as ValueId
-	export let blame as WriteBlame
 
-	export static function create(callResult ValueId, column ParamCount, cell ValueId, blame WriteBlame) returns Self
-		return Self{callResult: callResult, column: column, cell: cell, blame: blame}
+	export static function create(callResult ValueId, column ParamCount, cell ValueId) returns Self
+		return Self{callResult: callResult, column: column, cell: cell}
 	end 'create'
 
 	// @generated library-cache begin
@@ -489,20 +483,18 @@ export type DeferredArgumentBinding
 		writer.unsigned(self.callResult as CacheUnsigned)
 		writer.unsigned(self.column as CacheUnsigned)
 		writer.unsigned(self.cell as CacheUnsigned)
-		cacheWriteWriteBlame(writer, value: self.blame)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns DeferredArgumentBinding throws LibraryCacheDamage
 		let f_callResult = (try reader.unsigned()) as ValueId
 		let f_column = (try reader.unsigned()) as ParamCount
 		let f_cell = (try reader.unsigned()) as ValueId
-		let f_blame = try cacheReadWriteBlame(reader)
 
-		return Self{callResult: f_callResult, column: f_column, cell: f_cell, blame: f_blame}
+		return Self{callResult: f_callResult, column: f_column, cell: f_cell}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize32
-		return sizeof(DeferredArgumentBinding) as CacheSize32
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(DeferredArgumentBinding) as CacheSize24
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -521,7 +513,7 @@ end 'cacheWriteDeferredArgumentBindingArray'
 
 function cacheReadDeferredArgumentBindingArray(reader LibraryCacheReader) returns DeferredArgumentBindingArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DeferredArgumentBindingArray.create(count, zeroed: false)
+	let result = DeferredArgumentBindingArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try DeferredArgumentBinding.cacheRead(reader)
@@ -566,7 +558,7 @@ export type ExistentialFieldStore
 
 	// The same store with its claimed instances renumbered by a merge (`ParseStaging.rewriteTypeIds`).
 	export function withClaimsRenumbered(remap TypeIdRemap) returns ExistentialFieldStore
-		var renumbered = GenericInstanceIdArray.create(self.claims.count(), zeroed: false)
+		let renumbered = GenericInstanceIdArray.create(self.claims.count(), zeroed: false)
 
 		for claim in self.claims 'eachClaim'
 			renumbered.push(remap.applyInstance(claim))
@@ -659,7 +651,7 @@ end 'cacheWriteExistentialFieldStoreArray'
 
 function cacheReadExistentialFieldStoreArray(reader LibraryCacheReader) returns ExistentialFieldStoreArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ExistentialFieldStoreArray.create(count, zeroed: false)
+	let result = ExistentialFieldStoreArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try ExistentialFieldStore.cacheRead(reader)
@@ -859,7 +851,7 @@ end 'cacheWriteDebugLocalVersionArray'
 
 function cacheReadDebugLocalVersionArray(reader LibraryCacheReader) returns DebugLocalVersionArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DebugLocalVersionArray.create(count, zeroed: false)
+	let result = DebugLocalVersionArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try DebugLocalVersion.cacheRead(reader)
@@ -897,14 +889,14 @@ export type DebugLocalDecl
 	end 'noteScopeExit'
 
 	export static function create(name ByteArray, declaredType MaxonType, firstValue ValueId, firstDef DebugVersionDef, heldInACell bool) returns DebugLocalDecl
-		var versions = DebugLocalVersionArray.create(0)
+		let versions = DebugLocalVersionArray.create(0)
 		versions.push(DebugLocalVersion.create(firstValue, def: firstDef))
 
 		return Self{name: name, declaredType: declaredType.clone(), versions: versions, heldInACell: heldInACell}
 	end 'create'
 
 	export function splicedCopy(subst ValueIdArray, blockSubst BlockIdArray, scopeExits BlockIdArray, site InlineSiteRef) returns DebugLocalDecl
-		var splicedVersions = DebugLocalVersionArray.create(0)
+		let splicedVersions = DebugLocalVersionArray.create(0)
 
 		for version in self.versions 'eachVersion'
 			if version.value >= subst.count() as ValueId 'definedByNoOp'
@@ -914,7 +906,7 @@ export type DebugLocalDecl
 			splicedVersions.push(DebugLocalVersion.create(try subst.get(version.value) otherwise panic("DebugLocalDecl.splicedCopy: value {version.value} of '{String.from(self.name)}' is past the {subst.count()} the splice's value column covers"), def: version.splicedDef(subst, blockSubst: blockSubst)))
 		end 'eachVersion'
 
-		var copy = Self{name: self.name, declaredType: self.declaredType, versions: splicedVersions, heldInACell: self.heldInACell, foldedConstant: self.foldedConstant, foldedRecord: self.foldedRecord, inlineSite: site}
+		let copy = Self{name: self.name, declaredType: self.declaredType, versions: splicedVersions, heldInACell: self.heldInACell, foldedConstant: self.foldedConstant, foldedRecord: self.foldedRecord, inlineSite: site}
 
 		copy.scopeEndLost = self.scopeEndLost
 
@@ -1011,7 +1003,7 @@ end 'cacheWriteDebugLocalDeclArray'
 
 function cacheReadDebugLocalDeclArray(reader LibraryCacheReader) returns DebugLocalDeclArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DebugLocalDeclArray.create(count, zeroed: false)
+	let result = DebugLocalDeclArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try DebugLocalDecl.cacheRead(reader)
@@ -1071,7 +1063,7 @@ end 'cacheWriteClosureEnvFieldArray'
 
 function cacheReadClosureEnvFieldArray(reader LibraryCacheReader) returns ClosureEnvFieldArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ClosureEnvFieldArray.create(count, zeroed: false)
+	let result = ClosureEnvFieldArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try ClosureEnvField.cacheRead(reader)
@@ -1209,7 +1201,7 @@ end 'cacheWriteClosureStoreSiteArray'
 
 function cacheReadClosureStoreSiteArray(reader LibraryCacheReader) returns ClosureStoreSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ClosureStoreSiteArray.create(count, zeroed: false)
+	let result = ClosureStoreSiteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try ClosureStoreSite.cacheRead(reader)
@@ -1277,7 +1269,7 @@ end 'cacheWriteDebugValueLocationArray'
 
 function cacheReadDebugValueLocationArray(reader LibraryCacheReader) returns DebugValueLocationArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DebugValueLocationArray.create(count, zeroed: false)
+	let result = DebugValueLocationArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try DebugValueLocation.cacheRead(reader)
@@ -1348,7 +1340,7 @@ end 'cacheWriteDebugValueRangeArray'
 
 function cacheReadDebugValueRangeArray(reader LibraryCacheReader) returns DebugValueRangeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DebugValueRangeArray.create(count, zeroed: false)
+	let result = DebugValueRangeArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try DebugValueRange.cacheRead(reader)
@@ -1359,55 +1351,6 @@ function cacheReadDebugValueRangeArray(reader LibraryCacheReader) returns DebugV
 end 'cacheReadDebugValueRangeArray'
 
 // @generated library-cache end
-
-// The immutable names of one function in declaration order: the `let` bindings the author wrote and
-// the module-level `let`s its body reads (`moduleLets`). A value bound by two of them appears
-// twice; the first names it. `infos` is each local binding's `VarInfo`, whose last use is final
-// once the body is parsed; a module `let`'s is a record of its own that is never read for one.
-export type ImmutableBindings
-	export var values as ValueIdArray
-	export var names as NameRoster
-	export var moduleLets as BoolArray
-	export var declTokens as TokenIndexArray
-	export var infos as VarInfoArray
-
-	export static function create() returns ImmutableBindings
-		return Self{values: ValueIdArray.create(0), names: NameRoster.create(0), moduleLets: BoolArray.create(0), declTokens: TokenIndexArray.create(0), infos: VarInfoArray.create(0)}
-	end 'create'
-
-	export function record(value ValueId, name ByteArray, moduleLet bool, declToken ElementIndex, info VarInfo)
-		self.values.push(value)
-		self.names.push(name)
-		self.moduleLets.push(moduleLet)
-		self.declTokens.push(declToken)
-		self.infos.push(info)
-	end 'record'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteValueIdArray(writer, value: self.values)
-		cacheWriteNameRoster(writer, value: self.names)
-		cacheWriteBoolArray(writer, value: self.moduleLets)
-		cacheWriteTokenIndexArray(writer, value: self.declTokens)
-		cacheWriteVarInfoArray(writer, value: self.infos)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns ImmutableBindings throws LibraryCacheDamage
-		let f_values = try cacheReadValueIdArray(reader)
-		let f_names = try cacheReadNameRoster(reader)
-		let f_moduleLets = try cacheReadBoolArray(reader)
-		let f_declTokens = try cacheReadTokenIndexArray(reader)
-		let f_infos = try cacheReadVarInfoArray(reader)
-
-		return Self{values: f_values, names: f_names, moduleLets: f_moduleLets, declTokens: f_declTokens, infos: f_infos}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize40
-		return sizeof(ImmutableBindings) as CacheSize40
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'ImmutableBindings'
 
 // A source position as one ordered key: the line in the high word, the column in the low one.
 export typealias PositionKey = int(0 to u64.max)
@@ -1427,563 +1370,6 @@ export function positionKeyColumn(key PositionKey) returns ColumnNumber
 	return (key and PositionColumnMask) as ColumnNumber
 end 'positionKeyColumn'
 
-// The token each call of a body ends at, by the call's position.
-export typealias TokenByPosition = Map with (PositionKey, ElementIndex)
-export typealias StartByPosition = Map with (PositionKey, PositionKey)
-
-// ⭐ **A DOOR WHOSE VERDICT IS A WHOLE-PROGRAM QUESTION, SO THE SITE WAITS FOR `StorageProvenance`.** `name` is
-// what the author wrote there: the mutable binding a value was bound or assigned to, the mutable name that
-// outlives the call a value was bound to, or the record a write goes through. `token` is where the door happens,
-// which an immutable name's liveness is compared against.
-export type StorageSite
-	export let name as immutable ByteArray
-	export let value as ValueId
-	export let line as LineNumber
-	export let column as ColumnNumber
-	export let token as ElementIndex
-
-	export static function create(name ByteArray, value ValueId, line LineNumber, column ColumnNumber, token ElementIndex) returns StorageSite
-		return Self{name: name, value: value, line: line, column: column, token: token}
-	end 'create'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		writer.bytes(self.name)
-		writer.unsigned(self.value as CacheUnsigned)
-		writer.unsigned(self.line as CacheUnsigned)
-		writer.unsigned(self.column as CacheUnsigned)
-		writer.unsigned(self.token as CacheUnsigned)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns StorageSite throws LibraryCacheDamage
-		let f_name = freeze try reader.bytes()
-		let f_value = (try reader.unsigned()) as ValueId
-		let f_line = (try reader.unsigned()) as LineNumber
-		let f_column = (try reader.unsigned()) as ColumnNumber
-		let f_token = (try reader.unsigned()) as ElementIndex
-
-		return Self{name: f_name, value: f_value, line: f_line, column: f_column, token: f_token}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize40
-		return sizeof(StorageSite) as CacheSize40
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'StorageSite'
-
-export typealias StorageSiteArray = Array with StorageSite
-
-// @generated library-cache begin
-function cacheWriteStorageSiteArray(writer LibraryCacheWriter, value StorageSiteArray)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for item in value 'eachItem'
-		item.cacheWrite(writer)
-	end 'eachItem'
-end 'cacheWriteStorageSiteArray'
-
-function cacheReadStorageSiteArray(reader LibraryCacheReader) returns StorageSiteArray throws LibraryCacheDamage
-	let count = try reader.count()
-	var result = StorageSiteArray.create(count, zeroed: false)
-
-	for _ in 0 upto count 'eachItem'
-		let item = try StorageSite.cacheRead(reader)
-		result.push(item)
-	end 'eachItem'
-
-	return result
-end 'cacheReadStorageSiteArray'
-
-// @generated library-cache end
-
-export type FieldWriteSite
-	export let place as immutable ByteArray
-	export let field as immutable ByteArray
-	export let target as ValueId
-	export let stored as ValueId
-	export let line as LineNumber
-	export let column as ColumnNumber
-	export let token as ElementIndex
-
-	export static function create(place ByteArray, field ByteArray, target ValueId, stored ValueId, line LineNumber, column ColumnNumber, token ElementIndex) returns FieldWriteSite
-		return Self{place: place, field: field, target: target, stored: stored, line: line, column: column, token: token}
-	end 'create'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		writer.bytes(self.place)
-		writer.bytes(self.field)
-		writer.unsigned(self.target as CacheUnsigned)
-		writer.unsigned(self.stored as CacheUnsigned)
-		writer.unsigned(self.line as CacheUnsigned)
-		writer.unsigned(self.column as CacheUnsigned)
-		writer.unsigned(self.token as CacheUnsigned)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns FieldWriteSite throws LibraryCacheDamage
-		let f_place = freeze try reader.bytes()
-		let f_field = freeze try reader.bytes()
-		let f_target = (try reader.unsigned()) as ValueId
-		let f_stored = (try reader.unsigned()) as ValueId
-		let f_line = (try reader.unsigned()) as LineNumber
-		let f_column = (try reader.unsigned()) as ColumnNumber
-		let f_token = (try reader.unsigned()) as ElementIndex
-
-		return Self{place: f_place, field: f_field, target: f_target, stored: f_stored, line: f_line, column: f_column, token: f_token}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize56
-		return sizeof(FieldWriteSite) as CacheSize56
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'FieldWriteSite'
-
-export typealias FieldWriteSiteArray = Array with FieldWriteSite
-
-// @generated library-cache begin
-function cacheWriteFieldWriteSiteArray(writer LibraryCacheWriter, value FieldWriteSiteArray)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for item in value 'eachItem'
-		item.cacheWrite(writer)
-	end 'eachItem'
-end 'cacheWriteFieldWriteSiteArray'
-
-function cacheReadFieldWriteSiteArray(reader LibraryCacheReader) returns FieldWriteSiteArray throws LibraryCacheDamage
-	let count = try reader.count()
-	var result = FieldWriteSiteArray.create(count, zeroed: false)
-
-	for _ in 0 upto count 'eachItem'
-		let item = try FieldWriteSite.cacheRead(reader)
-		result.push(item)
-	end 'eachItem'
-
-	return result
-end 'cacheReadFieldWriteSiteArray'
-
-// @generated library-cache end
-
-export type WriteRefusalSite
-	export let root as immutable ByteArray
-	export let kind as ReadOnlyRootKind
-	export let place as immutable ByteArray
-	export let line as LineNumber
-	export let column as ColumnNumber
-
-	export static function create(root ByteArray, kind ReadOnlyRootKind, place ByteArray, line LineNumber, column ColumnNumber) returns WriteRefusalSite
-		return Self{root: root, kind: kind, place: place, line: line, column: column}
-	end 'create'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		writer.bytes(self.root)
-		writer.unsigned(self.kind.ordinal as CacheUnsigned)
-		writer.bytes(self.place)
-		writer.unsigned(self.line as CacheUnsigned)
-		writer.unsigned(self.column as CacheUnsigned)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns WriteRefusalSite throws LibraryCacheDamage
-		let f_root = freeze try reader.bytes()
-		let f_kind = try cacheReadReadOnlyRootKind(reader)
-		let f_place = freeze try reader.bytes()
-		let f_line = (try reader.unsigned()) as LineNumber
-		let f_column = (try reader.unsigned()) as ColumnNumber
-
-		return Self{root: f_root, kind: f_kind, place: f_place, line: f_line, column: f_column}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize40
-		return sizeof(WriteRefusalSite) as CacheSize40
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'WriteRefusalSite'
-
-export typealias WriteRefusalSiteArray = Array with WriteRefusalSite
-
-// @generated library-cache begin
-function cacheWriteWriteRefusalSiteArray(writer LibraryCacheWriter, value WriteRefusalSiteArray)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for item in value 'eachItem'
-		item.cacheWrite(writer)
-	end 'eachItem'
-end 'cacheWriteWriteRefusalSiteArray'
-
-function cacheReadWriteRefusalSiteArray(reader LibraryCacheReader) returns WriteRefusalSiteArray throws LibraryCacheDamage
-	let count = try reader.count()
-	var result = WriteRefusalSiteArray.create(count, zeroed: false)
-
-	for _ in 0 upto count 'eachItem'
-		let item = try WriteRefusalSite.cacheRead(reader)
-		result.push(item)
-	end 'eachItem'
-
-	return result
-end 'cacheReadWriteRefusalSiteArray'
-
-// @generated library-cache end
-
-export type ReceiverWriteSite
-	export let receiver as ValueId
-	export let place as immutable ByteArray
-	export let line as LineNumber
-	export let column as ColumnNumber
-	export let token as ElementIndex
-
-	export static function create(receiver ValueId, place ByteArray, line LineNumber, column ColumnNumber, token ElementIndex) returns ReceiverWriteSite
-		return Self{receiver: receiver, place: place, line: line, column: column, token: token}
-	end 'create'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		writer.unsigned(self.receiver as CacheUnsigned)
-		writer.bytes(self.place)
-		writer.unsigned(self.line as CacheUnsigned)
-		writer.unsigned(self.column as CacheUnsigned)
-		writer.unsigned(self.token as CacheUnsigned)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns ReceiverWriteSite throws LibraryCacheDamage
-		let f_receiver = (try reader.unsigned()) as ValueId
-		let f_place = freeze try reader.bytes()
-		let f_line = (try reader.unsigned()) as LineNumber
-		let f_column = (try reader.unsigned()) as ColumnNumber
-		let f_token = (try reader.unsigned()) as ElementIndex
-
-		return Self{receiver: f_receiver, place: f_place, line: f_line, column: f_column, token: f_token}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize40
-		return sizeof(ReceiverWriteSite) as CacheSize40
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'ReceiverWriteSite'
-
-export typealias ReceiverWriteSiteArray = Array with ReceiverWriteSite
-
-// @generated library-cache begin
-function cacheWriteReceiverWriteSiteArray(writer LibraryCacheWriter, value ReceiverWriteSiteArray)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for item in value 'eachItem'
-		item.cacheWrite(writer)
-	end 'eachItem'
-end 'cacheWriteReceiverWriteSiteArray'
-
-function cacheReadReceiverWriteSiteArray(reader LibraryCacheReader) returns ReceiverWriteSiteArray throws LibraryCacheDamage
-	let count = try reader.count()
-	var result = ReceiverWriteSiteArray.create(count, zeroed: false)
-
-	for _ in 0 upto count 'eachItem'
-		let item = try ReceiverWriteSite.cacheRead(reader)
-		result.push(item)
-	end 'eachItem'
-
-	return result
-end 'cacheReadReceiverWriteSiteArray'
-
-// @generated library-cache end
-
-export enum MoveDestinationKind
-	mutableName
-	readOnlyElement
-	readOnlyElementValue
-	keptArgument
-	uniqueArgument
-	uniqueSubject
-	uniqueSlot
-	serviceReply
-	sharedSend
-	sentMessage
-	publishedValue
-	mutablePlace
-	returnedValue
-end 'MoveDestinationKind'
-
-// @generated library-cache begin
-let CacheCasesMoveDestinationKind = [MoveDestinationKind.mutableName, MoveDestinationKind.readOnlyElement, MoveDestinationKind.readOnlyElementValue, MoveDestinationKind.keptArgument, MoveDestinationKind.uniqueArgument, MoveDestinationKind.uniqueSubject, MoveDestinationKind.uniqueSlot, MoveDestinationKind.serviceReply, MoveDestinationKind.sharedSend, MoveDestinationKind.sentMessage, MoveDestinationKind.publishedValue, MoveDestinationKind.mutablePlace, MoveDestinationKind.returnedValue]
-
-function cacheReadMoveDestinationKind(reader LibraryCacheReader) returns MoveDestinationKind throws LibraryCacheDamage
-	let ordinal = try reader.unsigned()
-
-	return try CacheCasesMoveDestinationKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
-end 'cacheReadMoveDestinationKind'
-
-function cacheTableAgreesMoveDestinationKind() returns bool
-	let declared = MoveDestinationKind.allCases
-
-	if CacheCasesMoveDestinationKind.count() != declared.count() 'differentCount'
-		return false
-	end 'differentCount'
-
-	for position in 0 upto declared.count() 'eachCase'
-		let listed = try CacheCasesMoveDestinationKind.get(position) otherwise return false
-		let expected = try declared.get(position) otherwise return false
-
-		if listed != expected 'anotherCase'
-			return false
-		end 'anotherCase'
-	end 'eachCase'
-
-	return true
-end 'cacheTableAgreesMoveDestinationKind'
-
-// @generated library-cache end
-
-// ⭐ **A NAME HANDED WHOLE TO A DESTINATION THAT MAY TAKE IT, AND THE FIRST READ OF IT AFTER.**
-// Filed where a `let` — or a `var`, whose E3077 verdict needs the same fact — is bound or assigned
-// to a mutable name, or handed to the door `destinationKind` names (`destination`). Whether the
-// door moves the name, refuses it or does nothing is `StorageProvenance`'s to decide; a site the
-// parser already refused arrives `refused`, and a refused hand-off carries its wording in
-// `refusal`. The parser fills in the first read of the name after the door on the door's own path
-// (`Parser.requireBindingLive`), which is where a move is observed.
-export type MoveSite
-	export let value as ValueId
-	export let source as immutable ByteArray
-	export let sourceValue as ValueId
-	export let sourceIsMutable as bool
-	export let destination as immutable ByteArray
-	export let line as LineNumber
-	export let column as ColumnNumber
-	export let token as ElementIndex
-	export var destinationKind = MoveDestinationKind.mutableName
-	export var readAfter = false
-	export var readInALaterIteration = false
-
-	// The value was built at the store, so only what it holds is judged; such a site is filed only when
-	// the value may hold a record.
-	export var freshAtTheTop = false
-	export var readLine = 0 as LineNumber
-	export var readColumn = 0 as ColumnNumber
-	export var refused = false
-	export var refusal as immutable ByteArray
-	export var lender = UniqueLender.none
-
-	export static function create(value ValueId, source ByteArray, sourceValue ValueId, sourceIsMutable bool, destination ByteArray, line LineNumber, column ColumnNumber, token ElementIndex) returns MoveSite
-		return Self{value: value, source: source, sourceValue: sourceValue, sourceIsMutable: sourceIsMutable, destination: destination, line: line, column: column, token: token, refusal: EmptySourceText}
-	end 'create'
-
-	// The first read of the source after this door, and no later one.
-	export function noteRead(atLine LineNumber, atColumn ColumnNumber)
-		if self.readAfter 'alreadyRead'
-			return
-		end 'alreadyRead'
-
-		self.readAfter = true
-		self.readLine = atLine
-		self.readColumn = atColumn
-	end 'noteRead'
-
-	export function noteReadInALaterIteration(atLine LineNumber, atColumn ColumnNumber)
-		if self.readAfter 'alreadyRead'
-			return
-		end 'alreadyRead'
-
-		self.noteRead(atLine, atColumn: atColumn)
-		self.readInALaterIteration = true
-	end 'noteReadInALaterIteration'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		writer.unsigned(self.value as CacheUnsigned)
-		writer.bytes(self.source)
-		writer.unsigned(self.sourceValue as CacheUnsigned)
-		writer.flag(self.sourceIsMutable)
-		writer.bytes(self.destination)
-		writer.unsigned(self.line as CacheUnsigned)
-		writer.unsigned(self.column as CacheUnsigned)
-		writer.unsigned(self.token as CacheUnsigned)
-		writer.unsigned(self.destinationKind.ordinal as CacheUnsigned)
-		writer.flag(self.readAfter)
-		writer.flag(self.readInALaterIteration)
-		writer.flag(self.freshAtTheTop)
-		writer.unsigned(self.readLine as CacheUnsigned)
-		writer.unsigned(self.readColumn as CacheUnsigned)
-		writer.flag(self.refused)
-		writer.bytes(self.refusal)
-		writer.unsigned(self.lender.ordinal as CacheUnsigned)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns MoveSite throws LibraryCacheDamage
-		let f_value = (try reader.unsigned()) as ValueId
-		let f_source = freeze try reader.bytes()
-		let f_sourceValue = (try reader.unsigned()) as ValueId
-		let f_sourceIsMutable = try reader.flag()
-		let f_destination = freeze try reader.bytes()
-		let f_line = (try reader.unsigned()) as LineNumber
-		let f_column = (try reader.unsigned()) as ColumnNumber
-		let f_token = (try reader.unsigned()) as ElementIndex
-		let f_destinationKind = try cacheReadMoveDestinationKind(reader)
-		let f_readAfter = try reader.flag()
-		let f_readInALaterIteration = try reader.flag()
-		let f_freshAtTheTop = try reader.flag()
-		let f_readLine = (try reader.unsigned()) as LineNumber
-		let f_readColumn = (try reader.unsigned()) as ColumnNumber
-		let f_refused = try reader.flag()
-		let f_refusal = freeze try reader.bytes()
-		let f_lender = try cacheReadUniqueLender(reader)
-
-		return Self{value: f_value, source: f_source, sourceValue: f_sourceValue, sourceIsMutable: f_sourceIsMutable, destination: f_destination, line: f_line, column: f_column, token: f_token, destinationKind: f_destinationKind, readAfter: f_readAfter, readInALaterIteration: f_readInALaterIteration, freshAtTheTop: f_freshAtTheTop, readLine: f_readLine, readColumn: f_readColumn, refused: f_refused, refusal: f_refusal, lender: f_lender}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize136
-		return sizeof(MoveSite) as CacheSize136
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'MoveSite'
-
-export typealias MoveSiteArray = Array with MoveSite
-
-// @generated library-cache begin
-function cacheWriteMoveSiteArray(writer LibraryCacheWriter, value MoveSiteArray)
-	writer.unsigned(value.count() as CacheUnsigned)
-
-	for item in value 'eachItem'
-		item.cacheWrite(writer)
-	end 'eachItem'
-end 'cacheWriteMoveSiteArray'
-
-function cacheReadMoveSiteArray(reader LibraryCacheReader) returns MoveSiteArray throws LibraryCacheDamage
-	let count = try reader.count()
-	var result = MoveSiteArray.create(count, zeroed: false)
-
-	for _ in 0 upto count 'eachItem'
-		let item = try MoveSite.cacheRead(reader)
-		result.push(item)
-	end 'eachItem'
-
-	return result
-end 'cacheReadMoveSiteArray'
-
-// @generated library-cache end
-
-// The `var`s of one function the author never reassigned — its E3077 candidates — in declaration order. E3077
-// is withheld where `let` would not compile (`ProvenanceTracer.varIsNeededMutable`), so every candidate waits
-// for that verdict; `reported` is the diagnostic the parser filed for the first of them, which is replaced when
-// that one is withheld.
-export type VarShouldBeLetCandidates
-	export let values as ValueIdArray
-	export let names as NameRoster
-	export let ranges as SourceRangeArray
-	export var infos as VarInfoArray
-	export let declTokens as TokenIndexArray
-	export let reported as Diagnostic
-
-	export static function create(values ValueIdArray, names NameRoster, ranges SourceRangeArray, infos VarInfoArray, declTokens TokenIndexArray, reported Diagnostic) returns VarShouldBeLetCandidates
-		return Self{values: values, names: names, ranges: ranges, infos: infos, declTokens: declTokens, reported: reported}
-	end 'create'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteValueIdArray(writer, value: self.values)
-		cacheWriteNameRoster(writer, value: self.names)
-		cacheWriteSourceRangeArray(writer, value: self.ranges)
-		cacheWriteVarInfoArray(writer, value: self.infos)
-		cacheWriteTokenIndexArray(writer, value: self.declTokens)
-		self.reported.cacheWrite(writer)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns VarShouldBeLetCandidates throws LibraryCacheDamage
-		let f_values = try cacheReadValueIdArray(reader)
-		let f_names = try cacheReadNameRoster(reader)
-		let f_ranges = try cacheReadSourceRangeArray(reader)
-		let f_infos = try cacheReadVarInfoArray(reader)
-		let f_declTokens = try cacheReadTokenIndexArray(reader)
-		let f_reported = try Diagnostic.cacheRead(reader)
-
-		return Self{values: f_values, names: f_names, ranges: f_ranges, infos: f_infos, declTokens: f_declTokens, reported: f_reported}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize48
-		return sizeof(VarShouldBeLetCandidates) as CacheSize48
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'VarShouldBeLetCandidates'
-
-export union FiledVarCandidates
-	none
-	filed(candidates VarShouldBeLetCandidates)
-end 'FiledVarCandidates'
-
-// @generated library-cache begin
-function cacheWriteFiledVarCandidates(writer LibraryCacheWriter, value FiledVarCandidates)
-	writer.unsigned(value.ordinal as CacheUnsigned)
-
-	match value 'payload'
-		none then break
-		filed(a0) then cacheWriteFiledVarCandidatesFiled(writer, a0: a0)
-	end 'payload'
-end 'cacheWriteFiledVarCandidates'
-
-function cacheWriteFiledVarCandidatesFiled(writer LibraryCacheWriter, a0 VarShouldBeLetCandidates)
-	a0.cacheWrite(writer)
-end 'cacheWriteFiledVarCandidatesFiled'
-
-function cacheReadFiledVarCandidates(reader LibraryCacheReader) returns FiledVarCandidates throws LibraryCacheDamage
-	let tag = try reader.unsigned()
-
-	return match tag 'case'
-		0 gives FiledVarCandidates.none
-		1 gives try cacheReadFiledVarCandidatesFiled(reader)
-		default throws LibraryCacheDamage.unknownTag(tag)
-	end 'case'
-end 'cacheReadFiledVarCandidates'
-
-function cacheReadFiledVarCandidatesFiled(reader LibraryCacheReader) returns FiledVarCandidates throws LibraryCacheDamage
-	let a0 = try VarShouldBeLetCandidates.cacheRead(reader)
-
-	return FiledVarCandidates.filed(a0)
-end 'cacheReadFiledVarCandidatesFiled'
-
-// @generated library-cache end
-
-// Token spans of a body, each `[start, finish)`: its loops, from header to `end`, and the two arms of each `if`
-// with an `else`, recorded as consecutive spans.
-export type TokenSpans
-	export var starts as TokenIndexArray
-	export var ends as TokenIndexArray
-
-	export static function create() returns TokenSpans
-		return Self{starts: TokenIndexArray.create(0), ends: TokenIndexArray.create(0)}
-	end 'create'
-
-	export function record(start ElementIndex, finish ElementIndex)
-		self.starts.push(start)
-		self.ends.push(finish)
-	end 'record'
-
-	export function clear()
-		self.starts.clear()
-		self.ends.clear()
-	end 'clear'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteTokenIndexArray(writer, value: self.starts)
-		cacheWriteTokenIndexArray(writer, value: self.ends)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns TokenSpans throws LibraryCacheDamage
-		let f_starts = try cacheReadTokenIndexArray(reader)
-		let f_ends = try cacheReadTokenIndexArray(reader)
-
-		return Self{starts: f_starts, ends: f_ends}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(TokenSpans) as CacheSize16
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'TokenSpans'
-
 export typealias PositionKeyArray = Array with PositionKey
 
 // @generated library-cache begin
@@ -1997,7 +1383,7 @@ end 'cacheWritePositionKeyArray'
 
 module function cacheReadPositionKeyArray(reader LibraryCacheReader) returns PositionKeyArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = PositionKeyArray.create(count, zeroed: false)
+	let result = PositionKeyArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as PositionKey
@@ -2009,803 +1395,6 @@ end 'cacheReadPositionKeyArray'
 
 // @generated library-cache end
 
-// Every read of an immutable name in a body — the name's value and the token the read ends at — so a door asks
-// whether a read can follow it on some path rather than only whether one follows it in the text.
-export type LetReads
-	export var values as ValueIdArray
-	export var tokens as TokenIndexArray
-
-	export static function create() returns LetReads
-		return Self{values: ValueIdArray.create(0), tokens: TokenIndexArray.create(0)}
-	end 'create'
-
-	export function record(value ValueId, token ElementIndex)
-		self.values.push(value)
-		self.tokens.push(token)
-	end 'record'
-
-	export function clear()
-		self.values.clear()
-		self.tokens.clear()
-	end 'clear'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteValueIdArray(writer, value: self.values)
-		cacheWriteTokenIndexArray(writer, value: self.tokens)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns LetReads throws LibraryCacheDamage
-		let f_values = try cacheReadValueIdArray(reader)
-		let f_tokens = try cacheReadTokenIndexArray(reader)
-
-		return Self{values: f_values, tokens: f_tokens}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(LetReads) as CacheSize16
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'LetReads'
-
-// Where each call of a body ends and the position it starts at (`Parser.noteCallToken`), in the
-// order the calls were emitted, so a later call at one position replaces an earlier one in
-// `byPosition` exactly as the map it builds would have.
-export type CallTokenColumns
-	export var positions as PositionKeyArray
-	export var tokens as TokenIndexArray
-	export var starts as PositionKeyArray
-
-	export static function create() returns CallTokenColumns
-		return Self{positions: PositionKeyArray.create(0), tokens: TokenIndexArray.create(0), starts: PositionKeyArray.create(0)}
-	end 'create'
-
-	export function record(position PositionKey, token ElementIndex, start PositionKey)
-		self.positions.push(position)
-		self.tokens.push(token)
-		self.starts.push(start)
-	end 'record'
-
-	export function clear()
-		self.positions.clear()
-		self.tokens.clear()
-		self.starts.clear()
-	end 'clear'
-
-	export function startsByPosition() returns StartByPosition
-		var byPosition = StartByPosition.create()
-
-		for i in 0 upto self.positions.count() 'eachCall'
-			byPosition.upsert(try self.positions.get(i) otherwise panic("CallTokenColumns.startsByPosition: positions.get OOB at {i}"), value: try self.starts.get(i) otherwise panic("CallTokenColumns.startsByPosition: starts.get OOB at {i} — a call pushes all three columns"))
-		end 'eachCall'
-
-		return byPosition
-	end 'startsByPosition'
-
-	export function byPosition() returns TokenByPosition
-		var byPosition = TokenByPosition.create()
-
-		for i in 0 upto self.positions.count() 'eachCall'
-			byPosition.upsert(try self.positions.get(i) otherwise panic("CallTokenColumns.byPosition: positions.get OOB at {i}"), value: try self.tokens.get(i) otherwise panic("CallTokenColumns.byPosition: tokens.get OOB at {i} — the columns are pushed together"))
-		end 'eachCall'
-
-		return byPosition
-	end 'byPosition'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		cacheWritePositionKeyArray(writer, value: self.positions)
-		cacheWriteTokenIndexArray(writer, value: self.tokens)
-		cacheWritePositionKeyArray(writer, value: self.starts)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns CallTokenColumns throws LibraryCacheDamage
-		let f_positions = try cacheReadPositionKeyArray(reader)
-		let f_tokens = try cacheReadTokenIndexArray(reader)
-		let f_starts = try cacheReadPositionKeyArray(reader)
-
-		return Self{positions: f_positions, tokens: f_tokens, starts: f_starts}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize24
-		return sizeof(CallTokenColumns) as CacheSize24
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'CallTokenColumns'
-
-// The module-level `let`s a body read (`Parser.recordModuleLetRoot`), filed as its immutable names at its `end`.
-export type ModuleLetReads
-	export var values as ValueIdArray
-	export var names as NameRoster
-
-	export static function create() returns ModuleLetReads
-		return Self{values: ValueIdArray.create(0), names: NameRoster.create(0)}
-	end 'create'
-
-	export function record(value ValueId, name ByteArray)
-		self.values.push(value)
-		self.names.push(name)
-	end 'record'
-
-	export function clear()
-		self.values.clear()
-		self.names.clear()
-	end 'clear'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteValueIdArray(writer, value: self.values)
-		cacheWriteNameRoster(writer, value: self.names)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns ModuleLetReads throws LibraryCacheDamage
-		let f_values = try cacheReadValueIdArray(reader)
-		let f_names = try cacheReadNameRoster(reader)
-
-		return Self{values: f_values, names: f_names}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(ModuleLetReads) as CacheSize16
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'ModuleLetReads'
-
-// Writes through a record read out of a field (`Parser.noteWriteThroughAField`), each place kept as the tokens that
-// spell it, `[placeStart, placeEnd)`, and spelled only when it is filed.
-export type DeferredWriteThroughs
-	export var targets as ValueIdArray
-	export var storedValues as ValueIdArray
-	export var fieldNames as NameRoster
-	export var placeStarts as TokenIndexArray
-	export var placeEnds as TokenIndexArray
-	export var lines as LineNumberArray
-	export var columns as ColumnNumberArray
-	export var tokens as TokenIndexArray
-
-	export static function create() returns DeferredWriteThroughs
-		return Self{targets: ValueIdArray.create(0), storedValues: ValueIdArray.create(0), fieldNames: NameRoster.create(0), placeStarts: TokenIndexArray.create(0), placeEnds: TokenIndexArray.create(0), lines: LineNumberArray.create(0), columns: ColumnNumberArray.create(0), tokens: TokenIndexArray.create(0)}
-	end 'create'
-
-	export function record(target ValueId, stored ValueId, fieldName ByteArray, placeStart ElementIndex, placeEnd ElementIndex, line LineNumber, column ColumnNumber, token ElementIndex)
-		self.targets.push(target)
-		self.storedValues.push(stored)
-		self.fieldNames.push(fieldName)
-		self.placeStarts.push(placeStart)
-		self.placeEnds.push(placeEnd)
-		self.lines.push(line)
-		self.columns.push(column)
-		self.tokens.push(token)
-	end 'record'
-
-	export function clear()
-		self.targets.clear()
-		self.storedValues.clear()
-		self.fieldNames.clear()
-		self.placeStarts.clear()
-		self.placeEnds.clear()
-		self.lines.clear()
-		self.columns.clear()
-		self.tokens.clear()
-	end 'clear'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteValueIdArray(writer, value: self.targets)
-		cacheWriteValueIdArray(writer, value: self.storedValues)
-		cacheWriteNameRoster(writer, value: self.fieldNames)
-		cacheWriteTokenIndexArray(writer, value: self.placeStarts)
-		cacheWriteTokenIndexArray(writer, value: self.placeEnds)
-		cacheWriteLineNumberArray(writer, value: self.lines)
-		cacheWriteColumnNumberArray(writer, value: self.columns)
-		cacheWriteTokenIndexArray(writer, value: self.tokens)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns DeferredWriteThroughs throws LibraryCacheDamage
-		let f_targets = try cacheReadValueIdArray(reader)
-		let f_storedValues = try cacheReadValueIdArray(reader)
-		let f_fieldNames = try cacheReadNameRoster(reader)
-		let f_placeStarts = try cacheReadTokenIndexArray(reader)
-		let f_placeEnds = try cacheReadTokenIndexArray(reader)
-		let f_lines = try cacheReadLineNumberArray(reader)
-		let f_columns = try cacheReadColumnNumberArray(reader)
-		let f_tokens = try cacheReadTokenIndexArray(reader)
-
-		return Self{targets: f_targets, storedValues: f_storedValues, fieldNames: f_fieldNames, placeStarts: f_placeStarts, placeEnds: f_placeEnds, lines: f_lines, columns: f_columns, tokens: f_tokens}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize64
-		return sizeof(DeferredWriteThroughs) as CacheSize64
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'DeferredWriteThroughs'
-
-// Container writes to a record a call names (`Parser.noteContainerWrite`), each by the token of the call, from which
-// the position and the token the call ends at are read when it is filed, and by the tokens that spell the place,
-// `[placeStart, placeEnd)`, spelled only then.
-export type DeferredReceiverWrites
-	export var receivers as ValueIdArray
-	export var methodIndices as TokenIndexArray
-	export var placeStarts as TokenIndexArray
-	export var placeEnds as TokenIndexArray
-
-	export static function create() returns DeferredReceiverWrites
-		return Self{receivers: ValueIdArray.create(0), methodIndices: TokenIndexArray.create(0), placeStarts: TokenIndexArray.create(0), placeEnds: TokenIndexArray.create(0)}
-	end 'create'
-
-	export function record(receiver ValueId, methodIndex ElementIndex, placeStart ElementIndex, placeEnd ElementIndex)
-		self.receivers.push(receiver)
-		self.methodIndices.push(methodIndex)
-		self.placeStarts.push(placeStart)
-		self.placeEnds.push(placeEnd)
-	end 'record'
-
-	export function clear()
-		self.receivers.clear()
-		self.methodIndices.clear()
-		self.placeStarts.clear()
-		self.placeEnds.clear()
-	end 'clear'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		cacheWriteValueIdArray(writer, value: self.receivers)
-		cacheWriteTokenIndexArray(writer, value: self.methodIndices)
-		cacheWriteTokenIndexArray(writer, value: self.placeStarts)
-		cacheWriteTokenIndexArray(writer, value: self.placeEnds)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns DeferredReceiverWrites throws LibraryCacheDamage
-		let f_receivers = try cacheReadValueIdArray(reader)
-		let f_methodIndices = try cacheReadTokenIndexArray(reader)
-		let f_placeStarts = try cacheReadTokenIndexArray(reader)
-		let f_placeEnds = try cacheReadTokenIndexArray(reader)
-
-		return Self{receivers: f_receivers, methodIndices: f_methodIndices, placeStarts: f_placeStarts, placeEnds: f_placeEnds}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize32
-		return sizeof(DeferredReceiverWrites) as CacheSize32
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'DeferredReceiverWrites'
-
-// ⭐ **WHAT A BODY FILES THAT IS ASKED ONLY OF A BODY WITH SOMETHING TO GUARD.** `StorageProvenance`
-// reads these of a function only once it has something to guard (`Parser.fileDeferredProvenance`
-// decides) — or, for `receiverWrites` and `nameBindSites`, once a parameter of it may hold a
-// record, whose summary is traced from them, and for `calls` alone, once it hands a record to a
-// call. The parser keeps one of these for the body it is parsing, in storage it reuses from body to
-// body, and files it at the body's `end` (`IrFunction.fileTracedProvenance`,
-// `fileGuardedProvenance`, `fileCallProvenance`): a body none is asked of allocates nothing for any
-// of it. `moduleLets` is the exception, filed whole as immutable names
-// (`Parser.publishExistentialInstances`). Every column starts as a shared empty and is replaced the
-// first time it is written, and a column filed is handed over whole, so the next body starts that
-// one empty again.
-export type DeferredProvenance
-	export var calls as CallTokenColumns
-	export var moduleLets as ModuleLetReads
-	export var loops as TokenSpans
-	export var fieldWrites as ValueIdArray
-	export var writableValues as ValueIdArray
-	export var writableNames as NameRoster
-	export var writableInfos as VarInfoArray
-	export var moveSites as MoveSiteArray
-	export var writeRefusals as WriteRefusalSiteArray
-	export var mutableBindingSites as StorageSiteArray
-	export var nameBindSites as StorageSiteArray
-	export var writeThroughs as DeferredWriteThroughs
-	export var receiverWrites as DeferredReceiverWrites
-	export var letReads as LetReads
-
-	// Whether a call of the body is handed an argument that may hold a record, which a callee may write.
-	export var handsARecordToACall as bool
-
-	export var readsASharedView as bool
-
-	// The immutable names a closure literal captured, at the literal: the closure reads each wherever it is called.
-	export var letCaptures as LetReads
-
-	// The two arms of each `if` with an `else`, as consecutive spans: the `then` arm, then the `else` arm.
-	export var exclusiveArms as TokenSpans
-
-	// The empties every column above starts from and is emptied back to.
-	export var empty as ProvenanceColumns
-
-	export static function create(empty ProvenanceColumns) returns DeferredProvenance
-		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, calls: empty.calls, moduleLets: empty.moduleLets, loops: empty.tokenSpans, fieldWrites: empty.values, writableValues: empty.values, writableNames: empty.names, writableInfos: empty.varInfos, moveSites: empty.moveSites, writeRefusals: empty.writeRefusals, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughs: empty.writeThroughs, receiverWrites: empty.deferredReceiverWrites, handsARecordToACall: false, readsASharedView: false, empty: empty}
-	end 'create'
-
-	// Empty for the next body, keeping what each column this parser owns has grown to. A shared empty one is left
-	// untouched: it holds nothing, and nothing writes it.
-	export function clear()
-		if self.calls is not self.empty.calls 'ownsCalls'
-			self.calls.clear()
-		end 'ownsCalls'
-
-		if self.moduleLets is not self.empty.moduleLets 'ownsModuleLets'
-			self.moduleLets.clear()
-		end 'ownsModuleLets'
-
-		if self.loops is not self.empty.tokenSpans 'ownsLoops'
-			self.loops.clear()
-		end 'ownsLoops'
-
-		if self.fieldWrites is not self.empty.values 'ownsFieldWrites'
-			self.fieldWrites.clear()
-		end 'ownsFieldWrites'
-
-		if self.writableValues is not self.empty.values 'ownsWritableValues'
-			self.writableValues.clear()
-		end 'ownsWritableValues'
-
-		if self.writableNames is not self.empty.names 'ownsWritableNames'
-			self.writableNames.clear()
-		end 'ownsWritableNames'
-
-		if self.writableInfos is not self.empty.varInfos 'ownsWritableInfos'
-			self.writableInfos.clear()
-		end 'ownsWritableInfos'
-
-		if self.moveSites is not self.empty.moveSites 'ownsMoveSites'
-			self.moveSites.clear()
-		end 'ownsMoveSites'
-
-		if self.writeRefusals is not self.empty.writeRefusals 'ownsWriteRefusals'
-			self.writeRefusals.clear()
-		end 'ownsWriteRefusals'
-
-		if self.mutableBindingSites is not self.empty.storageSites 'ownsMutableBindingSites'
-			self.mutableBindingSites.clear()
-		end 'ownsMutableBindingSites'
-
-		if self.nameBindSites is not self.empty.storageSites 'ownsNameBindSites'
-			self.nameBindSites.clear()
-		end 'ownsNameBindSites'
-
-		if self.writeThroughs is not self.empty.writeThroughs 'ownsWriteThroughs'
-			self.writeThroughs.clear()
-		end 'ownsWriteThroughs'
-
-		if self.receiverWrites is not self.empty.deferredReceiverWrites 'ownsReceiverWrites'
-			self.receiverWrites.clear()
-		end 'ownsReceiverWrites'
-
-		if self.letReads is not self.empty.letReads 'ownsLetReads'
-			self.letReads.clear()
-		end 'ownsLetReads'
-
-		if self.letCaptures is not self.empty.letReads 'ownsLetCaptures'
-			self.letCaptures.clear()
-		end 'ownsLetCaptures'
-
-		if self.exclusiveArms is not self.empty.tokenSpans 'ownsArms'
-			self.exclusiveArms.clear()
-		end 'ownsArms'
-
-		self.handsARecordToACall = false
-		self.readsASharedView = false
-	end 'clear'
-
-	export function noteLetRead(value ValueId, token ElementIndex)
-		if self.letReads is self.empty.letReads 'firstRead'
-			self.letReads = LetReads.create()
-		end 'firstRead'
-
-		self.letReads.record(value, token: token)
-	end 'noteLetRead'
-
-	export function noteLetCapture(value ValueId, token ElementIndex)
-		if self.letCaptures is self.empty.letReads 'firstCapture'
-			self.letCaptures = LetReads.create()
-		end 'firstCapture'
-
-		self.letCaptures.record(value, token: token)
-	end 'noteLetCapture'
-
-	export function noteExclusiveArms(thenStart ElementIndex, thenEnd ElementIndex, elseStart ElementIndex, elseEnd ElementIndex)
-		if self.exclusiveArms is self.empty.tokenSpans 'firstArms'
-			self.exclusiveArms = TokenSpans.create()
-		end 'firstArms'
-
-		self.exclusiveArms.record(thenStart, finish: thenEnd)
-		self.exclusiveArms.record(elseStart, finish: elseEnd)
-	end 'noteExclusiveArms'
-
-	export function noteCall(position PositionKey, token ElementIndex, start PositionKey)
-		if self.calls is self.empty.calls 'firstCall'
-			self.calls = CallTokenColumns.create()
-		end 'firstCall'
-
-		self.calls.record(position, token: token, start: start)
-	end 'noteCall'
-
-	export function noteModuleLetRead(value ValueId, name ByteArray)
-		if self.moduleLets is self.empty.moduleLets 'firstRead'
-			self.moduleLets = ModuleLetReads.create()
-		end 'firstRead'
-
-		self.moduleLets.record(value, name: name)
-	end 'noteModuleLetRead'
-
-	export function noteLoop(start ElementIndex, finish ElementIndex)
-		if self.loops is self.empty.tokenSpans 'firstLoop'
-			self.loops = TokenSpans.create()
-		end 'firstLoop'
-
-		self.loops.record(start, finish: finish)
-	end 'noteLoop'
-
-	// The record a field write writes — the box whose field is stored, however it was reached.
-	export function noteFieldWrite(target ValueId)
-		if self.fieldWrites is self.empty.values 'firstWrite'
-			self.fieldWrites = ValueIdArray.create(0)
-		end 'firstWrite'
-
-		self.fieldWrites.push(target)
-	end 'noteFieldWrite'
-
-	export function noteWritableValue(value ValueId, name ByteArray, info VarInfo)
-		if self.writableValues is self.empty.values 'firstValue'
-			self.writableValues = ValueIdArray.create(0)
-			self.writableNames = NameRoster.create(0)
-			self.writableInfos = VarInfoArray.create(0)
-		end 'firstValue'
-
-		self.writableValues.push(value)
-		self.writableNames.push(name)
-		self.writableInfos.push(info)
-	end 'noteWritableValue'
-
-	export function noteMoveSite(site MoveSite)
-		if self.moveSites is self.empty.moveSites 'firstSite'
-			self.moveSites = MoveSiteArray.create(0)
-		end 'firstSite'
-
-		self.moveSites.push(site)
-	end 'noteMoveSite'
-
-	export function refuseMoveSite(index ElementIndex, refusal ByteArray)
-		var site = try self.moveSites.get(index) otherwise panic("ProvenanceSites.refuseMoveSite: no move site {index} is filed to refuse")
-		site.refused = true
-		site.refusal = refusal
-	end 'refuseMoveSite'
-
-	export function noteWriteRefusal(site WriteRefusalSite)
-		if self.writeRefusals is self.empty.writeRefusals 'firstSite'
-			self.writeRefusals = WriteRefusalSiteArray.create(0)
-		end 'firstSite'
-
-		self.writeRefusals.push(site)
-	end 'noteWriteRefusal'
-
-	export function noteMutableBindingSite(site StorageSite)
-		if self.mutableBindingSites is self.empty.storageSites 'firstSite'
-			self.mutableBindingSites = StorageSiteArray.create(0)
-		end 'firstSite'
-
-		self.mutableBindingSites.push(site)
-	end 'noteMutableBindingSite'
-
-	export function noteNameBindSite(site StorageSite)
-		if self.nameBindSites is self.empty.storageSites 'firstSite'
-			self.nameBindSites = StorageSiteArray.create(0)
-		end 'firstSite'
-
-		self.nameBindSites.push(site)
-	end 'noteNameBindSite'
-
-	export function noteWriteThrough(target ValueId, stored ValueId, fieldName ByteArray, placeStart ElementIndex, placeEnd ElementIndex, line LineNumber, column ColumnNumber, token ElementIndex)
-		if self.writeThroughs is self.empty.writeThroughs 'firstWrite'
-			self.writeThroughs = DeferredWriteThroughs.create()
-		end 'firstWrite'
-
-		self.writeThroughs.record(target, stored: stored, fieldName: fieldName, placeStart: placeStart, placeEnd: placeEnd, line: line, column: column, token: token)
-	end 'noteWriteThrough'
-
-	export function noteReceiverWrite(receiver ValueId, methodIndex ElementIndex, placeStart ElementIndex, placeEnd ElementIndex)
-		if self.receiverWrites is self.empty.deferredReceiverWrites 'firstWrite'
-			self.receiverWrites = DeferredReceiverWrites.create()
-		end 'firstWrite'
-
-		self.receiverWrites.record(receiver, methodIndex: methodIndex, placeStart: placeStart, placeEnd: placeEnd)
-	end 'noteReceiverWrite'
-
-	// What a summary is traced from, into `sites`: the receiver writes as the parser spelled them, and the name binds.
-	export function fileTracedInto(sites ProvenanceSites, spelledReceiverWrites ReceiverWriteSiteArray)
-		if spelledReceiverWrites.count() > 0 'someReceiverWrite'
-			sites.receiverWrites = spelledReceiverWrites
-		end 'someReceiverWrite'
-
-		if self.nameBindSites.count() > 0 'someNameBind'
-			sites.nameBindSites = self.nameBindSites
-			self.nameBindSites = self.empty.storageSites
-		end 'someNameBind'
-	end 'fileTracedInto'
-
-	export function fileCallsInto(sites ProvenanceSites)
-		if self.calls.positions.count() > 0 'someCall'
-			sites.calls = self.calls
-			self.calls = self.empty.calls
-		end 'someCall'
-	end 'fileCallsInto'
-
-	// Everything else but the write-throughs, which the parser spells, into the `sites` of a body with something to
-	// guard.
-	export function fileGuardedInto(sites ProvenanceSites)
-		self.fileCallsInto(sites)
-
-		if self.loops.starts.count() > 0 'someLoop'
-			sites.loops = self.loops
-			self.loops = self.empty.tokenSpans
-		end 'someLoop'
-
-		if self.letReads.values.count() > 0 'someLetRead'
-			sites.letReads = self.letReads
-			self.letReads = self.empty.letReads
-		end 'someLetRead'
-
-		if self.letCaptures.values.count() > 0 'someLetCapture'
-			sites.letCaptures = self.letCaptures
-			self.letCaptures = self.empty.letReads
-		end 'someLetCapture'
-
-		if self.exclusiveArms.starts.count() > 0 'someArms'
-			sites.exclusiveArms = self.exclusiveArms
-			self.exclusiveArms = self.empty.tokenSpans
-		end 'someArms'
-
-		if self.fieldWrites.count() > 0 'someFieldWrite'
-			sites.fieldWrites = self.fieldWrites
-			self.fieldWrites = self.empty.values
-		end 'someFieldWrite'
-
-		if self.writableValues.count() > 0 'someWritableValue'
-			sites.writableValues = self.writableValues
-			sites.writableNames = self.writableNames
-			sites.writableInfos = self.writableInfos
-			self.writableValues = self.empty.values
-			self.writableNames = self.empty.names
-			self.writableInfos = self.empty.varInfos
-		end 'someWritableValue'
-
-		if self.moveSites.count() > 0 'someMoveSite'
-			sites.moveSites = self.moveSites
-			self.moveSites = self.empty.moveSites
-		end 'someMoveSite'
-
-		if self.writeRefusals.count() > 0 'someWriteRefusal'
-			sites.writeRefusals = self.writeRefusals
-			self.writeRefusals = self.empty.writeRefusals
-		end 'someWriteRefusal'
-
-		if self.mutableBindingSites.count() > 0 'someMutableBinding'
-			sites.mutableBindingSites = self.mutableBindingSites
-			self.mutableBindingSites = self.empty.storageSites
-		end 'someMutableBinding'
-	end 'fileGuardedInto'
-end 'DeferredProvenance'
-
-// What the parser saw of one body's storage that `StorageProvenance` judges once every body is parsed: the
-// immutable roots, the doors whose verdict needs a callee's summary, and the values `var` bindings hold — writable
-// storage, as a parameter's record is. Every field starts as a shared empty one and is replaced before it is first
-// written, so a body files only what it has.
-export type ProvenanceSites
-	export var immutableBindings as ImmutableBindings
-	export var mutableBindingSites as StorageSiteArray
-	export var nameBindSites as StorageSiteArray
-	export var writeThroughSites as FieldWriteSiteArray
-	export var receiverWrites as ReceiverWriteSiteArray
-	export var fieldWrites as ValueIdArray
-	export var moveSites as MoveSiteArray
-	export var writeRefusals as WriteRefusalSiteArray
-	export var writableValues as ValueIdArray
-	export var writableNames as NameRoster
-	export var writableInfos as VarInfoArray
-	export var loops as TokenSpans
-	export var calls as CallTokenColumns
-	export var letReads as LetReads
-	export var letCaptures as LetReads
-	export var exclusiveArms as TokenSpans
-	export var varCandidates as FiledVarCandidates
-	export var empty as ProvenanceColumns
-
-	export static function create(empty ProvenanceColumns) returns ProvenanceSites
-		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, immutableBindings: empty.immutableBindings, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughSites: empty.fieldWriteSites, receiverWrites: empty.receiverWrites, fieldWrites: empty.values, moveSites: empty.moveSites, writeRefusals: empty.writeRefusals, writableValues: empty.values, writableNames: empty.names, writableInfos: empty.varInfos, loops: empty.tokenSpans, calls: empty.calls, varCandidates: FiledVarCandidates.none, empty: empty}
-	end 'create'
-
-	export function recordImmutableName(value ValueId, name ByteArray, moduleLet bool, declToken ElementIndex, info VarInfo)
-		if self.immutableBindings is self.empty.immutableBindings 'firstName'
-			self.immutableBindings = ImmutableBindings.create()
-		end 'firstName'
-
-		self.immutableBindings.record(value, name: name, moduleLet: moduleLet, declToken: declToken, info: info)
-	end 'recordImmutableName'
-
-	export function renumberBindingTypeIds(remap TypeIdRemap, epoch RenumberingEpoch)
-		for info in self.immutableBindings.infos 'eachImmutable'
-			info.renumberTypeIds(remap, epoch: epoch)
-		end 'eachImmutable'
-
-		var filedCandidates = self.varCandidates
-
-		match filedCandidates 'candidates'
-			none then return
-			filed(candidates) then renumberCandidateTypeIds(candidates, remap: remap, epoch: epoch)
-		end 'candidates'
-	end 'renumberBindingTypeIds'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		self.immutableBindings.cacheWrite(writer)
-		cacheWriteStorageSiteArray(writer, value: self.mutableBindingSites)
-		cacheWriteStorageSiteArray(writer, value: self.nameBindSites)
-		cacheWriteFieldWriteSiteArray(writer, value: self.writeThroughSites)
-		cacheWriteReceiverWriteSiteArray(writer, value: self.receiverWrites)
-		cacheWriteValueIdArray(writer, value: self.fieldWrites)
-		cacheWriteMoveSiteArray(writer, value: self.moveSites)
-		cacheWriteWriteRefusalSiteArray(writer, value: self.writeRefusals)
-		cacheWriteValueIdArray(writer, value: self.writableValues)
-		cacheWriteNameRoster(writer, value: self.writableNames)
-		cacheWriteVarInfoArray(writer, value: self.writableInfos)
-		self.loops.cacheWrite(writer)
-		self.calls.cacheWrite(writer)
-		self.letReads.cacheWrite(writer)
-		self.letCaptures.cacheWrite(writer)
-		self.exclusiveArms.cacheWrite(writer)
-		cacheWriteFiledVarCandidates(writer, value: self.varCandidates)
-		self.empty.cacheWrite(writer)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns ProvenanceSites throws LibraryCacheDamage
-		let f_immutableBindings = try ImmutableBindings.cacheRead(reader)
-		let f_mutableBindingSites = try cacheReadStorageSiteArray(reader)
-		let f_nameBindSites = try cacheReadStorageSiteArray(reader)
-		let f_writeThroughSites = try cacheReadFieldWriteSiteArray(reader)
-		let f_receiverWrites = try cacheReadReceiverWriteSiteArray(reader)
-		let f_fieldWrites = try cacheReadValueIdArray(reader)
-		let f_moveSites = try cacheReadMoveSiteArray(reader)
-		let f_writeRefusals = try cacheReadWriteRefusalSiteArray(reader)
-		let f_writableValues = try cacheReadValueIdArray(reader)
-		let f_writableNames = try cacheReadNameRoster(reader)
-		let f_writableInfos = try cacheReadVarInfoArray(reader)
-		let f_loops = try TokenSpans.cacheRead(reader)
-		let f_calls = try CallTokenColumns.cacheRead(reader)
-		let f_letReads = try LetReads.cacheRead(reader)
-		let f_letCaptures = try LetReads.cacheRead(reader)
-		let f_exclusiveArms = try TokenSpans.cacheRead(reader)
-		let f_varCandidates = try cacheReadFiledVarCandidates(reader)
-		let f_empty = try ProvenanceColumns.cacheRead(reader)
-
-		return Self{immutableBindings: f_immutableBindings, mutableBindingSites: f_mutableBindingSites, nameBindSites: f_nameBindSites, writeThroughSites: f_writeThroughSites, receiverWrites: f_receiverWrites, fieldWrites: f_fieldWrites, moveSites: f_moveSites, writeRefusals: f_writeRefusals, writableValues: f_writableValues, writableNames: f_writableNames, writableInfos: f_writableInfos, loops: f_loops, calls: f_calls, letReads: f_letReads, letCaptures: f_letCaptures, exclusiveArms: f_exclusiveArms, varCandidates: f_varCandidates, empty: f_empty}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize144
-		return sizeof(ProvenanceSites) as CacheSize144
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'ProvenanceSites'
-
-function renumberCandidateTypeIds(candidates VarShouldBeLetCandidates, remap TypeIdRemap, epoch RenumberingEpoch)
-	for info in candidates.infos 'eachCandidate'
-		info.renumberTypeIds(remap, epoch: epoch)
-	end 'eachCandidate'
-end 'renumberCandidateTypeIds'
-
-// ⭐ **WHAT THE PARSER FILED FOR `StorageProvenance`, OR NOTHING** — a union rather than a shared empty record, so
-// `createFromStd`, off the parser's thread, holds one small box of its own and reaches for no singleton.
-export union FiledProvenance
-	none
-	filed(sites ProvenanceSites)
-end 'FiledProvenance'
-
-// @generated library-cache begin
-function cacheWriteFiledProvenance(writer LibraryCacheWriter, value FiledProvenance)
-	writer.unsigned(value.ordinal as CacheUnsigned)
-
-	match value 'payload'
-		none then break
-		filed(a0) then cacheWriteFiledProvenanceFiled(writer, a0: a0)
-	end 'payload'
-end 'cacheWriteFiledProvenance'
-
-function cacheWriteFiledProvenanceFiled(writer LibraryCacheWriter, a0 ProvenanceSites)
-	a0.cacheWrite(writer)
-end 'cacheWriteFiledProvenanceFiled'
-
-function cacheReadFiledProvenance(reader LibraryCacheReader) returns FiledProvenance throws LibraryCacheDamage
-	let tag = try reader.unsigned()
-
-	return match tag 'case'
-		0 gives FiledProvenance.none
-		1 gives try cacheReadFiledProvenanceFiled(reader)
-		default throws LibraryCacheDamage.unknownTag(tag)
-	end 'case'
-end 'cacheReadFiledProvenance'
-
-function cacheReadFiledProvenanceFiled(reader LibraryCacheReader) returns FiledProvenance throws LibraryCacheDamage
-	let a0 = try ProvenanceSites.cacheRead(reader)
-
-	return FiledProvenance.filed(a0)
-end 'cacheReadFiledProvenanceFiled'
-
-// @generated library-cache end
-
-// ⭐ **THE EMPTY COLUMNS A `ProvenanceSites` AND A `DeferredProvenance` START FROM.** Never written: each writer
-// REPLACES a column before its first write, keyed on its identity with the one here. One set per owner rather than
-// one shared set, because a counted record two OS threads retain is a lost update.
-export type ProvenanceColumns
-	export var immutableBindings as ImmutableBindings
-	export var storageSites as StorageSiteArray
-	export var fieldWriteSites as FieldWriteSiteArray
-	export var receiverWrites as ReceiverWriteSiteArray
-	export var values as ValueIdArray
-	export var moveSites as MoveSiteArray
-	export var writeRefusals as WriteRefusalSiteArray
-	export var tokenSpans as TokenSpans
-	export var letReads as LetReads
-	export var calls as CallTokenColumns
-	export var moduleLets as ModuleLetReads
-	export var writeThroughs as DeferredWriteThroughs
-	export var deferredReceiverWrites as DeferredReceiverWrites
-	export var names as NameRoster
-	export var varInfos as VarInfoArray
-
-	export static function create() returns ProvenanceColumns
-		return Self{immutableBindings: ImmutableBindings.create(), storageSites: StorageSiteArray.create(0), fieldWriteSites: FieldWriteSiteArray.create(0), receiverWrites: ReceiverWriteSiteArray.create(0), values: ValueIdArray.create(0), names: NameRoster.create(0), varInfos: VarInfoArray.create(0), moveSites: MoveSiteArray.create(0), writeRefusals: WriteRefusalSiteArray.create(0), tokenSpans: TokenSpans.create(), letReads: LetReads.create(), calls: CallTokenColumns.create(), moduleLets: ModuleLetReads.create(), writeThroughs: DeferredWriteThroughs.create(), deferredReceiverWrites: DeferredReceiverWrites.create()}
-	end 'create'
-
-	// @generated library-cache begin
-	function cacheWrite(writer LibraryCacheWriter)
-		self.immutableBindings.cacheWrite(writer)
-		cacheWriteStorageSiteArray(writer, value: self.storageSites)
-		cacheWriteFieldWriteSiteArray(writer, value: self.fieldWriteSites)
-		cacheWriteReceiverWriteSiteArray(writer, value: self.receiverWrites)
-		cacheWriteValueIdArray(writer, value: self.values)
-		cacheWriteMoveSiteArray(writer, value: self.moveSites)
-		cacheWriteWriteRefusalSiteArray(writer, value: self.writeRefusals)
-		self.tokenSpans.cacheWrite(writer)
-		self.letReads.cacheWrite(writer)
-		self.calls.cacheWrite(writer)
-		self.moduleLets.cacheWrite(writer)
-		self.writeThroughs.cacheWrite(writer)
-		self.deferredReceiverWrites.cacheWrite(writer)
-		cacheWriteNameRoster(writer, value: self.names)
-		cacheWriteVarInfoArray(writer, value: self.varInfos)
-	end 'cacheWrite'
-
-	static function cacheRead(reader LibraryCacheReader) returns ProvenanceColumns throws LibraryCacheDamage
-		let f_immutableBindings = try ImmutableBindings.cacheRead(reader)
-		let f_storageSites = try cacheReadStorageSiteArray(reader)
-		let f_fieldWriteSites = try cacheReadFieldWriteSiteArray(reader)
-		let f_receiverWrites = try cacheReadReceiverWriteSiteArray(reader)
-		let f_values = try cacheReadValueIdArray(reader)
-		let f_moveSites = try cacheReadMoveSiteArray(reader)
-		let f_writeRefusals = try cacheReadWriteRefusalSiteArray(reader)
-		let f_tokenSpans = try TokenSpans.cacheRead(reader)
-		let f_letReads = try LetReads.cacheRead(reader)
-		let f_calls = try CallTokenColumns.cacheRead(reader)
-		let f_moduleLets = try ModuleLetReads.cacheRead(reader)
-		let f_writeThroughs = try DeferredWriteThroughs.cacheRead(reader)
-		let f_deferredReceiverWrites = try DeferredReceiverWrites.cacheRead(reader)
-		let f_names = try cacheReadNameRoster(reader)
-		let f_varInfos = try cacheReadVarInfoArray(reader)
-
-		return Self{immutableBindings: f_immutableBindings, storageSites: f_storageSites, fieldWriteSites: f_fieldWriteSites, receiverWrites: f_receiverWrites, values: f_values, moveSites: f_moveSites, writeRefusals: f_writeRefusals, tokenSpans: f_tokenSpans, letReads: f_letReads, calls: f_calls, moduleLets: f_moduleLets, writeThroughs: f_writeThroughs, deferredReceiverWrites: f_deferredReceiverWrites, names: f_names, varInfos: f_varInfos}
-	end 'cacheRead'
-
-	static function cacheLayoutBytes() returns CacheSize120
-		return sizeof(ProvenanceColumns) as CacheSize120
-	end 'cacheLayoutBytes'
-
-	// @generated library-cache end
-end 'ProvenanceColumns'
-
 export enum SharedColumn
 	valueColumns
 	literalCasts
@@ -2813,12 +1402,11 @@ export enum SharedColumn
 	paramGuards
 	inlineSites
 	closureStoreSites
-	filedProvenance
 end 'SharedColumn'
 
-typealias OwnedColumnBits = int(0 to 127)
+typealias OwnedColumnBits = int(0 to 63)
 
-let EveryColumnOwnedBits = 127
+let EveryColumnOwnedBits = 63
 
 type ColumnOwnership
 	let bits as OwnedColumnBits
@@ -2845,7 +1433,7 @@ type ColumnOwnership
 end 'ColumnOwnership'
 
 function heldDebugLocalsCopy(held DebugLocalDeclArray) returns DebugLocalDeclArray
-	var copy = DebugLocalDeclArray.create(held.count() + 1, zeroed: false)
+	let copy = DebugLocalDeclArray.create(held.count() + 1, zeroed: false)
 
 	for local in held 'eachHeld'
 		copy.push(local)
@@ -2854,27 +1442,15 @@ function heldDebugLocalsCopy(held DebugLocalDeclArray) returns DebugLocalDeclArr
 	return copy
 end 'heldDebugLocalsCopy'
 
-function filedProvenanceCopy(filed FiledProvenance) returns FiledProvenance
-	return match filed 'filed'
-		none gives FiledProvenance.none
-		filed(sites) gives FiledProvenance.filed(sites.clone())
-	end 'filed'
-end 'filedProvenanceCopy'
-
 // ⭐ **THE PLACEHOLDERS EVERY FUNCTION ONE PARSER BUILDS STARTS FROM** — `create`'s share of `createFromStd`'s
 // fresh ones, held by the parser for all of its functions so a function that fills none of them allocates none.
 // Each is replaced before it is written, never written through.
 export type FunctionPlaceholders
-	export var provenance as ProvenanceColumns
-
-	// The answer of a function that filed nothing.
-	export var noSites as ProvenanceSites
-	export var noFiledProvenance as FiledProvenance
 	export var paramGuards as RangeCheckParamGuardArray
 	export var inlineSites as InlineSiteArray
 
-	// The sole-owner column of a function `StorageProvenance` does not trace (`IrFunction.valueMintedSole`), which a
-	// post-parse writer replaces before it writes (`IrFunction.makePrivate`).
+	// The sole-owner column of a function that keeps none (`IrFunction.valueMintedSole`), which a post-parse writer
+	// replaces before it writes (`IrFunction.makePrivate`).
 	export var mintedSole as BoolArray
 
 	export var noCapabilityNotes as CapabilityNotes
@@ -2888,8 +1464,7 @@ export type FunctionPlaceholders
 	export var noTypeSites as DeclaredTypeSites
 
 	export static function create() returns FunctionPlaceholders
-		var provenance = ProvenanceColumns.create()
-		return Self{provenance: provenance, noSites: ProvenanceSites.create(provenance), noFiledProvenance: FiledProvenance.none, paramGuards: RangeCheckParamGuardArray.create(0), inlineSites: InlineSiteArray.create(0), mintedSole: BoolArray.create(0), noCapabilityNotes: CapabilityNotes.create(), noLiteralCastArguments: LiteralCastMap.create(), noLetCastReads: LetCastReadArray.create(0), noPendingOverlaps: PendingOverlapArray.create(0), noTypeSites: DeclaredTypeSites.create()}
+		return Self{paramGuards: RangeCheckParamGuardArray.create(0), inlineSites: InlineSiteArray.create(0), mintedSole: BoolArray.create(0), noCapabilityNotes: CapabilityNotes.create(), noLiteralCastArguments: LiteralCastMap.create(), noLetCastReads: LetCastReadArray.create(0), noPendingOverlaps: PendingOverlapArray.create(0), noTypeSites: DeclaredTypeSites.create()}
 	end 'create'
 end 'FunctionPlaceholders'
 
@@ -3102,7 +1677,7 @@ end 'cacheWritePendingOverlapArray'
 
 function cacheReadPendingOverlapArray(reader LibraryCacheReader) returns PendingOverlapArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = PendingOverlapArray.create(count, zeroed: false)
+	let result = PendingOverlapArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try PendingOverlap.cacheRead(reader)
@@ -3186,10 +1761,6 @@ function cacheTableAgreesBodyStatus() returns bool
 end 'cacheTableAgreesBodyStatus'
 
 export function cacheEnumTablesAgreeInCompilerIRIrFunction() returns bool
-	if not cacheTableAgreesMoveDestinationKind() 'disagreesCacheTableAgreesMoveDestinationKind'
-		return false
-	end 'disagreesCacheTableAgreesMoveDestinationKind'
-
 	if not cacheTableAgreesExistentialStorePlace() 'disagreesCacheTableAgreesExistentialStorePlace'
 		return false
 	end 'disagreesCacheTableAgreesExistentialStorePlace'
@@ -3240,7 +1811,7 @@ export type IrFunction
 	// for the runtime's own scaffolding, and false for every parsed function a `runtime/` file declares — which
 	// IS asked, because `isRuntimeFunction` answers `true` for a tier body and `skipsGreenThreadStackGuard`
 	// then reads this field. TRUE for two families. The per-type CASCADES — `__destruct_<T>`,
-	// `__clone_<T>`, `__sole_<T>`, their dictionary twins and the one-argument element thunks — recurse once
+	// `__clone_<T>`, `__share_<T>`, their dictionary twins and the one-argument element thunks — recurse once
 	// per LEVEL of the user's data graph, so their frame count is a property of the program's types and nothing
 	// in the runtime bounds it. `__module_init` and `__maxon_global_cleanup` are the first and last frames on
 	// `main`'s green thread in a program with green threads (`BacktraceFormat.MainThreadEntryName`), where no
@@ -3362,14 +1933,12 @@ export type IrFunction
 	export var capabilityNotes as CapabilityNotes
 
 	// ⭐ **WHETHER THE OP DEFINING A VALUE MINTED ITS RECORD (`Parser.valueMintedSole`), DENSE in the same
-	// lockstep** — the ownership model's own `sole` claim as its emitter made it, and `StorageProvenance`'s
-	// answer to "is this value fresh, or an alias of its operands?". False is the default every emitter gets
-	// without asking, so a door added later is read as an alias until it says otherwise. That pass traces
-	// exactly the functions the parser files it for (`keepsSoleOwnerMarks`), and every other one keeps the
-	// shared empty column (`FunctionPlaceholders.mintedSole`), whose marks nothing reads.
+	// lockstep** — the ownership model's own `sole` claim as its emitter made it, and `ValueOrigins`' answer to
+	// "is this value fresh, or an alias of its operands?". False is the default every emitter gets without asking,
+	// so a door added later is read as an alias until it says otherwise. Only a function that keeps the marks
+	// (`keepsSoleOwnerMarks`) is read this way; every other one keeps the shared empty column
+	// (`FunctionPlaceholders.mintedSole`).
 	export var valueMintedSole as BoolArray
-
-	export var filedProvenance as FiledProvenance
 
 	// ⚠ A function whose columns another holds owns none of them: a parsed one once `parseModule`
 	// surrenders them, and every `shallowCopy`. A copy that inherited its source's claims would write
@@ -3492,10 +2061,6 @@ export type IrFunction
 
 	export var brandOriginValues as ValueIdArray
 	export var brandOriginKeys as NameRoster
-
-	// ⭐ **IT ASSIGNS MODULE-LEVEL STORAGE — the effect summary's "modifies global state" seed (E3064),**
-	// read by `EffectSummaryBuilder.walkNode`. No emitter sets it: a module-level binding is never assigned.
-	export var writesModuleStorage as bool
 
 	// ⛔⛔ **ANYTHING BUT `parsed`: THE PARSER WALKED PAST THIS BODY WITHOUT BUILDING IT — so NOTHING may be
 	// concluded from its ops, and an analysis that reads them is reading an empty function that is not what
@@ -3659,7 +2224,6 @@ export type IrFunction
 			valueCapabilities: valueCapabilities,
 			capabilityNotes: placeholders.noCapabilityNotes,
 			valueMintedSole: valueMintedSole,
-			filedProvenance: placeholders.noFiledProvenance,
 			valueWitnessIds: valueWitnessIds,
 			valueExistentialInstances: ValueExistentialInstanceMap.create(),
 			valueCallInstances: ValueCallInstanceMap.create(),
@@ -3688,7 +2252,6 @@ export type IrFunction
 			mayYieldSeed: false,
 			brandOriginValues: ValueIdArray.create(0),
 			brandOriginKeys: NameRoster.create(0),
-			writesModuleStorage: false,
 			bodyStatus: BodyStatus.parsed,
 			bodySplicedAway: false,
 			usesValueTupleReturn: false,
@@ -3758,7 +2321,6 @@ export type IrFunction
 			valueCapabilities: ValueCapabilityArray.create(0),
 			capabilityNotes: CapabilityNotes.create(),
 			valueMintedSole: BoolArray.create(0),
-			filedProvenance: FiledProvenance.none,
 			valueWitnessIds: ValueIdArray.create(0),
 			valueExistentialInstances: ValueExistentialInstanceMap.create(),
 			valueCallInstances: ValueCallInstanceMap.create(),
@@ -3787,7 +2349,6 @@ export type IrFunction
 			mayYieldSeed: false,
 			brandOriginValues: ValueIdArray.create(0),
 			brandOriginKeys: NameRoster.create(0),
-			writesModuleStorage: false,
 			bodyStatus: BodyStatus.parsed,
 			bodySplicedAway: false,
 			usesValueTupleReturn: false,
@@ -3848,7 +2409,6 @@ export type IrFunction
 			valueCapabilities: src.valueCapabilities,
 			capabilityNotes: src.capabilityNotes,
 			valueMintedSole: src.valueMintedSole,
-			filedProvenance: src.filedProvenance,
 			valueWitnessIds: src.valueWitnessIds,
 			valueExistentialInstances: src.valueExistentialInstances,
 			valueCallInstances: src.valueCallInstances,
@@ -3877,7 +2437,6 @@ export type IrFunction
 			mayYieldSeed: src.mayYieldSeed,
 			brandOriginValues: src.brandOriginValues,
 			brandOriginKeys: src.brandOriginKeys,
-			writesModuleStorage: src.writesModuleStorage,
 			bodyStatus: src.bodyStatus,
 			bodySplicedAway: src.bodySplicedAway,
 			usesValueTupleReturn: src.usesValueTupleReturn,
@@ -3929,7 +2488,6 @@ export type IrFunction
 			paramGuards then self.paramGuards = self.paramGuards.clone()
 			inlineSites then self.inlineSites = self.inlineSites.clone()
 			closureStoreSites then self.closureStoreSites = self.closureStoreSites.clone()
-			filedProvenance then self.filedProvenance = filedProvenanceCopy(self.filedProvenance)
 		end 'column'
 
 		self.ownership = self.ownership.claiming(column)
@@ -3958,16 +2516,16 @@ export type IrFunction
 	end 'replaceDebugLocal'
 
 	// Renumber every type id this function holds (`ParseStaging.rewriteTypeIds`): its signature, its
-	// per-value columns, the existential instances its values carry, the bindings its provenance
-	// filed, and the declared types its debug locals were recorded under. The columns are rebuilt
+	// per-value columns, the existential instances its values carry, and the declared types its debug
+	// locals were recorded under. The columns are rebuilt
 	// rather than written into, because the merged module's copy of this function shares them.
-	export function renumberTypeIds(remap TypeIdRemap, epoch RenumberingEpoch)
+	export function renumberTypeIds(remap TypeIdRemap)
 		self.maxonReturnType = remapMaxonReturnType(self.maxonReturnType, remap: remap)
 		self.maxonParamTypes = remapMaxonTypes(self.maxonParamTypes, remap: remap)
 
 		// Tag-aware, in lockstep with `valueTags`, which no renumbering moves: a scalar slot keeps its
 		// `UnnamedTypeId` filler (see `remapValueNameId`).
-		var nameIds = TypeNameIdArray.create(self.valueNameIds.count(), zeroed: false)
+		let nameIds = TypeNameIdArray.create(self.valueNameIds.count(), zeroed: false)
 
 		for position in 0 upto self.valueNameIds.count() 'eachValue'
 			let tag = try self.valueTags.get(position) otherwise panic("IrFunction.renumberTypeIds: valueTags.get OOB at {position} — the two type columns fell out of lockstep")
@@ -3978,7 +2536,7 @@ export type IrFunction
 		self.valueNameIds = nameIds
 
 		// Interner ids throughout — `UnnamedTypeId` included, the empty name in every interner — so no tag is asked.
-		var brandIds = TypeNameIdArray.create(self.valueBrandIds.count(), zeroed: false)
+		let brandIds = TypeNameIdArray.create(self.valueBrandIds.count(), zeroed: false)
 
 		for brandId in self.valueBrandIds 'eachBrand'
 			brandIds.push(remap.applyName(brandId))
@@ -3986,7 +2544,7 @@ export type IrFunction
 
 		self.valueBrandIds = brandIds
 
-		var existentials = ValueExistentialInstanceMap.create()
+		let existentials = ValueExistentialInstanceMap.create()
 
 		for (value, instance) in self.valueExistentialInstances 'eachExistential'
 			existentials.upsert(value, value: remap.applyInstance(instance))
@@ -3995,7 +2553,7 @@ export type IrFunction
 		self.valueExistentialInstances = existentials
 
 		if self.valueCallInstances.count() > 0 'callsThroughAnInstance'
-			var callInstances = ValueCallInstanceMap.create()
+			let callInstances = ValueCallInstanceMap.create()
 
 			for (value, instance) in self.valueCallInstances 'eachCallInstance'
 				callInstances.upsert(value, value: remap.applyInstance(instance))
@@ -4005,7 +2563,7 @@ export type IrFunction
 		end 'callsThroughAnInstance'
 
 		if self.existentialFieldStores.count() > 0 'storesIntoAnInterfaceField'
-			var stores = ExistentialFieldStoreArray.create(self.existentialFieldStores.count(), zeroed: false)
+			let stores = ExistentialFieldStoreArray.create(self.existentialFieldStores.count(), zeroed: false)
 
 			for store in self.existentialFieldStores 'eachStore'
 				stores.push(store.withClaimsRenumbered(remap))
@@ -4014,18 +2572,11 @@ export type IrFunction
 			self.existentialFieldStores = stores
 		end 'storesIntoAnInterfaceField'
 
-		var filedSites = self.filedProvenance
-
-		match filedSites 'filed'
-			none then break
-			filed(sites) then sites.renumberBindingTypeIds(remap, epoch: epoch)
-		end 'filed'
-
 		for local in self.debugLocals 'eachDebugLocal'
 			local.renumberTypeIds(remap)
 		end 'eachDebugLocal'
 
-		var captures = ClosureEnvFieldArray.create(self.closureEnvFields.count(), zeroed: false)
+		let captures = ClosureEnvFieldArray.create(self.closureEnvFields.count(), zeroed: false)
 
 		for capture in self.closureEnvFields 'eachCapture'
 			captures.push(capture.withTypeRenumbered(remap))
@@ -4041,7 +2592,7 @@ export type IrFunction
 	// count. Offset 0 serves a backend that needs the function to keep pointing at the
 	// source's body blocks in place.
 	export static function relocateFunction(src IrFunction, blockOffset ElementIndex = 0) returns IrFunction
-		var relocated = IrFunction.shallowCopy(src)
+		let relocated = IrFunction.shallowCopy(src)
 
 		for blockRef in src.blockRefs 'eachBlock'
 			relocated.blockRefs.push(blockRef + blockOffset)
@@ -4073,92 +2624,14 @@ export type IrFunction
 		self.debugLocals.push(local)
 	end 'recordSplicedLocal'
 
-	export function recordImmutableBinding(value ValueId, bindingName ByteArray, info VarInfo, declToken ElementIndex, empty ProvenanceColumns)
-		var sites = self.provenanceSitesForWrite(empty)
-		sites.recordImmutableName(value, name: bindingName, moduleLet: false, declToken: declToken, info: info)
-	end 'recordImmutableBinding'
-
-	// A value the body read out of a module-level `let`, which is immutable storage wherever it is
-	// read.
-	export function recordModuleLetRead(value ValueId, globalName ByteArray, empty ProvenanceColumns)
-		var sites = self.provenanceSitesForWrite(empty)
-		sites.recordImmutableName(value, name: globalName, moduleLet: true, declToken: 0, info: VarInfo.create(globalName, varType: MaxonType.unresolved, kind: BindingKind.let, slot: 0))
-	end 'recordModuleLetRead'
-
-	// Every E3077 candidate of the body, the first of which the parser reported as `reported`.
-	export function recordVarShouldBeLetCandidates(candidates VarShouldBeLetCandidates, empty ProvenanceColumns)
-		var sites = self.provenanceSitesForWrite(empty)
-		sites.varCandidates = FiledVarCandidates.filed(candidates)
-	end 'recordVarShouldBeLetCandidates'
-
-	// Did the parser file anything for this function — an immutable name, or an E3077 candidate?
-	export function holdsFiledProvenance() returns bool
-		return match self.filedProvenance 'filed'
-			none gives false
-			filed gives true
-		end 'filed'
-	end 'holdsFiledProvenance'
-
 	export function keepsSoleOwnerMarks() returns bool
 		return self.valueMintedSole.count() == self.valueTags.count()
 	end 'keepsSoleOwnerMarks'
-
-	// What `StorageProvenance` reads of this function, or the asker's own empty answer for one that filed nothing.
-	export function provenanceSites(nothingFiled immutable ProvenanceSites) returns ProvenanceSites
-		return match self.filedProvenance 'filed'
-			none gives nothingFiled
-			filed(sites) gives sites
-		end 'filed'
-	end 'provenanceSites'
-
-	// Did the parser file an immutable name of this function — the one kind of body whose doors are asked which
-	// arguments a call writes?
-	export function filesImmutableBindings() returns bool
-		return match self.filedProvenance 'filed'
-			none gives false
-			filed(sites) gives sites.immutableBindings.values.count() > 0
-		end 'filed'
-	end 'filesImmutableBindings'
-
-	// The deferred facts a summary is traced from (`DeferredProvenance.fileTracedInto`).
-	export function fileTracedProvenance(deferred DeferredProvenance, receiverWrites ReceiverWriteSiteArray)
-		var sites = self.provenanceSitesForWrite(deferred.empty)
-		deferred.fileTracedInto(sites, spelledReceiverWrites: receiverWrites)
-	end 'fileTracedProvenance'
-
-	// The rest of the deferred facts, for a function with something to guard (`DeferredProvenance.fileGuardedInto`).
-	export function fileGuardedProvenance(deferred DeferredProvenance)
-		var sites = self.provenanceSitesForWrite(deferred.empty)
-		deferred.fileGuardedInto(sites)
-	end 'fileGuardedProvenance'
-
-	export function fileCallProvenance(deferred DeferredProvenance)
-		var sites = self.provenanceSitesForWrite(deferred.empty)
-		deferred.fileCallsInto(sites)
-	end 'fileCallProvenance'
 
 	export function noteClosureStoreSite(site ClosureStoreSite)
 		self.makePrivate(SharedColumn.closureStoreSites)
 		self.closureStoreSites.push(site)
 	end 'noteClosureStoreSite'
-
-	export function fileWriteThroughSites(writeThroughSites FieldWriteSiteArray, empty ProvenanceColumns)
-		var sites = self.provenanceSitesForWrite(empty)
-		sites.writeThroughSites = writeThroughSites
-	end 'fileWriteThroughSites'
-
-	function provenanceSitesForWrite(empty ProvenanceColumns) returns ProvenanceSites
-		self.makePrivate(SharedColumn.filedProvenance)
-
-		match self.filedProvenance 'filed'
-			filed(sites) then return sites
-			none then break
-		end 'filed'
-
-		let sites = ProvenanceSites.create(empty)
-		self.filedProvenance = FiledProvenance.filed(sites)
-		return sites
-	end 'provenanceSitesForWrite'
 
 	export function releaseMaxonTierData(emptyScope Scope)
 		// ⛔ `maxonReturnType` is NOT released, and it is the one field here that may not be.
@@ -4181,7 +2654,6 @@ export type IrFunction
 		self.pendingOverlaps = PendingOverlapArray.create(0)
 		self.deferredArgumentBindings = DeferredArgumentBindingArray.create(0)
 		self.existentialFieldStores = ExistentialFieldStoreArray.create(0)
-		self.filedProvenance = FiledProvenance.none
 		self.ownership = ColumnOwnership.nothing()
 
 		// No Std or backend pass reads `scope`. It is replaced rather than reset because `shallowCopy`
@@ -4224,7 +2696,6 @@ export type IrFunction
 		cacheWriteValueCapabilityArray(writer, value: self.valueCapabilities)
 		self.capabilityNotes.cacheWrite(writer)
 		cacheWriteBoolArray(writer, value: self.valueMintedSole)
-		cacheWriteFiledProvenance(writer, value: self.filedProvenance)
 		cacheWriteValueIdArray(writer, value: self.valueWitnessIds)
 		cacheWriteValueExistentialInstanceMap(writer, value: self.valueExistentialInstances)
 		cacheWriteValueCallInstanceMap(writer, value: self.valueCallInstances)
@@ -4251,7 +2722,6 @@ export type IrFunction
 		writer.flag(self.mayYieldSeed)
 		cacheWriteValueIdArray(writer, value: self.brandOriginValues)
 		cacheWriteNameRoster(writer, value: self.brandOriginKeys)
-		writer.flag(self.writesModuleStorage)
 		writer.unsigned(self.bodyStatus.ordinal as CacheUnsigned)
 		writer.flag(self.bodySplicedAway)
 		writer.flag(self.usesValueTupleReturn)
@@ -4298,7 +2768,6 @@ export type IrFunction
 		let f_valueCapabilities = try cacheReadValueCapabilityArray(reader)
 		let f_capabilityNotes = try CapabilityNotes.cacheRead(reader)
 		let f_valueMintedSole = try cacheReadBoolArray(reader)
-		let f_filedProvenance = try cacheReadFiledProvenance(reader)
 		let f_valueWitnessIds = try cacheReadValueIdArray(reader)
 		let f_valueExistentialInstances = try cacheReadValueExistentialInstanceMap(reader)
 		let f_valueCallInstances = try cacheReadValueCallInstanceMap(reader)
@@ -4325,7 +2794,6 @@ export type IrFunction
 		let f_mayYieldSeed = try reader.flag()
 		let f_brandOriginValues = try cacheReadValueIdArray(reader)
 		let f_brandOriginKeys = try cacheReadNameRoster(reader)
-		let f_writesModuleStorage = try reader.flag()
 		let f_bodyStatus = try cacheReadBodyStatus(reader)
 		let f_bodySplicedAway = try reader.flag()
 		let f_usesValueTupleReturn = try reader.flag()
@@ -4341,11 +2809,11 @@ export type IrFunction
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 		let f_debugLocalSpans = try DebugSpanRows.cacheRead(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueCapabilities: f_valueCapabilities, capabilityNotes: f_capabilityNotes, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, needsMutableParamMask: f_needsMutableParamMask, needsFrozenParamMask: f_needsFrozenParamMask, resultFromParamMask: f_resultFromParamMask, resultHasOtherPath: f_resultHasOtherPath, resultMayBeFrozen: f_resultMayBeFrozen, resultMayBeUnknown: f_resultMayBeUnknown, mayWaitSeed: f_mayWaitSeed, mayYieldSeed: f_mayYieldSeed, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyStatus: f_bodyStatus, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, allocatesParameterCells: f_allocatesParameterCells, reassignedParamMask: f_reassignedParamMask, storedParamMask: f_storedParamMask, letCastReads: f_letCastReads, pendingOverlaps: f_pendingOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, layoutReserve: f_layoutReserve, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, typeSites: f_typeSites, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueCapabilities: f_valueCapabilities, capabilityNotes: f_capabilityNotes, valueMintedSole: f_valueMintedSole, ownership: ColumnOwnership.everything(), valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, needsMutableParamMask: f_needsMutableParamMask, needsFrozenParamMask: f_needsFrozenParamMask, resultFromParamMask: f_resultFromParamMask, resultHasOtherPath: f_resultHasOtherPath, resultMayBeFrozen: f_resultMayBeFrozen, resultMayBeUnknown: f_resultMayBeUnknown, mayWaitSeed: f_mayWaitSeed, mayYieldSeed: f_mayYieldSeed, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, bodyStatus: f_bodyStatus, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, allocatesParameterCells: f_allocatesParameterCells, reassignedParamMask: f_reassignedParamMask, storedParamMask: f_storedParamMask, letCastReads: f_letCastReads, pendingOverlaps: f_pendingOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges, debugLocalSpans: f_debugLocalSpans}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize576
-		return sizeof(IrFunction) as CacheSize576
+	static function cacheLayoutBytes() returns CacheSize560
+		return sizeof(IrFunction) as CacheSize560
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -4364,7 +2832,7 @@ end 'cacheWriteIrFunctionArray'
 
 export function cacheReadIrFunctionArray(reader LibraryCacheReader) returns IrFunctionArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = IrFunctionArray.create(count, zeroed: false)
+	let result = IrFunctionArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try IrFunction.cacheRead(reader)

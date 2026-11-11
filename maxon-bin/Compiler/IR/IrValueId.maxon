@@ -41,7 +41,7 @@ end 'cacheWriteValueIdArray'
 
 export function cacheReadValueIdArray(reader LibraryCacheReader) returns ValueIdArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ValueIdArray.create(count, zeroed: false)
+	let result = ValueIdArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ValueId
@@ -68,7 +68,7 @@ end 'cacheWriteBlockIdArray'
 
 export function cacheReadBlockIdArray(reader LibraryCacheReader) returns BlockIdArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = BlockIdArray.create(count, zeroed: false)
+	let result = BlockIdArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as BlockId
@@ -83,7 +83,7 @@ end 'cacheReadBlockIdArray'
 export typealias BlockIdSet = Set with BlockId
 
 // ⭐ **ONE PARSER MARK OVER ONE FUNCTION'S SSA VALUES — a set of the values that carry it.** The marks
-// that wear this shape are `Parser.immutableGlobalReads` (loaded out of an IMMUTABLE top-level global's
+// that wear this shape are `Parser.imageRecordReads` (loaded out of an IMMUTABLE top-level global's
 // slot), `Parser.bufferSurfaceValues` (denotes a `__ManagedMemory` BUFFER rather than the
 // `Array` around it), `Parser.unsignedMaxLiterals` and `Parser.writtenNegativeLiterals` (the two
 // halves of what a bit-63-set constant's 64 bits cannot say); each field's own header says what its mark
@@ -109,7 +109,7 @@ end 'cacheWriteValueMarkSet'
 
 function cacheReadValueMarkSet(reader LibraryCacheReader) returns ValueMarkSet throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ValueMarkSet.create()
+	let result = ValueMarkSet.create()
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ValueId
@@ -182,8 +182,8 @@ function installedValueMarks(column ValueMarkColumn) returns ValueMarkColumn
 end 'installedValueMarks'
 
 export function withValueMarked(column ValueMarkColumn, value ValueId) returns ValueMarkColumn
-	var installed = installedValueMarks(column)
-	var marked = markSetOf(installed)
+	let installed = installedValueMarks(column)
+	let marked = markSetOf(installed)
 	marked.insert(value)
 	return installed
 end 'withValueMarked'
@@ -227,19 +227,16 @@ end 'valueIsMarkedUnsigned'
 // beside `BlockIdArray` — so the three tiers that need it call ONE implementation rather than each
 // spelling the same quadratic loop.
 export function distinctSwitchTargets(caseTargets BlockIdArray, exclude BlockId) returns BlockIdArray
-	var out = BlockIdArray.create(0)
+	let out = BlockIdArray.create(0)
 
 	if caseTargets.count() == 0 'noSlots'
 		return out
 	end 'noSlots'
 
-	// Not a `Set with BlockId`: its probe dispatches `hash` through a witness, and this runs on the
-	// register allocator's pool workers, where a dispatch the compiler cannot name makes every
-	// address-taken function message-reachable. Sized by the case count
-	// rather than the function's id space, because it is built once per jump-table block and an
-	// id-space column makes that quadratic.
+	// Sized by the case count rather than the function's id space, because it is built once per
+	// jump-table block and an id-space column makes that quadratic.
 	let capacity = ((caseTargets.count() + 1) * SwitchSlotsPerTarget + 1) as ElementIndex
-	var slots = SwitchSlotArray.create(capacity)
+	let slots = SwitchSlotArray.create(capacity)
 	slots.refill(EmptySwitchSlot)
 
 	// Seeding with `exclude` drops every default/hole slot in the same membership test that dedups the
@@ -311,7 +308,7 @@ end 'cacheWriteBlockRefArray'
 
 module function cacheReadBlockRefArray(reader LibraryCacheReader) returns BlockRefArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = BlockRefArray.create(count, zeroed: false)
+	let result = BlockRefArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ElementIndex
@@ -366,7 +363,7 @@ end 'cacheWriteParamCountArray'
 
 export function cacheReadParamCountArray(reader LibraryCacheReader) returns ParamCountArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ParamCountArray.create(count, zeroed: false)
+	let result = ParamCountArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ParamCount
@@ -391,7 +388,7 @@ end 'cacheWriteStdTypeArray'
 
 module function cacheReadStdTypeArray(reader LibraryCacheReader) returns StdTypeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = StdTypeArray.create(count, zeroed: false)
+	let result = StdTypeArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadStdType(reader)
@@ -439,7 +436,7 @@ end 'cacheWriteOpIndexArray'
 
 module function cacheReadOpIndexArray(reader LibraryCacheReader) returns OpIndexArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = OpIndexArray.create(count, zeroed: false)
+	let result = OpIndexArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ElementIndex

@@ -12,23 +12,23 @@ let LoopbackWord = "loopback"
 let CliDeadlineMs = 10000
 
 test 'a foreign Origin is refused 403 and a loopback one is served'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
-	let foreign = server.request("POST", target: McpRoutePath, host: server.authority(), origin: ForeignOrigin, sessionId: sessionId, body: toolsListRequest(2))
-	let loopback = server.request("POST", target: McpRoutePath, host: server.authority(), origin: server.loopbackOrigin(), sessionId: sessionId, body: toolsListRequest(3))
+	let foreign = server.address.request("POST", target: McpRoutePath, host: server.address.authority(), origin: ForeignOrigin, sessionId: sessionId, body: toolsListRequest(2))
+	let loopback = server.address.request("POST", target: McpRoutePath, host: server.address.authority(), origin: server.address.loopbackOrigin(), sessionId: sessionId, body: toolsListRequest(3))
 	try server.stop()
 
 	try Expect.equal(initialized.statusCode, expected: OkStatus, message: "the control `initialize` did not succeed, so nothing below says anything about `Origin`")
 	try Expect.equal(foreign.statusCode, expected: ForbiddenStatus, message: "an `Origin: {ForeignOrigin}` must be 403; it answered {foreign.statusCode} with {foreign.body}")
-	try Expect.equal(loopback.statusCode, expected: OkStatus, message: "the same request with `Origin: {server.loopbackOrigin()}` must be served")
+	try Expect.equal(loopback.statusCode, expected: OkStatus, message: "the same request with `Origin: {server.address.loopbackOrigin()}` must be served")
 end 'a foreign Origin is refused 403 and a loopback one is served'
 
 test 'a loopback Origin without the server own port is refused 403, because it is another origin'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
-	let portlessLocalhost = server.request("POST", target: McpRoutePath, host: server.authority(), origin: "http://{LocalhostName}", sessionId: sessionId, body: toolsListRequest(2))
-	let portlessLoopback = server.request("POST", target: McpRoutePath, host: server.authority(), origin: "http://{LoopbackAddress}", sessionId: sessionId, body: toolsListRequest(3))
-	let ownPort = server.request("POST", target: McpRoutePath, host: server.authority(), origin: "http://{LocalhostName}:{server.endpointPort}", sessionId: sessionId, body: toolsListRequest(4))
+	let portlessLocalhost = server.address.request("POST", target: McpRoutePath, host: server.address.authority(), origin: "http://{LocalhostName}", sessionId: sessionId, body: toolsListRequest(2))
+	let portlessLoopback = server.address.request("POST", target: McpRoutePath, host: server.address.authority(), origin: "http://{LoopbackAddress}", sessionId: sessionId, body: toolsListRequest(3))
+	let ownPort = server.address.request("POST", target: McpRoutePath, host: server.address.authority(), origin: "http://{LocalhostName}:{server.address.port}", sessionId: sessionId, body: toolsListRequest(4))
 	try server.stop()
 
 	try Expect.equal(initialized.statusCode, expected: OkStatus, message: "the control `initialize` did not succeed, so nothing below says anything about `Origin`")
@@ -38,10 +38,10 @@ test 'a loopback Origin without the server own port is refused 403, because it i
 end 'a loopback Origin without the server own port is refused 403, because it is another origin'
 
 test 'a foreign Host header is refused 403 and localhost is served'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
-	let foreign = server.request("POST", target: McpRoutePath, host: "{ForeignHost}:{server.endpointPort}", origin: "", sessionId: sessionId, body: toolsListRequest(2))
-	let named = server.request("POST", target: McpRoutePath, host: "{LocalhostName}:{server.endpointPort}", origin: "", sessionId: sessionId, body: toolsListRequest(3))
+	let foreign = server.address.request("POST", target: McpRoutePath, host: "{ForeignHost}:{server.address.port}", origin: "", sessionId: sessionId, body: toolsListRequest(2))
+	let named = server.address.request("POST", target: McpRoutePath, host: "{LocalhostName}:{server.address.port}", origin: "", sessionId: sessionId, body: toolsListRequest(3))
 	try server.stop()
 
 	try Expect.equal(initialized.statusCode, expected: OkStatus, message: "the control `initialize` did not succeed, so nothing below says anything about `Host`")
@@ -50,10 +50,10 @@ test 'a foreign Host header is refused 403 and localhost is served'
 end 'a foreign Host header is refused 403 and localhost is served'
 
 test 'a request target that is not a path cannot carry a loopback authority past a foreign Host'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
-	let smuggled = server.request("POST", target: "@{server.authority()}{McpRoutePath}", host: "{ForeignHost}:{server.endpointPort}", origin: "", sessionId: sessionId, body: toolsListRequest(2))
-	let control = server.request("POST", target: McpRoutePath, host: server.authority(), origin: "", sessionId: sessionId, body: toolsListRequest(3))
+	let smuggled = server.address.request("POST", target: "@{server.address.authority()}{McpRoutePath}", host: "{ForeignHost}:{server.address.port}", origin: "", sessionId: sessionId, body: toolsListRequest(2))
+	let control = server.address.request("POST", target: McpRoutePath, host: server.address.authority(), origin: "", sessionId: sessionId, body: toolsListRequest(3))
 	try server.stop()
 
 	try Expect.equal(initialized.statusCode, expected: OkStatus, message: "the control `initialize` did not succeed, so nothing below says anything about the target")
@@ -71,8 +71,8 @@ test 'an HTTP-only option without --http is refused by the CLI'
 end 'an HTTP-only option without --http is refused by the CLI'
 
 test 'the endpoint the server prints is on loopback'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
-	let host = server.endpointHost
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let host = server.address.hostName
 	let endpoint = server.endpoint
 	try server.stop()
 

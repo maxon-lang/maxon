@@ -45,7 +45,7 @@ let LowDwordMask = 0xFFFFFFFF
 let HighDwordShift = 32
 
 function wordToBytes(word RegisterWord) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for lane in 0 upto WordBytes 'eachByte'
 		bytes.push(((word shr ((lane * BitsPerByte) as BitShift)) and 0xFF) as Byte)
@@ -85,10 +85,6 @@ module type ScratchPages
 		return self.box.base() != 0
 	end 'held'
 
-	module function readHandle() returns ScratchPages
-		return Self{box: self.box}
-	end 'readHandle'
-
 	module function release()
 		self.box.release()
 	end 'release'
@@ -124,7 +120,7 @@ module type ScratchPages
 	end 'addressOf'
 
 	module function bytesAt(offset ScratchOffset, count DebuggeeByteCount) returns ByteArray
-		var taken = ByteArray.create(0)
+		let taken = ByteArray.create(0)
 		var index = 0 as DebuggeeByteCount
 
 		while index < count 'eachWord'
@@ -160,7 +156,7 @@ public type RegisterBlock
 	let words as RegisterWordArray
 
 	module static function readFrom(pages ScratchPages, at ScratchOffset, length ScratchBytes) returns RegisterBlock
-		var words = RegisterWordArray.create(0)
+		let words = RegisterWordArray.create(0)
 		var index = 0 as ScratchBytes
 
 		while index < length 'eachWord'
@@ -195,6 +191,25 @@ public type RegisterBlock
 		return slot
 	end 'slotOf'
 
+	module function wordAtAnyOffset(offset RegisterOffset) returns RegisterWord throws DebuggeeError
+		let lane = offset mod WordBytes
+		let slot = (offset - lane) as RegisterOffset
+		let low = try self.word(slot)
+
+		if lane == 0 'onAWord'
+			return low
+		end 'onAWord'
+
+		let high = try self.word((slot + WordBytes) as RegisterOffset)
+		let bytes = wordToBytes(low)
+
+		for byte in wordToBytes(high) 'eachByte'
+			bytes.push(byte)
+		end 'eachByte'
+
+		return packedWord(bytes, from: lane as RegisterOffset)
+	end 'wordAtAnyOffset'
+
 	/// Throws `outOfBounds` for an offset that is not a multiple of 8 or is at or past the block's end.
 	public function word(offset RegisterOffset) returns RegisterWord throws DebuggeeError
 		let slot = try self.slotOf(offset)
@@ -205,7 +220,7 @@ public type RegisterBlock
 	/// A new block with the word at `offset` replaced, under the conditions `word` throws on.
 	public function with(offset RegisterOffset, word RegisterWord) returns RegisterBlock throws DebuggeeError
 		let slot = try self.slotOf(offset)
-		var changed = self.words.clone()
+		let changed = self.words.clone()
 		try changed.set(slot, value: word) otherwise throw DebuggeeError.outOfBounds
 
 		return Self{words: changed}
@@ -1002,7 +1017,7 @@ public type ProcessTrace
 			throw DebuggeeError.unwritable
 		end 'unreadable'
 
-		var bytes = wordToBytes(self.scratch.word(TracePeekSlot))
+		let bytes = wordToBytes(self.scratch.word(TracePeekSlot))
 
 		for step in 0 upto taking 'eachByte'
 			let value = try from.get((startingAt + step) as ElementIndex) otherwise throw DebuggeeError.outOfBounds

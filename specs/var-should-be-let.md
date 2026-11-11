@@ -86,7 +86,7 @@ end 'main'
 42
 ```
 
-<!-- test: multiple-var-first-reported -->
+<!-- test: multiple-vars-each-reported -->
 ```maxon
 
 function main() returns ExitCode
@@ -96,7 +96,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3077: specs/var-should-be-let/multiple-var-first-reported.maxon:4:6: variable 'x' is never reassigned; use 'let' instead of 'var'
+error E3077: <fragment>:4:6: variable 'x' is never reassigned; use 'let' instead of 'var'
+error E3077: <fragment>:5:6: variable 'y' is never reassigned; use 'let' instead of 'var'
 ```
 
 <!-- test: var-from-immutable-integer-ok -->
@@ -131,7 +132,7 @@ end 'Point'
 
 function main() returns ExitCode
 	let a = Point.create(1, y: 2)
-	var b = a
+	let b = a
 	b.x = 99
 	return b.x
 end 'main'
@@ -156,7 +157,7 @@ end 'Point'
 
 function main() returns ExitCode
 	let a = Point.create(1, y: 2)
-	var b = a.clone()
+	let b = a.clone()
 	b.x = 99
 	return b.x + a.x
 end 'main'
@@ -214,7 +215,7 @@ end 'Outer'
 
 function main() returns ExitCode
 	let o = Outer.create(Inner.create(42))
-	var i = o.inner
+	let i = o.inner
 	i.value = 99
 	return i.value
 end 'main'
@@ -329,7 +330,7 @@ end 'relay'
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var b = relay(a)
+	let b = relay(a)
 	b.x = 99
 	return a.x
 end 'main'
@@ -514,7 +515,7 @@ function main() returns ExitCode
 	let source = Point.create(1)
 
 	if let a = try relayT(source) 'ok'
-		var b = relay(a)
+		let b = relay(a)
 		b.x = 99
 		return source.x
 	end 'ok'
@@ -559,7 +560,7 @@ end 'PointError'
 
 function main() returns ExitCode
 	if let a = try make(1) 'ok'
-		var b = relay(a)
+		let b = relay(a)
 		b.x = 99
 		return a.x
 	end 'ok'
@@ -717,14 +718,14 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function launder(p Point) returns Point
-	var arr = PointArray.create(0)
+	let arr = PointArray.create(0)
 	arr.push(p)
 	return try arr.get(0) otherwise panic("an element was pushed")
 end 'launder'
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var b = launder(a)
+	let b = launder(a)
 	b.x = 99
 	return a.x
 end 'main'
@@ -764,14 +765,14 @@ type Box
 end 'Box'
 
 function launder(p Point) returns Point
-	var box = Box.create(Point.create(0))
+	let box = Box.create(Point.create(0))
 	box.set(p)
 	return box.get()
 end 'launder'
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var b = launder(a)
+	let b = launder(a)
 	b.x = 99
 	return a.x
 end 'main'
@@ -802,7 +803,7 @@ end 'launder'
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var b = launder(a)
+	let b = launder(a)
 	b.x = 99
 	return a.x
 end 'main'
@@ -812,7 +813,7 @@ end 'main'
 ```
 
 <!-- test: let-record-of-a-let-global-through-a-call -->
-A module-level `let` never moves, and its record is image data, so a write through a value derived from it is refused.
+A `static let` never moves, and its record is image data, so a write through a value derived from it is refused.
 
 ```maxon
 
@@ -821,25 +822,21 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x as Integer
 
-	static function create(x Integer) returns Self
-		return Self{x: x}
-	end 'create'
+	static let origin = Point{x: 1}
 end 'Point'
-
-let origin = Point.create(1)
 
 function relay(p Point) returns Point
 	return p
 end 'relay'
 
 function main() returns ExitCode
-	var b = relay(origin)
+	var b = relay(Point.origin)
 	b.x = 99
-	return origin.x
+	return Point.origin.x
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:21:2: cannot write 'x' through 'b', which is immutable
+error E3197: <fragment>:17:2: cannot write 'x' through 'b', which is immutable
 ```
 
 <!-- test: let-record-alias-of-a-parameter-bound-through-a-call -->
@@ -958,7 +955,7 @@ end 'Box'
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var box = Box.create(a)
+	let box = Box.create(a)
 	box.item.x = 99
 	return a.x
 end 'main'
@@ -986,9 +983,9 @@ typealias PointArray = Array with Point
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var arr = PointArray.create(0)
+	let arr = PointArray.create(0)
 	arr.push(a)
-	var e = try arr.get(0) otherwise panic("an element was pushed")
+	let e = try arr.get(0) otherwise panic("an element was pushed")
 	e.x = 99
 	return a.x
 end 'main'
@@ -1022,7 +1019,7 @@ end 'Box'
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var box = Box.create(Point.create(0))
+	let box = Box.create(Point.create(0))
 	box.item = a
 	box.item.x = 99
 	return a.x
@@ -1077,9 +1074,9 @@ typealias PointArray = Array with Point
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var arr = PointArray.create(0)
+	let arr = PointArray.create(0)
 	arr.push(a)
-	var e = try arr.pop() otherwise panic("one element was pushed")
+	let e = try arr.pop() otherwise panic("one element was pushed")
 	e.x = 99
 	return a.x
 end 'main'
@@ -1106,10 +1103,10 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function main() returns ExitCode
-	var arr = PointArray.create(0)
+	let arr = PointArray.create(0)
 	arr.push(Point.create(1))
 	let s = try arr.get(0) otherwise panic("an element was pushed")
-	var e = try arr.get(0) otherwise panic("an element was pushed")
+	let e = try arr.get(0) otherwise panic("an element was pushed")
 	e.x = 9
 	return s.x
 end 'main'
@@ -1142,7 +1139,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var box = Box.create(Point.create(1))
+	let box = Box.create(Point.create(1))
 	let p = box.item
 	box.item.x = 99
 	return p.x
@@ -1181,7 +1178,7 @@ end 'relay'
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var b = relay(a)
+	let b = relay(a)
 	b.bump()
 	return a.x
 end 'main'
@@ -1215,7 +1212,7 @@ end 'bumpIt'
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var b = relay(a)
+	let b = relay(a)
 	let f = bumpIt
 	f(b)
 	return a.x
@@ -1243,9 +1240,9 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function main() returns ExitCode
-	var arr = PointArray.create(0)
+	let arr = PointArray.create(0)
 	arr.push(Point.create(1))
-	var e = try arr.get(0) otherwise panic("an element was pushed")
+	let e = try arr.get(0) otherwise panic("an element was pushed")
 	let s = try arr.get(0) otherwise panic("an element was pushed")
 	e.x = 9
 	return s.x
@@ -1282,11 +1279,11 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var pair = Pair.create()
+	let pair = Pair.create()
 	pair.left.push(Point.create(3))
 	pair.right.push(Point.create(4))
-	view src = try pair.left.get(0) otherwise panic("an element was pushed")
-	var dst = try pair.right.get(0) otherwise panic("an element was pushed")
+	let src = try pair.left.get(0) otherwise panic("an element was pushed")
+	let dst = try pair.right.get(0) otherwise panic("an element was pushed")
 	dst.x = 9
 	return src.x
 end 'main'
@@ -1314,11 +1311,11 @@ typealias PointArray = Array with Point
 
 function main() returns ExitCode
 	let s = Point.create(1)
-	var arr = PointArray.create(0)
+	let arr = PointArray.create(0)
 
 	if arr.count() == 0 'writes'
 		arr.push(s)
-		var e = try arr.get(0) otherwise panic("an element was pushed")
+		let e = try arr.get(0) otherwise panic("an element was pushed")
 		e.x = 9
 		print("wrote {e.x}\n")
 	end 'writes' else 'reads'
@@ -1361,9 +1358,9 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var p = Point.create(1)
-	var pair = Pair.create(p, right: p)
-	view l = pair.left
+	let p = Point.create(1)
+	let pair = Pair.create(p, right: p)
+	let l = pair.left
 	pair.right.x = 9
 	return l.x
 end 'main'
@@ -1396,11 +1393,11 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var p = Point.create(1)
-	var pair = Pair.create(Point.create(0), right: Point.create(0))
+	let p = Point.create(1)
+	let pair = Pair.create(Point.create(0), right: Point.create(0))
 	pair.left = p
 	pair.right = p
-	view l = pair.left
+	let l = pair.left
 	pair.right.x = 9
 	return l.x
 end 'main'
@@ -1468,7 +1465,7 @@ function fill(bag Bag)
 end 'fill'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	fill(holder.bag)
 	return holder.bag.items.count() as ExitCode
 end 'main'
@@ -1532,7 +1529,7 @@ end 'Bag'
 typealias BagArray = Array with Bag
 
 function makeBags() returns BagArray
-	var bags = BagArray.create(0)
+	let bags = BagArray.create(0)
 	bags.push(Bag.create())
 	bags.push(Bag.create())
 	return bags
@@ -1543,7 +1540,7 @@ function fill(bag Bag)
 end 'fill'
 
 function main() returns ExitCode
-	var bags = makeBags()
+	let bags = makeBags()
 	var total = 0 as Count
 
 	for bag in bags 'eachBag'
@@ -1576,7 +1573,7 @@ end 'Bag'
 typealias BagArray = Array with Bag
 
 function makeBags() returns BagArray
-	var bags = BagArray.create(0)
+	let bags = BagArray.create(0)
 	bags.push(Bag.create())
 	bags.push(Bag.create())
 	return bags

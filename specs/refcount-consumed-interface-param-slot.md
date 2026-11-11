@@ -99,7 +99,7 @@ end 'borrowCount'
 
 // Consumes `p` (mirrors allocateRegistersForFunc storing into FunctionRegAllocator).
 function forFunc(item Integer, p Payload) returns Integer
-	var h = Holder.create(p)
+	let h = Holder.create(p)
 	return h.run() + item
 end 'forFunc'
 
@@ -124,7 +124,7 @@ function withX64(items ItemArray) returns Integer
 end 'withX64'
 
 function main() returns ExitCode
-	var items = ItemArray.create(0)
+	let items = ItemArray.create(0)
 	items.push(1)
 	items.push(2)
 	items.push(3)
@@ -171,9 +171,9 @@ type Holder
 end 'Holder'
 
 function twice(item Integer, p Payload) returns Integer
-	var h1 = Holder.create(p)
+	let h1 = Holder.create(p)
 	let a = h1.run()
-	var h2 = Holder.create(p)
+	let h2 = Holder.create(p)
 	let b = h2.run()
 	return a + b + item
 end 'twice'

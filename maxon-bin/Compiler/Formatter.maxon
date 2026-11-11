@@ -284,8 +284,8 @@ type SourceLines
 	// empty. The emit paths index comments
 	// by line number, so a line that exists and holds nothing still has to exist here.
 	static function of(bytes ByteArray) returns SourceLines
-		var starts = ByteOffsetArray.create(0)
-		var ends = ByteOffsetArray.create(0)
+		let starts = ByteOffsetArray.create(0)
+		let ends = ByteOffsetArray.create(0)
 		var lineStart = 0 as ByteOffset
 		var i = 0 as ByteOffset
 
@@ -403,7 +403,7 @@ type CommentMapBuilder
 	end 'create'
 
 	function build(log CommentLog) returns SourceComments
-		var anchored = InPlaceCommentMap.create()
+		let anchored = InPlaceCommentMap.create()
 
 		match log 'sink'
 			recorded(spans) then self.takeAll(spans, anchored: anchored)
@@ -412,7 +412,7 @@ type CommentMapBuilder
 
 		self.finishLine()
 
-		view byLine = self.comments
+		let byLine = self.comments
 		self.comments = SourceCommentMap.create()
 
 		return SourceComments.create(byLine, inPlace: anchored)
@@ -501,7 +501,7 @@ type CommentMapBuilder
 end 'CommentMapBuilder'
 
 function firstCodeColumns(lines SourceLines, tokens TokenArray) returns FirstCodeMap
-	var firstCode = FirstCodeMap.create()
+	let firstCode = FirstCodeMap.create()
 
 	for token in tokens 'eachToken'
 		if token.kind == TokenKind.newline or token.kind == TokenKind.eof 'notCode'
@@ -2077,8 +2077,8 @@ function formatCore(source String, options FormatOptions) returns String throws 
 	end 'unlexable'
 
 	let lines = SourceLines.of(source.toByteArray())
-	var builder = CommentMapBuilder.create(lines, tokens: lexed.tokens)
-	var state = FormatState.create(lexed.tokens, options: options, lines: lines, comments: builder.build(lexed.comments), keywords: keywords)
+	let builder = CommentMapBuilder.create(lines, tokens: lexed.tokens)
+	let state = FormatState.create(lexed.tokens, options: options, lines: lines, comments: builder.build(lexed.comments), keywords: keywords)
 	return try state.run()
 end 'formatCore'
 
@@ -2131,10 +2131,10 @@ end 'sliceOf'
 /// spelling the walk reaches, so a link back to an ancestor ends the walk there. It throws when a
 /// directory cannot be listed or an entry cannot be identified.
 export function collectFormattableFiles(root FilePath) returns FilePathArray throws CompileError
-	var files = FilePathArray.create(0)
-	var ledger = PhysicalEntryLedger.create()
+	let files = FilePathArray.create(0)
+	let ledger = PhysicalEntryLedger.create()
 
-	var pending = FilePathArray.create(0)
+	let pending = FilePathArray.create(0)
 	pending.push(root)
 
 	while pending.count() > 0 'walk'
@@ -2148,8 +2148,8 @@ export function collectFormattableFiles(root FilePath) returns FilePathArray thr
 
 		let entries = try Directory.list(dir) otherwise throw CompileError.directoryNotFound(dir.path)
 
-		var subdirectories = FilePathArray.create(0)
-		var here = FilePathArray.create(0)
+		let subdirectories = FilePathArray.create(0)
+		let here = FilePathArray.create(0)
 
 		for entry in entries 'eachEntry'
 			if Directory.isDirectory(entry) 'isSubdirectory'

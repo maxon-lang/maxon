@@ -96,7 +96,7 @@ with an empty line — the failure a NUL-scanned length would produce — the pr
 `return 1`.
 ```maxon
 function main() returns ExitCode
-	var stdin = Console.stdin()
+	let stdin = Console.stdin()
 	let line = try stdin.readLine() otherwise 'atEof'
 		return 9
 	end 'atEof'
@@ -134,9 +134,9 @@ one whose second construction faulted on a spent stream, fails here where the re
 would not notice.
 ```maxon
 function main() returns ExitCode
-	var first = Console.stdin()
+	let first = Console.stdin()
 	let a = try first.readLine() otherwise 'firstAtEof'
-		var second = Console.stdin()
+		let second = Console.stdin()
 		let b = try second.readLine() otherwise 'secondAtEof'
 			return 3
 		end 'secondAtEof'
@@ -157,7 +157,7 @@ throw exactly as the first did. A reader that re-issued the read would still be 
 that answered a stale buffer, or that stopped throwing, would not.
 ```maxon
 function main() returns ExitCode
-	var stdin = Console.stdin()
+	let stdin = Console.stdin()
 	var thrown = 0 as Count
 	var i = 0 as Count
 	while i < 3 'again'
@@ -181,7 +181,7 @@ end 'main'
 leaking into the count would answer 64.
 ```maxon
 function main() returns ExitCode
-	var stdin = Console.stdin()
+	let stdin = Console.stdin()
 	let bytes = stdin.readBytes(64)
 	if bytes.count() == 0 'eof'
 		return 5
@@ -199,7 +199,7 @@ hundred of them in a loop is the leak gate's shape: a missing drop is a non-zero
 which the runtime reports as exit 101 rather than as a wrong number.
 ```maxon
 function main() returns ExitCode
-	var stdin = Console.stdin()
+	let stdin = Console.stdin()
 	var total = 0 as Count
 	var i = 0 as Count
 	while i < 100 'reads'

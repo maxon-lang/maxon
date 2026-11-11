@@ -159,7 +159,7 @@ module function emitErrnoOfAnswer(module StdModule, block IrBlock, answer ValueI
 end 'emitErrnoOfAnswer'
 
 module function emitCodeIsOneOf(module StdModule, block IrBlock, code ValueId, codes FullRangeIntArray, ids ValueMinter) returns ValueId
-	var matches = ValueIdArray.create(codes.count(), zeroed: false)
+	let matches = ValueIdArray.create(codes.count(), zeroed: false)
 
 	for candidate in codes 'eachCode'
 		matches.push(emitCompareWithConstant(module, block: block, value: code, pred: StdCmpPred.eq, against: candidate, ids: ids))
@@ -256,8 +256,8 @@ let WsaDataBytes = 408
 // a park here would report a blocking operation that does not block — see `emitIoPark` for why the unit is the
 // blocking operation and not the function.
 export function emitWinsockStartup(module StdModule, func IrFunction, block IrBlock, ready IrBlock, notReady IrBlock, ids ValueMinter)
-	var startup = module.addBlock(func, label: b"mswsa", heat: BlockHeat.normal)
-	var markStarted = module.addBlock(func, label: b"mswsaok", heat: BlockHeat.normal)
+	let startup = module.addBlock(func, label: b"mswsa", heat: BlockHeat.normal)
+	let markStarted = module.addBlock(func, label: b"mswsaok", heat: BlockHeat.normal)
 
 	let started = emitLoadAcquireGlobalWord(module, block: block, label: WinsockStartedLabel, ids: ids)
 	emitBranchOnCompare(module, block: block, value: started, pred: StdCmpPred.ne, against: WinsockNotStarted, whenTrue: ready, whenFalse: startup, ids: ids)
@@ -281,7 +281,7 @@ let WinsockStarted = 1
 // This family's one `.data` word, laid out where a surviving body names it (`DataReach.walked`).
 // `lastWriterWins`: every writer stores the same `WinsockStarted` — `emitWinsockStartup` argues the race.
 export function managedSocketRuntimeGlobals() returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create(0)
+	let out = DataSectionEntryArray.create(0)
 	pushRuntimeGlobal(out, label: WinsockStartedLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked, seed: WinsockNotStarted)
 	return out
 end 'managedSocketRuntimeGlobals'
@@ -509,8 +509,8 @@ export type BuiltSockaddr
 end 'BuiltSockaddr'
 
 export function emitSockaddrFor(module StdModule, func IrFunction, entry IrBlock, joined IrBlock, address ResolvedAddress, port ValueId, target Target, ids ValueMinter) returns BuiltSockaddr
-	var build4 = module.addBlock(func, label: b"msaddr4", heat: BlockHeat.normal)
-	var build6 = module.addBlock(func, label: b"msaddr6", heat: BlockHeat.normal)
+	let build4 = module.addBlock(func, label: b"msaddr4", heat: BlockHeat.normal)
+	let build6 = module.addBlock(func, label: b"msaddr6", heat: BlockHeat.normal)
 
 	let addr = emitRawAlloc(module, block: entry, byteCount: emitConst(module, block: entry, value: SockaddrIn6Bytes, ids: ids), ids: ids)
 	let length = ids.mint()
@@ -562,8 +562,8 @@ export function emitSocketAttempt(module StdModule, func IrFunction, attempt IrB
 end 'emitSocketAttempt'
 
 function emitSocketPolledRetry(module StdModule, func IrFunction, attempt IrBlock, failedCall ValueId, answer ValueId, pollKey ValueId, gen ValueId, mode FullRangeInt, ok IrBlock, failed IrBlock, stale IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
-	var classify = module.addBlock(func, label: b"msclassify", heat: BlockHeat.normal)
-	var waitReady = module.addBlock(func, label: b"mswait", heat: BlockHeat.normal)
+	let classify = module.addBlock(func, label: b"msclassify", heat: BlockHeat.normal)
+	let waitReady = module.addBlock(func, label: b"mswait", heat: BlockHeat.normal)
 
 	module.setTerminator(attempt, op: StdOp.condBranch(failedCall, thenBlockId: classify.id, elseBlockId: ok.id))
 
@@ -588,7 +588,7 @@ end 'emitSocketPolledRetry'
 // The resolver reuses its closing exit because its socket is its own frame's for the whole
 // exchange.
 function emitSocketWaitReady(module StdModule, func IrFunction, block IrBlock, pollKey ValueId, gen ValueId, mode FullRangeInt, timedOut IrBlock, stale IrBlock, ready IrBlock, ids ValueMinter)
-	var live = module.addBlock(func, label: b"mswaitlive", heat: BlockHeat.normal)
+	let live = module.addBlock(func, label: b"mswaitlive", heat: BlockHeat.normal)
 
 	let outcome = emitNetpollPdWait(module, block: block, source: pollKey, mode: mode, gen: gen, ids: ids)
 	emitBranchOnCompare(module, block: block, value: outcome, pred: StdCmpPred.eq, against: NetpollWaitStale, whenTrue: stale, whenFalse: live, ids: ids)
@@ -605,7 +605,7 @@ end 'emitSocketWaitReady'
 // runs after a park of the thread's own, and by then the descriptor may name another socket's life
 // of the same record (`NetpollRuntime.PdOffTimedOut`).
 module function emitSocketLateExit(module StdModule, func IrFunction, pollKey ValueId, gen ValueId, failureFlag FullRangeInt, ids ValueMinter) returns IrBlock
-	var late = module.addBlock(func, label: b"mslate", heat: BlockHeat.normal)
+	let late = module.addBlock(func, label: b"mslate", heat: BlockHeat.normal)
 	emitNetpollPdMarkTimedOut(module, block: late, source: pollKey, gen: gen, ids: ids)
 	emitErrorReturn(module, block: late, flag: failureFlag, ids: ids)
 	return late
@@ -705,14 +705,14 @@ end 'ResolvedAddress'
 // A host holding a colon is only ever an IPv6 literal, so one that fails to parse is `resolveFailed`
 // and is never handed to a resolver. Names resolve to IPv4 addresses alone.
 export function emitResolveHostIp(module StdModule, func IrFunction, resolve IrBlock, resolved IrBlock, resolveFailed IrBlock, renounced IrBlock, host ValueId, shape SocketResolveShape, park GtIoOperation, target Target, ids ValueMinter) returns ResolvedAddress
-	var unnamed = module.addBlock(func, label: b"msnoname", heat: BlockHeat.normal)
-	var named = module.addBlock(func, label: b"mshasname", heat: BlockHeat.normal)
-	var literal = module.addBlock(func, label: b"msiplit", heat: BlockHeat.normal)
-	var notDotted = module.addBlock(func, label: b"msnotv4", heat: BlockHeat.normal)
-	var colonText = module.addBlock(func, label: b"msip6go", heat: BlockHeat.normal)
-	var literal6 = module.addBlock(func, label: b"msip6lit", heat: BlockHeat.normal)
-	var name = module.addBlock(func, label: b"msname", heat: BlockHeat.normal)
-	var lookup = module.addBlock(func, label: b"msnamego", heat: BlockHeat.normal)
+	let unnamed = module.addBlock(func, label: b"msnoname", heat: BlockHeat.normal)
+	let named = module.addBlock(func, label: b"mshasname", heat: BlockHeat.normal)
+	let literal = module.addBlock(func, label: b"msiplit", heat: BlockHeat.normal)
+	let notDotted = module.addBlock(func, label: b"msnotv4", heat: BlockHeat.normal)
+	let colonText = module.addBlock(func, label: b"msip6go", heat: BlockHeat.normal)
+	let literal6 = module.addBlock(func, label: b"msip6lit", heat: BlockHeat.normal)
+	let name = module.addBlock(func, label: b"msname", heat: BlockHeat.normal)
+	let lookup = module.addBlock(func, label: b"msnamego", heat: BlockHeat.normal)
 
 	let address = ResolvedAddress.create(ids.mint(), family: ids.mint(), low: ids.mint(), high: ids.mint())
 	resolved.blockArgs.push(IrBlockArg.create(address.ip, argType: StdType.i64))
@@ -721,7 +721,7 @@ export function emitResolveHostIp(module StdModule, func IrFunction, resolve IrB
 	resolved.blockArgs.push(IrBlockArg.create(address.high, argType: StdType.i64))
 
 	let hostLength = ids.mint()
-	var measured = emitCStringLength(module, func: func, cur: resolve, cstr: host, length: hostLength, ids: ids)
+	let measured = emitCStringLength(module, func: func, cur: resolve, cstr: host, length: hostLength, ids: ids)
 	emitBranchOnCompare(module, block: measured, value: hostLength, pred: StdCmpPred.eq, against: 0, whenTrue: unnamed, whenFalse: named, ids: ids)
 
 	emitRawFree(module, block: unnamed, ptr: host, ids: ids)
@@ -772,8 +772,8 @@ end 'emitBranchToResolvedIpv4'
 // earlier: `emitResolveHostIp` reads its UTF-8 bytes. The copy is released right after the resolve,
 // which blocks on this thread, so nothing reads it later.
 function emitResolveThroughAddrInfo(module StdModule, func IrFunction, lookup IrBlock, resolved IrBlock, resolveFailed IrBlock, host ValueId, ids ValueMinter)
-	var looked = module.addBlock(func, label: b"msgaiok", heat: BlockHeat.normal)
-	var notLooked = module.addBlock(func, label: b"msgaino", heat: BlockHeat.normal)
+	let looked = module.addBlock(func, label: b"msgaiok", heat: BlockHeat.normal)
+	let notLooked = module.addBlock(func, label: b"msgaino", heat: BlockHeat.normal)
 
 	let hints = emitRawAlloc(module, block: lookup, byteCount: emitConst(module, block: lookup, value: AddrInfoBytes, ids: ids), ids: ids)
 	emitStoreDwordPair(module, block: lookup, record: hints, offset: AddrInfoFlagsFamilyOffset, low: 0, high: AfInet, ids: ids)
@@ -811,7 +811,7 @@ function emitResolveThroughBuiltinResolver(module StdModule, func IrFunction, lo
 	let address = emitResolverCall(module, block: lookup, callee: ManagedSocketResolveName, args: twoArgs(host, second: hostLength), ids: ids)
 	emitRawFree(module, block: lookup, ptr: host, ids: ids)
 
-	var found = module.addBlock(func, label: b"msnamefound", heat: BlockHeat.normal)
+	let found = module.addBlock(func, label: b"msnamefound", heat: BlockHeat.normal)
 	module.setTerminator(lookup, op: StdOp.condBranch(emitIsAddress(module, block: lookup, answer: address, ids: ids), thenBlockId: found.id, elseBlockId: resolveFailed.id))
 	pushBranchEdge(lookup, to: found, values: argsOf(address))
 
@@ -839,26 +839,26 @@ end 'emitResolveThroughBuiltinResolver'
 // that could leave. The `addrinfo` LIST is the OS's and goes back through
 // `FreeAddrInfoW` or `freeaddrinfo`, never through `__mm_free`.
 function buildManagedSocketTcpConnect(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedSocketTcpConnectName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedSocketThrows())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedSocketTcpConnectName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedSocketThrows())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var init = module.addBlock(func, label: b"msinit", heat: BlockHeat.normal)
-	var noWinsock = module.addBlock(func, label: b"msnowsa", heat: BlockHeat.normal)
-	var resolve = module.addBlock(func, label: b"msresolve", heat: BlockHeat.normal)
-	var resolveFailed = module.addBlock(func, label: b"msdnsfail", heat: BlockHeat.normal)
-	var resolved = module.addBlock(func, label: b"msaddr", heat: BlockHeat.normal)
-	var refused = module.addBlock(func, label: b"msrefused", heat: BlockHeat.normal)
-	var create = module.addBlock(func, label: b"mssock", heat: BlockHeat.normal)
-	var noSocket = module.addBlock(func, label: b"msnosock", heat: BlockHeat.normal)
-	var registerSource = module.addBlock(func, label: b"msregister", heat: BlockHeat.normal)
-	var dial = module.addBlock(func, label: b"msdial", heat: BlockHeat.normal)
-	var dialing = module.addBlock(func, label: b"msdialgo", heat: BlockHeat.normal)
-	var dialAddressed = module.addBlock(func, label: b"msdialaddr", heat: BlockHeat.normal)
-	var dialPending = module.addBlock(func, label: b"msdialwait", heat: BlockHeat.normal)
-	var closeAndFail = module.addBlock(func, label: b"msconnclose", heat: BlockHeat.normal)
-	var closeAndTimeOut = module.addBlock(func, label: b"msconnlate", heat: BlockHeat.normal)
-	var connected = module.addBlock(func, label: b"msok", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let init = module.addBlock(func, label: b"msinit", heat: BlockHeat.normal)
+	let noWinsock = module.addBlock(func, label: b"msnowsa", heat: BlockHeat.normal)
+	let resolve = module.addBlock(func, label: b"msresolve", heat: BlockHeat.normal)
+	let resolveFailed = module.addBlock(func, label: b"msdnsfail", heat: BlockHeat.normal)
+	let resolved = module.addBlock(func, label: b"msaddr", heat: BlockHeat.normal)
+	let refused = module.addBlock(func, label: b"msrefused", heat: BlockHeat.normal)
+	let create = module.addBlock(func, label: b"mssock", heat: BlockHeat.normal)
+	let noSocket = module.addBlock(func, label: b"msnosock", heat: BlockHeat.normal)
+	let registerSource = module.addBlock(func, label: b"msregister", heat: BlockHeat.normal)
+	let dial = module.addBlock(func, label: b"msdial", heat: BlockHeat.normal)
+	let dialing = module.addBlock(func, label: b"msdialgo", heat: BlockHeat.normal)
+	let dialAddressed = module.addBlock(func, label: b"msdialaddr", heat: BlockHeat.normal)
+	let dialPending = module.addBlock(func, label: b"msdialwait", heat: BlockHeat.normal)
+	let closeAndFail = module.addBlock(func, label: b"msconnclose", heat: BlockHeat.normal)
+	let closeAndTimeOut = module.addBlock(func, label: b"msconnlate", heat: BlockHeat.normal)
+	let connected = module.addBlock(func, label: b"msok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let hostRec = 0
@@ -927,7 +927,7 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	// The box: one 8-byte slot holding the socket, allocated through `__mm_alloc` so the ordinary ownership
 	// machinery drops it — and the drop it takes is `__ms_destruct`, which CLOSES the socket before freeing
 	// the memory (`SignatureIndex.managedNameDropCallee`). That is the whole RAII half of this type.
-	let box = emitRawAlloc(module, block: connected, byteCount: emitConst(module, block: connected, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
+	let box = emitHandleBoxAlloc(module, block: connected, byteCount: emitConst(module, block: connected, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
 	emitStoreHandleSlot(module, block: connected, record: box, handleOffset: ManagedSocketHandleOffset, handle: socket, ids: ids)
 	emitOkReturn(module, block: connected, value: box, ids: ids)
 
@@ -959,7 +959,7 @@ function emitSocketPolledDial(module StdModule, func IrFunction, ids ValueMinter
 	// and closes the socket: on a stale answer that fd number may name another socket. This exit leaks
 	// nothing, because the wait goes stale only when the record was reset under it, and then the
 	// descriptor this frame opened is already gone.
-	var staleExit = module.addBlock(func, label: b"msdialstale", heat: BlockHeat.normal)
+	let staleExit = module.addBlock(func, label: b"msdialstale", heat: BlockHeat.normal)
 	emitErrorReturn(module, block: staleExit, flag: ManagedSocketConnectFailedFlag, ids: ids)
 	emitSocketConnectWait(module, func: func, cur: dialPending, answer: dialResult, socket: socket, pollKey: pollKey, gen: gen, connected: connected, failed: failed, late: late, stale: staleExit, shape: SocketWaitShape.polled, target: target, ids: ids)
 end 'emitSocketPolledDial'
@@ -982,18 +982,18 @@ end 'emitSocketPolledDial'
 //
 // The socket stays non-blocking afterwards, which an overlapped `WSARecv` or `WSASend` ignores.
 function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinter, dial IrBlock, dialPending IrBlock, socket ValueId, addr ValueId, addrLen ValueId, deadlineMs ValueId, connected IrBlock, failed IrBlock, late IrBlock)
-	var noEvent = module.addBlock(func, label: b"msnoevent", heat: BlockHeat.normal)
-	var armWatch = module.addBlock(func, label: b"mswatch", heat: BlockHeat.normal)
-	var watchRefused = module.addBlock(func, label: b"mswatchno", heat: BlockHeat.normal)
-	var issue = module.addBlock(func, label: b"msdialissue", heat: BlockHeat.normal)
-	var openSource = module.addBlock(func, label: b"msdialsource", heat: BlockHeat.normal)
-	var watching = module.addBlock(func, label: b"msdialwatch", heat: BlockHeat.normal)
-	var awaited = module.addBlock(func, label: b"msdialawaited", heat: BlockHeat.normal)
-	var verify = module.addBlock(func, label: b"msdialverify", heat: BlockHeat.normal)
-	var giveBack = module.addBlock(func, label: b"msdialgiveback", heat: BlockHeat.normal)
-	var dropEvent = module.addBlock(func, label: b"msdialdropevent", heat: BlockHeat.normal)
-	var notSignalled = module.addBlock(func, label: b"msdialunsignalled", heat: BlockHeat.normal)
-	var dropEventLate = module.addBlock(func, label: b"msdialdropeventlate", heat: BlockHeat.normal)
+	let noEvent = module.addBlock(func, label: b"msnoevent", heat: BlockHeat.normal)
+	let armWatch = module.addBlock(func, label: b"mswatch", heat: BlockHeat.normal)
+	let watchRefused = module.addBlock(func, label: b"mswatchno", heat: BlockHeat.normal)
+	let issue = module.addBlock(func, label: b"msdialissue", heat: BlockHeat.normal)
+	let openSource = module.addBlock(func, label: b"msdialsource", heat: BlockHeat.normal)
+	let watching = module.addBlock(func, label: b"msdialwatch", heat: BlockHeat.normal)
+	let awaited = module.addBlock(func, label: b"msdialawaited", heat: BlockHeat.normal)
+	let verify = module.addBlock(func, label: b"msdialverify", heat: BlockHeat.normal)
+	let giveBack = module.addBlock(func, label: b"msdialgiveback", heat: BlockHeat.normal)
+	let dropEvent = module.addBlock(func, label: b"msdialdropevent", heat: BlockHeat.normal)
+	let notSignalled = module.addBlock(func, label: b"msdialunsignalled", heat: BlockHeat.normal)
+	let dropEventLate = module.addBlock(func, label: b"msdialdropeventlate", heat: BlockHeat.normal)
 
 	let event = ids.mint()
 	module.appendOp(dial, op: StdOp.osEventCreate(event))
@@ -1096,8 +1096,8 @@ function emitSocketConnectWait(module StdModule, func IrFunction, cur IrBlock, a
 end 'emitSocketConnectWait'
 
 function emitSocketConnectPolledWait(module StdModule, func IrFunction, cur IrBlock, answer ValueId, socket ValueId, pollKey ValueId, gen ValueId, connected IrBlock, failed IrBlock, late IrBlock, stale IrBlock, target Target, ids ValueMinter)
-	var waitWritable = module.addBlock(func, label: b"msdialready", heat: BlockHeat.normal)
-	var verify = module.addBlock(func, label: b"msdialverify", heat: BlockHeat.normal)
+	let waitWritable = module.addBlock(func, label: b"msdialready", heat: BlockHeat.normal)
+	let verify = module.addBlock(func, label: b"msdialverify", heat: BlockHeat.normal)
 
 	let pending = emitSocketWouldBlock(module, block: cur, answer: answer, target: target, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(pending, thenBlockId: waitWritable.id, elseBlockId: failed.id))
@@ -1141,22 +1141,22 @@ let SocketOptionScratchBytes = 8
 // tree for the reason recorded there; it is a defect of that builder, outside this spec's cases, and is
 // reported rather than changed here.
 function buildManagedSocketSendFrom(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedSocketSendFromName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: managedSocketThrows())
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(ManagedSocketSendFromName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: managedSocketThrows())
+	let ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkOffset = module.addBlock(func, label: b"mschkoff", heat: BlockHeat.normal)
-	var checkLength = module.addBlock(func, label: b"mschklen", heat: BlockHeat.normal)
-	var pickBound = module.addBlock(func, label: b"msbound", heat: BlockHeat.normal)
-	var viewBound = module.addBlock(func, label: b"msviewb", heat: BlockHeat.normal)
-	var ownedBound = module.addBlock(func, label: b"msownb", heat: BlockHeat.normal)
-	var checkCap = module.addBlock(func, label: b"mschkcap", heat: BlockHeat.normal)
-	var outOfBounds = module.addBlock(func, label: b"msoob", heat: BlockHeat.normal)
-	var doSend = module.addBlock(func, label: b"mssend", heat: BlockHeat.normal)
-	var sending = module.addBlock(func, label: b"mssendgo", heat: BlockHeat.normal)
-	var sendAttempt = module.addBlock(func, label: b"mssendtry", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"msfail", heat: BlockHeat.normal)
-	var ok = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkOffset = module.addBlock(func, label: b"mschkoff", heat: BlockHeat.normal)
+	let checkLength = module.addBlock(func, label: b"mschklen", heat: BlockHeat.normal)
+	let pickBound = module.addBlock(func, label: b"msbound", heat: BlockHeat.normal)
+	let viewBound = module.addBlock(func, label: b"msviewb", heat: BlockHeat.normal)
+	let ownedBound = module.addBlock(func, label: b"msownb", heat: BlockHeat.normal)
+	let checkCap = module.addBlock(func, label: b"mschkcap", heat: BlockHeat.normal)
+	let outOfBounds = module.addBlock(func, label: b"msoob", heat: BlockHeat.normal)
+	let doSend = module.addBlock(func, label: b"mssend", heat: BlockHeat.normal)
+	let sending = module.addBlock(func, label: b"mssendgo", heat: BlockHeat.normal)
+	let sendAttempt = module.addBlock(func, label: b"mssendtry", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"msfail", heat: BlockHeat.normal)
+	let ok = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let box = 0
@@ -1234,16 +1234,16 @@ end 'buildManagedSocketSendFrom'
 // method fills `managed` up to its capacity. A caller that wants fewer bytes allocates a smaller buffer,
 // which is what `stdlib/TcpClient.maxon:62` does.
 function buildManagedSocketRecv(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedSocketRecvName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedSocketThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedSocketRecvName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedSocketThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkCap = module.addBlock(func, label: b"mschkcap", heat: BlockHeat.normal)
-	var doRecv = module.addBlock(func, label: b"msrecv", heat: BlockHeat.normal)
-	var receiving = module.addBlock(func, label: b"msrecvgo", heat: BlockHeat.normal)
-	var recvAttempt = module.addBlock(func, label: b"msrecvtry", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"msfail", heat: BlockHeat.normal)
-	var ok = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkCap = module.addBlock(func, label: b"mschkcap", heat: BlockHeat.normal)
+	let doRecv = module.addBlock(func, label: b"msrecv", heat: BlockHeat.normal)
+	let receiving = module.addBlock(func, label: b"msrecvgo", heat: BlockHeat.normal)
+	let recvAttempt = module.addBlock(func, label: b"msrecvtry", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"msfail", heat: BlockHeat.normal)
+	let ok = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let box = 0
@@ -1311,7 +1311,7 @@ function emitSocketTransfer(module StdModule, func IrFunction, ids ValueMinter, 
 	let moved = ids.mint()
 	ok.blockArgs.push(IrBlockArg.create(moved, argType: StdType.i64))
 	let mode = socketTransferMode(direction)
-	view timedOut = emitSocketLateExit(module, func: func, pollKey: pollKey, gen: gen, failureFlag: failureFlag, ids: ids)
+	let timedOut = emitSocketLateExit(module, func: func, pollKey: pollKey, gen: gen, failureFlag: failureFlag, ids: ids)
 
 	match shape 'shape'
 		polled then emitSocketPolledTransfer(module, func: func, ids: ids, attempt: attempt, socket: socket, pollKey: pollKey, gen: gen, buffer: buffer, length: length, direction: direction, mode: mode, ok: ok, failed: failed, timedOut: timedOut, target: target)
@@ -1349,15 +1349,15 @@ end 'emitSocketPolledTransfer'
 // this call's own, and every road out frees it exactly once — including the two that must first collect an
 // outstanding packet.
 function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, gen ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, mode FullRangeInt, ok IrBlock, failed IrBlock, timedOut IrBlock)
-	var issueFailed = module.addBlock(func, label: b"msnostart", heat: BlockHeat.normal)
-	var waitHdr = module.addBlock(func, label: b"mswaitovl", heat: BlockHeat.normal)
-	var landed = module.addBlock(func, label: b"mslanded", heat: BlockHeat.normal)
-	var notReady = module.addBlock(func, label: b"msnotready", heat: BlockHeat.normal)
-	var lateCollect = module.addBlock(func, label: b"mslatecollect", heat: BlockHeat.normal)
-	var lateCollected = module.addBlock(func, label: b"mslatecollected", heat: BlockHeat.normal)
-	var lateFree = module.addBlock(func, label: b"mslatefree", heat: BlockHeat.normal)
-	var staleCollect = module.addBlock(func, label: b"msstalecollect", heat: BlockHeat.normal)
-	var completed = module.addBlock(func, label: b"mscompleted", heat: BlockHeat.normal)
+	let issueFailed = module.addBlock(func, label: b"msnostart", heat: BlockHeat.normal)
+	let waitHdr = module.addBlock(func, label: b"mswaitovl", heat: BlockHeat.normal)
+	let landed = module.addBlock(func, label: b"mslanded", heat: BlockHeat.normal)
+	let notReady = module.addBlock(func, label: b"msnotready", heat: BlockHeat.normal)
+	let lateCollect = module.addBlock(func, label: b"mslatecollect", heat: BlockHeat.normal)
+	let lateCollected = module.addBlock(func, label: b"mslatecollected", heat: BlockHeat.normal)
+	let lateFree = module.addBlock(func, label: b"mslatefree", heat: BlockHeat.normal)
+	let staleCollect = module.addBlock(func, label: b"msstalecollect", heat: BlockHeat.normal)
+	let completed = module.addBlock(func, label: b"mscompleted", heat: BlockHeat.normal)
 
 	let gt = emitLoadCurrentGt(module, block: attempt, ids: ids)
 	let overlapped = emitBin(module, block: attempt, a: gt, b: emitConst(module, block: attempt, value: GtOffOverlapped as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
@@ -1460,9 +1460,9 @@ end 'emitSocketPacketPair'
 // somebody else. Whether the request still has to be CANCELLED to make that packet come is the caller's
 // question, because only the caller knows whether it may still name the descriptor.
 function emitSocketCollectOutstanding(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, mode FullRangeInt, cont IrBlock)
-	var wait = module.addBlock(func, label: b"mscollect", heat: BlockHeat.normal)
-	var collected = module.addBlock(func, label: b"mscollected", heat: BlockHeat.normal)
-	var notACompletion = module.addBlock(func, label: b"mscollectbad", heat: BlockHeat.normal)
+	let wait = module.addBlock(func, label: b"mscollect", heat: BlockHeat.normal)
+	let collected = module.addBlock(func, label: b"mscollected", heat: BlockHeat.normal)
+	let notACompletion = module.addBlock(func, label: b"mscollectbad", heat: BlockHeat.normal)
 
 	let source = emitNetpollOpSettle(module, block: cur, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: source, pred: StdCmpPred.ne, against: 0, whenTrue: wait, whenFalse: cont, ids: ids)
@@ -1509,12 +1509,12 @@ let WsaBufMaxBytes = 4294967295
 // what makes the documented "close then let the destructor close again" sequence safe rather than a second
 // `closesocket` on a descriptor the OS may have reused.
 function buildManagedSocketClose(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedSocketCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedSocketCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var doClose = module.addBlock(func, label: b"msdo", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let doClose = module.addBlock(func, label: b"msdo", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -1540,13 +1540,13 @@ function buildManagedSocketClose(module StdModule, target Target)
 end 'buildManagedSocketClose'
 
 function buildManagedSocketShutdownWrite(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketShutdownWriteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedSocketThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedSocketShutdownWriteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedSocketThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var shut = module.addBlock(func, label: b"msshut", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"msshutok", heat: BlockHeat.normal)
-	var refused = module.addBlock(func, label: b"msshutno", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let shut = module.addBlock(func, label: b"msshut", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"msshutok", heat: BlockHeat.normal)
+	let refused = module.addBlock(func, label: b"msshutno", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -1571,11 +1571,11 @@ end 'buildManagedSocketShutdownWrite'
 // ⚠ It THROWS, and the only variant it can raise is `closed` — a deadline set on a socket that has been
 // closed is a caller error, and the guard that says so is the one every other method uses.
 function buildManagedSocketSetDeadline(module StdModule, name ByteArray, mode FullRangeInt, target Target)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedSocketThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedSocketThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var arm = module.addBlock(func, label: b"msarmdl", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let arm = module.addBlock(func, label: b"msarmdl", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let box = 0
@@ -1597,10 +1597,10 @@ end 'buildManagedSocketSetDeadline'
 // it throw would put a `try` on the one call a handler makes while it is already handling an error.
 //
 function buildManagedSocketTimedOut(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedSocketTimedOutName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedSocketTimedOutName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -1610,8 +1610,8 @@ function buildManagedSocketTimedOut(module StdModule, target Target)
 end 'buildManagedSocketTimedOut'
 
 function emitManagedSocketTimedOutAnswer(module StdModule, func IrFunction, entry IrBlock, box ValueId, target Target, ids ValueMinter)
-	var live = module.addBlock(func, label: b"mstolive", heat: BlockHeat.normal)
-	var gone = module.addBlock(func, label: b"mstogone", heat: BlockHeat.normal)
+	let live = module.addBlock(func, label: b"mstolive", heat: BlockHeat.normal)
+	let gone = module.addBlock(func, label: b"mstogone", heat: BlockHeat.normal)
 
 	let slot = emitLoadField(module, block: entry, record: box, offset: ManagedSocketHandleOffset, ids: ids)
 	let closed = emitCompareWithConstant(module, block: entry, value: slot, pred: StdCmpPred.eq, against: ManagedSocketClosedHandle, ids: ids)
@@ -1638,12 +1638,12 @@ end 'emitManagedSocketTimedOutAnswer'
 // ⭐ It reuses `__ms_close` rather than re-emitting the close, so idempotence is stated once: an explicit
 // `s.close()` followed by the scope-exit drop finds the sentinel already stored and does nothing.
 function buildManagedSocketDestruct(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedSocketDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
-	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	let drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -1677,7 +1677,7 @@ end 'verifyManagedSocketOrdinals'
 // CI builds every lane from carries that check. A case inserted anywhere else is refused by the seed — four
 // red lanes on `main` with no fix available to anyone.
 function claimManagedSocketOrdinals(project Project, declaration EnumLayout)
-	var socketErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedSocketOrdinalInstaller)
+	let socketErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedSocketOrdinalInstaller)
 	socketErrors.claim(ManagedSocketBufferOutOfBoundsCaseName, ordinal: ManagedSocketBufferOutOfBoundsOrdinal)
 	socketErrors.claim(ManagedSocketResolveFailedCaseName, ordinal: ManagedSocketResolveFailedOrdinal)
 	socketErrors.claim(ManagedSocketConnectFailedCaseName, ordinal: ManagedSocketConnectFailedOrdinal)
@@ -1965,15 +1965,15 @@ end 'emitIsAddress'
 // rather than an expression — which is exactly why the two functions share a BUILDER instead of sharing a
 // runtime argument.
 function buildManagedSocketSpan(module StdModule, name ByteArray, skipBlanks bool)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"msspan", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"msspb", heat: BlockHeat.normal)
-	var tabTest = module.addBlock(func, label: b"mssptab", heat: BlockHeat.normal)
-	var step = module.addBlock(func, label: b"msspstep", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"msspdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"msspan", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"msspb", heat: BlockHeat.normal)
+	let tabTest = module.addBlock(func, label: b"mssptab", heat: BlockHeat.normal)
+	let step = module.addBlock(func, label: b"msspstep", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"msspdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let buf = 0
@@ -2009,14 +2009,14 @@ end 'buildManagedSocketSpan'
 // rather than a third `buildManagedSocketSpan` specialization because it tests ONE byte and the span tests
 // two, and a builder parameterised over the byte SET would be the set written down twice.
 function buildManagedSocketEol(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketEolName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedSocketEolName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"mseol", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"mseolb", heat: BlockHeat.normal)
-	var step = module.addBlock(func, label: b"mseolstep", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"mseoldone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"mseol", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"mseolb", heat: BlockHeat.normal)
+	let step = module.addBlock(func, label: b"mseolstep", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"mseoldone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let buf = 0
@@ -2045,7 +2045,7 @@ end 'buildManagedSocketEol'
 // because `MmRuntime`'s `argsOf`/`twoArgs`/`threeArgs`/`fourArgs` family stops at four and this loop needs
 // six — which is also why the six are named here once rather than pushed at each of the three edges.
 function ipv4LoopArgs(pos ValueId, address ValueId, scale ValueId, octet ValueId, digits ValueId, closed ValueId) returns ValueIdArray
-	var args = fourArgs(pos, second: address, third: scale, fourth: octet)
+	let args = fourArgs(pos, second: address, third: scale, fourth: octet)
 	args.push(digits)
 	args.push(closed)
 	return args
@@ -2064,23 +2064,23 @@ end 'ipv4LoopArgs'
 // ⚠ Six values ride the loop: the cursor, the address so far, the next octet's byte SCALE, the octet being
 // read, how many digits it has (which is what refuses an EMPTY octet) and how many octets are closed.
 function buildManagedSocketIpv4(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketIpv4Name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedSocketIpv4Name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"msip", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"msipb", heat: BlockHeat.normal)
-	var digitLow = module.addBlock(func, label: b"msipdlo", heat: BlockHeat.normal)
-	var digitHigh = module.addBlock(func, label: b"msipdhi", heat: BlockHeat.normal)
-	var digit = module.addBlock(func, label: b"msipdig", heat: BlockHeat.normal)
-	var digitFits = module.addBlock(func, label: b"msipdfit", heat: BlockHeat.normal)
-	var dot = module.addBlock(func, label: b"msipdot", heat: BlockHeat.normal)
-	var dotCount = module.addBlock(func, label: b"msipdcnt", heat: BlockHeat.normal)
-	var dotClosed = module.addBlock(func, label: b"msipdcl", heat: BlockHeat.normal)
-	var finish = module.addBlock(func, label: b"msipfin", heat: BlockHeat.normal)
-	var finishCount = module.addBlock(func, label: b"msipfcnt", heat: BlockHeat.normal)
-	var finishClosed = module.addBlock(func, label: b"msipfcl", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"msipbad", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"msip", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"msipb", heat: BlockHeat.normal)
+	let digitLow = module.addBlock(func, label: b"msipdlo", heat: BlockHeat.normal)
+	let digitHigh = module.addBlock(func, label: b"msipdhi", heat: BlockHeat.normal)
+	let digit = module.addBlock(func, label: b"msipdig", heat: BlockHeat.normal)
+	let digitFits = module.addBlock(func, label: b"msipdfit", heat: BlockHeat.normal)
+	let dot = module.addBlock(func, label: b"msipdot", heat: BlockHeat.normal)
+	let dotCount = module.addBlock(func, label: b"msipdcnt", heat: BlockHeat.normal)
+	let dotClosed = module.addBlock(func, label: b"msipdcl", heat: BlockHeat.normal)
+	let finish = module.addBlock(func, label: b"msipfin", heat: BlockHeat.normal)
+	let finishCount = module.addBlock(func, label: b"msipfcnt", heat: BlockHeat.normal)
+	let finishClosed = module.addBlock(func, label: b"msipfcl", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"msipbad", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let buf = 0
@@ -2157,15 +2157,15 @@ function buildManagedSocketIpv4(module StdModule)
 end 'buildManagedSocketIpv4'
 
 function buildManagedSocketHasColon(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketHasColonName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedSocketHasColonName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"mshc", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"mshcb", heat: BlockHeat.normal)
-	var step = module.addBlock(func, label: b"mshcstep", heat: BlockHeat.normal)
-	var found = module.addBlock(func, label: b"mshcyes", heat: BlockHeat.normal)
-	var missing = module.addBlock(func, label: b"mshcno", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"mshc", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"mshcb", heat: BlockHeat.normal)
+	let step = module.addBlock(func, label: b"mshcstep", heat: BlockHeat.normal)
+	let found = module.addBlock(func, label: b"mshcyes", heat: BlockHeat.normal)
+	let missing = module.addBlock(func, label: b"mshcno", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let buf = 0
@@ -2192,7 +2192,7 @@ function buildManagedSocketHasColon(module StdModule)
 end 'buildManagedSocketHasColon'
 
 function ipv6LoopArgs(pos ValueId, value ValueId, digits ValueId, outIndex ValueId, gap ValueId, tokenStart ValueId) returns ValueIdArray
-	var args = fourArgs(pos, second: value, third: digits, fourth: outIndex)
+	let args = fourArgs(pos, second: value, third: digits, fourth: outIndex)
 	args.push(gap)
 	args.push(tokenStart)
 	return args
@@ -2225,52 +2225,52 @@ end 'emitIpv6HexValue'
 // URL's spelling, which `URL.host()` has already stripped. The tail after a `::` moves up from its last
 // byte, since its destination is never below its source.
 function buildManagedSocketIpv6(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketIpv6Name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedSocketIpv6Name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var first = module.addBlock(func, label: b"msv6first", heat: BlockHeat.normal)
-	var leadColon = module.addBlock(func, label: b"msv6lead", heat: BlockHeat.normal)
-	var leadSecond = module.addBlock(func, label: b"msv6lead2", heat: BlockHeat.normal)
-	var startPlain = module.addBlock(func, label: b"msv6start", heat: BlockHeat.normal)
-	var startLead = module.addBlock(func, label: b"msv6startlead", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"msv6", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"msv6b", heat: BlockHeat.normal)
-	var notColon = module.addBlock(func, label: b"msv6nc", heat: BlockHeat.normal)
-	var digitLow = module.addBlock(func, label: b"msv6dlo", heat: BlockHeat.normal)
-	var digitHigh = module.addBlock(func, label: b"msv6dhi", heat: BlockHeat.normal)
-	var upperLow = module.addBlock(func, label: b"msv6ulo", heat: BlockHeat.normal)
-	var upperHigh = module.addBlock(func, label: b"msv6uhi", heat: BlockHeat.normal)
-	var lowerLow = module.addBlock(func, label: b"msv6llo", heat: BlockHeat.normal)
-	var lowerHigh = module.addBlock(func, label: b"msv6lhi", heat: BlockHeat.normal)
-	var decimal = module.addBlock(func, label: b"msv6dec", heat: BlockHeat.normal)
-	var upper = module.addBlock(func, label: b"msv6up", heat: BlockHeat.normal)
-	var lower = module.addBlock(func, label: b"msv6low", heat: BlockHeat.normal)
-	var hex = module.addBlock(func, label: b"msv6hex", heat: BlockHeat.normal)
-	var hexAccept = module.addBlock(func, label: b"msv6hexok", heat: BlockHeat.normal)
-	var colon = module.addBlock(func, label: b"msv6col", heat: BlockHeat.normal)
-	var colonGap = module.addBlock(func, label: b"msv6gap", heat: BlockHeat.normal)
-	var gapSet = module.addBlock(func, label: b"msv6gapset", heat: BlockHeat.normal)
-	var colonGroup = module.addBlock(func, label: b"msv6grp", heat: BlockHeat.normal)
-	var colonFlush = module.addBlock(func, label: b"msv6grpflush", heat: BlockHeat.normal)
-	var colonStore = module.addBlock(func, label: b"msv6grpstore", heat: BlockHeat.normal)
-	var dot = module.addBlock(func, label: b"msv6dot", heat: BlockHeat.normal)
-	var dotParse = module.addBlock(func, label: b"msv6dotparse", heat: BlockHeat.normal)
-	var dotStore = module.addBlock(func, label: b"msv6dotstore", heat: BlockHeat.normal)
-	var finish = module.addBlock(func, label: b"msv6fin", heat: BlockHeat.normal)
-	var finishFlush = module.addBlock(func, label: b"msv6finflush", heat: BlockHeat.normal)
-	var finishStore = module.addBlock(func, label: b"msv6finstore", heat: BlockHeat.normal)
-	var closeUp = module.addBlock(func, label: b"msv6close", heat: BlockHeat.normal)
-	var exact = module.addBlock(func, label: b"msv6exact", heat: BlockHeat.normal)
-	var gapped = module.addBlock(func, label: b"msv6gapped", heat: BlockHeat.normal)
-	var compress = module.addBlock(func, label: b"msv6squeeze", heat: BlockHeat.normal)
-	var moveHeader = module.addBlock(func, label: b"msv6move", heat: BlockHeat.normal)
-	var moveBody = module.addBlock(func, label: b"msv6moveb", heat: BlockHeat.normal)
-	var zeroStart = module.addBlock(func, label: b"msv6zero", heat: BlockHeat.normal)
-	var zeroHeader = module.addBlock(func, label: b"msv6zerohdr", heat: BlockHeat.normal)
-	var zeroBody = module.addBlock(func, label: b"msv6zerob", heat: BlockHeat.normal)
-	var success = module.addBlock(func, label: b"msv6ok", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"msv6bad", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let first = module.addBlock(func, label: b"msv6first", heat: BlockHeat.normal)
+	let leadColon = module.addBlock(func, label: b"msv6lead", heat: BlockHeat.normal)
+	let leadSecond = module.addBlock(func, label: b"msv6lead2", heat: BlockHeat.normal)
+	let startPlain = module.addBlock(func, label: b"msv6start", heat: BlockHeat.normal)
+	let startLead = module.addBlock(func, label: b"msv6startlead", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"msv6", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"msv6b", heat: BlockHeat.normal)
+	let notColon = module.addBlock(func, label: b"msv6nc", heat: BlockHeat.normal)
+	let digitLow = module.addBlock(func, label: b"msv6dlo", heat: BlockHeat.normal)
+	let digitHigh = module.addBlock(func, label: b"msv6dhi", heat: BlockHeat.normal)
+	let upperLow = module.addBlock(func, label: b"msv6ulo", heat: BlockHeat.normal)
+	let upperHigh = module.addBlock(func, label: b"msv6uhi", heat: BlockHeat.normal)
+	let lowerLow = module.addBlock(func, label: b"msv6llo", heat: BlockHeat.normal)
+	let lowerHigh = module.addBlock(func, label: b"msv6lhi", heat: BlockHeat.normal)
+	let decimal = module.addBlock(func, label: b"msv6dec", heat: BlockHeat.normal)
+	let upper = module.addBlock(func, label: b"msv6up", heat: BlockHeat.normal)
+	let lower = module.addBlock(func, label: b"msv6low", heat: BlockHeat.normal)
+	let hex = module.addBlock(func, label: b"msv6hex", heat: BlockHeat.normal)
+	let hexAccept = module.addBlock(func, label: b"msv6hexok", heat: BlockHeat.normal)
+	let colon = module.addBlock(func, label: b"msv6col", heat: BlockHeat.normal)
+	let colonGap = module.addBlock(func, label: b"msv6gap", heat: BlockHeat.normal)
+	let gapSet = module.addBlock(func, label: b"msv6gapset", heat: BlockHeat.normal)
+	let colonGroup = module.addBlock(func, label: b"msv6grp", heat: BlockHeat.normal)
+	let colonFlush = module.addBlock(func, label: b"msv6grpflush", heat: BlockHeat.normal)
+	let colonStore = module.addBlock(func, label: b"msv6grpstore", heat: BlockHeat.normal)
+	let dot = module.addBlock(func, label: b"msv6dot", heat: BlockHeat.normal)
+	let dotParse = module.addBlock(func, label: b"msv6dotparse", heat: BlockHeat.normal)
+	let dotStore = module.addBlock(func, label: b"msv6dotstore", heat: BlockHeat.normal)
+	let finish = module.addBlock(func, label: b"msv6fin", heat: BlockHeat.normal)
+	let finishFlush = module.addBlock(func, label: b"msv6finflush", heat: BlockHeat.normal)
+	let finishStore = module.addBlock(func, label: b"msv6finstore", heat: BlockHeat.normal)
+	let closeUp = module.addBlock(func, label: b"msv6close", heat: BlockHeat.normal)
+	let exact = module.addBlock(func, label: b"msv6exact", heat: BlockHeat.normal)
+	let gapped = module.addBlock(func, label: b"msv6gapped", heat: BlockHeat.normal)
+	let compress = module.addBlock(func, label: b"msv6squeeze", heat: BlockHeat.normal)
+	let moveHeader = module.addBlock(func, label: b"msv6move", heat: BlockHeat.normal)
+	let moveBody = module.addBlock(func, label: b"msv6moveb", heat: BlockHeat.normal)
+	let zeroStart = module.addBlock(func, label: b"msv6zero", heat: BlockHeat.normal)
+	let zeroHeader = module.addBlock(func, label: b"msv6zerohdr", heat: BlockHeat.normal)
+	let zeroBody = module.addBlock(func, label: b"msv6zerob", heat: BlockHeat.normal)
+	let success = module.addBlock(func, label: b"msv6ok", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"msv6bad", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let buf = 0
@@ -2437,13 +2437,13 @@ end 'buildManagedSocketIpv6'
 // because `__ManagedSocketError` has one resolve variant and a missing `/etc/resolv.conf` is a resolve
 // failure like any other.
 function buildManagedSocketSlurp(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketSlurpName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedSocketSlurpName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var opened = module.addBlock(func, label: b"msslop", heat: BlockHeat.normal)
-	var read = module.addBlock(func, label: b"msslrd", heat: BlockHeat.normal)
-	var empty = module.addBlock(func, label: b"msslno", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let opened = module.addBlock(func, label: b"msslop", heat: BlockHeat.normal)
+	let read = module.addBlock(func, label: b"msslrd", heat: BlockHeat.normal)
+	let empty = module.addBlock(func, label: b"msslno", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let path = 0 as ValueId
@@ -2526,22 +2526,22 @@ end 'emitResolverLineWalk'
 // ⚠ **THE COMPARISON IS LENGTH-FIRST**, which is what keeps the byte loop off every unrelated name in the
 // file rather than only off the ones that differ early.
 function buildManagedSocketHosts(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketHostsName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(ManagedSocketHostsName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
+	let ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var lineHeader = module.addBlock(func, label: b"mshl", heat: BlockHeat.normal)
-	var lineStart = module.addBlock(func, label: b"mshls", heat: BlockHeat.normal)
-	var haveAddress = module.addBlock(func, label: b"mshaddr", heat: BlockHeat.normal)
-	var namesStart = module.addBlock(func, label: b"mshns", heat: BlockHeat.normal)
-	var nameHeader = module.addBlock(func, label: b"mshnh", heat: BlockHeat.normal)
-	var nameCheck = module.addBlock(func, label: b"mshnc", heat: BlockHeat.normal)
-	var lengthCheck = module.addBlock(func, label: b"mshlen", heat: BlockHeat.normal)
-	var compare = module.addBlock(func, label: b"mshcmp", heat: BlockHeat.normal)
-	var matched = module.addBlock(func, label: b"mshhit", heat: BlockHeat.normal)
-	var nextName = module.addBlock(func, label: b"mshnn", heat: BlockHeat.normal)
-	var nextLine = module.addBlock(func, label: b"mshnl", heat: BlockHeat.normal)
-	var notFound = module.addBlock(func, label: b"mshno", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let lineHeader = module.addBlock(func, label: b"mshl", heat: BlockHeat.normal)
+	let lineStart = module.addBlock(func, label: b"mshls", heat: BlockHeat.normal)
+	let haveAddress = module.addBlock(func, label: b"mshaddr", heat: BlockHeat.normal)
+	let namesStart = module.addBlock(func, label: b"mshns", heat: BlockHeat.normal)
+	let nameHeader = module.addBlock(func, label: b"mshnh", heat: BlockHeat.normal)
+	let nameCheck = module.addBlock(func, label: b"mshnc", heat: BlockHeat.normal)
+	let lengthCheck = module.addBlock(func, label: b"mshlen", heat: BlockHeat.normal)
+	let compare = module.addBlock(func, label: b"mshcmp", heat: BlockHeat.normal)
+	let matched = module.addBlock(func, label: b"mshhit", heat: BlockHeat.normal)
+	let nextName = module.addBlock(func, label: b"mshnn", heat: BlockHeat.normal)
+	let nextLine = module.addBlock(func, label: b"mshnl", heat: BlockHeat.normal)
+	let notFound = module.addBlock(func, label: b"mshno", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let host = 0
@@ -2600,18 +2600,18 @@ end 'buildManagedSocketHosts'
 // would be reached only when the first REFUSES a connection, and answering *no address* is the same outcome
 // one round trip sooner.
 function buildManagedSocketNameserver(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketNameserverName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedSocketNameserverName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var lineHeader = module.addBlock(func, label: b"msnl", heat: BlockHeat.normal)
-	var lineStart = module.addBlock(func, label: b"msnls", heat: BlockHeat.normal)
-	var keyCompare = module.addBlock(func, label: b"msnkc", heat: BlockHeat.normal)
-	var keyMatched = module.addBlock(func, label: b"msnkm", heat: BlockHeat.normal)
-	var haveValue = module.addBlock(func, label: b"msnv", heat: BlockHeat.normal)
-	var found = module.addBlock(func, label: b"msnhit", heat: BlockHeat.normal)
-	var nextLine = module.addBlock(func, label: b"msnnl", heat: BlockHeat.normal)
-	var notFound = module.addBlock(func, label: b"msnno", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let lineHeader = module.addBlock(func, label: b"msnl", heat: BlockHeat.normal)
+	let lineStart = module.addBlock(func, label: b"msnls", heat: BlockHeat.normal)
+	let keyCompare = module.addBlock(func, label: b"msnkc", heat: BlockHeat.normal)
+	let keyMatched = module.addBlock(func, label: b"msnkm", heat: BlockHeat.normal)
+	let haveValue = module.addBlock(func, label: b"msnv", heat: BlockHeat.normal)
+	let found = module.addBlock(func, label: b"msnhit", heat: BlockHeat.normal)
+	let nextLine = module.addBlock(func, label: b"msnnl", heat: BlockHeat.normal)
+	let notFound = module.addBlock(func, label: b"msnno", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let buf = 0
@@ -2654,17 +2654,17 @@ end 'buildManagedSocketNameserver'
 // set — and an answer's name is nearly always the pointer form, because it points back at the question.
 // Neither form is FOLLOWED here: this walk only needs the byte AFTER the name.
 function buildManagedSocketDnsSkip(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketDnsSkipName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedSocketDnsSkipName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"msdn", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"msdnb", heat: BlockHeat.normal)
-	var root = module.addBlock(func, label: b"msdnr", heat: BlockHeat.normal)
-	var pointerTest = module.addBlock(func, label: b"msdnpt", heat: BlockHeat.normal)
-	var pointer = module.addBlock(func, label: b"msdnp", heat: BlockHeat.normal)
-	var label = module.addBlock(func, label: b"msdnl", heat: BlockHeat.normal)
-	var truncated = module.addBlock(func, label: b"msdnt", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"msdn", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"msdnb", heat: BlockHeat.normal)
+	let root = module.addBlock(func, label: b"msdnr", heat: BlockHeat.normal)
+	let pointerTest = module.addBlock(func, label: b"msdnpt", heat: BlockHeat.normal)
+	let pointer = module.addBlock(func, label: b"msdnp", heat: BlockHeat.normal)
+	let label = module.addBlock(func, label: b"msdnl", heat: BlockHeat.normal)
+	let truncated = module.addBlock(func, label: b"msdnt", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let buf = 0
@@ -2723,48 +2723,48 @@ end 'buildManagedSocketDnsSkip'
 // ⚠ The query id is echoed and NOT checked: a fresh connection carries exactly one exchange, so there is no
 // other answer it could be confused with (see `DnsQueryId`).
 function buildManagedSocketDns(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedSocketDnsName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedSocketDnsName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var sized = module.addBlock(func, label: b"msdsz", heat: BlockHeat.normal)
-	var nameHeader = module.addBlock(func, label: b"msdq", heat: BlockHeat.normal)
-	var nameByte = module.addBlock(func, label: b"msdqb", heat: BlockHeat.normal)
-	var nameChar = module.addBlock(func, label: b"msdqc", heat: BlockHeat.normal)
-	var nameDot = module.addBlock(func, label: b"msdqd", heat: BlockHeat.normal)
-	var nameDotSized = module.addBlock(func, label: b"msdqds", heat: BlockHeat.normal)
-	var nameFinish = module.addBlock(func, label: b"msdqf", heat: BlockHeat.normal)
-	var nameFinishSized = module.addBlock(func, label: b"msdqfs", heat: BlockHeat.normal)
-	var question = module.addBlock(func, label: b"msdqq", heat: BlockHeat.normal)
-	var dial = module.addBlock(func, label: b"msddial", heat: BlockHeat.normal)
-	var connectStep = module.addBlock(func, label: b"msdconn", heat: BlockHeat.normal)
-	var connectWait = module.addBlock(func, label: b"msdconnw", heat: BlockHeat.normal)
-	var sendStep = module.addBlock(func, label: b"msdsend", heat: BlockHeat.normal)
-	var sentOk = module.addBlock(func, label: b"msdsent", heat: BlockHeat.normal)
-	var recvStart = module.addBlock(func, label: b"msdrs", heat: BlockHeat.normal)
-	var recvHeader = module.addBlock(func, label: b"msdrh", heat: BlockHeat.normal)
-	var recvFull = module.addBlock(func, label: b"msdrf", heat: BlockHeat.normal)
-	var recvRead = module.addBlock(func, label: b"msdrr", heat: BlockHeat.normal)
-	var readOk = module.addBlock(func, label: b"msdrok", heat: BlockHeat.normal)
-	var recvEof = module.addBlock(func, label: b"msdre", heat: BlockHeat.normal)
-	var recvGot = module.addBlock(func, label: b"msdrg", heat: BlockHeat.normal)
-	var recvCheck = module.addBlock(func, label: b"msdrc", heat: BlockHeat.normal)
-	var recvDone = module.addBlock(func, label: b"msdrd", heat: BlockHeat.normal)
-	var recvMore = module.addBlock(func, label: b"msdrm", heat: BlockHeat.normal)
-	var parse = module.addBlock(func, label: b"msdp", heat: BlockHeat.normal)
-	var rcodeCheck = module.addBlock(func, label: b"msdrco", heat: BlockHeat.normal)
-	var answerCount = module.addBlock(func, label: b"msdac", heat: BlockHeat.normal)
-	var skipQuestion = module.addBlock(func, label: b"msdsq", heat: BlockHeat.normal)
-	var answerHeader = module.addBlock(func, label: b"msdah", heat: BlockHeat.normal)
-	var answerBody = module.addBlock(func, label: b"msdab", heat: BlockHeat.normal)
-	var answerFields = module.addBlock(func, label: b"msdaf", heat: BlockHeat.normal)
-	var addressRecord = module.addBlock(func, label: b"msdar", heat: BlockHeat.normal)
-	var addressRoom = module.addBlock(func, label: b"msdaroom", heat: BlockHeat.normal)
-	var haveAddress = module.addBlock(func, label: b"msdhit", heat: BlockHeat.normal)
-	var answerNext = module.addBlock(func, label: b"msdan", heat: BlockHeat.normal)
-	var closeFailed = module.addBlock(func, label: b"msdclf", heat: BlockHeat.normal)
-	var releaseFailed = module.addBlock(func, label: b"msdrel", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"msdno", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let sized = module.addBlock(func, label: b"msdsz", heat: BlockHeat.normal)
+	let nameHeader = module.addBlock(func, label: b"msdq", heat: BlockHeat.normal)
+	let nameByte = module.addBlock(func, label: b"msdqb", heat: BlockHeat.normal)
+	let nameChar = module.addBlock(func, label: b"msdqc", heat: BlockHeat.normal)
+	let nameDot = module.addBlock(func, label: b"msdqd", heat: BlockHeat.normal)
+	let nameDotSized = module.addBlock(func, label: b"msdqds", heat: BlockHeat.normal)
+	let nameFinish = module.addBlock(func, label: b"msdqf", heat: BlockHeat.normal)
+	let nameFinishSized = module.addBlock(func, label: b"msdqfs", heat: BlockHeat.normal)
+	let question = module.addBlock(func, label: b"msdqq", heat: BlockHeat.normal)
+	let dial = module.addBlock(func, label: b"msddial", heat: BlockHeat.normal)
+	let connectStep = module.addBlock(func, label: b"msdconn", heat: BlockHeat.normal)
+	let connectWait = module.addBlock(func, label: b"msdconnw", heat: BlockHeat.normal)
+	let sendStep = module.addBlock(func, label: b"msdsend", heat: BlockHeat.normal)
+	let sentOk = module.addBlock(func, label: b"msdsent", heat: BlockHeat.normal)
+	let recvStart = module.addBlock(func, label: b"msdrs", heat: BlockHeat.normal)
+	let recvHeader = module.addBlock(func, label: b"msdrh", heat: BlockHeat.normal)
+	let recvFull = module.addBlock(func, label: b"msdrf", heat: BlockHeat.normal)
+	let recvRead = module.addBlock(func, label: b"msdrr", heat: BlockHeat.normal)
+	let readOk = module.addBlock(func, label: b"msdrok", heat: BlockHeat.normal)
+	let recvEof = module.addBlock(func, label: b"msdre", heat: BlockHeat.normal)
+	let recvGot = module.addBlock(func, label: b"msdrg", heat: BlockHeat.normal)
+	let recvCheck = module.addBlock(func, label: b"msdrc", heat: BlockHeat.normal)
+	let recvDone = module.addBlock(func, label: b"msdrd", heat: BlockHeat.normal)
+	let recvMore = module.addBlock(func, label: b"msdrm", heat: BlockHeat.normal)
+	let parse = module.addBlock(func, label: b"msdp", heat: BlockHeat.normal)
+	let rcodeCheck = module.addBlock(func, label: b"msdrco", heat: BlockHeat.normal)
+	let answerCount = module.addBlock(func, label: b"msdac", heat: BlockHeat.normal)
+	let skipQuestion = module.addBlock(func, label: b"msdsq", heat: BlockHeat.normal)
+	let answerHeader = module.addBlock(func, label: b"msdah", heat: BlockHeat.normal)
+	let answerBody = module.addBlock(func, label: b"msdab", heat: BlockHeat.normal)
+	let answerFields = module.addBlock(func, label: b"msdaf", heat: BlockHeat.normal)
+	let addressRecord = module.addBlock(func, label: b"msdar", heat: BlockHeat.normal)
+	let addressRoom = module.addBlock(func, label: b"msdaroom", heat: BlockHeat.normal)
+	let haveAddress = module.addBlock(func, label: b"msdhit", heat: BlockHeat.normal)
+	let answerNext = module.addBlock(func, label: b"msdan", heat: BlockHeat.normal)
+	let closeFailed = module.addBlock(func, label: b"msdclf", heat: BlockHeat.normal)
+	let releaseFailed = module.addBlock(func, label: b"msdrel", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"msdno", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let host = 0
@@ -3002,7 +3002,7 @@ end 'emitDnsLabelLength'
 // because this tier has no `setcc` (`MmRuntime.emitConstReturn` carries that), so a compound condition is
 // blocks — which is why both boundaries call this rather than each spelling the pair.
 function emitDnsLabelGuard(module StdModule, func IrFunction, block IrBlock, labelLength ValueId, bad IrBlock, ok IrBlock, ids ValueMinter)
-	var upper = module.addBlock(func, label: b"msdqlim", heat: BlockHeat.normal)
+	let upper = module.addBlock(func, label: b"msdqlim", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: block, value: labelLength, pred: StdCmpPred.lt, against: 1, whenTrue: bad, whenFalse: upper, ids: ids)
 
@@ -3045,14 +3045,14 @@ end 'emitDnsAddressWord'
 // ⚠ One scratch buffer serves both file reads and is released before the DNS step, which allocates its own —
 // so a resolve holds one 8 KiB block at a time rather than two.
 function buildManagedSocketResolve(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSocketResolveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedSocketResolveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var hostsStep = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var hostsHit = module.addBlock(func, label: b"msrhh", heat: BlockHeat.normal)
-	var serverStep = module.addBlock(func, label: b"msrns", heat: BlockHeat.normal)
-	var queryStep = module.addBlock(func, label: b"msrq", heat: BlockHeat.normal)
-	var noAnswer = module.addBlock(func, label: b"msrno", heat: BlockHeat.normal)
+	let hostsStep = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let hostsHit = module.addBlock(func, label: b"msrhh", heat: BlockHeat.normal)
+	let serverStep = module.addBlock(func, label: b"msrns", heat: BlockHeat.normal)
+	let queryStep = module.addBlock(func, label: b"msrq", heat: BlockHeat.normal)
+	let noAnswer = module.addBlock(func, label: b"msrno", heat: BlockHeat.normal)
 
 	emitParams(module, block: hostsStep, count: 2)
 	let host = 0

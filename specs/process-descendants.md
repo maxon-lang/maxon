@@ -44,7 +44,7 @@ let PollMs = 50
 
 function main() returns ExitCode
 	#if os(Windows)
-	var config = Configuration.create(Executable.name("ping"))
+	let config = Configuration.create(Executable.name("ping"))
 	config.arguments.push("-n")
 	config.arguments.push("30")
 	config.arguments.push("127.0.0.1")
@@ -166,7 +166,7 @@ armed=0 removed=0 named=true onlyOne=true ended=true
 function main() returns ExitCode
 	#if os(Windows)
 	let exe = Executable.name("cmd")
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("exit")
 	argv.push("0")
@@ -206,7 +206,7 @@ function main() returns ExitCode
 	try File.writeText(flag, content: "go") otherwise return 3
 
 	#if os(Windows)
-	var config = Configuration.create(Executable.name("cmd"))
+	let config = Configuration.create(Executable.name("cmd"))
 	config.arguments.push("/c")
 	config.arguments.push("del")
 	config.arguments.push(FlagName)
@@ -261,7 +261,7 @@ let PollMs = 50
 
 function main() returns ExitCode
 	#if os(Windows)
-	var config = Configuration.create(Executable.name("cmd"))
+	let config = Configuration.create(Executable.name("cmd"))
 	config.arguments.push("/c")
 	config.arguments.push("exit")
 	config.arguments.push("0")
@@ -307,7 +307,7 @@ let SleeperLabel = "sleeper="
 
 function detachSleeper() returns ExitCode
 	#if os(Windows)
-	var config = Configuration.create(Executable.name("ping"))
+	let config = Configuration.create(Executable.name("ping"))
 	config.arguments.push("-n")
 	config.arguments.push("30")
 	config.arguments.push("127.0.0.1")
@@ -328,7 +328,7 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let armed = Process.endDescendants()
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 
 	argv.push("child")
 
@@ -384,7 +384,7 @@ let OrphanerMode = "orphaner"
 
 function startSleeper() returns Pid
 	#if os(Windows)
-	var config = Configuration.create(Executable.name("ping"))
+	let config = Configuration.create(Executable.name("ping"))
 	config.arguments.push("-n")
 	config.arguments.push("30")
 	config.arguments.push("127.0.0.1")
@@ -404,7 +404,7 @@ end 'runAsOrphaner'
 function runAsProbe() returns ExitCode
 	let direct = startSleeper()
 	let me = try Process.executablePath() otherwise return 2
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 
 	argv.push(OrphanerMode)
 
@@ -446,12 +446,12 @@ function main() returns ExitCode
 		return runAsOrphaner() if mode == OrphanerMode else runAsProbe()
 	end 'asAChild'
 
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 
 	overrides.upsert(TrackVariable, value: UntrackedValue)
 
 	let me = try Process.executablePath() otherwise return 2
-	var config = Configuration.create(Executable.path(me))
+	let config = Configuration.create(Executable.path(me))
 
 	config.arguments.push(ProbeMode)
 	config.environment = Environment.inheritUpdating(overrides)
@@ -489,7 +489,7 @@ typealias PidArray = Array with Pid
 
 function detachSleeper() returns ExitCode
 	#if os(Windows)
-	var config = Configuration.create(Executable.name("ping"))
+	let config = Configuration.create(Executable.name("ping"))
 	config.arguments.push("-n")
 	config.arguments.push("30")
 	config.arguments.push("127.0.0.1")
@@ -505,7 +505,7 @@ function detachSleeper() returns ExitCode
 end 'detachSleeper'
 
 function framedPids(text String) returns PidArray
-	var found = PidArray.create(0)
+	let found = PidArray.create(0)
 
 	for line in text.split("\n") 'eachLine'
 		if line.startsWith(FramePrefix) 'framed'
@@ -521,7 +521,7 @@ function framedPids(text String) returns PidArray
 end 'framedPids'
 
 function framedTokens(text String) returns StringArray
-	var found = StringArray.create(0)
+	let found = StringArray.create(0)
 
 	for line in text.split("\n") 'eachLine'
 		if line.startsWith(FramePrefix) 'framed'
@@ -543,12 +543,12 @@ function main() returns ExitCode
 		return detachSleeper()
 	end 'asTheChild'
 
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 
 	overrides.upsert(TrackVariable, value: ArmedValue)
 
 	let me = try Process.executablePath() otherwise return 2
-	var config = Configuration.create(Executable.path(me))
+	let config = Configuration.create(Executable.path(me))
 
 	config.arguments.push("child")
 	config.environment = Environment.inheritUpdating(overrides)
@@ -605,7 +605,7 @@ let FramePrefix = "@@maxon-spec@@!"
 
 function waitForShortChild() returns ExitCode
 	#if os(Windows)
-	var config = Configuration.create(Executable.name("ping"))
+	let config = Configuration.create(Executable.name("ping"))
 	config.arguments.push("-n")
 	config.arguments.push("2")
 	config.arguments.push("127.0.0.1")
@@ -633,12 +633,12 @@ function main() returns ExitCode
 		return waitForShortChild()
 	end 'asTheChild'
 
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 
 	overrides.upsert(TrackVariable, value: ArmedValue)
 
 	let me = try Process.executablePath() otherwise return 2
-	var config = Configuration.create(Executable.path(me))
+	let config = Configuration.create(Executable.path(me))
 
 	config.arguments.push("child")
 	config.environment = Environment.inheritUpdating(overrides)
@@ -677,7 +677,7 @@ typealias PidArray = Array with Pid
 
 function detachSleeper() returns ExitCode
 	#if os(Windows)
-	var config = Configuration.create(Executable.name("ping"))
+	let config = Configuration.create(Executable.name("ping"))
 	config.arguments.push("-n")
 	config.arguments.push("30")
 	config.arguments.push("127.0.0.1")
@@ -695,7 +695,7 @@ function detachSleeper() returns ExitCode
 end 'detachSleeper'
 
 function framedPids(text String) returns PidArray
-	var found = PidArray.create(0)
+	let found = PidArray.create(0)
 
 	for line in text.split("\n") 'eachLine'
 		if line.startsWith(FramePrefix) 'framed'
@@ -712,7 +712,7 @@ end 'framedPids'
 
 function runAsChild() returns ExitCode
 	let me = try Process.executablePath() otherwise return 2
-	var config = Configuration.create(Executable.path(me))
+	let config = Configuration.create(Executable.path(me))
 
 	config.arguments.push(GrandchildMode)
 
@@ -732,12 +732,12 @@ function main() returns ExitCode
 		return detachSleeper() if mode == GrandchildMode else runAsChild()
 	end 'asAChild'
 
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 
 	overrides.upsert(TrackVariable, value: ArmedValue)
 
 	let me = try Process.executablePath() otherwise return 2
-	var config = Configuration.create(Executable.path(me))
+	let config = Configuration.create(Executable.path(me))
 
 	config.arguments.push(ChildMode)
 	config.environment = Environment.inheritUpdating(overrides)

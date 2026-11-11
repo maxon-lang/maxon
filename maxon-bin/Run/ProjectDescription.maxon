@@ -92,7 +92,7 @@ export type ManifestVoice
 	end 'sayEntryWords'
 
 	export function asOneMessage() returns StringArray
-		var message = StringArray.create(1, zeroed: false)
+		let message = StringArray.create(1, zeroed: false)
 		message.push(joinedWith(self.said, separator: "\n"))
 		return message
 	end 'asOneMessage'
@@ -162,7 +162,7 @@ export type ManifestVoice
 	end 'runChild'
 
 	function collectedChild(executable FilePath, arguments StringArray, environment Environment, workingDirectory FilePath) returns ExitCode
-		var config = Configuration.create(Executable.path(executable))
+		let config = Configuration.create(Executable.path(executable))
 		config.arguments = arguments
 		config.environment = environment
 		config.workingDirectory = workingDirectory
@@ -195,13 +195,13 @@ export type ManifestVoice
 end 'ManifestVoice'
 
 function capturedCompileError(e CompileError) returns CapturedDiagnosticTextArray
-	var sink = DiagnosticSink.capturing()
+	let sink = DiagnosticSink.capturing()
 	reportCompileError(e, sink: sink)
 	return sink.emitted()
 end 'capturedCompileError'
 
 function capturedRosterError(e EntryRosterError) returns CapturedDiagnosticTextArray
-	var sink = DiagnosticSink.capturing()
+	let sink = DiagnosticSink.capturing()
 	reportEntryRosterError(e, sink: sink)
 	return sink.emitted()
 end 'capturedRosterError'
@@ -221,8 +221,8 @@ export type DescribedBuild
 	end 'create'
 
 	export function declaringAlso(outer MaxonSourcePathArray) returns DescribedBuild
-		var merged = MaxonSourcePathArray.create(0)
-		var held = MaxonSourcePathSet.create()
+		let merged = MaxonSourcePathArray.create(0)
+		let held = MaxonSourcePathSet.create()
 
 		holdNew(outer, into: merged, held: held)
 		holdNew(self.inputs, into: merged, held: held)
@@ -407,7 +407,7 @@ function severalTargetsInputs(projectFile FilePath, projectDir FilePath, declare
 end 'severalTargetsInputs'
 
 function everyTargetInputs(projectFile FilePath, projectDir FilePath, declared TaskNameArray, voice ManifestVoice) returns ProjectInputs
-	var everyTarget = HeldListing.create()
+	let everyTarget = HeldListing.create()
 
 	for target in declared 'eachTarget'
 		match targetInputs(projectFile, projectDir: projectDir, target: target, voice: voice) 'inputs'
@@ -461,7 +461,7 @@ function targetInputs(projectFile FilePath, projectDir FilePath, target String, 
 end 'targetInputs'
 
 function absolutePaths(paths MaxonSourcePathArray) returns MaxonSourcePathArray
-	var absolute = MaxonSourcePathArray.create(paths.count(), zeroed: false)
+	let absolute = MaxonSourcePathArray.create(paths.count(), zeroed: false)
 
 	for path in paths 'eachPath'
 		absolute.push(path.resolve(Directory.currentPath()))
@@ -496,7 +496,7 @@ end 'describedNoBuild'
 // set once for the session by `runLspServer` and left alone here.
 export function runManifestProgram(manifest FilePath, entry ByteArray, base ManifestBase, arguments StringArray, voice ManifestVoice) returns ManifestProgramRun
 	let spoke = voice.quietedChatter()
-	var session = voice.compileSession()
+	let session = voice.compileSession()
 
 	let runner = try cachedBuild(manifest, isProject: false, target: detectHostTarget(), entryFunction: entry, speaker: voice.speaker, session: session) otherwise 'manifestNotBuilt'
 		spoke.restored()
@@ -515,7 +515,7 @@ export function runManifestProgram(manifest FilePath, entry ByteArray, base Mani
 	let description = buildDescriptionPath(runner)
 	discardDescription(description)
 
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 	overrides.upsert(BuildDescriptionVariable, value: description.toString())
 	overrides.upsert(CompilerVariable, value: runningCompilerPath().toString())
 
@@ -597,7 +597,7 @@ end 'refuseWhatIsNotABuild'
 // A field the description states and this cannot use is an error, never a default: a guess is how a
 // build compiles the wrong thing while reporting success.
 export function resolveDescription(described String, manifest FilePath, base ManifestBase, depth DelegationDepth, voice ManifestVoice) returns DescriptionResolution
-	var doc = try Json.parse("{DescribedBuildsOpen}{described}{DescribedBuildsClose}") otherwise return DescriptionResolution.refused(refuseWhatIsNotABuild(described, manifest: manifest, voice: voice))
+	let doc = try Json.parse("{DescribedBuildsOpen}{described}{DescribedBuildsClose}") otherwise return DescriptionResolution.refused(refuseWhatIsNotABuild(described, manifest: manifest, voice: voice))
 	let describedCount = try doc.arrayLength(doc.root) otherwise panic("resolveDescription: the description is parsed inside brackets, so its root is an array")
 
 	if describedCount > 1 'severalBuilds'
@@ -615,7 +615,7 @@ export function resolveDescription(described String, manifest FilePath, base Man
 		return DescriptionResolution.refused(reportMalformedManifestField(ManifestOutputKey, error: e, manifest: manifest, voice: voice))
 	end 'badOutput'
 
-	var statedSources = try manifestSources(doc, build: chosen, base: base) otherwise (e) 'badSources'
+	let statedSources = try manifestSources(doc, build: chosen, base: base) otherwise (e) 'badSources'
 		return DescriptionResolution.refused(reportMalformedManifestField(ManifestSourcesKey, error: e, manifest: manifest, voice: voice))
 	end 'badSources'
 
@@ -739,7 +739,7 @@ end 'manifestInputs'
 
 function manifestPaths(doc JsonDoc, list JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
 	let spellings = try manifestStrings(doc, list: doc.get(list))
-	var paths = MaxonSourcePathArray.create(spellings.count(), zeroed: false)
+	let paths = MaxonSourcePathArray.create(spellings.count(), zeroed: false)
 
 	for spelling in spellings 'eachPath'
 		let stated = rebasedOnManifest(spelling, base: base)
@@ -864,7 +864,7 @@ end 'manifestVersion'
 export function manifestDefines(doc JsonDoc, build JsonNodeId) returns DefineArray throws ManifestFieldError
 	let listId = try doc.getChild(build, key: ManifestDefinesKey) otherwise return DefineArray.create(0)
 	let pairs = try manifestStrings(doc, list: doc.get(listId))
-	var defines = DefineArray.create(pairs.count(), zeroed: false)
+	let defines = DefineArray.create(pairs.count(), zeroed: false)
 
 	for pair in pairs 'eachDefine'
 		defines.push(try defineFromPair(pair) otherwise throw ManifestFieldError.notADefinePair(pair))
@@ -886,7 +886,7 @@ function manifestStrings(doc JsonDoc, list JsonNode) returns ManifestStringArray
 		throw ManifestFieldError.notAListOfStrings
 	end 'notAList'
 
-	var strings = ManifestStringArray.create(list.children.count(), zeroed: false)
+	let strings = ManifestStringArray.create(list.children.count(), zeroed: false)
 
 	for entryId in list.children 'eachEntry'
 		let entry = doc.get(entryId)

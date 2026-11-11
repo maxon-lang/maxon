@@ -71,7 +71,7 @@ function swapFirstTwo(a WordArray)
 end 'swapFirstTwo'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(3)
 	a.push(5)
 	a.push(7)
@@ -107,7 +107,7 @@ function carry(count WordArray, n ElementIndex) returns Word
 end 'carry'
 
 function main() returns ExitCode
-	var count = WordArray.create(0)
+	let count = WordArray.create(0)
 	count.resize(6)
 	if carry(count, n: 6) != 5 'firstPass'
 		return 1
@@ -130,7 +130,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(1)
 	a.push(2)
 	try a.set(0, value: 10) otherwise panic("main: a holds two elements")
@@ -157,7 +157,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)
@@ -196,7 +196,7 @@ function rewrite(a WordArray) returns WordArray
 end 'rewrite'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(1)
 	let kept = rewrite(a)
 	if (try kept.get(0) otherwise 0) != 10 'keptHoldsTheFirstWrite'
@@ -221,7 +221,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(1)
 	a.push(2)
 	let b = a.clone()
@@ -255,7 +255,7 @@ function rewrite(a WordArray, n Word)
 end 'rewrite'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(1)
 	a.push(2)
 	let b = a.clone()
@@ -289,7 +289,7 @@ function rewrite(a WordArray, b WordArray) returns WordArray
 end 'rewrite'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(1)
 	a.push(2)
 	let kept = rewrite(a, b: a)
@@ -319,7 +319,7 @@ function rewrite(a StringArray)
 end 'rewrite'
 
 function main() returns ExitCode
-	var a = StringArray.create(0)
+	let a = StringArray.create(0)
 	a.push("seed")
 	rewrite(a)
 	let kept = try a.get(0) otherwise ""

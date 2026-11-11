@@ -474,7 +474,7 @@ let AsciiColon = 0x3A
 // which is what the two drops are for.
 function splitRow(line String) returns StringArray
 	let raw = line.split("|")
-	var cells = StringArray.create(raw.count(), zeroed: false)
+	let cells = StringArray.create(raw.count(), zeroed: false)
 
 	for i in 1 upto raw.count() - 1 'eachCell'
 		cells.push((try raw.get(i) otherwise panic("splitRow: i < count-1 but get({i}) failed")).trim())
@@ -569,7 +569,7 @@ end 'memoryRowFrom'
 // character that differs, and `cellDifferenceReport` states that rule where the reader is looking at its
 // output rather than in a comment they are not reading.
 function assertSameRun(cells StringArray, date String, mintedAt String, note String, marker String, source String) throws ScaleError
-	var differing = StringArray.create(0)
+	let differing = StringArray.create(0)
 	recordCellDifference(differing, heading: DateColumnHeading, logged: date, other: try cellAt(cells, index: DateColumnIndex, source: source))
 	recordCellDifference(differing, heading: MintedAtColumnHeading, logged: mintedAt, other: try cellAt(cells, index: MintedAtColumnIndex, source: source))
 	recordCellDifference(differing, heading: NoteColumnHeading, logged: note, other: try cellAt(cells, index: NoteColumnIndex, source: source))
@@ -700,7 +700,7 @@ end 'indexAt'
 typealias ParsedCountArray = Array with ParsedCount
 
 function rungCells(cells StringArray, source String) returns ParsedCountArray throws ScaleError
-	var counts = ParsedCountArray.create(cells.count(), zeroed: false)
+	let counts = ParsedCountArray.create(cells.count(), zeroed: false)
 
 	for i in LeadingColumns upto cells.count() 'eachRung'
 		counts.push(try parseGroupedCount(try cellAt(cells, index: i, source: source), source: source, column: i))
@@ -712,7 +712,7 @@ end 'rungCells'
 // A parsed row as the column its table holds. Two builders because the two columns are two
 // instances and a function cannot be generic over which.
 function allocColumnOf(cells ParsedCountArray) returns AllocCountArray
-	var column = AllocCountArray.create(cells.count(), zeroed: false)
+	let column = AllocCountArray.create(cells.count(), zeroed: false)
 
 	for cell in cells 'eachRung'
 		column.push(cell as AllocCount)
@@ -722,7 +722,7 @@ function allocColumnOf(cells ParsedCountArray) returns AllocCountArray
 end 'allocColumnOf'
 
 function byteColumnOf(cells ParsedCountArray) returns ByteCountArray
-	var column = ByteCountArray.create(cells.count(), zeroed: false)
+	let column = ByteCountArray.create(cells.count(), zeroed: false)
 
 	for cell in cells 'eachRung'
 		column.push(cell as HeapByteCount)
@@ -959,7 +959,7 @@ let MarkerSplitParts = 2
 // third table of them would be a near-duplicate paid for in width. They are measured, reported, and
 // carried in `--result-json` for anyone who wants them.
 function renderMemoryRow(results RungResultArray, note String, mintedAt String, date String, measure ScaleMeasure) returns String
-	var cells = StringArray.create(results.count() + LeadingColumns, zeroed: false)
+	let cells = StringArray.create(results.count() + LeadingColumns, zeroed: false)
 	cells.push(date)
 	cells.push(mintedAt)
 	cells.push(note)
@@ -972,7 +972,7 @@ function renderMemoryRow(results RungResultArray, note String, mintedAt String, 
 end 'renderMemoryRow'
 
 function renderRow(cells StringArray) returns String
-	var row = StringBuilder.create()
+	let row = StringBuilder.create()
 	row.append("|")
 
 	for cell in cells 'each'
@@ -997,7 +997,7 @@ export function groupDigits(value Delta) returns String
 	let digits = "{value}"
 	let count = digits.count() as GroupIndex
 
-	var grouped = StringBuilder.create()
+	let grouped = StringBuilder.create()
 	var index = 0 as GroupIndex
 
 	for digit in digits 'eachDigit'

@@ -45,7 +45,7 @@ public type TlsIdentity
 
 	/// The `CERTIFICATE` blocks of `certificates` and the first private key block of `key`.
 	public static function fromPem(certificates String, key String) returns TlsIdentity throws TlsError
-		var chain = ByteArrays.create(0)
+		let chain = ByteArrays.create(0)
 		let certificateBlocks = try Pem.decode(certificates) otherwise throw TlsError.invalidPem
 		let keyBlocks = try Pem.decode(key) otherwise throw TlsError.invalidPem
 
@@ -97,7 +97,7 @@ function tlsRequireSameCurve(first ByteArray, other ByteArray) returns TlsEcCurv
 end 'tlsRequireSameCurve'
 
 function tlsParsePrivateKey(der ByteArray) returns TlsPrivateKey throws TlsError
-	var info = try DerReader.wholeSequence(der) otherwise throw TlsError.invalidPrivateKey
+	let info = try DerReader.wholeSequence(der) otherwise throw TlsError.invalidPrivateKey
 
 	let version = try info.readInteger() otherwise throw TlsError.invalidPrivateKey
 	let next = try info.peekHeader() otherwise throw TlsError.invalidPrivateKey
@@ -130,7 +130,7 @@ function tlsRsaKey(pkcs8 ByteArray) returns TlsPrivateKey throws TlsError
 end 'tlsRsaKey'
 
 function tlsPkcs8Key(der ByteArray, info DerReader) returns TlsPrivateKey throws TlsError
-	var algorithm = try info.enterSequence() otherwise throw TlsError.invalidPrivateKey
+	let algorithm = try info.enterSequence() otherwise throw TlsError.invalidPrivateKey
 	let identifier = try algorithm.readObjectIdentifier() otherwise throw TlsError.invalidPrivateKey
 
 	if identifier.equals(rsaEncryptionOid) 'rsa'
@@ -152,11 +152,11 @@ function tlsPkcs8Key(der ByteArray, info DerReader) returns TlsPrivateKey throws
 
 		try algorithm.finish() otherwise throw TlsError.invalidPrivateKey
 
-		var sec1 = DerReader.create(try info.readOctetString() otherwise throw TlsError.invalidPrivateKey)
+		let sec1 = DerReader.create(try info.readOctetString() otherwise throw TlsError.invalidPrivateKey)
 
 		try info.finish() otherwise throw TlsError.invalidPrivateKey
 
-		var key = try sec1.enterSequence() otherwise throw TlsError.invalidPrivateKey
+		let key = try sec1.enterSequence() otherwise throw TlsError.invalidPrivateKey
 
 		try sec1.finish() otherwise throw TlsError.invalidPrivateKey
 		try requireKeyVersion(try key.readInteger() otherwise throw TlsError.invalidPrivateKey, expected: tlsKeyVersionOne)
@@ -168,7 +168,7 @@ function tlsPkcs8Key(der ByteArray, info DerReader) returns TlsPrivateKey throws
 end 'tlsPkcs8Key'
 
 function tlsEd25519Key(wrapped ByteArray) returns TlsPrivateKey throws TlsError
-	var wrapper = DerReader.create(wrapped)
+	let wrapper = DerReader.create(wrapped)
 	let seed = try wrapper.readOctetString() otherwise throw TlsError.invalidPrivateKey
 
 	try wrapper.finish() otherwise throw TlsError.invalidPrivateKey
@@ -185,7 +185,7 @@ function tlsEcKey(key DerReader, outer TlsEcCurveName) returns TlsPrivateKey thr
 	var inner = TlsEcCurveName.unspecified
 
 	if not key.isAtEnd() and (try key.peekHeader() otherwise throw TlsError.invalidPrivateKey).tagNumber == tlsEcParametersTag 'explicitParameters'
-		var explicit = try key.enterExplicit(tlsEcParametersTag) otherwise throw TlsError.invalidPrivateKey
+		let explicit = try key.enterExplicit(tlsEcParametersTag) otherwise throw TlsError.invalidPrivateKey
 
 		inner = TlsEcCurveName.named(try explicit.readElement() otherwise throw TlsError.invalidPrivateKey)
 
@@ -193,7 +193,7 @@ function tlsEcKey(key DerReader, outer TlsEcCurveName) returns TlsPrivateKey thr
 	end 'explicitParameters'
 
 	if not key.isAtEnd() 'publicKey'
-		var explicit = try key.enterExplicit(tlsEcPublicKeyTag) otherwise throw TlsError.invalidPrivateKey
+		let explicit = try key.enterExplicit(tlsEcPublicKeyTag) otherwise throw TlsError.invalidPrivateKey
 
 		_ = try explicit.readBitString() otherwise throw TlsError.invalidPrivateKey
 
@@ -262,10 +262,10 @@ function tlsPairsWith(key TlsPrivateKey, certificateKey X509PublicKey) returns b
 end 'tlsPairsWith'
 
 function tlsPkcs8OfPkcs1(pkcs1 ByteArray) returns ByteArray
-	var algorithm = derElement(tlsDerObjectIdentifierIdentifier, contents: rsaEncryptionOid)
+	let algorithm = derElement(tlsDerObjectIdentifierIdentifier, contents: rsaEncryptionOid)
 	algorithm.append(x509ParametersNull)
 
-	var body = derElement(tlsDerIntegerIdentifier, contents: tlsKeyVersionZero)
+	let body = derElement(tlsDerIntegerIdentifier, contents: tlsKeyVersionZero)
 	body.append(derElement(tlsDerSequenceIdentifier, contents: algorithm))
 	body.append(derElement(tlsDerOctetStringIdentifier, contents: pkcs1))
 

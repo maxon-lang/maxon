@@ -122,7 +122,7 @@
 			return refuseProfileUsage("unknown verb '{verb}'")
 		end 'unknownVerb'
 
-		var request = ProfileRequest.create()
+		let request = ProfileRequest.create()
 
 		for position in FirstOptionArgument upto args.paths.count() 'eachArgument'
 			let arg = try args.paths.get(position) otherwise panic("runProfile: index {position} is past args.paths.count() despite the upto bound")
@@ -337,7 +337,7 @@
 		// Rooted, because a spawn resolves a bare program name against PATH rather than against the
 		// working directory, so `dir/prog.exe` would be reported missing by the OS moments after this
 		// file found it.
-		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(image.launchPath.anchoredAt(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDirectory(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
+		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(image.launchPath.anchoredAt(Directory.currentPath())), arguments: request.targetArgs, workingDirectory: inheritedWorkingDirectory(), environment: profileChildEnvironment(request)) otherwise (e) 'didNotStart'
 			image.release()
 
 			return refuseProfile("could not run {reportSpelledPathDisplay(request.exePath())}: {e.displayReason()}")
@@ -394,7 +394,7 @@
 			end 'why'
 		end 'cannotOpen'
 
-		var session = ProfileSession.create(process, cyclesPerTick: cyclesPerTick)
+		let session = ProfileSession.create(process, cyclesPerTick: cyclesPerTick)
 
 		let outcome = match attachedImage(request, child: child, session: session, sidecar: sidecar, textBytes: textBytes) 'symbols'
 			refused(reason) gives refuseProfileAfterKilling(child, reason: reason)
@@ -447,10 +447,10 @@
 	end 'profileChildEndsSoon'
 
 	function runProfileTicks(request ProfileRequest, child StreamingSubprocess, session ProfileSession, image ProfileImage) returns ExitCode
-		var accumulator = ProfileAccumulator.create()
-		var frames = ProfileStringArray.create(0)
+		let accumulator = ProfileAccumulator.create()
+		let frames = ProfileStringArray.create(0)
 
-		var timer = SampleTimer.create(profileIntervalNanos(request.rateHz))
+		let timer = SampleTimer.create(profileIntervalNanos(request.rateHz))
 
 		if not timer.ready() 'noTimer'
 			return refuseProfileAfterKilling(child, reason: ProfileNoSamplerReason)
@@ -475,7 +475,7 @@
 
 			// Liveness is checked after the sample, so a short program's last moments are measured rather
 			// than lost to a check that happened to win the race.
-			var observed = profileChildExit(child)
+			let observed = profileChildExit(child)
 
 			if profileStatusObserved(observed) 'itEnded'
 				status = observed

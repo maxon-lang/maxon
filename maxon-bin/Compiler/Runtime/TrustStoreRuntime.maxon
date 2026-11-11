@@ -198,7 +198,7 @@ function emitTrustStoreRelease(module StdModule, block IrBlock, object ValueId, 
 end 'emitTrustStoreRelease'
 
 function emitTrustStoreReleaseIfHeld(module StdModule, func IrFunction, cur IrBlock, held ValueId, done IrBlock, label ByteArray, ids ValueMinter)
-	var release = module.addBlock(func, label: label, heat: BlockHeat.cold)
+	let release = module.addBlock(func, label: label, heat: BlockHeat.cold)
 
 	emitBranchOnCompare(module, block: cur, value: held, pred: StdCmpPred.ne, against: TrustStoreNoContext, whenTrue: release, whenFalse: done, ids: ids)
 	emitTrustStoreRelease(module, block: release, object: held, ids: ids)
@@ -207,14 +207,14 @@ end 'emitTrustStoreReleaseIfHeld'
 
 function emitFreshBytesRecord(module StdModule, func IrFunction, cur IrBlock, record ValueId, src ValueId, byteCount ValueId, ids ValueMinter) returns IrBlock
 	let destination = emitManagedByteBuffer(module, block: cur, record: record, byteCount: byteCount, ids: ids)
-	var copied = emitForwardCopy(module, func: func, cur: cur, dest: destination, src: src, byteCount: byteCount, ids: ids)
+	let copied = emitForwardCopy(module, func: func, cur: cur, dest: destination, src: src, byteCount: byteCount, ids: ids)
 	emitStoreField(module, block: copied, record: record, offset: ManagedRecordLengthOffset, value: byteCount)
 
 	return copied
 end 'emitFreshBytesRecord'
 
 function emitTrustStoreReleaseSlot(module StdModule, func IrFunction, cur IrBlock, store ValueId, offset ByteOffset, ids ValueMinter) returns IrBlock
-	var next = module.addBlock(func, label: b"tsclosed", heat: BlockHeat.normal)
+	let next = module.addBlock(func, label: b"tsclosed", heat: BlockHeat.normal)
 
 	let held = emitLoadField(module, block: cur, record: store, offset: offset, ids: ids)
 	emitTrustStoreReleaseIfHeld(module, func: func, cur: cur, held: held, done: next, label: b"tsreleaseslot", ids: ids)
@@ -223,10 +223,10 @@ function emitTrustStoreReleaseSlot(module StdModule, func IrFunction, cur IrBloc
 end 'emitTrustStoreReleaseSlot'
 
 function buildWindowsTrustStoreClose(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(TrustStoreCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let store = 0
@@ -239,10 +239,10 @@ function buildWindowsTrustStoreClose(module StdModule)
 end 'buildWindowsTrustStoreClose'
 
 function buildWindowsTrustStoreOpen(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(TrustStoreOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	func.stackSize = TrustStoreRootFrameBytes
 	let namePtr = ids.mint()
@@ -263,15 +263,15 @@ function buildWindowsTrustStoreOpen(module StdModule)
 end 'buildWindowsTrustStoreOpen'
 
 function buildWindowsTrustStoreNext(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(TrustStoreNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var found = module.addBlock(func, label: b"tsfound", heat: BlockHeat.normal)
-	var ended = module.addBlock(func, label: b"tsended", heat: BlockHeat.cold)
-	var checkNoMoreFiles = module.addBlock(func, label: b"tscheck", heat: BlockHeat.cold)
-	var failed = module.addBlock(func, label: b"tsfailed", heat: BlockHeat.cold)
-	var complete = module.addBlock(func, label: b"tscomplete", heat: BlockHeat.cold)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let found = module.addBlock(func, label: b"tsfound", heat: BlockHeat.normal)
+	let ended = module.addBlock(func, label: b"tsended", heat: BlockHeat.cold)
+	let checkNoMoreFiles = module.addBlock(func, label: b"tscheck", heat: BlockHeat.cold)
+	let failed = module.addBlock(func, label: b"tsfailed", heat: BlockHeat.cold)
+	let complete = module.addBlock(func, label: b"tscomplete", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: 2)
 	let store = 0
@@ -294,10 +294,10 @@ function buildWindowsTrustStoreNext(module StdModule)
 end 'buildWindowsTrustStoreNext'
 
 function buildWindowsTrustStoreCertificate(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreCertificateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(TrustStoreCertificateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let cursor = 1
@@ -310,18 +310,18 @@ function buildWindowsTrustStoreCertificate(module StdModule)
 	let encodedBytes = emitBin(module, block: entry, a: encodedWord, b: lowDwordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
 
 	let record = ids.mint()
-	var copied = emitFreshBytesRecord(module, func: func, cur: entry, record: record, src: encoded, byteCount: encodedBytes, ids: ids)
+	let copied = emitFreshBytesRecord(module, func: func, cur: entry, record: record, src: encoded, byteCount: encodedBytes, ids: ids)
 	module.setTerminator(copied, op: StdOp.ret(record))
 
 	module.functions.push(func)
 end 'buildWindowsTrustStoreCertificate'
 
 function buildWindowsTrustStoreVerdict(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreVerdictName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let func = IrFunction.createFromStd(TrustStoreVerdictName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 
-	var ids = ValueMinter.create(2)
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	emitConstReturn(module, block: entry, value: TrustVerdictAccepted, ids: ids)
@@ -379,9 +379,9 @@ end 'emitTrustStoreTotal'
 
 function emitTrustStoreCopyDomain(module StdModule, func IrFunction, cur IrBlock, header ValueId, scratch ValueId, domain TrustStoreDomain, ids ValueMinter) returns IrBlock
 	let position = trustStoreDomainWord(domain)
-	var copied = module.addBlock(func, label: freeze "tscopied{position}".toByteArray(), heat: BlockHeat.normal)
-	var counted = module.addBlock(func, label: freeze "tscounted{position}".toByteArray(), heat: BlockHeat.normal)
-	var next = module.addBlock(func, label: freeze "tsdomain{position}".toByteArray(), heat: BlockHeat.normal)
+	let copied = module.addBlock(func, label: freeze "tscopied{position}".toByteArray(), heat: BlockHeat.normal)
+	let counted = module.addBlock(func, label: freeze "tscounted{position}".toByteArray(), heat: BlockHeat.normal)
+	let next = module.addBlock(func, label: freeze "tsdomain{position}".toByteArray(), heat: BlockHeat.normal)
 
 	emitStoreField(module, block: cur, record: scratch, offset: TrustStoreOutOffset, value: emitConst(module, block: cur, value: TrustStoreNoContext, ids: ids))
 	let domainConstant = emitConst(module, block: cur, value: trustStoreDomainConstant(domain), ids: ids)
@@ -419,7 +419,7 @@ function emitTrustStoreCreateKey(module StdModule, block IrBlock, nameAt ValueId
 end 'emitTrustStoreCreateKey'
 
 function emitTrustStoreResolveKey(module StdModule, func IrFunction, cur IrBlock, nameAt ValueId, produced IrBlock, failed IrBlock, ids ValueMinter)
-	var resolved = module.addBlock(func, label: b"tssymbol", heat: BlockHeat.normal)
+	let resolved = module.addBlock(func, label: b"tssymbol", heat: BlockHeat.normal)
 
 	let defaultImage = emitConst(module, block: cur, value: RtldDefault, ids: ids)
 	let address = emitTrustStoreCall(module, block: cur, service: HostProcessCall.lookupSymbol, a0: defaultImage, a1: nameAt, ids: ids)
@@ -431,8 +431,8 @@ end 'emitTrustStoreResolveKey'
 
 // A null key handed to a `CFDictionary` crashes, so a key that did not resolve fails the open.
 function emitTrustStoreLoadKey(module StdModule, func IrFunction, cur IrBlock, header ValueId, scratch ValueId, key TrustStoreKey, failed IrBlock, ids ValueMinter) returns IrBlock
-	var produced = module.addBlock(func, label: b"tskey", heat: BlockHeat.normal)
-	var stored = module.addBlock(func, label: b"tskeystored", heat: BlockHeat.normal)
+	let produced = module.addBlock(func, label: b"tskey", heat: BlockHeat.normal)
+	let stored = module.addBlock(func, label: b"tskeystored", heat: BlockHeat.normal)
 
 	let value = ids.mint()
 	produced.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
@@ -463,12 +463,12 @@ function emitTrustStoreClearHeader(module StdModule, block IrBlock, header Value
 end 'emitTrustStoreClearHeader'
 
 function buildMacosTrustStoreOpen(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(TrustStoreOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"tsfailed", heat: BlockHeat.cold)
-	var opened = module.addBlock(func, label: b"tsopened", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"tsfailed", heat: BlockHeat.cold)
+	let opened = module.addBlock(func, label: b"tsopened", heat: BlockHeat.normal)
 
 	func.stackSize = trustStoreOpenFrameBytes()
 	let scratch = ids.mint()
@@ -499,12 +499,12 @@ function buildMacosTrustStoreOpen(module StdModule)
 end 'buildMacosTrustStoreOpen'
 
 function buildMacosTrustStoreNext(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(TrustStoreNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var advance = module.addBlock(func, label: b"tsadvance", heat: BlockHeat.normal)
-	var finished = module.addBlock(func, label: b"tsfinished", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let advance = module.addBlock(func, label: b"tsadvance", heat: BlockHeat.normal)
+	let finished = module.addBlock(func, label: b"tsfinished", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let store = 0
@@ -523,10 +523,10 @@ function buildMacosTrustStoreNext(module StdModule)
 end 'buildMacosTrustStoreNext'
 
 function emitTrustEntry(module StdModule, func IrFunction, entry IrBlock, store ValueId, cursor ValueId, joined IrBlock, ids ValueMinter) returns (ValueId, ValueId, ValueId)
-	var system = module.addBlock(func, label: b"tsfromsystem", heat: BlockHeat.normal)
-	var beyondSystem = module.addBlock(func, label: b"tsbeyondsystem", heat: BlockHeat.normal)
-	var admin = module.addBlock(func, label: b"tsfromadmin", heat: BlockHeat.normal)
-	var user = module.addBlock(func, label: b"tsfromuser", heat: BlockHeat.normal)
+	let system = module.addBlock(func, label: b"tsfromsystem", heat: BlockHeat.normal)
+	let beyondSystem = module.addBlock(func, label: b"tsbeyondsystem", heat: BlockHeat.normal)
+	let admin = module.addBlock(func, label: b"tsfromadmin", heat: BlockHeat.normal)
+	let user = module.addBlock(func, label: b"tsfromuser", heat: BlockHeat.normal)
 
 	let arrayId = ids.mint()
 	let indexId = ids.mint()
@@ -562,13 +562,13 @@ function emitTrustEntry(module StdModule, func IrFunction, entry IrBlock, store 
 end 'emitTrustEntry'
 
 function buildMacosTrustStoreCertificate(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreCertificateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(TrustStoreCertificateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var located = module.addBlock(func, label: b"tslocated", heat: BlockHeat.normal)
-	var present = module.addBlock(func, label: b"tspresent", heat: BlockHeat.normal)
-	var absent = module.addBlock(func, label: b"tsabsent", heat: BlockHeat.cold)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let located = module.addBlock(func, label: b"tslocated", heat: BlockHeat.normal)
+	let present = module.addBlock(func, label: b"tspresent", heat: BlockHeat.normal)
+	let absent = module.addBlock(func, label: b"tsabsent", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: 2)
 	let store = 0
@@ -584,30 +584,30 @@ function buildMacosTrustStoreCertificate(module StdModule)
 	let dataBytes = emitTrustStoreCall(module, block: present, service: HostProcessCall.cfDataLength, a0: data, a1: unused, ids: ids)
 	let dataStart = emitTrustStoreCall(module, block: present, service: HostProcessCall.cfDataBytes, a0: data, a1: unused, ids: ids)
 	let record = ids.mint()
-	var copied = emitFreshBytesRecord(module, func: func, cur: present, record: record, src: dataStart, byteCount: dataBytes, ids: ids)
+	let copied = emitFreshBytesRecord(module, func: func, cur: present, record: record, src: dataStart, byteCount: dataBytes, ids: ids)
 	emitTrustStoreRelease(module, block: copied, object: data, ids: ids)
 	module.setTerminator(copied, op: StdOp.ret(record))
 
 	let nothing = emitConst(module, block: absent, value: TrustStoreNoBytes, ids: ids)
 	let emptyRecord = ids.mint()
-	var emptied = emitFreshBytesRecord(module, func: func, cur: absent, record: emptyRecord, src: nothing, byteCount: nothing, ids: ids)
+	let emptied = emitFreshBytesRecord(module, func: func, cur: absent, record: emptyRecord, src: nothing, byteCount: nothing, ids: ids)
 	module.setTerminator(emptied, op: StdOp.ret(emptyRecord))
 
 	module.functions.push(func)
 end 'buildMacosTrustStoreCertificate'
 
 function buildMacosTrustStoreVerdict(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreVerdictName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(TrustStoreVerdictName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var located = module.addBlock(func, label: b"tslocated", heat: BlockHeat.normal)
-	var inSettings = module.addBlock(func, label: b"tsinsettings", heat: BlockHeat.normal)
-	var evaluate = module.addBlock(func, label: b"tsevaluate", heat: BlockHeat.normal)
-	var rootResult = module.addBlock(func, label: b"tsresultroot", heat: BlockHeat.normal)
-	var checkAsRoot = module.addBlock(func, label: b"tscheckasroot", heat: BlockHeat.normal)
-	var asRootResult = module.addBlock(func, label: b"tsresultasroot", heat: BlockHeat.normal)
-	var checkDeny = module.addBlock(func, label: b"tscheckdeny", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let located = module.addBlock(func, label: b"tslocated", heat: BlockHeat.normal)
+	let inSettings = module.addBlock(func, label: b"tsinsettings", heat: BlockHeat.normal)
+	let evaluate = module.addBlock(func, label: b"tsevaluate", heat: BlockHeat.normal)
+	let rootResult = module.addBlock(func, label: b"tsresultroot", heat: BlockHeat.normal)
+	let checkAsRoot = module.addBlock(func, label: b"tscheckasroot", heat: BlockHeat.normal)
+	let asRootResult = module.addBlock(func, label: b"tsresultasroot", heat: BlockHeat.normal)
+	let checkDeny = module.addBlock(func, label: b"tscheckdeny", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let store = 0
@@ -615,7 +615,7 @@ function buildMacosTrustStoreVerdict(module StdModule)
 
 	let (entryArray, entryIndex, entryDomain) = emitTrustEntry(module, func: func, entry: entry, store: store, cursor: cursor, joined: located, ids: ids)
 
-	var system = module.addBlock(func, label: b"tsissystem", heat: BlockHeat.normal)
+	let system = module.addBlock(func, label: b"tsissystem", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: located, value: entryDomain, pred: StdCmpPred.eq, against: SecDomainSystem, whenTrue: system, whenFalse: inSettings, ids: ids)
 	emitConstReturn(module, block: system, value: TrustVerdictRoot, ids: ids)
 
@@ -630,8 +630,8 @@ function buildMacosTrustStoreVerdict(module StdModule)
 	emitBranchOnCompare(module, block: checkAsRoot, value: result, pred: StdCmpPred.eq, against: SecResultTrustAsRoot, whenTrue: asRootResult, whenFalse: checkDeny, ids: ids)
 	emitConstReturn(module, block: asRootResult, value: TrustVerdictNonRoot, ids: ids)
 
-	var denied = module.addBlock(func, label: b"tsdenied", heat: BlockHeat.normal)
-	var ignored = module.addBlock(func, label: b"tsignored", heat: BlockHeat.normal)
+	let denied = module.addBlock(func, label: b"tsdenied", heat: BlockHeat.normal)
+	let ignored = module.addBlock(func, label: b"tsignored", heat: BlockHeat.normal)
 	let decision = ids.mint()
 	checkDeny.blockArgs.push(IrBlockArg.create(decision, argType: StdType.i64))
 	emitBranchOnCompare(module, block: checkDeny, value: decision, pred: StdCmpPred.eq, against: SecResultDeny, whenTrue: denied, whenFalse: ignored, ids: ids)
@@ -645,16 +645,16 @@ function buildMacosTrustStoreVerdict(module StdModule)
 end 'buildMacosTrustStoreVerdict'
 
 function buildTrustSslPolicy(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreIsSslPolicyName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(TrustStoreIsSslPolicyName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var named = module.addBlock(func, label: b"tspolicy", heat: BlockHeat.normal)
-	var described = module.addBlock(func, label: b"tsproperties", heat: BlockHeat.normal)
-	var hasOid = module.addBlock(func, label: b"tshasoid", heat: BlockHeat.normal)
-	var noOid = module.addBlock(func, label: b"tsnooid", heat: BlockHeat.normal)
-	var absentOid = module.addBlock(func, label: b"tsabsentoid", heat: BlockHeat.normal)
-	var finish = module.addBlock(func, label: b"tspolicydone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let named = module.addBlock(func, label: b"tspolicy", heat: BlockHeat.normal)
+	let described = module.addBlock(func, label: b"tsproperties", heat: BlockHeat.normal)
+	let hasOid = module.addBlock(func, label: b"tshasoid", heat: BlockHeat.normal)
+	let noOid = module.addBlock(func, label: b"tsnooid", heat: BlockHeat.normal)
+	let absentOid = module.addBlock(func, label: b"tsabsentoid", heat: BlockHeat.normal)
+	let finish = module.addBlock(func, label: b"tspolicydone", heat: BlockHeat.normal)
 
 	func.stackSize = TrustStoreSettingsFrameBytes
 	emitParams(module, block: entry, count: 2)
@@ -701,32 +701,32 @@ end 'buildTrustSslPolicy'
 // policy or to a policy string (a host name) is skipped, a missing result key reads TrustRoot, and the
 // first TrustRoot, TrustAsRoot or Deny ends the walk. A walk that matched nothing is unspecified.
 function buildTrustSslResult(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreSslResultName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(TrustStoreSslResultName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var userAnswered = module.addBlock(func, label: b"tsuseranswered", heat: BlockHeat.normal)
-	var askAdmin = module.addBlock(func, label: b"tsaskadmin", heat: BlockHeat.normal)
-	var adminAnswered = module.addBlock(func, label: b"tsadminanswered", heat: BlockHeat.normal)
-	var dropUser = module.addBlock(func, label: b"tsdropuser", heat: BlockHeat.normal)
-	var dropAdmin = module.addBlock(func, label: b"tsdropadmin", heat: BlockHeat.normal)
-	var settingsHeld = module.addBlock(func, label: b"tssettings", heat: BlockHeat.normal)
-	var emptySettings = module.addBlock(func, label: b"tsemptysettings", heat: BlockHeat.normal)
-	var walk = module.addBlock(func, label: b"tswalk", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"tswalkheader", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"tswalkbody", heat: BlockHeat.normal)
-	var constrained = module.addBlock(func, label: b"tswalkpolicy", heat: BlockHeat.normal)
-	var checkPolicyString = module.addBlock(func, label: b"tswalkpolicystring", heat: BlockHeat.normal)
-	var readResult = module.addBlock(func, label: b"tswalkresult", heat: BlockHeat.normal)
-	var numbered = module.addBlock(func, label: b"tswalknumber", heat: BlockHeat.normal)
-	var defaulted = module.addBlock(func, label: b"tswalkdefault", heat: BlockHeat.normal)
-	var decided = module.addBlock(func, label: b"tswalkdecided", heat: BlockHeat.normal)
-	var checkHigh = module.addBlock(func, label: b"tswalkhigh", heat: BlockHeat.normal)
-	var step = module.addBlock(func, label: b"tswalkstep", heat: BlockHeat.normal)
-	var finished = module.addBlock(func, label: b"tswalkfinished", heat: BlockHeat.normal)
-	var unmatched = module.addBlock(func, label: b"tswalkunmatched", heat: BlockHeat.normal)
-	var walkExit = module.addBlock(func, label: b"tswalkexit", heat: BlockHeat.normal)
-	var unspecified = module.addBlock(func, label: b"tsunspecified", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let userAnswered = module.addBlock(func, label: b"tsuseranswered", heat: BlockHeat.normal)
+	let askAdmin = module.addBlock(func, label: b"tsaskadmin", heat: BlockHeat.normal)
+	let adminAnswered = module.addBlock(func, label: b"tsadminanswered", heat: BlockHeat.normal)
+	let dropUser = module.addBlock(func, label: b"tsdropuser", heat: BlockHeat.normal)
+	let dropAdmin = module.addBlock(func, label: b"tsdropadmin", heat: BlockHeat.normal)
+	let settingsHeld = module.addBlock(func, label: b"tssettings", heat: BlockHeat.normal)
+	let emptySettings = module.addBlock(func, label: b"tsemptysettings", heat: BlockHeat.normal)
+	let walk = module.addBlock(func, label: b"tswalk", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"tswalkheader", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"tswalkbody", heat: BlockHeat.normal)
+	let constrained = module.addBlock(func, label: b"tswalkpolicy", heat: BlockHeat.normal)
+	let checkPolicyString = module.addBlock(func, label: b"tswalkpolicystring", heat: BlockHeat.normal)
+	let readResult = module.addBlock(func, label: b"tswalkresult", heat: BlockHeat.normal)
+	let numbered = module.addBlock(func, label: b"tswalknumber", heat: BlockHeat.normal)
+	let defaulted = module.addBlock(func, label: b"tswalkdefault", heat: BlockHeat.normal)
+	let decided = module.addBlock(func, label: b"tswalkdecided", heat: BlockHeat.normal)
+	let checkHigh = module.addBlock(func, label: b"tswalkhigh", heat: BlockHeat.normal)
+	let step = module.addBlock(func, label: b"tswalkstep", heat: BlockHeat.normal)
+	let finished = module.addBlock(func, label: b"tswalkfinished", heat: BlockHeat.normal)
+	let unmatched = module.addBlock(func, label: b"tswalkunmatched", heat: BlockHeat.normal)
+	let walkExit = module.addBlock(func, label: b"tswalkexit", heat: BlockHeat.normal)
+	let unspecified = module.addBlock(func, label: b"tsunspecified", heat: BlockHeat.normal)
 
 	func.stackSize = TrustStoreSettingsFrameBytes
 	emitParams(module, block: entry, count: 2)
@@ -838,10 +838,10 @@ function buildTrustSslResult(module StdModule)
 end 'buildTrustSslResult'
 
 function buildMacosTrustStoreClose(module StdModule)
-	var func = IrFunction.createFromStd(TrustStoreCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(TrustStoreCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let store = 0

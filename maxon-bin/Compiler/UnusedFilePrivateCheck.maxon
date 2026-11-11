@@ -60,7 +60,7 @@ type CandidatePool
 		end 'theSameDeclaration'
 
 		self.known.insert(position)
-		var inFile = try self.byFile.get(key) otherwise FilePrivateCandidateArray.create(0)
+		let inFile = try self.byFile.get(key) otherwise FilePrivateCandidateArray.create(0)
 		inFile.push(candidate)
 		self.byFile.upsert(key, value: inFile)
 	end 'add'
@@ -97,7 +97,7 @@ type UsageGraph
 	export let usesOf as CandidateAdjacency
 
 	static function create(count ElementIndex) returns UsageGraph
-		var usesOf = CandidateAdjacency.create(count, zeroed: false)
+		let usesOf = CandidateAdjacency.create(count, zeroed: false)
 
 		for _ in 0 upto count 'eachCandidate'
 			usesOf.push(CandidateIndexArray.create(0))
@@ -133,7 +133,7 @@ type UsageGraph
 	// Every candidate is queued once, when it first becomes live, so each edge is read once however the
 	// declarations are ordered in the file.
 	function propagate()
-		var followed = CandidateIndexArray.create(0)
+		let followed = CandidateIndexArray.create(0)
 
 		for index in 0 upto self.live.count() 'eachCandidate'
 			if self.isLive(index) 'aSeed'
@@ -167,8 +167,8 @@ module function checkUnusedFilePrivate(project Project, module MaxonModule, sign
 	end 'aRefusedUseHidesAReader'
 
 	let sources = splitSourcePaths(project)
-	var auditedFiles = FilePathArray.create(0)
-	var auditedPaths = AuditedPathSet.create()
+	let auditedFiles = FilePathArray.create(0)
+	let auditedPaths = AuditedPathSet.create()
 
 	for path in sources.userFiles 'eachUserFile'
 		auditedFiles.push(path)
@@ -234,7 +234,7 @@ end 'gatherTemplateCandidates'
 
 function gatherConstantCandidates(signatures ProgramSignatures, pool CandidatePool)
 	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
-		view decl = signatures.declAt(i)
+		let decl = signatures.declAt(i)
 
 		if decl.visibility != Visibility.file or decl.scope.isType() or isSynthesizedName(signatures, name: decl.name) 'notAnAuthorsFilePrivateConstant'
 			continue
@@ -246,7 +246,7 @@ end 'gatherConstantCandidates'
 
 function gatherTypeCandidates(project Project, signatures ProgramSignatures, files FilePathArray, pool CandidatePool) throws CompileError
 	for path in files 'eachFile'
-		view artifact = try queryParseOps(project, path: path)
+		let artifact = try queryParseOps(project, path: path)
 
 		for decl in artifact.typeNameDecls 'eachTypeName'
 			if decl.claim.visibility != Visibility.file or isTypeAliasDecl(decl.claim.kind) or isSynthesizedName(signatures, name: decl.name) 'notAnAuthorsFilePrivateType'
@@ -259,8 +259,8 @@ function gatherTypeCandidates(project Project, signatures ProgramSignatures, fil
 end 'gatherTypeCandidates'
 
 function auditFile(project Project, signatures ProgramSignatures, path FilePath, candidates FilePrivateCandidateArray) throws CompileError
-	view tokens = try queryActiveTokens(project, path: path)
-	var reader = structuralFileReader(project, signatures: signatures, path: path, tokens: tokens)
+	let tokens = try queryActiveTokens(project, path: path)
+	let reader = structuralFileReader(project, signatures: signatures, path: path, tokens: tokens)
 	let located = locateDeclarations(tokens, candidates: candidates, path: path, reader: reader)
 	let conditional = try conditionalSpellingsOf(project, path: path)
 	let watched = watchedNamesOf(located, conditional: conditional)
@@ -287,19 +287,19 @@ function auditFile(project Project, signatures ProgramSignatures, path FilePath,
 end 'auditFile'
 
 function locateDeclarations(tokens TokenArray, candidates FilePrivateCandidateArray, path FilePath, reader mutable Parser) returns LocatedDeclarations
-	var onLine = CandidateIndexByLineMap.create()
+	let onLine = CandidateIndexByLineMap.create()
 
 	for position in 0 upto candidates.count() 'eachCandidate'
 		let candidate = try candidates.get(position) otherwise panic("locateDeclarations: candidate {position} is outside the {candidates.count()} this file holds")
-		var sharing = try onLine.get(candidate.nameLine) otherwise CandidateIndexArray.create(0)
+		let sharing = try onLine.get(candidate.nameLine) otherwise CandidateIndexArray.create(0)
 		sharing.push(position)
 		onLine.upsert(candidate.nameLine, value: sharing)
 	end 'eachCandidate'
 
-	var declarationAt = CandidateIndexByTokenMap.create()
-	var candidatesNamed = CandidateIndexByNameMap.create()
-	var names = CandidateNameMap.create()
-	var limits = CandidateLimitMap.create()
+	let declarationAt = CandidateIndexByTokenMap.create()
+	let candidatesNamed = CandidateIndexByNameMap.create()
+	let names = CandidateNameMap.create()
+	let limits = CandidateLimitMap.create()
 
 	for at in 0 upto tokens.count() 'eachToken'
 		let token = try tokens.get(at) otherwise panic("locateDeclarations: token {at} is outside the {tokens.count()} of {path.toString()}")
@@ -317,7 +317,7 @@ function locateDeclarations(tokens TokenArray, candidates FilePrivateCandidateAr
 				continue
 			end 'anotherName'
 
-			var named = try candidatesNamed.get(token.value) otherwise CandidateIndexArray.create(0)
+			let named = try candidatesNamed.get(token.value) otherwise CandidateIndexArray.create(0)
 			named.push(position)
 			candidatesNamed.upsert(token.value, value: named)
 			declarationAt.upsert(at, value: position)
@@ -342,7 +342,7 @@ function extentLimitOf(extent CandidateExtent, nameAt ElementIndex, tokens Token
 end 'extentLimitOf'
 
 function watchedNamesOf(located LocatedDeclarations, conditional NameRoster) returns WatchedNameSet
-	var watched = WatchedNameSet.create()
+	let watched = WatchedNameSet.create()
 
 	for spelling in conditional 'eachSpelling'
 		if located.candidatesNamed.contains(spelling) 'aCandidateName'
@@ -392,7 +392,7 @@ end 'countSpelling'
 // live on every target.
 function creditNamesSpelledOutsideTheActiveArms(project Project, path FilePath, located LocatedDeclarations, watched WatchedNameSet, activeCounts SpellingCountMap, graph UsageGraph) throws CompileError
 	let rawCounts = SpellingCountMap.create()
-	view rawTokens = try queryTokens(project, path: path)
+	let rawTokens = try queryTokens(project, path: path)
 
 	for token in rawTokens 'eachRawToken'
 		if tokenCanBeAName(token) and watched.contains(token.value) 'aWatchedName'

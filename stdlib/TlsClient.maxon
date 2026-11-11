@@ -77,7 +77,7 @@ public type TlsClientOptions
 	end 'capHandshakeDeadline'
 
 	module function configFor(host String) returns TlsClientConfig
-		var config = settings.clone()
+		let config = settings.clone()
 
 		config.peerName = match serverName 'name'
 			fromHost gives X509VerifyHost.named(host)
@@ -112,9 +112,9 @@ public type TlsClient
 
 	module static function over(transport TcpClient, host String, options TlsClientOptions) returns TlsStream throws TlsError
 		let config = options.configFor(host)
-		var peer = try options.authenticator()
+		let peer = try options.authenticator()
 		let entropy = try TlsClientEntropy.fresh(config) otherwise throw TlsError.entropyUnavailable
-		var endpoint = try TlsClientHandshake.create(config, entropy: entropy, peer: peer, helloSource: TlsBuiltClientHello.create()) otherwise throw TlsError.invalidConfiguration
+		let endpoint = try TlsClientHandshake.create(config, entropy: entropy, peer: peer, helloSource: TlsBuiltClientHello.create()) otherwise throw TlsError.invalidConfiguration
 
 		return try TlsStream.establish(transport, endpoint: endpoint, peer: peer, deadlineMs: options.handshakeDeadlineMs)
 	end 'over'

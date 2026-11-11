@@ -499,7 +499,7 @@ function constantElementsImage(values FullRangeIntArray, stride ElementStride) r
 		return packConstantElements(values, packedBits: -stride as PackedBitWidth)
 	end 'subBytePacked'
 
-	var out = ByteArray.create(values.count() * (stride as Count), zeroed: false) as isolated ByteArray
+	let out = ByteArray.create(values.count() * (stride as Count), zeroed: false) as isolated ByteArray
 
 	modify out 'fill'
 		for value in values 'eachElement'
@@ -555,7 +555,7 @@ let ByteMask = 0xFF as MachineWord
 // It is PRIVATE: `constantElementsImage` above is the only caller, because the choice between this and the
 // byte-strided run is the stride's to make and not a caller's.
 function packConstantElements(values FullRangeIntArray, packedBits PackedBitWidth) returns immutable ByteArray
-	var out = ByteArray.create(elementsByteLen(values.count() as FullRangeInt, stride: (-packedBits) as ElementStride) as ElementIndex) as isolated ByteArray
+	let out = ByteArray.create(elementsByteLen(values.count() as FullRangeInt, stride: (-packedBits) as ElementStride) as ElementIndex) as isolated ByteArray
 
 	let fieldMask = ((1 shl packedBits) - 1) as FullRangeInt
 
@@ -763,7 +763,7 @@ module typealias ArgumentDictionaryArray = Array with ArgumentDictionary
 // thunk, owes no reference and has no field-offset blob, so nothing patches them and the blob needs
 // no relocation.
 module function encodeLayoutDescriptor(d LayoutDescriptor, dictionaries ArgumentDictionaryArray) returns ByteArray
-	var buf = ByteArray.create(layoutDescriptorBytesFor(dictionaries.count() as ElementIndex), zeroed: false)
+	let buf = ByteArray.create(layoutDescriptorBytesFor(dictionaries.count() as ElementIndex), zeroed: false)
 
 	for dictionary in dictionaries 'eachTypeParam'
 		appendLittleEndianScalar(buf, value: d.size as FullRangeInt, byteCount: LAYOUT_FIELD_BYTES)

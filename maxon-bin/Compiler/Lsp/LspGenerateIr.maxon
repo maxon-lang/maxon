@@ -29,7 +29,7 @@ module function generateIrAnswer(workspace LspWorkspaceState, incoming JsonDoc, 
 end 'generateIrAnswer'
 
 function exploredOutcome(workspace LspWorkspaceState, document ReaderDocument, source String) returns LspExtensionOutcome
-	var explored = lspDocumentProject(workspace, document: document, content: source)
+	let explored = lspDocumentProject(workspace, document: document, content: source)
 
 	return match explored 'explorer'
 		loaded(project, reader) gives LspExtensionOutcome.answered(project.generatedIr(lspBufferPathOf(reader), source: source))
@@ -48,16 +48,16 @@ extension Project
 			refused gives ""
 		end 'compile'
 
-		var doc = JsonDoc.create()
+		let doc = JsonDoc.create()
 		let index = LspLineIndex.build(source)
 		let tokens = lspDocumentTokens(source, keywords: self.keywords)
-		var errors = JsonNodeIdArray.create(self.diagnostics.count(), zeroed: false)
+		let errors = JsonNodeIdArray.create(self.diagnostics.count(), zeroed: false)
 
 		for diagnostic in self.diagnostics 'each'
 			errors.push(irErrorNode(doc, diagnostic: diagnostic, path: path, source: source, index: index, tokens: tokens))
 		end 'each'
 
-		var result = LspJsonObject.create(doc)
+		let result = LspJsonObject.create(doc)
 		result.put(IrKey, value: JsonNode.stringNode(ir))
 		result.putNode(ErrorsKey, value: doc.add(JsonNode.arrayNode(errors)))
 		return LspAnswer.of(doc, result: result.finish())
@@ -72,7 +72,7 @@ function irErrorNode(doc JsonDoc, diagnostic Diagnostic, path FilePath, source S
 	let message = diagnostic.message if inTheSource else elsewhereMessage(diagnostic)
 	let start = index.positionOf(source, offset: span.startByte)
 
-	var item = LspJsonObject.create(doc)
+	let item = LspJsonObject.create(doc)
 	item.put(IrErrorMessageKey, value: JsonNode.stringNode(message))
 	item.put(IrErrorLineKey, value: JsonNode.numberNode((start.line + ExplorerPositionBase) as JsonFloat))
 	item.put(IrErrorColumnKey, value: JsonNode.numberNode((start.character + ExplorerPositionBase) as JsonFloat))

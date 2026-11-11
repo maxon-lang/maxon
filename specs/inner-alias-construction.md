@@ -37,7 +37,7 @@ type Plain
 	typealias Nums = Array with ExitCode
 
 	static function make() returns Count
-		var n = Nums{}
+		let n = Nums{}
 		n.resize(4)
 		return n.count()
 	end 'make'
@@ -72,7 +72,7 @@ type Holder uses Element
 	export var items as ElementArray
 
 	static function create() returns Self
-		var n = ElementArray{}
+		let n = ElementArray{}
 		n.resize(5)
 		return Self{ items: n }
 	end 'create'
@@ -85,7 +85,7 @@ end 'Holder'
 typealias IntHolder = Holder with ExitCode
 
 function main() returns ExitCode
-	var h = IntHolder.create()
+	let h = IntHolder.create()
 	let c = h.count()
 	if c == 5 'ok'
 		return 5
@@ -114,7 +114,7 @@ type Bag
 	export var names as Names
 
 	static function create() returns Self
-		var n = Names{}
+		let n = Names{}
 		n.push("a string long enough to force a heap allocation")
 		return Self{names: n}
 	end 'create'
@@ -125,7 +125,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	let c = b.count()
 	if c == 1 'ok'
 		return 0
@@ -192,7 +192,7 @@ type Plain
 	typealias Nums = Set with ExitCode
 
 	static function make() returns Count
-		var s = Nums.create()
+		let s = Nums.create()
 		s.insert(3)
 		s.insert(3)
 		return s.count()
@@ -231,14 +231,14 @@ type Holder
 	end 'create'
 
 	function count() returns Count
-		var n = Nums{}
+		let n = Nums{}
 		n.resize(self.seed)
 		return n.count()
 	end 'count'
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	let c = h.count()
 	if c == 0 'ok'
 		return 0
@@ -872,7 +872,7 @@ end 'Holder'
 typealias IntHolder = Holder with ExitCode
 
 function main() returns ExitCode
-	var h = IntHolder.create()
+	let h = IntHolder.create()
 	let c = h.sized()
 	if c == 0 'ok'
 		return 0
@@ -909,7 +909,7 @@ end 'Holder'
 typealias IntHolder = Holder with ExitCode
 
 function main() returns ExitCode
-	var h = IntHolder.create()
+	let h = IntHolder.create()
 	let c = h.sized()
 	if c == 0 'ok'
 		return 0
@@ -944,7 +944,7 @@ export extension Tagged
 	typealias TagArray = Array with ExitCode
 
 	function tags() returns Count
-		var result = TagArray{}
+		let result = TagArray{}
 		result.push(self.tag())
 		return result.count()
 	end 'tags'

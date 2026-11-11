@@ -66,7 +66,7 @@ export function hostCStringBytes(module StdModule, text String) returns immutabl
 end 'hostCStringBytes'
 
 function utf16CStringBytes(text String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for codepoint in text.codepoints() 'eachCodepoint'
 		let value = codepoint as FullRangeInt
@@ -168,10 +168,10 @@ end 'NulRefusedExtent'
 // Host names take this path too, and `emitResolveHostIp` refuses the empty one.
 function emitNulRefusedExtent(module StdModule, func IrFunction, cur IrBlock, buf ValueId, len ValueId, ids ValueMinter) returns NulRefusedExtent
 	let start = emitConst(module, block: cur, value: 0, ids: ids)
-	var loop = openCountedLoop(module, func: func, cur: cur, from: start, to: len, label: b"pnul", ids: ids)
-	var advance = module.addBlock(func, label: b"pnuls", heat: BlockHeat.normal)
-	var refused = module.addBlock(func, label: b"pnulr", heat: BlockHeat.normal)
-	var joined = module.addBlock(func, label: b"pnulj", heat: BlockHeat.normal)
+	let loop = openCountedLoop(module, func: func, cur: cur, from: start, to: len, label: b"pnul", ids: ids)
+	let advance = module.addBlock(func, label: b"pnuls", heat: BlockHeat.normal)
+	let refused = module.addBlock(func, label: b"pnulr", heat: BlockHeat.normal)
+	let joined = module.addBlock(func, label: b"pnulj", heat: BlockHeat.normal)
 
 	let byte = emitLoadByteIndexed(module, block: loop.body, base: buf, index: loop.index, ids: ids)
 	emitBranchOnCompare(module, block: loop.body, value: byte, pred: StdCmpPred.eq, against: NulByte, whenTrue: refused, whenFalse: advance, ids: ids)
@@ -190,7 +190,7 @@ end 'emitNulRefusedExtent'
 export function emitPathToText(module StdModule, func IrFunction, cur IrBlock, join IrBlock, pathRec ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
 	let len = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordLengthOffset, ids: ids)
 	let buf = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordBufferOffset, ids: ids)
-	var extent = emitNulRefusedExtent(module, func: func, cur: cur, buf: buf, len: len, ids: ids)
+	let extent = emitNulRefusedExtent(module, func: func, cur: cur, buf: buf, len: len, ids: ids)
 
 	if encoding == HostTextEncoding.utf8 'narrow'
 		return emitBytesToCString(module, func: func, cur: extent.block, join: join, buf: buf, len: extent.length, ids: ids)

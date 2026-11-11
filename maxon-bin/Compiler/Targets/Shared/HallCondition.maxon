@@ -289,7 +289,7 @@ export type RegPoolCensus
 	var classPoolSizes as FixedRegCountColumn
 
 	export static function create() returns RegPoolCensus
-		var byPoolSize = FixedRegCountColumn.create(RegisterFileSize + 1)
+		let byPoolSize = FixedRegCountColumn.create(RegisterFileSize + 1)
 		return Self{byPoolSize: byPoolSize, occupied: 0, constrained: 0, classPoolSizes: zeroClassRow()}
 	end 'create'
 
@@ -673,7 +673,7 @@ end 'HallVerdict'
 export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask, scratch HallScratch) returns HallVerdict
 	let valueCount = live.count()
 
-	var allowed = scratch.allowed
+	let allowed = scratch.allowed
 	allowed.resize(valueCount)
 
 	for i in 0 upto valueCount 'eachValue'
@@ -685,7 +685,7 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 
 	if let remembered = try scratch.memo.get(key) 'seenBefore'
 		if sameAllowedMasks(remembered.masks, allowed: allowed, valueCount: valueCount) 'sameQuestion'
-			var answer = scratch.verdict
+			let answer = scratch.verdict
 
 			if remembered.feasible 'aFeasiblePoint'
 				answer.becomeFeasible()
@@ -699,11 +699,11 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 
 	// The matching, as its two inverse maps. Positions in `live`, not ValueIds — the search is over
 	// this point's live set alone, so a dense 0..valueCount numbering is the right one.
-	var regOfValue = scratch.regOfValue
+	let regOfValue = scratch.regOfValue
 	regOfValue.resize(valueCount)
-	var valueMatched = scratch.valueMatched
+	let valueMatched = scratch.valueMatched
 	valueMatched.refill(valueCount, value: false)
-	var valueOfReg = scratch.valueOfReg
+	let valueOfReg = scratch.valueOfReg
 	valueOfReg.resize(RegisterFileSize)
 	scratch.heldRegisters = 0
 
@@ -715,7 +715,7 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 		end 'grew'
 	end 'augment'
 
-	var verdict = scratch.verdict
+	let verdict = scratch.verdict
 
 	if matched == valueCount as RegCount 'saturated'
 		verdict.becomeFeasible()
@@ -752,16 +752,16 @@ end 'hallVerdictAt'
 // allocator. The parent links are not just an anti-recursion device: they ARE the path the
 // augmentation walks back along.
 function augmentValue(start ElementIndex, scratch HallScratch) returns bool
-	view allowed = scratch.allowed
-	view valueOfReg = scratch.valueOfReg
+	let allowed = scratch.allowed
+	let valueOfReg = scratch.valueOfReg
 
 	// register -> the value position that offered it during THIS search (its predecessor on the
 	// alternating path). Only registers in `visited` have a meaningful entry, and `visited` is local to
 	// this search.
-	var parentOfReg = scratch.parentOfReg
+	let parentOfReg = scratch.parentOfReg
 	parentOfReg.resize(RegisterFileSize)
 	var visited = 0 as RegMask
-	var queue = scratch.queue
+	let queue = scratch.queue
 	queue.clear()
 	queue.push(start)
 
@@ -802,10 +802,10 @@ end 'augmentValue'
 // vacated by the re-assignment — is the next one to hand on. The walk ends at `start`, which held no
 // register, so the matching finishes one edge larger.
 function applyAugmentingPath(freeReg RegNum, start ElementIndex, scratch HallScratch)
-	view parentOfReg = scratch.parentOfReg
-	var regOfValue = scratch.regOfValue
-	var valueMatched = scratch.valueMatched
-	var valueOfReg = scratch.valueOfReg
+	let parentOfReg = scratch.parentOfReg
+	let regOfValue = scratch.regOfValue
+	let valueMatched = scratch.valueMatched
+	let valueOfReg = scratch.valueOfReg
 	var reg = freeReg
 
 	while true 'walkBack'
@@ -838,14 +838,14 @@ end 'applyAugmentingPath'
 // removing any ONE of its values drops the deficiency by exactly one: the freed register lets an
 // unmatched value augment into the chain.
 function tightRegisterSet(scratch HallScratch, valueCount ElementIndex) returns RegMask
-	view allowed = scratch.allowed
-	view valueMatched = scratch.valueMatched
-	view valueOfReg = scratch.valueOfReg
+	let allowed = scratch.allowed
+	let valueMatched = scratch.valueMatched
+	let valueOfReg = scratch.valueOfReg
 	var reachable = 0 as RegMask
 
 	// The queue is shared with `augmentValue`, which has finished by the time this runs (the matching
 	// must be MAXIMUM before its tight set means anything).
-	var queue = scratch.queue
+	let queue = scratch.queue
 	queue.clear()
 
 	for i in 0 upto valueCount 'seedUnmatched'

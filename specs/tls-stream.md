@@ -47,7 +47,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -111,7 +111,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -120,7 +120,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -131,7 +131,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -152,7 +152,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -174,15 +174,14 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
@@ -214,7 +213,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -278,7 +277,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -287,7 +286,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -298,7 +297,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -319,7 +318,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -341,22 +340,21 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
 
 function main() returns ExitCode
 	let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
-	var client = trustedClient(rootHex)
+	let client = trustedClient(rootHex)
 
 	try client.setProtocols(TlsProtocolArray from [TlsProtocol.tls12]) otherwise return 1
 
@@ -384,7 +382,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -448,7 +446,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -457,7 +455,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -468,7 +466,7 @@ let leafP384Hex = "308201763082011da00302010202010b300a06082a8648ce3d040302300f3
 let keyP384Hex = "304e020100301006072a8648ce3d020106052b8104002204373035020101043011afb2f77a2dec51c976f3225ec7e0eea79b70dab08e2ee263317047c621cd679b49f41aa42549e4cc3180e6191498a9"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -489,7 +487,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -511,21 +509,20 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
 
 function main() returns ExitCode
-	var server = trustedServer(identityOf(leafP384Hex, keyHex: keyP384Hex))
+	let server = trustedServer(identityOf(leafP384Hex, keyHex: keyP384Hex))
 
 	try server.setProtocols(TlsProtocolArray from [TlsProtocol.tls12]) otherwise return 1
 
@@ -553,7 +550,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -617,7 +614,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -626,7 +623,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -641,7 +638,7 @@ let leafRsaHex = "30820225308201cba00302010202010c300a06082a8648ce3d040302300f31
 let keyRsaHex = "308204be020100300d06092a864886f70d0101010500048204a8308204a40201000282010100980fb5297c6dbb97057a14a202477630baf871afeb1598873f816217be94c5d5f69db47f1cb38ea433cc6df20a2071d12fce4b12f7c44f357c82bae83573a8240420ec7ff7ed2fdd75c89785d558f68d84663e73aaa4c4d45c4601434916cc3eb576b794e589c15c5c0eefb54852ef17f41ea0321ad585779e5c34df68b88e4a180dfeebf9be95476f6f9015ec0d6b51e2523e78fac0682a5c0f5409d6868c59faddc91135f977108adf4fda4a9b2e4740c8ffece5f66f9468aead8395a76c14962637fbfcfdb9014e75b2b9af07691875b56bb80cb023cd6d4d9a6d4fb7f50b8a0ffcd773cef8d7b7ab41d25748c2f53fe2a710047c4488eb9e30eebca677b302030100010282010024736f7bf865dd98002a19941473c8f3397ea0d208ca6e7bcd4f5892548f1935871e9acbf5b75d34236e97d47374ff93a3a0120303fdbcf71757c7322ece00ba517b0af64a1a436514fcf6c59034f935474db31ecb032063bf92d06eaeb0965959ea916b51f2c9b53824247612563f1640e0ae8a1440a6f3dbb442c0633c0a6f7de7ba71d3e4244b8a7bc1864cda9fc8b12c8e9ddbf99a134e4dd1815700ba34737712ccf781539a9100dad22e10aba85012a56d0104967e14bd5508a287862903a5c84ddfb573a59610a20c8adea62a464d740f62b08163036af3321949e6afc0f430250142f6445c58dfd80c9e93e23d32059656cde2f6763b68788a3d8b2102818100c7604784668dbc3abf35f39f6dd6ea60fdae845e9c91939e9b3ec67335c76bbcccdaf21ab32ce9c484d8a80f482387b6048262c2dc0f98827f8110ef03d8e835787297fd8ae563c6c9bfb20cb4346ba15bb81ebfcfefc05126ec1fb402db7b5ad7d6e3874aeaad1eebebc7a60a0241b684c23df05e6b7724f37a9c1dffe6e3d902818100c33f64247f70fbbb32ecdc24e98d379727c18d05f4dbc9cf0bfbac772b6b4077ef16105ac145484ddf0e93edabf531cfb75af56cf0aee3cd51e6d40cde751b8a3869be1d03fb6722f5c3b8b23e97eb3b6341fef7690b47e39308e34a522c6bb6e4ef64b56569cb8563ed2a924d9faa32c0a9ab8148b8e05a4537d75dcf959c6b028181008ec392726c3cf19bdf6f7293a6c34df145b5c1733e09bffac28fa0eabe879dce03a283da3a92de91a9ceba08b74f39ce4c4c510bd72813bcde303d3fe9315895713a1d3ba049c1b8869e8d902b399e185ce4ea9fcef58e708dbe66b52f969a2de2802d4ca388878eacc098a57c654148c0a796529849bb76ea21d1c869859b8102818100932ce096e67dcb337412b96b15a5fe66717063963ed9c248d116980d886c233f84b8940165388d652da3b67c6ca7ba31825c0d2e5e4ae6aaa9771f16c8456c4a077625f9873be5a5a3ae3236221ab015a71f634b2a2277c122df8b3d45adf84ff8484018c0663c24c38b4e10d4746b7e305e754a52001215d9a15b357ab9a31b0281804264563254965cdc052103249118f22693332397e0a99f0b1a8440cdc21581ed70ebe413945346acd53605a3635fadd427f62e4078236527509c0c6b40e8a2bac85787638bc5864eefa7382f9ce32efd82d0fd3a009d2df06c866f2d18f0775a4c98b6f558c5734aa54570923e544658e0596e40bb52d2618a35e3fe03c0b58e"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -662,7 +659,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -684,22 +681,21 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
 
 function line(label String, leafHex String, keyHex String, protocol TlsProtocol) returns String
-	var server = trustedServer(identityOf(leafHex, keyHex: keyHex))
-	var client = trustedClient(rootHex)
+	let server = trustedServer(identityOf(leafHex, keyHex: keyHex))
+	let client = trustedClient(rootHex)
 
 	try client.setProtocols(TlsProtocolArray from [protocol]) otherwise return "protocols refused"
 
@@ -740,7 +736,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -804,7 +800,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -813,7 +809,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -827,7 +823,7 @@ let clientLeafHex = "3082016b30820111a00302010202016e300a06082a8648ce3d040302301
 let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d030107042730250201010420fd7e8e00621840dac0226ea921c19c18e46a79d944d6a3308b3f64cf009d82da"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -848,7 +844,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -870,22 +866,21 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
 
 function line(protocol TlsProtocol) returns String
-	var server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
-	var client = trustedClient(rootHex)
+	let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let client = trustedClient(rootHex)
 
 	try server.requireClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return "roots refused"
 	try client.setProtocols(TlsProtocolArray from [protocol]) otherwise return "protocols refused"
@@ -922,7 +917,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -986,7 +981,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -995,7 +990,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -1009,7 +1004,7 @@ let clientLeafHex = "3082016b30820111a00302010202016e300a06082a8648ce3d040302301
 let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d030107042730250201010420fd7e8e00621840dac0226ea921c19c18e46a79d944d6a3308b3f64cf009d82da"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -1030,7 +1025,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1052,22 +1047,21 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
 
 function line(protocol TlsProtocol, presents bool) returns String
-	var server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
-	var client = trustedClient(rootHex)
+	let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let client = trustedClient(rootHex)
 
 	try server.requestClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return "roots refused"
 	try client.setProtocols(TlsProtocolArray from [protocol]) otherwise return "protocols refused"
@@ -1110,7 +1104,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1174,7 +1168,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -1183,7 +1177,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -1195,7 +1189,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -1216,7 +1210,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1238,7 +1232,7 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function clientListens(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1250,49 +1244,47 @@ function clientListens(options TlsClientOptions, port NetworkPort) returns Strin
 end 'clientListens'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
 
 function silentExchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientListens(clientOptions, port: listener.port())
+	let client = clientListens(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'silentExchange'
 
 function main() returns ExitCode
-	var tls13Server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let tls13Server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
 	try tls13Server.requireClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return 1
 
-	var tls13Client = trustedClient(rootHex)
+	let tls13Client = trustedClient(rootHex)
 
 	try tls13Client.setProtocols(TlsProtocolArray from [TlsProtocol.tls13]) otherwise return 2
 
 	print("tls13: {silentExchange(tls13Server, clientOptions: tls13Client)}\n")
 
-	var tls12Server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let tls12Server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
 	try tls12Server.requireClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return 3
 
-	var tls12Client = trustedClient(rootHex)
+	let tls12Client = trustedClient(rootHex)
 
 	try tls12Client.setProtocols(TlsProtocolArray from [TlsProtocol.tls12]) otherwise return 4
 
@@ -1321,7 +1313,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1385,7 +1377,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -1394,7 +1386,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -1407,7 +1399,7 @@ let clientLeafHex = "3082016b30820111a00302010202016e300a06082a8648ce3d040302301
 let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d030107042730250201010420fd7e8e00621840dac0226ea921c19c18e46a79d944d6a3308b3f64cf009d82da"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -1428,7 +1420,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1450,7 +1442,7 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function clientListens(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1462,50 +1454,48 @@ function clientListens(options TlsClientOptions, port NetworkPort) returns Strin
 end 'clientListens'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
 
 function silentExchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientListens(clientOptions, port: listener.port())
+	let client = clientListens(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'silentExchange'
 
 function main() returns ExitCode
-	var tls13Server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let tls13Server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
 	try tls13Server.requireClientCertificates(RootCertificates from [fromHex(rootHex)]) otherwise return 1
 
-	var tls13Client = trustedClient(rootHex)
+	let tls13Client = trustedClient(rootHex)
 
 	tls13Client.setIdentity(identityOf(clientLeafHex, keyHex: clientKeyHex))
 	try tls13Client.setProtocols(TlsProtocolArray from [TlsProtocol.tls13]) otherwise return 2
 
 	print("tls13: {silentExchange(tls13Server, clientOptions: tls13Client)}\n")
 
-	var tls12Server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let tls12Server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
 	try tls12Server.requireClientCertificates(RootCertificates from [fromHex(rootHex)]) otherwise return 3
 
-	var tls12Client = trustedClient(rootHex)
+	let tls12Client = trustedClient(rootHex)
 
 	tls12Client.setIdentity(identityOf(clientLeafHex, keyHex: clientKeyHex))
 	try tls12Client.setProtocols(TlsProtocolArray from [TlsProtocol.tls12]) otherwise return 4
@@ -1535,7 +1525,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1599,7 +1589,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -1608,7 +1598,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -1619,7 +1609,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -1640,7 +1630,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1662,15 +1652,14 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
@@ -1678,7 +1667,7 @@ end 'exchange'
 function main() returns ExitCode
 	for protocol in TlsProtocol.allCases 'eachProtocol'
 		let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
-		var client = trustedClient(rootHex)
+		let client = trustedClient(rootHex)
 
 		try client.setServerName("other.example") otherwise return 1
 		try client.setProtocols(TlsProtocolArray from [protocol]) otherwise return 2
@@ -1687,7 +1676,7 @@ function main() returns ExitCode
 	end 'eachProtocol'
 
 	let dialled = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
-	var literal = TlsClientOptions.create()
+	let literal = TlsClientOptions.create()
 
 	try literal.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise return 3
 	literal.setVerificationTime(1767225600)
@@ -1718,7 +1707,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1782,7 +1771,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -1791,7 +1780,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -1804,7 +1793,7 @@ let leafExpiredHex = "3082015b30820100a00302010202010e300a06082a8648ce3d04030230
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -1825,7 +1814,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1847,15 +1836,14 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
@@ -1863,14 +1851,14 @@ end 'exchange'
 function main() returns ExitCode
 	for protocol in TlsProtocol.allCases 'eachProtocol'
 		let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
-		var client = trustedClient(otherRootHex)
+		let client = trustedClient(otherRootHex)
 
 		try client.setProtocols(TlsProtocolArray from [protocol]) otherwise return 1
 
 		print("{protocol.name} other root: {exchange(server, clientOptions: client)}\n")
 
 		let expired = trustedServer(identityOf(leafExpiredHex, keyHex: keyP256Hex))
-		var current = trustedClient(rootHex)
+		let current = trustedClient(rootHex)
 
 		try current.setProtocols(TlsProtocolArray from [protocol]) otherwise return 2
 
@@ -1902,7 +1890,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1952,7 +1940,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -1961,7 +1949,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -1975,7 +1963,7 @@ let clientLeafHex = "3082016b30820111a00302010202016e300a06082a8648ce3d040302301
 let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d030107042730250201010420fd7e8e00621840dac0226ea921c19c18e46a79d944d6a3308b3f64cf009d82da"
 
 function serveOnce(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -1999,18 +1987,24 @@ function serveOnce(listener TlsListener) returns String
 end 'serveOnce'
 
 function main() returns ExitCode
-	var serverOptions = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let serverOptions = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
 	try serverOptions.requestClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return 1
 
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise return 2
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise return 2
+
+	return exchangeOver(listener)
+end 'main'
+
+function exchangeOver(listener TlsListener) returns ExitCode
+	let boundPort = listener.port()
 	let peer = async serveOnce(listener)
 
-	var clientOptions = trustedClient(rootHex)
+	let clientOptions = trustedClient(rootHex)
 
 	clientOptions.setIdentity(identityOf(clientLeafHex, keyHex: clientKeyHex))
 
-	var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: clientOptions) otherwise 'refused3x225'
+	let stream = try TlsClient.connect("127.0.0.1", port: boundPort, options: clientOptions) otherwise 'refused3x225'
 		peer.cancel()
 		return 3
 	end 'refused3x225'
@@ -2028,9 +2022,10 @@ function main() returns ExitCode
 
 	stream.close()
 
-	var anonymous = trustedClient(rootHex)
+	let anonymous = trustedClient(rootHex)
+	let boundPort = listener.port()
 	let second = async serveOnce(listener)
-	var unauthenticated = try TlsClient.connect("127.0.0.1", port: listener.port(), options: anonymous) otherwise 'refused5x236'
+	let unauthenticated = try TlsClient.connect("127.0.0.1", port: boundPort, options: anonymous) otherwise 'refused5x236'
 		second.cancel()
 		return 5
 	end 'refused5x236'
@@ -2040,7 +2035,7 @@ function main() returns ExitCode
 	listener.close()
 
 	return 0
-end 'main'
+end 'exchangeOver'
 ```
 ```stdout
 client saw 1 server certificate(s), first is the server leaf: true
@@ -2063,7 +2058,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2113,7 +2108,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -2122,7 +2117,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -2133,7 +2128,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function readToEnd(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -2151,7 +2146,7 @@ function readToEnd(listener TlsListener) returns String
 end 'readToEnd'
 
 function closes(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -2165,7 +2160,7 @@ function closes(options TlsClientOptions, port NetworkPort) returns String
 end 'closes'
 
 function drops(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -2176,23 +2171,28 @@ function drops(options TlsClientOptions, port NetworkPort) returns String
 	return "dropped"
 end 'drops'
 
+function exchangeOver(listener TlsListener, client TlsClientOptions, protocol TlsProtocol)
+	let boundPort = listener.port()
+	let first = async readToEnd(listener)
+	let closing = closes(client, port: boundPort)
+
+	print("{protocol.name} {closing}: server {await first}\n")
+
+	let second = async readToEnd(listener)
+	let dropping = drops(client, port: boundPort)
+
+	print("{protocol.name} {dropping}: server {await second}\n")
+	listener.close()
+end 'exchangeOver'
+
 function main() returns ExitCode
 	for protocol in TlsProtocol.allCases 'eachProtocol'
-		var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
-		var client = trustedClient(rootHex)
+		let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+		let client = trustedClient(rootHex)
 
 		try client.setProtocols(TlsProtocolArray from [protocol]) otherwise return 2
 
-		let first = async readToEnd(listener)
-		let closing = closes(client, port: listener.port())
-
-		print("{protocol.name} {closing}: server {await first}\n")
-
-		let second = async readToEnd(listener)
-		let dropping = drops(client, port: listener.port())
-
-		print("{protocol.name} {dropping}: server {await second}\n")
-		listener.close()
+		exchangeOver(listener, client: client, protocol: protocol)
 	end 'eachProtocol'
 
 	return 0
@@ -2220,7 +2220,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2270,7 +2270,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -2279,7 +2279,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -2290,7 +2290,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function answerAfterEnd(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -2310,40 +2310,49 @@ function answerAfterEnd(listener TlsListener) returns String
 	panic("answerAfterEnd: the loop returns when the stream ends")
 end 'answerAfterEnd'
 
+function exchangeOver(listener TlsListener, options TlsClientOptions, protocol TlsProtocol) returns bool
+	let boundPort = listener.port()
+	let server = async answerAfterEnd(listener)
+	let stream = try TlsClient.connect("127.0.0.1", port: boundPort, options: options) otherwise 'refused3x132'
+		server.cancel()
+		return false
+	end 'refused3x132'
+
+	_ = try stream.send("request") otherwise 'refused4x134'
+		server.cancel()
+		return false
+	end 'refused4x134'
+	try stream.shutdownWrite() otherwise 'refused5x135'
+		server.cancel()
+		return false
+	end 'refused5x135'
+
+	let answer = try stream.recv(1024) otherwise 'refused6x137'
+		server.cancel()
+		return false
+	end 'refused6x137'
+	let served = await server
+	let after = try stream.recv(1024) otherwise (error) 'ended'
+		print("{protocol.name} client heard [{answer}] then {describe(error)}; server {served}\n")
+		listener.close()
+		return true
+	end 'ended'
+
+	print("unexpected data [{after}]\n")
+
+	return false
+end 'exchangeOver'
+
 function main() returns ExitCode
 	for protocol in TlsProtocol.allCases 'eachProtocol'
-		var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
-		var options = trustedClient(rootHex)
+		let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+		let options = trustedClient(rootHex)
 
 		try options.setProtocols(TlsProtocolArray from [protocol]) otherwise return 2
 
-		let server = async answerAfterEnd(listener)
-		var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: options) otherwise 'refused3x132'
-			server.cancel()
+		if not exchangeOver(listener, options: options, protocol: protocol) 'failed'
 			return 3
-		end 'refused3x132'
-
-		_ = try stream.send("request") otherwise 'refused4x134'
-			server.cancel()
-			return 4
-		end 'refused4x134'
-		try stream.shutdownWrite() otherwise 'refused5x135'
-			server.cancel()
-			return 5
-		end 'refused5x135'
-
-		let answer = try stream.recv(1024) otherwise 'refused6x137'
-			server.cancel()
-			return 6
-		end 'refused6x137'
-		let served = await server
-		let after = try stream.recv(1024) otherwise (error) 'ended'
-			print("{protocol.name} client heard [{answer}] then {describe(error)}; server {served}\n")
-			listener.close()
-			continue
-		end 'ended'
-
-		print("unexpected data [{after}]\n")
+		end 'failed'
 	end 'eachProtocol'
 
 	return 0
@@ -2369,7 +2378,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2433,7 +2442,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -2442,7 +2451,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -2453,7 +2462,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -2474,7 +2483,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -2496,22 +2505,21 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
 
 function line(label String, serverProtocols StringArray, clientProtocols StringArray) returns String
-	var server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
-	var client = trustedClient(rootHex)
+	let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let client = trustedClient(rootHex)
 
 	try server.setApplicationProtocols(serverProtocols) otherwise return "server protocols refused"
 	try client.setApplicationProtocols(clientProtocols) otherwise return "client protocols refused"
@@ -2552,7 +2560,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2616,7 +2624,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -2625,7 +2633,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -2636,7 +2644,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -2657,7 +2665,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -2679,22 +2687,21 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
 
 function main() returns ExitCode
-	var server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
-	var client = trustedClient(rootHex)
+	let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let client = trustedClient(rootHex)
 
 	try server.setApplicationProtocols(["h2", "http/1.1"]) otherwise return 1
 	try client.setApplicationProtocols(["http/1.1", "h2"]) otherwise return 2
@@ -2724,7 +2731,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2788,7 +2795,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -2797,7 +2804,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -2808,7 +2815,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -2829,7 +2836,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -2851,30 +2858,29 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
 
 function main() returns ExitCode
-	var onlyTls12 = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
-	var onlyTls13 = trustedClient(rootHex)
+	let onlyTls12 = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let onlyTls13 = trustedClient(rootHex)
 
 	try onlyTls12.setProtocols(TlsProtocolArray from [TlsProtocol.tls12]) otherwise return 1
 	try onlyTls13.setProtocols(TlsProtocolArray from [TlsProtocol.tls13]) otherwise return 2
 
 	print("tls12 server, tls13 client: {exchange(onlyTls12, clientOptions: onlyTls13)}\n")
 
-	var secondServer = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
-	var secondClient = trustedClient(rootHex)
+	let secondServer = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let secondClient = trustedClient(rootHex)
 
 	try secondServer.setProtocols(TlsProtocolArray from [TlsProtocol.tls13]) otherwise return 3
 	try secondClient.setProtocols(TlsProtocolArray from [TlsProtocol.tls12]) otherwise return 4
@@ -2904,7 +2910,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2954,7 +2960,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -2963,7 +2969,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -2978,7 +2984,7 @@ function acceptTwice(listener TlsListener) returns String
 	var report = ""
 
 	for attempt in 1 to 2 'eachAttempt'
-		var stream = try listener.accept() otherwise (error) 'refused'
+		let stream = try listener.accept() otherwise (error) 'refused'
 			report.append("[accept {attempt}: {describe(error)}]")
 			continue
 		end 'refused'
@@ -3005,26 +3011,27 @@ end 'failure'
 
 function main() returns ExitCode
 	for protocol in TlsProtocol.allCases 'eachProtocol'
-		var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+		let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+		let port = listener.port()
 		let peer = async acceptTwice(listener)
 
-		var wrongRoot = trustedClient(otherRootHex)
+		let wrongRoot = trustedClient(otherRootHex)
 
 		try wrongRoot.setProtocols(TlsProtocolArray from [protocol]) otherwise 'refused2x140'
 			peer.cancel()
 			return 2
 		end 'refused2x140'
 
-		print("{protocol.name} first: {describe(failure(wrongRoot, port: listener.port()))}\n")
+		print("{protocol.name} first: {describe(failure(wrongRoot, port: port))}\n")
 
-		var good = trustedClient(rootHex)
+		let good = trustedClient(rootHex)
 
 		try good.setProtocols(TlsProtocolArray from [protocol]) otherwise 'refused3x146'
 			peer.cancel()
 			return 3
 		end 'refused3x146'
 
-		var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: good) otherwise 'refused4x148'
+		let stream = try TlsClient.connect("127.0.0.1", port: port, options: good) otherwise 'refused4x148'
 			peer.cancel()
 			return 4
 		end 'refused4x148'
@@ -3036,7 +3043,6 @@ function main() returns ExitCode
 		stream.close()
 
 		print("{protocol.name} server: {await peer}\n")
-		listener.close()
 	end 'eachProtocol'
 
 	return 0
@@ -3065,7 +3071,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3115,7 +3121,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -3124,7 +3130,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -3140,7 +3146,7 @@ let smallWrites = 2000
 let smallWriteBytes = 50
 
 function pattern(count Count, seed Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	bytes.reserve(count)
 
@@ -3152,7 +3158,7 @@ function pattern(count Count, seed Count) returns ByteArray
 end 'pattern'
 
 function receiveAll(stream TlsStream, total Count) returns ByteArray throws TlsError
-	var received = ByteArray.create(0)
+	let received = ByteArray.create(0)
 	var reads = 0 as Count
 
 	while received.count() < total 'receiving'
@@ -3164,7 +3170,7 @@ function receiveAll(stream TlsStream, total Count) returns ByteArray throws TlsE
 end 'receiveAll'
 
 function serveBulk(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -3186,7 +3192,7 @@ function serveBulk(listener TlsListener) returns String
 end 'serveBulk'
 
 function clientBulk(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -3215,16 +3221,16 @@ end 'clientBulk'
 
 function main() returns ExitCode
 	for protocol in TlsProtocol.allCases 'eachProtocol'
-		var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
-		var client = trustedClient(rootHex)
+		let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+		let client = trustedClient(rootHex)
 
 		try client.setProtocols(TlsProtocolArray from [protocol]) otherwise return 2
 
+		let listenerPort = listener.port()
 		let peer = async serveBulk(listener)
-		let reported = clientBulk(client, port: listener.port())
+		let reported = clientBulk(client, port: listenerPort)
 
 		print("{protocol.name}: client[{reported}] server[{await peer}]\n")
-		listener.close()
 	end 'eachProtocol'
 
 	return 0
@@ -3250,7 +3256,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3403,7 +3409,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3478,7 +3484,7 @@ function element(tag Byte, body ByteArray) returns ByteArray
 		panic("the case builds short elements only")
 	end 'tooLong'
 
-	var encoded = ByteArray.create(0)
+	let encoded = ByteArray.create(0)
 	encoded.push(tag)
 	encoded.push(body.count() as Byte)
 	encoded.append(body)
@@ -3487,7 +3493,7 @@ function element(tag Byte, body ByteArray) returns ByteArray
 end 'element'
 
 function join(first ByteArray, second ByteArray) returns ByteArray
-	var joined = first.clone()
+	let joined = first.clone()
 	joined.append(second)
 
 	return joined
@@ -3498,7 +3504,7 @@ function lastBytes(der ByteArray, count Count) returns ByteArray
 end 'lastBytes'
 
 function otherScalar(scalar ByteArray) returns ByteArray
-	var other = scalar.clone()
+	let other = scalar.clone()
 	let last = try other.get(other.count() - 1) otherwise panic("a scalar has a last byte")
 
 	try other.set(other.count() - 1, value: last xor 1) otherwise panic("the last byte is inside the scalar")
@@ -3507,14 +3513,14 @@ function otherScalar(scalar ByteArray) returns ByteArray
 end 'otherScalar'
 
 function zeros(count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.growFilled(count, value: 0)
 
 	return bytes
 end 'zeros'
 
 function sec1(scalar ByteArray, tail ByteArray) returns ByteArray
-	var body = element(derInteger, body: fromHex("01"))
+	let body = element(derInteger, body: fromHex("01"))
 	body.append(element(derOctetString, body: scalar))
 	body.append(tail)
 
@@ -3522,7 +3528,7 @@ function sec1(scalar ByteArray, tail ByteArray) returns ByteArray
 end 'sec1'
 
 function pkcs8(algorithm ByteArray, privateKey ByteArray, tail ByteArray) returns ByteArray
-	var body = element(derInteger, body: fromHex("00"))
+	let body = element(derInteger, body: fromHex("00"))
 	body.append(element(derSequence, body: algorithm))
 	body.append(element(derOctetString, body: privateKey))
 	body.append(tail)
@@ -3553,7 +3559,7 @@ function main() returns ExitCode
 	let ed25519Seed = lastBytes(fromHex(keyEd25519Hex), count: ed25519Bytes)
 	let p256Public = try EcdhP256.publicKey(p256Scalar) otherwise return 1
 	let trailing = fromHex(nullElement)
-	var publicKeyBits = ByteArray.create(0)
+	let publicKeyBits = ByteArray.create(0)
 
 	publicKeyBits.push(0)
 	publicKeyBits.append(p256Public)
@@ -3622,7 +3628,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3682,7 +3688,7 @@ function alpnName(protocol TlsApplicationProtocol) returns String
 end 'alpnName'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -3697,7 +3703,7 @@ let leafRsaHex = "30820225308201cba00302010202010c300a06082a8648ce3d040302300f31
 let keyRsaPkcs1Hex = "308204a40201000282010100980fb5297c6dbb97057a14a202477630baf871afeb1598873f816217be94c5d5f69db47f1cb38ea433cc6df20a2071d12fce4b12f7c44f357c82bae83573a8240420ec7ff7ed2fdd75c89785d558f68d84663e73aaa4c4d45c4601434916cc3eb576b794e589c15c5c0eefb54852ef17f41ea0321ad585779e5c34df68b88e4a180dfeebf9be95476f6f9015ec0d6b51e2523e78fac0682a5c0f5409d6868c59faddc91135f977108adf4fda4a9b2e4740c8ffece5f66f9468aead8395a76c14962637fbfcfdb9014e75b2b9af07691875b56bb80cb023cd6d4d9a6d4fb7f50b8a0ffcd773cef8d7b7ab41d25748c2f53fe2a710047c4488eb9e30eebca677b302030100010282010024736f7bf865dd98002a19941473c8f3397ea0d208ca6e7bcd4f5892548f1935871e9acbf5b75d34236e97d47374ff93a3a0120303fdbcf71757c7322ece00ba517b0af64a1a436514fcf6c59034f935474db31ecb032063bf92d06eaeb0965959ea916b51f2c9b53824247612563f1640e0ae8a1440a6f3dbb442c0633c0a6f7de7ba71d3e4244b8a7bc1864cda9fc8b12c8e9ddbf99a134e4dd1815700ba34737712ccf781539a9100dad22e10aba85012a56d0104967e14bd5508a287862903a5c84ddfb573a59610a20c8adea62a464d740f62b08163036af3321949e6afc0f430250142f6445c58dfd80c9e93e23d32059656cde2f6763b68788a3d8b2102818100c7604784668dbc3abf35f39f6dd6ea60fdae845e9c91939e9b3ec67335c76bbcccdaf21ab32ce9c484d8a80f482387b6048262c2dc0f98827f8110ef03d8e835787297fd8ae563c6c9bfb20cb4346ba15bb81ebfcfefc05126ec1fb402db7b5ad7d6e3874aeaad1eebebc7a60a0241b684c23df05e6b7724f37a9c1dffe6e3d902818100c33f64247f70fbbb32ecdc24e98d379727c18d05f4dbc9cf0bfbac772b6b4077ef16105ac145484ddf0e93edabf531cfb75af56cf0aee3cd51e6d40cde751b8a3869be1d03fb6722f5c3b8b23e97eb3b6341fef7690b47e39308e34a522c6bb6e4ef64b56569cb8563ed2a924d9faa32c0a9ab8148b8e05a4537d75dcf959c6b028181008ec392726c3cf19bdf6f7293a6c34df145b5c1733e09bffac28fa0eabe879dce03a283da3a92de91a9ceba08b74f39ce4c4c510bd72813bcde303d3fe9315895713a1d3ba049c1b8869e8d902b399e185ce4ea9fcef58e708dbe66b52f969a2de2802d4ca388878eacc098a57c654148c0a796529849bb76ea21d1c869859b8102818100932ce096e67dcb337412b96b15a5fe66717063963ed9c248d116980d886c233f84b8940165388d652da3b67c6ca7ba31825c0d2e5e4ae6aaa9771f16c8456c4a077625f9873be5a5a3ae3236221ab015a71f634b2a2277c122df8b3d45adf84ff8484018c0663c24c38b4e10d4746b7e305e754a52001215d9a15b357ab9a31b0281804264563254965cdc052103249118f22693332397e0a99f0b1a8440cdc21581ed70ebe413945346acd53605a3635fadd427f62e4078236527509c0c6b40e8a2bac85787638bc5864eefa7382f9ce32efd82d0fd3a009d2df06c866f2d18f0775a4c98b6f558c5734aa54570923e544658e0596e40bb52d2618a35e3fe03c0b58e"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -3718,7 +3724,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -3740,15 +3746,14 @@ function clientTurn(options TlsClientOptions, port NetworkPort) returns String
 end 'clientTurn'
 
 function exchange(serverOptions TlsServerOptions, clientOptions TlsClientOptions) returns String
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 		return "bind: {describe(error)}"
 	end 'refused'
 
+	let port = listener.port()
 	let peer = async serveEcho(listener)
-	let client = clientTurn(clientOptions, port: listener.port())
+	let client = clientTurn(clientOptions, port: port)
 	let server = await peer
-
-	listener.close()
 
 	return "client[{client}] server[{server}]"
 end 'exchange'
@@ -3763,13 +3768,13 @@ function line(label String, certificates String, key String) returns String
 	end 'refused'
 
 	let blocks = try Pem.decode(pemOf("CERTIFICATE", hex: rootHex)) otherwise return "root PEM refused"
-	var roots = RootCertificates.create(0)
+	let roots = RootCertificates.create(0)
 
 	for block in blocks 'eachBlock'
 		roots.push(block.bytes.clone())
 	end 'eachBlock'
 
-	var client = TlsClientOptions.create()
+	let client = TlsClientOptions.create()
 
 	try client.setTrustedRoots(roots) otherwise return "roots refused"
 	try client.setServerName("example.com") otherwise return "name refused"
@@ -3807,7 +3812,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3857,7 +3862,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -3887,8 +3892,8 @@ function bindOutcome(port NetworkPort, options TlsServerOptions) returns String
 end 'bindOutcome'
 
 function main() returns ExitCode
-	var client = TlsClientOptions.create()
-	var server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let client = TlsClientOptions.create()
+	let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 	var longName = ""
 
 	for _ in 0 upto 256 'eachLetter'
@@ -3935,7 +3940,7 @@ function main() returns ExitCode
 	print("connect to a closed port: {connectOutcome("127.0.0.1", port: freePort)}\n")
 	print("connect to an unresolvable name: {connectOutcome("this.host.does.not.exist.invalid", port: 443)}\n")
 
-	var held = try TlsListener.bind("127.0.0.1", port: 0, options: server) otherwise return 2
+	let held = try TlsListener.bind("127.0.0.1", port: 0, options: server) otherwise return 2
 
 	print("bind a port in use: {bindOutcome(held.port(), options: server)}\n")
 
@@ -3973,7 +3978,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -4023,7 +4028,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -4032,7 +4037,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -4061,7 +4066,7 @@ function dial(port NetworkPort, options TlsClientOptions) returns String
 end 'dial'
 
 function acceptOnce(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -4073,33 +4078,32 @@ function acceptOnce(listener TlsListener) returns String
 end 'acceptOnce'
 
 function main() returns ExitCode
-	var silent = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let silent = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let silentPort = silent.port()
 	let holder = async holdOpen(silent)
 
-	var impatient = trustedClient(rootHex)
+	let impatient = trustedClient(rootHex)
 
 	impatient.setHandshakeDeadline(300)
 
-	let dialled = dial(silent.port(), options: impatient)
+	let dialled = dial(silentPort, options: impatient)
 
 	print("client: {dialled}; peer: {await holder}\n")
 
-	silent.close()
-
-	var options = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let options = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
 	options.setHandshakeDeadline(300)
 
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: options) otherwise return 2
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: options) otherwise return 2
+	let port = listener.port()
 	let waiting = async acceptOnce(listener)
-	let mute = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'refused3x236'
+	let mute = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused3x236'
 		waiting.cancel()
 		return 3
 	end 'refused3x236'
 
 	print("server: {await waiting}\n")
 	mute.close()
-	listener.close()
 
 	return 0
 end 'main'
@@ -4124,7 +4128,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -4184,7 +4188,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -4197,7 +4201,7 @@ function refuseThree(listener TlsListener) returns String
 	var report = ""
 
 	for attempt in 1 to 3 'eachAttempt'
-		var stream = try listener.accept() otherwise (error) 'refused'
+		let stream = try listener.accept() otherwise (error) 'refused'
 			report.append("[{attempt}: accept {describe(error)}]")
 			continue
 		end 'refused'
@@ -4226,14 +4230,14 @@ function talk(port NetworkPort, bytes ByteArray) returns String
 end 'talk'
 
 function main() returns ExitCode
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listenerPort = listener.port()
 	let peer = async refuseThree(listener)
 
-	print("http request: {talk(listener.port(), bytes: "GET / HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray())}\n")
-	print("unknown version: {talk(listener.port(), bytes: ByteArray from [0x16, 0x04, 0x01, 0x00, 0x05])}\n")
-	print("oversized body: {talk(listener.port(), bytes: ByteArray from [0x16, 0x03, 0x03, 0xFF, 0xFF])}\n")
+	print("http request: {talk(listenerPort, bytes: "GET / HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray())}\n")
+	print("unknown version: {talk(listenerPort, bytes: ByteArray from [0x16, 0x04, 0x01, 0x00, 0x05])}\n")
+	print("oversized body: {talk(listenerPort, bytes: ByteArray from [0x16, 0x03, 0x03, 0xFF, 0xFF])}\n")
 	print("server: {await peer}\n")
-	listener.close()
 
 	return 0
 end 'main'
@@ -4260,7 +4264,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -4310,7 +4314,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -4319,7 +4323,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -4370,7 +4374,7 @@ function writeDeadlineOutcome(stream TlsStream) returns String
 end 'writeDeadlineOutcome'
 
 function serveAndClose(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -4384,9 +4388,10 @@ function serveAndClose(listener TlsListener) returns String
 end 'serveAndClose'
 
 function main() returns ExitCode
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listenerPort = listener.port()
 	let peer = async serveAndClose(listener)
-	var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: trustedClient(rootHex)) otherwise 'refused2x243'
+	let stream = try TlsClient.connect("127.0.0.1", port: listenerPort, options: trustedClient(rootHex)) otherwise 'refused2x243'
 		peer.cancel()
 		return 2
 	end 'refused2x243'
@@ -4405,7 +4410,6 @@ function main() returns ExitCode
 	print("setWriteDeadline: {writeDeadlineOutcome(stream)}\n")
 
 	print("server: {await peer}\n")
-	listener.close()
 
 	return 0
 end 'main'
@@ -4434,7 +4438,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -4498,7 +4502,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -4507,7 +4511,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -4518,7 +4522,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -4539,7 +4543,7 @@ function serveEcho(listener TlsListener) returns String
 end 'serveEcho'
 
 function clientTurn(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -4601,7 +4605,7 @@ function holdOpen(silent TcpListener) returns String
 end 'holdOpen'
 
 function acceptOnce(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describeStall(error)}"
 	end 'refused'
 
@@ -4613,20 +4617,25 @@ function acceptOnce(listener TlsListener) returns String
 end 'acceptOnce'
 
 function main() returns ExitCode
-	var options = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let options = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
 	options.setHandshakeDeadline(5000)
 
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: options) otherwise return 1
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: options) otherwise return 1
 
+	return phasesOver(listener)
+end 'main'
+
+function phasesOver(listener TlsListener) returns ExitCode
 	try listener.setAcceptDeadline(300) otherwise return 2
 
 	print("nobody connects: {acceptOnce(listener)}\n")
 
 	try listener.setAcceptDeadline(0) otherwise return 3
 
+	let boundPort = listener.port()
 	let waiting = async acceptOnce(listener)
-	let mute = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'refused4x284'
+	let mute = try TcpClient.connect("127.0.0.1", port: boundPort) otherwise 'refused4x284'
 		waiting.cancel()
 		return 4
 	end 'refused4x284'
@@ -4634,23 +4643,24 @@ function main() returns ExitCode
 	print("a client that says nothing: {await waiting}\n")
 	mute.close()
 
+	let boundPort = listener.port()
 	let again = async serveEcho(listener)
-	let reply = clientTurn(trustedClient(rootHex), port: listener.port())
+	let reply = clientTurn(trustedClient(rootHex), port: boundPort)
 
 	print("a client after it: {reply} | {await again}\n")
 	listener.close()
 
-	var silent = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 5
+	let silent = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 5
+	let silentPort = silent.port()
 	let holder = async holdOpen(silent)
 
-	print("a client dialling a server that never answers: {dialOutcome(silent.port())} {await holder}\n")
-	silent.close()
+	print("a client dialling a server that never answers: {dialOutcome(silentPort)} {await holder}\n")
 
 	return 0
-end 'main'
+end 'phasesOver'
 
 function dialOutcome(port NetworkPort) returns String
-	var impatient = trustedClient(rootHex)
+	let impatient = trustedClient(rootHex)
 
 	impatient.setHandshakeDeadline(300)
 
@@ -4683,7 +4693,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -4743,7 +4753,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -4756,7 +4766,7 @@ function refuseThree(listener TlsListener) returns String
 	var report = ""
 
 	for attempt in 1 to 3 'eachAttempt'
-		var stream = try listener.accept() otherwise (error) 'refused'
+		let stream = try listener.accept() otherwise (error) 'refused'
 			report.append("[{attempt}: accept {describe(error)}]")
 			continue
 		end 'refused'
@@ -4775,7 +4785,7 @@ end 'refuseThree'
 let ExtraBytes = 200000
 
 function filler() returns String
-	var text = StringBuilder.create()
+	let text = StringBuilder.create()
 
 	for row in 0 upto ExtraBytes / 16 'eachRow'
 		text.append("{row:08x}-padding\n")
@@ -4785,7 +4795,7 @@ function filler() returns String
 end 'filler'
 
 function hearAll(raw TcpClient) returns String
-	var heard = ByteArray.create(0)
+	let heard = ByteArray.create(0)
 
 	while true 'reading'
 		let chunk = try raw.recv(1024) otherwise break
@@ -4818,14 +4828,14 @@ function talkMore(port NetworkPort, head String) returns String
 end 'talkMore'
 
 function main() returns ExitCode
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listenerPort = listener.port()
 	let peer = async refuseThree(listener)
 
-	print("http request and more: {talkMore(listener.port(), head: "GET / HTTP/1.1\r\nHost: x\r\n\r\n")}\n")
-	print("other bytes and more: {talkMore(listener.port(), head: "hello hello hello\n")}\n")
-	print("a record of an unknown version and more: {talkMore(listener.port(), head: String.from(ByteArray from [0x16, 0x04, 0x01, 0x00, 0x05]))}\n")
+	print("http request and more: {talkMore(listenerPort, head: "GET / HTTP/1.1\r\nHost: x\r\n\r\n")}\n")
+	print("other bytes and more: {talkMore(listenerPort, head: "hello hello hello\n")}\n")
+	print("a record of an unknown version and more: {talkMore(listenerPort, head: String.from(ByteArray from [0x16, 0x04, 0x01, 0x00, 0x05]))}\n")
 	print("server: {await peer}\n")
-	listener.close()
 
 	return 0
 end 'main'
@@ -4853,7 +4863,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -4903,7 +4913,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -4912,7 +4922,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -4923,7 +4933,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function acceptOne(listener TlsListener) returns TlsStream throws TlsError
-	var stream = try listener.accept()
+	let stream = try listener.accept()
 
 	try stream.handshake()
 
@@ -4935,7 +4945,7 @@ let MostChunks = 256
 let StalledWriteMs = 300
 
 function chunk() returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	bytes.resize(ChunkBytes)
 
@@ -4981,13 +4991,14 @@ function drain(stream TlsStream) returns String
 end 'drain'
 
 function main() returns ExitCode
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listenerPort = listener.port()
 	let accepted = async acceptOne(listener)
-	var client = try TlsClient.connect("127.0.0.1", port: listener.port(), options: trustedClient(rootHex)) otherwise 'refused2x247'
+	let client = try TlsClient.connect("127.0.0.1", port: listenerPort, options: trustedClient(rootHex)) otherwise 'refused2x247'
 		accepted.cancel()
 		return 2
 	end 'refused2x247'
-	var server = try await accepted otherwise return 3
+	let server = try await accepted otherwise return 3
 
 	try client.setWriteDeadline(StalledWriteMs) otherwise return 4
 
@@ -5004,7 +5015,6 @@ function main() returns ExitCode
 	client.close()
 
 	print("peer read: {await draining}\n")
-	listener.close()
 
 	return 0
 end 'main'
@@ -5032,7 +5042,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -5082,7 +5092,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -5091,7 +5101,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -5102,7 +5112,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function serveEcho(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -5165,17 +5175,18 @@ function writeDeadlineOutcome(stream TlsStream) returns String
 end 'writeDeadlineOutcome'
 
 function main() returns ExitCode
-	var server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+	let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
 	try server.requireClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return 1
 
-	var options = trustedClient(rootHex)
+	let options = trustedClient(rootHex)
 
 	try options.setProtocols(TlsProtocolArray from [TlsProtocol.tls13]) otherwise return 2
 
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: server) otherwise return 3
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: server) otherwise return 3
+	let listenerPort = listener.port()
 	let peer = async serveEcho(listener)
-	var stream = try TlsClient.connect("127.0.0.1", port: listener.port(), options: options) otherwise 'refused4x243'
+	let stream = try TlsClient.connect("127.0.0.1", port: listenerPort, options: options) otherwise 'refused4x243'
 		peer.cancel()
 		return 4
 	end 'refused4x243'
@@ -5187,8 +5198,6 @@ function main() returns ExitCode
 	print("setReadDeadline: {readDeadlineOutcome(stream)}\n")
 	print("setWriteDeadline: {writeDeadlineOutcome(stream)}\n")
 	print("server: {await peer}\n")
-
-	listener.close()
 
 	return 0
 end 'main'
@@ -5206,7 +5215,6 @@ server: recv: protocolError(certificateRequired)
 0
 ```
 
-
 <!-- test: tls-stream.the-system-roots-are-read-once-for-every-connection -->
 <!-- tier: stdlib/helpers/tls -->
 Two connections made with default options, which trust the system roots, read the roots from the operating system once between them: the second connection verifies against the roots the first one loaded. The case replaces the program-wide roots source with one that answers the case's root and counts its reads.
@@ -5220,7 +5228,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -5270,7 +5278,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -5301,7 +5309,7 @@ function serveTwice(listener TlsListener) returns String
 	var report = ""
 
 	for attempt in 1 to 2 'eachAttempt'
-		var stream = try listener.accept() otherwise (error) 'refused'
+		let stream = try listener.accept() otherwise (error) 'refused'
 			report.append("[accept {attempt}: {describe(error)}]")
 			continue
 		end 'refused'
@@ -5319,12 +5327,12 @@ function serveTwice(listener TlsListener) returns String
 end 'serveTwice'
 
 function dial(port NetworkPort) returns String
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
 
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -5341,15 +5349,14 @@ function main() returns ExitCode
 	let reads = ReadCountCell.create(0 as ReadCount)
 	SystemRoots.register(SystemRoots.loading(spawn SystemRootsLoader.create(CountingTrust.create(reads.clone()))))
 
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listenerPort = listener.port()
 	let peer = async serveTwice(listener)
 
-	print("first: {dial(listener.port())}\n")
-	print("second: {dial(listener.port())}\n")
+	print("first: {dial(listenerPort)}\n")
+	print("second: {dial(listenerPort)}\n")
 	print("server: {await peer}\n")
 	print("reads: {reads.current()}\n")
-
-	listener.close()
 
 	return 0
 end 'main'
@@ -5377,7 +5384,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -5427,7 +5434,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -5459,7 +5466,7 @@ function serveFour(listener TlsListener) returns String
 	var report = ""
 
 	for attempt in 1 to 4 'eachAttempt'
-		var stream = try listener.accept() otherwise (error) 'refused'
+		let stream = try listener.accept() otherwise (error) 'refused'
 			report.append("[accept {attempt}: {describe(error)}]")
 			continue
 		end 'refused'
@@ -5477,12 +5484,12 @@ function serveFour(listener TlsListener) returns String
 end 'serveFour'
 
 function dial(port NetworkPort) returns String
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
 
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -5499,9 +5506,9 @@ function main() returns ExitCode
 	let reads = ReadCountCell.create(0 as ReadCount)
 	SystemRoots.register(SystemRoots.loading(spawn SystemRootsLoader.create(SlowTrust.create(reads.clone()))))
 
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
-	let peer = async serveFour(listener)
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
 	let port = listener.port()
+	let peer = async serveFour(listener)
 
 	let first = async dial(port)
 	let second = async dial(port)
@@ -5511,8 +5518,6 @@ function main() returns ExitCode
 	print("clients: {await first} {await second} {await third} {await fourth}\n")
 	print("server: {await peer}\n")
 	print("reads: {reads.current()}\n")
-
-	listener.close()
 
 	return 0
 end 'main'
@@ -5539,7 +5544,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -5589,7 +5594,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -5616,7 +5621,7 @@ type MissingTrust implements TrustSource
 end 'MissingTrust'
 
 function dial(port NetworkPort) returns String
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -5632,7 +5637,7 @@ function main() returns ExitCode
 	let reads = ReadCountCell.create(0 as ReadCount)
 	SystemRoots.register(SystemRoots.loading(spawn SystemRootsLoader.create(MissingTrust.create(reads.clone()))))
 
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
 
 	print("first: {dial(listener.port())}\n")
 	print("second: {dial(listener.port())}\n")
@@ -5664,7 +5669,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -5714,7 +5719,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -5725,7 +5730,7 @@ let leafP256Hex = "3082015930820100a00302010202010a300a06082a8648ce3d040302300f3
 let keyP256Hex = "3041020100301306072a8648ce3d020106082a8648ce3d0301070427302502010104200f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b"
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -5734,7 +5739,7 @@ function trustedClient(rootHex String) returns TlsClientOptions
 end 'trustedClient'
 
 function patientServer(identity TlsIdentity) returns TlsServerOptions
-	var options = trustedServer(identity)
+	let options = trustedServer(identity)
 
 	options.setHandshakeDeadline(0)
 
@@ -5756,13 +5761,13 @@ function echoOne(stream TlsStream) returns String
 end 'echoOne'
 
 function acceptTwo(listener TlsListener) returns String
-	var first = try listener.accept() otherwise (error) 'firstRefused'
+	let first = try listener.accept() otherwise (error) 'firstRefused'
 		return "accept 1: {describe(error)}"
 	end 'firstRefused'
 
 	let firstTask = async echoOne(first)
 
-	var second = try listener.accept() otherwise (error) 'secondRefused'
+	let second = try listener.accept() otherwise (error) 'secondRefused'
 		firstTask.cancel()
 		return "accept 2: {describe(error)}"
 	end 'secondRefused'
@@ -5775,7 +5780,7 @@ function acceptTwo(listener TlsListener) returns String
 end 'acceptTwo'
 
 function dial(options TlsClientOptions, port NetworkPort) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -5793,20 +5798,19 @@ function dial(options TlsClientOptions, port NetworkPort) returns String
 end 'dial'
 
 function main() returns ExitCode
-	var listener = try TlsListener.bind("127.0.0.1", port: 0, options: patientServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listener = try TlsListener.bind("127.0.0.1", port: 0, options: patientServer(identityOf(leafP256Hex, keyHex: keyP256Hex))) otherwise return 1
+	let listenerPort = listener.port()
 	let server = async acceptTwo(listener)
-	let silent = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'refused2x141'
+	let silent = try TcpClient.connect("127.0.0.1", port: listenerPort) otherwise 'refused2x141'
 		server.cancel()
 		return 2
 	end 'refused2x141'
 
-	print("echo client: {dial(trustedClient(rootHex), port: listener.port())}\n")
+	print("echo client: {dial(trustedClient(rootHex), port: listenerPort)}\n")
 
 	silent.close()
 
 	print("server: {await server}\n")
-
-	listener.close()
 
 	return 0
 end 'main'

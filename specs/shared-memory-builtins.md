@@ -26,8 +26,7 @@ Every accessor is bounds-checked against the size the section was created with: 
 `writeWord` whose 8 bytes, or a `copyOut` whose `offset + byteCount`, would reach past the end throws
 `SharedMemoryError.outOfBounds`, so the three carry `throws SharedMemoryError` and are called with `try`.
 After `close()` the mapping is gone, and each of the three throws `SharedMemoryError.closed` rather than
-touching the address the mapping used to occupy. A `clone()` of a segment is another name for the same
-mapping, so closing either one closes it under both.
+touching the address the mapping used to occupy. A `SharedSegment` is unique: it has one owner, and `clone()` of one is E3214.
 
 ⛔ **A NAME IS HELD TO WHAT EVERY LANE CAN PUBLISH, ON EVERY LANE.** `create` throws
 `SharedMemoryError.invalidName` before any host call for a name that is empty, longer than 31 bytes, or
@@ -60,7 +59,7 @@ mapping that could not be created, or one whose writes went somewhere the reads 
 before any layout question is asked.
 ```maxon
 function main() returns ExitCode
-	var segment = try SharedSegment.create("maxon-spec-shm-round-trip", bytes: 4096) otherwise return 3
+	let segment = try SharedSegment.create("maxon-spec-shm-round-trip", bytes: 4096) otherwise return 3
 	try segment.writeWord(0, value: 1234567) otherwise return 4
 	let stored = try segment.readWord(0) otherwise return 5
 	segment.close()
@@ -81,7 +80,7 @@ read back. An accessor that dropped its offset, or scaled it as a word index on 
 answer the SAME number twice — which a single round trip cannot see.
 ```maxon
 function main() returns ExitCode
-	var segment = try SharedSegment.create("maxon-spec-shm-offsets", bytes: 4096) otherwise return 3
+	let segment = try SharedSegment.create("maxon-spec-shm-offsets", bytes: 4096) otherwise return 3
 	try segment.writeWord(0, value: 11) otherwise return 4
 	try segment.writeWord(8, value: 22) otherwise return 5
 	let first = try segment.readWord(0) otherwise return 6
@@ -104,7 +103,7 @@ first=11 second=22
 that landed at another offset, changes every one of them.
 ```maxon
 function main() returns ExitCode
-	var segment = try SharedSegment.create("maxon-spec-shm-copy-out", bytes: 4096) otherwise return 3
+	let segment = try SharedSegment.create("maxon-spec-shm-copy-out", bytes: 4096) otherwise return 3
 	try segment.writeWord(0, value: 258) otherwise return 8
 	let octets = try segment.copyOut(0, byteCount: 4) otherwise return 9
 	segment.close()
@@ -134,7 +133,7 @@ typealias NameTally = int(0 to u64.max)
 function main() returns ExitCode
 	var named = 0 as NameTally
 	for cycle in 0 upto 4 'eachCycle'
-		var segment = try SharedSegment.create("maxon-spec-shm-name-{cycle}", bytes: 4096) otherwise return 3
+		let segment = try SharedSegment.create("maxon-spec-shm-name-{cycle}", bytes: 4096) otherwise return 3
 		if segment.segmentName().byteLength() > 0 'published'
 			named = named + 1
 		end 'published'
@@ -161,7 +160,7 @@ refuses that one as `createFailed` (3), so every refused line reads 7 only becau
 the host.
 ```maxon
 function createOutcome(name String) returns ExitCode
-	var segment = try SharedSegment.create(name, bytes: 4096) otherwise (e) 'refused'
+	let segment = try SharedSegment.create(name, bytes: 4096) otherwise (e) 'refused'
 		return match e 'why'
 			invalidName gives 7
 			createFailed gives 3
@@ -199,7 +198,7 @@ IT.** A word is 8 bytes, so offset 4090 in a 4096-byte section starts inside the
 past it. Exit 7 is reachable only through the `outOfBounds` arm; a read that succeeded returns 5.
 ```maxon
 function main() returns ExitCode
-	var segment = try SharedSegment.create("maxon-spec-shm-read-past-end", bytes: 4096) otherwise return 3
+	let segment = try SharedSegment.create("maxon-spec-shm-read-past-end", bytes: 4096) otherwise return 3
 	let word = try segment.readWord(4090) otherwise (e) 'refused'
 		segment.close()
 		return match e 'why'
@@ -225,7 +224,7 @@ The write twin of the read above: a store that straddles the end would overwrite
 does not own, so it is refused by the same bound before any byte moves.
 ```maxon
 function main() returns ExitCode
-	var segment = try SharedSegment.create("maxon-spec-shm-write-past-end", bytes: 4096) otherwise return 3
+	let segment = try SharedSegment.create("maxon-spec-shm-write-past-end", bytes: 4096) otherwise return 3
 	try segment.writeWord(4090, value: 1) otherwise (e) 'refused'
 		segment.close()
 		return match e 'why'
@@ -250,7 +249,7 @@ end 'main'
 the offset alone is inside it.
 ```maxon
 function main() returns ExitCode
-	var segment = try SharedSegment.create("maxon-spec-shm-copy-past-end", bytes: 4096) otherwise return 3
+	let segment = try SharedSegment.create("maxon-spec-shm-copy-past-end", bytes: 4096) otherwise return 3
 	let octets = try segment.copyOut(4000, byteCount: 200) otherwise (e) 'refused'
 		segment.close()
 		return match e 'why'
@@ -312,7 +311,7 @@ function copyAfterClose(segment SharedSegment) returns String
 end 'copyAfterClose'
 
 function main() returns ExitCode
-	var segment = try SharedSegment.create("maxon-spec-shm-after-close", bytes: 4096) otherwise return 3
+	let segment = try SharedSegment.create("maxon-spec-shm-after-close", bytes: 4096) otherwise return 3
 	try segment.writeWord(0, value: 42) otherwise return 4
 	segment.close()
 	print("read={readAfterClose(segment)} write={writeAfterClose(segment)} copy={copyAfterClose(segment)}\n")
@@ -326,43 +325,24 @@ read=closed write=closed copy=closed
 0
 ```
 
-<!-- test: shared-memory-builtins.a-clone-of-a-closed-segment-is-closed-too -->
-⛔ **A COPY OF A SEGMENT IS A SECOND NAME FOR ONE MAPPING, NOT A SECOND MAPPING.** `clone()` copies the
-record, and the record holds the mapping's address; closing the original unmaps it under every copy. Every
-copy therefore shares the one owner state that says whether the mapping is still there, so the clone's
-`readWord` throws `closed` rather than reading through an address that no longer maps anything — which prints
-`read` and a stale word, or faults.
+<!-- test: shared-memory-builtins.a-clone-of-a-segment-is-refused -->
+⛔ **A SEGMENT HAS ONE OWNER, SO IT HAS NO COPY.** A copy of a segment record would be a second name for one mapping, and closing the original would unmap it under the copy. `SharedSegment` is unique, so `clone()` is refused (E3214) and no program holds a handle whose mapping another handle can close.
 ```maxon
-function verdict(e SharedMemoryError) returns String
-	return match e 'why'
-		closed gives "closed"
-		createFailed or
-		mapFailed or
-		invalidName or
-		outOfBounds gives "other"
-	end 'why'
-end 'verdict'
-
 function main() returns ExitCode
-	var segment = try SharedSegment.create("maxon-spec-shm-clone-closed", bytes: 4096) otherwise return 3
+	let segment = try SharedSegment.create("maxon-spec-shm-clone-refused", bytes: 4096) otherwise return 3
 	try segment.writeWord(0, value: 42) otherwise return 4
 	let copy = segment.clone()
 	segment.close()
 
-	let word = try copy.readWord(0) otherwise (e) 'refused'
-		print("{verdict(e)}\n")
-		return 0
-	end 'refused'
+	let word = try copy.readWord(0) otherwise return 5
 
 	print("read {word}\n")
+
 	return 1
 end 'main'
 ```
-```stdout
-closed
-```
-```exitcode
-0
+```maxoncstderr
+error E3214: <fragment>:5:13: 'SharedSegment' is unique and cannot be cloned
 ```
 
 <!-- test: shared-memory-builtins.an-adopter-closing-keeps-the-publishers-name -->
@@ -373,12 +353,12 @@ wrote (77); an adopter that withdrew the name would leave the third `create` pub
 section (0).
 ```maxon
 function main() returns ExitCode
-	var publisher = try SharedSegment.create("maxon-spec-shm-adopter-close", bytes: 4096) otherwise return 3
+	let publisher = try SharedSegment.create("maxon-spec-shm-adopter-close", bytes: 4096) otherwise return 3
 	try publisher.writeWord(0, value: 77) otherwise return 4
-	var adopter = try SharedSegment.create("maxon-spec-shm-adopter-close", bytes: 4096) otherwise return 5
+	let adopter = try SharedSegment.create("maxon-spec-shm-adopter-close", bytes: 4096) otherwise return 5
 	let seen = try adopter.readWord(0) otherwise return 6
 	adopter.close()
-	var later = try SharedSegment.create("maxon-spec-shm-adopter-close", bytes: 4096) otherwise return 7
+	let later = try SharedSegment.create("maxon-spec-shm-adopter-close", bytes: 4096) otherwise return 7
 	let stillSeen = try later.readWord(0) otherwise return 8
 	later.close()
 	publisher.close()
@@ -399,7 +379,7 @@ adopter=77 later=77
 publisher closes, the name is free and a second `publish` succeeds (5).
 ```maxon
 function publishOutcome(name String) returns ExitCode
-	var segment = try SharedSegment.publish(name, bytes: 4096) otherwise (e) 'refused'
+	let segment = try SharedSegment.publish(name, bytes: 4096) otherwise (e) 'refused'
 		return match e 'why'
 			createFailed gives 3
 			invalidName or
@@ -414,7 +394,7 @@ function publishOutcome(name String) returns ExitCode
 end 'publishOutcome'
 
 function main() returns ExitCode
-	var first = try SharedSegment.publish("maxon-spec-shm-publish-twice", bytes: 4096) otherwise return 6
+	let first = try SharedSegment.publish("maxon-spec-shm-publish-twice", bytes: 4096) otherwise return 6
 	let whileHeld = publishOutcome("maxon-spec-shm-publish-twice")
 	first.close()
 	let afterClose = publishOutcome("maxon-spec-shm-publish-twice")
@@ -435,7 +415,7 @@ A `create` that finds the name already published by a section smaller than it as
 than the section holds adopts it (5).
 ```maxon
 function createOutcome(name String, bytes SegmentByteCount) returns ExitCode
-	var segment = try SharedSegment.create(name, bytes: bytes) otherwise (e) 'refused'
+	let segment = try SharedSegment.create(name, bytes: bytes) otherwise (e) 'refused'
 		return match e 'why'
 			createFailed gives 3
 			invalidName or
@@ -450,7 +430,7 @@ function createOutcome(name String, bytes SegmentByteCount) returns ExitCode
 end 'createOutcome'
 
 function main() returns ExitCode
-	var publisher = try SharedSegment.publish("maxon-spec-shm-too-small", bytes: 4096) otherwise return 6
+	let publisher = try SharedSegment.publish("maxon-spec-shm-too-small", bytes: 4096) otherwise return 6
 	let larger = createOutcome("maxon-spec-shm-too-small", bytes: 65536)
 	let same = createOutcome("maxon-spec-shm-too-small", bytes: 4096)
 	publisher.close()

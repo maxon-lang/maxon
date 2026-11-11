@@ -766,7 +766,7 @@ end 'claimedMemoryUnder'
 export function compileMemoryReport(memory CompileMemory, timings CompileTimings) returns String
 	let total = memory.total
 
-	var msg = StringBuilder.create()
+	let msg = StringBuilder.create()
 	msg.append("compile memory — {total.allocs} allocs, {total.frees} frees, {total.bytes} bytes\n")
 	msg.append("{padRight("{MemRowIndent}phase", width: MemPhaseNameWidth)}{padLeft("allocs", width: MemAllocsWidth)}{padLeft("frees", width: MemFreesWidth)}{padLeft("bytes", width: MemBytesWidth)}\n")
 	msg.append(horizontalRule(MemRuleWidth))
@@ -799,7 +799,7 @@ function compileResidencyReport(memory CompileMemory, timings CompileTimings) re
 	var peak = PhaseResidency.zero()
 	var peakCommittedPhase = ""
 	var peakLivePhase = CompilePhase.load
-	var msg = StringBuilder.create()
+	let msg = StringBuilder.create()
 
 	msg.append("\ncompile residency — the heap's LEVEL at each phase boundary, in bytes\n")
 	msg.append("{padRight("{MemRowIndent}phase", width: MemPhaseNameWidth)}{padLeft("live", width: MemBytesWidth)}{padLeft("free", width: MemBytesWidth)}{padLeft("cachedFree", width: MemBytesWidth)}{padLeft("parked", width: MemBytesWidth)}{padLeft("committed", width: MemBytesWidth)}\n")
@@ -855,7 +855,7 @@ function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase, timin
 	let names = census.buckets.names
 	let style = tagCensusRowStyle(census.buckets.mode)
 	let tablePhase = census.requested.namedOr(peakLivePhase)
-	var msg = StringBuilder.create()
+	let msg = StringBuilder.create()
 
 	msg.append("\n{tagCensusHeadline(census.buckets.mode)}\n")
 
@@ -897,7 +897,7 @@ function allocTallyReport(memory CompileMemory, timings CompileTimings) returns 
 		return ""
 	end 'notRequested'
 
-	var msg = StringBuilder.create()
+	let msg = StringBuilder.create()
 	msg.append("\n{allocTallyHeadline(tally.buckets.mode)}\n")
 
 	let names = tally.buckets.names
@@ -1111,7 +1111,7 @@ end 'tagRowIsShownSeparately'
 
 function tagRowsRanked(columns TagBucketColumns, index PhaseIndex, wholeTable bool, style TagRowStyle) returns TagCensusRowArray
 	let order = style.order
-	var rows = TagCensusRowArray.create(0)
+	let rows = TagCensusRowArray.create(0)
 
 	for bucket in 0 upto SlabCensusTagBuckets 'eachBucket'
 		if tagRowIsShownSeparately(bucket, skip: style.skip) 'itsOwnRow'
@@ -1140,7 +1140,7 @@ end 'tagRowsRanked'
 
 function tagPhaseTopLines(columns TagBucketColumns, style TagRowStyle, peakPhase CompilePhase, peakRows TagCensusRowArray, peakRanked bool) returns String
 	let names = columns.names
-	var msg = StringBuilder.create()
+	let msg = StringBuilder.create()
 
 	for phase in CompilePhase.allCases 'eachPhase'
 		if not columns.sampledAt(phase.ordinal as PhaseIndex) 'neverSampled'
@@ -1162,7 +1162,7 @@ function tagPhaseTopLines(columns TagBucketColumns, style TagRowStyle, peakPhase
 end 'tagPhaseTopLines'
 
 function tagTableBlock(rows TagCensusRowArray, style TagRowStyle, names StringArray, columnTitle String, countTitle String) returns String
-	var msg = StringBuilder.create()
+	let msg = StringBuilder.create()
 
 	msg.append("{padRight("{MemRowIndent}{columnTitle}", width: TagLabelWidth)}{padLeft(countTitle, width: MemAllocsWidth)}{padLeft(TagTableBytesColumnTitle, width: MemBytesWidth)}\n")
 	msg.append(horizontalRule(TagCensusRuleWidth))
@@ -1196,7 +1196,7 @@ function keepTagTopRow(top TagCensusRowArray, row TagCensusRow, order TagRowOrde
 	var at = top.count()
 
 	while at > 0 'findItsPlace'
-		view ahead = try top.get(at - 1) otherwise panic("keepTagTopRow: slot {at - 1} of {top.count()} is not readable")
+		let ahead = try top.get(at - 1) otherwise panic("keepTagTopRow: slot {at - 1} of {top.count()} is not readable")
 
 		if tagRowRank(ahead, against: row, order: order) == Ordering.lessThan 'inPlace'
 			break
@@ -1284,7 +1284,7 @@ function residencyRow(label String, reading PhaseResidency) returns String
 end 'residencyRow'
 
 function regAllocSubPhaseMemoryRows(memory CompileMemory) returns String
-	var msg = StringBuilder.create()
+	let msg = StringBuilder.create()
 
 	for sub in RegAllocPhase.allCases 'eachSub'
 		msg.append(memoryRow("{MemSubPhaseIndent}{sub.name}", delta: memory.regAlloc.deltaOf(sub)))

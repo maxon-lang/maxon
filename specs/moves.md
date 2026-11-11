@@ -87,7 +87,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var t = build(1)
+	let t = build(1)
 	let u = t
 	print(u)
 	return 0
@@ -216,7 +216,7 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(1)
-	var t = build(2)
+	let t = build(2)
 	s = t
 	print(s)
 	return 0
@@ -389,7 +389,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var xs = StringSeq.create(0)
+	let xs = StringSeq.create(0)
 	xs.push(build(1))
 	xs.push(build(2))
 	var last = build(0)
@@ -566,7 +566,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(7)
+	let p = Point.create(7)
 	let q = p
 	return q.x
 end 'main'
@@ -596,7 +596,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var t = build(1)
+	let t = build(1)
 	let u = (t)
 	print(u)
 	return 0
@@ -807,7 +807,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(4)
+	let p = Point.create(4)
 	p.x = 0
 	return p.getX()
 end 'main'
@@ -933,7 +933,7 @@ end 'Box'
 
 function main() returns ExitCode
 	let t = Box.create(5)
-	var u = t
+	let u = t
 	u.value = 9
 	return u.value
 end 'main'
@@ -958,7 +958,7 @@ end 'Box'
 
 function main() returns ExitCode
 	let t = Box.create(5)
-	var u = t.clone()
+	let u = t.clone()
 	u.value = 9
 	return u.value + t.value
 end 'main'
@@ -995,7 +995,7 @@ end 'Outer'
 
 function main() returns ExitCode
 	let o = Outer.create(Inner.create(5))
-	var i = (o).inner
+	let i = (o).inner
 	i.value = 9
 	return o.inner.value
 end 'main'
@@ -1018,7 +1018,7 @@ end 'Box'
 
 function main() returns ExitCode
 	let t = (Box.create(5), 7)
-	var b = t.0
+	let b = t.0
 	b.value = 9
 	return b.value
 end 'main'
@@ -1070,6 +1070,7 @@ function main() returns ExitCode
 	var (b, n) = t
 	b.value = 9
 	n = n + 1
+	b = Box.create(b.value)
 	return b.value + n
 end 'main'
 ```
@@ -1090,11 +1091,11 @@ type Holder
 	end 'create'
 
 	function refresh(n Count)
-		view before = self.list
+		let before = self.list
 		var sink = Counts.create(0)
 
 		for i in 0 upto n 'each'
-			var fresh = Counts.create(0)
+			let fresh = Counts.create(0)
 			sink = fresh
 			print("{before.count()} {i}\n")
 		end 'each'
@@ -1104,7 +1105,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	h.refresh(2)
 	return 0
 end 'main'
@@ -1124,12 +1125,12 @@ it is still readable after the clear.
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var items = Words.create(0)
+	let items = Words.create(0)
 	items.push("first padded out long enough to heap allocate {1}")
 	items.push("second padded out long enough to heap allocate {2}")
 
 	for x in items 'each'
-		var taken = items
+		let taken = items
 		taken.clear()
 		print("{x} {taken.count()}\n")
 		break

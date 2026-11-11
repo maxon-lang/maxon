@@ -126,7 +126,7 @@ function feed(tallier Tallier) returns Tally
 end 'feed'
 
 function main() returns ExitCode
-	var total = Total.create()
+	let total = Total.create()
 	let result = feed(function(n) gives total.bump(n))
 	print("{result}\n")
 	return 0
@@ -350,7 +350,7 @@ function touch(box mutable Box) returns Tally
 end 'touch'
 
 function main() returns ExitCode
-	var e = Box.create(0)
+	let e = Box.create(0)
 	let bump = function() gives touch(e)
 	print("{bump()}\n")
 	return 0

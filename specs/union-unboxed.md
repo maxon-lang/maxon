@@ -159,12 +159,12 @@ function mass(h Holder) returns Mass
 end 'mass'
 
 function main() returns ExitCode
-	var all = HolderArray.create(0)
+	let all = HolderArray.create(0)
 	all.push(Holder.holding(Body.create(4)))
 	all.push(Holder.empty)
 	all.push(Holder.holding(Body.create(6)))
 
-	var byName = HolderMap.create()
+	let byName = HolderMap.create()
 	byName.upsert("a", value: Holder.holding(Body.create(10)))
 
 	var total = 0 as Mass
@@ -409,10 +409,10 @@ type Lexed
 end 'Lexed'
 
 function main() returns ExitCode
-	var scanner = Scanner.create(true)
+	let scanner = Scanner.create(true)
 	let n = scanner.note()
 	print("{n}")
-	view log = scanner.takeComments()
+	let log = scanner.takeComments()
 	let lexed = Lexed.create(log)
 
 	return match lexed.comments 'kind'
@@ -437,7 +437,7 @@ type Counts
 	export var lines = 0 as Tally
 
 	static function of(content ByteArray) returns Self
-		var counts = Self{}
+		let counts = Self{}
 		counts.lines = content.count() as Tally
 
 		return counts
@@ -709,8 +709,8 @@ end 'weigh'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let n = Note.text("abc{1}")
-	view a = n
-	view b = n
+	let a = n
+	let b = n
 	let wa = weigh(a)
 	let wb = weigh(b)
 	let wn = weigh(n)
@@ -767,14 +767,14 @@ function weigh(b Blob) returns Count
 end 'weigh'
 
 function nineBytes() returns ByteArray
-	var data = ByteArray.create(0)
+	let data = ByteArray.create(0)
 	data.resize(9)
 
 	return data
 end 'nineBytes'
 
 function twoWords() returns WordArray
-	var list = WordArray.create(0)
+	let list = WordArray.create(0)
 	list.push("one{1}")
 	list.push("two{2}")
 
@@ -862,7 +862,7 @@ union Trio
 end 'Trio'
 
 function bytesOf(count Integer) returns ByteArray
-	var data = ByteArray.create(0)
+	let data = ByteArray.create(0)
 	data.resize(count as ElementIndex)
 
 	return data
@@ -1615,7 +1615,7 @@ function weigh(w Wide) returns Weight
 end 'weigh'
 
 function main() returns ExitCode
-	var all = WideArray.create(0)
+	let all = WideArray.create(0)
 	all.push(Wide.nine)
 	all.push(Wide.point(Point.create(7, label: "p")))
 	all.push(Wide.idle)
@@ -1792,36 +1792,30 @@ mm_free InterpolationScratch #7
 mm_alloc Store #9 size=8
 mm_decref ServiceStartRecord #1 rc=0
 mm_free ServiceStartRecord #1
-mm_alloc ElementBuffer #10 size=3
 mm_decref Point #5 rc=0
 mm_decref StringRecord #6 rc=0
-mm_decref ElementBuffer #10 rc=0
-mm_free ElementBuffer #10
 mm_free StringRecord #6
 mm_free Point #5
-mm_alloc ElementBuffer #11 size=4
 mm_decref StringRecord #8 rc=0
-mm_decref ElementBuffer #11 rc=0
-mm_free ElementBuffer #11
 mm_free StringRecord #8
+mm_alloc InterpolationScratch #10 size=20
+mm_alloc InterpolationScratch #11 size=20
 mm_alloc InterpolationScratch #12 size=20
 mm_alloc InterpolationScratch #13 size=20
 mm_alloc InterpolationScratch #14 size=20
-mm_alloc InterpolationScratch #15 size=20
-mm_alloc InterpolationScratch #16 size=20
-mm_alloc StringRecord #17 size=67
+mm_alloc StringRecord #15 size=67
+mm_decref InterpolationScratch #10 rc=0
+mm_free InterpolationScratch #10
+mm_decref InterpolationScratch #11 rc=0
+mm_free InterpolationScratch #11
 mm_decref InterpolationScratch #12 rc=0
 mm_free InterpolationScratch #12
 mm_decref InterpolationScratch #13 rc=0
 mm_free InterpolationScratch #13
 mm_decref InterpolationScratch #14 rc=0
 mm_free InterpolationScratch #14
-mm_decref InterpolationScratch #15 rc=0
-mm_free InterpolationScratch #15
-mm_decref InterpolationScratch #16 rc=0
-mm_free InterpolationScratch #16
-mm_decref StringRecord #17 rc=0
-mm_free StringRecord #17
+mm_decref StringRecord #15 rc=0
+mm_free StringRecord #15
 mm_decref Store.handle #2 rc=0
 mm_free Store.handle #2
 mm_decref Store #9 rc=0

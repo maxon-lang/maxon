@@ -55,7 +55,7 @@ function bumpFirst(boxes BoxArray) returns Count
 end 'bumpFirst'
 
 function main() returns ExitCode
-	var fill = BoxArray.create(0) as isolated BoxArray
+	let fill = BoxArray.create(0) as isolated BoxArray
 
 	modify fill 'fill'
 		fill.push(Box.create(1))
@@ -101,7 +101,7 @@ function makeBump(boxes BoxArray) returns Bump
 end 'makeBump'
 
 function main() returns ExitCode
-	var fill = BoxArray.create(0) as isolated BoxArray
+	let fill = BoxArray.create(0) as isolated BoxArray
 
 	modify fill 'fill'
 		fill.push(Box.create(1))
@@ -149,7 +149,7 @@ function bumpFirst(boxes BoxList) returns Count
 end 'bumpFirst'
 
 function main() returns ExitCode
-	var fill = BoxList.create() as isolated BoxList
+	let fill = BoxList.create() as isolated BoxList
 
 	modify fill 'fill'
 		fill.append(Box.create(1))
@@ -196,7 +196,7 @@ function bumpFirst(boxes BoxMap) returns Count
 end 'bumpFirst'
 
 function main() returns ExitCode
-	var fill = BoxMap.create() as isolated BoxMap
+	let fill = BoxMap.create() as isolated BoxMap
 
 	modify fill 'fill'
 		fill.upsert("a", value: Box.create(1))
@@ -362,7 +362,7 @@ function makeBump(boxes BoxArray) returns Bump
 end 'makeBump'
 
 function main() returns ExitCode
-	var fill = BoxArray.create(0) as isolated BoxArray
+	let fill = BoxArray.create(0) as isolated BoxArray
 
 	modify fill 'fill'
 		fill.push(Box.create(1))
@@ -423,7 +423,7 @@ function bumpFirst(boxes BoxArray) returns Count
 end 'bumpFirst'
 
 function main() returns ExitCode
-	var fill = BoxArray.create(0) as isolated BoxArray
+	let fill = BoxArray.create(0) as isolated BoxArray
 
 	modify fill 'fill'
 		fill.push(Box.create(1))
@@ -439,7 +439,7 @@ error E3207: <fragment>:50:20: 'bumpFirst' writes 'boxes' (line 38: a result rea
 ```
 
 <!-- test: error.a-plain-closure-hands-an-element-of-a-captured-iterator-to-an-immutable-parameter -->
-`peekFirst` is handed a mutable array, and the closure passes the element its iterator reads to an `immutable` parameter, which would share mutable data as frozen data; the element is refused where the closure uses it.
+`peekFirst` is handed a mutable array, and the closure passes the element its iterator reads to an `immutable` parameter, which would share mutable data as frozen data; the element is refused where the closure uses it, and the call that hands `peekFirst` the mutable array is refused because `peekFirst` needs it frozen.
 
 ```maxon
 typealias Peek = function() returns Count
@@ -469,7 +469,7 @@ function peekFirst(boxes BoxArray) returns Count
 end 'peekFirst'
 
 function main() returns ExitCode
-	var boxes = BoxArray.create(0)
+	let boxes = BoxArray.create(0)
 	boxes.push(Box.create(1))
 	print("{peekFirst(boxes)}\n")
 	return 0
@@ -507,7 +507,7 @@ function peekFirst(boxes BoxArray) returns Count
 end 'peekFirst'
 
 function main() returns ExitCode
-	var fill = BoxArray.create(0) as isolated BoxArray
+	let fill = BoxArray.create(0) as isolated BoxArray
 
 	modify fill 'fill'
 		fill.push(Box.create(1))
@@ -554,7 +554,7 @@ function bumpFirst(boxes BoxArray) returns Count
 end 'bumpFirst'
 
 function main() returns ExitCode
-	var boxes = BoxArray.create(0)
+	let boxes = BoxArray.create(0)
 	let first = Box.create(1)
 	boxes.push(first)
 	print("{bumpFirst(boxes)} {first.count}\n")
@@ -592,7 +592,7 @@ function makeBump(boxes BoxArray) returns Bump
 end 'makeBump'
 
 function main() returns ExitCode
-	var boxes = BoxArray.create(0)
+	let boxes = BoxArray.create(0)
 	let first = Box.create(1)
 	boxes.push(first)
 	let g = makeBump(boxes)
@@ -641,7 +641,7 @@ function bumpAll(boxes BoxArray) returns Count
 end 'bumpAll'
 
 function main() returns ExitCode
-	var fill = BoxArray.create(0) as isolated BoxArray
+	let fill = BoxArray.create(0) as isolated BoxArray
 
 	modify fill 'fill'
 		fill.push(Box.create(1))
@@ -689,7 +689,7 @@ function bumpFirst(boxes BoxArray) returns Count
 end 'bumpFirst'
 
 function main() returns ExitCode
-	var fill = BoxArray.create(0) as isolated BoxArray
+	let fill = BoxArray.create(0) as isolated BoxArray
 
 	modify fill 'fill'
 		fill.push(Box.create(1))
@@ -741,7 +741,7 @@ function bumpAll(boxes BoxArray) returns Count
 end 'bumpAll'
 
 function main() returns ExitCode
-	var boxes = BoxArray.create(0)
+	let boxes = BoxArray.create(0)
 	let first = Box.create(1)
 	boxes.push(first)
 	boxes.push(Box.create(10))
@@ -786,7 +786,7 @@ function bumpFirst(boxes BoxArray) returns Count
 end 'bumpFirst'
 
 function main() returns ExitCode
-	var boxes = BoxArray.create(0)
+	let boxes = BoxArray.create(0)
 	let first = Box.create(1)
 	boxes.push(first)
 	print("{bumpFirst(boxes)} {first.count}\n")
@@ -819,7 +819,7 @@ function makeFetch(boxes BoxArray) returns Fetch
 end 'makeFetch'
 
 function main() returns ExitCode
-	var boxes = BoxArray.create(0)
+	let boxes = BoxArray.create(0)
 	let first = Box.create(1)
 	boxes.push(first)
 	let g = makeFetch(boxes)
@@ -874,7 +874,7 @@ function bumpFirst(boxes BoxArray) returns Count
 end 'bumpFirst'
 
 function main() returns ExitCode
-	var fill = BoxArray.create(0) as isolated BoxArray
+	let fill = BoxArray.create(0) as isolated BoxArray
 
 	modify fill 'fill'
 		fill.push(Box.create(1))
@@ -930,7 +930,7 @@ function bumpFirst(boxes BoxArray) returns Count
 end 'bumpFirst'
 
 function main() returns ExitCode
-	var boxes = BoxArray.create(0)
+	let boxes = BoxArray.create(0)
 	let first = Box.create(1)
 	boxes.push(first)
 	print("{bumpFirst(boxes)} {first.count}\n")

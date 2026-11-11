@@ -3067,22 +3067,22 @@ end 'emitUnit'
 // function; it gates the syscall shim on every `iatCall` (`emitGtGatedIatCall`) and the stack guard
 // below.
 export function emitFunctionChunk(module TargetModule, func IrFunction, frame X64PrologueFrame, encoding FunctionEncodingFacts, usesGt bool, target Target) returns FunctionCodeChunk
-	var code = ByteArray.create(0)
-	var callFixups = CallFixupArray.create(0)
-	var iatRelocs = RelocationArray.create(0)
+	let code = ByteArray.create(0)
+	let callFixups = CallFixupArray.create(0)
+	let iatRelocs = RelocationArray.create(0)
 
 	// The chunk's code -> .data references, filed by `encodeLeaRegGlobal` with CHUNK-LOCAL offsets;
 	// `concatX64FunctionChunks` rebases them exactly as it rebases `callFixups` and `iatRelocs`.
-	var rdataRelocs = RdataRelocationArray.create(0)
-	var rel32Fixups = ChunkRel32FixupArray.create(0)
+	let rdataRelocs = RdataRelocationArray.create(0)
+	let rel32Fixups = ChunkRel32FixupArray.create(0)
 
 	// Dense-match jump tables encoded in this chunk, awaiting their per-slot block-address relocations —
 	// resolved after the block loop, when `chunkLabelOffsets` holds every block's chunk-local offset.
-	var jumpTables = JumpTablePendingArray.create(0)
+	let jumpTables = JumpTablePendingArray.create(0)
 
 	// Sized from `func.nextBlockId` — the function's ids run 0..nextBlockId-1 — so the table is two
 	// allocations and `place` never reallocates. See BlockKeyedTable for why this is an array and not a Map.
-	var chunkLabelOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
+	let chunkLabelOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
 	// The base rsp offset of this function's spill-slot area, computed once (it depends
 	// only on whether the function makes a call — a caller's slots sit ABOVE the Win64
@@ -3103,23 +3103,23 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 	// Hoisted so a build without debug info pays one bool test per op and never reads the span column.
 	let captureSpans = module.spans.armed
-	var lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, encoding: encoding)
-	var runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
-	var chunkBlockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
+	let lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, encoding: encoding)
+	let runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
+	let chunkBlockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
 	// Where this chunk's coverage counters land. Filled by the encoder itself, which is the only thing that
 	// knows where an instruction begins; empty for every build that emits none.
-	var covOffsets = CovPointOffsetArray.create(0)
+	let covOffsets = CovPointOffsetArray.create(0)
 
 	// The code range of every run of blocks under one inline site, read off the block loop itself: the
 	// only thing that knows where a block's code starts and ends.
-	var inlineRanges = InlineRangeBuilder.create()
-	var asyncUnsafeRanges = InlineRangeBuilder.create()
+	let inlineRanges = InlineRangeBuilder.create()
+	let asyncUnsafeRanges = InlineRangeBuilder.create()
 	let stoppable = asyncPreemptionCanStop(usesGt, skipsStackGuard: encoding.skipsStackGuard, pinsItsThread: encoding.pinsItsThread)
 
 	let threadPointerSegment = x64ThreadPointerSegment(target.os)
-	var mark = EmitMark.create()
-	var jumpSpans = JumpTableSpans.empty()
+	let mark = EmitMark.create()
+	let jumpSpans = JumpTableSpans.empty()
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("emitFunctionChunk: blockRef from func.blockRefs not in module.blocks")
@@ -3179,7 +3179,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 	resolveChunkRel32Fixups(code, labelOffsets: chunkLabelOffsets, rel32Fixups: rel32Fixups)
 
-	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	let chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
 
 	// Not `emitGuard`: see `asyncPreemptionCanStop`. The safe-point predicate tests the stack
@@ -3223,19 +3223,19 @@ export let EntryPointName = b"mrt_start"
 // reads the identical table. Concat below appends it to close `.text`.
 
 export function concatX64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
-	var code = ByteArray.create(0)
-	var relocations = RelocationArray.create(0)
-	var callFixups = CallFixupArray.create(0)
-	var labelOffsets = FuncLabelOffsetMap.create()
-	var debugSymbols = DebugSymbolArray.create(0)
-	var rdataRelocations = RdataRelocationArray.create(0)
-	var jumpTableRelocs = JumpTableRelocArray.create(0)
+	let code = ByteArray.create(0)
+	let relocations = RelocationArray.create(0)
+	let callFixups = CallFixupArray.create(0)
+	let labelOffsets = FuncLabelOffsetMap.create()
+	let debugSymbols = DebugSymbolArray.create(0)
+	let rdataRelocations = RdataRelocationArray.create(0)
+	let jumpTableRelocs = JumpTableRelocArray.create(0)
 	let captureSpans = targetModule.spans.armed
-	var debugFunctions = DebugFunctionRangeArray.create(0)
-	var debugLineRows = DebugLineRowArray.create(0)
-	var covPointOffsets = CovPointOffsetArray.create(0)
-	var inlineFrames = InlineFrameTables.create()
-	var asyncUnsafe = AsyncUnsafeTable.create()
+	let debugFunctions = DebugFunctionRangeArray.create(0)
+	let debugLineRows = DebugLineRowArray.create(0)
+	let covPointOffsets = CovPointOffsetArray.create(0)
+	let inlineFrames = InlineFrameTables.create()
+	let asyncUnsafe = AsyncUnsafeTable.create()
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
 	// owns the rule and the refusal for both native backends.
@@ -3272,7 +3272,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		// its slot's offset within `.data`. The writer then adds the section's RVA — the only part
 		// of the address the backend cannot know, because sections are not laid out yet.
 		for rr in chunk.rdataRelocs 'rebaseRdata'
-			var reloc = RdataRelocation.create(funcStart as CodeOffset + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
+			let reloc = RdataRelocation.create(funcStart as CodeOffset + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
 
 			// The chunk-local `rdataOffset` is the ADDEND inside the named object; this resolves the object and
 			// folds the two into the section-relative offset the writer adds an RVA to.
@@ -3321,7 +3321,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		panic("concatX64FunctionChunks: '{String.from(EntryPointName)}' must be laid out FIRST in .text but is at offset {entryOffset} — the panic runtime takes its address as `text_base` and symbolizes every frame relative to it, so anything below it would silently drop out of all backtraces")
 	end 'entryNotFirst'
 
-	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: globalData.symdataImage)
+	let result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: globalData.symdataImage)
 	result.debugSymbols = debugSymbols
 	result.dataPrelude = globalData.dataSectionImage()
 	result.jumpTableRelocs = jumpTableRelocs

@@ -27,10 +27,10 @@ test 'over stdio an initialize, tools/list or tools/call notification gets no an
 end 'over stdio an initialize, tools/list or tools/call notification gets no answer'
 
 test 'over http an initialize notification is accepted 202 and mints no session'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
-	let notified = server.post(notificationOf("initialize"), sessionId: McpSession.none)
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let notified = server.address.post(notificationOf("initialize"), sessionId: McpSession.none)
 	let (initialized, sessionId) = server.initializeSession()
-	let listed = server.post(notificationOf("tools/list"), sessionId: sessionId)
+	let listed = server.address.post(notificationOf("tools/list"), sessionId: sessionId)
 	try server.stop()
 
 	try Expect.equal(notified.statusCode, expected: AcceptedStatus, message: "a POST carrying only a notification is answered 202 with no body; it answered {notified.statusCode} with {notified.body}")

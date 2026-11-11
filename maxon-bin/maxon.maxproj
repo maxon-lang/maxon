@@ -67,7 +67,7 @@ function emittedRuntimePathspecs() returns StringArray
 end 'emittedRuntimePathspecs'
 
 function gitAboutEmittedRuntime(command StringArray) returns String throws GitFailure
-	var args = command.clone()
+	let args = command.clone()
 	args.push("--")
 	args.append(emittedRuntimePathspecs())
 	return try gitAnswer(args)

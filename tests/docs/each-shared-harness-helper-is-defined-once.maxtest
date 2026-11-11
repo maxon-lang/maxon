@@ -17,7 +17,7 @@ test 'each shared harness helper is defined once'
 	let support = try FilePath.from(SupportDir) otherwise panic("shared-helpers: '{SupportDir}' is not a spellable path")
 	Expect.isTrue(Directory.isDirectory(support), message: "there is no {SupportDir}/ directory, so no shared harness helper exists to be defined once. Every path here is relative to the CHECKOUT ROOT; run it from there.")
 
-	var helpers = StringArray.create(0)
+	let helpers = StringArray.create(0)
 
 	for source in sourcesUnder(support) 'eachSupportSource'
 		if not source.filename().endsWith(MaxonSourceSuffix) 'notAHelperSource'
@@ -33,7 +33,7 @@ test 'each shared harness helper is defined once'
 
 	Expect.isTrue(helpers.count() > 0, message: "{SupportDir}/*{MaxonSourceSuffix} declares no `{HelperDeclarationPrefix}<name>(`, so the comparison below would be vacuous.")
 
-	var declaring = DeclaringFiles.create()
+	let declaring = DeclaringFiles.create()
 
 	for helper in helpers 'eachHelperName'
 		declaring.upsert(helper, value: StringArray.create(0))
@@ -53,7 +53,7 @@ test 'each shared harness helper is defined once'
 				continue
 			end 'notAHelper'
 
-			var files = try declaring.get(name) otherwise panic("shared-helpers: '{name}' was found in the map just above")
+			let files = try declaring.get(name) otherwise panic("shared-helpers: '{name}' was found in the map just above")
 
 			if not files.contains(source.toString()) 'newFile'
 				files.push(source.toString())
@@ -62,10 +62,10 @@ test 'each shared harness helper is defined once'
 		end 'eachDeclared'
 	end 'eachSource'
 
-	var misdeclared = StringArray.create(0)
+	let misdeclared = StringArray.create(0)
 
 	for helper in helpers 'eachHelperChecked'
-		view files = try declaring.get(helper) otherwise panic("shared-helpers: every helper was entered into the map")
+		let files = try declaring.get(helper) otherwise panic("shared-helpers: every helper was entered into the map")
 		let onlyInSupport = files.count() == DeclaredOnce and allUnderSupport(files)
 
 		if not onlyInSupport 'misplaced'
@@ -87,7 +87,7 @@ function allUnderSupport(files StringArray) returns bool
 end 'allUnderSupport'
 
 function helperNamesIn(source String) returns StringArray
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 
 	for line in source.split(LineFeed) 'eachLine'
 		let declaration = line.trim()
@@ -101,7 +101,7 @@ function helperNamesIn(source String) returns StringArray
 end 'helperNamesIn'
 
 function functionNamesIn(source String) returns StringArray
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 
 	for line in source.split(LineFeed) 'eachLine'
 		let declaration = withoutModifiers(line.trim())

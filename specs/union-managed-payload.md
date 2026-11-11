@@ -576,7 +576,7 @@ end 'grab'
 
 function main() returns ExitCode
 	let slot = Slot.filled(Body.create(5))
-	var escaped = grab(slot)
+	let escaped = grab(slot)
 	escaped.mass = 99
 	return grab(slot).mass as ExitCode
 end 'main'
@@ -646,7 +646,7 @@ end 'grab'
 
 function main() returns ExitCode
 	let slot = Slot.filled(Body.create(5))
-	var own = grab(slot).clone()
+	let own = grab(slot).clone()
 	own.mass = 99
 	print("{grab(slot).mass} {own.mass}\n")
 	return 0
@@ -1360,7 +1360,7 @@ union U
 end 'U'
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match U.b 'k'
@@ -1386,7 +1386,7 @@ union U
 end 'U'
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match U.a 'k'
@@ -1414,7 +1414,7 @@ union U
 end 'U'
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match U.b 'k'
@@ -1437,7 +1437,7 @@ that fail target becomes the edge into it.
 typealias Code = int(0 to 255)
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match "b" 'k'
@@ -1458,7 +1458,7 @@ directly, past the fail edge the drop sits on.
 typealias Code = int(0 to 255)
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match "a" 'k'
@@ -1479,7 +1479,7 @@ plan's miss edges into the default that are wrapped.
 typealias Code = int(0 to 255)
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match 2 'k'
@@ -1499,7 +1499,7 @@ Its control, entered at `1`, so the move runs and the fallthrough edge carries i
 typealias Code = int(0 to 255)
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match 1 'k'
@@ -1520,7 +1520,7 @@ goes on that arm's own match edge — the then-edge of the test that selected it
 typealias Code = int(0 to 255)
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match "b" 'k'
@@ -1542,7 +1542,7 @@ never reached.
 typealias Code = int(0 to 255)
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match "a" 'k'
@@ -1570,7 +1570,7 @@ union U
 end 'U'
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match U.c 'k'
@@ -1599,9 +1599,9 @@ union U
 end 'U'
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
-	var u = "a third heap string long enough to be a real allocation".clone()
+	let u = "a third heap string long enough to be a real allocation".clone()
 	var w = "a fourth heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match U.c 'k'
@@ -1629,9 +1629,9 @@ union U
 end 'U'
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
-	var u = "a third heap string long enough to be a real allocation".clone()
+	let u = "a third heap string long enough to be a real allocation".clone()
 	var w = "a fourth heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match U.b 'k'
@@ -1658,9 +1658,9 @@ union U
 end 'U'
 
 function main() returns ExitCode
-	var s = "a heap string long enough to be a real allocation".clone()
+	let s = "a heap string long enough to be a real allocation".clone()
 	var t = "a second heap string long enough to be a real allocation".clone()
-	var u = "a third heap string long enough to be a real allocation".clone()
+	let u = "a third heap string long enough to be a real allocation".clone()
 	var w = "a fourth heap string long enough to be a real allocation".clone()
 	var n = 0 as Code
 	match U.a 'k'
@@ -2772,7 +2772,7 @@ function tyLen(ty Ty) returns Integer
 end 'tyLen'
 
 function main() returns ExitCode
-	var arr = TyArray.create(0)
+	let arr = TyArray.create(0)
 	arr.push(Ty.concrete("an array element payload, long enough to be a real heap allocation"))
 	let borrowed = try arr.get(0) otherwise panic("get failed")
 	let first = match borrowed 'b'
@@ -2982,7 +2982,7 @@ function probe(inner Inner) returns Integer
 end 'probe'
 
 function main() returns ExitCode
-	var inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
+	let inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
 	let n = probe(inner)
 	let again = match inner 'k'
 		text(body) gives body.byteLength() as ExitCode
@@ -3028,7 +3028,7 @@ function probe(inner Inner) returns Integer
 end 'probe'
 
 function main() returns ExitCode
-	var inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
+	let inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
 	let n = probe(inner)
 	let again = match inner 'k'
 		text(body) gives body.byteLength() as ExitCode
@@ -3106,16 +3106,16 @@ union Ty
 end 'Ty'
 
 function steal(ty Ty) returns Integer
-	var list = TyList.create()
+	let list = TyList.create()
 	list.append(ty)
-	view got = try list.removeFirst() otherwise panic("removeFirst failed")
+	let got = try list.removeFirst() otherwise panic("removeFirst failed")
 	return match got 'm'
 		concrete(name) gives name.byteLength() as Integer
 	end 'm'
 end 'steal'
 
 function main() returns ExitCode
-	var ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
+	let ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
 	let n = steal(ty)
 	let again = match ty 'k'
 		concrete(name) gives name.byteLength() as ExitCode
@@ -3146,16 +3146,16 @@ union Ty
 end 'Ty'
 
 function steal(ty Ty) returns Integer
-	var arr = TyArray.create(0)
+	let arr = TyArray.create(0)
 	arr.push(ty)
-	view got = try arr.remove(0) otherwise panic("remove failed")
+	let got = try arr.remove(0) otherwise panic("remove failed")
 	return match got 'm'
 		concrete(name) gives name.byteLength() as Integer
 	end 'm'
 end 'steal'
 
 function main() returns ExitCode
-	var ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
+	let ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
 	let n = steal(ty)
 	let again = match ty 'k'
 		concrete(name) gives name.byteLength() as ExitCode
@@ -3210,7 +3210,7 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	var cell = Cell.create(Slot.filled("the borrowed payload, long enough to be a real heap allocation"))
+	let cell = Cell.create(Slot.filled("the borrowed payload, long enough to be a real heap allocation"))
 	let measured = match cell.slot 'm'
 		filled(s) gives cell.replaceThenMeasure(s)
 		empty(n) gives n
@@ -3489,7 +3489,7 @@ function replaceThenMeasure(borrowed String, shelf Shelf) returns Integer
 end 'replaceThenMeasure'
 
 function main() returns ExitCode
-	var shelf = Shelf.create(Holder.create(Slot.filled(text(5))))
+	let shelf = Shelf.create(Holder.create(Slot.filled(text(5))))
 	let measured = measure(shelf)
 	print("measured={measured}")
 	return 0
@@ -3546,7 +3546,7 @@ function resetThenLen(h VarHolder, s String) returns Integer
 end 'resetThenLen'
 
 function main() returns ExitCode
-	var vh = VarHolder.create(LSlot.lfilled(text(5)))
+	let vh = VarHolder.create(LSlot.lfilled(text(5)))
 	let d = vh.measure()
 	print("d={d}")
 	return 0
@@ -3607,7 +3607,7 @@ function wipeThenLen(h VarHolder, s String) returns Integer
 end 'wipeThenLen'
 
 function main() returns ExitCode
-	var vh = VarHolder.create(LSlot.lfilled(text(5)))
+	let vh = VarHolder.create(LSlot.lfilled(text(5)))
 	let d = vh.measure()
 	print("d={d}")
 	return 0

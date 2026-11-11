@@ -41,7 +41,7 @@ module function filesRemoved(project Project, paths MaxonSourcePathSet)
 		return
 	end 'nothingWentAway'
 
-	var kept = FilePathArray.create(0)
+	let kept = FilePathArray.create(0)
 
 	// Nothing here may write `project.db.sourcePaths`: the walk re-reads its live count each step, so a
 	// removal in place would skip the element after it. The kept list replaces it once the walk is over.
@@ -180,7 +180,7 @@ function memoOrNew(project Project, contentHash HashDigest) returns SharedFileMe
 		return memo
 	end 'alreadyHeld'
 
-	var created = SharedFileMemo.holdingNothingYet()
+	let created = SharedFileMemo.holdingNothingYet()
 	project.session.fileMemos.entries.upsert(contentHash, value: created)
 
 	return created
@@ -222,7 +222,7 @@ end 'viewsPackFor'
 
 function loadedView(project Project, contentHash HashDigest, buildKey BuildKey) returns ViewEntry throws SharedMemoMiss
 	let opened = try viewsPackFor(project, contentHash: contentHash)
-	var reader = try opened.pack.section(contentHash, second: NoRowQualifier, third: NoRowQualifier) otherwise throw SharedMemoMiss.notHeld
+	let reader = try opened.pack.section(contentHash, second: NoRowQualifier, third: NoRowQualifier) otherwise throw SharedMemoMiss.notHeld
 
 	return try decodedViewSection(reader, buildKey: buildKey) otherwise (damage) 'damaged'
 		project.session.fileMemos.library.rejectDecoded(project.target, name: opened.name, damage: damage, tally: project.db.libraryTally)
@@ -246,8 +246,8 @@ function heldViewFor(project Project, contentHash HashDigest, buildKey BuildKey)
 		return view
 	end 'inMemory'
 
-	var entry = try loadedView(project, contentHash: contentHash, buildKey: buildKey)
-	var memo = memoOrNew(project, contentHash: contentHash)
+	let entry = try loadedView(project, contentHash: contentHash, buildKey: buildKey)
+	let memo = memoOrNew(project, contentHash: contentHash)
 	memo.learnRawStreamFacts(entry.facts)
 	memo.addView(entry.view)
 
@@ -273,7 +273,7 @@ export function shareTokens(project Project, contentHash HashDigest, tokens Toke
 		return
 	end 'notAdmitted'
 
-	var memo = memoOrNew(project, contentHash: contentHash)
+	let memo = memoOrNew(project, contentHash: contentHash)
 	memo.holdRawTokens(tokens)
 end 'shareTokens'
 
@@ -308,7 +308,7 @@ export function shareActiveTokens(project Project, contentHash HashDigest, build
 	// stream that a later compile would read as a blank file, with no diagnostic. A view is only ever
 	// ADDED here, never replaced: `queryActiveTokens` reaches this line only after
 	// `sharedActiveTokensOf` answered no for this build.
-	var memo = try heldMemoFor(project, contentHash: contentHash) otherwise return
+	let memo = try heldMemoFor(project, contentHash: contentHash) otherwise return
 
 	if not memo.holdsRawTokens() 'theRawStreamDidNotLex'
 		return
@@ -337,7 +337,7 @@ export function shareProducerMask(project Project, contentHash HashDigest, build
 	// this build has no view because the file failed to lex or its `#if` filter FAILED and a failure is
 	// deliberately not published (see `shareActiveTokens`). The sweep still walks the empty stream that
 	// failure produced, so it still arrives here with a mask.
-	var view = try heldViewFor(project, contentHash: contentHash, buildKey: buildKey) otherwise return
+	let view = try heldViewFor(project, contentHash: contentHash, buildKey: buildKey) otherwise return
 	view.rememberProducerMask(mask)
 end 'shareProducerMask'
 
@@ -455,11 +455,11 @@ end 'sharedParseOf'
 // The baseline is restored after every lookup, hit or miss: checking a held parse's told row-set
 // answers re-asks them, which writes journaled memos onto this program's index.
 function heldParseFor(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable) returns FileParseArtifact throws SharedMemoMiss
-	var memo = memoOrNew(project, contentHash: contentHash)
+	let memo = memoOrNew(project, contentHash: contentHash)
 	loadParseIfAbsent(project, memo: memo, contentHash: contentHash, variant: variant, key: key, libraryHash: signatures.libraryHash)
 
 	let consuming = not project.session.fileMemos.library.retainsWhatItLoads()
-	var rebased = try memo.parseOf(variant, key: key, signatures: signatures, overrides: overrides, consuming: consuming) otherwise (miss) 'notHeld'
+	let rebased = try memo.parseOf(variant, key: key, signatures: signatures, overrides: overrides, consuming: consuming) otherwise (miss) 'notHeld'
 		signatures.restoreBaseline()
 		project.db.sharedParseMisses = project.db.sharedParseMisses + 1
 
@@ -474,7 +474,7 @@ function heldParseFor(project Project, contentHash HashDigest, variant HashDiges
 	signatures.restoreBaseline()
 	project.db.sharedParseHits = project.db.sharedParseHits + 1
 	project.db.sharedParseReusedFiles.insert(contentHash)
-	rebaseArtifact(project, artifact: rebased.artifact, rebase: rebased.rebase)
+	rebaseArtifact(rebased.artifact, rebase: rebased.rebase)
 
 	return rebased.artifact
 end 'heldParseFor'
@@ -494,10 +494,10 @@ function loadParseIfAbsent(project Project, memo SharedFileMemo, contentHash Has
 		return
 	end 'inMemory'
 
-	var library = project.session.fileMemos.library
+	let library = project.session.fileMemos.library
 	let name = try parsesPackName(project, libraryHash: libraryHash) otherwise return
 	let pack = try library.openPack(project.target, name: name, tally: project.db.libraryTally) otherwise return
-	var reader = try pack.section(contentHash, second: variant, third: key) otherwise return
+	let reader = try pack.section(contentHash, second: variant, third: key) otherwise return
 
 	let parse = try decodedParseSection(reader, variant: variant, key: key) otherwise (damage) 'damaged'
 		library.rejectDecoded(project.target, name: name, damage: damage, tally: project.db.libraryTally)
@@ -508,7 +508,7 @@ function loadParseIfAbsent(project Project, memo SharedFileMemo, contentHash Has
 end 'loadParseIfAbsent'
 
 export function persistSharedEntries(project Project)
-	var library = project.session.fileMemos.library
+	let library = project.session.fileMemos.library
 	let entryClass = library.entryClassOf(project)
 
 	if not library.persistsFor(project) 'noDiskTier'
@@ -517,11 +517,11 @@ export function persistSharedEntries(project Project)
 
 	let name = try viewsPackName(project) otherwise return
 	let buildKey = buildKeyOf(project)
-	var views = LibraryPackBuilder.create()
+	let views = LibraryPackBuilder.create()
 	var fresh = false
 
 	for contentHash in project.db.shareableTokenHashes 'eachAdmitted'
-		view view = try memoViewOf(project, contentHash: contentHash, buildKey: buildKey) otherwise continue
+		let view = try memoViewOf(project, contentHash: contentHash, buildKey: buildKey) otherwise continue
 
 		if not view.persisted 'newToTheDisk'
 			fresh = true
@@ -533,8 +533,8 @@ export function persistSharedEntries(project Project)
 	end 'nothingNew'
 
 	for contentHash in project.db.shareableTokenHashes 'eachToWrite'
-		view memo = try heldMemoFor(project, contentHash: contentHash) otherwise continue
-		view view = try memo.viewOf(buildKey) otherwise continue
+		let memo = try heldMemoFor(project, contentHash: contentHash) otherwise continue
+		let view = try memo.viewOf(buildKey) otherwise continue
 		let facts = try memo.rawStreamFactsHeld() otherwise panic("persistSharedEntries: a memo holds a view but not its raw stream's facts, and every view is added beside them")
 		views.add(contentHash, second: NoRowQualifier, third: NoRowQualifier, payload: encodedViewSection(facts, view: view))
 	end 'eachToWrite'
@@ -546,19 +546,19 @@ export function persistSharedEntries(project Project)
 	library.trimEntries(project.target, kind: LibraryEntryKind.views, entryClass: entryClass, kept: name, most: MostEntriesOfAKind)
 
 	for contentHash in project.db.shareableTokenHashes 'eachWritten'
-		var view = try memoViewOf(project, contentHash: contentHash, buildKey: buildKey) otherwise continue
+		let view = try memoViewOf(project, contentHash: contentHash, buildKey: buildKey) otherwise continue
 		view.markPersisted()
 	end 'eachWritten'
 end 'persistSharedEntries'
 
 export function persistStashedParses(project Project)
-	var stashed = project.db.stashedParsePacks
+	let stashed = project.db.stashedParsePacks
 	project.db.stashedParsePacks = StashedParsePackMap.create()
-	var library = project.session.fileMemos.library
+	let library = project.session.fileMemos.library
 	let entryClass = library.entryClassOf(project)
 
 	for (libraryHash, _) in stashed 'eachLibraryState'
-		var pack = try stashed.get(libraryHash) otherwise panic("persistStashedParses: the map iterated {libraryHash} and does not hold it")
+		let pack = try stashed.get(libraryHash) otherwise panic("persistStashedParses: the map iterated {libraryHash} and does not hold it")
 		let name = try parsesPackName(project, libraryHash: libraryHash) otherwise continue
 
 		// Re-read from disk, not from the pack this process opened, so rows another process wrote since
@@ -587,13 +587,13 @@ function stashShareableParse(project Project, contentHash HashDigest, variant Ha
 		return artifact
 	end 'carriesFaults'
 
-	var signatures = programSignaturesIn(project, asker: "stashShareableParse")
-	let footprint = footprintOf(project, artifact: artifact, signatures: signatures)
-	var held = SharedLibraryParse.create(variant, key: key, footprint: footprint, artifact: artifact)
+	let signatures = programSignaturesIn(project, asker: "stashShareableParse")
+	let footprint = footprintOf(artifact, signatures: signatures)
+	let held = SharedLibraryParse.create(variant, key: key, footprint: footprint, artifact: artifact)
 
 	let retains = project.session.fileMemos.library.retainsWhatItLoads()
 
-	var canonical = try persistedCanonicalParse(project, held: held, contentHash: contentHash, libraryHash: signatures.libraryHash) otherwise 'notPersistable'
+	let canonical = try persistedCanonicalParse(project, held: held, contentHash: contentHash, libraryHash: signatures.libraryHash) otherwise 'notPersistable'
 		if retains 'aLaterCompileMayAsk'
 			project.db.pendingSharedParses.upsert(contentHash, value: held.cloned())
 		end 'aLaterCompileMayAsk'
@@ -613,14 +613,14 @@ end 'stashShareableParse'
 // (`tests/cli/library-cache-warm-build-is-byte-identical`). `LibraryBaseline.persistedBaseline`
 // does the same for the baseline.
 function persistedCanonicalParse(project Project, held SharedLibraryParse, contentHash HashDigest, libraryHash HashDigest) returns SharedLibraryParse throws LibraryEntryMiss
-	var library = project.session.fileMemos.library
+	let library = project.session.fileMemos.library
 
 	if not library.persistsFor(project) 'noDiskTier'
 		throw LibraryEntryMiss.unavailable
 	end 'noDiskTier'
 
 	let payload = try encodedParseSection(held) otherwise throw LibraryEntryMiss.unavailable
-	var pack = try project.db.stashedParsePacks.get(libraryHash) otherwise LibraryPackBuilder.create()
+	let pack = try project.db.stashedParsePacks.get(libraryHash) otherwise LibraryPackBuilder.create()
 	pack.add(contentHash, second: held.variantOf(), third: held.keyOf(), payload: payload)
 	project.db.stashedParsePacks.upsert(libraryHash, value: pack)
 
@@ -636,7 +636,7 @@ export function publishStandingParses(project Project)
 	project.db.pendingSharedParses = PendingSharedParseMap.create()
 
 	for (contentHash, standing) in pending 'eachPending'
-		var memo = try heldMemoFor(project, contentHash: contentHash) otherwise panic("publishStandingParses: a parse was stashed for bytes no shared file memo holds — a shareable plan requires admitted bytes, and admitted bytes that lexed are held")
+		let memo = try heldMemoFor(project, contentHash: contentHash) otherwise panic("publishStandingParses: a parse was stashed for bytes no shared file memo holds — a shareable plan requires admitted bytes, and admitted bytes that lexed are held")
 		memo.holdParse(standing)
 		published = published + 1
 	end 'eachPending'
@@ -659,7 +659,7 @@ export function compositeSourceHash(project Project) returns HashDigest
 	var h = Hasher.empty()
 
 	for path in project.db.sourcePaths 'each'
-		view entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
+		let entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
 
 		// The path is folded beside the content hash: the digest is a function of the (path, content)
 		// sequence, not of the contents alone. A rename moves no content, so a fold over contents alone

@@ -87,7 +87,7 @@ function size(op Op) returns Integer
 end 'size'
 
 function main() returns ExitCode
-	var name = ByteArray.create(0)
+	let name = ByteArray.create(0)
 	name.push(65)
 	name.push(66)
 	let op = Op.call(name, weight: 1)
@@ -110,7 +110,7 @@ union Op
 end 'Op'
 
 function main() returns ExitCode
-	var name = ByteArray.create(0)
+	let name = ByteArray.create(0)
 	name.push(65)
 	let op = Op.call(name, weight: 1)
 	name.push(66)
@@ -145,7 +145,7 @@ union Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.held(Cell.create())
+	let holder = Holder.held(Cell.create())
 
 	match holder 'write'
 		held(cell) then cell.level = 5
@@ -169,7 +169,7 @@ union Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.held(ByteArray.create(0))
+	let holder = Holder.held(ByteArray.create(0))
 
 	match holder 'write'
 		held(items) then items.push(1)
@@ -319,7 +319,7 @@ function bump(cell Cell)
 end 'bump'
 
 function main() returns ExitCode
-	var holder = Holder.held(Cell.create())
+	let holder = Holder.held(Cell.create())
 
 	match holder 'write'
 		held(cell) then bump(cell)
@@ -366,7 +366,7 @@ end 'Pocket'
 
 function main() returns ExitCode
 	let holder = Holder.held(Cell.create())
-	var pocket = Pocket.create()
+	let pocket = Pocket.create()
 
 	match holder 'read'
 		held(cell) then pocket.keep(cell)
@@ -408,7 +408,7 @@ end 'payloadOf'
 
 function main() returns ExitCode
 	let holder = Holder.held(Cell.create())
-	var copy = payloadOf(holder)
+	let copy = payloadOf(holder)
 	copy.level = 4
 
 	return copy.level as ExitCode
@@ -455,7 +455,7 @@ type Shelf
 end 'Shelf'
 
 function main() returns ExitCode
-	var shelf = Shelf.create()
+	let shelf = Shelf.create()
 	let source = Holder.held(Cell.create())
 
 	match source 'copy'
@@ -507,8 +507,8 @@ type Shelf
 end 'Shelf'
 
 function main() returns ExitCode
-	var shelf = Shelf.create()
-	var cell = Cell.create()
+	let shelf = Shelf.create()
+	let cell = Cell.create()
 	shelf.shelve(cell)
 	cell.level = 9
 
@@ -541,7 +541,7 @@ union Mark
 end 'Mark'
 
 function main() returns ExitCode
-	var point = Point.create(3, y: 4)
+	let point = Point.create(3, y: 4)
 	var tick = 5 as Integer
 	let mark = Mark.at(point, tick: tick)
 	tick = tick + point.x
@@ -574,7 +574,7 @@ function wrapOp(callee ByteArray) returns Op
 end 'wrapOp'
 
 function main() returns ExitCode
-	var scratch = ByteArray.create(0)
+	let scratch = ByteArray.create(0)
 	scratch.push(1)
 	let op = wrapOp(scratch)
 	scratch.push(2)
@@ -677,7 +677,7 @@ function wrapOp(grid Grid) returns Op
 end 'wrapOp'
 
 function main() returns ExitCode
-	var scratch = Grid.create(0)
+	let scratch = Grid.create(0)
 	scratch.push(Row.create(0))
 	let op = wrapOp(scratch)
 	scratch.push(Row.create(0))

@@ -63,7 +63,7 @@ export function runLspServer(args MaxonArgs) returns ExitCode
 	let writer = spawn LspStdoutWriter.create()
 	let stdinReader = spawn LspStdinReader.create()
 	let mode = LspSessionMode.served if args.relayed else LspSessionMode.unrouted
-	var session = LspSession.create(writer, stdinReader: stdinReader, mode: mode)
+	let session = LspSession.create(writer, stdinReader: stdinReader, mode: mode)
 	return session.run()
 end 'runLspServer'
 
@@ -201,14 +201,15 @@ type LspSession
 
 	function becomeRelay(slot FilePath, body String, doc JsonDoc)
 		let relay = LspRelay.create(slot, initializeBody: body, initializeId: readRequestId(doc))
-		self.mode = LspSessionMode.relaying(relay)
 		relay.armTick(self.workspace)
 
 		match relay.attachInitial(self.workspace) 'attachment'
-			attached then return
+			attached then break
 			detached then respondInitialize(self.workspace, id: readRequestId(doc), doc: doc)
 			failed(reason) then self.answerInitializeThenReport(relay, reason: reason, doc: doc)
 		end 'attachment'
+
+		self.mode = LspSessionMode.relaying(relay)
 	end 'becomeRelay'
 
 	function answerInitializeThenReport(relay LspRelay, reason String, doc JsonDoc)
@@ -289,7 +290,7 @@ type LspSession
 
 	function rearriveProjectFileIfRecordMoved(name RootName)
 		let key = name.key()
-		view watched = try self.workspace.recordWatches.get(key) otherwise return
+		let watched = try self.workspace.recordWatches.get(key) otherwise return
 
 		if recordWatchHolds(watched) 'unchanged'
 			return
@@ -400,7 +401,7 @@ type LspSession
 			return
 		end 'noAnswerYet'
 
-		var answer = try self.answerResolving(method, doc: doc) otherwise 'badParams'
+		let answer = try self.answerResolving(method, doc: doc) otherwise 'badParams'
 			self.refuseParams(spelling.wireName, id: id)
 			return
 		end 'badParams'
@@ -411,7 +412,7 @@ type LspSession
 	function answerExtensionRequest(method LspExtensionMethod, id LspRequestId, doc JsonDoc)
 		let wireName = lspExtensionMethodWireName(method)
 
-		var outcome = try answerExtension(method, doc: doc, documents: self.documents, workspace: self.workspace) otherwise 'badParams'
+		let outcome = try answerExtension(method, doc: doc, documents: self.documents, workspace: self.workspace) otherwise 'badParams'
 			self.refuseParams(wireName, id: id)
 			return
 		end 'badParams'
@@ -536,8 +537,8 @@ function respondInitialize(workspace LspWorkspaceState, id LspRequestId, doc Jso
 	lspRememberClientRoots(workspace, roots: clientRootsOf(doc))
 	workspace.trusted = trustedByInitializationOptions(doc)
 
-	var reply = JsonDoc.create()
-	var capabilities = LspJsonObject.create(reply)
+	let reply = JsonDoc.create()
+	let capabilities = LspJsonObject.create(reply)
 	capabilities.put(TextDocumentSyncKey, value: JsonNode.numberNode(FullTextDocumentSync))
 	capabilities.putNode(WorkspaceKey, value: workspaceFoldersCapability(reply))
 
@@ -546,7 +547,7 @@ function respondInitialize(workspace LspWorkspaceState, id LspRequestId, doc Jso
 		capabilities.putNode(spelling.providerKey, value: providerValueNode(reply, shape: spelling.providerValue))
 	end 'eachMethod'
 
-	var result = LspJsonObject.create(reply)
+	let result = LspJsonObject.create(reply)
 	result.putNode(CapabilitiesKey, value: capabilities.finish())
 	result.putNode(ServerInfoKey, value: serverInfoNode(reply))
 	writeLspResult(workspace.writer, doc: reply, id: id, result: result.finish())
@@ -562,7 +563,7 @@ module function trustedByInitializationOptions(doc JsonDoc) returns bool
 end 'trustedByInitializationOptions'
 
 function serverInfoNode(doc JsonDoc) returns JsonNodeId
-	var info = LspJsonObject.create(doc)
+	let info = LspJsonObject.create(doc)
 	info.put(ServerNameKey, value: JsonNode.stringNode(CompilerProductName))
 	info.put(VersionKey, value: JsonNode.stringNode(versionLine()))
 	return info.finish()
@@ -573,7 +574,7 @@ end 'serverInfoNode'
 // folders settle it alone where there are any: `rootUri` carries one root and a multi-root window has
 // several, so consulting it first would leave the rest of the window out of the workspace entirely.
 module function clientRootsOf(doc JsonDoc) returns LspClientRootArray
-	var roots = LspClientRootArray.create(0)
+	let roots = LspClientRootArray.create(0)
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return roots
 
 	pushWorkspaceFolderRoots(doc, container: params, key: WorkspaceFoldersKey, into: roots)
@@ -593,8 +594,8 @@ function changeWorkspaceFolders(workspace LspWorkspaceState, doc JsonDoc) throws
 	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
 	let event = try lspMember(doc, of: params, key: FolderEventKey)
 
-	var added = LspClientRootArray.create(0)
-	var removed = LspClientRootArray.create(0)
+	let added = LspClientRootArray.create(0)
+	let removed = LspClientRootArray.create(0)
 
 	pushWorkspaceFolderRoots(doc, container: event, key: FoldersAddedKey, into: added)
 	pushWorkspaceFolderRoots(doc, container: event, key: FoldersRemovedKey, into: removed)
@@ -629,11 +630,11 @@ end 'pushRootAt'
 // `tests/lsp/capability-agreement.maxtest` is the gate, because a test client that sends either
 // unconditionally cannot notice their absence.
 function workspaceFoldersCapability(doc JsonDoc) returns JsonNodeId
-	var folders = LspJsonObject.create(doc)
+	let folders = LspJsonObject.create(doc)
 	folders.put(WorkspaceFoldersSupportedKey, value: JsonNode.boolNode(true))
 	folders.put(WorkspaceFoldersChangeNotificationsKey, value: JsonNode.boolNode(true))
 
-	var workspace = LspJsonObject.create(doc)
+	let workspace = LspJsonObject.create(doc)
 	workspace.putNode(WorkspaceFoldersKey, value: folders.finish())
 
 	return workspace.finish()
@@ -680,7 +681,7 @@ end 'answerExtension'
 // from the roster while `answerFor` routes to it: both halves are a `match` over the same enum, and
 // neither compiles with an arm absent.
 function servedMethods() returns LspMethodArray
-	var served = LspMethodArray.create(0)
+	let served = LspMethodArray.create(0)
 
 	for area in LspArea.allCases 'eachArea'
 		for method in areaServedMethods(area) 'eachMethod'
@@ -705,7 +706,7 @@ end 'areaServedMethods'
 
 // LSP defines shutdown's result as null.
 module function respondShutdown(writer LspStdoutWriter.handle, id LspRequestId)
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 	writeLspResult(writer, doc: doc, id: id, result: doc.add(JsonNode.nullNode()))
 end 'respondShutdown'
 

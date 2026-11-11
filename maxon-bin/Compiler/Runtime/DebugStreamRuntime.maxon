@@ -434,8 +434,6 @@ export enum MmTag
 	ClosureEnv
 	ParameterCell
 
-	// The table a soleness or share walk counts the meetings of a record reached more than once in.
-	WalkVisitTable
 	AsyncArgumentImage
 	ServiceStartRecord
 end 'MmTag'
@@ -477,7 +475,7 @@ export type DebugStreamNameTable
 	// interned-name table it is the answer `__DebugStream.nameId("")` gets, and it is the right one:
 	// an empty name IS no name. `specs/debugstream-name-id.md` pins that answer.
 	export static function create(seed StringArray) returns DebugStreamNameTable
-		var byName = DebugStreamNameIndexMap.create()
+		let byName = DebugStreamNameIndexMap.create()
 
 		for name in seed 'seedIndex'
 			byName.upsert(name, value: byName.count() as FullRangeInt)
@@ -511,7 +509,7 @@ end 'DebugStreamNameTable'
 // type name for an allocation that has none. The rule is the CONSUMER's (`resolveInternedName`
 // skips index 0), asked here rather than restated as a second convention.
 export function mmTagRosterNames() returns StringArray
-	var names = StringArray.create(MmTag.allCases.count(), zeroed: false)
+	let names = StringArray.create(MmTag.allCases.count(), zeroed: false)
 
 	for tag in MmTag.allCases 'each'
 		names.push("" if tag == MmTag.Untagged else tag.name)
@@ -524,7 +522,7 @@ end 'mmTagRosterNames'
 // Stated beside the tag roster because it is the same rule read the other way: that one reserves index 0 by
 // giving `MmTag.Untagged` an empty spelling, this one by having nothing else at 0 to give.
 export function debugStreamNameRosterSeed() returns StringArray
-	var names = StringArray.create(MmTag.allCases.count(), zeroed: false)
+	let names = StringArray.create(MmTag.allCases.count(), zeroed: false)
 	names.push("")
 	return names
 end 'debugStreamNameRosterSeed'
@@ -538,7 +536,7 @@ end 'debugStreamNameRosterSeed'
 // would be that fact written twice, and the failure mode of a drift between them is not a build error: it
 // would slide the monitor's parse one byte and turn every name after the first into garbage.
 function debugStreamNameBlob(magic ByteArray, names StringArray) returns ByteArray
-	var blob = ByteArray.create(0)
+	let blob = ByteArray.create(0)
 	blob.append(magic)
 	appendNameBlobField(blob, value: names.count(), what: "the name count")
 
@@ -698,7 +696,7 @@ function dsAllocTallyImage() returns ByteArray
 		panic("DebugStream allocation tally: the byte column sits at {DsAllocTallyBytesOffset} of a {DsAllocTallyBucketBytes}-byte bucket")
 	end 'byteColumnOutsideTheBucket'
 
-	var image = ByteArray.create(DsAllocTallyTableBytes as ElementIndex, zeroed: false)
+	let image = ByteArray.create(DsAllocTallyTableBytes as ElementIndex, zeroed: false)
 	image.growFilled(DsAllocTallyTableBytes as ElementIndex, value: DsAllocTallyZeroByte)
 	return image
 end 'dsAllocTallyImage'
@@ -715,7 +713,7 @@ let DsEnvBufferBytes = 512
 // unchanged. Ordinary i64 slots in every respect, exactly like `SlabRuntime.slabRuntimeGlobals` and
 // `GtRuntime.gtRuntimeGlobals`.
 export function debugStreamRuntimeGlobals() returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create(0)
+	let out = DataSectionEntryArray.create(0)
 
 	// The first four are written by `__ds_init` alone, which the ENTRY STUB runs before `main` and
 	// therefore before any green thread, let alone any worker M. The ring itself is not among them: it
@@ -774,7 +772,7 @@ export function installDebugStreamRuntime(module StdModule, globalData GlobalDat
 	// interned-name table is written beside the tag table even when the program interned nothing: it is then
 	// the magic plus a zero count — ten bytes that say "this table exists and is empty", which is an answer,
 	// where an absent blob is indistinguishable from a compiler that never learned to write one.
-	var symdata = debugStreamNameBlob(DsTagBlobMagic, names: globalData.debugStreamTags.names)
+	let symdata = debugStreamNameBlob(DsTagBlobMagic, names: globalData.debugStreamTags.names)
 	symdata.append(debugStreamNameBlob(DsStrBlobMagic, names: globalData.debugStreamNames.names))
 	globalData.symdataImage = symdata
 
@@ -815,15 +813,15 @@ end 'installDebugStreamRuntime'
 // the exact torn read the commit bit closes. An empty trace is a visibly missing instrument; a wrong one
 // is not.
 function buildDsInit(module StdModule, envNameLabel ByteArray)
-	var func = IrFunction.createFromStd(DsInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(DsInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkMagic = module.addBlock(func, label: b"checkMagic", heat: BlockHeat.normal)
-	var checkVersion = module.addBlock(func, label: b"checkVersion", heat: BlockHeat.normal)
-	var claim = module.addBlock(func, label: b"claim", heat: BlockHeat.normal)
-	var attach = module.addBlock(func, label: b"attach", heat: BlockHeat.normal)
-	var dark = module.addBlock(func, label: b"dark", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkMagic = module.addBlock(func, label: b"checkMagic", heat: BlockHeat.normal)
+	let checkVersion = module.addBlock(func, label: b"checkVersion", heat: BlockHeat.normal)
+	let claim = module.addBlock(func, label: b"claim", heat: BlockHeat.normal)
+	let attach = module.addBlock(func, label: b"attach", heat: BlockHeat.normal)
+	let dark = module.addBlock(func, label: b"dark", heat: BlockHeat.normal)
 
 	// The scratch region. `__slab_alloc` hands back ZEROED memory (the allocator's zeroing contract),
 	// which is what lets the env lookup below need no "was it set?" branch: an absent variable leaves the
@@ -893,12 +891,12 @@ end 'buildDsInit'
 // still needs to know how to parse what it left. The view is dropped by process exit, which is the only
 // thing that happens after this call.
 function buildDsShutdown(module StdModule)
-	var func = IrFunction.createFromStd(DsShutdownName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(DsShutdownName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var clear = module.addBlock(func, label: b"clear", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let clear = module.addBlock(func, label: b"clear", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	let base = emitLoadGlobalWord(module, block: entry, label: DsBaseLabel, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: clear, whenFalse: done, ids: ids)
@@ -1006,17 +1004,17 @@ end 'emitDsLockStep'
 // absence is survivable here: the whole function runs under the ring lock, so the header word cannot
 // change underneath it, and a re-read and a thread are the same value by construction.
 function buildDsReserve(module StdModule, usesGt bool)
-	var func = IrFunction.createFromStd(DsReserveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(DsReserveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var raisePeak = module.addBlock(func, label: b"raisePeak", heat: BlockHeat.normal)
-	var checkSpace = module.addBlock(func, label: b"checkSpace", heat: BlockHeat.normal)
-	var checkWrap = module.addBlock(func, label: b"checkWrap", heat: BlockHeat.normal)
-	var pad = module.addBlock(func, label: b"pad", heat: BlockHeat.normal)
-	var recheck = module.addBlock(func, label: b"recheck", heat: BlockHeat.normal)
-	var place = module.addBlock(func, label: b"place", heat: BlockHeat.normal)
-	var full = module.addBlock(func, label: b"full", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let raisePeak = module.addBlock(func, label: b"raisePeak", heat: BlockHeat.normal)
+	let checkSpace = module.addBlock(func, label: b"checkSpace", heat: BlockHeat.normal)
+	let checkWrap = module.addBlock(func, label: b"checkWrap", heat: BlockHeat.normal)
+	let pad = module.addBlock(func, label: b"pad", heat: BlockHeat.normal)
+	let recheck = module.addBlock(func, label: b"recheck", heat: BlockHeat.normal)
+	let place = module.addBlock(func, label: b"place", heat: BlockHeat.normal)
+	let full = module.addBlock(func, label: b"full", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let eventType = 0
@@ -1108,10 +1106,10 @@ end 'buildDsReserve'
 // What it DOES need is release ordering, so the payload writes are visible to the monitor before the bit
 // that claims they are there.
 function buildDsCommit(module StdModule)
-	var func = IrFunction.createFromStd(DsCommitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(DsCommitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let entryPtr = 0 as ValueId
 
@@ -1135,12 +1133,12 @@ end 'buildDsCommit'
 // ⭐ **IT ALWAYS COMMITS.** A missed commit does not lose one event — an uncommitted entry is never skipped
 // while its producer lives, so the monitor STALLS ON IT FOREVER.
 function buildDsEmitMm(module StdModule)
-	var func = IrFunction.createFromStd(DsEmitMmName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(DsEmitMmName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let eventType = 0
@@ -1176,12 +1174,12 @@ end 'buildDsEmitMm'
 // All six transitions are one 16-byte shape, the header and the green thread's trace id, so they share a
 // body the way the four mm events do. The sites are `GtRuntime`'s (`emitSchedEventOf`).
 function buildDsEmitSched(module StdModule)
-	var func = IrFunction.createFromStd(DsEmitSchedName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(DsEmitSchedName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let eventType = 0
@@ -1321,7 +1319,7 @@ end 'emitPackedLogFields'
 // be a `var` to be appended to and a field read is not one. It also keeps the caller's `done` terminator
 // where the caller can see it.
 function emitLogEntryOpen(module StdModule, func IrFunction, entry IrBlock, eventType ValueId, entryBytes ValueId, write IrBlock, done IrBlock, ids ValueMinter) returns ValueId
-	var reserve = module.addBlock(func, label: b"reserve", heat: BlockHeat.normal)
+	let reserve = module.addBlock(func, label: b"reserve", heat: BlockHeat.normal)
 
 	let base = emitLoadGlobalWord(module, block: entry, label: DsBaseLabel, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: reserve, whenFalse: done, ids: ids)
@@ -1348,17 +1346,17 @@ end 'emitCommitAndFinish'
 // The word is `phase_id(2) rsvd(2) unit_id(4)`, and `rsvd` stays zero for free — the masked `phase_id`
 // occupies only bits [0:15] and the unit's shift discards anything above bit 31.
 function buildDsEmitLogPhase(module StdModule, usesGt bool)
-	var func = IrFunction.createFromStd(DsEmitLogPhaseName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(DsEmitLogPhaseName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let eventType = 0
 	let nameId = 1
 	let unitId = 2
 
 	var write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	let entryBytes = emitConst(module, block: entry, value: DsLogPhaseEntryBytes, ids: ids)
 	let entryPtr = emitLogEntryOpen(module, func: func, entry: entry, eventType: eventType, entryBytes: entryBytes, write: write, done: done, ids: ids)
@@ -1382,10 +1380,10 @@ end 'buildDsEmitLogPhase'
 // The structured, ZERO-ALLOC tier a compiler pass uses. Its two argument slots are deliberately opaque:
 // what they mean is the emitting site's business, and the monitor prints them as numbers.
 function buildDsEmitLogEvent(module StdModule, usesGt bool)
-	var func = IrFunction.createFromStd(DsEmitLogEventName, returnType: StdReturnType.void, paramCount: 6, paramTypes: sixI64Params())
-	var ids = ValueMinter.create(6)
+	let func = IrFunction.createFromStd(DsEmitLogEventName, returnType: StdReturnType.void, paramCount: 6, paramTypes: sixI64Params())
+	let ids = ValueMinter.create(6)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 6)
 	let nameId = 0
 	let category = 1
@@ -1395,7 +1393,7 @@ function buildDsEmitLogEvent(module StdModule, usesGt bool)
 	let arg1 = 5 as ValueId
 
 	var write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	let eventType = emitConst(module, block: entry, value: DsEvLogEvent, ids: ids)
 	let entryBytes = emitConst(module, block: entry, value: DsLogEventEntryBytes, ids: ids)
@@ -1433,10 +1431,10 @@ end 'buildDsEmitLogEvent'
 // ⚠ **THE SAME CLAMPED LENGTH FEEDS BOTH THE HEADER'S `len` FIELD AND THE ENTRY SIZE.** Computing one from
 // the raw length and the other from the clamped one is how a reader walks off the end of an entry.
 function buildDsEmitLogText(module StdModule, usesGt bool)
-	var func = IrFunction.createFromStd(DsEmitLogTextName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(DsEmitLogTextName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
+	let ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 4)
 	let category = 0
 	let level = 1
@@ -1444,9 +1442,9 @@ function buildDsEmitLogText(module StdModule, usesGt bool)
 	let record = 3
 
 	var write = module.addBlock(func, label: b"write", heat: BlockHeat.normal)
-	var zeroPad = module.addBlock(func, label: b"zeroPad", heat: BlockHeat.normal)
-	var copy = module.addBlock(func, label: b"copy", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let zeroPad = module.addBlock(func, label: b"zeroPad", heat: BlockHeat.normal)
+	let copy = module.addBlock(func, label: b"copy", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	// Sized in the ENTRY block because `emitLogEntryOpen` needs the size to reserve with. A detached build
 	// pays these arithmetic ops and no call, which is the same order of cost its `__ds_base` test is.
@@ -1528,13 +1526,13 @@ end 'emitSchedEvent'
 // `callee(eventType, payload...)` when a monitor is attached. The event type is minted inside the attached
 // arm, so a detached run pays the load and the branch and nothing else.
 function emitEventCallIfAttached(module StdModule, func IrFunction, block IrBlock, callee ByteArray, eventType FullRangeInt, payload ValueIdArray, ids ValueMinter) returns IrBlock
-	var emit = module.addBlock(func, label: b"dsEmit", heat: BlockHeat.normal)
-	var resume = module.addBlock(func, label: b"dsResume", heat: BlockHeat.normal)
+	let emit = module.addBlock(func, label: b"dsEmit", heat: BlockHeat.normal)
+	let resume = module.addBlock(func, label: b"dsResume", heat: BlockHeat.normal)
 
 	let base = emitLoadGlobalWord(module, block: block, label: DsBaseLabel, ids: ids)
 	emitBranchOnCompare(module, block: block, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: emit, whenFalse: resume, ids: ids)
 
-	var args = argsOf(emitConst(module, block: emit, value: eventType, ids: ids))
+	let args = argsOf(emitConst(module, block: emit, value: eventType, ids: ids))
 
 	for word in payload 'eachPayloadWord'
 		args.push(word)

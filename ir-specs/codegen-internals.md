@@ -1675,7 +1675,7 @@ func @main {
 <!-- test: rdata-cow-mutation-copies-to-heap -->
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [42]
+	let arr = FullRangeIntArray from [42]
 	try arr.set(0, value: 77) otherwise panic("test invariant: set OOB")
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -2109,7 +2109,7 @@ func @main {
 <!-- test: rdata-cow-multiple-mutations -->
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [1, 2, 3]
+	let arr = FullRangeIntArray from [1, 2, 3]
 	try arr.set(0, value: 10) otherwise panic("test invariant: set OOB")
 	try arr.set(1, value: 20) otherwise panic("test invariant: set OOB")
 	try arr.set(2, value: 30) otherwise panic("test invariant: set OOB")
@@ -2958,7 +2958,7 @@ func @main {
 <!-- test: rdata-global-var-array-cow -->
 ```maxon
 function main() returns ExitCode
-	var globalArr = FullRangeIntArray from [1, 2, 3]
+	let globalArr = FullRangeIntArray from [1, 2, 3]
 	try globalArr.set(0, value: 42) otherwise panic("test invariant: set OOB")
 	return try globalArr.get(0) otherwise 0
 end 'main'
@@ -3398,7 +3398,7 @@ function readFirst(arr FullRangeIntArray) returns Integer
 end 'readFirst'
 
 function main() returns ExitCode
-	var globalArr = FullRangeIntArray from [10, 20, 30]
+	let globalArr = FullRangeIntArray from [10, 20, 30]
 	try globalArr.set(0, value: 99) otherwise panic("test invariant: set OOB")
 	return readFirst(globalArr)
 end 'main'

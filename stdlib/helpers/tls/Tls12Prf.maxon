@@ -65,7 +65,7 @@ public type Tls12Prf
 		try tls12RequireRandom(clientRandom)
 		try tls12RequireRandom(serverRandom)
 
-		var seed = clientRandom.clone()
+		let seed = clientRandom.clone()
 		seed.append(serverRandom)
 
 		return tls12Expand(suite.hashAlgorithm(), secret: preMasterSecret, label: tls12MasterSecretLabel, seed: seed, length: tls12MasterSecretBytes)
@@ -89,7 +89,7 @@ public type Tls12Prf
 		try tls12RequireRandom(clientRandom)
 		try tls12RequireRandom(serverRandom)
 
-		var seed = serverRandom.clone()
+		let seed = serverRandom.clone()
 		seed.append(clientRandom)
 
 		let keyBytes = suite.keyBytes()
@@ -156,17 +156,17 @@ function tls12Part(block ByteArray, start ElementIndex, length Count) returns By
 end 'tls12Part'
 
 function tls12Expand(hash HashAlgorithm, secret ByteArray, label String, seed ByteArray, length Tls12PrfLength) returns ByteArray
-	var labelledSeed = label.toByteArray()
+	let labelledSeed = label.toByteArray()
 	labelledSeed.append(seed)
 
-	var output = ByteArray.create(length, zeroed: false)
+	let output = ByteArray.create(length, zeroed: false)
 
 	var chain = labelledSeed.clone()
 
 	while output.count() < length 'eachBlock'
 		chain = hmac(hash, key: secret, message: chain)
 
-		var input = chain.clone()
+		let input = chain.clone()
 		input.append(labelledSeed)
 
 		let block = hmac(hash, key: secret, message: input)

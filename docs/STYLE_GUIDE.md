@@ -275,8 +275,8 @@ Use blank lines to separate logical sections within functions:
 ```maxon
 function initialize() returns int
 	// Setup phase
-	var config = loadConfig()
-	var data = createData()
+	let config = loadConfig()
+	let data = createData()
 
 	// Validation phase
 	if not isValid(config) 'invalid'
@@ -327,8 +327,8 @@ Keep lines reasonably short for readability. Aim for under 80 characters when pr
 ```maxon
 // Good: clear and readable
 function calculateDistance(x1 int, y1 int, x2 int, y2 int) returns int
-	var dx = x2 - x1
-	var dy = y2 - y1
+	let dx = x2 - x1
+	let dy = y2 - y1
 	return sqrt(dx * dx + dy * dy)
 end 'calculateDistance'
 ```
@@ -338,9 +338,9 @@ end 'calculateDistance'
 Use spaces around binary operators:
 
 ```maxon
-var result = a + b
-var comparison = x > y
-var product = a * b
+let result = a + b
+let comparison = x > y
+let product = a * b
 ```
 
 ### Function Calls
@@ -349,7 +349,7 @@ No space before the opening parenthesis:
 
 ```maxon
 print(value)
-var x = calculateSum(a, b)
+let x = calculateSum(a, b)
 ```
 
 ### Block Structure

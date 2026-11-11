@@ -284,7 +284,7 @@ end 'bump'
 
 function main() returns ExitCode
 	let n = 500
-	var d = 6 as Integer
+	let d = 6 as Integer
 	let t = bump(d)
 	let q = n / d
 	let r = q + t

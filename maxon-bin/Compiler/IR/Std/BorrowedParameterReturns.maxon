@@ -48,7 +48,7 @@ end 'ReturnedParameterSite'
 typealias ReturnedParameterSiteArray = Array with ReturnedParameterSite
 
 export function borrowReturnedParameters(project Project, module StdModule, signatures ProgramSignatures)
-	var candidates = collectReturnedParameters(module, signatures: signatures)
+	let candidates = collectReturnedParameters(module, signatures: signatures)
 
 	if candidates.isEmpty() 'nothingReturnsAParameter'
 		return
@@ -66,12 +66,12 @@ export function borrowReturnedParameters(project Project, module StdModule, sign
 end 'borrowReturnedParameters'
 
 function collectReturnedParameters(module StdModule, signatures ProgramSignatures) returns ReturnedParameterArray
-	var candidates = ReturnedParameterArray.create(0)
-	var census = RetainCensus.create()
-	var call = StdCallOperands.create()
+	let candidates = ReturnedParameterArray.create(0)
+	let census = RetainCensus.create()
+	let call = StdCallOperands.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		view func = module.getFunc(funcIndex)
+		let func = module.getFunc(funcIndex)
 
 		if not returnsARecordByValue(func) or consumesAParameter(signatures, func: func) 'notThisShape'
 			continue
@@ -120,8 +120,8 @@ function analyseReturnedParameter(module StdModule, func IrFunction, funcIndex E
 	let defs = StdValueDefs.build(module, func: func)
 	let bound = defs.valueBound()
 	let flows = valueFlowsOf(module, func: func)
-	var seeds = BoolArray.create(bound)
-	var carriers = BoolArray.create(bound)
+	let seeds = BoolArray.create(bound)
+	let carriers = BoolArray.create(bound)
 
 	for flow in flows 'eachFlow'
 		markValue(carriers, v: flow.carrier)
@@ -151,10 +151,10 @@ function anEdgeCarriesAWantedValueElsewhere(flows ValueFlowArray, wanted BoolArr
 end 'anEdgeCarriesAWantedValueElsewhere'
 
 function anyOpOtherThanAReturnReads(module StdModule, func IrFunction, wanted BoolArray) returns bool
-	var reads = StdValueUseSet.createRecordingIds()
+	let reads = StdValueUseSet.createRecordingIds()
 
 	for blockRef in func.blockRefs 'eachBlock'
-		view block = module.getBlock(blockRef)
+		let block = module.getBlock(blockRef)
 
 		for opIdx in block.bodyOps() 'eachBodyOp'
 			if opReadsAWantedValue(module.getOp(opIdx), wanted: wanted, reads: reads) 'readElsewhere'
@@ -188,7 +188,7 @@ function opReadsAWantedValue(op StdOp, wanted BoolArray, reads StdValueUseSet) r
 end 'opReadsAWantedValue'
 
 function judgeLeaves(module StdModule, func IrFunction, funcIndex ElementIndex, defs StdValueDefs, wanted BoolArray, carriers BoolArray, call StdCallOperands) returns ReturnedParameterVerdict
-	var leaves = ValueIdArray.create(0)
+	let leaves = ValueIdArray.create(0)
 	var retainDoor = OwnershipDoor.managedRetain
 	var position = 0 as ParamCount
 
@@ -234,7 +234,7 @@ end 'judgeLeaves'
 
 function parameterIsReleased(module StdModule, func IrFunction, parameter ValueId, call StdCallOperands) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
-		view block = module.getBlock(blockRef)
+		let block = module.getBlock(blockRef)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			classifyCallOperands(module.getOp(opIdx), call: call)
@@ -260,7 +260,7 @@ function refuseUnsafeCandidates(project Project, module StdModule, candidates Re
 	let addressTaken = collectAddressTakenFunctions(project, module: module)
 
 	for index in 0 upto candidates.count() 'eachCandidate'
-		var candidate = try candidates.get(index) otherwise panic("refuseUnsafeCandidates: candidates.get OOB at {index}")
+		let candidate = try candidates.get(index) otherwise panic("refuseUnsafeCandidates: candidates.get OOB at {index}")
 		let name = module.getFunc(candidate.funcIndex).name
 
 		if isCompilerInternalCallee(name) or addressTaken.contains(name) or addressTaken.contains(fnRefThunkName(name)) 'reachedOtherwiseThanByACall'
@@ -270,7 +270,7 @@ function refuseUnsafeCandidates(project Project, module StdModule, candidates Re
 end 'refuseUnsafeCandidates'
 
 function candidateIndexByName(module StdModule, candidates ReturnedParameterArray) returns FuncIndexByName
-	var byCallee = FuncIndexByName.create()
+	let byCallee = FuncIndexByName.create()
 
 	for index in 0 upto candidates.count() 'eachCandidate'
 		let candidate = try candidates.get(index) otherwise panic("candidateIndexByName: candidates.get OOB at {index}")
@@ -284,14 +284,14 @@ function candidateIndexByName(module StdModule, candidates ReturnedParameterArra
 end 'candidateIndexByName'
 
 function collectBorrowedReturnSites(module StdModule, candidates ReturnedParameterArray, byCallee FuncIndexByName) returns ReturnedParameterSiteArray
-	var sites = ReturnedParameterSiteArray.create(0)
-	var call = StdCallOperands.create()
+	let sites = ReturnedParameterSiteArray.create(0)
+	let call = StdCallOperands.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
 
 		for blockRef in func.blockRefs 'eachBlock'
-			view block = module.getBlock(blockRef)
+			let block = module.getBlock(blockRef)
 			var position = 0 as ElementIndex
 
 			for opIdx in block.bodyOps() 'eachOp'
@@ -311,7 +311,7 @@ end 'collectBorrowedReturnSites'
 
 function noteBorrowedReturnSite(module StdModule, sites ReturnedParameterSiteArray, candidates ReturnedParameterArray, byCallee FuncIndexByName, call StdCallOperands, funcIndex ElementIndex, blockRef ElementIndex, position ElementIndex, opIdx ElementIndex)
 	let index = try byCallee.get(call.callee) otherwise panic("noteBorrowedReturnSite: byCallee.contains held for '{String.from(call.callee)}' a line ago")
-	var candidate = try candidates.get(index) otherwise panic("noteBorrowedReturnSite: candidates.get OOB at {index}")
+	let candidate = try candidates.get(index) otherwise panic("noteBorrowedReturnSite: candidates.get OOB at {index}")
 
 	match module.getOp(opIdx) 'call'
 		call(resultId, _, args) then noteDirectCall(sites, candidate: candidate, index: index, funcIndex: funcIndex, blockRef: blockRef, position: position, opIdx: opIdx, resultId: resultId, args: args)
@@ -330,7 +330,7 @@ function noteDirectCall(sites ReturnedParameterSiteArray, candidate ReturnedPara
 end 'noteDirectCall'
 
 function rewriteFunctions(module StdModule, candidates ReturnedParameterArray, sites ReturnedParameterSiteArray)
-	var ownerOf = CandidateIndexByFunction.create()
+	let ownerOf = CandidateIndexByFunction.create()
 
 	for index in 0 upto candidates.count() 'eachCandidate'
 		let candidate = try candidates.get(index) otherwise panic("rewriteFunctions: candidates.get OOB at {index}")
@@ -358,10 +358,10 @@ function rewriteFunctions(module StdModule, candidates ReturnedParameterArray, s
 end 'rewriteFunctions'
 
 function rewriteFunction(module StdModule, funcIndex ElementIndex, candidates ReturnedParameterArray, sites ReturnedParameterSiteArray, first ElementIndex, stop ElementIndex, ownerOf CandidateIndexByFunction)
-	var func = module.getFunc(funcIndex)
+	let func = module.getFunc(funcIndex)
 	let bound = nextFreeValueId(module, func: func)
-	var minter = ValueMinter.resuming(bound)
-	var subst = ValueIdArray.create(bound, zeroed: false)
+	let minter = ValueMinter.resuming(bound)
+	let subst = ValueIdArray.create(bound, zeroed: false)
 
 	for id in 0 upto bound 'identity'
 		subst.push(id)
@@ -382,7 +382,7 @@ function rewriteFunction(module StdModule, funcIndex ElementIndex, candidates Re
 		changed = true
 	end 'eachSiteFromTheLast'
 
-	var doomed = StdValueUseSet.create()
+	let doomed = StdValueUseSet.create()
 
 	if let ownerIndex = try ownerOf.get(funcIndex) 'returnsAParameter'
 		let owner = try candidates.get(ownerIndex) otherwise panic("rewriteFunction: candidates.get OOB at {ownerIndex}")
@@ -408,7 +408,7 @@ function insertRetainAfter(module StdModule, site ReturnedParameterSite, retainD
 
 	let retained = minter.mint()
 	let retainOp = module.pushDetachedOp(StdOp.call(retained, callee: ownershipDoorName(retainDoor), args: argsOf(site.argId)))
-	var block = module.getBlock(site.blockRef)
+	let block = module.getBlock(site.blockRef)
 	block.insertBodyOp(site.position + 1, opIdx: retainOp)
 	return retained
 end 'insertRetainAfter'

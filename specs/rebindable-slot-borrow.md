@@ -50,8 +50,8 @@ type Holder
 	end 'fill'
 
 	function swapAndRead() returns Integer
-		view old = items
-		var fresh = IntArray.create(0)
+		let old = items
+		let fresh = IntArray.create(0)
 		fresh.push(99)
 		items = fresh
 
@@ -64,7 +64,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	h.fill(5)
 	return h.swapAndRead() as ExitCode
 end 'main'
@@ -90,7 +90,7 @@ type Holder
 	function swapAndRead() returns Integer
 		items.push(3)
 		items.push(4)
-		var old = items
+		let old = items
 		items = IntArray.create(0)
 
 		var sum = 0 as Integer
@@ -102,7 +102,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	return h.swapAndRead() as ExitCode
 end 'main'
 ```
@@ -132,7 +132,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create("hello world {40 + 2} padded out long enough for the heap")
+	let h = Holder.create("hello world {40 + 2} padded out long enough for the heap")
 	print(h.swapAndRead("replacement {7} padded out long enough for the heap"))
 	return 0
 end 'main'
@@ -152,7 +152,7 @@ type Frozen
 	let items as IntArray
 
 	static function create() returns Self
-		var a = IntArray.create(0)
+		let a = IntArray.create(0)
 		a.push(4)
 		a.push(5)
 		return Self{items: a}
@@ -170,7 +170,7 @@ type Frozen
 end 'Frozen'
 
 function main() returns ExitCode
-	var f = Frozen.create()
+	let f = Frozen.create()
 	return f.total() as ExitCode
 end 'main'
 ```

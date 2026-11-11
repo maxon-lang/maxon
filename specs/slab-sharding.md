@@ -107,12 +107,12 @@ function survivor(idx Integer) returns String
 end 'survivor'
 
 function main() returns ExitCode
-	var churns = IntPromiseArray.create(0)
+	let churns = IntPromiseArray.create(0)
 	for i in 0 upto 40 'spawnChurn'
 		churns.push(async churn(i))
 	end 'spawnChurn'
 
-	var kept = PromiseArray.create(0)
+	let kept = PromiseArray.create(0)
 	for k in 0 upto 24 'spawnKeep'
 		kept.push(async survivor(k))
 	end 'spawnKeep'
@@ -126,7 +126,7 @@ function main() returns ExitCode
 		return 1
 	end 'churnLost'
 
-	var strings = StringArray.create(0)
+	let strings = StringArray.create(0)
 	for p in kept 'awaitKeep'
 		strings.push(await p)
 	end 'awaitKeep'
@@ -169,7 +169,7 @@ typealias Seed = int(0 to 65536)
 typealias Integer = int(i64.min to i64.max)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(48)
 	for i in 0 upto 48 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -256,7 +256,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(80)
 	for i in 0 upto 80 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -289,7 +289,7 @@ function main() returns ExitCode
 	end 'lostBuffers'
 
 	// The survivors are cut from spans that have each been parked and re-owned several times over.
-	var keep = Bufs.create(0)
+	let keep = Bufs.create(0)
 	for k in 0 upto 200 'survivors'
 		keep.push(build((k + 900) as Seed))
 	end 'survivors'
@@ -342,7 +342,7 @@ typealias Integer = int(i64.min to i64.max)
 function fill() returns Integer
 	var bufs = Bufs.create(0)
 	for k in 0 upto 16000 'alloc'
-		var b = ByteArray.create(0)
+		let b = ByteArray.create(0)
 		b.reserve(96)
 		for i in 0 upto 96 'bytes'
 			b.push(((k + i) mod 251) as Byte)
@@ -527,7 +527,7 @@ type Sink
 end 'Sink'
 
 function main() returns ExitCode
-	var sinks = SinkHandleArray.create(0)
+	let sinks = SinkHandleArray.create(0)
 	var i = 0 as Integer
 	while i < sinkCount 'spawnEach'
 		sinks.push(spawn Sink.create())
@@ -537,10 +537,10 @@ function main() returns ExitCode
 	var delivered = 0 as Integer
 	var wave = 0 as Integer
 	while wave < waves 'waves'
-		var replies = CountPromiseArray.create(0)
+		let replies = CountPromiseArray.create(0)
 		var k = 0 as Integer
 		while k < sinkCount 'sendEach'
-			view s = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k}")
+			let s = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k}")
 			replies.push(try s.take("payload-{k}-{wave}") otherwise panic("an open mailbox with room takes the send"))
 			k = k + 1
 		end 'sendEach'
@@ -589,7 +589,7 @@ type Sink
 end 'Sink'
 
 function holdThenDrop(n Counted) returns Integer
-	var held = StringBox.create(0)
+	let held = StringBox.create(0)
 	var i = 0 as Integer
 	while i < (n as Integer) 'fill'
 		held.push("payload-{i}")

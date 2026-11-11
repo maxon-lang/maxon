@@ -23,7 +23,7 @@ type Counter
 	var misordered as Integer
 
 	static function create() returns Self
-		var next = IntegerArray.create(0)
+		let next = IntegerArray.create(0)
 		var k = 0 as Integer
 
 		while k < pusherCount 'eachPusher'
@@ -85,7 +85,7 @@ type Pusher
 end 'Pusher'
 
 function main() returns ExitCode
-	var counters = CounterHandleArray.create(0)
+	let counters = CounterHandleArray.create(0)
 	var c = 0 as Integer
 
 	while c < counterCount 'spawnCounter'
@@ -93,7 +93,7 @@ function main() returns ExitCode
 		c = c + 1
 	end 'spawnCounter'
 
-	var pushers = PusherHandleArray.create(0)
+	let pushers = PusherHandleArray.create(0)
 	var p = 0 as Integer
 
 	while p < pusherCount 'spawnPusher'
@@ -104,12 +104,12 @@ function main() returns ExitCode
 	var k = 0 as ElementIndex
 
 	while k < pusherCount 'eachPusher'
-		view pusher = try pushers.get(k) otherwise panic("cown-handoff-torture: pushers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let pusher = try pushers.get(k) otherwise panic("cown-handoff-torture: pushers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		var j = 0 as ElementIndex
 
 		while j < counterCount 'eachCounter'
 			let rotated = (k + j) mod counterCount
-			view counter = try counters.get(rotated) otherwise panic("cown-handoff-torture: counters.get OOB at {rotated} — the rotation is bounded by the count the pushes above filled")
+			let counter = try counters.get(rotated) otherwise panic("cown-handoff-torture: counters.get OOB at {rotated} — the rotation is bounded by the count the pushes above filled")
 			try pusher.run(counter.clone(), rounds: roundsPerPusher) otherwise panic("cown-handoff-torture: a fresh pusher refused a message")
 			j = j + 1
 		end 'eachCounter'
@@ -129,7 +129,7 @@ function main() returns ExitCode
 	var j = 0 as ElementIndex
 
 	while j < counterCount 'checkEach'
-		view counter = try counters.get(j) otherwise panic("cown-handoff-torture: counters.get OOB at {j} — the loop is bounded by the count the pushes above filled")
+		let counter = try counters.get(j) otherwise panic("cown-handoff-torture: counters.get OOB at {j} — the loop is bounded by the count the pushes above filled")
 		var polls = 0 as Integer
 		var hits = 0 as Integer
 

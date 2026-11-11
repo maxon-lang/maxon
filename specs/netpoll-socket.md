@@ -91,8 +91,8 @@ function echoRounds(listener TcpListener) returns Tally
 	return served
 end 'echoRounds'
 
-function echoOnce(listener TcpListener, n Tally) returns Tally throws NetworkError
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
+function echoOnce(port NetworkPort, n Tally) returns Tally throws NetworkError
+	let client = try TcpClient.connect("127.0.0.1", port: port)
 	let msg = "maxon line {n}\n"
 	_ = try client.send(msg)
 	let response = try client.recv(1024)
@@ -113,16 +113,17 @@ function attempt() returns (Tally, bool) throws Attempt
 end 'attempt'
 
 function attemptOver(listener TcpListener) returns (Tally, bool) throws Attempt
+	let port = listener.port()
 	let peer = async echoRounds(listener)
-	_ = try echoOnce(listener, n: 0) otherwise 0
+	_ = try echoOnce(port, n: 0) otherwise 0
 
 	let beforeRetake = Scheduler.counters().retakes
 	let beforePreempt = Scheduler.counters().preempts
 
-	let p1 = async echoOnce(listener, n: 1)
-	let p2 = async echoOnce(listener, n: 2)
-	let p3 = async echoOnce(listener, n: 3)
-	let p4 = async echoOnce(listener, n: 4)
+	let p1 = async echoOnce(port, n: 1)
+	let p2 = async echoOnce(port, n: 2)
+	let p3 = async echoOnce(port, n: 3)
+	let p4 = async echoOnce(port, n: 4)
 
 	let r1 = try await p1 otherwise 0
 	let r2 = try await p2 otherwise 0
@@ -203,8 +204,8 @@ function echoRounds(listener TcpListener) returns Tally
 	return served
 end 'echoRounds'
 
-function echoOnce(listener TcpListener, n Tally) returns Tally throws NetworkError
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
+function echoOnce(port NetworkPort, n Tally) returns Tally throws NetworkError
+	let client = try TcpClient.connect("127.0.0.1", port: port)
 	let msg = "maxon line {n}\n"
 	_ = try client.send(msg)
 	let response = try client.recv(1024)
@@ -217,15 +218,16 @@ function echoOnce(listener TcpListener, n Tally) returns Tally throws NetworkErr
 end 'echoOnce'
 
 function exchangeOver(listener TcpListener) returns ExitCode
+	let port = listener.port()
 	let peer = async echoRounds(listener)
-	_ = try echoOnce(listener, n: 0) otherwise 0
+	_ = try echoOnce(port, n: 0) otherwise 0
 
 	let before = Scheduler.counters().syscalls
 
-	let p1 = async echoOnce(listener, n: 1)
-	let p2 = async echoOnce(listener, n: 2)
-	let p3 = async echoOnce(listener, n: 3)
-	let p4 = async echoOnce(listener, n: 4)
+	let p1 = async echoOnce(port, n: 1)
+	let p2 = async echoOnce(port, n: 2)
+	let p3 = async echoOnce(port, n: 3)
+	let p4 = async echoOnce(port, n: 4)
 
 	let r1 = try await p1 otherwise 0
 	let r2 = try await p2 otherwise 0
@@ -286,8 +288,8 @@ function echoRounds(listener TcpListener) returns Tally
 	return served
 end 'echoRounds'
 
-function echoOnce(listener TcpListener, n Tally) returns Tally throws NetworkError
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port())
+function echoOnce(port NetworkPort, n Tally) returns Tally throws NetworkError
+	let client = try TcpClient.connect("127.0.0.1", port: port)
 	let msg = "maxon line {n}\n"
 	_ = try client.send(msg)
 	let response = try client.recv(1024)
@@ -302,9 +304,10 @@ end 'echoOnce'
 function exchangeOver(listener TcpListener) returns ExitCode
 	let beforeParks = Scheduler.counters().netpollBlocks
 
+	let port = listener.port()
 	let peer = async echoRounds(listener)
-	let p1 = async echoOnce(listener, n: 1)
-	let p2 = async echoOnce(listener, n: 2)
+	let p1 = async echoOnce(port, n: 1)
+	let p2 = async echoOnce(port, n: 2)
 
 	let r1 = try await p1 otherwise 0
 	let r2 = try await p2 otherwise 0
@@ -405,7 +408,7 @@ let ChunkBytes = 1048576
 let MostChunks = 512
 
 function oneChunk() returns String
-	var chunk = StringBuilder.create()
+	let chunk = StringBuilder.create()
 
 	for _ in 0 upto ChunkBytes 'fill'
 		chunk.append("x")
@@ -471,7 +474,7 @@ let dialCap = 1000
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	var held = HeldClients.create(0)
+	let held = HeldClients.create(0)
 	var dialled = 0 as Tally
 
 	while dialled < dialCap 'fill'
@@ -662,106 +665,48 @@ dropped=true
 0
 ```
 
-<!-- test: netpoll-socket.a-parked-reader-survives-its-owner-closing-the-socket -->
+<!-- test: netpoll-socket.a-socket-lent-to-a-parked-reader-cannot-be-closed-under-it -->
 <!-- procs: 1 -->
-**A PARAMETER HANDED TO `async` CO-OWNS THE SOCKET BOX, SO THE OWNER CAN CLOSE IT WHILE THE COROUTINE IS PARKED
-ON IT.** A coroutine shares its spawner's strand — only one of the two RUNS at a time — but a PARKED coroutine and
-a running owner are exactly the pair that can be alive at once. `client` is `readOver`'s parameter, which a spawn
-cannot consume, so the `async` door takes a reference on the box rather than a copy of the descriptor
-(`Parser.coOwnConcreteRecordForSink`). So `client.close()` reaches
-`__np_pd_release` on a descriptor with a published waiter, which is a state a program can build.
-
-⭐ **THE RELEASE READIES THE WAITER, IT DOES NOT STRAND IT AND IT DOES NOT ABORT.** A direction word holding a
-green thread is the only pointer anything has to it, so the release resumes that thread with every word of the
-record back to its born state and the record's generation bumped: the resumed wait sees a record that has
-moved on, answers `NetpollWaitStale`, and the operation reports its own failure — `recvFailed`, never
-`timedOut` — having issued no syscall on a descriptor that may already name another socket. Dropping the
-waiter would hang the exit with the deadlock detector disarmed, and aborting would kill a program that did
-nothing wrong.
-
-⚠ **THE LISTENER IS THE PEER, AND IT NEVER ACCEPTS.** The kernel completes the handshake into the backlog, so
-the read parks on an ESTABLISHED connection that nothing on the far side can write to or close — the only
-thing that ends it is the owner closing under it, which is the state under test.
-
-⚠ **THE WAIT FOR THE COUNT IS WHAT MAKES THIS A POLLER CASE.** `readUntilClosed` publishes `parkedFrom` in
-the statement before its `recv`, and `main` closes only once the netpoll count has reached it, as
-`drop-a-parked-reader` does. Without the wait, a reader that merely yielded ahead of its kernel call — or one
-that never ran — satisfies the rest of the program just as well, and the case would read green against a
-release that never met a waiter at all. The wait has no bound, so a park that never arrives is a TIMEOUT and
-no sleep has to outlast the host.
+**A SOCKET HAS ONE OWNER AT A TIME, SO NO ONE CAN CLOSE IT UNDER A PARKED READER.** `async readUntilClosed(client)`
+lends the socket to the coroutine that reads it until the promise is awaited or cancelled, so `readOver` closing it
+in between is a use of a lent value (E3102). The reader closes its own socket when it returns, and it cannot do that
+while it is parked in `recv`.
 ```maxon
-// Exactly the four outcomes the match below can produce: 0 for a read that returned data, and one per
-// `NetworkError` variant a closed-under-it read can raise.
-typealias ReadOutcome = int(0 to 3)
+function readUntilClosed(client TcpClient) returns ExitCode
+	_ = try client.recv(1024) otherwise return 1
 
-typealias ParkMark = SharedValue with SchedulerEventCount
-
-function parkedInRecv(parkedFrom ParkMark) returns bool
-	let mark = parkedFrom.current()
-
-	if mark == 0 'notYet'
-		return false
-	end 'notYet'
-
-	return Scheduler.counters().netpollBlocks >= mark
-end 'parkedInRecv'
-
-// Nothing on the far side can ever write, so this read parks and stays parked until the owner closes under it.
-function readUntilClosed(client TcpClient, parkedFrom ParkMark) returns ReadOutcome
-	var code = 0 as ReadOutcome
-
-	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
-
-	try client.recv(1024) otherwise (e) 'readErr'
-		match e 'which'
-			recvFailed then code = 1
-			connectionClosed then code = 2
-			timedOut then code = 3
-			default panic("unreachable: a read whose socket closes under it ends in one of the three above")
-		end 'which'
-	end 'readErr'
-
-	return code
+	return 0
 end 'readUntilClosed'
 
 function readOver(client TcpClient) returns ExitCode
-	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
-	let reader = async readUntilClosed(client, parkedFrom: parkedFrom.clone())
+	let reader = async readUntilClosed(client)
 
-	while not parkedInRecv(parkedFrom) 'untilParkedInRecv'
-		sleep(1)
-	end 'untilParkedInRecv'
-
+	Scheduler.yield()
 	client.close()
-	let code = await reader
 
-	print("code={code}\n")
-	return 0
+	return await reader
 end 'readOver'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
+
 	return readOver(client)
 end 'main'
 ```
-```stdout
-code=1
-```
-```exitcode
-0
+```maxoncstderr
+error E3102: <fragment>:12:2: use of moved value 'client': it is lent to the coroutine of the `async` call at 9:21 until that promise is awaited or cancelled
 ```
 
-<!-- test: netpoll-socket.a-readied-waiter-does-not-clobber-the-next-owner-of-its-descriptor -->
+<!-- test: netpoll-socket.a-cancelled-reader-leaves-its-descriptor-clean-for-the-next-socket -->
 <!-- procs: 1 -->
 <!-- unsupported-targets: x64-windows -->
-**A RELEASE LEAVES ITS RECORD IN THE TABLE, SO THE NEXT SOCKET ON THAT DESCRIPTOR INHERITS IT — AND THE
-THREAD THE RELEASE READIED IS STILL HOLDING A POINTER TO IT.** `__np_pd_release` readies the waiter and
-returns the record's words to their born state, but the table slot goes on naming that record, so
-`__np_pd_open` on a recycled descriptor hands the SAME record to the next socket. A resumed waiter that
-writes its direction word without first asking whether the record is still its own writes over whatever the
-new owner published there — and a direction word is the only pointer anything holds to a parked thread, so
-the new owner is stranded with `__np_waiters` still counting it: a hang with the deadlock detector disarmed.
+**A SOCKET WHOSE PARKED READER WAS CANCELLED IS CLOSED WITH NOTHING STILL WAITING ON IT, SO THE NEXT SOCKET ON
+THAT DESCRIPTOR STARTS CLEAN.** The first connection is lent to a reader that parks on it. `stale.cancel()` readies
+that reader and waits for it to finish, which returns the socket to its owner, and only then does the owner close it.
+The table slot goes on naming the closed socket's record, so `__np_pd_open` on the recycled descriptor hands the SAME
+record to the next socket, and a record that still named a waiter would strand the new owner: a hang with the
+deadlock detector disarmed.
 
 ⭐ **THE DESCRIPTOR REUSE IS DETERMINISTIC, NOT HOPEFUL.** POSIX requires `socket()` to return the
 LOWEST-NUMBERED descriptor not currently open by the process. Every other descriptor this program holds —
@@ -770,9 +715,9 @@ closed here, and neither `close` nor the `connect` that follows it yields, so th
 in between. The closed descriptor is therefore the lowest free one when the second connection is made, and
 that connection takes it.
 
-⚠ **THE PEER MUST OUTLAST A CONNECTION THAT DIES WITHOUT SPEAKING.** The first connection is closed under its
-own reader without ever writing, so the peer's read of it ends in an error; the peer is finished only once it
-has ECHOED, which is the second connection.
+⚠ **THE PEER MUST OUTLAST A CONNECTION THAT DIES WITHOUT SPEAKING.** The first connection is closed without ever
+writing, so the peer's read of it ends in an error; the peer is finished only once it has ECHOED, which is the
+second connection.
 
 ⚠ **THE WITNESS IS THAT THE SECOND CONNECTION'S READ COMPLETES AT ALL.** A stranded reader is not a wrong
 answer, it is a thread nothing can ever wake, so the shape of the failure is the case never finishing —
@@ -780,7 +725,7 @@ the runner reports it as TIMED OUT rather than as a mismatch. The echo is asked 
 a read on a HEALTHY socket has an answer waiting for it, which is what makes "never returned" mean the strand
 and not the peer.
 
-⚠ **THE OWNER CLOSES ONLY WHEN THE READER IS COUNTED PARKED, AND THE PEER'S OWN PARK IS COUNTED OUT FIRST.** The
+⚠ **THE OWNER CANCELS ONLY WHEN THE READER IS COUNTED PARKED, AND THE PEER'S OWN PARK IS COUNTED OUT FIRST.** The
 peer also commits to the poller, in its `recv` of this same connection, so a count that moved could be the
 peer's. `echoUntilAnswered` publishes `peerFrom` in the statement before that `recv`, and the owner waits until the
 netpoll count has reached it; only then does the owner start the reader, whose `readNothing` publishes
@@ -788,17 +733,10 @@ netpoll count has reached it; only then does the owner start the reader, whose `
 the two waits. Neither wait has a bound, so a park that never arrives is a TIMEOUT and no sleep has to outlast the
 host.
 
-⚠⚠ **IT IS A GUARD OVER AN INVARIANT, NOT A REPRODUCTION.** On one strand the readied thread runs at the
-owner’s very next yield, which is inside the second `connect` — before that socket publishes anything — so
-this ordering does not reach the clobber even with the generation test removed, and the case passes either
-way. What it holds is the descriptor reuse itself: nothing else in the corpus closes a socket and opens
-another onto the same record, so without it the recycle path has no coverage at all.
-
 ⚠ **x64-windows IS MARKED BECAUSE A SOCKET HANDLE THERE CARRIES NO LOWEST-FREE PROMISE.** The reuse this
 case rests on is POSIX's rule that `socket()` returns the lowest-numbered free descriptor; Winsock says
 nothing of the kind, so closing one socket and opening another there need not land on the same record and
-the state this case is about would not be built. Its subject is the generation test, which every polled
-lane runs — the descriptor reuse is only how this file reaches it.
+the state this case is about would not be built.
 
 ```maxon
 typealias ReadOutcome = int(0 to 3)
@@ -816,7 +754,7 @@ function parkedAt(from ParkMark) returns bool
 	return Scheduler.counters().netpollBlocks >= mark
 end 'parkedAt'
 
-// Nothing is ever sent on this connection, so this read parks and is still parked when the owner closes.
+// Nothing is ever sent on this connection, so this read parks and is still parked when the owner cancels.
 function readNothing(client TcpClient, parkedFrom ParkMark) returns ReadOutcome
 	var code = 0 as ReadOutcome
 
@@ -827,7 +765,7 @@ function readNothing(client TcpClient, parkedFrom ParkMark) returns ReadOutcome
 			recvFailed then code = 1
 			connectionClosed then code = 2
 			timedOut then code = 3
-			default panic("unreachable: a read whose socket closes under it ends in one of the three above")
+			default panic("unreachable: a cancelled read on a socket nothing writes to ends in one of the three above")
 		end 'which'
 	end 'readErr'
 
@@ -855,13 +793,14 @@ end 'main'
 
 function reuseOver(listener TcpListener) returns ExitCode
 	let peerFrom = ParkMark.create(0 as SchedulerEventCount)
+	let boundPort = listener.port()
 	let peer = async echoUntilAnswered(listener, peerFrom: peerFrom.clone())
-	let first = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'firstConnectFailed'
+	let first = try TcpClient.connect("127.0.0.1", port: boundPort) otherwise 'firstConnectFailed'
 		peer.cancel()
 		return 1
 	end 'firstConnectFailed'
 
-	let reused = reuseItsDescriptor(first, port: listener.port(), peerFrom: peerFrom)
+	let reused = reuseItsDescriptor(first, port: boundPort, peerFrom: peerFrom)
 	let answered = await peer
 
 	if answered != 1 'peer'
@@ -884,245 +823,112 @@ function reuseItsDescriptor(first TcpClient, port NetworkPort, peerFrom ParkMark
 		sleep(1)
 	end 'untilReaderParked'
 
+	stale.cancel()
 	first.close()
 
 	// The lowest free descriptor is the one just closed, so this connection inherits the released record.
-	var second = try TcpClient.connect("127.0.0.1", port: port) otherwise 'secondConnectFailed'
-		stale.cancel()
-		return "the second connect failed\n"
-	end 'secondConnectFailed'
+	let second = try TcpClient.connect("127.0.0.1", port: port) otherwise return "the second connect failed\n"
 
-	_ = try second.send("reuse\n") otherwise 'sendFailed'
-		stale.cancel()
-		return "the send failed\n"
-	end 'sendFailed'
+	_ = try second.send("reuse\n") otherwise return "the send failed\n"
 
-	let echo = try second.recv(1024) otherwise 'echoNeverArrived'
-		stale.cancel()
-		return "the echo never arrived\n"
-	end 'echoNeverArrived'
+	let echo = try second.recv(1024) otherwise return "the echo never arrived\n"
 
-	let outcome = await stale
-	return "echoed={echo == "reuse\n"} outcome={outcome}\n"
+	return "echoed={echo == "reuse\n"}\n"
 end 'reuseItsDescriptor'
 ```
 ```stdout
-echoed=true outcome=1
+echoed=true
 ```
 ```exitcode
 0
 ```
 
-<!-- test: netpoll-socket.two-readers-on-one-socket-is-a-named-stop -->
+<!-- test: netpoll-socket.a-second-reader-cannot-be-started-on-a-socket-lent-to-the-first -->
 <!-- procs: 1 -->
-**TWO GREEN THREADS READING ONE SOCKET IS A PROGRAM ERROR, AND IT STOPS WITH A NAMED ABORT.** A direction
-word holds ONE waiter, so a second wait on the same direction would overwrite the first's publication and
-the first would never be woken again. `__np_pd_wait` refuses that outright rather than losing a thread
-silently — `RuntimeAbort.netpollDoubleWait`, exit **107**.
-
-⭐ **AND THE REFUSAL IS RIGHT HERE WHERE ITS NEIGHBOUR'S WAS NOT.** Two readers racing one byte stream have
-no defined answer — whichever wakes first takes bytes the other was going to return — so naming the stop is
-the service. That is the opposite of a release finding a parked waiter, which happens to a program that did
-nothing wrong and is answered by readying the waiter rather than by stopping.
-
-⚠ **THE LISTENER IS THE PEER, AND IT NEVER ACCEPTS.** The handshake completes into the backlog, so both reads
-are issued on an ESTABLISHED connection that nothing can ever answer — the abort is what ends the program, not
-a peer that hung up.
-
-⚠ **THE ORDER IS DETERMINISTIC BECAUSE THE HANDOVER IS A READING.** The coroutine shares its spawner's
-strand and runs when the spawner yields. `readNothing` publishes `parkedFrom` in the statement before its
-`recv`, and the owner waits until the netpoll count has reached it, as `drop-a-parked-reader` does, so the
-coroutine is published on the direction word before the owner's own read arrives second, every time. The wait
-has no bound, so a coroutine that never parks is a TIMEOUT and no sleep has to outlast the host.
+**A SOCKET HAS ONE READER AT A TIME, BECAUSE IT HAS ONE OWNER AT A TIME.** `async readNothing(client)` lends the
+socket to the coroutine that reads it until the promise is awaited or cancelled, so `readOver` reading it again in
+between is a use of a lent value (E3102). Two reads of one socket are never in flight together.
 ```maxon
-typealias ReadOutcome = int(0 to 3)
+function readNothing(client TcpClient) returns ExitCode
+	_ = try client.recv(1024) otherwise return 1
 
-typealias ParkMark = SharedValue with SchedulerEventCount
-
-function parkedInRecv(parkedFrom ParkMark) returns bool
-	let mark = parkedFrom.current()
-
-	if mark == 0 'notYet'
-		return false
-	end 'notYet'
-
-	return Scheduler.counters().netpollBlocks >= mark
-end 'parkedInRecv'
-
-function readNothing(client TcpClient, parkedFrom ParkMark) returns ReadOutcome
-	var code = 0 as ReadOutcome
-
-	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
-
-	try client.recv(1024) otherwise (e) 'readErr'
-		match e 'which'
-			recvFailed then code = 1
-			connectionClosed then code = 2
-			timedOut then code = 3
-			default panic("unreachable: a read on a socket nothing writes to ends in one of the three above")
-		end 'which'
-	end 'readErr'
-
-	return code
+	return 0
 end 'readNothing'
 
 function readOver(client TcpClient) returns ExitCode
-	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
-	let first = async readNothing(client, parkedFrom: parkedFrom.clone())
+	let first = async readNothing(client)
 
-	while not parkedInRecv(parkedFrom) 'untilParkedInRecv'
-		sleep(1)
-	end 'untilParkedInRecv'
+	Scheduler.yield()
+	_ = try client.recv(1024) otherwise return 2
 
-	// The coroutine is published on this socket's READ direction, so this second read is the refusal.
-	try client.recv(1024) otherwise ignore
-
-	let unreachable = await first
-	return unreachable as ExitCode
+	return await first
 end 'readOver'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
+
 	return readOver(client)
 end 'main'
 ```
-```exitcode
-107
-```
-```stderr
-fatal error: runtime abort 107 (netpollDoubleWait)
+```maxoncstderr
+error E3102: <fragment>:12:10: use of moved value 'client': it is lent to the coroutine of the `async` call at 9:20 until that promise is awaited or cancelled
 ```
 
-<!-- test: netpoll-socket.a-reader-arriving-before-an-ended-reader-resumes-is-the-same-named-stop -->
+<!-- test: netpoll-socket.a-socket-is-read-again-once-its-parked-reader-is-cancelled -->
 <!-- procs: 1 -->
-**A WAIT HOLDS ITS DIRECTION UNTIL ITS OWN THREAD RESUMES, SO A SECOND READER ARRIVING AFTER THE FIRST WAS
-ENDED BUT BEFORE IT RAN IS STILL TWO READERS, AND STOPS THE SAME WAY.** Whatever ends a wait — readiness, its
-deadline, a cancelled promise — readies the thread, but that thread has not answered yet: it resumes, settles
-the direction word and only then returns. A second wait on the same direction in that window meets the reader
-that still holds it — `RuntimeAbort.netpollDoubleWait`, exit **107** — exactly as it would a moment earlier,
-while the first was still published. A word that read *nothing waits* in the window would make the refusal a
-matter of timing: the second reader would publish itself there, and the first reader's resume would erase it —
-a thread nothing can wake, with `__np_waiters` still counting it, so the program hangs with the deadlock
-detector disarmed.
+**ONCE A PARKED READER IS CANCELLED, ITS SOCKET IS THE OWNER'S AGAIN AND READS NORMALLY.** The reader is parked on the
+socket's read direction, and `first.cancel()` ends that wait and waits for the reader to finish. The owner's own read
+then parks and completes like any other: the cancelled reader left nothing published on the direction word, so the
+owner's wait is the only one and the bytes the peer sends arrive whole.
 
-⭐ **THE WINDOW IS BUILT, NOT HOPED FOR.** The first reader is parked on the socket's read direction, and the
-coroutine that started it keeps itself runnable. That the reader is parked is a reading and not a wait:
-`readOutcome` publishes `parkedFrom` in the statement before its `recv`, the canceller yields until the netpoll
-count has reached it and only then raises `phase`, and `main` yields until it sees that, so no sleep has to
-outlast how long the reader takes to get there. `main` announces its read through `phase` and issues it, and
-the read opens with a genuine suspension, during which the canceller is the one member the strand can run. The
-first reader's promise is tied to the socket, so cancelling it waits for the reader to finish, and a wait fires
-nothing that is due: the reader would run before `main`'s resumption is fired. So the canceller first starts
-`giveMainItsTurn`, a coroutine that queues ahead of the reader and does one yield. The canceller then cancels the first reader, which
-ends that wait and queues the reader, and parks until it finishes. `giveMainItsTurn` runs next, and its yield fires
-what is due before it places the yielder, so `main`'s own resumption is fired there — and a readied OWNER joins the
-front of its strand's queue where a coroutine joins the back. `main` therefore finds the socket empty and reaches
-its wait while the first reader's has ended and the reader has not yet run.
+⭐ **THE PARK IS A READING, NOT A SLEEP.** The owner yields until the netpoll count has moved past the value it read
+before starting the reader, so the cancel always lands on a reader that is parked on the poller. The wait has no bound,
+so a reader that never parks is a TIMEOUT and no sleep has to outlast the host.
 
-⚠ **A MACHINE WAITING IN THE POLLER CAN FIRE `main`'s RESUMPTION BEFORE THE CANCELLER RUNS**, since registering
-it breaks that wait. `main` then meets the first reader still published and stops by the ordinary road — the
-same exit, which is the property: which of the two roads a run takes is the scheduler's business, and both end
-in the one named stop.
-
-⚠ **THE WAIT HAS TO END BY SOMETHING THE STRAND DOES ITSELF.** Every socket operation opens with that
-suspension, and it runs every readied member of the strand first. Readiness and a deadline are processed by
-whichever machine is polling, at a time the program does not choose, and one landing before the second reader's
-suspension is settled there, before its call is issued. A cancel is issued by the strand, at a point the program
-picks. Without `giveMainItsTurn`'s yield the cancelled reader is the first thing the strand runs, settles the word, and
-`main` then waits on it for ever.
-
-⚠ **A RUNTIME THAT FREES THE WORD WHEN THE WAIT ENDS DOES NOT STOP.** `main` publishes itself on the word, the
-cancelled reader's resume erases it, and `main` waits for ever — the runner reports the case TIMED OUT.
+⚠ **THE PEER SENDS ONLY AFTER THE CANCEL.** The reader cannot be the one to take the bytes, so the read that returns
+them is the owner's.
 ```maxon
-typealias ReadOutcome = int(0 to 3)
-typealias Phase = int(0 to 2)
+function readNothing(client TcpClient) returns ExitCode
+	_ = try client.recv(1024) otherwise return 1
 
-typealias PhaseFlag = SharedValue with Phase
-typealias ParkMark = SharedValue with SchedulerEventCount
-
-function parkedInRecv(parkedFrom ParkMark) returns bool
-	let mark = parkedFrom.current()
-
-	if mark == 0 'notYet'
-		return false
-	end 'notYet'
-
-	return Scheduler.counters().netpollBlocks >= mark
-end 'parkedInRecv'
-
-function readOutcome(client TcpClient, parkedFrom ParkMark) returns ReadOutcome
-	var code = 0 as ReadOutcome
-
-	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
-
-	try client.recv(1024) otherwise (e) 'readErr'
-		match e 'which'
-			recvFailed then code = 1
-			connectionClosed then code = 2
-			timedOut then code = 3
-			default panic("unreachable: a read on a socket nothing writes to ends in one of the three above")
-		end 'which'
-	end 'readErr'
-
-	return code
-end 'readOutcome'
-
-function giveMainItsTurn() returns ReadOutcome
-	Scheduler.yield()
 	return 0
-end 'giveMainItsTurn'
+end 'readNothing'
 
-// Yielding rather than sleeping keeps this coroutine runnable, so it is what runs while `main`'s read is
-// suspended.
-function cancelFirstReader(client TcpClient, parkedFrom ParkMark, phase PhaseFlag) returns ReadOutcome
-	let first = async readOutcome(client, parkedFrom: parkedFrom.clone())
+function readOver(client TcpClient, peer TcpClient) returns String
+	let parksBefore = Scheduler.counters().netpollBlocks
+	let first = async readNothing(client)
 
-	while not parkedInRecv(parkedFrom) 'untilFirstParked'
+	while Scheduler.counters().netpollBlocks == parksBefore 'untilParked'
 		Scheduler.yield()
-	end 'untilFirstParked'
+	end 'untilParked'
 
-	phase.publish(1 as Phase)
-
-	while phase.current() == 1 'untilMainReads'
-		Scheduler.yield()
-	end 'untilMainReads'
-
-	let turn = async giveMainItsTurn()
 	first.cancel()
 
-	return await turn
-end 'cancelFirstReader'
+	_ = try peer.send("late") otherwise return "the send failed"
 
-function readOver(client TcpClient) returns ExitCode
-	// 0 until the first reader is parked, 1 until `main` is about to issue its own read.
-	let phase = PhaseFlag.create(0 as Phase)
-	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
-	let canceller = async cancelFirstReader(client, parkedFrom: parkedFrom.clone(), phase: phase.clone())
+	let heard = try client.recv(1024) otherwise (e) 'unheard'
+		return "recv threw {e.name}"
+	end 'unheard'
 
-	while phase.current() == 0 'untilFirstParked'
-		Scheduler.yield()
-	end 'untilFirstParked'
-
-	// The first reader's wait is ended under this read's own suspension, before the reader runs.
-	phase.publish(2 as Phase)
-	let second = readOutcome(client, parkedFrom: parkedFrom)
-	let unreachable = await canceller
-	print("second={second} canceller={unreachable}\n")
-	return 0
+	return "heard={heard}"
 end 'readOver'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 1
-	return readOver(client)
+	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let peer = try listener.accept() otherwise return 3
+
+	print("{readOver(client, peer: peer)}\n")
+
+	return 0
 end 'main'
 ```
-```exitcode
-107
+```stdout
+heard=late
 ```
-```stderr
-fatal error: runtime abort 107 (netpollDoubleWait)
+```exitcode
+0
 ```
 
 <!-- test: netpoll-socket.a-loopback-echo-service-accepts-and-answers -->
@@ -1146,10 +952,10 @@ function serveOne(listener TcpListener) returns Served
 	return 1
 end 'serveOne'
 
-function roundTrip(listener TcpListener) returns bool
+function roundTrip(port NetworkPort) returns bool
 	let payload = "maxon loopback\n"
 
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return false
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
 	_ = try client.send(payload) otherwise return false
 	let answer = try client.recv(1024) otherwise return false
 
@@ -1157,8 +963,9 @@ function roundTrip(listener TcpListener) returns bool
 end 'roundTrip'
 
 function exchangeOver(listener TcpListener) returns ExitCode
+	let port = listener.port()
 	let peer = async serveOne(listener)
-	let echoed = roundTrip(listener)
+	let echoed = roundTrip(port)
 	let served = await peer
 
 	print("echoed={echoed} served={served}\n")
@@ -1214,21 +1021,22 @@ function acceptOne(listener TcpListener, parkedFrom ParkMark) returns Served
 	return 1
 end 'acceptOne'
 
-function dialOnceParked(listener TcpListener, parkedFrom ParkMark) returns bool
+function dialOnceParked(port NetworkPort, parkedFrom ParkMark) returns bool
 	while not parkedInAccept(parkedFrom) 'untilParkedInAccept'
 		sleep(1)
 	end 'untilParkedInAccept'
 
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return false
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
 	_ = try client.send("knock\n") otherwise return false
 
 	return true
 end 'dialOnceParked'
 
 function exchangeOver(listener TcpListener) returns ExitCode
+	let port = listener.port()
 	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
 	let acceptor = async acceptOne(listener, parkedFrom: parkedFrom.clone())
-	let dialer = async dialOnceParked(listener, parkedFrom: parkedFrom.clone())
+	let dialer = async dialOnceParked(port, parkedFrom: parkedFrom.clone())
 
 	let served = await acceptor
 	let dialled = await dialer
@@ -1278,8 +1086,8 @@ function serveBoth(listener TcpListener) returns Served
 	return served
 end 'serveBoth'
 
-function roundTrip(listener TcpListener, payload String) returns bool
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return false
+function roundTrip(port NetworkPort, payload String) returns bool
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return false
 	_ = try client.send(payload) otherwise return false
 	let answer = try client.recv(1024) otherwise return false
 
@@ -1287,9 +1095,10 @@ function roundTrip(listener TcpListener, payload String) returns bool
 end 'roundTrip'
 
 function exchangeOver(listener TcpListener) returns ExitCode
+	let port = listener.port()
 	let peer = async serveBoth(listener)
-	let earlier = async roundTrip(listener, payload: "first payload\n")
-	let later = async roundTrip(listener, payload: "second payload\n")
+	let earlier = async roundTrip(port, payload: "first payload\n")
+	let later = async roundTrip(port, payload: "second payload\n")
 
 	let earlierOk = await earlier
 	let laterOk = await later
@@ -1318,9 +1127,9 @@ readability just as a socket does, so a coroutine suspended in `accept` is reach
 its reading sibling is — and a drop that knows about sockets but not about listeners strands a thread nothing
 can ever wake, which the exit's join then waits on forever.
 
-⚠ **THE LISTENER MUST SURVIVE ITS DROPPED ACCEPT.** `listener` is a parameter, so the coroutine co-owns the listener box, and a drop that
-took the box down with the wait would close a listener its owner is still holding — `bound` asks the listener
-for its port after the drop and gets the same answer it gave before.
+⚠ **THE LISTENER MUST SURVIVE ITS DROPPED ACCEPT.** `listener` is lent to the coroutine until the cancel, and a
+drop that took the box down with the wait would close a listener its owner gets back — `bound` asks the listener
+for its port after the cancel and gets the same answer it gave before.
 
 ⚠ **THE EXIT CODE IS DISTINCTIVE ON PURPOSE.** It is produced at exactly one place, the end of `main`, so a
 leaked box (101), a named abort, or a hang cannot be mistaken for the clean exit this case is about.
@@ -1364,10 +1173,12 @@ function exchangeOver(listener TcpListener) returns ExitCode
 	end 'untilParkedInAccept'
 
 	let stillWaiting = not acceptor.isComplete()
+
+	acceptor.cancel()
+
 	let stillBound = listener.port() == port
 
 	print("dropped={stillWaiting} bound={stillBound}\n")
-	acceptor.cancel()
 	return cleanExit as ExitCode
 end 'exchangeOver'
 
@@ -1383,75 +1194,36 @@ dropped=true bound=true
 42
 ```
 
-<!-- test: netpoll-socket.a-listener-closed-under-a-parked-accept-fails-the-accept -->
+<!-- test: netpoll-socket.a-listener-lent-to-a-parked-accept-cannot-be-closed-under-it -->
 <!-- procs: 1 -->
-**A LISTENER CLOSED UNDER A PARKED ACCEPT IS A FAILED LISTENER, ON EVERY LANE.** The close readies the parked
-accept with its record's generation moved on, so the wait answers `NetpollWaitStale`: the listener the accept
-began on is gone, and no later accept on it can succeed. That is `acceptFailed`, never `acceptInterrupted` —
-the retriable answer tells a server loop to accept again on a listener that no longer exists.
-
-⚠ **THE WAIT FOR THE COUNT IS WHAT MAKES THIS A POLLER CASE.** An accept that never reached the poller would
-meet the closed listener at its own entry and fail there, which reads the same at the end.
-`acceptUntilClosed` publishes `parkedFrom` in the statement before its `accept` and `exchangeOver` closes only
-once the netpoll count has reached it, as `drop-a-parked-reader` does; the wait has no bound, so an accept that
-never parks is a TIMEOUT and no sleep has to outlast the host.
+**A LISTENER HAS ONE OWNER AT A TIME, SO NO ONE CAN CLOSE IT UNDER A PARKED ACCEPT.** `async acceptUntilClosed(listener)`
+lends the listener to the coroutine that accepts on it until the promise is awaited or cancelled, so `exchangeOver`
+closing it in between is a use of a lent value (E3102). A listener is closed by its owner once the accept is over,
+and an accept that is no longer wanted is ended by `cancel()`.
 ```maxon
-typealias AcceptOutcome = int(0 to 3)
+function acceptUntilClosed(listener TcpListener) returns ExitCode
+	_ = try listener.accept() otherwise return 1
 
-typealias ParkMark = SharedValue with SchedulerEventCount
-
-function parkedInAccept(parkedFrom ParkMark) returns bool
-	let mark = parkedFrom.current()
-
-	if mark == 0 'notYet'
-		return false
-	end 'notYet'
-
-	return Scheduler.counters().netpollBlocks >= mark
-end 'parkedInAccept'
-
-function acceptUntilClosed(listener TcpListener, parkedFrom ParkMark) returns AcceptOutcome
-	var code = 0 as AcceptOutcome
-
-	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
-
-	try listener.accept() otherwise (e) 'acceptErr'
-		match e 'which'
-			acceptFailed then code = 1
-			acceptInterrupted then code = 2
-			timedOut then code = 3
-			default panic("unreachable: an accept whose listener closes under it ends in one of the three above")
-		end 'which'
-	end 'acceptErr'
-
-	return code
+	return 0
 end 'acceptUntilClosed'
 
 function exchangeOver(listener TcpListener) returns ExitCode
-	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
-	let acceptor = async acceptUntilClosed(listener, parkedFrom: parkedFrom.clone())
+	let acceptor = async acceptUntilClosed(listener)
 
-	while not parkedInAccept(parkedFrom) 'untilParkedInAccept'
-		sleep(1)
-	end 'untilParkedInAccept'
-
+	Scheduler.yield()
 	listener.close()
-	let code = await acceptor
 
-	print("code={code}\n")
-	return 0
+	return await acceptor
 end 'exchangeOver'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+
 	return exchangeOver(listener)
 end 'main'
 ```
-```stdout
-code=1
-```
-```exitcode
-0
+```maxoncstderr
+error E3102: <fragment>:12:2: use of moved value 'listener': it is lent to the coroutine of the `async` call at 9:23 until that promise is awaited or cancelled
 ```
 
 <!-- test: netpoll-socket.a-renounced-acceptor-does-not-start-an-accept-nothing-can-end -->
@@ -1496,10 +1268,12 @@ function exchangeOver(listener TcpListener) returns ExitCode
 	end 'untilSleeping'
 
 	let stillWaiting = not acceptor.isComplete()
+
+	acceptor.cancel()
+
 	let stillBound = listener.port() == port
 
 	print("dropped={stillWaiting} bound={stillBound}\n")
-	acceptor.cancel()
 	return cleanExit as ExitCode
 end 'exchangeOver'
 
@@ -1515,81 +1289,35 @@ dropped=true bound=true
 42
 ```
 
-<!-- test: netpoll-socket.two-accepts-on-one-listener-is-a-named-stop -->
+<!-- test: netpoll-socket.a-second-accept-cannot-be-started-on-a-listener-lent-to-the-first -->
 <!-- procs: 1 -->
-**A LISTENER IS A DESCRIPTOR LIKE ANY OTHER, SO TWO GREEN THREADS ACCEPTING ON ONE OF THEM STOPS WITH THE
-SAME NAMED ABORT TWO READERS DO.** An accept waits on the listener's READ direction, and a direction word
-holds ONE waiter, so a second accept would overwrite the first's publication and the first would never be
-woken again — `RuntimeAbort.netpollDoubleWait`, exit **107**.
-
-⭐ **THE STOP IS THE SERVICE HERE TOO.** Two acceptors racing one backlog have no defined answer — whichever
-wakes first takes the connection the other was going to return — so a runtime that let the second wait
-through would be trading a named refusal for a thread nobody can ever wake, and a park on a poller source
-disarms the deadlock detector, so the exit's join would hang rather than report.
-
-⚠ **NOTHING EVER DIALS THIS LISTENER.** The backlog stays empty, so both accepts are genuinely suspended and
-the abort is what ends the program, not a connection that answered one of them.
-
-⚠ **THE ORDER IS DETERMINISTIC BECAUSE THE HANDOVER IS A READING.** The coroutine shares its spawner's
-strand and runs when the spawner yields. `acceptNobody` publishes `parkedFrom` in the statement before its
-`accept`, and the owner waits until the netpoll count has reached it, as `drop-a-parked-reader` does, so the
-coroutine is published on the direction word before the owner's own accept arrives second, every time. The
-wait has no bound, so a coroutine that never parks is a TIMEOUT and no sleep has to outlast the host.
+**A LISTENER HAS ONE ACCEPTOR AT A TIME, BECAUSE IT HAS ONE OWNER AT A TIME.** `async acceptOnce(listener)` lends the
+listener to the coroutine that accepts on it until the promise is awaited or cancelled, so `exchangeOver` accepting
+again in between is a use of a lent value (E3102). Two accepts on one listener are never in flight together.
 ```maxon
-typealias AcceptOutcome = int(0 to 1)
+function acceptOnce(listener TcpListener) returns ExitCode
+	_ = try listener.accept() otherwise return 1
 
-typealias ParkMark = SharedValue with SchedulerEventCount
-
-function parkedInAccept(parkedFrom ParkMark) returns bool
-	let mark = parkedFrom.current()
-
-	if mark == 0 'notYet'
-		return false
-	end 'notYet'
-
-	return Scheduler.counters().netpollBlocks >= mark
-end 'parkedInAccept'
-
-function acceptNobody(listener TcpListener, parkedFrom ParkMark) returns AcceptOutcome
-	var code = 0 as AcceptOutcome
-
-	parkedFrom.publish(Scheduler.counters().netpollBlocks + 1)
-
-	try listener.accept() otherwise (e) 'acceptErr'
-		match e 'which'
-			acceptFailed then code = 1
-			default panic("unreachable: an accept on a listener nothing dials ends only as an abandoned accept")
-		end 'which'
-	end 'acceptErr'
-
-	return code
-end 'acceptNobody'
+	return 0
+end 'acceptOnce'
 
 function exchangeOver(listener TcpListener) returns ExitCode
-	let parkedFrom = ParkMark.create(0 as SchedulerEventCount)
-	let first = async acceptNobody(listener, parkedFrom: parkedFrom.clone())
+	let first = async acceptOnce(listener)
 
-	while not parkedInAccept(parkedFrom) 'untilParkedInAccept'
-		sleep(1)
-	end 'untilParkedInAccept'
+	Scheduler.yield()
+	_ = try listener.accept() otherwise return 2
 
-	// The coroutine is published on this listener's READ direction, so this second accept is the refusal.
-	try listener.accept() otherwise ignore
-
-	let unreachable = await first
-	return unreachable as ExitCode
+	return await first
 end 'exchangeOver'
 
 function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+
 	return exchangeOver(listener)
 end 'main'
 ```
-```exitcode
-107
-```
-```stderr
-fatal error: runtime abort 107 (netpollDoubleWait)
+```maxoncstderr
+error E3102: <fragment>:12:10: use of moved value 'listener': it is lent to the coroutine of the `async` call at 9:20 until that promise is awaited or cancelled
 ```
 
 <!-- test: netpoll-socket.a-second-bind-of-a-live-port-is-refused -->
@@ -1719,9 +1447,10 @@ function nextRead(client TcpClient) returns String
 end 'nextRead'
 
 function exchangeOver(listener TcpListener) returns ExitCode
+	let boundPort = listener.port()
 	let peer = async halfClosed(listener)
 
-	let client = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise 'cancelled36'
+	let client = try TcpClient.connect("127.0.0.1", port: boundPort) otherwise 'cancelled36'
 		peer.cancel()
 		return 2
 	end 'cancelled36'
@@ -1764,7 +1493,7 @@ let AcceptRounds = 8 as AcceptRound
 let Greeting = "hello"
 
 function resetBeforeAccept(port NetworkPort) returns bool
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 
 	#if os(Windows)
 		argv.push("-NoProfile")

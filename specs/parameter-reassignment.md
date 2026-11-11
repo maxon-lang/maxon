@@ -197,7 +197,7 @@ function fill(r Row)
 end 'fill'
 
 function main() returns ExitCode
-	var r = Row.create(1)
+	let r = Row.create(1)
 	fill(r)
 	print("{r.n} {r.items.count()}\n")
 	return 0
@@ -311,7 +311,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:9:2: cannot pass a literal to a function that writes parameter 'n' (in main); pass a `var`
+error E2013: <fragment>:9:2: cannot pass a literal to a function that writes parameter 'n' (in main); pass a `var`
 ```
 
 <!-- test: error.an-expression-handed-to-a-mutable-parameter-is-refused -->
@@ -329,7 +329,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:2: cannot pass an expression to a function that writes parameter 'n' (in main); pass a `var`
+error E2013: <fragment>:10:2: cannot pass an expression to a function that writes parameter 'n' (in main); pass a `var`
 ```
 
 <!-- test: error.a-function-with-a-mutable-parameter-does-not-fit-an-unmarked-function-type -->

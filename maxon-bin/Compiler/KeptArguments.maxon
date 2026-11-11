@@ -1,0 +1,94 @@
+typealias KeptReadRowsBySite = Map with (ElementIndex, EntryIndexArray)
+
+module function checkKeptArgumentsAreNotReadAgain(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction)
+	let notes = func.capabilityNotes
+
+	if notes.keptArgOps.isEmpty() 'nothingKept'
+		return
+	end 'nothingKept'
+
+	let readsBySite = keptReadsBySite(notes)
+	let flow = BlockFlow.over(module, func: func)
+
+	for site in 0 upto notes.keptArgOps.count() 'eachKeptArgument'
+		let opIdx = try notes.keptArgOps.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgOps.get OOB at {site} below its own count")
+		let argIndex = try notes.keptArgPositions.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgPositions.get OOB at {site} — the columns are pushed together")
+		let target = try keptParameterAt(project, module: module, funcNames: funcNames, facts: facts, opIdx: opIdx, argIndex: argIndex) otherwise continue
+		let name = String.from(try notes.keptArgNames.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgNames.get OOB at {site} — the columns are pushed together"))
+		let filePath = authoredFileOf(project, func: func, opIndex: opIdx)
+		let origin = try notes.keptArgOrigins.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgOrigins.get OOB at {site} — the columns are pushed together")
+
+		if origin != UniqueOrigin.owned 'onlyLentToTheCaller'
+			let callRange = project.opRanges.get(opIdx)
+			reportPositioned(project, code: ErrorCode.semanticUniqueValueRefused, message: "cannot pass '{name}' to parameter '{target.1}' of '{String.from(target.0)}': it keeps a unique value, and {keptUniqueRefusalSentence(origin, subject: name)}", line: callRange.line, column: callRange.column, filePath: filePath)
+			continue
+		end 'onlyLentToTheCaller'
+
+		let nextLap = try notes.keptNextLap.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptNextLap.get OOB at {site} — the columns are pushed together")
+
+		if nextLap 'movedInAnEarlierLap'
+			let argLine = try notes.keptArgLines.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgLines.get OOB at {site} — the columns are pushed together")
+			let argColumn = try notes.keptArgColumns.get(site) otherwise panic("checkKeptArgumentsAreNotReadAgain: keptArgColumns.get OOB at {site} — the columns are pushed together")
+			reportPositioned(project, code: ErrorCode.useAfterMove, message: movedInAnEarlierIterationMessage(name), line: argLine, column: argColumn, filePath: filePath)
+			continue
+		end 'movedInAnEarlierLap'
+
+		let reads = try readsBySite.get(site) otherwise continue
+		let read = try firstReadAfterTheCall(notes, flow: flow, reads: reads, opIdx: opIdx) otherwise continue
+		let into = "the parameter '{target.1}' of '{String.from(target.0)}', which keeps it"
+		reportPositioned(project, code: ErrorCode.useAfterMove, message: useOfValueMovedIntoMessage(name, into: into), line: read.0, column: read.1, filePath: filePath)
+	end 'eachKeptArgument'
+end 'checkKeptArgumentsAreNotReadAgain'
+
+function keptReadsBySite(notes CapabilityNotes) returns KeptReadRowsBySite
+	let rows = KeptReadRowsBySite.create()
+
+	for read in 0 upto notes.keptReadSites.count() 'eachRead'
+		let site = try notes.keptReadSites.get(read) otherwise panic("keptReadsBySite: keptReadSites.get OOB at {read} below its own count")
+
+		if let known = try rows.get(site) 'aSiteWithReads'
+			known.push(read)
+			continue
+		end 'aSiteWithReads'
+
+		let fresh = EntryIndexArray.create(0)
+		fresh.push(read)
+		rows.upsert(site, value: fresh)
+	end 'eachRead'
+
+	return rows
+end 'keptReadsBySite'
+
+function keptParameterAt(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, opIdx ElementIndex, argIndex ParamCount) returns (immutable ByteArray, String) throws AbsentError
+	let parts = try directCallPartsOf(try module.ops.get(opIdx) otherwise throw AbsentError.absent)
+	let callee = parts.0
+
+	if not funcNames.byName.contains(callee) or not project.funcSignatures.contains(callee) 'aCalleeNoSummaryDescribes'
+		throw AbsentError.absent
+	end 'aCalleeNoSummaryDescribes'
+
+	let parameter = try calleeParameterOf(project, funcNames: funcNames, callee: callee, labels: parts.2, argIndex: argIndex)
+	let calleeFunc = try funcNames.functions.get(parameter.calleeIndex) otherwise panic("keptParameterAt: functions.get OOB at {parameter.calleeIndex}")
+
+	if not calleeKeepsParameter(project, facts: facts, calleeFunc: calleeFunc, parameter: parameter, uniqueOnly: true) 'notMovedByTheCallee'
+		throw AbsentError.absent
+	end 'notMovedByTheCallee'
+
+	return (callee, parameter.name)
+end 'keptParameterAt'
+
+function firstReadAfterTheCall(notes CapabilityNotes, flow BlockFlow, reads EntryIndexArray, opIdx ElementIndex) returns (LineNumber, ColumnNumber) throws AbsentError
+	let callBlock = flow.blockPositionOfOp(opIdx)
+
+	for read in reads 'eachRead'
+		let block = flow.positionOfBlock((try notes.keptReadBlocks.get(read) otherwise panic("firstReadAfterTheCall: keptReadBlocks.get OOB at {read} — the columns are pushed together")) as BlockId)
+
+		if block == callBlock or flow.blockReaches(callBlock, to: block) 'afterTheCall'
+			let line = try notes.keptReadLines.get(read) otherwise panic("firstReadAfterTheCall: keptReadLines.get OOB at {read} — the columns are pushed together")
+			let column = try notes.keptReadColumns.get(read) otherwise panic("firstReadAfterTheCall: keptReadColumns.get OOB at {read} — the columns are pushed together")
+			return (line, column)
+		end 'afterTheCall'
+	end 'eachRead'
+
+	throw AbsentError.absent
+end 'firstReadAfterTheCall'

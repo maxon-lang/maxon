@@ -61,7 +61,7 @@ type Registry
 end 'Registry'
 
 function main() returns ExitCode
-	var registry = Registry.create()
+	let registry = Registry.create()
 	let source = Source.create()
 	registry.add(source.title)
 
@@ -165,7 +165,7 @@ type Registry
 end 'Registry'
 
 function main() returns ExitCode
-	var registry = Registry.create()
+	let registry = Registry.create()
 	let source = Source.create()
 	registry.add(source.size)
 
@@ -212,7 +212,7 @@ function fallback() returns Target
 end 'fallback'
 
 function main() returns ExitCode
-	var walker = Walker.create()
+	let walker = Walker.create()
 	walker.aim(NoTarget)
 	walker.aim(fallback())
 	let chosen = Target.named("x") if walker.aimed() else NoTarget
@@ -226,7 +226,7 @@ end 'main'
 ```
 
 <!-- test: error.a-union-case-with-a-payload-in-a-module-let-is-refused-at-every-door -->
-The same three doors as the case above with a module-level `let` that holds a case with a payload. `Target` has a `ByteArray` payload, so the value is `immutable` image data, and a `var` field that keeps it is a second holder that could write it. The direct pass, the call result and the merge are each refused.
+The same three doors as the case above with a module-level `let` that holds a case with a payload. `Target` has a plain `ByteArray` payload, but the value is `immutable` image data, so the case is refused where it is built, the `immutable` result that returns it is refused, and the pass to a `var` field that would keep it as a second holder is refused.
 
 ```maxon
 union Target
@@ -234,7 +234,7 @@ union Target
 	named(label ByteArray)
 end 'Target'
 
-let Named = Target.named("x".toByteArray())
+let Named = Target.named(b"x")
 
 type Walker
 	var target as Target
@@ -270,21 +270,19 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:34:13: 'aim' writes 'next' (line 17: `self.target = next`); 'Named' is immutable
+error E3196: <fragment>:7:26: cannot store an immutable 'Array with int(0 to 255)' into 'Target.named.label', which holds a mutable 'Array with int(0 to 255)'; declare the payload `immutable Array with int(0 to 255)`
+error E3209: <fragment>:29:2: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 error E3207: <fragment>:35:13: 'aim' writes 'next' (line 17: `self.target = next`); 'fallback()' is immutable
-error E3207: <fragment>:37:13: 'aim' writes 'next' (line 17: `self.target = next`); 'chosen' is immutable
 ```
 
-<!-- test: error.a-payload-written-through-a-match-in-a-callee-refuses-a-module-let-union -->
-A `match` binding is a payload of its scrutinee's box, so the callee that pushes onto `label` writes the box it was handed, and the module-level `let` that box is cannot be handed to it.
+<!-- test: error.a-payload-written-through-a-match-in-a-callee-refuses-a-frozen-union -->
+A `match` binding is a payload of its scrutinee's box, so the callee that pushes onto `label` writes the box it was handed, and the frozen value cannot be handed to it.
 
 ```maxon
 union Target
 	none
 	named(label ByteArray)
 end 'Target'
-
-let Named = Target.named("x".toByteArray())
 
 function poke(t Target)
 	match t 'm'
@@ -294,13 +292,14 @@ function poke(t Target)
 end 'poke'
 
 function main() returns ExitCode
-	poke(Named)
+	let named = freeze Target.named(ByteArray.create(0))
+	poke(named)
 
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:17:7: 'poke' writes 't' (line 12: `label.push(65)`); 'Named' is immutable
+error E3207: <fragment>:16:7: 'poke' writes 't' (line 10: `label.push(65)`); 'named' is immutable
 ```
 
 <!-- test: an-all-let-union-is-a-value-type-pushed-anywhere -->
@@ -326,7 +325,7 @@ end 'Route'
 
 function main() returns ExitCode
 	let route = Route.create()
-	var steps = StepArray.create(0)
+	let steps = StepArray.create(0)
 	steps.push(route.first)
 
 	return steps.count() as ExitCode
@@ -358,7 +357,7 @@ end 'Route'
 
 function main() returns ExitCode
 	let route = Route.create()
-	var steps = StepArray.create(0)
+	let steps = StepArray.create(0)
 	steps.push(route.first)
 
 	return steps.count() as ExitCode

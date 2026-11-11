@@ -379,15 +379,15 @@ function pair(a Num, b Num) returns (Num, Num)
 end 'pair'
 
 function stash(xs PairArray) returns (Num, Num)
-	var p = pair(10, b: 20)
+	let p = pair(10, b: 20)
 	xs.push(p)
 	return p
 end 'stash'
 
 function main() returns ExitCode
-	var xs = PairArray.create(0)
+	let xs = PairArray.create(0)
 	let r = stash(xs)
-	view q = try xs.get(0) otherwise panic("element 0 was just pushed")
+	let q = try xs.get(0) otherwise panic("element 0 was just pushed")
 	return r._0 + r._1 + q._0 + q._1
 end 'main'
 ```
@@ -840,7 +840,7 @@ A `var` tuple holding a MANAGED element, written through `.1` and read back. The
 scope exit — a missed drop exits 101.
 ```maxon
 function main() returns ExitCode
-	var t = ("a", 1 as FullRangeInt)
+	let t = ("a", 1 as FullRangeInt)
 	t.1 = 41
 	return t.1 + 1
 end 'main'
@@ -884,8 +884,8 @@ end 'count'
 function main() returns ExitCode
 	let p = (1, 2)
 	let q = (3, 40)
-	var xs = [p, q]
-	view r = try xs.get(1) otherwise panic("pushed")
+	let xs = [p, q]
+	let r = try xs.get(1) otherwise panic("pushed")
 	return r.0 + r.1 + xs.count()
 end 'main'
 ```
@@ -908,10 +908,10 @@ typealias Tagged = (Num, String)
 typealias TaggedArray = Array with Tagged
 
 function main() returns ExitCode
-	var xs = TaggedArray.create(0)
+	let xs = TaggedArray.create(0)
 	xs.push((1, "hello"))
 	xs.push((2, "world"))
-	view r = try xs.get(1) otherwise panic("pushed")
+	let r = try xs.get(1) otherwise panic("pushed")
 	print("{r.1}\n")
 	return (r.0 as Count) + xs.count()
 end 'main'
@@ -1116,7 +1116,7 @@ type Box uses T
 end 'Box'
 
 function heapText() returns String
-	var builder = StringBuilder.create()
+	let builder = StringBuilder.create()
 	builder.append("a heap string long enough to allocate ")
 	builder.append("and then some")
 	return builder.build()
@@ -1192,7 +1192,7 @@ so the tuple's drop cascade releases exactly the two it took and `s` releases th
 holds.
 ```maxon
 function main() returns ExitCode
-	var s = "hello"
+	let s = "hello"
 	let t = (s, s)
 	print("{t.0}{t.1}{s}")
 	return 0
@@ -1237,12 +1237,12 @@ function seedManaged() returns (String, Num)
 end 'seedManaged'
 
 function main() returns ExitCode
-	var a = seedTrivial()
+	let a = seedTrivial()
 	var b = echoTrivial(a)
 	b.1 = 99
 
-	var m = seedManaged()
-	var n = echoManaged(m)
+	let m = seedManaged()
+	let n = echoManaged(m)
 	n.1 = 99
 
 	print("trivial a.1={a.1} b.1={b.1} managed m.1={m.1} n.1={n.1}")
@@ -1300,15 +1300,15 @@ function seedTrivial() returns (Num, Num)
 end 'seedTrivial'
 
 function main() returns ExitCode
-	var a = seedTrivial()
+	let a = seedTrivial()
 	var b = viaMerge(a, c: true)
 	b.1 = 99
 
-	var m = seedTrivial()
+	let m = seedTrivial()
 	var n = viaFallback(m)
 	n.1 = 99
 
-	var g = seedTrivial()
+	let g = seedTrivial()
 	let z = viaBinding(g)
 
 	print("merged a.1={a.1} fallback m.1={m.1} binding g.1={g.1} z={z}")
@@ -1391,9 +1391,9 @@ end 'nested'
 
 function main() returns ExitCode
 	let h = Holder.create()
-	var xs = PairArray.create(0)
+	let xs = PairArray.create(0)
 	xs.push((14, 0))
-	view e = try xs.get(0) otherwise return 1
+	let e = try xs.get(0) otherwise return 1
 	let n = nested()
 	let s = Slot.some((16, 0))
 	let sv = match s 'm'
@@ -1440,9 +1440,9 @@ end 'nested'
 
 function main() returns ExitCode
 	let h = Holder.create()
-	var xs = PairArray.create(0)
+	let xs = PairArray.create(0)
 	xs.push((14, 0))
-	view e = try xs.get(0) otherwise return 1
+	let e = try xs.get(0) otherwise return 1
 	let n = nested()
 	let s = Slot.some((16, 0))
 	let sv = match s 'm'
@@ -1805,7 +1805,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let _ = sizeof(Holder)
-	var b = StringBox.create("alpha")
+	let b = StringBox.create("alpha")
 	b.replace("beta")
 	return 0
 end 'main'
@@ -1831,8 +1831,8 @@ typealias Pair = (String, Integer)
 typealias Pairs = Array with Pair
 
 function main() returns ExitCode
-	var xs = Pairs.create(0)
-	var sb = StringBuilder.create()
+	let xs = Pairs.create(0)
+	let sb = StringBuilder.create()
 	sb.append("a heap ")
 	sb.append("payload")
 	xs.push((sb.build(), 5))
@@ -1860,8 +1860,8 @@ typealias Pair = (String, int)
 typealias Pairs = Array with Pair
 
 function main() returns ExitCode
-	var xs = Pairs.create(0)
-	var sb = StringBuilder.create()
+	let xs = Pairs.create(0)
+	let sb = StringBuilder.create()
 	sb.append("a heap ")
 	sb.append("payload")
 	xs.push((sb.build(), 5))
@@ -1890,14 +1890,14 @@ typealias Pair = (String, Integer)
 typealias Pairs = Array with Pair
 
 function main() returns ExitCode
-	var xs = Pairs.create(0)
-	var sb = StringBuilder.create()
+	let xs = Pairs.create(0)
+	let sb = StringBuilder.create()
 	sb.append("shared ")
 	sb.append("record")
 	xs.push((sb.build(), 3))
 	let ys = xs.clone()
 
-	view original = try xs.get(0) otherwise panic("pushed")
+	let original = try xs.get(0) otherwise panic("pushed")
 	let copied = try ys.get(0) otherwise panic("cloned")
 	print("{original.0}|{copied.0}\n")
 	return original.1 + copied.1 + xs.count() as Integer + ys.count() as Integer
@@ -1956,10 +1956,10 @@ end 'Point'
 typealias PointMap = Map with (String, Point)
 
 function main() returns ExitCode
-	var m = PointMap.create()
+	let m = PointMap.create()
 	m.upsert("a", value: Point.create("alpha"))
 	for e in m 'each'
-		view arr = [e]
+		let arr = [e]
 		let cp = arr.clone()
 		let copied = try cp.get(0) otherwise panic("cloned")
 		print("{copied.0}{copied.1.name}\n")
@@ -2432,7 +2432,7 @@ type Slot
 end 'Slot'
 
 function main() returns ExitCode
-	var s = Slot.create()
+	let s = Slot.create()
 	let first = s.pair.0() + s.pair.1
 	s.rearm(41)
 	let second = s.pair.0() + s.pair.1
@@ -2487,7 +2487,7 @@ function keptOrArmed(kept (Thunk, Integer), keep bool) returns (Thunk, Integer)
 end 'keptOrArmed'
 
 function main() returns ExitCode
-	var s = Slot.create()
+	let s = Slot.create()
 	s.choose(Mode.live)
 	let first = s.pair.0() + s.pair.1
 	s.pair = keptOrArmed(s.pair, keep: false)
@@ -2590,7 +2590,7 @@ type Slot
 end 'Slot'
 
 function main() returns ExitCode
-	var s = Slot.create()
+	let s = Slot.create()
 	s.arm((seven, 2))
 	print("{s.pair.0() + s.pair.1}\n")
 	return 0
@@ -2753,7 +2753,7 @@ function top(values WideArray) returns Wide
 end 'top'
 
 function main() returns ExitCode
-	var values = WideArray.create(0)
+	let values = WideArray.create(0)
 	values.push(5)
 	values.push(18446744073709551615)
 	values.push(9223372036854775808)
@@ -3234,7 +3234,7 @@ type Tally
 end 'Tally'
 
 function main() returns ExitCode
-	var spot = Spot.create((3 as Num, 40 as Num))
+	let spot = Spot.create((3 as Num, 40 as Num))
 	let t = spawn Tally.create()
 	try t.take(spot.pair) otherwise panic("an open mailbox with room takes the send")
 	let sum = try await t.total() otherwise panic("the tally is running")
@@ -3313,7 +3313,7 @@ function capture(t (Num, Num)) returns Num
 end 'capture'
 
 function main() returns ExitCode
-	var g = (1 as Num, 2 as Num)
+	let g = (1 as Num, 2 as Num)
 	return capture(g) as ExitCode
 end 'main'
 ```
@@ -3359,7 +3359,7 @@ end 'Tally'
 
 export function second() returns ExitCode
 	let t = spawn Tally.create()
-	var items = Nums.create(0) as isolated Nums
+	let items = Nums.create(0) as isolated Nums
 	items.push(43 as Num)
 	try t.take(items) otherwise panic("an open mailbox with room takes the send")
 	let sum = try await t.total() otherwise panic("the tally is running")

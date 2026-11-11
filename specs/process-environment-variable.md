@@ -110,10 +110,10 @@ function main() returns ExitCode
 	end 'iAmTheChild'
 
 	let me = try Process.executablePath() otherwise return 2
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("child")
 
-	var config = Configuration.create(Executable.path(me))
+	let config = Configuration.create(Executable.path(me))
 	config.arguments = argv
 	config.environment = Environment.inheritUpdating(["MAXON_SPEC_ENV_EQ": "a=b"])
 	let run = try Subprocess.runConfiguration(config) otherwise return 4

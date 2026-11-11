@@ -80,10 +80,16 @@ not 80.
   awaited or cancelled`), a sibling field of a lent local too, and naming it in the statement that starts the
   coroutine is **E3186**. A `var`, or a field of a local, may be lent; any other storage at a
   by-reference position is **E2015** (`an `async` call takes only a local variable by reference`), a literal
-  is **E3159**, and the variable's declared type must be the parameter's type (**E3005**, see
+  is **E2013**, and the variable's declared type must be the parameter's type (**E3005**, see
   [Parameter Passing](/docs/language/functions/#parameter-passing)). A coroutine that writes a parameter is refused a
-  [read-only](/docs/language/memory-model/#read-only-values) argument (**E3159**), as an ordinary call is. `specs/regions-async-lend.md`
+  [read-only](/docs/language/memory-model/#read-only-values) argument (**E3207**), as an ordinary call is. `specs/regions-async-lend.md`
   pins each case; `the-coroutine-writes-the-callers-variable-and-the-await-shows-it` runs one.
+- **A [unique](/docs/language/regions/#unique-types) value is lent to the coroutine the same way.** A local or a parameter handed to
+  an `async` call, a socket or an `HttpServer` included, is the coroutine's until the promise is awaited or
+  cancelled: a read, `close()`, pass or move of it before then is **E3102**, and after the await or the cancel
+  it is the caller's again. A server that runs in a coroutine is stopped with `.cancel()` on its promise, then
+  `close()`d; `close()` while the promise is pending is **E3102**. The cases are in
+  `specs/regions-async-lend.md`.
 - A call passes an `isolated` value to `async` only in an `isolated` parameter, which moves it (**E3207**).
 - A closure that captured a binding owns it, so handing that binding to `async` afterwards is **E3102**.
 - The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, send a service message with a
@@ -159,7 +165,7 @@ A `mutable` promise parameter the callee reassigns (`q = async work()`) writes i
 callee drops the thread the variable held, the variable takes the new one, and the caller awaits it as any
 other promise name. The same holds through a function that only hands the parameter on, and at a position a
 function type passes by reference. The argument is a `var` the caller owns: a `let` or a `let` field is
-**E2013**, and a name a closure captured, or a promise an array still holds, is **E3159**. Inside a loop, `await x` after such a call
+**E2013**, and so is a name a closure captured or a promise an array still holds. Inside a loop, `await x` after such a call
 spends `x`, so the call on the next iteration is **E3102**.
 
 ```maxon
@@ -173,7 +179,7 @@ function nap(delay Milliseconds, tag Tag) returns Tag
 end 'nap'
 
 function main() returns ExitCode
-	var naps = TagPromiseArray.create(0)
+	let naps = TagPromiseArray.create(0)
 	naps.push(async nap(200, tag: 1))
 	naps.push(async nap(20, tag: 2))
 	naps.push(async nap(100, tag: 3))
@@ -436,56 +442,41 @@ either side could write, because the two green threads may run at the same time 
   reply is judged at its declaration, so a generic message that `returns T` is not refused here. A word is
   needed on none of these: numbers, `bool`, `ExitCode`, `String`, `Character`, enums, unions whose cases carry
   nothing, service and interface handles, `SharedValue` cells, a tuple none of whose elements owns heap, and a
-  type that holds a `unique` value or an OS handle (`TcpClient`, `TcpListener`, …). A promise, a function value
-  or an opaque type parameter is **E3135**, a reply the cell cannot carry is **E3140**, and a state field that
-  can hold a promise is **E3216**; those are reported before E3217.
+  `unique` type, which moves (the OS handles `TcpClient`, `TcpListener`, `TlsStream`, `TlsListener` and the
+  types that hold them are `unique`).
+- **Four kinds of value cannot cross at all, and are E3217 too:** a promise or any type that can hold one (a
+  record with a promise in a field, a union with a case carrying one, an array or list of promises, empty or
+  not), because a coroutine belongs to the strand that started it and a promise that crossed would be dropped,
+  awaited or cancelled by a strand that does not own it; a function value, a closure record that owns what it
+  captures; an opaque type parameter, whose layout is not known at the send; and an OS handle bound to a
+  thread, such as a `MachinePin`, also when it is held at an interface type. `await` the promise and send or
+  return the result, or send the scalar the value is derived from. A reply the cell cannot carry is
+  **E3140**, and a state field that can hold a promise is **E3216**; those are reported before E3217.
 - A local `let` or `var`, a temporary or a literal argument the sender owns is **moved** into the service;
   reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
   `spawn` hands its factory, whether or not the factory keeps it. The handler owns what it was moved, so it may
   keep it or write it.
-- A [read-only](/docs/language/memory-model/#read-only-values) value the sender does not own — a module-level `let`, `immutable` data, a
-  `SharedValue` or registry read, or a parameter nothing in the sending function writes — is **shared**: its graph is marked shared, so every
-  count on it steps atomically, and neither side may write it. Sending a parameter the sending function
-  writes, or any shared value the handler writes or keeps, is **E3138**. A borrowed `String` is copied at the
-  send.
+- An `isolated` argument must be a value no other name reaches: a fresh call result or an `isolated` local. A
+  value read out of a field or an element of a `var`, the source of an enclosing `for` loop, or an element a
+  member hands back out of a field's container (`return self.queue.pop()`) is still held by its container, so
+  it is not `isolated` (**E3200**); send a `.clone()`.
+- An `immutable` argument must be frozen data: `freeze x.clone()`, a constant, a module-level `let`, or a
+  `SharedValue` or registry read. It is **shared**: its graph is marked shared, so every count on it steps
+  atomically, and neither side may write it. A mutable argument at an `immutable` parameter is **E3207**.
+  A `String` is a value; its buffer count becomes atomic when it is sent.
 - A tuple none of whose elements owns heap — `(Amount, Amount)`, say — is a value. When the sender is not its
   one owner, it is copied wherever it crosses: a send, a factory argument,
   `SharedValue.publish` or `Key.register`. The service gets the copy and the sender keeps its own.
-- A value with an owner besides the sender that is not read-only — held in a container, read out of a field
-  or an element of a `var`, or the source of an enclosing `for` loop — is **E3138**; send a `.clone()`. So is
-  an element a member hands back out of a field's container (`return self.queue.pop()`): it has left the
-  container, and another owner may still hold it. A
-  borrowed factory argument is **E3138** too, a generic factory's argument at a type
-  parameter included; one the sender owns but also shares is caught by the run-time check below (exit code
-  **96**). A field read off a temporary built inside the factory call's own argument list crosses, because the
-  `spawn` releases that temporary.
-- A parameter, a reply or a factory argument whose type cannot cross at all — a promise, a function value, an
-  opaque type parameter — is **E3135**. So is one whose type can hold a promise in any slot: a record with a
-  promise in a field, a union with a case carrying one, an array or list of promises, empty or not. A coroutine
-  belongs to the strand that started it, so a promise that crossed would be dropped, awaited or cancelled by a
-  strand that does not own it; `await` the promise and send or return the result. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
-  service the reply is judged at the `spawn` that fixes `T`, and a `returns T` message that hands back the
-  state is **E3137** there whenever `T` resolves to a managed type; a scalar `T` crosses.
 - A value held at an interface type crosses as a message argument, in a service's state and as a reply,
-  moved like any other value. A conformer sent at its own type whose graph the runtime cannot walk
-  (an OS handle other than a socket, such as a machine pin) is **E3138**; once it is held at the interface type
-  it is checked through its witness at the send, and such a conformer aborts with exit code **96**.
-- **A socket crosses like any other record, because its box counts its owners.** A `TcpClient`, a
-  `TcpListener` or a `TlsStream` that the sender holds alone is moved into a service, sent in a message or
-  handed back in a reply; the receiving green thread reads and writes it, and the network poller wakes it
-  wherever it runs. One with a second owner — a copy in a container, a second `TcpClient` over the same
-  socket — is stopped by the walk below with exit code **96**. A module `let`,
-  a `SharedValue` or a registry value that reaches one is **E3163** or **E3171**.
-- Before a send, the runtime also checks the value's whole object graph. The graph may reach one record
-  several times — two fields, two slots of an array — when every owner of that record is one of those
-  references, and the record is walked once however many paths reach it. If some nested record has an owner
-  outside the graph, the program prints `fatal error: runtime abort 96 (transferredRecordNotSole)` to
-  stderr and exits with code **96** before anything is sent. A reply is checked
-  after the handler's locals and the message's arguments are released, so a reply built from them crosses. A
-  generic service's reply is checked at the type its `spawn` fixes: a `returns T` message that hands back a
-  container or a reference-holding record from the service's own state is **E3137** at the `spawn`, and a
-  reply whose graph holds a type the runtime cannot walk (an OS handle other than a socket) is **E3138** there. A generic service
-  cannot be spawned over a value held at an interface type (**E2015**).
+  moved like any other value; a conformer whose graph cannot cross is refused at the send, as it is at its own type.
+- **An OS handle crosses by move.** A `TcpClient`, a `TcpListener` or a `TlsStream` is `unique`: bound with
+  `let`, pushed into a container or handed to a `spawn`, it moves, and reading the sender's name afterwards is
+  **E3102**; the receiving green thread reads and writes it, and the network poller wakes it wherever it runs.
+  `clone()` of one is [E3214](/docs/cli/error-codes/#e3214--semanticuniquevaluerefused). A `SharedValue` or a
+  registry value that reaches one is **E3171**.
+- Freezing or publishing a graph walks it to mark every record shared. A value held at an interface type is
+  walked through the conformer it holds, and one no walk can be built for stops the program with exit code
+  **96** before anything is published.
 
 **A service's state holds no promise.** A field of a service type that is a `Promise`, an array of promises, or a
 record or union that holds one is [E3216](/docs/cli/error-codes/#e3216--semanticservicestateholdsapromise), reported at the
@@ -494,13 +485,10 @@ so a promise kept in the state could be awaited or dropped by a strand that does
 factory `await`s or `.cancel()`s the coroutines it starts before it returns, and keeps their result in the field.
 
 **Module-level state.** A service keeps its state in its own fields and hands results back through replies. A
-module-level `let` is readable from a handler or factory. In a program that spawns a service, every `let` record built before
-`main` is marked shared once the last global initializer has returned, so every count a handler steps on it
-is atomic; a record two `let`s reach counts both as its owners. A `let` whose graph no walk can mark — one
-holding an OS handle, a value held at an interface type, or a generic instance with no base layout — is
-**E3163** where a message or a factory can read it, and legal where only `main` does. A `spawn` a global initializer can
-reach is **E3164** (a [`default`](#program-wide-defaults--default) starts a program-wide service before
-`main`; see [Top-Level Bindings](/docs/language/variables/#top-level-bindings)).
+module-level `let` is `immutable` image data, so a handler or factory reads the one copy every thread shares,
+and it can hold no OS handle, function value or promise. A `spawn` in a global initializer is **E3220**, like any
+call (a [`default`](#program-wide-defaults--default) starts a program-wide service before `main`; see
+[Top-Level Bindings](/docs/language/variables/#top-level-bindings)).
 
 **Output order.** Text printed by `main` and by a service handler or factory may interleave in any order; sequence it
 through awaited replies when order matters.
@@ -539,8 +527,8 @@ send: the handler receives the message's own arguments alone.
 - A message that declares a parameter named `sendTimeout`, and an argument after `sendTimeout:`, are
   **[E3192](/docs/cli/error-codes/#e3192--semanticservicesendtimeoutreserved)**.
 
-The arguments come back owned by the caller, so they can be sent again, to this service or another. A
-read-only value the send shared (see above) comes back as a copy. One whose type has no deep copy comes back
+The arguments come back owned by the caller, so they can be sent again, to this service or another. An
+`immutable` value the send shared (see above) comes back as a copy. One whose type has no deep copy comes back
 as the shared value itself, which the caller may read and keeps for itself. A message with no parameters
 has payload-free cases. Through an
 [interface handle](#interface-handles) the error is `<Interface>.<message>.sendError`.
@@ -589,9 +577,7 @@ end 'main'
   to each other and the service waits for it forever. Give the send a `sendTimeout:`, which parks the
   coroutine until there is room.
 - **A send error is propagated** by a bare `try` in a function that `throws <Service>.<message>.sendError`,
-  or rethrown with `throw e` from the binding that caught it. Throwing one the function does not solely
-  own — a parameter, say — is **E3191**, because its catcher takes the arguments out of it as their only
-  owner.
+  or rethrown with `throw e` from the binding that caught it.
 - `otherwise ignore` drops a failed send and releases its arguments.
 
 ## Interface Handles
@@ -605,7 +591,7 @@ service the handle holds, by the same rules as the service's own handle. Its sen
 typealias Count = int(0 to 1000000)
 
 interface Tally
-	function add(by Count)
+	function add(mutable self, by Count)
 	function total() returns Count
 end 'Tally'
 
@@ -639,7 +625,7 @@ end 'main'
 
 - A `T.handle` converts to `I.handle` wherever an `I.handle` is expected: a binding, an argument, a return, a field, an array element, a message argument, a
   `Key.register` and a call through a function value or a closure. `as I.handle` converts explicitly.
-- Every requirement must be sendable: its parameters must cross a message (**E3135**) and its reply must be
+- Every requirement must be sendable: its parameters must cross a message (**E3217**) and its reply must be
   carriable (**E3140**). One send serves every implementer, so the services a program sends to through
   `I.handle` declare each requirement with the same parameter, return and `throws` types
   ([E3177](/docs/cli/error-codes/#e3177--interfacehandleimplementersdisagree)); send through each service's own handle
@@ -662,13 +648,14 @@ A top-level `default Key = expression` declares the program-wide default for `Ke
   or promise ([E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) otherwise). Its fields may be `var`,
   and may hold containers. The expression builds one, and may spawn services for its fields.
   `Key.current()` returns the published record, [read-only](/docs/language/memory-model/#read-only-values) all the way down: a write
-  through it is **E3159**, binding it to a `var` is **E3078**, and `clone()` makes a mutable copy.
+  through it is **E3197** (**E3207** where it is handed to a parameter the callee writes), and `clone()` makes
+  a mutable copy.
 
 ```maxon
 typealias Count = int(i64.min to i64.max)
 
 interface Greeter
-	function greet() returns Count
+	function greet(mutable self) returns Count
 end 'Greeter'
 
 type Polite implements Greeter
@@ -828,7 +815,7 @@ Each of these aborts writes `fatal error: runtime abort N (name)` to stderr, the
 | 75 | a green thread was neither awaited nor dropped when the program ended |
 | 90 | a service's message loop received a message its type does not declare — reachable only if a send the compiler built names no message of the service |
 | 92 | deadlock: `main` is unfinished and every green thread waits for good (for example `awaitAny` on an empty array, or a `sendTimeout: ForeverMs` send to a mailbox that stays full) |
-| 96 | a service send found a value with a second owner |
+| 96 | a share walk (`freeze`, `SharedValue.publish`, `Key.register`) reached a value held at an interface type whose conformer no walk can be built for |
 | 98 | a service send waiting for room broke the protocol between the sender and the party that wakes it — reachable only through a send the compiler built wrongly |
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
 | 120 | a deep copy reached an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled |

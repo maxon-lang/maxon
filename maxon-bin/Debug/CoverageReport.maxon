@@ -213,8 +213,8 @@ end 'lineKey'
 // count executions OF THAT LINE, and the arm counts are a subset of the statement's. A line is
 // `eliminated` only when EVERY point on it lost its code.
 function joinFiles(sidecar MxdbgReader, data MxcovData) returns CovFileArray
-	var merged = CovMergedLineMap.create()
-	var order = CovLineKeyArray.create(0)
+	let merged = CovMergedLineMap.create()
+	let order = CovLineKeyArray.create(0)
 
 	for index in 0 upto sidecar.coveragePointCount() 'eachPoint'
 		let point = sidecar.coveragePoint(index as MxdbgIndex)
@@ -261,7 +261,7 @@ function compareLinePosition(left CovLineKey, right CovLineKey) returns Ordering
 end 'compareLinePosition'
 
 function groupedFiles(order CovLineKeyArray, merged CovMergedLineMap) returns CovFileArray
-	var files = CovFileArray.create(0)
+	let files = CovFileArray.create(0)
 	var groupPath = ""
 	var groupLines = CovLineArray.create(0)
 
@@ -290,7 +290,7 @@ end 'groupedFiles'
 // That is a total order even when two arms share a line (an `if` and its implicit `else` both sit at the
 // `if`), which a sort by position would not be — so the sort below must be STABLE.
 function joinBranches(sidecar MxdbgReader, data MxcovData) returns CovBranchArray
-	var rows = CovArmRowArray.create(0)
+	let rows = CovArmRowArray.create(0)
 
 	for index in 0 upto sidecar.coveragePointCount() 'eachPoint'
 		let point = sidecar.coveragePoint(index as MxdbgIndex)
@@ -321,7 +321,7 @@ function compareBranchPosition(left CovArmRow, right CovArmRow) returns Ordering
 end 'compareBranchPosition'
 
 function groupedBranches(rows CovArmRowArray) returns CovBranchArray
-	var branches = CovBranchArray.create(0)
+	let branches = CovBranchArray.create(0)
 	var groupFile = ""
 	var groupLine = 0 as CovLineNumber
 	var groupColumn = 0 as CovSourceColumn
@@ -491,7 +491,7 @@ function renderStatesOnly(file CovFile) returns String
 end 'renderStatesOnly'
 
 function renderAnnotatedSource(file CovFile, source StringArray) returns String
-	var markerOfLine = CovMarkerMap.create()
+	let markerOfLine = CovMarkerMap.create()
 
 	for line in file.lines 'eachLine'
 		markerOfLine.upsert(line.line, value: marker(line))
@@ -534,7 +534,7 @@ function sourceLines(path String) returns CovSourceLookup
 	let body = try File.readText(spelled) otherwise return CovSourceLookup.unreadable
 
 	let rows = body.split(LineFeed)
-	var lines = StringArray.create(rows.count(), zeroed: false)
+	let lines = StringArray.create(rows.count(), zeroed: false)
 
 	for row in rows 'eachRow'
 		lines.push(row.replace(CarriageReturn, with: "") if row.endsWith(CarriageReturn) else row)
@@ -592,7 +592,7 @@ function jsonTargetStatus(status CovTargetStatus) returns String
 end 'jsonTargetStatus'
 
 function jsonFile(file CovFile) returns String
-	var lines = StringArray.create(file.lines.count(), zeroed: false)
+	let lines = StringArray.create(file.lines.count(), zeroed: false)
 
 	for line in file.lines 'eachLine'
 		lines.push(jsonLine(line))
@@ -617,7 +617,7 @@ function stateName(state CovLineState) returns String
 end 'stateName'
 
 function jsonBranch(branch CovBranch) returns String
-	var arms = StringArray.create(branch.arms.count(), zeroed: false)
+	let arms = StringArray.create(branch.arms.count(), zeroed: false)
 
 	for arm in branch.arms 'eachArm'
 		arms.push(jsonArm(arm))

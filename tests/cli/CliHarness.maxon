@@ -283,7 +283,7 @@ export function buildAProgramBesideALibraryFile(caseDirName String, libraryFile 
 	let main = dir.join(StagedProgramFileName)
 	writeStagedFile(main, content: BesideAProgramMainSource)
 
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push(BuildCommandWord)
 	arguments.push(main.toString())
 	arguments.push(libraryFile)
@@ -393,7 +393,7 @@ export function rosterWithHighestRootBlocked(dir FilePath) returns EnvMap
 
 	let fallThrough = stagingDir(dir.join(FallThroughRootDirName).toString())
 
-	var naming = EnvMap.create()
+	let naming = EnvMap.create()
 	naming.upsert(HomeDirectoryVariable, value: blocked.toString())
 	naming.upsert(rootRankedBelowHomeVariable(), value: fallThrough.toString())
 
@@ -422,7 +422,7 @@ end 'runWithCacheRoots'
 
 // One driver run whose cache is confined to `cacheRoot`.
 export function runWithCacheRoot(arguments StringArray, cacheRoot FilePath, workingDirectory FilePath, binary FilePath = testedCompilerPath()) returns CollectedOutput
-	var naming = EnvMap.create()
+	let naming = EnvMap.create()
 	naming.upsert(CacheRootVariable, value: cacheRoot.toString())
 
 	return runWithCacheRoots(arguments, naming: naming, workingDirectory: workingDirectory, binary: binary)
@@ -435,7 +435,7 @@ export function blockedRootFileIn(dir FilePath, ordinal ElementIndex) returns Fi
 end 'blockedRootFileIn'
 
 export function rosterWithEveryCandidateBlocked(dir FilePath) returns EnvMap
-	var naming = EnvMap.create()
+	let naming = EnvMap.create()
 
 	for (iter, variable) in confinableCacheVariables().withIterator() 'eachCandidate'
 		let blocked = blockedRootFileIn(dir, ordinal: iter.index())
@@ -458,7 +458,7 @@ end 'rosterWithEveryCandidateBlocked'
 function confinedCacheEnvironment(dir FilePath, naming EnvMap) returns Environment
 	let inherited = try Process.currentEnvironmentEntries() otherwise panic("CliHarness: the gate could not run - this process's environment could not be read, and a child inheriting the developer's own cache roots would clear the developer's cache.")
 
-	var vars = EnvMap.create()
+	let vars = EnvMap.create()
 
 	for entry in inherited 'eachEntry'
 		let name = Process.envEntryName(entry)
@@ -499,7 +499,7 @@ export function confinableCacheVariables() returns StringArray
 end 'confinableCacheVariables'
 
 function variablesACallerCanSet() returns StringArray
-	var variables = StringArray.create(0)
+	let variables = StringArray.create(0)
 
 	for variable in confinableCacheVariables() 'eachCandidate'
 		variables.push(variable)
@@ -569,7 +569,7 @@ end 'privateRootFor'
 // PATH, so publishing the same text twice under one name supersedes the first build rather than adding a
 // second; a case that needs more than one build in a root names a second file.
 export function publishCachedBuild(dir FilePath, cacheRoot FilePath, program String = CachedProgramFileName)
-	var naming = EnvMap.create()
+	let naming = EnvMap.create()
 	naming.upsert(CacheRootVariable, value: cacheRoot.toString())
 
 	publishCachedBuildUnder(dir, naming: naming, owned: cacheRoot.join(CacheVendorDirName), program: program)
@@ -608,7 +608,7 @@ export function plantedLinkInTheLibraryCache(dir FilePath, linkName String = Cac
 	let outside = dir.join(CacheLinkOutsideDirName)
 	let library = libraryCacheDirIn(dir)
 	let link = library.join(linkName)
-	var outsideFiles = FilePathArray.create(0)
+	let outsideFiles = FilePathArray.create(0)
 
 	if not Directory.create(outside) 'noOutside'
 		panic("CliHarness: the gate could not create {outside.toString()}")
@@ -630,7 +630,7 @@ export function plantedLinkInTheLibraryCache(dir FilePath, linkName String = Cac
 end 'plantedLinkInTheLibraryCache'
 
 export function publishCachedBuildInHome(dir FilePath, home FilePath)
-	var naming = EnvMap.create()
+	let naming = EnvMap.create()
 	naming.upsert(HomeDirectoryVariable, value: home.toString())
 
 	publishCachedBuildUnder(dir, naming: naming, owned: homeCacheRoot(home), program: CachedProgramFileName)
@@ -756,7 +756,7 @@ end 'caseDirectoryName'
 // wrapped prose — which starts far to the right — is never mistaken for one. In the short list these are
 // the COMMANDS; in a reference section they are that command's OPTIONS.
 export function labelledWordsIn(listing String) returns StringArray
-	var words = StringArray.create(0)
+	let words = StringArray.create(0)
 
 	for label in labelsIn(listing) 'eachLabel'
 		words.push(firstWordOf(label))
@@ -768,7 +768,7 @@ end 'labelledWordsIn'
 // Each label whole — every spelling an option line gives, such as `--bail, --bail=N` — which
 // ends where the gap before the description column starts.
 function labelsIn(listing String) returns StringArray
-	var labels = StringArray.create(0)
+	let labels = StringArray.create(0)
 
 	for line in listing.split("\n") 'eachLine'
 		if not line.startsWith(LabelIndent) 'notALabel'
@@ -790,7 +790,7 @@ end 'labelsIn'
 // comma-separated alternatives each give their flag, and a flag taking a value keeps its `=` and drops the
 // placeholder — `--output=<path>` gives `--output=`, `--bail, --bail=N` gives both.
 export function optionSpellingsIn(listing String) returns StringArray
-	var spellings = StringArray.create(0)
+	let spellings = StringArray.create(0)
 
 	for label in labelsIn(listing) 'eachLabel'
 		if not label.startsWith(OptionPrefix) 'aCommand'
@@ -834,7 +834,7 @@ end 'spellingOfAlternative'
 // `_`, each carrying an `=` that directly follows it. Membership in this list is what "the text names
 // `--output=`" means, so `--output-dir` and `x--output=` never count as naming it.
 export function spellingsIn(text String) returns StringArray
-	var spellings = StringArray.create(0)
+	let spellings = StringArray.create(0)
 	var current = ""
 
 	for c in text 'eachCharacter'
@@ -865,7 +865,7 @@ export function spellingsIn(text String) returns StringArray
 end 'spellingsIn'
 
 export function linesOpeningIn(text String, prefix String) returns StringArray
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	for line in text.split("\n") 'eachLine'
 		if line.startsWith(prefix) 'opensWithIt'
@@ -887,7 +887,7 @@ end 'cliReferenceText'
 // ⭐ **THE COMMANDS THE FULL REFERENCE HAS A SECTION FOR**, read off ITS layout: a section label is the
 // only thing at the left margin apart from the `Usage:` line.
 export function sectionedCommandsIn(reference String) returns StringArray
-	var words = StringArray.create(0)
+	let words = StringArray.create(0)
 
 	for line in reference.split("\n") 'eachLine'
 		if line.trim().isEmpty() 'blank'
@@ -912,7 +912,7 @@ end 'sectionedCommandsIn'
 // apart from the reference without either being pinned to the byte. ONE selector taking the answer it
 // wants, because the two questions are one question and its negation.
 export function labelsWhereOptionhoodIs(words StringArray, isOption bool) returns StringArray
-	var selected = StringArray.create(0)
+	let selected = StringArray.create(0)
 
 	for word in words 'eachWord'
 		if word.startsWith(OptionPrefix) == isOption 'wanted'
@@ -941,7 +941,7 @@ end 'anchorsMissingFrom'
 // empty and the hidden run one asserts is not, so it returns the words rather than a count or a
 // rendering — `listed` is what turns it into a report.
 export function wordsNotIn(left StringArray, right StringArray) returns StringArray
-	var missing = StringArray.create(0)
+	let missing = StringArray.create(0)
 
 	for word in left 'eachWord'
 		if not right.contains(word) 'absent'
@@ -954,7 +954,7 @@ end 'wordsNotIn'
 
 // The first `count` words, which is how a case takes the run a listing prints FIRST.
 export function firstFew(words StringArray, count WordTally) returns StringArray
-	var taken = StringArray.create(0)
+	let taken = StringArray.create(0)
 
 	for word in words 'eachWord'
 		if taken.count() >= count as ElementIndex 'enough'
@@ -1009,7 +1009,7 @@ function sortsAhead(before String, after String) returns bool
 end 'sortsAhead'
 
 function bytesOfText(text String) returns ByteArray
-	var collected = ByteArray.create(0)
+	let collected = ByteArray.create(0)
 
 	for one in text.bytes() 'eachByte'
 		collected.push(one)
@@ -1114,7 +1114,7 @@ export function libraryCacheDirIn(dir FilePath) returns FilePath
 end 'libraryCacheDirIn'
 
 export function runLibraryCacheBuild(dir FilePath, program String, output String, options StringArray) returns CollectedOutput
-	var logged = StringArray.create(0)
+	let logged = StringArray.create(0)
 	logged.push(CompilerDebugLogFlag)
 
 	for option in options 'eachOption'
@@ -1144,7 +1144,7 @@ let ClockPollLimit = 100 as ClockPollTally
 export let SettledProgramDirName = "app"
 
 export function runRecordedBuild(dir FilePath, program String, output String, options StringArray, binary FilePath = testedCompilerPath()) returns CollectedOutput
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push(BuildCommandWord)
 	arguments.push(program)
 	arguments.push("{OutputOptionPrefix}{dir.join(output).toString()}")
@@ -1478,7 +1478,7 @@ end 'byteArrayArrayEndsAt'
 export function entryWithEveryProducerMaskForged(image ByteArray) returns ByteArray
 	let rowCount = entryNumberAt(image, start: EntryPayloadOffset)
 	var at = rowCount.next
-	var lengths = EntryLengthArray.create(0)
+	let lengths = EntryLengthArray.create(0)
 
 	for _ in 0 upto rowCount.value 'eachRow'
 		for _ in 0 upto EntryRowKeyCount 'eachRowKey'
@@ -1490,7 +1490,7 @@ export function entryWithEveryProducerMaskForged(image ByteArray) returns ByteAr
 		lengths.push(length.value)
 	end 'eachRow'
 
-	var forged = image.clone()
+	let forged = image.clone()
 
 	for length in lengths 'eachSection'
 		let offset = producerMaskOffsetIn(image, section: at)
@@ -1505,7 +1505,7 @@ end 'entryWithEveryProducerMaskForged'
 export function entryWithChecksumOfItsPayload(image ByteArray) returns ByteArray
 	let payload = try image.slice(EntryPayloadOffset, endIndex: image.count()) otherwise panic("CliHarness: the gate could not run - the entry is shorter than its header.")
 	let checksum = Hasher.combined(Hasher.combinedBytes(Hasher.empty(), bytes: payload), value: payload.count() as HashDigest)
-	var sealed = image.clone()
+	let sealed = image.clone()
 
 	for position in 0 upto EntryWordByteCount 'eachByte'
 		try sealed.set(EntryChecksumOffset + position, value: ((checksum shr (position * EntryByteBits)) and EntryByteMask) as Byte) otherwise panic("CliHarness: the gate could not run - the entry has no checksum byte {position}.")
@@ -1516,7 +1516,7 @@ end 'entryWithChecksumOfItsPayload'
 
 export function entryWithAnotherSchema(image ByteArray) returns ByteArray
 	let first = try image.get(EntryFingerprintOffset) otherwise panic("CliHarness: the gate could not run - the entry is shorter than its header.")
-	var altered = image.clone()
+	let altered = image.clone()
 	try altered.set(EntryFingerprintOffset, value: ((first + 1) and EntryByteMask) as Byte) otherwise panic("CliHarness: the gate could not run - the entry is shorter than its header.")
 
 	return altered
@@ -1597,7 +1597,7 @@ type MetricsRow
 end 'MetricsRow'
 
 function metricsRowsOf(table String) returns MetricsRowArray
-	var rows = MetricsRowArray.create(0)
+	let rows = MetricsRowArray.create(0)
 
 	for row in table.split(MetricsRowSeparator) 'eachRow'
 		let line = row.trimEnd()
@@ -1631,7 +1631,7 @@ export function metricsAllocsOutsidePhase(table String, kind String, phase Strin
 end 'metricsAllocsOutsidePhase'
 
 export function metricsPhasesOf(table String, kind String) returns StringArray
-	var phases = StringArray.create(0)
+	let phases = StringArray.create(0)
 
 	for row in metricsRowsOf(table) 'eachRow'
 		if row.kind == kind and not phases.contains(row.phase()) 'aNewPhase'
@@ -1968,7 +1968,7 @@ export function requireDeclarationRefused(caseDirName String, source String, ref
 end 'requireDeclarationRefused'
 
 export function requireScratchNameCheckPasses(check String) throws TestFailure
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push(check)
 	arguments.push("{endedProcessId()}")
 	arguments.push(debugStreamSegmentPrefix())

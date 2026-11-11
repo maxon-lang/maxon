@@ -311,7 +311,7 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(1)
-	var t = s
+	let t = s
 	s = t
 	print(s)
 	return 0

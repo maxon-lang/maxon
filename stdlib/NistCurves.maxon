@@ -75,7 +75,7 @@ function nistByte(bytes ByteArray, index ElementIndex) returns Byte throws NistR
 end 'nistByte'
 
 function nistSmall(count Count, value WorkspaceLimb) returns WorkspaceLimbs
-	var limbs = zeroLimbs(count)
+	let limbs = zeroLimbs(count)
 	workspaceLimbPut(limbs, index: 0, value: value)
 	return limbs
 end 'nistSmall'
@@ -85,7 +85,7 @@ function nistMask(bit WorkspaceLimb) returns WorkspaceLimb
 end 'nistMask'
 
 function nistSubtract(a WorkspaceLimbs, b WorkspaceLimbs) returns (WorkspaceLimbs, WorkspaceLimb)
-	var difference = zeroLimbs(a.count())
+	let difference = zeroLimbs(a.count())
 	let borrow = limbBorrowChain(difference, dstBase: 0, a: a, aBase: 0, b: b, bBase: 0, count: a.count())
 	return (difference, borrow)
 end 'nistSubtract'
@@ -112,7 +112,7 @@ end 'nistEqual'
 
 function nistLimbsFromBytes(bytes ByteArray, start ElementIndex, count Count) returns WorkspaceLimbs
 	let limbCount = count / nistLimbBytes
-	var limbs = WorkspaceLimbs.create(limbCount, zeroed: false)
+	let limbs = WorkspaceLimbs.create(limbCount, zeroed: false)
 
 	for index in 0 upto limbCount 'eachLimb'
 		let first = start + count - (index + 1) * nistLimbBytes
@@ -124,7 +124,7 @@ function nistLimbsFromBytes(bytes ByteArray, start ElementIndex, count Count) re
 end 'nistLimbsFromBytes'
 
 function nistBytesFromLimbs(limbs WorkspaceLimbs) returns ByteArray
-	var bytes = ByteArray.create(limbs.count() * nistLimbBytes, zeroed: false)
+	let bytes = ByteArray.create(limbs.count() * nistLimbBytes, zeroed: false)
 
 	for step in 0 upto limbs.count() 'eachLimb'
 		__Builtins.appendBigEndian(bytes, workspaceLimbAt(limbs, index: limbs.count() - 1 - step) as OrderedWord, nistLimbBytes)
@@ -142,7 +142,7 @@ function nistHexDigit(symbol Byte) returns Byte
 end 'nistHexDigit'
 
 function nistLimbsFromHex(hex String) returns WorkspaceLimbs
-	var bytes = ByteArray.create(hex.byteLength() / nistHexDigitsPerByte, zeroed: false)
+	let bytes = ByteArray.create(hex.byteLength() / nistHexDigitsPerByte, zeroed: false)
 	var high = nistZeroByte
 	var isHigh = true
 
@@ -255,7 +255,7 @@ function nistParseSignature(der ByteArray) returns (ByteArray, ByteArray) throws
 end 'nistParseSignature'
 
 function nistDerEncodedInteger(value WorkspaceLimbs) returns ByteArray
-	var content = ByteArray.create(0)
+	let content = ByteArray.create(0)
 
 	for byte in nistBytesFromLimbs(value) 'eachByte'
 		if content.isEmpty() and byte == nistZeroByte 'leadingZero'
@@ -273,7 +273,7 @@ function nistDerEncodedInteger(value WorkspaceLimbs) returns ByteArray
 end 'nistDerEncodedInteger'
 
 function nistNonceStep(hash HashAlgorithm, key ByteArray, value ByteArray, suffix ByteArray) returns (ByteArray, ByteArray)
-	var keyed = value.clone()
+	let keyed = value.clone()
 	keyed.append(suffix)
 	let nextKey = hmac(hash, key: key, message: keyed)
 	return (nextKey, hmac(hash, key: nextKey, message: value))
@@ -296,20 +296,20 @@ type NistModulus
 	end 'create'
 
 	function blankWorkspace(slotCount Count) returns WorkspaceLimbs
-		var ws = self.slots.workspace(slotCount)
+		let ws = self.slots.workspace(slotCount)
 		self.slots.load(ws, slot: nistOneSlot, value: self.one)
 		self.slots.load(ws, slot: nistUnitSlot, value: nistSmall(self.slots.limbCount, value: nistOne))
 		return ws
 	end 'blankWorkspace'
 
 	function workspace(slotCount Count, squared WorkspaceLimbs) returns WorkspaceLimbs
-		var ws = blankWorkspace(slotCount)
+		let ws = blankWorkspace(slotCount)
 		self.slots.load(ws, slot: nistSquaredSlot, value: squared)
 		return ws
 	end 'workspace'
 
 	function computeSquared() returns WorkspaceLimbs
-		var ws = blankWorkspace(nistFieldSlots)
+		let ws = blankWorkspace(nistFieldSlots)
 		self.slots.load(ws, slot: nistFirstFreeSlot, value: self.one)
 
 		for _ in 0 upto self.slots.limbCount * nistLimbBits 'eachDoubling'
@@ -335,7 +335,7 @@ type NistModulus
 	function reduceOnce(value WorkspaceLimbs) returns WorkspaceLimbs
 		let (difference, borrow) = nistSubtract(value, b: self.limbs)
 		let replace = nistMask(borrow xor nistOne)
-		var reduced = WorkspaceLimbs.create(value.count(), zeroed: false)
+		let reduced = WorkspaceLimbs.create(value.count(), zeroed: false)
 
 		for (iter, limb) in value.withIterator() 'eachLimb'
 			reduced.push(selectByMask(limb, replacement: workspaceLimbAt(difference, index: iter.index()), mask: replace))
@@ -477,7 +477,7 @@ type NistCurve implements CombPoints
 	end 'tableAt'
 
 	function workspace(termCount Count) returns WorkspaceLimbs
-		var ws = self.primeField.workspace(nistTableSlot + termCount * self.comb.tableSlots(), squared: self.primeSquared)
+		let ws = self.primeField.workspace(nistTableSlot + termCount * self.comb.tableSlots(), squared: self.primeSquared)
 		self.primeField.loadMontgomery(ws, slot: nistCurveBSlot, value: self.b)
 		return ws
 	end 'workspace'
@@ -628,7 +628,7 @@ type NistCurve implements CombPoints
 	end 'affine'
 
 	function multiplyAffine(scalar WorkspaceLimbs, point NistAffinePoint) returns NistAffinePoint
-		var ws = workspace(1)
+		let ws = workspace(1)
 		loadPoint(ws, slot: nistPointBSlot, point: point)
 		self.comb.buildTable(ws, points: self, table: tableAt(0), base: nistPointBSlot)
 		self.comb.multiply(ws, points: self, table: tableAt(0), scalars: CombScalars from [scalar.clone()], looked: nistLookedSlot, result: nistPointASlot)
@@ -636,7 +636,7 @@ type NistCurve implements CombPoints
 	end 'multiplyAffine'
 
 	function multiplyGenerator(scalar WorkspaceLimbs) returns NistAffinePoint
-		var ws = workspace(self.comb.chunkCount)
+		let ws = workspace(self.comb.chunkCount)
 		self.comb.loadChunkTables(ws, firstSlot: nistTableSlot, packed: generatorTable())
 		self.comb.multiply(ws, points: self, table: nistTableSlot, scalars: self.comb.chunks(scalar), looked: nistLookedSlot, result: nistPointASlot)
 		return affine(ws, point: nistPointASlot)
@@ -647,7 +647,7 @@ type NistCurve implements CombPoints
 	end 'generatorTable'
 
 	function buildGeneratorTable() returns WorkspaceLimbs
-		var ws = workspace(1)
+		let ws = workspace(1)
 		loadPoint(ws, slot: nistPointBSlot, point: self.generator)
 		return self.comb.buildChunkTables(ws, points: self, scratch: tableAt(0), base: nistPointBSlot)
 	end 'buildGeneratorTable'
@@ -669,7 +669,7 @@ type NistCurve implements CombPoints
 	end 'decodeScalar'
 
 	function signatureScalar(content ByteArray) returns WorkspaceLimbs throws NistRefusal
-		var padded = ByteArray.create(self.scalarBytes, zeroed: false)
+		let padded = ByteArray.create(self.scalarBytes, zeroed: false)
 
 		for byte in content 'eachByte'
 			if padded.isEmpty() and byte == nistZeroByte 'leadingZero'
@@ -709,7 +709,7 @@ type NistCurve implements CombPoints
 		end 'nonCanonical'
 
 		let field = self.primeField
-		var ws = workspace(0)
+		let ws = workspace(0)
 		let xm = nistFirstFreeSlot
 		let ym = nistFirstFreeSlot + 1
 		let rightSide = nistFirstFreeSlot + 2
@@ -731,7 +731,7 @@ type NistCurve implements CombPoints
 	end 'decodePoint'
 
 	function encodePoint(point NistAffinePoint) returns ByteArray
-		var encoded = ByteArray.create(nistPointTagBytes + nistPointCoordinates * self.scalarBytes, zeroed: false)
+		let encoded = ByteArray.create(nistPointTagBytes + nistPointCoordinates * self.scalarBytes, zeroed: false)
 		encoded.push(nistUncompressedTag)
 		encoded.append(nistBytesFromLimbs(point.0))
 		encoded.append(nistBytesFromLimbs(point.1))
@@ -739,7 +739,7 @@ type NistCurve implements CombPoints
 	end 'encodePoint'
 
 	function digest(message ByteArray) returns WorkspaceLimbs
-		var digest = Digest.create(self.hash)
+		let digest = Digest.create(self.hash)
 		digest.update(message)
 		return nistLimbsFromBytes(digest.finalize(), start: 0, count: self.scalarBytes)
 	end 'digest'
@@ -748,7 +748,7 @@ type NistCurve implements CombPoints
 		let r = try signatureScalar(rContent) otherwise return false
 		let s = try signatureScalar(sContent) otherwise return false
 		let order = self.scalarField
-		var orderWs = order.workspace(nistFieldSlots, squared: self.orderSquared)
+		let orderWs = order.workspace(nistFieldSlots, squared: self.orderSquared)
 		let sMontgomery = nistFirstFreeSlot
 		let sInverse = nistFirstFreeSlot + 1
 		let first = nistFirstFreeSlot + 2
@@ -762,7 +762,7 @@ type NistCurve implements CombPoints
 		order.multiply(orderWs, dst: second, a: second, b: sInverse)
 		order.multiply(orderWs, dst: second, a: second, b: nistUnitSlot)
 
-		var ws = workspace(2)
+		let ws = workspace(2)
 		loadPoint(ws, slot: nistPointBSlot, point: self.generator)
 		loadPoint(ws, slot: nistPointCSlot, point: q)
 		self.comb.buildTable(ws, points: self, table: tableAt(0), base: nistPointBSlot)
@@ -787,7 +787,7 @@ type NistCurve implements CombPoints
 			throw NistRefusal.rejectedNonce
 		end 'zeroR'
 
-		var ws = order.workspace(nistFieldSlots, squared: self.orderSquared)
+		let ws = order.workspace(nistFieldSlots, squared: self.orderSquared)
 		let kMontgomery = nistFirstFreeSlot
 		let kInverse = nistFirstFreeSlot + 1
 		let keyMontgomery = nistFirstFreeSlot + 2
@@ -808,7 +808,7 @@ type NistCurve implements CombPoints
 			throw NistRefusal.rejectedNonce
 		end 'zeroS'
 
-		var content = nistDerEncodedInteger(r)
+		let content = nistDerEncodedInteger(r)
 		content.append(nistDerEncodedInteger(s))
 		return derElement(nistDerSequenceTag, contents: content)
 	end 'signature'
@@ -827,7 +827,7 @@ type NistCurve implements CombPoints
 		nonceValue.growFilled(self.scalarBytes, value: nistNonceOneByte)
 
 		for separator in ByteArray from [nistZeroByte, nistNonceOneByte] 'eachSeed'
-			var suffix = ByteArray from [separator]
+			let suffix = ByteArray from [separator]
 			suffix.append(privateKey)
 			suffix.append(hashOctets)
 			(nonceKey, nonceValue) = nistNonceStep(self.hash, key: nonceKey, value: nonceValue, suffix: suffix)

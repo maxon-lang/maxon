@@ -53,7 +53,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	print("{holder.bump()}\n")
 	return 0
 end 'main'
@@ -81,10 +81,10 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var boxes = Boxes.create(0)
+	let boxes = Boxes.create(0)
 	boxes.push(Box.create(1))
 	let w = try boxes.get(0) otherwise return 1
-	var again = try boxes.get(0) otherwise return 2
+	let again = try boxes.get(0) otherwise return 2
 	again.n = 5
 	print("{w.n}\n")
 	return 0
@@ -128,7 +128,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let b = holder.grab()
 	holder.grow()
 	print("{b.n}\n")
@@ -169,8 +169,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-binding-capabilities.a-let-of-a-module-let-is-accepted -->
-A module `let`'s record is read-only everywhere, so a local `let` may name it.
+<!-- test: let-binding-capabilities.a-let-of-a-static-let-is-accepted -->
+A `static let`'s record is read-only everywhere, so a local `let` may name it.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -178,15 +178,15 @@ typealias Count = int(0 to 1000)
 type Box
 	export var n as Count
 
+	static let shared = Self{n: 7}
+
 	static function create(n Count) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Box'
 
-let shared = Box.create(7)
-
 function main() returns ExitCode
-	let y = shared
+	let y = Box.shared
 	print("{y.n}\n")
 	return 0
 end 'main'
@@ -226,7 +226,7 @@ function peek(p Holder) returns Count
 end 'peek'
 
 function main() returns ExitCode
-	var h = Holder.create(Box.create(4))
+	let h = Holder.create(Box.create(4))
 	h.box.n = 6
 	print("{peek(h)}\n")
 	return 0
@@ -270,7 +270,7 @@ function clobber(holder mutable Holder)
 end 'clobber'
 
 function main() returns ExitCode
-	var holder = Holder.create(Box.create(0))
+	let holder = Holder.create(Box.create(0))
 	let a = Box.create(1)
 	register(holder, b: a)
 	clobber(holder)
@@ -316,7 +316,7 @@ function clobber(holder mutable Holder)
 end 'clobber'
 
 function main() returns ExitCode
-	var holder = Holder.create(Box.create(0))
+	let holder = Holder.create(Box.create(0))
 	let a = Box.create(1)
 	register(holder, b: a)
 	clobber(holder)
@@ -351,12 +351,12 @@ function stash(kept mutable Boxes, b Box)
 end 'stash'
 
 function bump(kept mutable Boxes)
-	var w = try kept.get(0) otherwise return
+	let w = try kept.get(0) otherwise return
 	w.n = 99
 end 'bump'
 
 function main() returns ExitCode
-	var kept = Boxes.create(0)
+	let kept = Boxes.create(0)
 	let a = Box.create(1)
 	stash(kept, b: a)
 	bump(kept)
@@ -387,12 +387,12 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var boxes = Boxes.create(0)
-	var a = Box.create(1)
+	let boxes = Boxes.create(0)
+	let a = Box.create(1)
 	a.n = 2
 	boxes.push(a)
 	let b = a
-	var w = try boxes.get(0) otherwise return 1
+	let w = try boxes.get(0) otherwise return 1
 	w.n = 9
 	print("{b.n}\n")
 	return 0
@@ -425,7 +425,7 @@ function touch(b Box) returns Box
 end 'touch'
 
 function main() returns ExitCode
-	var a = Box.create(3)
+	let a = Box.create(3)
 	let x = touch(a)
 	a.n = 5
 	print("{x.n}\n")
@@ -468,7 +468,7 @@ function f(p Box) returns Count
 end 'f'
 
 function main() returns ExitCode
-	var a = Box.create(1)
+	let a = Box.create(1)
 	print("{f(a)}\n")
 	return 0
 end 'main'
@@ -547,7 +547,7 @@ type H
 end 'H'
 
 function wrap(ms Boxes) returns Hs
-	var hs = Hs.create(0)
+	let hs = Hs.create(0)
 
 	for m in ms 'each'
 		hs.push(H.create(m))
@@ -557,10 +557,10 @@ function wrap(ms Boxes) returns Hs
 end 'wrap'
 
 function main() returns ExitCode
-	var ms = Boxes.create(0)
+	let ms = Boxes.create(0)
 	ms.push(Box.create(1))
 	let hs = wrap(ms)
-	var w = try ms.get(0) otherwise return 1
+	let w = try ms.get(0) otherwise return 1
 	w.n = 7
 	let h = try hs.get(0) otherwise return 2
 	print("{h.m.n}\n")
@@ -599,7 +599,7 @@ function printOne(b Box)
 end 'printOne'
 
 function main() returns ExitCode
-	var kept = Boxes.create(0)
+	let kept = Boxes.create(0)
 	let s = Box.create(3)
 	let flag = kept.count() == 0
 	printOne(keepAndReturn(kept, b: s) if flag else s)
@@ -640,7 +640,7 @@ function take(kept mutable Boxes, b Box) returns Count
 end 'take'
 
 function scan() returns Count
-	var kept = Boxes.create(0)
+	let kept = Boxes.create(0)
 	var i = 0 as Count
 
 	while i < 3 'trips'
@@ -688,7 +688,7 @@ type Person
 end 'Person'
 
 function countName(p Person) returns Count
-	var names = Names.create(0)
+	let names = Names.create(0)
 	names.push(p.name)
 	return names.count() as Count
 end 'countName'
@@ -768,12 +768,12 @@ function stash(kept mutable Boxes, b Box)
 end 'stash'
 
 function bump(kept mutable Boxes)
-	var w = try kept.get(0) otherwise return
+	let w = try kept.get(0) otherwise return
 	w.n = 99
 end 'bump'
 
 function main() returns ExitCode
-	var kept = Boxes.create(0)
+	let kept = Boxes.create(0)
 	let a = Box.create(1)
 
 	if kept.count() > 5 'never'
@@ -814,7 +814,7 @@ function touchPair(b Box) returns (Box, Count)
 end 'touchPair'
 
 function main() returns ExitCode
-	var a = Box.create(3)
+	let a = Box.create(3)
 	let (_, k) = touchPair(a)
 	a.n = 5
 	print("{k}\n")
@@ -848,7 +848,7 @@ function touchPair(b Box) returns (Box, Count)
 end 'touchPair'
 
 function main() returns ExitCode
-	var a = Box.create(3)
+	let a = Box.create(3)
 	let (x, k) = touchPair(a)
 	a.n = 5
 	print("{x.n} {k}\n")
@@ -938,7 +938,7 @@ end 'ends'
 
 function main() returns ExitCode
 	let p = Pair.create(Box.create(1), right: Box.create(2))
-	var (a, _) = ends(p)
+	let (a, _) = ends(p)
 	a.n = 9
 	print("{a.n} {p.left.n}\n")
 	return 0
@@ -980,7 +980,7 @@ end 'ends'
 
 function main() returns ExitCode
 	let p = Pair.create(Box.create(1), right: Box.create(2))
-	var t = ends(p)
+	let t = ends(p)
 	t.0.n = 9
 	print("{t.0.n} {p.left.n}\n")
 	return 0
@@ -1018,7 +1018,7 @@ end 'Pair'
 
 function main() returns ExitCode
 	let p = Pair.create(Box.create(1), right: Box.create(2))
-	var t = (p.left, p.right)
+	let t = (p.left, p.right)
 	t.0.n = 9
 	print("{t.0.n} {p.left.n}\n")
 	return 0
@@ -1111,7 +1111,7 @@ end 'ends'
 
 function main() returns ExitCode
 	let p = Pair.create(Box.create(1), right: Box.create(2))
-	var h = Holder.create((Box.create(3), Box.create(4)))
+	let h = Holder.create((Box.create(3), Box.create(4)))
 	h.held = ends(p)
 	print("{h.held.0.n} {p.left.n}\n")
 	return 0
@@ -1200,7 +1200,7 @@ end 'ends'
 
 function main() returns ExitCode
 	let p = Pair.create(Box.create(1), right: Box.create(2))
-	var all = Ends.create(0)
+	let all = Ends.create(0)
 	all.push(ends(p))
 	print("{all.count()} {p.left.n}\n")
 	return 0
@@ -1246,7 +1246,7 @@ end 'bump'
 
 function main() returns ExitCode
 	let q = Pair.create(Box.create(1), right: Box.create(2))
-	var p = Box.create(5)
+	let p = Box.create(5)
 	let t = (q.left, id(p))
 	bump(p)
 	print("{t.1.n} {q.left.n}\n")
@@ -1293,7 +1293,7 @@ end 'bump'
 
 function main() returns ExitCode
 	let q = Pair.create(Box.create(1), right: Box.create(2))
-	var p = Box.create(5)
+	let p = Box.create(5)
 	let (_, y) = (q.left, id(p))
 	bump(p)
 	print("{y.n} {q.left.n}\n")
@@ -1344,7 +1344,7 @@ end 'ends2'
 
 function main() returns ExitCode
 	let q = Pair.create(Box.create(1), right: Box.create(2))
-	var p = Box.create(5)
+	let p = Box.create(5)
 	let (_, y) = ends2(q, b: id(p))
 	bump(p)
 	print("{y.n} {q.left.n}\n")
@@ -1468,7 +1468,7 @@ type Pair
 end 'Pair'
 
 function fresh(p Pair) returns Count
-	var (_, c) = (p.left, Box.create(3))
+	let (_, c) = (p.left, Box.create(3))
 	c.n = 4
 	return c.n
 end 'fresh'
@@ -1515,7 +1515,7 @@ end 'mixed'
 
 function main() returns ExitCode
 	let p = Pair.create(Box.create(1), right: Box.create(2))
-	var (_, b) = mixed(p)
+	let (_, b) = mixed(p)
 	b.n = 4
 	print("{b.n} {p.left.n}\n")
 	return 0
@@ -1558,7 +1558,7 @@ end 'second'
 
 function main() returns ExitCode
 	let p = Pair.create(Box.create(1), right: Box.create(2))
-	var b = second(p)
+	let b = second(p)
 	b.n = 4
 	print("{b.n} {p.left.n}\n")
 	return 0
@@ -1600,7 +1600,7 @@ end 'mixed'
 
 function main() returns ExitCode
 	let p = Pair.create(Box.create(1), right: Box.create(2))
-	var (a, _) = mixed(p)
+	let (a, _) = mixed(p)
 	a.n = 4
 	print("{a.n} {p.left.n}\n")
 	return 0
@@ -1644,7 +1644,7 @@ type Outer
 end 'Outer'
 
 function run(m Outer) returns Count
-	var (r, _) = (m.x.y, 1)
+	let (r, _) = (m.x.y, 1)
 	r.z = 5
 	return r.z
 end 'run'
@@ -1689,7 +1689,7 @@ function first(t (Rec, Count)) returns Rec
 end 'first'
 
 function run(h Holder) returns Count
-	var r = first((h.r, 1))
+	let r = first((h.r, 1))
 	r.v = 5
 	return r.v
 end 'run'
@@ -1738,7 +1738,7 @@ function bump(b Box)
 end 'bump'
 
 function main() returns ExitCode
-	var p = Box.create(5)
+	let p = Box.create(5)
 	let fr = Frozen.create((Box.create(1), id(p)))
 	bump(p)
 	print("{fr.held.1.n}\n")
@@ -1792,7 +1792,7 @@ function bump(b Box)
 end 'bump'
 
 function main() returns ExitCode
-	var p = Box.create(5)
+	let p = Box.create(5)
 	let fr = Frozen.create(Wrap.create(Box.create(1), b: id(p)))
 	bump(p)
 	print("{fr.held.b.n}\n")
@@ -1859,7 +1859,7 @@ type Frozen
 	export let held as (Box, Box)
 
 	static function build() returns Self
-		var p = Box.create(5)
+		let p = Box.create(5)
 		let f = Self{held: (Box.create(1), id(p))}
 		bump(p)
 		return f
@@ -1965,7 +1965,7 @@ function bump(b Box)
 end 'bump'
 
 function main() returns ExitCode
-	var q = Box.create(2)
+	let q = Box.create(2)
 	bump(q)
 	let fr = Frozen.create(Wrap.create(Box.create(1), b: q))
 	print("{fr.held.b.n}\n")
@@ -2007,7 +2007,7 @@ function bump(b Box)
 end 'bump'
 
 function main() returns ExitCode
-	var q = Box.create(2)
+	let q = Box.create(2)
 	bump(q)
 	let w = Wrap.create(Box.create(1), b: q)
 	print("{w.b.n}\n")
@@ -2047,7 +2047,7 @@ function dispatch(n Count, replies ReplyPromises)
 end 'dispatch'
 
 function drain() returns Count
-	var replies = ReplyPromises.create(0)
+	let replies = ReplyPromises.create(0)
 	var total = 0 as Count
 
 	for n in 1 to 3 'each'
@@ -2103,7 +2103,7 @@ type Holder
 end 'Holder'
 
 function keep() returns Count
-	var box = Box.create(1)
+	let box = Box.create(1)
 	let holder = Holder.wrap(box)
 	_ = holder
 	return 1
@@ -2171,7 +2171,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let k = 3
-	var v = Holder.create("ab{k}")
+	let v = Holder.create("ab{k}")
 	let n = v.name
 	v.name.append("XY")
 	print("{n} {v.name}\n")
@@ -2204,7 +2204,7 @@ end 'nudge'
 function main() returns ExitCode
 	let k = 3
 	let s = "ab{k}"
-	var v = Holder.create(s)
+	let v = Holder.create(s)
 	nudge(v)
 	print("{s} {v.name}\n")
 	return 0
@@ -2232,7 +2232,7 @@ end 'Holder'
 let Greeting = "hi"
 
 function main() returns ExitCode
-	var v = Holder.create(Greeting)
+	let v = Holder.create(Greeting)
 	v.name.append("!")
 	print("{Greeting} {v.name}\n")
 	return 0
@@ -2281,7 +2281,7 @@ type Holder
 end 'Holder'
 
 function keep() returns Count
-	var shelf = BoxArray.create(0)
+	let shelf = BoxArray.create(0)
 	let box = Box.create(1)
 	register(shelf, b: box)
 	let holder = Holder.wrap(box)

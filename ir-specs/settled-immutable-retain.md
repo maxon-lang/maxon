@@ -435,8 +435,8 @@ function wrap(data ByteArray) returns Slab
 end 'wrap'
 
 function main() returns ExitCode
-	var raw = "abc".toByteArray()
-	var slab = wrap(raw)
+	let raw = "abc".toByteArray()
+	let slab = wrap(raw)
 	slab.data.push(100)
 	print("{slab.data.count()}\n")
 	return 0

@@ -43,7 +43,7 @@ A read from a non-zero, unaligned index at each width. Bytes 1..2 are `11 22`, b
 and bytes 3..10 are `33 44 55 66 77 88 99 AA`; the least significant byte comes first.
 ```maxon
 function main() returns ExitCode
-	var data = ByteArray.create(0)
+	let data = ByteArray.create(0)
 
 	for byte in [0x10, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA] 'fill'
 		data.push(byte)
@@ -68,7 +68,7 @@ end 'main'
 The same three reads, most significant byte first.
 ```maxon
 function main() returns ExitCode
-	var data = ByteArray.create(0)
+	let data = ByteArray.create(0)
 
 	for byte in [0x10, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA] 'fill'
 		data.push(byte)
@@ -94,7 +94,7 @@ The bound is inclusive of the array's final byte: a four-byte read at 4 and an e
 eight-byte array both succeed.
 ```maxon
 function main() returns ExitCode
-	var data = ByteArray.create(0)
+	let data = ByteArray.create(0)
 
 	for byte in [1, 2, 3, 4, 5, 6, 7, 8] 'fill'
 		data.push(byte)
@@ -135,7 +135,7 @@ function getFailure(data ByteArray, at Count) returns String
 end 'getFailure'
 
 function main() returns ExitCode
-	var data = ByteArray.create(0)
+	let data = ByteArray.create(0)
 
 	for byte in [1, 2, 3, 4, 5, 6, 7, 8] 'fill'
 		data.push(byte)
@@ -174,7 +174,7 @@ function readFailure(data ByteArray, at Count, wide bool) returns String
 end 'readFailure'
 
 function main() returns ExitCode
-	var data = ByteArray.create(0)
+	let data = ByteArray.create(0)
 
 	for byte in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16] 'fill'
 		data.push(byte)
@@ -198,7 +198,7 @@ indexOutOfBounds indexOutOfBounds indexOutOfBounds indexOutOfBounds
 Each width appends exactly `width` bytes after the existing one, least significant byte first.
 ```maxon
 function main() returns ExitCode
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	out.push(0xEE)
 	__Builtins.appendLittleEndian(out, 0x0102, 2)
 	__Builtins.appendLittleEndian(out, 0x03040506, 4)
@@ -225,7 +225,7 @@ end 'main'
 The same three appends, most significant byte first.
 ```maxon
 function main() returns ExitCode
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	out.push(0xEE)
 	__Builtins.appendBigEndian(out, 0x0102, 2)
 	__Builtins.appendBigEndian(out, 0x03040506, 4)
@@ -252,8 +252,8 @@ end 'main'
 Only the low `width` bytes of the word are appended, in the named order, whatever the bytes above them hold.
 ```maxon
 function main() returns ExitCode
-	var little = ByteArray.create(0)
-	var big = ByteArray.create(0)
+	let little = ByteArray.create(0)
+	let big = ByteArray.create(0)
 	__Builtins.appendLittleEndian(little, 0x1122334455, 2)
 	__Builtins.appendLittleEndian(little, 0x1122334455, 4)
 	__Builtins.appendBigEndian(big, 0x1122334455, 2)
@@ -287,7 +287,7 @@ end 'main'
 An array that has never held an element has no buffer; the append allocates one.
 ```maxon
 function main() returns ExitCode
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	__Builtins.appendBigEndian(out, 0xAABBCCDD, 4)
 	print("{out.count()}:")
 
@@ -312,14 +312,14 @@ A `clone` shares its source's buffer until either side writes. The append must d
 or it would write through into the original's.
 ```maxon
 function main() returns ExitCode
-	var original = ByteArray.create(0)
+	let original = ByteArray.create(0)
 	original.reserve(64)
 
 	for byte in [1, 2, 3, 4] 'fill'
 		original.push(byte)
 	end 'fill'
 
-	var copy = original.clone()
+	let copy = original.clone()
 	__Builtins.appendLittleEndian(copy, 0x08070605, 4)
 	print("{original.count()} {copy.count()}:")
 
@@ -349,7 +349,7 @@ end 'main'
 The same sharing seen from the other side: the append goes to the array whose buffer a `clone` is still reading.
 ```maxon
 function main() returns ExitCode
-	var original = ByteArray.create(0)
+	let original = ByteArray.create(0)
 	original.reserve(64)
 
 	for byte in [1, 2, 3, 4] 'fill'
@@ -387,8 +387,8 @@ Appending past the capacity again and again grows the buffer between appends; ev
 appended, in both orders.
 ```maxon
 function main() returns ExitCode
-	var little = ByteArray.create(0)
-	var big = ByteArray.create(0)
+	let little = ByteArray.create(0)
+	let big = ByteArray.create(0)
 
 	for n in 0 upto 100 'append'
 		__Builtins.appendLittleEndian(little, n * 1000003, 8)
@@ -440,7 +440,7 @@ end 'Bag'
 typealias ByteBag = Bag with Byte
 
 function main() returns ExitCode
-	var bag = ByteBag.create()
+	let bag = ByteBag.create()
 
 	for byte in [1, 2, 3, 4, 5, 6, 7, 8] 'fill'
 		bag.add(byte)

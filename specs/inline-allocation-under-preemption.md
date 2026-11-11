@@ -43,13 +43,13 @@ type Churn
 		var round = 0 as Word
 
 		while round < rounds 'eachRound'
-			var a = WordArray.create(4, zeroed: false)
+			let a = WordArray.create(4, zeroed: false)
 			a.push(round)
 			a.push(seed)
 			a.push(round)
 			a.push(seed)
 
-			var b = WordArray.create(6, zeroed: false)
+			let b = WordArray.create(6, zeroed: false)
 			b.push(a.count() as Word)
 			b.push(round)
 			b.push(seed)
@@ -89,7 +89,7 @@ function expected(rounds Word, seed Word) returns Total
 end 'expected'
 
 function main() returns ExitCode
-	var handles = ChurnHandleArray.create(0)
+	let handles = ChurnHandleArray.create(0)
 	var index = 0 as ElementIndex
 
 	while index < ServiceCount 'spawnEach'
@@ -100,7 +100,7 @@ function main() returns ExitCode
 	index = 0
 
 	while index < ServiceCount 'sendEach'
-		view handle = try handles.get(index) otherwise panic("churn: handles.get OOB at {index}")
+		let handle = try handles.get(index) otherwise panic("churn: handles.get OOB at {index}")
 		try handle.run(Rounds, seed: (index + 1) as Word) otherwise panic("churn: a mailbox holds the one message")
 		index = index + 1
 	end 'sendEach'
@@ -109,7 +109,7 @@ function main() returns ExitCode
 	index = 0
 
 	while index < ServiceCount 'checkEach'
-		view handle = try handles.get(index) otherwise panic("churn: handles.get OOB at {index}")
+		let handle = try handles.get(index) otherwise panic("churn: handles.get OOB at {index}")
 		let got = try await handle.result() otherwise 0
 		let want = expected(Rounds, seed: (index + 1) as Word)
 

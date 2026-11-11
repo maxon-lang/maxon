@@ -104,7 +104,7 @@ function bump(col SmallCol, by Small)
 end 'bump'
 
 function main() returns ExitCode
-	var a = SmallCol.create(0)
+	let a = SmallCol.create(0)
 	a.push(40)
 	bump(a, by: 2)
 	return try a.get(0) otherwise panic("get")

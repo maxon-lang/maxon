@@ -66,7 +66,7 @@ export typealias IntModule = GenericModule with Integer
 typealias ExitCode = int(0 to 125)
 
 function main() returns ExitCode
-	var m = IntModule.create()
+	let m = IntModule.create()
 	m.pushOp(10)
 	m.pushOp(20)
 	m.pushItem(Item.create(99))
@@ -131,7 +131,7 @@ export typealias IntModule = GenericModule with Integer
 typealias ExitCode = int(0 to 125)
 
 function main() returns ExitCode
-	var m = IntModule.create()
+	let m = IntModule.create()
 	m.pushOp(10)
 	m.pushOp(20)
 	print("ops={m.opCount()} items={m.itemCount()}\n")

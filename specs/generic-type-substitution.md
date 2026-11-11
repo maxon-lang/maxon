@@ -12,7 +12,7 @@ category: type-system
 the compiler compiles ONE body per generic type, so everything written inside `type Outer uses T` is
 written in the **declaration view**: in terms of `T`, of `Self`, and of instances over those.
 A concrete receiver fixes every one of them. This spec covers the case where the declaration
-view reaches **another generic type**.
+let reaches **another generic type**.
 
 ### A bare generic type name inside a type-parameter scope
 
@@ -134,10 +134,10 @@ typealias O = Outer with Integer
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(7)
-	var o = O.create(a)
-	view w = o.wrap()
+	let o = O.create(a)
+	let w = o.wrap()
 	return (try w.first() otherwise 0) as ExitCode
 end 'main'
 ```
@@ -339,7 +339,7 @@ typealias StrCell = Cell with String
 typealias StrHolder = Holder with String
 
 function main() returns ExitCode
-	var h = StrHolder.create(StrCell.make("first string long enough to force a heap allocation"))
+	let h = StrHolder.create(StrCell.make("first string long enough to force a heap allocation"))
 	h.cell = StrCell.make("second string, longer still, and also heap allocated")
 	return h.value().count() as ExitCode
 end 'main'
@@ -375,7 +375,7 @@ typealias StrCell = Cell with String
 typealias StrHolder = Holder with String
 
 function main() returns ExitCode
-	var h = StrHolder.create(StrCell.make("first string long enough to force a heap allocation"))
+	let h = StrHolder.create(StrCell.make("first string long enough to force a heap allocation"))
 	h.replace(StrCell.make("second string, longer still, and also heap allocated"))
 	return 0
 end 'main'
@@ -452,7 +452,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function fill(b StrBag)
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("hello ")
 	sb.append("heap world")
 	let s = sb.build()
@@ -460,7 +460,7 @@ function fill(b StrBag)
 end 'fill'
 
 function main() returns ExitCode
-	var b = StrBag.create("seed")
+	let b = StrBag.create("seed")
 	fill(b)
 	let got = try b.first() otherwise 'e'
 		return 9
@@ -468,7 +468,7 @@ function main() returns ExitCode
 	var total = 0 as Integer
 
 	for i in 0 upto 50 'eachRound'
-		var sb = StringBuilder.create()
+		let sb = StringBuilder.create()
 		sb.append("a heap string of some length {i}")
 		total = total + b.probe(sb.build())
 	end 'eachRound'
@@ -510,7 +510,7 @@ typealias StrHolder = Holder with String
 typealias HolderArray = Array with StrHolder
 
 function main() returns ExitCode
-	var a = HolderArray.create(0)
+	let a = HolderArray.create(0)
 	a.push(StrHolder.create(StrCell.make("a string long enough to force a heap allocation")))
 	a.push(StrHolder.create(StrCell.make("another string long enough to force a heap allocation")))
 	return a.count() as ExitCode
@@ -555,7 +555,7 @@ typealias StrHolder = Holder with String
 typealias HolderArray = Array with StrHolder
 
 function detached() returns HolderArray
-	var a = HolderArray.create(0)
+	let a = HolderArray.create(0)
 	a.push(StrHolder.create(StrCell.make("a string long enough to force a heap allocation")))
 	return a.clone()
 	// a, its Holder box, its Cell box and their String are freed when this function returns
@@ -1001,7 +1001,7 @@ end 'Outer'
 typealias OuterStr = Outer with String
 
 function main() returns ExitCode
-	var o = OuterStr.create("alpha")
+	let o = OuterStr.create("alpha")
 	o.inner.replace("beta")
 	print("{o.inner.saved}\n")
 	return 0
@@ -1213,10 +1213,10 @@ typealias IntArray = Array with Integer
 typealias IntWalker = Walker with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(3)
 	a.push(4)
-	var w = IntWalker.create(a)
+	let w = IntWalker.create(a)
 	var total = 0 as Integer
 	for x in w 'walk'
 		total = total + x
@@ -1274,10 +1274,10 @@ end 'Holder'
 typealias IntHolder = Holder with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(11)
 	a.push(31)
-	var h = IntHolder.create(a)
+	let h = IntHolder.create(a)
 	let (x, y) = h.pair()
 	return x + y
 end 'main'
@@ -1313,9 +1313,9 @@ end 'Labeller'
 typealias IntLabeller = Labeller with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(39)
-	var l = IntLabeller.create(a)
+	let l = IntLabeller.create(a)
 	let (name, v) = l.tagged()
 	return v + (name.count() as Integer)
 end 'main'
@@ -1370,10 +1370,10 @@ typealias IntArray = Array with Integer
 typealias B = Box with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(3)
 	a.push(4)
-	view b = B.create(a)
+	let b = B.create(a)
 	var total = 0 as Integer
 	for x in b 'walk'
 		total = total + x

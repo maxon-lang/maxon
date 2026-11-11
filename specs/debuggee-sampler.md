@@ -40,7 +40,7 @@ built from a scratch region the case fills, since only a debuggee hands one out 
 
 ```maxon
 function context() returns RegisterBlock
-	var pages = ScratchPages.reserve(0x1000)
+	let pages = ScratchPages.reserve(0x1000)
 	pages.setWord(0xF8, value: 0x1000)
 	pages.setWord(0x98, value: 0x2000)
 	pages.setWord(0x40, value: 0x2B + (0x246 shl 32))
@@ -78,7 +78,7 @@ segment bits of the word it rewrites.
 
 ```maxon
 function context() returns RegisterBlock
-	var pages = ScratchPages.reserve(0x1000)
+	let pages = ScratchPages.reserve(0x1000)
 	pages.setWord(0xF8, value: 0x1000)
 	pages.setWord(0x98, value: 0x2000)
 	pages.setWord(0x40, value: 0x2B + (0x246 shl 32))
@@ -124,7 +124,7 @@ that is not a CONTEXT throws it from the named accessors too.
 
 ```maxon
 function block(length ScratchBytes) returns RegisterBlock
-	var pages = ScratchPages.reserve(0x1000)
+	let pages = ScratchPages.reserve(0x1000)
 	pages.setWord(0, value: 5)
 	let made = RegisterBlock.readFrom(pages, at: 0, length: length)
 	pages.release()
@@ -183,7 +183,7 @@ panics.
 
 ```maxon
 function main() returns ExitCode
-	var pages = ScratchPages.reserve(0x1000)
+	let pages = ScratchPages.reserve(0x1000)
 	let block = RegisterBlock.readFrom(pages, at: 0, length: 0x4D0)
 	pages.release()
 	let past = b"0123456789abcdef".count() as Win64GprIndex
@@ -223,11 +223,11 @@ function writeOutcome(trace ProcessTrace, content ByteArray) returns String
 end 'writeOutcome'
 
 function main() returns ExitCode
-	var trace = ProcessTrace.create()
+	let trace = ProcessTrace.create()
 	print("ready {trace.isReady()}\n")
 	print("{readOutcome(trace, count: 0)} {readOutcome(trace, count: 513)} {readOutcome(trace, count: 1000000)}\n")
 
-	var big = ByteArray.create(0)
+	let big = ByteArray.create(0)
 
 	for _ in 0 upto 513 'fill'
 		big.push(0)
@@ -259,7 +259,7 @@ no longer holds. The status word sits after the register block and the vector bl
 
 ```maxon
 function main() returns ExitCode
-	var trace = ProcessTrace.create()
+	let trace = ProcessTrace.create()
 	trace.close()
 	let report = trace.wait(0, process: 1)
 
@@ -270,7 +270,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Debuggee.maxon:98: ScratchPages: offset 744 was asked of pages that are not held — a caller used them before reserving them or after releasing them
+panic at Debuggee.maxon:94: ScratchPages: offset 744 was asked of pages that are not held — a caller used them before reserving them or after releasing them
 Stack trace:
   in ScratchPages.requireWordInside
   in ScratchPages.heldBase
@@ -280,7 +280,7 @@ Stack trace:
   in mrt_start
 ```
 ```Stderr:arm64-linux
-panic at Debuggee.maxon:98: ScratchPages: offset 816 was asked of pages that are not held — a caller used them before reserving them or after releasing them
+panic at Debuggee.maxon:94: ScratchPages: offset 816 was asked of pages that are not held — a caller used them before reserving them or after releasing them
 Stack trace:
   in ScratchPages.requireWordInside
   in ScratchPages.heldBase
@@ -290,7 +290,7 @@ Stack trace:
   in mrt_start
 ```
 ```Stderr:arm64-macos
-panic at Debuggee.maxon:98: ScratchPages: offset 816 was asked of pages that are not held — a caller used them before reserving them or after releasing them
+panic at Debuggee.maxon:94: ScratchPages: offset 816 was asked of pages that are not held — a caller used them before reserving them or after releasing them
 Stack trace:
   in ScratchPages.requireWordInside
   in ScratchPages.heldBase
@@ -306,7 +306,7 @@ region on `close`.
 
 ```maxon
 function main() returns ExitCode
-	var port = DebugPort.create()
+	let port = DebugPort.create()
 	print("ready {port.isReady()} thread {port.eventThread()}\n")
 	port.close()
 	port.close()
@@ -332,7 +332,7 @@ On Windows a port with nothing attached has no event to wait for.
 
 ```maxon
 function main() returns ExitCode
-	var port = DebugPort.create()
+	let port = DebugPort.create()
 	let event = port.waitEvent(0)
 
 	match event 'which'
@@ -408,7 +408,7 @@ instead, in the cases below.
 
 ```maxon
 function main() returns ExitCode
-	var sampled = try SampledProcess.open(Process.id()) otherwise return 1
+	let sampled = try SampledProcess.open(Process.id()) otherwise return 1
 	let threads = sampled.threads()
 	let modules = try sampled.modules() otherwise return 2
 	print("threads {threads.count() > 0} modules {modules.count() > 0}\n")
@@ -444,7 +444,7 @@ the host gave it the handle it waits on.
 
 ```maxon
 function main() returns ExitCode
-	var timer = SampleTimer.create(1000000)
+	let timer = SampleTimer.create(1000000)
 
 	if not timer.ready() 'notReady'
 		return 1
@@ -474,7 +474,7 @@ A wait on a closed timer is a bug in the caller, so it panics.
 
 ```maxon
 function main() returns ExitCode
-	var timer = SampleTimer.create(1000000)
+	let timer = SampleTimer.create(1000000)
 	timer.close()
 	timer.wait()
 
@@ -485,7 +485,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Sampler.maxon:1656: SampleTimer.wait: the timer was closed
+panic at Sampler.maxon:1627: SampleTimer.wait: the timer was closed
 Stack trace:
   in SampleTimer.wait
   in main
@@ -509,12 +509,12 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create(0)
+	let childArguments = StringArray.create(0)
 	childArguments.push("child")
-	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	_ = try child.readStdoutLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
-	var sampled = try SampledProcess.open(pid) otherwise return 4
+	let sampled = try SampledProcess.open(pid) otherwise return 4
 	let threads = sampled.threads()
 	print("threads {threads.count() > 0}\n")
 
@@ -571,11 +571,11 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create(0)
+	let childArguments = StringArray.create(0)
 	childArguments.push("child")
-	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	let pid = try child.processId() otherwise return 3
-	var sampled = try SampledProcess.open(pid) otherwise return 4
+	let sampled = try SampledProcess.open(pid) otherwise return 4
 	let modules = try sampled.modules() otherwise return 5
 	var listed = false
 
@@ -605,6 +605,73 @@ end 'main'
 ```
 ```stdout
 system library listed true
+```
+```exitcode
+0
+```
+
+<!-- test: a-stack-window-outlives-a-sampled-process-dropped-without-close -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- process: own -->
+A `SampledProcess` dropped without `close` releases its scratch pages, so a `StackWindow` it handed out holds the
+bytes it copied and not the pages: reading a word after the drop answers a word and touches no freed memory.
+
+```maxon
+function main() returns ExitCode
+	let arguments = CommandLine.args()
+
+	if arguments.count() > 1 'asTheChild'
+		print("ready\n")
+		sleep(60000)
+
+		return 0
+	end 'asTheChild'
+
+	let me = try Process.executablePath() otherwise return 1
+	let childArguments = StringArray.create(0)
+	childArguments.push("child")
+	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	_ = try child.readStdoutLine() otherwise return 7
+	let pid = try child.processId() otherwise return 3
+	let captured = captureAndDrop(pid)
+	var status = 0 as ExitCode
+
+	match captured 'result'
+		threadGone then status = 5
+		unreadable then status = 6
+		captured(stack) then status = readAfterTheDrop(stack.window)
+	end 'result'
+
+	_ = try child.waitWithTimeout(1) otherwise 0
+	child.release()
+
+	return status
+end 'main'
+
+function captureAndDrop(pid Pid) returns SampleCapture
+	let sampled = try SampledProcess.open(pid) otherwise panic("the child is running and traceable")
+	let threads = sampled.threads()
+	let first = try threads.get(0) otherwise panic("a running child has a thread")
+
+	return try sampled.capture(first) otherwise panic("a stopped thread of the child is capturable")
+end 'captureAndDrop'
+
+function readAfterTheDrop(window StackWindow) returns ExitCode
+	let first = try window.word(0) otherwise return 4
+	let again = try window.word(0) otherwise return 4
+	let straddling = try window.word(1) otherwise return 8
+	let next = try window.word(8) otherwise return 9
+	let topByte = (straddling shr 56) and 0xFF
+	let lowByte = next and 0xFF
+	print("read after the drop {first == again}\n")
+	print("a word at an unaligned offset ends where the next word begins {topByte == lowByte}\n")
+
+	return 0
+end 'readAfterTheDrop'
+```
+```stdout
+read after the drop true
+a word at an unaligned offset ends where the next word begins true
 ```
 ```exitcode
 0
@@ -653,9 +720,9 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create(0)
+	let childArguments = StringArray.create(0)
 	childArguments.push("child")
-	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	_ = try child.readStdoutLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = seizeAndDrop(pid)
@@ -831,7 +898,7 @@ function captureEverything(sampled SampledProcess) returns Round
 end 'captureEverything'
 
 function main() returns ExitCode
-	var sampled = try SampledProcess.open(Process.id()) otherwise return 1
+	let sampled = try SampledProcess.open(Process.id()) otherwise return 1
 	let work = async captureEverything(sampled)
 	let started = Clock.nowNanos()
 
@@ -1054,9 +1121,9 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create(0)
+	let childArguments = StringArray.create(0)
 	childArguments.push("child")
-	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	_ = try child.readStdoutLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = openAndDrop(pid)
@@ -1068,7 +1135,7 @@ function main() returns ExitCode
 end 'main'
 
 function openAndDrop(pid Pid) returns ExitCode
-	var sampled = try SampledProcess.open(pid) otherwise return 4
+	let sampled = try SampledProcess.open(pid) otherwise return 4
 	let threads = sampled.threads()
 	print("opened {threads.count() > 0}\n")
 
@@ -1100,9 +1167,9 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create(0)
+	let childArguments = StringArray.create(0)
 	childArguments.push("child")
-	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	_ = try child.readStdoutLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = releaseAndDrop(pid)
@@ -1113,7 +1180,7 @@ function main() returns ExitCode
 end 'main'
 
 function releaseAndDrop(pid Pid) returns ExitCode
-	var sampled = try SampledProcess.open(pid) otherwise return 4
+	let sampled = try SampledProcess.open(pid) otherwise return 4
 	let threads = sampled.threads()
 	let first = try threads.get(0) otherwise return 5
 	sampled.release(first)
@@ -1148,9 +1215,9 @@ function main() returns ExitCode
 	end 'asTheChild'
 
 	let me = try Process.executablePath() otherwise return 1
-	var childArguments = StringArray.create(0)
+	let childArguments = StringArray.create(0)
 	childArguments.push("child")
-	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
+	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: childArguments) otherwise return 2
 	_ = try child.readStdoutLine() otherwise return 7
 	let pid = try child.processId() otherwise return 3
 	let status = closeAndDrop(pid)
@@ -1161,7 +1228,7 @@ function main() returns ExitCode
 end 'main'
 
 function closeAndDrop(pid Pid) returns ExitCode
-	var sampled = try SampledProcess.open(pid) otherwise return 4
+	let sampled = try SampledProcess.open(pid) otherwise return 4
 	_ = sampled.threads()
 	sampled.close()
 	sampled.close()

@@ -50,7 +50,7 @@ module type RdataSlotIndex
 				continue
 			end 'sharedLabel'
 
-			var targets = RdataSlotTargetArray.create(0)
+			let targets = RdataSlotTargetArray.create(0)
 			targets.push(target)
 			self.byLabel.upsert(reloc.rdataLabel, value: targets)
 		end 'eachSlot'
@@ -72,7 +72,7 @@ module type RdataSlotIndex
 			return
 		end 'sharedLabel'
 
-		var offsets = ByteOffsetArray.create(0)
+		let offsets = ByteOffsetArray.create(0)
 		offsets.push(offset)
 		self.dataWordsByLabel.upsert(label, value: offsets)
 	end 'noteDataWord'
@@ -329,7 +329,7 @@ function resolveRdataWord(project Project, module StdModule, defs StdValueDefs, 
 		return RdataWord.unreadable
 	end 'notDefinedByAnOp'
 
-	view definer = module.getOp(defs.definingOp(found.root))
+	let definer = module.getOp(defs.definingOp(found.root))
 
 	if stdOpLabelKindOf(definer) != StdOpLabelKind.rdata 'notAnRdataAddress'
 		return RdataWord.unreadable
@@ -431,16 +431,16 @@ function reclaimOutcome(retainWord RdataWord, destroyWord RdataWord) returns Des
 end 'reclaimOutcome'
 
 module function devirtualizeTableCalls(project Project, module StdModule, func IrFunction, byName FunctionNameIndex, meta StdOpMetaMemo, slots RdataSlotIndex) returns OfferedOpSet
-	var rewritten = OfferedOpSet.create()
-	var candidates = OpIndexArray.create(0)
-	var call = StdCallOperands.create()
-	var witness = StdWitnessOperands.create()
+	let rewritten = OfferedOpSet.create()
+	let candidates = OpIndexArray.create(0)
+	let call = StdCallOperands.create()
+	let witness = StdWitnessOperands.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
-		view block = module.getBlock(blockRef)
+		let block = module.getBlock(blockRef)
 
 		for opIdx in block.bodyOps() 'eachOp'
-			view op = module.getOp(opIdx)
+			let op = module.getOp(opIdx)
 
 			if meta.holdsACall(op) and opIsTableCall(op, call: call, witness: witness) 'aCandidate'
 				candidates.push(opIdx)
@@ -453,11 +453,11 @@ module function devirtualizeTableCalls(project Project, module StdModule, func I
 	end 'nothingToResolve'
 
 	slots.ensureBuilt(project.globalData)
-	var defs = StdValueDefs.build(module, func: func)
-	var arith = StdArithOperands.create()
+	let defs = StdValueDefs.build(module, func: func)
+	let arith = StdArithOperands.create()
 
 	for opIdx in candidates 'eachCandidate'
-		view op = module.getOp(opIdx)
+		let op = module.getOp(opIdx)
 		classifyWitnessOperands(op, w: witness)
 
 		if witness.isDispatch() 'aWitnessDispatch'
@@ -523,7 +523,7 @@ function devirtualizeWitnessDispatch(project Project, module StdModule, defs Std
 	end 'word'
 
 	let calleeIndex = try byName.byName.get(target) otherwise return false
-	view calleeFunc = module.getFunc(calleeIndex)
+	let calleeFunc = module.getFunc(calleeIndex)
 
 	if calleeFunc.paramCount != witness.args.count() as ParamCount or floatParamMaskOf(calleeFunc.paramTypes) != witness.argFloatMask 'differentAbi'
 		return false
@@ -556,18 +556,18 @@ let MaxDeadSweeps = 4 as ElementIndex
 // Sound only while no `isPure` op can trap or allocate: one that could would vanish with its
 // result.
 module function dropDeadPureOps(module StdModule, func IrFunction)
-	var def = StdDefinedValues.create()
+	let def = StdDefinedValues.create()
 
 	for _ in 0 upto MaxDeadSweeps 'eachSweep'
-		var read = StdValueUseSet.create()
+		let read = StdValueUseSet.create()
 		collectFunctionValueUses(module, func: func, referenced: read)
-		var doomed = StdValueUseSet.create()
+		let doomed = StdValueUseSet.create()
 
 		for blockRef in func.blockRefs 'eachBlockOfDefs'
-			view block = module.getBlock(blockRef)
+			let block = module.getBlock(blockRef)
 
 			for opIdx in block.bodyOps() 'eachDefiningOp'
-				view op = module.getOp(opIdx)
+				let op = module.getOp(opIdx)
 
 				if not op.rawValue.isPure 'mustStay'
 					continue

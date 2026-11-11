@@ -359,29 +359,6 @@ end 'main'
 total=4
 ```
 
-<!-- test: a-module-scope-factory-fills-each-defaulted-discard-into-its-own-slot -->
-The same two slots reached from a module-scope initializer, which fills a factory's defaults through its own door instead of a body's: both defaults must reach their own `_`, not the first one.
-```maxon
-typealias Num = int(0 to 1000)
-
-type Box
-	export var n as Num
-
-	static function make(_ Num = 1, _ SourceLineNumber = __line__, b Num, c Num) returns Self
-		return Self{n: b + c}
-	end 'make'
-end 'Box'
-
-let shared = Box.make(b: 3, c: 4)
-
-function main() returns ExitCode
-	return shared.n as ExitCode
-end 'main'
-```
-```exitcode
-7
-```
-
 <!-- test: a-spawned-call-fills-each-defaulted-discard-into-its-own-slot -->
 `async f(tag: 5)` supplies both defaulted `_` arguments to the spawn.
 ```maxon
@@ -488,13 +465,7 @@ kept
 <!-- test: error.a-message-whose-handler-writes-its-parameter-after-a-discard-refuses-a-shared-value -->
 The message's first parameter is a defaulted `_`, so `p` is the second parameter and the second payload slot. A handler that writes `p` may not be sent a read-only value both threads reach.
 ```maxon
-type Payload
-	export var n as Integer
-
-	static function create(n Integer) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Payload'
+typealias Cells = Array with Integer
 
 type Store
 	var seen as Integer
@@ -503,14 +474,14 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function bump(_ Integer = 1, p isolated Payload) returns Integer
-		p.n = p.n + 1
+	export function bump(_ Integer = 1, p isolated Cells) returns Integer
+		p.push(1)
 		self.seen = self.seen + 1
-		return p.n
+		return p.count() as Integer
 	end 'bump'
 end 'Store'
 
-let Shared = Payload.create(7)
+let Shared = [7 as Integer]
 
 function main() returns ExitCode
 	let h = spawn Store.create()
@@ -519,19 +490,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3200: <fragment>:28:30: 'Shared' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+error E3200: <fragment>:22:30: 'Shared' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: a-message-whose-handler-only-reads-its-parameter-after-a-discard-accepts-a-shared-value -->
 The same message with a handler that only reads `p`.
 ```maxon
-type Payload
-	export var n as Integer
-
-	static function create(n Integer) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Payload'
+typealias Cells = Array with Integer
 
 type Store
 	var seen as Integer
@@ -540,13 +505,13 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function keep(_ Integer = 1, p immutable Payload) returns Integer
+	export function keep(_ Integer = 1, p immutable Cells) returns Integer
 		self.seen = self.seen + 1
-		return p.n
+		return try p.get(0) otherwise 0
 	end 'keep'
 end 'Store'
 
-let Shared = Payload.create(7)
+let Shared = [7 as Integer]
 
 function main() returns ExitCode
 	let h = spawn Store.create()
@@ -582,13 +547,7 @@ type Tag implements Describable
 	end 'describe'
 end 'Tag'
 
-type Payload
-	export var n as Integer
-
-	static function create(n Integer) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Payload'
+typealias Cells = Array with Integer
 
 type Store
 	var seen as Integer
@@ -597,14 +556,14 @@ type Store
 		return Self{seen: 0}
 	end 'create'
 
-	export function bump(d isolated Describable, _ Integer = 1, p isolated Payload) returns Integer
-		p.n = p.n + d.describe()
+	export function bump(d isolated Describable, _ Integer = 1, p isolated Cells) returns Integer
+		p.push(d.describe())
 		self.seen = self.seen + 1
-		return p.n
+		return p.count() as Integer
 	end 'bump'
 end 'Store'
 
-let Shared = Payload.create(7)
+let Shared = [7 as Integer]
 
 function main() returns ExitCode
 	let h = spawn Store.create()
@@ -613,7 +572,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3200: <fragment>:44:44: 'Shared' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+error E3200: <fragment>:38:44: 'Shared' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 ```
 
 <!-- test: a-promise-forwarded-by-a-method-with-discards-through-a-later-function-parameter-is-handed-on -->
@@ -648,8 +607,8 @@ type Hub
 end 'Hub'
 
 function main() returns ExitCode
-	var hub = Hub.create()
-	var pending = IntPromiseArray.create(0)
+	let hub = Hub.create()
+	let pending = IntPromiseArray.create(0)
 	hub.relay(sink: keep, pending: pending, p: async work())
 
 	var sum = 0 as Integer
@@ -715,8 +674,8 @@ function feed(sink Taker)
 end 'feed'
 
 function main() returns ExitCode
-	var keeper = Keeper.create()
-	var dropper = Dropper.create()
+	let keeper = Keeper.create()
+	let dropper = Dropper.create()
 	feed(keeper)
 	feed(dropper)
 	return 0
@@ -741,78 +700,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3038: <fragment>:9:25: duplicate argument for parameter '_' of 'f'
-```
-
-<!-- test: a-module-scope-factory-call-runs-the-default-of-the-factory-it-names -->
-Two factories with different defaults for `n`. A module-scope call fills its omitted argument at parse time from the factory it names: `two` runs, and `one` does not.
-```maxon
-typealias Num = int(0 to 1000)
-
-function one() returns Num
-	print("one\n")
-	return 1
-end 'one'
-
-function two() returns Num
-	print("two\n")
-	return 2
-end 'two'
-
-type Maker
-	export var n as Num
-
-	static function make(a Num, n Num = one()) returns Self
-		return Self{n: a + n}
-	end 'make'
-
-	static function makeText(a String, n Num = two()) returns Self
-		return Self{n: n + a.count() as Num}
-	end 'makeText'
-end 'Maker'
-
-let g = Maker.makeText("s")
-
-function main() returns ExitCode
-	return g.n as ExitCode
-end 'main'
-```
-```exitcode
-3
-```
-```stdout
-two
-```
-
-<!-- test: a-module-scope-factory-keeps-the-record-its-default-builds -->
-A module-scope factory call whose omitted argument is a helper returning a record, handed to a parameter the factory keeps.
-```maxon
-typealias Num = int(0 to 1000)
-
-type Bag
-	export var n as Num
-
-	static function create() returns Self
-		return Self{n: 9}
-	end 'create'
-end 'Bag'
-
-type Box
-	export var bag as Bag
-	export var b as Num
-
-	static function make(bag Bag = Bag.create(), b Num) returns Self
-		return Self{bag: bag, b: b}
-	end 'make'
-end 'Box'
-
-let shared = Box.make(b: 3)
-
-function main() returns ExitCode
-	return (shared.bag.n + shared.b) as ExitCode
-end 'main'
-```
-```exitcode
-12
 ```
 
 <!-- test: instance-methods-run-their-own-defaults -->

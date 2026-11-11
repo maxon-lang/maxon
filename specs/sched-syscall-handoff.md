@@ -168,7 +168,7 @@ type Sentinel
 end 'Sentinel'
 
 function main() returns ExitCode
-	var readers = ReaderHandleArray.create(0)
+	let readers = ReaderHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < readerCount 'spawnEach'
@@ -181,10 +181,10 @@ function main() returns ExitCode
 	// Post every read before awaiting any of them — this is what makes eight reads CONCURRENT rather
 	// than eight reads one after another, and it is the whole difference between this program and one
 	// that could never see the subject.
-	var replies = ReplyPromiseArray.create(0)
+	let replies = ReplyPromiseArray.create(0)
 	var k = 0 as Integer
 	while k < readerCount 'sendEach'
-		view r = try readers.get(k as ElementIndex) otherwise panic("readers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let r = try readers.get(k as ElementIndex) otherwise panic("readers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		replies.push(try r.roundTrip() otherwise panic("an open mailbox with room takes the send"))
 		k = k + 1
 	end 'sendEach'
@@ -244,7 +244,7 @@ type Runner
 
 	export function child() returns Integer
 		let exe = Executable.name("cmd")
-		var argv = StringArray.create(0)
+		let argv = StringArray.create(0)
 		argv.push("/c")
 		argv.push("exit")
 		argv.push("0")
@@ -271,7 +271,7 @@ type Sentinel
 end 'Sentinel'
 
 function main() returns ExitCode
-	var runners = RunnerHandleArray.create(0)
+	let runners = RunnerHandleArray.create(0)
 
 	var i = 0 as Integer
 	while i < runnerCount 'spawnEach'
@@ -281,10 +281,10 @@ function main() returns ExitCode
 
 	let last = spawn Sentinel.create()
 
-	var replies = ReplyPromiseArray.create(0)
+	let replies = ReplyPromiseArray.create(0)
 	var k = 0 as Integer
 	while k < runnerCount 'sendEach'
-		view r = try runners.get(k as ElementIndex) otherwise panic("runners.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let r = try runners.get(k as ElementIndex) otherwise panic("runners.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		replies.push(try r.child() otherwise panic("an open mailbox with room takes the send"))
 		k = k + 1
 	end 'sendEach'
@@ -580,61 +580,60 @@ retaken=yes
 <!-- procs: 1 -->
 <!-- unsupported-targets: wasm32-wasi -->
 Two `async` coroutines share one strand: a streaming child's `wait` in the first and a `sleep` in the second.
-The child reads its stdin and exits when the sleeper closes it, which the sleeper does after the sleep ends and
-its line is printed. The wait parks its coroutine rather than holding the machine, so the sleep ends while the
-child is still running and prints ahead of the wait's return. A wait that held the machine would keep the sleeper
-from starting, because a strand's coroutines run on the one machine that holds it and a processor handed off from
-that machine cannot carry them, so the child would never be released and the runner would report the case TIMED
-OUT. No deadline races the sleep, so a slow host cannot reorder the two lines.
+The child ends on its own about two seconds after it starts and the sleep is a tenth of that. The wait parks its
+coroutine rather than holding the machine, so the sleep ends while the child is still running and prints ahead of
+the wait's return. A wait that held the machine would keep the sleeper from starting, because a strand's coroutines
+run on the one machine that holds it and a processor handed off from that machine cannot carry them, so the sleeper
+would print only after the wait returned. The child belongs to the coroutine that waits on it, so nothing but the
+two durations orders the two lines, and they are nearly two seconds apart.
 ```maxon
-let napMs = 300
+let napMs = 100
 
-function spawnHeldChild() returns StreamingSubprocess throws SubprocessError
-	var argv = StringArray.create(0)
+function spawnTimedChild() returns StreamingSubprocess throws SubprocessError
+	let argv = StringArray.create(0)
 
 	#if os(Windows)
-		argv.push("/c")
-		argv.push("set")
-		argv.push("/p")
-		argv.push("released=")
-		return try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: argv)
+		argv.push("-n")
+		argv.push("3")
+		argv.push("127.0.0.1")
+		return try StreamingSubprocess.spawn(Executable.name("ping"), arguments: argv)
 	#else
-		return try StreamingSubprocess.spawn(Executable.path(FilePath from "/bin/cat"), arguments: argv)
+		argv.push("2")
+		return try StreamingSubprocess.spawn(Executable.path(FilePath from "/bin/sleep"), arguments: argv)
 	#endif
-end 'spawnHeldChild'
+end 'spawnTimedChild'
 
-function exitedOnRelease(child StreamingSubprocess) returns bool
+function exitedOnItsOwn(child StreamingSubprocess) returns bool
 	_ = try child.wait() otherwise return false
 
 	return true
-end 'exitedOnRelease'
+end 'exitedOnItsOwn'
 
 function outlast(child StreamingSubprocess) returns bool
 	print("W: waiting\n")
 
-	let exited = exitedOnRelease(child)
+	let exited = exitedOnItsOwn(child)
 
 	print("W: wait returned\n")
+	child.release()
 
 	return exited
 end 'outlast'
 
-function nap(child StreamingSubprocess) returns bool
+function nap() returns bool
 	sleep(napMs)
 	print("S: slept\n")
-	child.closeStdin()
 
 	return true
 end 'nap'
 
 function main() returns ExitCode
-	var child = try spawnHeldChild() otherwise return 1
+	let child = try spawnTimedChild() otherwise return 1
 	let watcher = async outlast(child)
-	let napper = async nap(child)
+	let napper = async nap()
 	let slept = await napper
 	let exited = await watcher
 
-	child.release()
 	print("slept={slept} exited={exited}\n")
 
 	return 0
@@ -653,41 +652,34 @@ slept=true exited=true
 <!-- test: a-child-wait-parks-instead-of-holding-a-processor -->
 <!-- procs: 1 -->
 <!-- unsupported-targets: wasm32-wasi -->
-A streaming child's `wait` parks its green thread until the child exits. The child reads its stdin and exits
-when `releaseOnReply` closes it, which that coroutine does only once the sentinel has answered, so the sentinel
-must run while the waiter is parked and its line prints ahead of the wait's return. With one processor a wait
-that held it would leave the sentinel unable to run, the child never released, and the runner would report the
-case TIMED OUT. No deadline races the sentinel, so a slow host cannot reorder the two lines.
+A streaming child's `wait` parks its green thread until the child exits. The child ends on its own about two
+seconds after it starts, and the sentinel it pinged answers at once, so the sentinel must run while the waiter is
+parked and its line prints ahead of the wait's return. With one processor a wait that held it would leave the
+sentinel unable to run until the child had ended, and its line would print after the wait's return. The child
+belongs to the service that waits on it, so nothing but the child's own duration orders the two lines, and they
+are nearly two seconds apart.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias SentinelReply = Promise with Integer
 
-function spawnHeldChild() returns StreamingSubprocess throws SubprocessError
-	var argv = StringArray.create(0)
+function spawnTimedChild() returns StreamingSubprocess throws SubprocessError
+	let argv = StringArray.create(0)
 
 	#if os(Windows)
-		argv.push("/c")
-		argv.push("set")
-		argv.push("/p")
-		argv.push("released=")
-		return try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: argv)
+		argv.push("-n")
+		argv.push("3")
+		argv.push("127.0.0.1")
+		return try StreamingSubprocess.spawn(Executable.name("ping"), arguments: argv)
 	#else
-		return try StreamingSubprocess.spawn(Executable.path(FilePath from "/bin/cat"), arguments: argv)
+		argv.push("2")
+		return try StreamingSubprocess.spawn(Executable.path(FilePath from "/bin/sleep"), arguments: argv)
 	#endif
-end 'spawnHeldChild'
+end 'spawnTimedChild'
 
-function exitedOnRelease(child StreamingSubprocess) returns bool
+function exitedOnItsOwn(child StreamingSubprocess) returns bool
 	_ = try child.wait() otherwise return false
 
 	return true
-end 'exitedOnRelease'
-
-function releaseOnReply(child StreamingSubprocess, reply SentinelReply) returns Integer
-	let tail = await reply
-	child.closeStdin()
-
-	return tail
-end 'releaseOnReply'
+end 'exitedOnItsOwn'
 
 type Waiter
 	var id as Integer
@@ -697,18 +689,17 @@ type Waiter
 	end 'create'
 
 	export function outlast(sentinel Sentinel.handle) returns Integer
-		var child = try spawnHeldChild() otherwise 'noChild'
+		let child = try spawnTimedChild() otherwise 'noChild'
 			return 0
 		end 'noChild'
 
 		print("W: waiting\n")
 		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
-		let releaser = async releaseOnReply(child, reply: tailReply)
-		let exited = exitedOnRelease(child)
+		let exited = exitedOnItsOwn(child)
 		child.release()
 		print("W: wait returned\n")
 
-		let tail = await releaser
+		let tail = await tailReply
 		print("done sibling={tail} exited={exited}\n")
 		return 1
 	end 'outlast'

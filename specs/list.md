@@ -111,7 +111,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	if list.isEmpty() 'check'
 		return 0
 	end 'check'
@@ -147,7 +147,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	let f = try list.first() otherwise 99
 	return f
 end 'main'
@@ -162,7 +162,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	let l = try list.last() otherwise 99
 	return l
 end 'main'
@@ -177,7 +177,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.prepend(42)
 	let f = try list.first() otherwise 0
 	return f
@@ -193,7 +193,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.prepend(3)
 	list.prepend(2)
 	list.prepend(1)
@@ -220,7 +220,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.append(42)
 	let f = try list.first() otherwise 0
 	return f
@@ -236,7 +236,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.append(1)
 	list.append(2)
 	list.append(3)
@@ -297,7 +297,7 @@ end 'main'
 <!-- test: insert.at-beginning -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [20, 30]
+	let list = List from [20, 30]
 	try list.insert(0, value: 10) otherwise 'err'
 		return 1
 	end 'err'
@@ -322,7 +322,7 @@ end 'main'
 <!-- test: insert.at-middle -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 30]
+	let list = List from [10, 30]
 	try list.insert(1, value: 20) otherwise 'err'
 		return 1
 	end 'err'
@@ -347,7 +347,7 @@ end 'main'
 <!-- test: insert.at-end -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20]
+	let list = List from [10, 20]
 	try list.insert(2, value: 30) otherwise 'err'
 		return 1
 	end 'err'
@@ -377,7 +377,7 @@ unchanged, rather than clamp the index to the tail and grow the list.
 
 ```maxon
 function main() returns ExitCode
-	var list = List from [10]
+	let list = List from [10]
 	try list.insert(5, value: 99) otherwise 'oob'
 		print("threw\n")
 		print("{list.count()}\n")
@@ -398,7 +398,7 @@ threw
 <!-- test: remove-first -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30]
+	let list = List from [10, 20, 30]
 	let removed = (try list.removeFirst() otherwise 0) as FullRangeInt
 	print("{removed}\n")
 	print("{list.count()}\n")
@@ -419,7 +419,7 @@ end 'main'
 <!-- test: remove-last -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30]
+	let list = List from [10, 20, 30]
 	let removed = (try list.removeLast() otherwise 0) as FullRangeInt
 	print("{removed}\n")
 	print("{list.count()}\n")
@@ -440,7 +440,7 @@ end 'main'
 <!-- test: remove.at-index -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [10, 20, 30, 40]
+	let list = List from [10, 20, 30, 40]
 	let removed = (try list.remove(1) otherwise 0) as FullRangeInt
 	print("{removed}\n")
 	print("{list.count()}\n")
@@ -489,7 +489,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	for i in 1 to 100 'build'
 		list.append(i)
 	end 'build'
@@ -532,7 +532,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.append(2)
 	list.append(3)
 	list.prepend(1)
@@ -565,7 +565,7 @@ end 'main'
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello")
 	list.append("world")
 	let f = try list.first() otherwise "none"
@@ -586,7 +586,7 @@ world
 <!-- test: clear -->
 ```maxon
 function main() returns ExitCode
-	var list = List from [1, 2, 3]
+	let list = List from [1, 2, 3]
 	list.clear()
 	if list.isEmpty() 'check'
 		return 0
@@ -603,7 +603,7 @@ end 'main'
 typealias StringList = List with String
 
 function testRemove()
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	list.append("goodbye world!!!!!!!!!!!!!")
 	let removed = try list.removeFirst() otherwise "none"
@@ -629,7 +629,7 @@ hello world!!!!!!!!!!!!!!
 typealias StringList = List with String
 
 function testRemove() returns String
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	list.append("goodbye world!!!!!!!!!!!!!")
 	return try list.removeFirst() otherwise "none"
@@ -653,7 +653,7 @@ hello world!!!!!!!!!!!!!!
 typealias StringList = List with String
 
 function testClear()
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("alpha string!!!!!!!!!!!!!!!")
 	list.append("beta string!!!!!!!!!!!!!!!!")
 	list.append("gamma string!!!!!!!!!!!!!!!")
@@ -682,7 +682,7 @@ function clearList(list StringList)
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("alpha string!!!!!!!!!!!!!!!")
 	list.append("beta string!!!!!!!!!!!!!!!!")
 	list.append("gamma string!!!!!!!!!!!!!!!")
@@ -713,7 +713,7 @@ function clearList(list StringList) returns String
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello world {40 + 2}!!!!!!!!!!!!!!")
 	let result = clearList(list)
 	print("{result}\n")
@@ -740,7 +740,7 @@ function clearList(list StringList)
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello world {40 + 2}!!!!!!!!!!!!!!")
 	let val = try list.first() otherwise "none"
 	clearList(list)
@@ -765,7 +765,7 @@ immortal record no `clear()` could free.
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("hello world {40 + 2}!!!!!!!!!!!!!!")
 	let val = try list.first() otherwise "none"
 	list.clear()
@@ -803,7 +803,7 @@ function walkSum(list NList, n N) returns N
 end 'walkSum'
 
 function main() returns ExitCode
-	var list = NList.create()
+	let list = NList.create()
 	var k = 0 as N
 	while k < 12 'build'
 		list.append(k * 10)
@@ -835,7 +835,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntList = List with Int
 
 function main() returns ExitCode
-	var l = IntList.create()
+	let l = IntList.create()
 	l.append(1)
 	l.append(2)
 	l.append(3)
@@ -882,10 +882,10 @@ end 'Point'
 typealias PointList = List with Point
 
 function main() returns ExitCode
-	var l = PointList.create()
+	let l = PointList.create()
 	l.append(Point.at(3, y: 4))
 	l.append(Point.at(5, y: 6))
-	view p = try l.first() otherwise Point.at(0, y: 0)
+	let p = try l.first() otherwise Point.at(0, y: 0)
 	print("[{p.x},{p.y}] count={l.count()}\n")
 	return 0
 end 'main'
@@ -928,7 +928,7 @@ typealias Codes = Array with Code
 typealias CodeList = List with Code
 
 function main() returns ExitCode
-	var codes = Codes.create(0)
+	let codes = Codes.create(0)
 	codes.push(30)
 	codes.push(10)
 	codes.push(30)
@@ -957,7 +957,7 @@ typealias Code = int(0 to 100)
 typealias Codes = Array with Code
 
 function makeCodes() returns Codes
-	var codes = Codes.create(0)
+	let codes = Codes.create(0)
 	codes.push(8)
 	codes.push(4)
 	return codes
@@ -1001,7 +1001,7 @@ typealias Names = Array with String
 typealias NameList = List with String
 
 function main() returns ExitCode
-	var names = Names.create(0)
+	let names = Names.create(0)
 	names.push("a{2}")
 	names.push("b")
 	let list = NameList from names
@@ -1040,7 +1040,7 @@ function main() returns ExitCode
 end 'main'
 
 function laterNames() returns Names
-	var names = Names.create(0)
+	let names = Names.create(0)
 	names.push("p")
 	names.push("q")
 	return names
@@ -1061,7 +1061,7 @@ typealias Names = Array with String
 typealias NameList = List with String
 
 function main() returns ExitCode
-	var names = Names.create(0)
+	let names = Names.create(0)
 	names.push("a")
 	names.push("b")
 	let list = NameList from names
@@ -1085,9 +1085,9 @@ typealias Buffers = Array with Buffer
 typealias BufferList = List with Buffer
 
 function main() returns ExitCode
-	var buffer = Buffer.create(0)
+	let buffer = Buffer.create(0)
 	buffer.push(1)
-	var buffers = Buffers.create(0)
+	let buffers = Buffers.create(0)
 	buffers.push(buffer)
 	let list = BufferList from buffers
 	buffer.push(2)
@@ -1107,7 +1107,7 @@ typealias NameList = List with String
 
 function main() returns ExitCode
 	var name = "a{1}"
-	var names = Names.create(0)
+	let names = Names.create(0)
 	names.push(name)
 	let list = NameList from names
 	name.append("z")

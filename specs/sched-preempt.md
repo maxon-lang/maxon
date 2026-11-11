@@ -235,17 +235,17 @@ end 'Bystander'
 
 function main() returns ExitCode
 	let released = ReleaseCell.create(false)
-	var spinners = SpinnerHandleArray.create(0)
+	let spinners = SpinnerHandleArray.create(0)
 	var i = 0 as Count
 	while i < Scheduler.processorCount() 'spawnEach'
 		spinners.push(spawn Spinner.create(released.clone()))
 		i = i + 1
 	end 'spawnEach'
 	let b = spawn Bystander.create()
-	var spun = ReplyPromiseArray.create(0)
+	let spun = ReplyPromiseArray.create(0)
 	var k = 0 as Count
 	while k < spinners.count() 'sendEach'
-		view s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
+		let s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
 		spun.push(try s.spin() otherwise panic("an open mailbox with room takes the send"))
 		k = k + 1
 	end 'sendEach'
@@ -421,7 +421,7 @@ type Mixer
 	end 'create'
 
 	export function churn(ms Integer) returns Integer
-		var expected = Checksums.create(0)
+		let expected = Checksums.create(0)
 		var k = 0 as Integer
 		while k < variants 'reference'
 			expected.push(mix(k, b: 2 + self.shift, c: 3, d: 4 + self.shift, e: 5, f: 6 + self.shift, g: 7, h: 8 + self.shift, p: 1.5 * self.scale, q: 2.25, r: 3.125 * self.scale, s: 4.0625, t: 5.5 * self.scale, u: 6.75, v: 7.875 * self.scale, w: 8.5, depth: 7))
@@ -586,17 +586,17 @@ end 'Bystander'
 
 function main() returns ExitCode
 	let released = ReleaseCell.create(false)
-	var spinners = SpinnerHandleArray.create(0)
+	let spinners = SpinnerHandleArray.create(0)
 	var i = 0 as Count
 	while i < Scheduler.processorCount() 'spawnEach'
 		spinners.push(spawn Spinner.create(released.clone()))
 		i = i + 1
 	end 'spawnEach'
 	let b = spawn Bystander.create()
-	var spun = ReplyPromiseArray.create(0)
+	let spun = ReplyPromiseArray.create(0)
 	var k = 0 as Count
 	while k < spinners.count() 'sendEach'
-		view s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
+		let s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
 		spun.push(try s.spin() otherwise panic("an open mailbox with room takes the send"))
 		k = k + 1
 	end 'sendEach'
@@ -875,7 +875,7 @@ function attempt() returns (Integer, Integer) throws Attempt
 	end 'silent'
 
 	let c = spawn Marker.create(3)
-	var replies = ReplyPromiseArray.create(0)
+	let replies = ReplyPromiseArray.create(0)
 	replies.push(try a.rank() otherwise panic("an open mailbox with room takes the send"))
 	replies.push(try b.rank() otherwise panic("an open mailbox with room takes the send"))
 	replies.push(try c.rank() otherwise panic("an open mailbox with room takes the send"))
@@ -951,7 +951,7 @@ type Doubler
 end 'Doubler'
 
 function main() returns ExitCode
-	var replies = ReplyPromiseArray.create(0)
+	let replies = ReplyPromiseArray.create(0)
 	replies.reserve(spawnCount)
 	for index in 0 upto spawnCount 'spawnDoublers'
 		let doubler = spawn Doubler.create(index as Integer)
@@ -1017,10 +1017,10 @@ function main() returns ExitCode
 	end 'iAmTheChild'
 
 	let me = try Process.executablePath() otherwise return 2
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("child")
 
-	var config = Configuration.create(Executable.path(me))
+	let config = Configuration.create(Executable.path(me))
 	config.arguments = argv
 	config.environment = Environment.inheritUpdating(["MAXON_PREEMPT": "maybe"])
 	let run = try Subprocess.runConfiguration(config) otherwise return 4

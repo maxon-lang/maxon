@@ -64,7 +64,7 @@ export extension Mergeable
 
 		for i in 0 upto source.funcCount() 'eachFunc'
 			let srcFunc = source.getFunc(i)
-			var func = self.cloneFunc(srcFunc)
+			let func = self.cloneFunc(srcFunc)
 			self.pushFunc(func)
 		end 'eachFunc'
 	end 'merge'
@@ -127,16 +127,16 @@ typealias StringModule = GenModule with String
 
 function main() returns ExitCode
 	// Build module A with ops and a block
-	var modA = StringModule.create()
-	var blockA = Block.create(0)
+	let modA = StringModule.create()
+	let blockA = Block.create(0)
 	modA.appendOp(blockA, op: "add")
 	modA.appendOp(blockA, op: "mul")
 	modA.blocks.push(blockA)
 	modA.functions.push(Item.create(1))
 
 	// Build module B with ops and a block
-	var modB = StringModule.create()
-	var blockB = Block.create(0)
+	let modB = StringModule.create()
+	let blockB = Block.create(0)
 	modB.appendOp(blockB, op: "sub")
 	modB.blocks.push(blockB)
 	modB.functions.push(Item.create(2))
@@ -207,12 +207,12 @@ typealias IntContainer = GenContainer with Integer
 typealias StringContainer = GenContainer with String
 
 function main() returns ExitCode
-	var ic = IntContainer.create()
+	let ic = IntContainer.create()
 	ic.push(10)
 	ic.push(20)
 	ic.push(30)
 
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("hello")
 	sc.push("world")
 

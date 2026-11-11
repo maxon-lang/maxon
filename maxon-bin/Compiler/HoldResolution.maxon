@@ -653,7 +653,7 @@ type HoldEventSummary
 	var reachQueue as HoldIndexColumn
 
 	static function create(eventIds HoldEventIds, flags FixedHoldWordColumn, callers CsrGraph, ranks FixedCsrColumn, storers CsrGraph) returns HoldEventSummary
-		var reachStates = HoldReachStateColumn.create(eventIds.count())
+		let reachStates = HoldReachStateColumn.create(eventIds.count())
 		reachStates.refill(HoldReachState.uncomputed)
 		let reachFloors = FixedHoldIndexColumn.create(eventIds.count())
 		let reachBegin = FixedHoldIndexColumn.create(eventIds.count())
@@ -908,7 +908,7 @@ type HoldEventBuilder
 
 	function build(module MaxonModule, funcNames FunctionNameIndex, judge HoldJudge, runtimeTier FunctionNameSet) returns HoldEventSummary
 		let functionCount = funcNames.functions.count()
-		var eventIds = HoldEventIds.create()
+		let eventIds = HoldEventIds.create()
 
 		for i in 0 upto functionCount 'eachFunc'
 			self.directBegin.push(self.directEvents.count())
@@ -917,7 +917,7 @@ type HoldEventBuilder
 
 		self.directBegin.push(self.directEvents.count())
 
-		var flags = FixedHoldWordColumn.create(functionCount)
+		let flags = FixedHoldWordColumn.create(functionCount)
 
 		for i in 0 upto functionCount 'eachRow'
 			self.seedRow(flags, row: i)
@@ -945,8 +945,8 @@ type HoldEventBuilder
 	end 'seedRow'
 
 	function eventStorers(eventIds HoldEventIds) returns CsrGraph
-		var events = CsrColumn.create(0)
-		var nodes = CsrColumn.create(0)
+		let events = CsrColumn.create(0)
+		let nodes = CsrColumn.create(0)
 		let rowCount = self.directBegin.count() - 1
 
 		for node in 0 upto rowCount 'eachNode'
@@ -1242,7 +1242,7 @@ type HoldResolver
 
 	function collectEntries(func IrFunction)
 		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
-			view block = self.module.blockAtPosition(func, position: blockPosition)
+			let block = self.module.blockAtPosition(func, position: blockPosition)
 
 			for position in 0 upto block.bodyOpCount() 'eachOp'
 				let opIdx = try block.bodyOpAt(position) otherwise panic("HoldResolver.collectEntries: bodyOpAt OOB at {position}")
@@ -1327,7 +1327,7 @@ type HoldResolver
 		self.isBlockArg.growFilled(valueCount, value: false)
 
 		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
-			view block = self.module.blockAtPosition(func, position: blockPosition)
+			let block = self.module.blockAtPosition(func, position: blockPosition)
 
 			for arg in block.blockArgs 'eachBlockArg'
 				try self.isBlockArg.set(arg.valueId, value: true) otherwise panic("HoldResolver.collectDefs: block arg v{arg.valueId} is outside the function's {valueCount} values")
@@ -1376,8 +1376,8 @@ type HoldResolver
 		end 'notABorrowedRead'
 
 		match op 'op'
-			call(result, _, _, _, _, _, _, _) then self.recordDef(result, opIdx: opIdx)
-			tryCall(result, _, _, _, _, _, _, _, _) then self.recordDef(result, opIdx: opIdx)
+			call(result, _, _, _, _, _, _) then self.recordDef(result, opIdx: opIdx)
+			tryCall(result, _, _, _, _, _, _, _) then self.recordDef(result, opIdx: opIdx)
 			default panic("HoldResolver.recordElementReadDef: handed an op that is not a call")
 		end 'op'
 	end 'recordElementReadDef'
@@ -1563,7 +1563,7 @@ type HoldResolver
 	end 'storeSummary'
 
 	function scanWindowBlock(func IrFunction, site ElementIndex, blockPosition ElementIndex, from ElementIndex, stamp ElementIndex)
-		view block = self.module.blockAtPosition(func, position: blockPosition)
+		let block = self.module.blockAtPosition(func, position: blockPosition)
 		let count = block.bodyOpCount()
 		var position = from
 
@@ -1909,8 +1909,8 @@ type HoldResolver
 		return match defOp 'def'
 			loadIndirect(_, addr, offset, _) gives self.hopThroughLoad(addr, offset: offset)
 			binOp(_, word, _, _) gives self.hopThroughWord(word)
-			call(_, callee, args, _, _, _, _, _) gives self.hopThroughCall(callee, args: args)
-			tryCall(_, _, _, args, _, _, _, _, _) gives self.hopThroughElementRead(args)
+			call(_, callee, args, _, _, _, _) gives self.hopThroughCall(callee, args: args)
+			tryCall(_, _, _, args, _, _, _, _) gives self.hopThroughElementRead(args)
 			default panic("HoldResolver.hopThroughDef: a recorded definition is neither a load nor a borrowed call")
 		end 'def'
 	end 'hopThroughDef'
@@ -1969,7 +1969,7 @@ type HoldResolver
 
 		try self.projectionRead.set(index, value: true) otherwise panic("HoldResolver.readProjection: projectionRead.set OOB at {index}")
 		let first = self.projectionOffsets.count()
-		view func = try self.functions.get(index) otherwise panic("HoldResolver.readProjection: functions.get OOB at {index}")
+		let func = try self.functions.get(index) otherwise panic("HoldResolver.readProjection: functions.get OOB at {index}")
 		self.collectReceiverLoads(func)
 
 		if not self.everyReturnIsAReceiverLoad(func) 'aReturnIsNotAReceiverField'
@@ -1987,7 +1987,7 @@ type HoldResolver
 		self.receiverLoadOffsets.clear()
 
 		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
-			view block = self.module.blockAtPosition(func, position: blockPosition)
+			let block = self.module.blockAtPosition(func, position: blockPosition)
 
 			for opIdx in block.bodyOps() 'eachOp'
 				self.noteReceiverLoad(self.module.getOp(opIdx))
@@ -2018,7 +2018,7 @@ type HoldResolver
 		var sawAReturn = false
 
 		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
-			view block = self.module.blockAtPosition(func, position: blockPosition)
+			let block = self.module.blockAtPosition(func, position: blockPosition)
 
 			if not block.hasTerminatorOp() 'noExit'
 				continue
@@ -2183,7 +2183,7 @@ type HoldResolver
 
 	function lowerEntry(entry ElementIndex, isEnd bool, kind HoldKind)
 		let opIdx = try self.entryOps.get(entry) otherwise panic("HoldResolver.lowerEntry: entryOps.get OOB at {entry}")
-		var lowered = loweredHoldCall(self.module.getOp(opIdx), range: self.project.opRanges.get(opIdx))
+		let lowered = loweredHoldCall(self.module.getOp(opIdx), range: self.project.opRanges.get(opIdx))
 		try self.module.ops.set(opIdx, value: lowered) otherwise panic("HoldResolver.lowerEntry: ops.set OOB at {opIdx}")
 
 		if not isEnd 'aMarker'
@@ -2197,8 +2197,8 @@ type HoldResolver
 		while cursor < self.deletedKeys.count() 'eachAffectedBlock'
 			let first = try self.deletedKeys.get(cursor) otherwise panic("HoldResolver.removeDeletedOps: deletedKeys.get OOB at {cursor}")
 			let blockPosition = holdKeyBlock(first)
-			var block = self.module.blockAtPosition(func, position: blockPosition)
-			var kept = OpIndexArray.create(block.bodyOpCount(), zeroed: false)
+			let block = self.module.blockAtPosition(func, position: blockPosition)
+			let kept = OpIndexArray.create(block.bodyOpCount(), zeroed: false)
 			var next = cursor
 
 			for position in 0 upto block.bodyOpCount() 'eachOp'
@@ -2216,7 +2216,7 @@ type HoldResolver
 	end 'removeDeletedOps'
 
 	function adjustRangeSites(func IrFunction)
-		view checks = try self.project.rangeChecks.get(func.name) otherwise return
+		let checks = try self.project.rangeChecks.get(func.name) otherwise return
 
 		if checks.sites.count() == 0 'noSites'
 			return
@@ -2226,7 +2226,7 @@ type HoldResolver
 		var anyShifted = false
 
 		for index in 0 upto checks.sites.count() 'eachSite'
-			view site = try checks.sites.get(index) otherwise panic("HoldResolver.adjustRangeSites: sites.get OOB at {index}")
+			let site = try checks.sites.get(index) otherwise panic("HoldResolver.adjustRangeSites: sites.get OOB at {index}")
 			let position = try self.rangePositions.get(index) otherwise panic("HoldResolver.adjustRangeSites: positions.get OOB at {index}, filled one per site")
 			let sitePosition = self.positionOfBlock(site.block)
 			let below = countKeysBelow(self.deletedKeys, target: holdKey(sitePosition, position: position)) - countKeysBelow(self.deletedKeys, target: holdKey(sitePosition, position: 0))
@@ -2320,11 +2320,11 @@ function aliasedHoldOp(op MaxonOp) returns MaxonOp
 end 'aliasedHoldOp'
 
 function holdCallOp(result ValueId, callee ByteArray, args ValueIdArray, range SourceRange) returns MaxonOp
-	return MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: WriteBlameArray.create(0), defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted)
+	return MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range), argImmutableNames: NameRoster.create(0), mint: CalleeMint.notMinted)
 end 'holdCallOp'
 
 function libraryColumnContainers(project Project, signatures ProgramSignatures) returns NameRoster
-	var bases = NameRoster.create(0)
+	let bases = NameRoster.create(0)
 
 	if declaredInTheLibrary(project, signatures: signatures, name: MapBuiltinBaseName) 'theLibrarysMap'
 		bases.push(MapBuiltinBaseName)
@@ -2349,10 +2349,10 @@ export function resolveHoldMarkers(project Project, module MaxonModule, signatur
 		return
 	end 'alreadyRefused'
 
-	var judge = HoldJudge.create(signatures, typeNames: project.typeNames, byName: funcNames.byName, functions: funcNames.functions, columnContainers: libraryColumnContainers(project, signatures: signatures))
-	var builder = HoldEventBuilder.create()
+	let judge = HoldJudge.create(signatures, typeNames: project.typeNames, byName: funcNames.byName, functions: funcNames.functions, columnContainers: libraryColumnContainers(project, signatures: signatures))
+	let builder = HoldEventBuilder.create()
 	let events = builder.build(module, funcNames: funcNames, judge: judge, runtimeTier: project.libraryFacts.runtimeTier)
-	var resolver = HoldResolver.create(project, module: module, judge: judge, events: events, functions: funcNames.functions)
+	let resolver = HoldResolver.create(project, module: module, judge: judge, events: events, functions: funcNames.functions)
 
 	for i in 0 upto funcNames.functions.count() 'eachFunc'
 		let func = holdFunctionAt(funcNames, index: i)

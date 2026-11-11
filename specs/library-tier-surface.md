@@ -144,7 +144,7 @@ typealias Small = int(0 to 255)
 typealias SmallArray = Array with Small
 
 function main() returns ExitCode
-	var xs = SmallArray.create(0)
+	let xs = SmallArray.create(0)
 	xs.push(10)
 	xs.push(20)
 	xs.push(30)
@@ -301,7 +301,7 @@ error E3185: <fragment>:3:19: '__ManagedMemory' named outside the library tiers:
 The same program in the library tier.
 ```maxon
 function main() returns ExitCode
-	var buffer = try __ManagedMemory.create(16, 1) otherwise return 1
+	let buffer = try __ManagedMemory.create(16, 1) otherwise return 1
 	print("{buffer.length()}\n")
 	return 0
 end 'main'
@@ -396,7 +396,7 @@ function firstOf(c IntCursor) returns Integer
 end 'firstOf'
 
 function main() returns ExitCode
-	var xs = IntArray.create(0)
+	let xs = IntArray.create(0)
 	xs.push(7)
 	let c = try xs.managed.createCursor() otherwise return 1
 	print("{firstOf(c)}\n")
@@ -445,7 +445,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var xs = IntArray.create(0)
+	let xs = IntArray.create(0)
 	xs.push(7)
 	let c = cursorOf(xs)
 	print("{c.current()}\n")
@@ -500,10 +500,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var xs = IntArray.create(0)
+	let xs = IntArray.create(0)
 	xs.push(7)
 	xs.push(8)
-	view m = bufferOf(xs)
+	let m = bufferOf(xs)
 	print("{m.length()}\n")
 	return 0
 end 'main'
@@ -588,7 +588,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-	var xs = IntArray.create(0)
+	let xs = IntArray.create(0)
 	xs.push(7)
 	xs.push(8)
 	print("{xs.rawLength()}\n")
@@ -980,7 +980,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-	var items = IntArray.create(0)
+	let items = IntArray.create(0)
 	items.push(3)
 	items.push(9)
 	let value = try items.second() otherwise return 1

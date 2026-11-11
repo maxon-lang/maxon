@@ -108,7 +108,7 @@ typealias Bufs = Array with ByteArray
 typealias Len = int(0 to 4096)
 
 function build(n Len) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((i + n) mod 251) as Byte)
@@ -117,14 +117,14 @@ function build(n Len) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	for n in 1 upto 261 'alloc'
 		bufs.push(build(n as Len))
 	end 'alloc'
 
 	var bad = 0 as FullRangeInt
 	for n in 1 upto 261 'check'
-		view b = try bufs.get(n - 1) otherwise return 1
+		let b = try bufs.get(n - 1) otherwise return 1
 		if b.count() != n 'length'
 			bad = bad + 1
 		end 'length'
@@ -163,7 +163,7 @@ typealias Bufs = Array with ByteArray
 typealias Index = int(0 to 65536)
 
 function build(seed Index) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(24)
 	for i in 0 upto 24 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -172,14 +172,14 @@ function build(seed Index) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	for k in 0 upto 3000 'alloc'
 		bufs.push(build(k as Index))
 	end 'alloc'
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 3000 'check'
-		view b = try bufs.get(k) otherwise return 1
+		let b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 24 'bytes'
 			let got = try b.get(i) otherwise return 2
 			if got != ((k + i) mod 251) 'value'
@@ -220,7 +220,7 @@ typealias ByteArray = Array with Byte
 typealias Round = int(0 to 255)
 
 function roundTrip(r Round) returns Integer
-	var big = ByteArray.create(0)
+	let big = ByteArray.create(0)
 	big.reserve(300000)
 	for i in 0 upto 512 'fill'
 		big.push(((r + i) mod 251) as Byte)
@@ -268,7 +268,7 @@ typealias Bufs = Array with ByteArray
 typealias Index = int(0 to 255)
 
 function build(k Index) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve((280000 + k * 4096) as ElementIndex)
 	for i in 0 upto 64 'fill'
 		b.push(((k * 7 + i) mod 251) as Byte)
@@ -277,14 +277,14 @@ function build(k Index) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	for k in 0 upto 40 'alloc'
 		bufs.push(build(k as Index))
 	end 'alloc'
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 40 'check'
-		view b = try bufs.get(k) otherwise return 1
+		let b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 64 'bytes'
 			let got = try b.get(i) otherwise return 2
 			if got != ((k * 7 + i) mod 251) 'value'
@@ -319,18 +319,18 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function dirty()
-	var mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return
+	let mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return
 	try mm.setLength(4096) otherwise return
-	var arr = ByteArray.init(mm)
+	let arr = ByteArray.init(mm)
 	for i in 0 upto 4096 'fill'
 		try arr.set(i, value: 255) otherwise return
 	end 'fill'
 end 'dirty'
 
 function countNonZero() returns Integer
-	var mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return 1
 	try mm.setLength(4096) otherwise return 2
-	view arr = ByteArray.init(mm)
+	let arr = ByteArray.init(mm)
 	var seen = 0 as FullRangeInt
 	for i in 0 upto 4096 'scan'
 		let got = try arr.get(i) otherwise return 3
@@ -370,7 +370,7 @@ typealias Bufs = Array with ByteArray
 typealias Len = int(0 to 4096)
 
 function build(n Len, seed Len) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((i + seed) mod 251) as Byte)
@@ -393,7 +393,7 @@ function verify(b ByteArray, n Len, seed Len) returns Integer
 end 'verify'
 
 function main() returns ExitCode
-	var keep = Bufs.create(0)
+	let keep = Bufs.create(0)
 	for k in 0 upto 120 'survivors'
 		keep.push(build((k + 8) as Len, seed: k as Len))
 	end 'survivors'
@@ -401,7 +401,7 @@ function main() returns ExitCode
 	// Four waves of churn. Each wave builds and drops its own population, so the slots it takes come
 	// from — and go back to — the same spans and buckets the survivors were cut from.
 	for wave in 0 upto 4 'waves'
-		var churn = Bufs.create(0)
+		let churn = Bufs.create(0)
 		for k in 0 upto 200 'build'
 			churn.push(build(((k mod 97) + wave * 13 + 1) as Len, seed: (k + wave) as Len))
 		end 'build'
@@ -409,7 +409,7 @@ function main() returns ExitCode
 
 	var bad = 0 as Integer
 	for k in 0 upto 120 'check'
-		view b = try keep.get(k) otherwise return 1
+		let b = try keep.get(k) otherwise return 1
 		bad = bad + verify(b, n: (k + 8) as Len, seed: k as Len)
 	end 'check'
 
@@ -450,7 +450,7 @@ typealias Bufs = Array with ByteArray
 typealias Len = int(0 to 256)
 
 function emptyThenGrow(n Len) returns ByteArray
-	var b = b"".clone()
+	let b = b"".clone()
 	for i in 0 upto n 'fill'
 		b.push(((i + n) mod 251) as Byte)
 	end 'fill'
@@ -458,19 +458,19 @@ function emptyThenGrow(n Len) returns ByteArray
 end 'emptyThenGrow'
 
 function main() returns ExitCode
-	var keep = Bufs.create(0)
+	let keep = Bufs.create(0)
 	for k in 0 upto 40 'survivors'
 		keep.push(emptyThenGrow((k + 1) as Len))
 	end 'survivors'
 
 	for _ in 0 upto 2000 'churn'
-		var scratch = b"".clone()
+		let scratch = b"".clone()
 		scratch.push(1)
 	end 'churn'
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 40 'check'
-		view b = try keep.get(k) otherwise return 1
+		let b = try keep.get(k) otherwise return 1
 		let n = k + 1
 		if b.count() != n 'length'
 			bad = bad + 1
@@ -519,7 +519,7 @@ let LenStep = 4
 let SweepCount = 26
 
 function build(n Len) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((i + n) mod 251) as Byte)
@@ -528,7 +528,7 @@ function build(n Len) returns ByteArray
 end 'build'
 
 function sweep() returns Integer
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	for k in 0 upto SweepCount 'alloc'
 		bufs.push(build((FirstLen + k * LenStep) as Len))
 	end 'alloc'
@@ -536,7 +536,7 @@ function sweep() returns Integer
 	var bad = 0 as FullRangeInt
 	for k in 0 upto SweepCount 'check'
 		let n = FirstLen + k * LenStep
-		view b = try bufs.get(k) otherwise return 1
+		let b = try bufs.get(k) otherwise return 1
 		if b.count() != n 'length'
 			bad = bad + 1
 		end 'length'
@@ -585,7 +585,7 @@ typealias Bufs = Array with ByteArray
 typealias Len = int(0 to 65536)
 
 function build(n Len, seed Len) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto 32 'fill'
 		b.push(((i + seed) mod 251) as Byte)
@@ -594,14 +594,14 @@ function build(n Len, seed Len) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	for k in 0 upto 96 'alloc'
 		bufs.push(build((9000 + k * 220) as Len, seed: k as Len))
 	end 'alloc'
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 96 'check'
-		view b = try bufs.get(k) otherwise return 1
+		let b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 32 'bytes'
 			let got = try b.get(i) otherwise return 2
 			if got != ((i + k) mod 251) 'value'
@@ -637,7 +637,7 @@ typealias Bufs = Array with ByteArray
 typealias Len = int(0 to 65536)
 
 function build(n Len, seed Len) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto 16 'fill'
 		b.push(((i + seed) mod 251) as Byte)
@@ -646,7 +646,7 @@ function build(n Len, seed Len) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	// Sixteen sizes spread across the ladder, forty spans' worth of each: the arena serves a run per
 	// span, and the runs are of sixteen different lengths.
 	for k in 0 upto 640 'alloc'
@@ -656,7 +656,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 640 'check'
-		view b = try bufs.get(k) otherwise return 1
+		let b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 16 'bytes'
 			let got = try b.get(i) otherwise return 2
 			if got != ((i + k) mod 251) 'value'

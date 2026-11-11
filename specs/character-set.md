@@ -83,7 +83,7 @@ end 'main'
 consults the key-type gate at all.
 ```maxon
 function main() returns ExitCode
-	var cs = CharSet.create()
+	let cs = CharSet.create()
 	print("{cs.count()}")
 	return 0
 end 'main'
@@ -102,7 +102,7 @@ the compiler types a character literal by its byte WIDTH, so `'x'` is an `int` u
 literal adopt the key type, and this is the case that exercises that door.
 ```maxon
 function main() returns ExitCode
-	var cs = CharSet.create()
+	let cs = CharSet.create()
 	cs.insert('x')
 	cs.insert('é')
 	cs.insert('中')
@@ -128,7 +128,7 @@ false
 ### Removing a Character key drops it exactly once
 ```maxon
 function main() returns ExitCode
-	var cs = CharSet.create()
+	let cs = CharSet.create()
 	cs.insert('a')
 	cs.insert('🎉')
 	print("{cs.remove('a')}\n")
@@ -577,7 +577,7 @@ error E2073: <fragment>:2:26: 'CharacterSet' has no static method named 'inverte
 ```
 
 <!-- test: characterset-from-in-a-body -->
-### `CharacterSet.from` — a KEYWORD-named static — in a body and at a TOP-LEVEL initializer
+### `CharacterSet.from` — a KEYWORD-named static — in a body
 After a `.`, a keyword is a name, so `CharacterSet.from` is an ordinary static call wherever an expression stands.
 ```maxon
 function main() returns ExitCode
@@ -594,7 +594,9 @@ end 'main'
 xyz
 ```
 
-<!-- test: characterset-from-at-a-top-level-initializer -->
+<!-- test: error.characterset-from-at-a-top-level-initializer-is-refused -->
+### Error: `CharacterSet.from` at a TOP-LEVEL initializer
+A top-level initializer calls nothing, and `CharacterSet.from` is a call.
 ```maxon
 let custom = CharacterSet.from(CharSet from ['a', 'e'])
 
@@ -604,9 +606,6 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-xyz
+```maxoncstderr
+error E3220: <fragment>:2:14: the initializer of 'custom' calls 'CharacterSet.from': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```

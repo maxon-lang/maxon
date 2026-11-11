@@ -202,7 +202,7 @@ export typealias IntArray = Array with Integer
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -240,7 +240,7 @@ end 'Container'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var c = Container.create()
+	let c = Container.create()
 	c.add(20)
 	c.add(22)
 	return c.sum()
@@ -261,7 +261,7 @@ export typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 export function makeArray() returns IntArray
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(42)
 	return arr
 end 'makeArray'
@@ -282,7 +282,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -1127,7 +1127,7 @@ end 'Points'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var points = Points.make()
+	let points = Points.make()
 	points.sort()
 	print("{points.firstX()}\n")
 	return 0
@@ -1306,26 +1306,17 @@ end 'main'
 10
 ```
 
-<!-- test: exported-struct-var-cross-file -->
-Cross-file access to an exported module-level struct var.
+<!-- test: exported-array-let-cross-file -->
+Cross-file access to an exported module-level array.
 ```maxon
 // --- file: api/state.maxon
 export typealias SmallInt = int(0 to u8.max)
 
-export type Counter
-		export var value as SmallInt
-
-		export static function create(value SmallInt) returns Self
-			return Self{value: value}
-		end 'create'
-end 'Counter'
-
-export let shared = Counter.create(42)
+export let shared = [42 as SmallInt]
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-		let c = Counter.create(1)
-		return shared.value - c.value + c.value
+		return try shared.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -1677,12 +1668,8 @@ file is the same refusal with a different noun — `function 'x' is not exported
 export typealias Count = int(0 to u64.max)
 
 export type Holder
-	static let cached = Holder.build()
+	static let cached = Holder{value: 7}
 	export var value as Count
-
-	static function build() returns Holder
-		return Holder{value: 7}
-	end 'build'
 end 'Holder'
 
 // --- file: main.maxon
@@ -1692,7 +1679,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/export-keyword/error.non-exported-static-read-cross-file.maxon:16:17: static 'Holder.cached' is not exported
+error E3008: specs/export-keyword/error.non-exported-static-read-cross-file.maxon:12:17: static 'Holder.cached' is not exported
 ```
 
 <!-- test: error.non-exported-static-constant-assign-cross-file -->

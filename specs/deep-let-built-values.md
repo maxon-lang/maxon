@@ -68,7 +68,7 @@ union Arrival
 end 'Arrival'
 
 function exchangeFor(arrived Arrived) returns Exchange
-	var request = Request.create("p")
+	let request = Request.create("p")
 	request.setBody(arrived.body)
 
 	return Exchange.create(request)
@@ -95,7 +95,7 @@ end 'next'
 
 function main() returns ExitCode
 	let arrived = Arrived.create("hi", flag: false)
-	var exchange = next(arrived)
+	let exchange = next(arrived)
 	exchange.bump()
 	exchange.stage = exchange.stage + 1
 
@@ -130,7 +130,7 @@ end 'Owner'
 
 function main() returns ExitCode
 	let owner = Owner.create(Settings.create(1))
-	var copy = owner.settings
+	let copy = owner.settings
 	copy.level = 2
 
 	return copy.level as ExitCode
@@ -256,7 +256,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	holder.note(b"a")
 	let kept = holder.closeWhole()
 
@@ -326,7 +326,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	holder.note(b"a")
 	let kept = holder.closeWhole()
 
@@ -390,8 +390,8 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var shared = Log.create()
-	var holder = Holder.create(shared)
+	let shared = Log.create()
+	let holder = Holder.create(shared)
 	holder.note(b"a")
 	let kept = holder.closeWhole()
 	shared.told.note(b"b")

@@ -151,7 +151,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	return v.count()
 end 'main'
 ```
@@ -165,7 +165,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(0, value: 42)
 	return v.get(0)
 end 'main'
@@ -179,7 +179,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 30)
@@ -204,7 +204,7 @@ function runtimeIndex(i ElementIndex) returns ElementIndex
 end 'runtimeIndex'
 
 function main() returns ExitCode
-	var v = Vec2.create()
+	let v = Vec2.create()
 	v.set(0, value: 10)
 	let result = try v.get(runtimeIndex(5)) otherwise -1
 	print("{result}\n")
@@ -243,7 +243,7 @@ function runtimeIndex(i ElementIndex) returns ElementIndex
 end 'runtimeIndex'
 
 function main() returns ExitCode
-	var v = Vec2.create()
+	let v = Vec2.create()
 	v.set(0, value: 10)
 	try v.set(runtimeIndex(5), value: 99) otherwise 'oob'
 		return 7
@@ -277,7 +277,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec1 = FixedArray with 1 Int
 
 function main() returns ExitCode
-	var v = Vec1.create()
+	let v = Vec1.create()
 	v.set(0, value: 77)
 	return v.get(0)
 end 'main'
@@ -292,7 +292,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec10 = FixedArray with 10 Int
 
 function main() returns ExitCode
-	var v = Vec10.create()
+	let v = Vec10.create()
 	var i = 0 as Int
 	while i < 10 'fill'
 		try v.set(i as ElementIndex, value: i * 10) otherwise panic("test invariant: set OOB")
@@ -313,7 +313,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec1 = FixedArray with 1 Int
 
 function main() returns ExitCode
-	var v = Vec1.create()
+	let v = Vec1.create()
 	return v.count()
 end 'main'
 ```
@@ -327,7 +327,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(1, value: 10)
 	v.set(1, value: 42)
 	return v.get(1)
@@ -343,7 +343,7 @@ typealias Float = float(f64.min to f64.max)
 typealias Vec2F = FixedArray with 2 Float
 
 function main() returns ExitCode
-	var v = Vec2F.create()
+	let v = Vec2F.create()
 	v.set(0, value: 2.5)
 	v.set(1, value: 3.5)
 	let a = v.get(0)
@@ -362,7 +362,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteVec4 = FixedArray with 4 Byte
 
 function main() returns ExitCode
-	var v = ByteVec4.create()
+	let v = ByteVec4.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 30)
@@ -391,7 +391,7 @@ function sum(v Vec3) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 12)
@@ -410,7 +410,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Vec2 = FixedArray with 2 Integer
 
 function makeVec(a Integer, b Integer) returns Vec2
-	var v = Vec2.create()
+	let v = Vec2.create()
 	v.set(0, value: a)
 	v.set(1, value: b)
 	return v
@@ -433,7 +433,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec4 = FixedArray with 4 Int
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 	v.set(0, value: 1)
 	v.set(1, value: 2)
 	v.set(2, value: 3)
@@ -455,7 +455,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 
 function makeVec() returns Vec3
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 12)
@@ -554,7 +554,7 @@ function sum(v Vec3) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(0, value: 10)
 	v.set(1, value: 20)
 	v.set(2, value: 12)
@@ -571,7 +571,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec5 = FixedArray with 5 Int
 
 function main() returns ExitCode
-	var v = Vec5.create()
+	let v = Vec5.create()
 	v.set(0, value: 1)
 	v.set(1, value: 2)
 	v.set(2, value: 3)
@@ -595,7 +595,7 @@ end 'main'
 typealias Bits16 = FixedArray with 16 bool
 
 function main() returns ExitCode
-	var v = Bits16.create()
+	let v = Bits16.create()
 	v.set(0, value: true)
 	v.set(3, value: true)
 	v.set(8, value: true)
@@ -621,7 +621,7 @@ end 'main'
 typealias Bits8 = FixedArray with 8 bool
 
 function main() returns ExitCode
-	var v = Bits8.create()
+	let v = Bits8.create()
 	v.set(2, value: true)
 	v.set(5, value: true)
 	v.set(2, value: false)
@@ -687,8 +687,8 @@ end 'Holder'
 typealias IntHolder = Holder with Int
 
 function main() returns ExitCode
-	var v = Vec3.create()
-	var h = IntHolder.create()
+	let v = Vec3.create()
+	let h = IntHolder.create()
 	return ((v.count() as Int) + h.size()) as ExitCode
 end 'main'
 ```
@@ -734,8 +734,8 @@ typealias IntHolder4 = Holder4 with Int
 typealias IntHolder7 = Holder7 with Int
 
 function main() returns ExitCode
-	var a = IntHolder4.create()
-	var b = IntHolder7.create()
+	let a = IntHolder4.create()
+	let b = IntHolder7.create()
 	return a.size() * 10 + b.size()
 end 'main'
 ```
@@ -801,7 +801,7 @@ function first(v Vec3) returns Int
 end 'first'
 
 function main() returns ExitCode
-	var t = Triple.create()
+	let t = Triple.create()
 	t.set(0, value: 21)
 	return (first(t as Vec3) + (t.count() as Int)) as ExitCode
 end 'main'
@@ -987,7 +987,7 @@ function runtimeIndex(i ElementIndex) returns ElementIndex
 end 'runtimeIndex'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	try FixedArray.set(v, index: runtimeIndex(1), value: 41) otherwise panic("set")
 	return (try FixedArray.get(v, index: runtimeIndex(1)) otherwise 0) + 1
 end 'main'
@@ -1003,7 +1003,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	FixedArray.set(v, index: 1, value: 41)
 	return FixedArray.get(v, index: 1) + 1
 end 'main'
@@ -1021,7 +1021,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec5 = FixedArray with 5 Int
 
 function main() returns ExitCode
-	var v = Vec5.create()
+	let v = Vec5.create()
 	return FixedArray.count(v) as ExitCode
 end 'main'
 ```
@@ -1108,8 +1108,8 @@ function runtimeIndex(n Int) returns Int
 end 'runtimeIndex'
 
 function main() returns ExitCode
-	var made = Vec3.create()
-	var lit = FixedArray from [1, 2, 3]
+	let made = Vec3.create()
+	let lit = FixedArray from [1, 2, 3].clone()
 	var refused = 0 as Int
 	try made.set(runtimeIndex(3) as ElementIndex, value: 99) otherwise 'madePastEnd'
 		refused = refused + 1
@@ -1175,7 +1175,7 @@ end 'Holder'
 typealias IntHolder = Holder with Int
 
 function main() returns ExitCode
-	var h = IntHolder.create()
+	let h = IntHolder.create()
 	h.put(0, value: 10)
 	h.put(3, value: 7)
 	print("a={h.at(0)} b={h.at(3)} zero={h.at(1)} count={h.size()}\n")
@@ -1312,7 +1312,7 @@ end 'Holder'
 typealias GaugeHolder = Holder with Gauge
 
 function main() returns ExitCode
-	var h = GaugeHolder.create()
+	let h = GaugeHolder.create()
 	return h.size()
 end 'main'
 ```
@@ -1638,7 +1638,7 @@ end 'Sized'
 
 extension Sized
 	function tallyTwice() returns Int
-		var v = Slot.create()
+		let v = Slot.create()
 		return (v.count() as Int) + tally()
 	end 'tallyTwice'
 end 'Sized'
@@ -1659,7 +1659,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	return b.tallyTwice()
 end 'main'
 ```
@@ -2041,7 +2041,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var buf = Buf.create(launder(5))
+	let buf = Buf.create(launder(5))
 
 	for i in 0 upto buf.count() 'fill'
 		try buf.set(i, value: i as Int) otherwise panic("set")
@@ -2074,7 +2074,7 @@ typealias Level = int(1 to 9)
 typealias Trio = FixedArray with 3 Level
 
 function main() returns ExitCode
-	var trio = Trio.create(value: 1)
+	let trio = Trio.create(value: 1)
 
 	trio.refill(2)
 
@@ -2100,7 +2100,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var buf = Buf.create(launder(0))
+	let buf = Buf.create(launder(0))
 
 	buf.refill(3)
 
@@ -2126,7 +2126,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var flags = Flags.create(launder(10), value: true)
+	let flags = Flags.create(launder(10), value: true)
 
 	flags.refill(false)
 
@@ -2199,7 +2199,7 @@ function label(n Int) returns String
 end 'label'
 
 function main() returns ExitCode
-	var names = Names.create(launder(3), value: label(1))
+	let names = Names.create(launder(3), value: label(1))
 	let held = try names.get(1) otherwise "missing"
 
 	try names.set(1, value: label(9)) otherwise panic("set")
@@ -2233,7 +2233,7 @@ function label(n Int) returns String
 end 'label'
 
 function main() returns ExitCode
-	var names = Names.create(launder(4), value: label(1))
+	let names = Names.create(launder(4), value: label(1))
 
 	try names.set(0, value: label(2)) otherwise panic("set")
 	try names.set(0, value: label(3)) otherwise panic("set")
@@ -2272,7 +2272,7 @@ function label(n Int) returns String
 end 'label'
 
 function main() returns ExitCode
-	var names = Names.create(launder(3), value: label(1))
+	let names = Names.create(launder(3), value: label(1))
 	let held = try names.get(0) otherwise "missing"
 
 	names.refill(label(2))
@@ -2309,7 +2309,7 @@ function label(n Int) returns String
 end 'label'
 
 function main() returns ExitCode
-	var names = Names.create(launder(0), value: label(1))
+	let names = Names.create(launder(0), value: label(1))
 
 	names.refill(label(2))
 
@@ -2340,8 +2340,8 @@ function label(n Int) returns String
 end 'label'
 
 function main() returns ExitCode
-	var names = Names.create(launder(2), value: label(1))
-	var copy = names.clone()
+	let names = Names.create(launder(2), value: label(1))
+	let copy = names.clone()
 
 	try copy.set(0, value: label(8)) otherwise panic("set")
 
@@ -2410,7 +2410,7 @@ function label(n Int) returns String
 end 'label'
 
 function main() returns ExitCode
-	var names = Names.create(launder(3), value: label(1))
+	let names = Names.create(launder(3), value: label(1))
 
 	try names.set(2, value: label(3)) otherwise panic("set")
 
@@ -2476,7 +2476,7 @@ function label(n Int) returns String
 end 'label'
 
 function main() returns ExitCode
-	var trio = Trio.create(value: label(4))
+	let trio = Trio.create(value: label(4))
 
 	trio.set(2, value: label(5))
 
@@ -2502,8 +2502,8 @@ function label(n Int) returns String
 end 'label'
 
 function main() returns ExitCode
-	var trio = Trio.create(value: label(1))
-	var copy = trio.clone()
+	let trio = Trio.create(value: label(1))
+	let copy = trio.clone()
 
 	trio.refill(label(2))
 
@@ -2566,7 +2566,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var tags = Tags.create(launder(3), value: Tag.make(5))
+	let tags = Tags.create(launder(3), value: Tag.make(5))
 	let first = try tags.get(0) otherwise Tag.make(0)
 	let last = try tags.get(2) otherwise Tag.make(0)
 
@@ -2599,7 +2599,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function makeRow(n Int) returns Row
-	var row = Row.create(0)
+	let row = Row.create(0)
 
 	row.push(n)
 	row.push(n + 1)
@@ -2608,12 +2608,12 @@ function makeRow(n Int) returns Row
 end 'makeRow'
 
 function main() returns ExitCode
-	var grid = Grid.create(launder(2), value: makeRow(4))
+	let grid = Grid.create(launder(2), value: makeRow(4))
 
 	try grid.set(1, value: makeRow(8)) otherwise panic("set")
 
-	var top = try grid.get(0) otherwise makeRow(0)
-	var bottom = try grid.get(1) otherwise makeRow(0)
+	let top = try grid.get(0) otherwise makeRow(0)
+	let bottom = try grid.get(1) otherwise makeRow(0)
 
 	print("{top.count()} {try top.get(1) otherwise 0} {try bottom.get(0) otherwise 0}\n")
 
@@ -2650,7 +2650,7 @@ function describe(shape Shape) returns String
 end 'describe'
 
 function main() returns ExitCode
-	var shapes = Shapes.create(launder(2), value: Shape.named("sq{launder(4)}"))
+	let shapes = Shapes.create(launder(2), value: Shape.named("sq{launder(4)}"))
 
 	try shapes.set(1, value: Shape.sized(3, height: 4)) otherwise panic("set")
 
@@ -2699,7 +2699,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var roster = Roster.build(launder(3))
+	let roster = Roster.build(launder(3))
 
 	roster.rename(1, to: label(6))
 
@@ -2729,7 +2729,7 @@ function label(n Int) returns String
 end 'label'
 
 function build(n ElementIndex) returns Names
-	var names = Names.create(n, value: label(1))
+	let names = Names.create(n, value: label(1))
 
 	try names.set(0, value: label(2)) otherwise panic("set")
 
@@ -2776,7 +2776,7 @@ end 'Registry'
 
 function main() returns ExitCode
 	let n = Registry.lengthOfSecond()
-	var copy = Names.clone()
+	let copy = Names.clone()
 	let other = Registry.wordsCopy()
 
 	copy.set(0, value: "changed{n}")
@@ -2910,7 +2910,7 @@ end 'Ring'
 typealias NameRing = Ring with String
 
 function main() returns ExitCode
-	var r = NameRing.create("abc{1}")
+	let r = NameRing.create("abc{1}")
 
 	r.replaceSecond("xyz{2}")
 
@@ -2960,7 +2960,7 @@ function label(n Int) returns String
 end 'label'
 
 function main() returns ExitCode
-	var ring = NameRing.create(label(1))
+	let ring = NameRing.create(label(1))
 
 	ring.put(1, value: label(2))
 	ring.put(2, value: label(3))
@@ -3238,14 +3238,14 @@ extension FixedArray
 		try managed.swap(0, 1) otherwise ignore
 		try managed.shiftRight(0, 1) otherwise ignore
 		try managed.shiftLeft(0, 1) otherwise ignore
-		view e = try managed.get(0) otherwise panic("get")
+		let e = try managed.get(0) otherwise panic("get")
 		try managed.set(1, e) otherwise ignore
 		return (managed.length() as Int) + (managed.capacity() as Int)
 	end 'survey'
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	return v.survey() as ExitCode
 end 'main'
 ```
@@ -3265,7 +3265,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 function main() returns ExitCode
-	var a = Ints.create(0)
+	let a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)
@@ -3323,7 +3323,7 @@ typealias Vec3 = FixedArray with 3 Int
 
 extension FixedArray
 	function sliceThenClear() returns Int
-		var s = try managed.slice(0, 2) otherwise panic("slice")
+		let s = try managed.slice(0, 2) otherwise panic("slice")
 		return wipe(s) + (10 * (managed.length() as Int))
 	end 'sliceThenClear'
 
@@ -3334,7 +3334,7 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	return v.sliceThenClear() as ExitCode
 end 'main'
 ```
@@ -3357,8 +3357,8 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
-	var got = v.part()
+	let v = Vec3.create()
+	let got = v.part()
 	got.clear()
 	return ((got.length() as Int) + (10 * (v.count() as Int))) as ExitCode
 end 'main'
@@ -3526,16 +3526,16 @@ extension FixedArray
 	typealias BufBox = Box with ElementMemory
 
 	function survey() returns Int
-		var b = Bufs.create(0)
+		let b = Bufs.create(0)
 		b.push(try managed.slice(0, 2) otherwise panic("slice"))
-		var fromContainer = try b.get(0) otherwise panic("no element")
+		let fromContainer = try b.get(0) otherwise panic("no element")
 		fromContainer.clear()
 
-		var t = (try managed.slice(0, 2) otherwise panic("slice"), 1 as Int)
+		let t = (try managed.slice(0, 2) otherwise panic("slice"), 1 as Int)
 		t.0.clear()
 
-		var boxed = BufBox.create(try managed.slice(0, 2) otherwise panic("slice"))
-		var fromBox = boxed.get()
+		let boxed = BufBox.create(try managed.slice(0, 2) otherwise panic("slice"))
+		let fromBox = boxed.get()
 		fromBox.clear()
 
 		return (fromContainer.length() as Int) + (fromBox.length() as Int) + (10 * (managed.length() as Int))
@@ -3543,7 +3543,7 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	return v.survey() as ExitCode
 end 'main'
 ```
@@ -3629,11 +3629,11 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 function main() returns ExitCode
-	var a = Ints.create(0)
+	let a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	let flag = a.count() > 0
-	var m = a.managed if flag else a.managed
+	let m = a.managed if flag else a.managed
 	try m.setLength(1) otherwise ignore
 	return ((m.length() as Int) * 10 + (a.count() as Int)) as ExitCode
 end 'main'
@@ -3668,7 +3668,7 @@ extension FixedArray
 end 'FixedArray'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	return v.walkedTwoWays() as ExitCode
 end 'main'
 ```
@@ -3704,10 +3704,10 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	var flags = Flags.create()
+	let flags = Flags.create()
 	flags.set(0, value: true)
 
-	var cells = CellArray.create(0)
+	let cells = CellArray.create(0)
 	cells.push(Cell.create(Content.marked(flags)))
 
 	for cell in cells 'each'
@@ -3759,10 +3759,10 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	var flags = Flags.create()
+	let flags = Flags.create()
 	flags.set(0, value: true)
 
-	var cells = CellArray.create(0)
+	let cells = CellArray.create(0)
 	cells.push(Cell.create(Content.marked(flags)))
 	cells.push(Cell.create(Content.marked(flags)))
 
@@ -3835,7 +3835,7 @@ type Svc
 end 'Svc'
 
 function flagsOf(first bool, second bool) returns Flags
-	var flags = Flags.create()
+	let flags = Flags.create()
 	flags.set(0, value: first)
 	flags.set(1, value: second)
 	return flags
@@ -3974,9 +3974,9 @@ typealias Nodes = Array with Node
 typealias Marks = FixedArray with 2 Tally
 
 function main() returns ExitCode
-	var nodes = Nodes.create(0)
+	let nodes = Nodes.create(0)
 	nodes.push(Node.create(7))
-	var marks = Marks.create()
+	let marks = Marks.create()
 	let held = try nodes.get(0) otherwise panic("get")
 	marks.set(0, value: 1)
 	try nodes.set(0, value: Node.create(9)) otherwise panic("set")
@@ -4019,7 +4019,7 @@ type Ledger
 end 'Ledger'
 
 function main() returns ExitCode
-	var ledger = Ledger.create()
+	let ledger = Ledger.create()
 	ledger.nodes.push(Node.create(7))
 	let held = try ledger.nodes.get(0) otherwise panic("get")
 	ledger.marks.set(0, value: 1)
@@ -4062,7 +4062,7 @@ end 'Ring'
 typealias IntRing = Ring with Int
 
 function main() returns ExitCode
-	var ring = IntRing.create()
+	let ring = IntRing.create()
 	let before = ring.swapFirst(5)
 	let after = ring.swapFirst(8)
 	print("{before} {after}\n")
@@ -4124,7 +4124,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var buf = Buf.create(launder(4))
+	let buf = Buf.create(launder(4))
 	var i = 0 as Int
 
 	while i < 4 'fill'
@@ -4181,7 +4181,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var buf = Buf.create(launder(3))
+	let buf = Buf.create(launder(3))
 
 	try buf.set(launder(3), value: 99) otherwise 'oob'
 		return 7
@@ -4258,7 +4258,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var flags = Flags.create(launder(17))
+	let flags = Flags.create(launder(17))
 	try flags.set(0, value: true) otherwise panic("set 0")
 	try flags.set(16, value: true) otherwise panic("set 16")
 
@@ -4294,7 +4294,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var samples = Samples.create(launder(3))
+	let samples = Samples.create(launder(3))
 	try samples.set(1, value: 2.5) otherwise panic("set")
 	try samples.set(2, value: 4.0) otherwise panic("set")
 
@@ -4350,7 +4350,7 @@ function total(cells Buf) returns Int
 end 'total'
 
 function main() returns ExitCode
-	var ledger = Ledger.create(launder(3))
+	let ledger = Ledger.create(launder(3))
 	ledger.record(6)
 	print("{ledger.cells.count()} {total(ledger.cells)}\n")
 
@@ -4398,7 +4398,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var ring = IntRing.create(launder(4))
+	let ring = IntRing.create(launder(4))
 	try ring.put(3, value: 7) otherwise panic("put")
 	let got = try ring.take(3) otherwise panic("take")
 	print("{ring.size()} {got}\n")
@@ -4615,7 +4615,7 @@ function sumOf(v Vec4) returns Int
 end 'sumOf'
 
 function main() returns ExitCode
-	var v = Buf.create(4)
+	let v = Buf.create(4)
 	v.set(2, value: 5)
 	print("{v.count()} {sumOf(v)}\n")
 
@@ -4787,7 +4787,7 @@ function describe(buf Buf) returns Int
 end 'describe'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(2, value: 5)
 	print("{describe(v)}\n")
 
@@ -4903,14 +4903,14 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	bufs.push(Buf.create(launder(2)))
 	bufs.push(Buf.create(4))
 
-	var second = try bufs.get(1) otherwise panic("second")
+	let second = try bufs.get(1) otherwise panic("second")
 	try second.set(3, value: 7) otherwise panic("set")
 
-	var first = try bufs.get(0) otherwise panic("first")
+	let first = try bufs.get(0) otherwise panic("first")
 	let written = try second.get(3) otherwise panic("get")
 	print("{first.count()} {second.count()} {written}\n")
 
@@ -4935,7 +4935,7 @@ function launder(n ElementIndex) returns ElementIndex
 end 'launder'
 
 function main() returns ExitCode
-	var buf = Buf.create(launder(5))
+	let buf = Buf.create(launder(5))
 	try buf.set(4, value: 9) otherwise panic("set")
 
 	let probe = function() gives (try buf.get(4) otherwise -1) + (buf.count() as Int)
@@ -5168,7 +5168,7 @@ end 'make'
 
 function main() returns ExitCode
 	let made = make()
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let first = holder.cells.count()
 	holder.cells = Vec3.create()
 	print("{made.count()} {first} {holder.cells.count()}\n")
@@ -5347,7 +5347,7 @@ end 'sumB'
 
 // --- file: lib/main.maxon
 function main() returns ExitCode
-	var v = fromA()
+	let v = fromA()
 	v.set(3, value: 5)
 	print("{sumB(v)} {lastOf(Buf.create(4)) + 4}\n")
 
@@ -5439,7 +5439,7 @@ extension FixedArray
 end 'FixedArray'
 
 function bytes() returns String
-	var cells = Bytes.create()
+	let cells = Bytes.create()
 
 	for at in 0 upto 300 'write'
 		cells.set(at, value: (at mod 251) as Byte)
@@ -5468,7 +5468,7 @@ function bytes() returns String
 end 'bytes'
 
 function halves() returns String
-	var cells = Halves.create()
+	let cells = Halves.create()
 
 	for at in 0 upto 300 'write'
 		cells.set(at, value: ((at * 217) mod 65536) as Half)
@@ -5497,7 +5497,7 @@ function halves() returns String
 end 'halves'
 
 function wides() returns String
-	var cells = Wides.create()
+	let cells = Wides.create()
 
 	for at in 0 upto 300 'write'
 		cells.set(at, value: ((at * 16777259) mod 4294967296) as Wide)
@@ -5526,7 +5526,7 @@ function wides() returns String
 end 'wides'
 
 function octets() returns String
-	var cells = Octets.create()
+	let cells = Octets.create()
 
 	for at in 0 upto 300 'write'
 		cells.set(at, value: (at mod 251) as Octet)
@@ -5555,7 +5555,7 @@ function octets() returns String
 end 'octets'
 
 function lanes() returns String
-	var cells = Lanes.create()
+	let cells = Lanes.create()
 
 	for at in 0 upto 300 'write'
 		cells.set(at, value: ((at * 217) mod 65536) as Lane)
@@ -5584,7 +5584,7 @@ function lanes() returns String
 end 'lanes'
 
 function flags() returns String
-	var cells = Flags.create()
+	let cells = Flags.create()
 
 	for at in 0 upto 301 'write'
 		cells.set(at, value: at mod 3 == 0)
@@ -5619,7 +5619,7 @@ function flags() returns String
 end 'flags'
 
 function crumbs() returns String
-	var cells = Crumbs.create()
+	let cells = Crumbs.create()
 
 	for at in 0 upto 301 'write'
 		cells.set(at, value: (at mod 4) as Crumb)
@@ -5648,7 +5648,7 @@ function crumbs() returns String
 end 'crumbs'
 
 function nibbles() returns String
-	var cells = Nibbles.create()
+	let cells = Nibbles.create()
 
 	for at in 0 upto 301 'write'
 		cells.set(at, value: (at mod 16) as Nibble)
@@ -5752,8 +5752,8 @@ typealias ByteTwo = Two with (Integer, Byte)
 typealias FlagTwo = Two with (String, bool)
 
 function main() returns ExitCode
-	var bytes = ByteTwo.create(7)
-	var flags = FlagTwo.create("flags")
+	let bytes = ByteTwo.create(7)
+	let flags = FlagTwo.create("flags")
 
 	for at in 0 upto 8 'write'
 		bytes.put(at, value: (at * 31) as Byte)
@@ -5843,8 +5843,8 @@ typealias ByteOuter = Outer with Byte
 typealias FlagOuter = Outer with bool
 
 function main() returns ExitCode
-	var bytes = ByteOuter.create()
-	var flags = FlagOuter.create()
+	let bytes = ByteOuter.create()
+	let flags = FlagOuter.create()
 
 	for at in 0 upto 6 'write'
 		bytes.put(at, value: (at * 41) as Byte)
@@ -5914,8 +5914,8 @@ typealias FlagBits = Bits with bool
 typealias CrumbBits = Bits with Crumb
 
 function main() returns ExitCode
-	var flags = FlagBits.create()
-	var crumbs = CrumbBits.create()
+	let flags = FlagBits.create()
+	let crumbs = CrumbBits.create()
 
 	for at in 0 upto 40 'write'
 		flags.put(at, value: at mod 5 == 0)

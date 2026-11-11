@@ -41,7 +41,7 @@ Three mechanisms carry this:
 | Forged values | No integer-to-enum or integer-to-union cast, and no interface-to-interface cast (**E3009**) |
 | Null | There is no null: every variable, field and element holds a value |
 | Uninitialized fields | Every field must be definitely assigned before its struct literal (**E3086**) |
-| Writing through read-only data | Compile error (**E3159**, **E3078**, **E3207**) |
+| Writing through read-only data | Compile error (**E3197**, **E3207**) |
 | Use after move | Compile error (**E3102**) |
 | Data races | Mutable state is owned by one thread, and only read-only values are shared |
 | Stack overflow | Checked function prologues; **E5004** for the unchecked runtime chains; guard pages on OS stacks |
@@ -82,7 +82,7 @@ typealias PointArray = Array with Point
 
 function main() returns ExitCode
 	var a = Point.create(1, y: 2)
-	var points = PointArray.create(0)
+	let points = PointArray.create(0)
 	points.push(a)                                        // the array shares a's record
 	var b = try points.get(0) otherwise panic("pushed")
 	b.x = 99
@@ -114,8 +114,11 @@ counts are needed. A mistake in that analysis can only add a count, so it costs 
   write to that collection inside the loop cannot free the elements being visited.
 - **Moves.** A move hands the reference over without changing the count, and consumes the source binding.
   Reading the source afterwards is **E3102**. Assigning the binding a new value makes it usable again.
-- **Plain and atomic counts.** Counts are plain within one thread, and atomic only on values shared between
-  threads (see [Threads and Shared Data](#threads-and-shared-data)).
+- **Three kinds of count.** A record in the current region has a plain count, stepped without synchronization
+  by the one thread that owns the region. `immutable` data that threads share, such as a `freeze` result, has an
+  atomic count. Constant data, which includes every module-level `let`, is immortal: it sits in read-only memory
+  and no count is stepped. A `String` buffer and the box of an OS handle start with a plain count and turn atomic
+  at the first alias, at a `freeze`, or at a send (see [Threads and Shared Data](#threads-and-shared-data)).
 
 ### Read-Only Values
 
@@ -124,31 +127,27 @@ number of holders and threads without copying, which is what makes sharing by re
 
 | Read-only data | Read-only through |
 |----------------|-------------------|
-| [constant data](/docs/language/regions/#constant-data): a constant `let`, a `b"…"` literal | itself, for the program's whole life |
+| [constant data](/docs/language/regions/#constant-data): a constant `let`, every module-level `let` and `static let`, a `b"…"` literal | itself, for the program's whole life |
 | [`immutable` data](/docs/language/regions/#frozen-data-freeze-and-immutable): a `freeze` result, a read of an `immutable` slot | everything it reaches |
-| a module-level `let` built by a call | everything it reaches, for the program's whole life |
 | a value read from a `SharedValue` or a registry | everything it reaches |
 | a stored Map key or Set element | itself, while stored |
-| an element of a `readonly` element type | itself, while stored |
+| an element of an `immutable` element slot (`Array with immutable T`) | itself, while stored |
 | a `for` variable, `if let` binding or `match` binding | the same as its source: read-only from a read-only source, writable from a writable one |
 
 The rules:
 
-- **No write through read-only data.** A field store, a method that writes its receiver, or an argument the
-  callee writes is **E3159** (**E3207** for constant and `immutable` data, whose message names the use that
-  needs it writable). The diagnostic names the read-only root. A `for` over a read-only `List` (frozen, or a
-  module `let`) hands out read-only elements, so writing one is **E3197**; iterate a `.clone()`.
-- **No mutable alias of read-only data.** Binding read-only data to a `var` is **E3078**. A module-level
-  `let`'s record reaching a `var` through a ternary, a `match … gives` or a `try … otherwise` is the same
-  **E3078**. Storing read-only data into a `var` field, a mutable container element, or passing it to a
-  parameter that keeps it where something may write it, is **E3078** too. Constant and `immutable` data is
-  refused by the capability checker instead: storing it into a plain field, element or payload is **E3196**,
-  and passing it to a parameter the callee writes or stores into a plain place is **E3207**.
+- **No write through read-only data.** A field store or a method that writes its receiver is **E3197** (**E3207**
+  for constant and `immutable` data, whose message names the use that needs it writable); handing it to a
+  parameter the callee writes is **E3207**. The diagnostic names the read-only root. A `for` over a read-only
+  `List` (frozen, or a module `let`), or over a collection with `immutable` elements, hands out read-only
+  elements, so writing one is **E3197**; iterate a `.clone()`. The element an iterator hands out of a frozen
+  collection parameter is read-only too, and handing it to a callee that writes it is **E3207**.
+- **No mutable place takes read-only data.** Storing it into a plain field, a mutable container element or a
+  union payload is **E3196**, and passing it to a parameter the callee stores into a plain place is **E3207**.
+  Binding it to a `var` or a `let` is allowed: the name sees the same data and is refused the writes.
   [`clone()`](#explicit-cloning) makes an independent mutable copy.
 - **A tuple carries the mark of what it holds.** A tuple literal may hold read-only data, and the tuple is
-  read-only wherever it goes, one a call returns included. Binding the tuple, or one of its read-only
-  elements, to a `var`, assigning it to existing `var` names, or storing it into a `var` field or a container
-  is **E3078**, and passing it to a function that writes it is **E3159**.
+  read-only wherever it goes, one a call returns included; the rules above apply to its elements.
 - **A `let` names writable data.** A `let` binding, a `let` field and a union payload hold records that stay
   writable through every name, so a write through a `let` field reaches the record it holds. An `immutable`
   field takes `immutable` data only.
@@ -157,14 +156,11 @@ The rules:
 - **Keys are read-only.** A stored Map key or Set element cannot be written through its container, and a key
   read back out is read-only. Both are `immutable` slots: a key is immutable data or is frozen where it is
   inserted. Map values and Array elements follow their container.
-- **Read-only element types.** `Array with readonly T` and `Map with K, readonly V` hold read-only values
+- **Immutable element types.** `Array with immutable T` and `Map with K, immutable V` hold frozen values
   without copying:
-  - a read-only value can be stored directly;
+  - a frozen value can be stored directly, and a mutable one is **E3196** until it is frozen;
   - an element read out is read-only;
   - the container itself stays mutable: elements can still be pushed, replaced and removed.
-
-  As a type argument, `readonly` appears only on a container's element or value type; bindings and fields use
-  `let`.
 - **Value types are exempt.** Scalars, `String`, `Character` and records that are immutable aggregates cannot
   give a stored value a second writer, so none of these rules apply to them. A record is an immutable aggregate
   when every field is a `let` and every field's type is a value type or an immutable aggregate; a record with
@@ -187,12 +183,12 @@ typealias PointArray = Array with Point
 function main() returns ExitCode
 	let frozen = freeze Point.create(2)  // frozen data
 	// frozen.x = 3                      // E3197: a write through frozen data
-	var b = frozen.clone()               // an independent, mutable record
+	let b = frozen.clone()               // an independent, mutable record
 	b.x = 5
 
-	var points = PointArray.create(0)
+	let points = PointArray.create(0)
 	points.push(b)                       // the array shares b's record
-	var first = try points.get(0) otherwise panic("pushed")
+	let first = try points.get(0) otherwise panic("pushed")
 	first.x = 9                          // an element follows its container
 	print("{frozen.x} {b.x} {first.x}\n")   // 2 9 9
 	return 0
@@ -203,20 +199,19 @@ end 'main'
 
 | Where a value goes | What happens |
 |--------------------|--------------|
-| `var b = a`, `a` a `var` | `a` moves into `b` |
-| `let b = a`, `a` a `var` | `a` moves into `b` |
+| `let b = a` or `var b = a`, `a` a `var` | `a` moves into `b` |
 | `let b = a` or `var b = a`, `a` a `let` | `b` names the same record, and `a` stays usable |
 | `let b = e`, `e` state something may still write | `b` names it, and the writes are seen through `b` |
-| `var b = a`, `a` read-only data (a stored key, a `SharedValue` read) | **E3078**; `a.clone()` is the mutable copy |
-| `var b = a`, `a` constant or `immutable` data | `b` can be reassigned but not written: a write through it is **E3207**; `a.clone()` is the mutable copy |
+| `let b = a`, `a` read-only data (a stored key, a `SharedValue` read, constant or `immutable` data) | `b` names the same data and is refused writes: a write through it is **E3197** or **E3207**; `a.clone()` is the mutable copy |
+| a `unique` value (a promise, an OS handle) bound with `let`, pushed into a container or handed to a `spawn` | moves; reading the name afterwards is **E3102**, and `clone()` is **E3214** |
 | an ordinary call argument | shared with the callee for the call, counted where needed; a `mutable` parameter is the caller's own storage, so the callee's writes reach it |
-| an argument the callee keeps where something may write it | the holder shares the record; read-only data is **E3078**, and constant or `immutable` data is **E3207** |
+| an argument the callee keeps where something may write it | the holder shares the record; constant or `immutable` data is refused (**E3196** into a plain field, element or payload, **E3207** at a parameter the callee stores into a plain place) |
 | an argument the callee keeps in an `immutable` field | must be `immutable` data (**E3207** otherwise) |
 | an argument to an [`isolated`](/docs/language/regions/#separate-regions-isolated) parameter | moves: a fresh region, or an `isolated` local; reading it afterwards is **E3102** |
 | an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread, and its promise is [tied](/docs/language/async/#tied-and-must-use-promises) when the argument is the caller's mutable data; a variable at a `mutable` parameter is lent to the coroutine until its promise is awaited or cancelled; a promise moves to the coroutine |
 | a [closure](/docs/language/functions/#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
-| a [service](/docs/language/async/#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied |
-| a `spawn` factory argument | moves into the service; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
+| a [service](/docs/language/async/#services--spawn) message | an `isolated` value moves to the service; an `immutable` value is shared; a tuple of heap-free elements the sender does not solely own is copied |
+| a `spawn` factory argument | moves into the service, on a message argument's terms: `isolated` or `immutable` (**E3217** without a word), and a value still held elsewhere is not `isolated` (**E3200**) |
 | `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**) or a tuple of heap-free elements, which is copied; every reader sees it read-only |
 
 ### Aliasing Between Arguments
@@ -286,7 +281,7 @@ end 'Point'
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var b = a.clone()
+	let b = a.clone()
 	b.x = 99
 	print("{a.x} {b.x} {a is b}\n")    // 1 99 false
 	return 0
@@ -326,13 +321,16 @@ decorator of that shape reaches the clone check.
 - **There is no module-level mutable state.** `var` is a local, a field of a `type`, or a parameter's target; a
   file-scope or `static` `var` is a syntax error. State more than one thread uses is a service's fields or a
   [`SharedValue`](/docs/language/async/#sharedvalue--a-live-value-made-at-run-time).
-- **Read-only values are shared.** A module `let` reachable from another thread, a value published through
-  `SharedValue` or a registry `default`, and a read-only parameter sent in a message are marked shared before a
-  second thread can see them. A shared value uses atomic counts, and nothing can write it, because it is read-only.
+- **Read-only values are shared.** A module `let` is image data that every thread reads. A `freeze` result, a
+  value published through `SharedValue` or a registry `default`, and an `immutable` argument sent in a message
+  are marked shared before a second thread can see them. A shared value uses atomic counts, and nothing can
+  write it, because it is read-only.
 - **A shared graph must be walkable.** A `SharedValue` or registry value that holds an OS handle, a function value
-  or a promise is **E3171**. A module `let` read by a message or a factory that the share walk cannot mark is **E3163**.
-- **The send check.** At run time, a mutable value moved to another thread must be solely owned; a value that is
-  not stops the program with exit code **96**.
+  or a promise is **E3171**. A module `let` can hold none of them.
+- **A moved value has one owner.** A mutable value that crosses to another thread is `isolated`, so the sender
+  holds no other name for it (**E3200**, **E3102**); the compiler decides this, and a send checks nothing at run
+  time. The share walk a `freeze` or a publish runs stops the program with exit code **96** only at a value held
+  at an interface type whose conformer no walk can be built for.
 
 ### Raw Memory and the Library Tier
 
@@ -401,7 +399,7 @@ end 'Token'
 typealias TokenList = List with Token
 
 function countTokens() returns TokenId
-	var list = TokenList.create()
+	let list = TokenList.create()
 	list.append(Token.create(1))
 	list.append(Token.create(2))
 	return list.count()             // list, then both tokens, are freed on return
@@ -489,19 +487,17 @@ awaited or dropped exits with **75** instead (see [Concurrency](/docs/language/a
 | Code | Meaning |
 |------|---------|
 | [E3009](/docs/cli/error-codes/#e3009--semanticunsafecast) | a cast that could forge a value: integer to an enum or a union, or interface to interface |
-| [E3078](/docs/cli/error-codes/#e3078--semanticvarfromimmutable) | read-only data bound or stored where it could be written |
 | [E3086](/docs/cli/error-codes/#e3086--semanticfieldnotinitialized) | a field not definitely assigned before its struct literal |
 | [E3102](/docs/cli/error-codes/#e3102--useaftermove) | use of a moved value |
 | [E3152](/docs/cli/error-codes/#e3152--rawintrinsicoutsideruntimetier) | `__Raw` used outside `runtime/` |
-| [E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord) | a write through a read-only value |
-| [E3163](/docs/cli/error-codes/#e3163--semanticunmarkableletreadbyamessage) | a module `let` read by a message or a factory that the share walk cannot mark |
 | [E3171](/docs/cli/error-codes/#e3171--registryvaluenotshareable) | a shared value whose graph holds an OS handle, a function value or a promise |
 | [E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned) | a published value that is not solely owned |
 | [E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier) | raw memory or a raw handle used outside the library tier |
 | [E3186](/docs/cli/error-codes/#e3186--argumentoverlapswrittenparameter) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |
 | [E3196](/docs/cli/error-codes/#e3196--semanticcapabilitymismatchatstore)–[E3217](/docs/cli/error-codes/#e3217--semanticmessageneedsacapability) | the capability, window, tied-promise, unique and service-state checks (see [Capability Errors](/docs/language/regions/#capability-errors)) |
 | [E5004](/docs/cli/error-codes/#e5004--unguardedstackchain) | a chain of unchecked runtime functions that can exceed the stack margin |
-| exit 96 | a mutable value sent to another thread while not solely owned |
+| [E3220](/docs/cli/error-codes/#e3220--semanticmoduleletcallsafunction) | a call in the initializer of a module-level `let` or a `static let` |
+| exit 96 | a share walk reached a value held at an interface type whose conformer no walk can be built for |
 | exit 101 | memory still allocated when `main` returns |
 
 ## Code Generation

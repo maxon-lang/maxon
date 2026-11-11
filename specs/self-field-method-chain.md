@@ -36,7 +36,7 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-		var c = Container.create(IntArray.create(0))
+		let c = Container.create(IntArray.create(0))
 		c.addItem(10)
 		c.addItem(20)
 		return c.getCount()
@@ -69,7 +69,7 @@ type NumberList
 end 'NumberList'
 
 function main() returns ExitCode
-		var list = NumberList.create(IntArray.create(0))
+		let list = NumberList.create(IntArray.create(0))
 		list.add(42)
 		return list.first()
 end 'main'
@@ -138,7 +138,7 @@ type Accumulator
 end 'Accumulator'
 
 function main() returns ExitCode
-		var acc = Accumulator.create(IntArray.create(0))
+		let acc = Accumulator.create(IntArray.create(0))
 		_ = acc.addAndCount(1)
 		_ = acc.addAndCount(2)
 		return acc.addAndCount(3)

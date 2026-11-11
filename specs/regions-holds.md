@@ -26,7 +26,7 @@ type Shelf
 	export var items as TallyArray
 
 	static function create() returns Self
-		var items = TallyArray.create(0)
+		let items = TallyArray.create(0)
 		items.push(11)
 		items.push(22)
 
@@ -44,7 +44,7 @@ type Pair
 end 'Pair'
 
 function replace(shelf Shelf) returns Tally
-	var fresh = TallyArray.create(0)
+	let fresh = TallyArray.create(0)
 	fresh.push(99)
 	shelf.items = fresh
 
@@ -52,7 +52,7 @@ function replace(shelf Shelf) returns Tally
 end 'replace'
 
 function main() returns ExitCode
-	var shelf = Shelf.create()
+	let shelf = Shelf.create()
 	let pair = Pair.build(shelf)
 	print("{pair.first.count()} {try pair.first.get(0) otherwise 0} {pair.second}\n")
 	return 0
@@ -76,7 +76,7 @@ type Shelf
 	export var items as TallyArray
 
 	static function create() returns Self
-		var items = TallyArray.create(0)
+		let items = TallyArray.create(0)
 		items.push(11)
 		items.push(22)
 
@@ -90,7 +90,7 @@ union Parcel
 end 'Parcel'
 
 function replace(shelf Shelf) returns Tally
-	var fresh = TallyArray.create(0)
+	let fresh = TallyArray.create(0)
 	fresh.push(99)
 	shelf.items = fresh
 
@@ -102,7 +102,7 @@ function pack(shelf Shelf) returns Parcel
 end 'pack'
 
 function main() returns ExitCode
-	var shelf = Shelf.create()
+	let shelf = Shelf.create()
 	let parcel = pack(shelf)
 
 	match parcel 'parcel'
@@ -154,7 +154,7 @@ function replace(shelf Shelf) returns Tally
 end 'replace'
 
 function main() returns ExitCode
-	var shelf = Shelf.create(1)
+	let shelf = Shelf.create(1)
 	let sink = spawn Sink.create()
 	let n = try await sink.take(shelf.label, tag: replace(shelf)) otherwise 0
 	print("{n}\n")
@@ -202,7 +202,7 @@ function replace(shelf Shelf) returns Tally
 end 'replace'
 
 function main() returns ExitCode
-	var shelf = Shelf.create(1)
+	let shelf = Shelf.create(1)
 	let holder = spawn Holder.create(shelf.label, tag: replace(shelf))
 	let n = try await holder.total() otherwise 0
 	print("{n}\n")
@@ -227,7 +227,7 @@ type Shelf
 	export var items as TallyArray
 
 	static function create() returns Self
-		var items = TallyArray.create(0)
+		let items = TallyArray.create(0)
 		items.push(11)
 		items.push(22)
 
@@ -236,7 +236,7 @@ type Shelf
 end 'Shelf'
 
 function replace(shelf Shelf) returns Tally
-	var fresh = TallyArray.create(0)
+	let fresh = TallyArray.create(0)
 	fresh.push(99)
 	shelf.items = fresh
 
@@ -249,7 +249,7 @@ function total(items TallyArray, tag Tally) returns Tally
 end 'total'
 
 function main() returns ExitCode
-	var shelf = Shelf.create()
+	let shelf = Shelf.create()
 	let later = async total(shelf.items, tag: replace(shelf))
 	let n = await later
 	print("{n}\n")
@@ -279,7 +279,7 @@ type Holder
 	export var slot as Slot
 
 	static function create() returns Self
-		var items = TallyArray.create(0)
+		let items = TallyArray.create(0)
 		items.push(11)
 		items.push(22)
 
@@ -290,7 +290,7 @@ end 'Holder'
 function readAfterReplacing(holder Holder, items TallyArray)
 	holder.slot = Slot.empty
 
-	var other = TallyArray.create(0)
+	let other = TallyArray.create(0)
 	other.push(7)
 	other.push(8)
 	other.push(9)
@@ -298,7 +298,7 @@ function readAfterReplacing(holder Holder, items TallyArray)
 end 'readAfterReplacing'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 
 	match holder.slot 'slot'
 		empty then print("empty\n")
@@ -642,7 +642,7 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var h = Outer.create()
+	let h = Outer.create()
 	let g = h.a
 	let pair = Pair.build(h.a.b, second: put(g.b))
 	print("{pair.first} {pair.second}\n")

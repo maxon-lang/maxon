@@ -9,24 +9,25 @@ category: language
 
 ## Documentation
 
-A `static let` can be initialized by a function call, an array literal, or a struct literal of the type whose
-body declares it, as well as by a constant. The cases here pin the VALUE every such initializer leaves in its
-slot; `specs/lazy-static-observable.md` pins WHEN it runs, which no case here can see, and the one exception
-to that timing: a standard-library static that nothing reads is not emitted at all, initializer included.
+A `static let` is initialized by a constant, an array literal, a collection conversion, or a struct literal of
+the type whose body declares it. An initializer calls no function: a call is E3220, so write a literal, or build
+the value where it is used. The cases here pin the VALUE every such initializer leaves in its slot;
+`specs/lazy-static-observable.md` pins what a value cannot show, and the one exception to a slot being kept: a
+standard-library static that nothing reads is not emitted at all, initializer included.
 
 ### Syntax
 
 ```text
 type MyType
-	static let cached = SomeType.create()
+	static let cached = MyType{n: 1}
 	static let DEFAULTS = [1, 2, 3]
 end 'MyType'
 ```
 
 ### Semantics
 
-- Every initializer runs before `main`, exactly once, in dependency order, whether or not anything reads the
-  field, a standard-library static aside (`specs/lazy-static-observable.md`)
+- An initializer calls nothing (E3220), so it is a function of the program text alone, in dependency order
+  whether or not anything reads the field, a standard-library static aside (`specs/lazy-static-observable.md`)
 - Every read answers with the value the initializer left
 - Assigning to a `static let` is E2013 (`specs/static-variables.md`)
 - A `static let` holds immutable data, so a function that hands it back declares `returns immutable`
@@ -48,8 +49,8 @@ end 'CharacterSet'
 
 ## Tests
 
-<!-- test: lazy-static.basic-function-call -->
-### A static initialized by a function call
+<!-- test: error.a-static-initialized-by-a-function-call-is-refused -->
+### A static initialized by a function call is refused
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -62,110 +63,29 @@ type Config
 		return Config{n: 42}
 	end 'makeValue'
 
-	static function getValue() returns immutable Config
-		return Config.value
+	static function getValue() returns Count
+		return Config.value.n
 	end 'getValue'
 end 'Config'
 
 function main() returns ExitCode
-	let c = Config.getValue()
-	return c.n
+	return Config.getValue()
 end 'main'
 ```
-```exitcode
-42
-```
-
-<!-- test: lazy-static.initialized-once -->
-### A static initialized only once
-The initializer prints, so a second run would print twice.
-
-```maxon
-typealias Count = int(0 to u64.max)
-
-type Counter
-	static let cached = Counter.createInstance()
-	export var id as Count
-
-	static function createInstance() returns Counter
-		print("init ")
-		return Counter{id: 7}
-	end 'createInstance'
-
-	static function getInstance() returns immutable Counter
-		return Counter.cached
-	end 'getInstance'
-end 'Counter'
-
-function main() returns ExitCode
-	let a = Counter.getInstance()
-	let b = Counter.getInstance()
-	let c = Counter.getInstance()
-	print("{a.id} {b.id} {c.id}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-init 7 7 7
-```
-
-<!-- test: lazy-static.factory-call-with-labelled-argument -->
-### A static built by a static factory call with a labelled argument
-
-```maxon
-typealias Count = int(0 to u64.max)
-
-type Point
-	export var x as Count
-	export var y as Count
-
-	static function create(x Count, y Count) returns Self
-		return Self{x: x, y: y}
-	end 'create'
-end 'Point'
-
-type Defaults
-	static let origin = Point.create(0, y: 0)
-
-	static function getOrigin() returns immutable Point
-		return Defaults.origin
-	end 'getOrigin'
-end 'Defaults'
-
-function main() returns ExitCode
-	let p = Defaults.getOrigin()
-	print("{p.x} {p.y}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-0 0
+```maxoncstderr
+error E3220: <fragment>:5:21: the initializer of 'Config.value' calls 'Config.makeValue': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: lazy-static.multiple-fields -->
-### Several call-initialized statics in one type
+### Several struct-literal statics in one type
 
 ```maxon
 typealias Count = int(0 to u64.max)
 
 type Cache
-	static let a = Cache.buildA()
-	static let b = Cache.buildB()
+	static let a = Cache{n: 10}
+	static let b = Cache{n: 20}
 	export var n as Count
-
-	static function buildA() returns Cache
-		return Cache{n: 10}
-	end 'buildA'
-
-	static function buildB() returns Cache
-		return Cache{n: 20}
-	end 'buildB'
 
 	static function sum() returns Count
 		return Cache.a.n + Cache.b.n
@@ -265,8 +185,10 @@ end 'main'
 true false true
 ```
 
-<!-- test: lazy-static.cross-type-return -->
-### A static initialized by a function returning a different type
+<!-- test: error.a-static-initialized-by-a-free-function-is-refused -->
+### A static initialized by a free function is refused
+
+A bare call inside a type body names the free function, and a free function is a call like any other.
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -286,68 +208,19 @@ type Registry
 	static function getX() returns Count
 		return Registry.cachedPair.x
 	end 'getX'
-
-	static function getY() returns Count
-		return Registry.cachedPair.y
-	end 'getY'
 end 'Registry'
 
 function buildPair() returns Pair
 	return Pair.create(11, y: 22)
 end 'buildPair'
-
-function main() returns ExitCode
-	print("{Registry.getX()} {Registry.getY()}")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-11 22
-```
-
-<!-- test: lazy-static.a-free-function-declared-above-the-type-it-returns -->
-### A static initialized by a free function declared above the type it returns
-
-The free function precedes both the type that calls it and the type it returns. A bare call inside a type body
-names the free function, whatever the declarations around it are.
-
-```maxon
-typealias Count = int(0 to u64.max)
-
-function buildPair() returns Pair
-	return Pair.create(11, y: 22)
-end 'buildPair'
-
-type Registry
-	static let cachedPair = buildPair()
-
-	static function getX() returns Count
-		return Registry.cachedPair.x
-	end 'getX'
-end 'Registry'
-
-type Pair
-	export var x as Count
-	export var y as Count
-
-	static function create(x Count, y Count) returns Self
-		return Self{x: x, y: y}
-	end 'create'
-end 'Pair'
 
 function main() returns ExitCode
 	print("{Registry.getX()}")
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-11
+```maxoncstderr
+error E3220: <fragment>:14:26: the initializer of 'Registry.cachedPair' calls 'buildPair': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: lazy-static.two-loads-in-one-function -->
@@ -420,12 +293,10 @@ A1B2A3 A1A3
 
 ## A struct literal as a static field's initializer
 
-A struct construction is a CALL whose callee is a TYPE rather than a function, and whose labelled
-arguments are its FIELDS. Everything the cases below assert follows from that one sentence: a field's
-value is admitted from exactly the set a factory ARGUMENT is (a constant, a String or array literal, an
-empty container, another call — or another construction), a field the literal omits takes the DEFAULT its
-declaration supplies, and the record is built before `main` the same way a `static let x = T.create()`
-is.
+A struct construction names a TYPE rather than a function, and its labelled arguments are its FIELDS. It is
+a literal, not a call: a field's value is a constant, a String or array literal, an empty container or
+another construction, a call among the fields is E3220, and a field the literal omits takes the DEFAULT its
+declaration supplies.
 
 The construction is legal **inside the type's own body and nowhere else**, which is the ordinary E3076
 restriction rather than a rule of its own — a `static` member's initializer is written inside the `type`
@@ -554,11 +425,10 @@ end 'main'
 2
 ```
 
-<!-- test: lazy-static.struct-literal-field-is-a-call -->
-### A struct literal whose field is a static factory call
+<!-- test: error.struct-literal-field-is-a-call -->
+### A struct literal whose field is a static factory call is refused
 
-The case that says a field is an ARGUMENT: its value is produced by running the program's own code, and
-the result is moved into the box exactly as a materialized constant is.
+A field is an ARGUMENT, and a call among the arguments is a call in the initializer.
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -576,22 +446,18 @@ type Outer
 
 	static let base = Outer{inner: Inner.create(7)}
 
-	static function get() returns immutable Outer
-		return Outer.base
+	static function get() returns Count
+		return Outer.base.inner.n
 	end 'get'
 end 'Outer'
 
 function main() returns ExitCode
-	let o = Outer.get()
-	print("{o.inner.n}")
+	print("{Outer.get()}")
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-7
+```maxoncstderr
+error E3220: <fragment>:15:20: the initializer of 'Outer.base' calls 'Inner.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: lazy-static.struct-literal-field-default -->

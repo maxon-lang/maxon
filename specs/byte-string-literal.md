@@ -194,8 +194,8 @@ end 'Info'
 
 function main() returns ExitCode
 		let m = [b"hello": Info.create(10), b"world": Info.create(20)]
-		view v1 = try m.get(b"hello") otherwise Info.create(0)
-		view v2 = try m.get(b"world") otherwise Info.create(0)
+		let v1 = try m.get(b"hello") otherwise Info.create(0)
+		let v2 = try m.get(b"world") otherwise Info.create(0)
 		print("{v1.value} {v2.value}")
 		return 0
 end 'main'
@@ -301,16 +301,31 @@ end 'main'
 99 9
 ```
 
-<!-- test: byte-string-literal.tobytearray-global -->
+<!-- test: byte-string-literal.error.tobytearray-global-is-refused -->
 
-A method call whose result is a record initializes a global as it initializes a body's `let`: the
-`ByteArray` is built once before `main`.
+A global's initializer calls nothing, so a method call whose result is a record is refused there; the `ByteArray`
+is built where it is used.
 ```maxon
 let B = "critsplit".toByteArray()
 
 function main() returns ExitCode
 		let first = try B.get(0) otherwise panic("oob")
 		print("{first} {B.count()}\n")
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E3220: <fragment>:2:9: the initializer of 'B' calls 'String.toByteArray': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+```
+
+<!-- test: byte-string-literal.tobytearray-local -->
+
+A method call whose result is a record initializes a body's `let`: the `ByteArray` is built when `main` runs.
+```maxon
+function main() returns ExitCode
+		let b = "critsplit".toByteArray()
+		let first = try b.get(0) otherwise panic("oob")
+		print("{first} {b.count()}\n")
 		return 0
 end 'main'
 ```
@@ -360,7 +375,7 @@ copied into a heap buffer of its own. Pushing onto it grows that buffer and leav
 alone — the run reports no leak, and the grown array drops leak-free.
 ```maxon
 function main() returns ExitCode
-		var a = b"hi".clone()
+		let a = b"hi".clone()
 		a.push(88)
 		let g = try a.get(2) otherwise 0
 		print("{a.count()} {g}")
@@ -457,7 +472,7 @@ literal's `.rdata`, which is mapped read-only. The clone copies the `length · e
 the other elements survive the write.
 ```maxon
 function main() returns ExitCode
-		var a = b"hi".clone()
+		let a = b"hi".clone()
 		try a.set(0, value: 88) otherwise panic("test invariant: index 0 is in bounds")
 		let v = try a.get(0) otherwise 0
 		let w = try a.get(1) otherwise 0
@@ -479,7 +494,7 @@ on the `.clone()` it writes the private buffer. The cleared array must remain a 
 push below lands in the clone's buffer, not back in the blob.
 ```maxon
 function main() returns ExitCode
-		var a = b"hey".clone()
+		let a = b"hey".clone()
 		a.clear()
 		a.push(65)
 		let z = try a.get(0) otherwise 0
@@ -500,7 +515,7 @@ end 'main'
 removed element is read out of the buffer and the survivors are compacted in the private copy.
 ```maxon
 function main() returns ExitCode
-		var a = b"hey".clone()
+		let a = b"hey".clone()
 		let r = try a.remove(0) otherwise panic("test invariant: index 0 is in bounds")
 		let f = try a.get(0) otherwise 0
 		print("{r} {a.count()} {f}")
@@ -520,7 +535,7 @@ end 'main'
 buffer, and so it runs on the `.clone()`.
 ```maxon
 function main() returns ExitCode
-		var a = b"yo".clone()
+		let a = b"yo".clone()
 		let p = try a.pop() otherwise panic("test invariant: a two-element array is not empty")
 		let f = try a.get(0) otherwise 0
 		print("{p} {a.count()} {f}")
@@ -542,7 +557,7 @@ reallocating a buffer that had just been replaced. Both writes must land in the 
 grow must carry all three earlier bytes forward.
 ```maxon
 function main() returns ExitCode
-		var a = b"abc".clone()
+		let a = b"abc".clone()
 		try a.set(0, value: 88) otherwise panic("test invariant: index 0 is in bounds")
 		try a.set(2, value: 90) otherwise panic("test invariant: index 2 is in bounds")
 		a.push(89)
@@ -575,7 +590,7 @@ RANGE and `a.set(0, value: n as Byte)` — an `Integer` cast into a `Byte` slot 
 the slot holds only `movRegReg rcx, r12`.
 ```maxon
 function detachAndRead(n Integer) returns Integer
-		var a = b"hi".clone()
+		let a = b"hi".clone()
 		try a.set(0, value: n as Byte) otherwise panic("test invariant: index 0 is in bounds")
 		return try a.get(0) otherwise 0
 end 'detachAndRead'
@@ -609,7 +624,7 @@ function main() returns ExitCode
 		var total = 0 as Count
 		var i = 0 as Count
 		while i < 3 'round'
-				var a = b"hi"
+				let a = b"hi"
 				let v = try a.get(0) otherwise 0
 				total = total + (v as Count)
 				i = i + 1
@@ -634,7 +649,7 @@ empty), so the zero-byte buffer is reached through the grow path: `resize` publi
 that the `set`s below then write.
 ```maxon
 function main() returns ExitCode
-		var a = b"".clone()
+		let a = b"".clone()
 		a.resize(2)
 		try a.set(0, value: 65) otherwise panic("test invariant: index 0 is in bounds")
 		try a.set(1, value: 66) otherwise panic("test invariant: index 1 is in bounds")
@@ -779,7 +794,7 @@ function launder(n Signed) returns Signed
 end 'launder'
 
 function main() returns ExitCode
-		var a = b"hey".clone()
+		let a = b"hey".clone()
 		a.resize(launder(-2) as ElementIndex)
 		return 0
 end 'main'

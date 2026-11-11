@@ -21,7 +21,7 @@ A *constant* bool-array literal (e.g. `[true, false, true]`) is lowered to a bit
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -50,7 +50,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(false)
 	arr.push(false)
 	arr.push(false)
@@ -71,7 +71,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	var i = 0 as Count
 	while i < 9 'push'
 		arr.push(false)
@@ -100,7 +100,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	var i = 0 as Count
 	while i < 100 'push'
 		arr.push(i < 50)
@@ -127,7 +127,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(true)
 	arr.insert(1, value: false)
@@ -156,7 +156,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -207,7 +207,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -247,7 +247,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.clear()
@@ -266,7 +266,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -282,7 +282,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -303,10 +303,10 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
-	var copy = arr.clone()
+	let copy = arr.clone()
 	try copy.set(0, value: false) otherwise panic("test invariant: set OOB")
 	let orig = try arr.get(0) otherwise false
 	let cloned = try copy.get(0) otherwise true
@@ -347,7 +347,7 @@ end 'main'
 <!-- test: mutable-literal-cow -->
 ```maxon
 function main() returns ExitCode
-	var arr = [true, false, true]
+	let arr = [true, false, true].clone()
 	try arr.set(1, value: true) otherwise panic("test invariant: set OOB")
 	let v1 = try arr.get(1) otherwise false
 	if v1 'check'
@@ -365,7 +365,7 @@ end 'main'
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -408,7 +408,7 @@ function printBits(a BoolArray)
 end 'printBits'
 
 function main() returns ExitCode
-	var a = [true, false, true, false, true]
+	let a = [true, false, true, false, true].clone()
 	_ = try a.remove(1) otherwise panic("test invariant: remove OOB")
 	printBits(a)
 	return 0
@@ -464,7 +464,7 @@ function printBits(a BoolArray)
 end 'printBits'
 
 function main() returns ExitCode
-	var d = [true, true, true]
+	let d = [true, true, true].clone()
 	d.insert(1, value: false)
 	printBits(d)
 	return 0
@@ -491,7 +491,7 @@ function printBits(a BoolArray)
 end 'printBits'
 
 function main() returns ExitCode
-	var e = [true, false]
+	let e = [true, false].clone()
 	let f = [true, true]
 	e.append(f)
 	printBits(e)
@@ -521,11 +521,11 @@ function printBits(a BoolArray)
 end 'printBits'
 
 function main() returns ExitCode
-	var front = [false, true, true]
+	let front = [false, true, true].clone()
 	_ = try front.remove(0) otherwise panic("test invariant: remove OOB")
 	printBits(front)
 
-	var wide = [true, false, true, false, true, false, true, false, true]
+	let wide = [true, false, true, false, true, false, true, false, true].clone()
 	_ = try wide.remove(4) otherwise panic("test invariant: remove OOB")
 	printBits(wide)
 	return 0

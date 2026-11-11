@@ -86,7 +86,7 @@ function grow(dest IntArray)
 end 'grow'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	grow(a)
 	return try a.get(0) otherwise -1
 end 'main'
@@ -305,7 +305,7 @@ function pong(d IntArray, n Integer)
 end 'pong'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	ping(a, n: 3)
 	return try a.get(0) otherwise -1
 end 'main'
@@ -350,7 +350,7 @@ end 'copyInto'
 
 function main() returns ExitCode
 	let a = IntArray.create(0)
-	var b = IntArray.create(0)
+	let b = IntArray.create(0)
 	copyInto(a, dest: b)
 	return b.count() as ExitCode
 end 'main'
@@ -372,7 +372,7 @@ end 'copyInto'
 
 function main() returns ExitCode
 	let a = IntArray.create(0)
-	var b = IntArray.create(0)
+	let b = IntArray.create(0)
 	copyInto(a, src: b)
 	return b.count() as ExitCode
 end 'main'
@@ -476,7 +476,7 @@ function add(s IntSet)
 end 'add'
 
 function main() returns ExitCode
-	var s = IntSet.create()
+	let s = IntSet.create()
 	add(s)
 	return s.count() as ExitCode
 end 'main'
@@ -542,7 +542,7 @@ function tick(c Counter)
 end 'tick'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	tick(c)
 	tick(c)
 	return c.n as ExitCode
@@ -616,7 +616,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	h.inner.bump()
 	return h.inner.n as ExitCode
 end 'main'
@@ -698,7 +698,7 @@ function nudge(t Holder)
 end 'nudge'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	nudge(h)
 	nudge(h)
 	return h.inner.n as ExitCode
@@ -769,7 +769,7 @@ function caller(p IntArray) returns Integer
 end 'caller'
 
 function main() returns ExitCode
-	var v = IntArray.create(0)
+	let v = IntArray.create(0)
 	return caller(v) as ExitCode
 end 'main'
 ```
@@ -789,13 +789,13 @@ function grow(d IntArray)
 end 'grow'
 
 function caller(p IntArray) returns Integer
-	var a = p
+	let a = p
 	grow(a)
 	return a.count()
 end 'caller'
 
 function main() returns ExitCode
-	var v = IntArray.create(0)
+	let v = IntArray.create(0)
 	return caller(v) as ExitCode
 end 'main'
 ```
@@ -821,7 +821,7 @@ function outer(d IntArray) returns Integer
 end 'outer'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	return outer(a) as ExitCode
 end 'main'
 ```
@@ -875,7 +875,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	c.bump()
 	return c.n as ExitCode
 end 'main'
@@ -943,7 +943,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	c.bumpTwice()
 	return c.n as ExitCode
 end 'main'
@@ -1033,7 +1033,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.add(1)
 	return b.size() as ExitCode
 end 'main'
@@ -1077,7 +1077,7 @@ function grow(d IntArray)
 end 'grow'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	let f = grow
 	f(a)
 	return a.count() as ExitCode
@@ -1137,7 +1137,7 @@ end 'apply'
 
 function main() returns ExitCode
 	let a = IntArray.create(0)
-	var b = IntArray.create(0)
+	let b = IntArray.create(0)
 	let g = grow
 	g(b)
 	let total = apply(size, d: a)
@@ -1175,7 +1175,7 @@ function build(m Maker, d mutable IntArray) returns Shelf
 end 'build'
 
 function main() returns ExitCode
-	var v = IntArray.create(0)
+	let v = IntArray.create(0)
 	v.push(1)
 	let shelf = build(shelve, d: v)
 	v.push(2)
@@ -1213,7 +1213,7 @@ function build(m Maker, d mutable IntArray) returns Shelf
 end 'build'
 
 function main() returns ExitCode
-	var v = IntArray.create(0)
+	let v = IntArray.create(0)
 	v.push(1)
 	let shelf = build(shelve, d: v)
 	return shelf.items.count() as ExitCode
@@ -1480,7 +1480,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.add(1)
 	return b.size() as ExitCode
 end 'main'
@@ -1519,7 +1519,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.add()
 	return b.size() as ExitCode
 end 'main'
@@ -1573,7 +1573,7 @@ function pass(s IntArray) returns IntArray
 end 'pass'
 
 function tag(p IntArray)
-	var x = pass(p)
+	let x = pass(p)
 	x.push(9)
 end 'tag'
 
@@ -1603,7 +1603,7 @@ type Blk
 end 'Blk'
 
 function retarget(block Blk, id Integer)
-	var target = block
+	let target = block
 	target.id = id
 end 'retarget'
 
@@ -1632,12 +1632,12 @@ type Blk
 end 'Blk'
 
 function retarget(block Blk, id Integer)
-	var target = block
+	let target = block
 	target.id = id
 end 'retarget'
 
 function main() returns ExitCode
-	var a = Blk.create(1)
+	let a = Blk.create(1)
 	retarget(a, id: 5)
 	return a.id as ExitCode
 end 'main'
@@ -1670,7 +1670,7 @@ type Outer
 end 'Outer'
 
 function retargetInner(outer Outer, id Integer)
-	var target = outer.inner
+	let target = outer.inner
 	target.id = id
 end 'retargetInner'
 
@@ -1707,12 +1707,12 @@ type Outer
 end 'Outer'
 
 function retargetInner(outer Outer, id Integer)
-	var target = outer.inner
+	let target = outer.inner
 	target.id = id
 end 'retargetInner'
 
 function main() returns ExitCode
-	var o = Outer.create(2)
+	let o = Outer.create(2)
 	retargetInner(o, id: 6)
 	return o.inner.id as ExitCode
 end 'main'
@@ -1736,13 +1736,13 @@ type Blk
 end 'Blk'
 
 function retargetEither(first Blk, second Blk, which bool, id Integer)
-	var target = first if which else second
+	let target = first if which else second
 	target.id = id
 end 'retargetEither'
 
 function main() returns ExitCode
 	let c = Blk.create(4)
-	var b = Blk.create(3)
+	let b = Blk.create(3)
 	retargetEither(c, second: b, which: false, id: 7)
 	return b.id as ExitCode
 end 'main'
@@ -1766,13 +1766,13 @@ type Blk
 end 'Blk'
 
 function retargetEither(first Blk, second Blk, which bool, id Integer)
-	var target = first if which else second
+	let target = first if which else second
 	target.id = id
 end 'retargetEither'
 
 function main() returns ExitCode
-	var c = Blk.create(4)
-	var b = Blk.create(3)
+	let c = Blk.create(4)
+	let b = Blk.create(3)
 	retargetEither(c, second: b, which: false, id: 7)
 	return b.id as ExitCode
 end 'main'

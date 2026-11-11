@@ -137,7 +137,7 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	// and `String` has no `Comparable`, so no `String.compare`. Those three holes are one fact, stated in
 	// `isIntrinsicBuiltinConformance` and read from there rather than restated here. ⚠ `Character` looks
 	// like a fourth and is not: it conforms to all three.
-	var impls = NameRoster.create(0)
+	let impls = NameRoster.create(0)
 	let intHash = candidateImplName(impls, conformerName: IntConformerName, methodName: HashMethodName)
 	let intEquals = candidateImplName(impls, conformerName: IntConformerName, methodName: EqualsMethodName)
 	let intCompare = candidateImplName(impls, conformerName: IntConformerName, methodName: CompareMethodName)
@@ -267,7 +267,7 @@ end 'candidateImplName'
 // ops-sized index array PER FUNCTION to answer it. Over-approximating is free here and under-approximating
 // is a link failure, so the walk is deliberately the cheap, wide one.
 function referencedBuiltinImpls(module StdModule, globalData GlobalDataTable, impls NameRoster) returns FunctionNameSet
-	var referenced = FunctionNameSet.create()
+	let referenced = FunctionNameSet.create()
 
 	let synthesizable = undefinedImplNames(module, impls: impls)
 
@@ -313,7 +313,7 @@ function undefinedImplNames(module StdModule, impls NameRoster) returns NameRost
 	// At most eleven entries, and it is a SET rather than a per-candidate flag column so both loops can walk
 	// their arrays by BORROW — neither the function records nor the candidate names are retained to answer a
 	// byte compare.
-	var definedCandidates = FunctionNameSet.create()
+	let definedCandidates = FunctionNameSet.create()
 
 	for func in module.functions 'eachFunc'
 		for impl in impls 'eachImpl'
@@ -324,7 +324,7 @@ function undefinedImplNames(module StdModule, impls NameRoster) returns NameRost
 		end 'eachImpl'
 	end 'eachFunc'
 
-	var undefined = NameRoster.create(0)
+	let undefined = NameRoster.create(0)
 
 	for impl in impls 'eachCandidate'
 		if not definedCandidates.contains(impl) 'notDefined'
@@ -500,10 +500,10 @@ end 'noteBuiltinImplReference'
 // scalar i64 in arg-0 (the witness dispatch passes `self.item`, a scalar `T` field read, straight
 // in — no pointer indirection).
 function buildIntHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let receiver = 0
 
@@ -564,11 +564,11 @@ end 'emitFloatBitsFold'
 // `primitive-hashable/float.hash.nan` pins the fold so a later reader does not "fix" it. `float.compare`'s
 // NaN preamble is not a counter-example: `compare` implements a TOTAL order, which IEEE does not give.
 function buildFloatHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneF64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneF64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var join = module.addBlock(func, label: b"hashed", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let join = module.addBlock(func, label: b"hashed", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
 	let receiver = 0
@@ -581,8 +581,8 @@ function buildFloatHash(module StdModule, name ByteArray)
 end 'buildFloatHash'
 
 export function emitFloatHashInto(module StdModule, func IrFunction, entry IrBlock, bits ValueId, join IrBlock, ids ValueMinter) returns ValueId
-	var negativeZero = module.addBlock(func, label: b"negzero", heat: BlockHeat.normal)
-	var folded = module.addBlock(func, label: b"floatfold", heat: BlockHeat.normal)
+	let negativeZero = module.addBlock(func, label: b"negzero", heat: BlockHeat.normal)
+	let folded = module.addBlock(func, label: b"floatfold", heat: BlockHeat.normal)
 
 	let hashed = ids.mint()
 	join.blockArgs.push(IrBlockArg.create(hashed, argType: StdType.i64))
@@ -673,12 +673,12 @@ end 'twoOperandParams'
 // (`stdlib/PrimitiveExtensions.maxon:39-41` is a bare `self == other` beside a NaN-aware `compare`) and the
 // canonical corpus pins both halves, so the asymmetry is the specification rather than an oversight here.
 function buildBuiltinEquals(module StdModule, name ByteArray, operandType StdType)
-	var func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(RequirementType.ofTag(ValueTypeTag.boolean)))
-	var ids = ValueMinter.create(2)
+	let func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(RequirementType.ofTag(ValueTypeTag.boolean)))
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
-	var notEqualBlock = module.addBlock(func, label: b"notEqual", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
+	let notEqualBlock = module.addBlock(func, label: b"notEqual", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
 	let receiver = 0
@@ -753,14 +753,14 @@ end 'emitOrderedCascade'
 // cannot use it: IEEE `<`/`>` are false for every NaN pair, so `buildFloatCompare` enters the SAME cascade
 // from a NaN preamble instead.
 function buildOrderingCompare(module StdModule, name ByteArray, operandType StdType, ordering EnumLayout)
-	var func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(RequirementType.ofNominal(OrderingTypeName)))
-	var ids = ValueMinter.create(2)
+	let func = createTwoOperandImpl(name, operandType: operandType, resultType: builtinProtocolResultStdType(RequirementType.ofNominal(OrderingTypeName)))
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var lessBlock = module.addBlock(func, label: b"less", heat: BlockHeat.normal)
-	var notLessBlock = module.addBlock(func, label: b"notLess", heat: BlockHeat.normal)
-	var greaterBlock = module.addBlock(func, label: b"greater", heat: BlockHeat.normal)
-	var equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let lessBlock = module.addBlock(func, label: b"less", heat: BlockHeat.normal)
+	let notLessBlock = module.addBlock(func, label: b"notLess", heat: BlockHeat.normal)
+	let greaterBlock = module.addBlock(func, label: b"greater", heat: BlockHeat.normal)
+	let equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
 	let receiver = 0
@@ -790,17 +790,17 @@ end 'buildOrderingCompare'
 // a VALUE two blocks read rather than a branch, which on x64 costs the
 // `setne`+`setp`+`lea` materialization instead of a fused jump — a bigger body, to save a duplicated compare.
 function buildFloatCompare(module StdModule, name ByteArray, ordering EnumLayout)
-	var func = createTwoOperandImpl(name, operandType: StdType.f64, resultType: builtinProtocolResultStdType(RequirementType.ofNominal(OrderingTypeName)))
-	var ids = ValueMinter.create(2)
+	let func = createTwoOperandImpl(name, operandType: StdType.f64, resultType: builtinProtocolResultStdType(RequirementType.ofNominal(OrderingTypeName)))
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var selfIsNanBlock = module.addBlock(func, label: b"selfIsNan", heat: BlockHeat.normal)
-	var selfNotNanBlock = module.addBlock(func, label: b"selfNotNan", heat: BlockHeat.normal)
-	var orderedBlock = module.addBlock(func, label: b"ordered", heat: BlockHeat.normal)
-	var lessBlock = module.addBlock(func, label: b"less", heat: BlockHeat.normal)
-	var notLessBlock = module.addBlock(func, label: b"notLess", heat: BlockHeat.normal)
-	var greaterBlock = module.addBlock(func, label: b"greater", heat: BlockHeat.normal)
-	var equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let selfIsNanBlock = module.addBlock(func, label: b"selfIsNan", heat: BlockHeat.normal)
+	let selfNotNanBlock = module.addBlock(func, label: b"selfNotNan", heat: BlockHeat.normal)
+	let orderedBlock = module.addBlock(func, label: b"ordered", heat: BlockHeat.normal)
+	let lessBlock = module.addBlock(func, label: b"less", heat: BlockHeat.normal)
+	let notLessBlock = module.addBlock(func, label: b"notLess", heat: BlockHeat.normal)
+	let greaterBlock = module.addBlock(func, label: b"greater", heat: BlockHeat.normal)
+	let equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
 	let receiver = 0
@@ -859,21 +859,21 @@ end 'buildFloatCompare'
 // lengths) rather than computed. Both `argType`s are set explicitly: `retypeBlockArgs` runs in
 // `lowerMaxonToStd`, which these post-pipeline functions never pass through.
 export function buildByteRecordCompare(module StdModule, name ByteArray, ordering EnumLayout)
-	var func = createTwoOperandImpl(name, operandType: StdType.i64, resultType: builtinProtocolResultStdType(RequirementType.ofNominal(OrderingTypeName)))
-	var ids = ValueMinter.create(2)
+	let func = createTwoOperandImpl(name, operandType: StdType.i64, resultType: builtinProtocolResultStdType(RequirementType.ofNominal(OrderingTypeName)))
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var selfShorter = module.addBlock(func, label: b"selfShorter", heat: BlockHeat.normal)
-	var otherShorter = module.addBlock(func, label: b"otherShorter", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
-	var byteNotLess = module.addBlock(func, label: b"byteNotLess", heat: BlockHeat.normal)
-	var nextByte = module.addBlock(func, label: b"nextByte", heat: BlockHeat.normal)
-	var lengthTie = module.addBlock(func, label: b"lengthTie", heat: BlockHeat.normal)
-	var lenNotLess = module.addBlock(func, label: b"lenNotLess", heat: BlockHeat.normal)
-	var lessBlock = module.addBlock(func, label: b"less", heat: BlockHeat.normal)
-	var greaterBlock = module.addBlock(func, label: b"greater", heat: BlockHeat.normal)
-	var equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let selfShorter = module.addBlock(func, label: b"selfShorter", heat: BlockHeat.normal)
+	let otherShorter = module.addBlock(func, label: b"otherShorter", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
+	let byteNotLess = module.addBlock(func, label: b"byteNotLess", heat: BlockHeat.normal)
+	let nextByte = module.addBlock(func, label: b"nextByte", heat: BlockHeat.normal)
+	let lengthTie = module.addBlock(func, label: b"lengthTie", heat: BlockHeat.normal)
+	let lenNotLess = module.addBlock(func, label: b"lenNotLess", heat: BlockHeat.normal)
+	let lessBlock = module.addBlock(func, label: b"less", heat: BlockHeat.normal)
+	let greaterBlock = module.addBlock(func, label: b"greater", heat: BlockHeat.normal)
+	let equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
 	let receiver = 0
@@ -935,10 +935,10 @@ end 'buildByteRecordCompare'
 // accumulator added. Both phi `argType`s are set to i64 explicitly: `retypeBlockArgs` runs in
 // `lowerMaxonToStd`, which these post-pipeline functions never pass through.
 function buildStrHash(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let strPtr = 0
@@ -992,9 +992,9 @@ export function emitArrayHashStepTail(module StdModule, block IrBlock, header Ir
 end 'emitArrayHashStepTail'
 
 function emitDjb2HashOverByteRange(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, len ValueId, ids ValueMinter)
-	var header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	let hSeed = emitConst(module, block: cur, value: Djb2Seed, ids: ids)
 	let iSeed = emitConst(module, block: cur, value: 0, ids: ids)

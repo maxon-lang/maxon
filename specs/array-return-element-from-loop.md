@@ -42,10 +42,10 @@ function findEntry(entries EntryArray, key String) returns Entry
 end 'findEntry'
 
 function main() returns ExitCode
-	var arr = EntryArray.create(0)
+	let arr = EntryArray.create(0)
 	arr.push(Entry.create("apple"))
 	arr.push(Entry.create("banana"))
-	view found = findEntry(arr, key: "banana")
+	let found = findEntry(arr, key: "banana")
 	print("found={found.key}\n")
 	return 0
 end 'main'

@@ -45,7 +45,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -361,7 +361,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -527,7 +527,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -743,7 +743,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1029,7 +1029,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1158,7 +1158,7 @@ zero-filled up to it. For plaintexts of 0 to 1024 bytes, the written bytes equal
 nonce of another length throws `invalidNonceLength` and leaves the array alone.
 ```maxon
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -1173,7 +1173,7 @@ function part(bytes ByteArray, start Count, endIndex Count) returns ByteArray
 end 'part'
 
 function zeros(count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.resize(count)
 
 	return bytes
@@ -1184,21 +1184,21 @@ function wrongWrites(aead AesGcm, nonce ByteArray, additional ByteArray, plain B
 	let expected = try aead.seal(nonce, plaintext: plain, additionalData: additional) otherwise panic("sealed")
 	let prefix = bytesFor(9, count: 7)
 
-	var fresh = ByteArray.create(0)
+	let fresh = ByteArray.create(0)
 	try aead.sealInto(fresh, at: 0, nonce: nonce, plaintext: plain, additionalData: additional) otherwise panic("sealed")
 
 	if not fresh.equals(expected) 'freshDiffers'
 		wrong = wrong + 1
 	end 'freshDiffers'
 
-	var longer = bytesFor(9, count: 7 + plain.count() + 100)
+	let longer = bytesFor(9, count: 7 + plain.count() + 100)
 	try aead.sealInto(longer, at: 7, nonce: nonce, plaintext: plain, additionalData: additional) otherwise panic("sealed")
 
 	if longer.count() != 7 + expected.count() or not part(longer, start: 0, endIndex: 7).equals(prefix) or not part(longer, start: 7, endIndex: longer.count()).equals(expected) 'longerDiffers'
 		wrong = wrong + 1
 	end 'longerDiffers'
 
-	var shorter = part(prefix, start: 0, endIndex: 3)
+	let shorter = part(prefix, start: 0, endIndex: 3)
 	try aead.sealInto(shorter, at: 7, nonce: nonce, plaintext: plain, additionalData: additional) otherwise panic("sealed")
 
 	if shorter.count() != 7 + expected.count() or not part(shorter, start: 0, endIndex: 3).equals(part(prefix, start: 0, endIndex: 3)) or not part(shorter, start: 3, endIndex: 7).equals(zeros(4)) or not part(shorter, start: 7, endIndex: shorter.count()).equals(expected) 'shorterDiffers'
@@ -1225,7 +1225,7 @@ function main() returns ExitCode
 		wrong = wrong + wrongWrites(aead, nonce: nonce, additional: additional, plain: bytesFor(dataBytes + 5, count: dataBytes))
 	end 'eachLength'
 
-	var untouched = bytesFor(9, count: 20)
+	let untouched = bytesFor(9, count: 20)
 	var refused = false
 
 	try aead.sealInto(untouched, at: 4, nonce: bytesFor(2, count: 11), plaintext: bytesFor(5, count: 8), additionalData: additional) otherwise (failure) 'nonceRefused'
@@ -1254,7 +1254,7 @@ those arrays: the array ends up holding that input's first `at` bytes followed b
 inputs, for plaintexts of 0 to 300 bytes at offsets 0, 5 and 40, and `open` takes the sealed bytes back.
 ```maxon
 function bytesFor(seed Count, count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		let mixed = ((index + seed * 977 + 1) * 2654435761 + 12345) mod 4294967296
@@ -1275,21 +1275,21 @@ enum Aliased
 end 'Aliased'
 
 function sealOverPlaintext(aead AesGcm, nonce ByteArray, additional ByteArray, plain ByteArray, at Count) returns ByteArray
-	var shared = plain.clone()
+	let shared = plain.clone()
 	try aead.sealInto(shared, at: at, nonce: nonce, plaintext: shared, additionalData: additional) otherwise panic("sealed")
 
 	return shared
 end 'sealOverPlaintext'
 
 function sealOverNonce(aead AesGcm, nonce ByteArray, additional ByteArray, plain ByteArray, at Count) returns ByteArray
-	var shared = nonce.clone()
+	let shared = nonce.clone()
 	try aead.sealInto(shared, at: at, nonce: shared, plaintext: plain, additionalData: additional) otherwise panic("sealed")
 
 	return shared
 end 'sealOverNonce'
 
 function sealOverAdditionalData(aead AesGcm, nonce ByteArray, additional ByteArray, plain ByteArray, at Count) returns ByteArray
-	var shared = additional.clone()
+	let shared = additional.clone()
 	try aead.sealInto(shared, at: at, nonce: nonce, plaintext: plain, additionalData: shared) otherwise panic("sealed")
 
 	return shared

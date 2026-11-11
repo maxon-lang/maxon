@@ -160,7 +160,7 @@ function appendArm64MinimalExit(code ByteArray)
 end 'appendArm64MinimalExit'
 
 export function minimalExitElf(cpu CpuArch) returns ByteArray
-	var code = ByteArray.create(0)
+	let code = ByteArray.create(0)
 
 	match cpu 'exitSequence'
 		x64 then appendX64MinimalExit(code)
@@ -171,7 +171,7 @@ export function minimalExitElf(cpu CpuArch) returns ByteArray
 	let codeOffset = ElfHeaderSize + ElfMinimalProgramHeaderCount * ElfProgramHeaderSize
 	let imageSize = codeOffset + code.count()
 
-	var elf = ByteArray.create(imageSize, zeroed: false)
+	let elf = ByteArray.create(imageSize, zeroed: false)
 
 	writeElfFileHeader(elf, elfMachine: elfMachineFor(cpu), entryPoint: (ElfLoadAddr + codeOffset) as MachineWord, programHeaderCount: ElfMinimalProgramHeaderCount)
 	writeElfProgramHeader(elf, flags: ElfPfRead or ElfPfExec, fileOffset: 0, vaddr: ElfLoadAddr, fileSize: imageSize as MachineWord, memSize: imageSize as MachineWord)
@@ -319,7 +319,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 
 	let elfMachine = elfMachineFor(target.cpu)
 
-	var code = codeResult.code
+	let code = codeResult.code
 	let codeSize = code.count()
 	let rdataSize = codeResult.rdata.count()
 	let preludeSize = codeResult.dataPrelude.count()
@@ -388,7 +388,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// exactly the same path x64-linux does. Only PIE images need the rebase channel instead (see MachOWriter).
 	bakeFuncAbs64Relocs(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, textBaseVa: textVAddr)
 
-	var elf = ByteArray.create(dataFileOffset + dataSegmentSize, zeroed: false)
+	let elf = ByteArray.create(dataFileOffset + dataSegmentSize, zeroed: false)
 
 	// === Elf64_Ehdr (64 bytes) ===
 	writeElfFileHeader(elf, elfMachine: elfMachine, entryPoint: entryPoint, programHeaderCount: programHeaderCount)
@@ -479,16 +479,16 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	sectionCount = sectionCount + 1
 
 	// `.strtab` — the function names, in symbol order. The leading NUL is ELF's reserved empty name.
-	var strtab = ByteArray.create(0)
+	let strtab = ByteArray.create(0)
 	strtab.push(0)
-	var symbolNameOffsets = ByteOffsetArray.create(codeResult.debugSymbols.count(), zeroed: false)
+	let symbolNameOffsets = ByteOffsetArray.create(codeResult.debugSymbols.count(), zeroed: false)
 
 	for sym in codeResult.debugSymbols 'eachSym'
 		symbolNameOffsets.push(appendElfStringTableName(strtab, name: sym.name))
 	end 'eachSym'
 
 	// `.shstrtab` — the section names, in the order the headers below are written.
-	var shstrtab = ByteArray.create(0)
+	let shstrtab = ByteArray.create(0)
 	shstrtab.push(0)
 	let textNameOffset = appendElfStringTableName(shstrtab, name: b".text")
 	let rodataNameOffset = appendElfStringTableName(shstrtab, name: b".rodata") if hasRodata else 0
@@ -523,7 +523,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	// all there is to say.
 	//
 	// ⚠ NOT `SHF_ALLOC`: it is metadata for tools, not something the loader maps.
-	var comment = ByteArray.create(0)
+	let comment = ByteArray.create(0)
 	comment.append("Maxon {CompilerVersion}".toByteArray())
 	comment.push(0)
 

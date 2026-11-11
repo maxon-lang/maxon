@@ -64,10 +64,10 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var a = TallyArray.create(0)
+	let a = TallyArray.create(0)
 	a.push(1)
-	var b = touch(a)
-	var c = touch(b)
+	let b = touch(a)
+	let c = touch(b)
 	c.push(2)
 
 	print("{a.count()} {b.count()} {c.count()}\n")
@@ -102,10 +102,10 @@ type Shelf
 end 'Shelf'
 
 function main() returns ExitCode
-	var shelf = Shelf.create()
+	let shelf = Shelf.create()
 	var cells = TallyArray.create(0)
 	cells.push(5)
-	var again = shelf.keep(cells)
+	let again = shelf.keep(cells)
 	again.push(6)
 	cells = TallyArray.create(0)
 
@@ -132,7 +132,7 @@ function pick(cells TallyArray, keepIt bool) returns TallyArray
 		return cells
 	end 'keep'
 
-	var fresh = TallyArray.create(0)
+	let fresh = TallyArray.create(0)
 	fresh.push(9)
 	return fresh
 end 'pick'
@@ -253,7 +253,7 @@ type Shelf
 	export var held as TallyArray
 
 	static function create() returns Shelf
-		var held = TallyArray.create(0)
+		let held = TallyArray.create(0)
 		held.push(7)
 		return Self{held: held}
 	end 'create'
@@ -268,8 +268,8 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var shelf = Shelf.create()
-	view seen = touch(shelf.held)
+	let shelf = Shelf.create()
+	let seen = touch(shelf.held)
 	shelf.reset()
 
 	print("{try seen.get(0) otherwise 0} {shelf.held.count()}\n")
@@ -297,7 +297,7 @@ function first(a TallyArray, b TallyArray) returns TallyArray
 end 'first'
 
 function main() returns ExitCode
-	var cells = TallyArray.create(0)
+	let cells = TallyArray.create(0)
 	cells.push(4)
 	var out = first(cells, b: cells)
 	out = first(out, b: out)
@@ -369,7 +369,7 @@ end 'touch'
 function main() returns ExitCode
 	var a = TallyArray.create(0)
 	a.push(3)
-	var b = touch(a)
+	let b = touch(a)
 	a = TallyArray.create(0)
 	b.push(4)
 
@@ -398,7 +398,7 @@ end 'touch'
 function main() returns ExitCode
 	var a = TallyArray.create(0)
 	a.push(3)
-	var b = touch(a)
+	let b = touch(a)
 	b.push(4)
 	b.push(5)
 	a = TallyArray.create(0)
@@ -427,7 +427,7 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var holder = TallyArrays.create(0)
+	let holder = TallyArrays.create(0)
 	var a = TallyArray.create(0)
 	a.push(8)
 	holder.push(touch(a))
@@ -435,7 +435,7 @@ function main() returns ExitCode
 	a.push(1)
 	a.push(2)
 
-	view kept = try holder.get(0) otherwise TallyArray.create(0)
+	let kept = try holder.get(0) otherwise TallyArray.create(0)
 	print("{kept.count()} {try kept.get(0) otherwise 0} {a.count()}\n")
 	return 0
 end 'main'
@@ -710,7 +710,7 @@ function touch(cells TallyArray) returns TallyArray
 end 'touch'
 
 function main() returns ExitCode
-	var parent = TallyArray.create(0)
+	let parent = TallyArray.create(0)
 	parent.push(1)
 	parent.push(2)
 	parent.push(3)
@@ -886,7 +886,7 @@ function stash(holder TallyArrays, cells TallyArray) returns TallyArray
 end 'stash'
 
 function main() returns ExitCode
-	var holder = TallyArrays.create(0)
+	let holder = TallyArrays.create(0)
 	var last = TallyArray.create(0)
 
 	for _ in 0 upto 3 'each'
@@ -894,7 +894,7 @@ function main() returns ExitCode
 		last.push(1)
 	end 'each'
 
-	view kept = try holder.get(2) otherwise TallyArray.create(0)
+	let kept = try holder.get(2) otherwise TallyArray.create(0)
 	print("{holder.count()} {last.count()} {kept.count()}\n")
 	return 0
 end 'main'
@@ -974,7 +974,7 @@ function descend(cells TallyArray, depth Tally) returns TallyArray
 	end 'bottom'
 
 	cells.push(depth)
-	var inner = descend(cells, depth: depth - 1)
+	let inner = descend(cells, depth: depth - 1)
 	inner.push(0)
 
 	return cells

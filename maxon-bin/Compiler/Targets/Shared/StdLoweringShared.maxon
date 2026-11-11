@@ -24,7 +24,7 @@
 // exhaustiveness, cannot drift.
 
 export function unitReturnTransfer(unitModule StdModule) returns ReturnTransfer
-	view unitFunc = unitModule.getFunc(UnitFunctionIndex)
+	let unitFunc = unitModule.getFunc(UnitFunctionIndex)
 
 	return ReturnTransfer.indirectJump if unitFunc.returnsByIndirectJump else ReturnTransfer.returnInstruction
 end 'unitReturnTransfer'
@@ -176,11 +176,8 @@ export type LoweredUnit
 	end 'create'
 end 'LoweredUnit'
 
-// ⛔ A `NameTable`, not a `Map`. A `Map` hashes its key through a witness slot, and a message that
-// dispatches through a witness the compiler cannot name makes every address-taken function
-// message-reachable — the lookups run on a pool worker. `NameTable`'s index names no witness; the isel
-// asks three or four times per call op, and a bisection over the sorted names would walk the shared
-// prefix of thirteen of them on every ask.
+// A `NameTable`, not a bisection over the sorted names: the isel asks three or four times per call op,
+// and a bisection would walk the shared prefix of thirteen of them on every ask.
 //
 // Every name lives in that one arena, so a worker's clone is a handful of array clones rather than
 // two allocations per callee per worker.
@@ -196,7 +193,7 @@ export type CalleeAbiTable
 	// `intern` appends in `functions` order and the columns are pushed in that same order.
 	export static function build(funcNames FunctionNameIndex) returns immutable CalleeAbiTable
 		let rowCount = funcNames.functions.count()
-		var table = Self{names: NameTable.create(rowCount as NameId, byteHint: (rowCount * CalleeNameByteEstimate) as NameByteCount), paramFloatMasks: ArgFloatMaskArray.create(rowCount, zeroed: false), resultClasses: CalleeResultClassArray.create(rowCount, zeroed: false)} as isolated CalleeAbiTable
+		let table = Self{names: NameTable.create(rowCount as NameId, byteHint: (rowCount * CalleeNameByteEstimate) as NameByteCount), paramFloatMasks: ArgFloatMaskArray.create(rowCount, zeroed: false), resultClasses: CalleeResultClassArray.create(rowCount, zeroed: false)} as isolated CalleeAbiTable
 
 		modify table 'fill'
 			for func in funcNames.functions 'eachFunc'
@@ -580,7 +577,7 @@ end 'abiStackSlotsBefore'
 // is ever coloured for them).
 export function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModule, funcIndex ElementIndex, abi CalleeAbiTable) returns ValueClassColumn
 	let srcFunc = stdModule.getFunc(funcIndex)
-	var column = ValueClassColumn.create(scanFunctionValueCount(targetModule, func: srcFunc), zeroed: false)
+	let column = ValueClassColumn.create(scanFunctionValueCount(targetModule, func: srcFunc), zeroed: false)
 	column.refill(scanFunctionValueCount(targetModule, func: srcFunc), value: RegClass.gpr)
 
 	for blockRef in srcFunc.blockRefs 'eachBlock'
@@ -1442,10 +1439,8 @@ end 'opTakesSyscallBracket'
 // its `isSubnormal` branch on a false condition and `0.5` printed as `4503599627370496`.
 // A block has exactly ONE terminator, so keyed by the block the fact is exact.
 //
-// ⛔ **A DENSE COLUMN OVER THE MODULE'S BLOCK REFS, NOT A `Map`.** A `Map` hashes its key through a
-// witness slot, and the census runs on a pool worker, where a dispatch the compiler cannot name makes
-// every address-taken function message-reachable. A unit module's block refs are exactly
-// `0 upto blocks.count()`, so a column sized to that count answers for every block of the function.
+// A unit module's block refs are exactly `0 upto blocks.count()`, so a column sized to that count
+// answers for every block of the function.
 type FusedPredColumn
 	var fused as BoolArray
 	var preds as StdCmpPredArray
@@ -1889,7 +1884,7 @@ export type CompareFusionCensus
 	// value must be in a register. Skipping every `condBranch` use unconditionally would miss
 	// that second one and leave the branch reading a value nothing ever wrote.
 	function computeValuesReadFromRegisters(module StdModule, func IrFunction, fused FusedPredColumn) returns StdValueUseSet
-		var readAsValue = StdValueUseSet.create()
+		let readAsValue = StdValueUseSet.create()
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("computeValuesReadFromRegisters: blockRef from func.blockRefs not in stdModule.blocks")
@@ -2332,7 +2327,7 @@ end 'socketServeOperand'
 
 // The operands a POSIX lane's `osNetpoll` chunk is called with — the prefix `posixNetpollOperandCount` names.
 export function posixNetpollChunkArgs(verb NetpollVerb, operands ValueIdArray) returns ValueIdArray
-	var args = ValueIdArray.create(posixNetpollOperandCount(verb), zeroed: false)
+	let args = ValueIdArray.create(posixNetpollOperandCount(verb), zeroed: false)
 
 	for index in 0 upto posixNetpollOperandCount(verb) 'eachRead'
 		args.push(netpollOperand(operands, index: index))

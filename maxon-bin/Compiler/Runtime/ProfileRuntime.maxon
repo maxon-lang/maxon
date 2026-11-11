@@ -179,10 +179,10 @@ end 'emitHostSample'
 // `__prof_open_target(pid) -> HANDLE | 0` — `OpenProcess`, which answers NULL for a process that has already
 // gone, and that 0 is what the profiler tests.
 function buildProfileOpenTarget(module StdModule)
-	var func = IrFunction.createFromStd(ProfileOpenTargetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ProfileOpenTargetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pid = 0
@@ -206,12 +206,12 @@ end 'buildProfileOpenTarget'
 // The handle arrives through an out-param and the return is an NTSTATUS, so the two are swapped here: a
 // caller wants the handle, and every non-success status — including running out of threads — is one 0.
 function buildProfileNextThread(module StdModule)
-	var func = IrFunction.createFromStd(ProfileNextThreadName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ProfileNextThreadName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var walked = module.addBlock(func, label: b"pfnthok", heat: BlockHeat.normal)
-	var ended = module.addBlock(func, label: b"pfnthend", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let walked = module.addBlock(func, label: b"pfnthok", heat: BlockHeat.normal)
+	let ended = module.addBlock(func, label: b"pfnthend", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let proc = 0
@@ -241,10 +241,10 @@ end 'buildProfileNextThread'
 // `__prof_thread_id(threadHandle) -> DWORD` — which thread a walked handle names, so the profiler can tell
 // one it already tracks from one that has just appeared.
 function buildProfileThreadId(module StdModule)
-	var func = IrFunction.createFromStd(ProfileThreadIdName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ProfileThreadIdName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handle = 0
@@ -266,10 +266,10 @@ end 'buildProfileThreadId'
 // every baseline, so it charges nothing, and a thread that really has exited stays uncharged until the next
 // refresh of the thread table drops it.
 function buildProfileThreadCycles(module StdModule)
-	var func = IrFunction.createFromStd(ProfileThreadCyclesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ProfileThreadCyclesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handle = 0 as ValueId
@@ -307,19 +307,19 @@ end 'buildProfileThreadCycles'
 // the thread runs while the sampler walks its stack fall on the wrong side of the next charge's
 // baseline.
 function buildProfileSample(module StdModule, layout HostContextLayout)
-	var func = IrFunction.createFromStd(ProfileSampleName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params())
-	var ids = ValueMinter.create(6)
+	let func = IrFunction.createFromStd(ProfileSampleName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params())
+	let ids = ValueMinter.create(6)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var readContext = module.addBlock(func, label: b"pfsctx", heat: BlockHeat.normal)
-	var queryRegion = module.addBlock(func, label: b"pfsq", heat: BlockHeat.normal)
-	var measureWindow = module.addBlock(func, label: b"pfsm", heat: BlockHeat.normal)
-	var capWindow = module.addBlock(func, label: b"pfscap", heat: BlockHeat.normal)
-	var capped = module.addBlock(func, label: b"pfsclamp", heat: BlockHeat.normal)
-	var copyStack = module.addBlock(func, label: b"pfscopy", heat: BlockHeat.normal)
-	var partialCopy = module.addBlock(func, label: b"pfspart", heat: BlockHeat.normal)
-	var resume = module.addBlock(func, label: b"pfsres", heat: BlockHeat.normal)
-	var answer = module.addBlock(func, label: b"pfsret", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let readContext = module.addBlock(func, label: b"pfsctx", heat: BlockHeat.normal)
+	let queryRegion = module.addBlock(func, label: b"pfsq", heat: BlockHeat.normal)
+	let measureWindow = module.addBlock(func, label: b"pfsm", heat: BlockHeat.normal)
+	let capWindow = module.addBlock(func, label: b"pfscap", heat: BlockHeat.normal)
+	let capped = module.addBlock(func, label: b"pfsclamp", heat: BlockHeat.normal)
+	let copyStack = module.addBlock(func, label: b"pfscopy", heat: BlockHeat.normal)
+	let partialCopy = module.addBlock(func, label: b"pfspart", heat: BlockHeat.normal)
+	let resume = module.addBlock(func, label: b"pfsres", heat: BlockHeat.normal)
+	let answer = module.addBlock(func, label: b"pfsret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 6)
 	let proc = 0
@@ -403,12 +403,12 @@ end 'buildProfileSample'
 // back to the ordinary one on a host that predates the flag. Even the ordinary waitable timer beats a sleep,
 // whose resolution is the system tick.
 function buildProfileTimerCreate(module StdModule)
-	var func = IrFunction.createFromStd(ProfileTimerCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(ProfileTimerCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var coarse = module.addBlock(func, label: b"pftcoarse", heat: BlockHeat.normal)
-	var made = module.addBlock(func, label: b"pftmade", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let coarse = module.addBlock(func, label: b"pftcoarse", heat: BlockHeat.normal)
+	let made = module.addBlock(func, label: b"pftmade", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let access = emitConst(module, block: entry, value: TimerAllAccess, ids: ids)
@@ -434,12 +434,12 @@ end 'buildProfileTimerCreate'
 // The due time arrives BY VALUE and is stored into this call's own frame, because the API takes a pointer to
 // a `LARGE_INTEGER` and the caller has no way to name an address.
 function buildProfileTimerWait(module StdModule)
-	var func = IrFunction.createFromStd(ProfileTimerWaitName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ProfileTimerWaitName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var armed = module.addBlock(func, label: b"pftwarmed", heat: BlockHeat.normal)
-	var unarmed = module.addBlock(func, label: b"pftwnone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let armed = module.addBlock(func, label: b"pftwarmed", heat: BlockHeat.normal)
+	let unarmed = module.addBlock(func, label: b"pftwnone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let timer = 0 as ValueId
@@ -469,9 +469,9 @@ function buildProfileTimerWait(module StdModule)
 end 'buildProfileTimerWait'
 
 function buildProfileSleep(module StdModule)
-	var func = IrFunction.createFromStd(ProfileSleepName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = IrFunction.createFromStd(ProfileSleepName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let microseconds = 0
@@ -488,10 +488,10 @@ end 'buildProfileSleep'
 // re-enumerating per sample would put a process-wide query on the sampling path to catch a case that does
 // not arise.
 function buildProfileModuleSnapshot(module StdModule)
-	var func = IrFunction.createFromStd(ProfileModuleSnapshotName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ProfileModuleSnapshotName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let pid = 0
@@ -508,10 +508,10 @@ end 'buildProfileModuleSnapshot'
 // CALLER's to write, because the caller is what reserved the record and therefore is the one place its size
 // is stated (`stdlib/Sampler.maxon`'s `ModuleEntryBytes`).
 function buildProfileModuleFirst(module StdModule)
-	var func = IrFunction.createFromStd(ProfileModuleFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ProfileModuleFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let snapshot = 0
@@ -527,10 +527,10 @@ end 'buildProfileModuleFirst'
 // `__prof_module_next(snapshot, entryPtr) -> BOOL` — the walk's later steps, over a record `Module32FirstW`
 // has already sized.
 function buildProfileModuleNext(module StdModule)
-	var func = IrFunction.createFromStd(ProfileModuleNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ProfileModuleNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let snapshot = 0
@@ -559,12 +559,12 @@ end 'emitMachPortRelease'
 
 // `__prof_close(handle)` — a zero handle is a no-op, so a failed open flows through here untested.
 function buildProfileClose(module StdModule, shape ProfileHostShape)
-	var func = IrFunction.createFromStd(ProfileCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ProfileCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var live = module.addBlock(func, label: b"pfclive", heat: BlockHeat.normal)
-	var nothing = module.addBlock(func, label: b"pfcnone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let live = module.addBlock(func, label: b"pfclive", heat: BlockHeat.normal)
+	let nothing = module.addBlock(func, label: b"pfcnone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handle = 0
@@ -580,16 +580,16 @@ function buildProfileClose(module StdModule, shape ProfileHostShape)
 end 'buildProfileClose'
 
 function buildProfilePagesReserve(module StdModule)
-	var func = IrFunction.createFromStd(ProfilePagesReserveName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ProfilePagesReserveName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let bytes = 0 as ValueId
 
 	let boxBytes = emitConst(module, block: entry, value: ManagedPagesBoxBytes, ids: ids)
-	let box = emitRawAlloc(module, block: entry, byteCount: boxBytes, ids: ids)
+	let box = emitHandleBoxAlloc(module, block: entry, byteCount: boxBytes, ids: ids)
 	let base = ids.mint()
 	module.appendOp(entry, op: StdOp.osAllocPages(base, sizeId: bytes))
 	emitStoreField(module, block: entry, record: box, offset: ManagedPagesBaseOffset, value: base)
@@ -600,12 +600,12 @@ function buildProfilePagesReserve(module StdModule)
 end 'buildProfilePagesReserve'
 
 function buildProfilePagesRelease(module StdModule)
-	var func = IrFunction.createFromStd(ProfilePagesReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ProfilePagesReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var held = module.addBlock(func, label: b"pfpheld", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"pfpdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let held = module.addBlock(func, label: b"pfpheld", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"pfpdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -625,12 +625,12 @@ function buildProfilePagesRelease(module StdModule)
 end 'buildProfilePagesRelease'
 
 export function buildBoxDestruct(module StdModule, name ByteArray, release ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
-	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	let drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -645,10 +645,10 @@ export function buildBoxDestruct(module StdModule, name ByteArray, release ByteA
 end 'buildBoxDestruct'
 
 export function buildBoxWordGetter(module StdModule, name ByteArray, offset ByteOffset)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -660,16 +660,16 @@ export function buildBoxWordGetter(module StdModule, name ByteArray, offset Byte
 end 'buildBoxWordGetter'
 
 function buildProfileHandleAdopt(module StdModule)
-	var func = IrFunction.createFromStd(ProfileHandleAdoptName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ProfileHandleAdoptName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handle = 0
 
 	let boxBytes = emitConst(module, block: entry, value: ManagedHandleBoxBytes, ids: ids)
-	let box = emitRawAlloc(module, block: entry, byteCount: boxBytes, ids: ids)
+	let box = emitHandleBoxAlloc(module, block: entry, byteCount: boxBytes, ids: ids)
 	emitStoreField(module, block: entry, record: box, offset: ManagedHandleWordOffset, value: handle)
 	module.setTerminator(entry, op: StdOp.ret(box))
 
@@ -677,10 +677,10 @@ function buildProfileHandleAdopt(module StdModule)
 end 'buildProfileHandleAdopt'
 
 function buildProfileTimerOpen(module StdModule)
-	var func = IrFunction.createFromStd(ProfileTimerOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(ProfileTimerOpenName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	let handle = ids.mint()
 	module.appendOp(entry, op: StdOp.call(handle, callee: ProfileTimerCreateName, args: ValueIdArray.create(0)))
@@ -692,10 +692,10 @@ function buildProfileTimerOpen(module StdModule)
 end 'buildProfileTimerOpen'
 
 function buildProfileHandleRelease(module StdModule)
-	var func = IrFunction.createFromStd(ProfileHandleReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ProfileHandleReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -715,10 +715,10 @@ end 'buildProfileHandleRelease'
 // so an accessor that multiplied by eight would put every field access one stride away. The bound is the
 // caller's — a scratch region's extent is a fact the PROFILER holds, and these are not given it.
 function buildProfileReadWord(module StdModule)
-	var func = IrFunction.createFromStd(ProfileReadWordName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ProfileReadWordName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let base = 0
@@ -733,10 +733,10 @@ function buildProfileReadWord(module StdModule)
 end 'buildProfileReadWord'
 
 function buildProfileWriteWord(module StdModule)
-	var func = IrFunction.createFromStd(ProfileWriteWordName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ProfileWriteWordName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let base = 0

@@ -270,7 +270,7 @@ export type IrModule uses Op
 	// indices into this array, so closing the gap would invalidate them). So a
 	// Maxon-tier consumer must reach ops through a block like every other.
 	export function liveOpIndices(func IrFunction) returns OpIndexArray
-		var indices = OpIndexArray.create(0)
+		let indices = OpIndexArray.create(0)
 		self.collectLiveOpIndices(func, into: indices)
 		return indices
 	end 'liveOpIndices'
@@ -301,12 +301,12 @@ export type IrModule uses Op
 	// `elimTrivialBlockArgs` or `pruneDeadBlockArgs` folded away is outside the web, and its edge
 	// arrives as a leaf.
 	export function exitChainsOf(func IrFunction, returned ValueIdArray) returns ExitChainsByReturn
-		var chains = ExitChainsByReturn.create()
-		var chainIds = BlockIdSet.create()
-		var webOfPhi = ExitWebByPhi.create()
+		let chains = ExitChainsByReturn.create()
+		let chainIds = BlockIdSet.create()
+		let webOfPhi = ExitWebByPhi.create()
 
 		for blockRef in func.blockRefs 'eachBlock'
-			var block = self.getBlock(blockRef)
+			let block = self.getBlock(blockRef)
 
 			if block.role != BlockRole.exitChain 'ordinaryBlock'
 				continue
@@ -323,10 +323,10 @@ export type IrModule uses Op
 			return chains
 		end 'noExitChain'
 
-		var incoming = self.incomingIntoExitChain(func, chainIds: chainIds)
+		let incoming = self.incomingIntoExitChain(func, chainIds: chainIds)
 
 		for value in returned 'eachReturned'
-			var start = try webOfPhi.get(value) otherwise continue
+			let start = try webOfPhi.get(value) otherwise continue
 			chains.upsert(value, value: self.exitChainFrom(start, incoming: incoming, webOfPhi: webOfPhi))
 		end 'eachReturned'
 
@@ -334,17 +334,17 @@ export type IrModule uses Op
 	end 'exitChainsOf'
 
 	function incomingIntoExitChain(func IrFunction, chainIds BlockIdSet) returns ExitIncomingByTarget
-		var incoming = ExitIncomingByTarget.create()
+		let incoming = ExitIncomingByTarget.create()
 
 		for blockRef in func.blockRefs 'eachSource'
-			var source = self.getBlock(blockRef)
+			let source = self.getBlock(blockRef)
 
 			for edge in source.branchEdges 'eachEdge'
 				if not chainIds.contains(edge.targetBlockId) 'leavesTheChain'
 					continue
 				end 'leavesTheChain'
 
-				var arrivals = try incoming.get(edge.targetBlockId) otherwise ExitIncomingArray.create(0)
+				let arrivals = try incoming.get(edge.targetBlockId) otherwise ExitIncomingArray.create(0)
 				arrivals.push(ExitIncoming.create(source, args: edge.argIds))
 				incoming.upsert(edge.targetBlockId, value: arrivals)
 			end 'eachEdge'
@@ -354,16 +354,16 @@ export type IrModule uses Op
 	end 'incomingIntoExitChain'
 
 	function exitChainFrom(start ExitWebBlock, incoming ExitIncomingByTarget, webOfPhi ExitWebByPhi) returns ExitChain
-		var web = ExitWebBlockArray.create(0)
-		var leaves = ExitArrivalArray.create(0)
-		var joins = ExitArrivalArray.create(0)
-		var visited = BlockIdSet.create()
+		let web = ExitWebBlockArray.create(0)
+		let leaves = ExitArrivalArray.create(0)
+		let joins = ExitArrivalArray.create(0)
+		let visited = BlockIdSet.create()
 		var next = 0 as ElementIndex
 		web.push(start)
 		visited.insert(start.block.id)
 
 		while next < web.count() 'untilTheChainIsWalked'
-			view current = try web.get(next) otherwise panic("exitChainFrom: web.get OOB at {next} below its own count")
+			let current = try web.get(next) otherwise panic("exitChainFrom: web.get OOB at {next} below its own count")
 			let currentId = current.block.id
 			let currentSlot = current.slot
 			next = next + 1
@@ -406,7 +406,7 @@ export type IrModule uses Op
 	// header states at length: block ids ARE the index space, and the hash was measured to be a
 	// quadratic before `spreadHash` and a 3x probe tax after it.
 	export function blockIndexById(func IrFunction) returns BlockIndexById
-		var byId = BlockIndexById.forBlockCount(func.nextBlockId)
+		let byId = BlockIndexById.forBlockCount(func.nextBlockId)
 		self.placeBlockPositions(func, into: byId)
 		return byId
 	end 'blockIndexById'
@@ -430,7 +430,7 @@ export type IrModule uses Op
 	end 'blockHoldingTheExitOf'
 
 	export function scopeExitsAfterSplits(local DebugLocalDecl, func IrFunction, byId BlockIndexById) returns BlockIdArray
-		var exits = BlockIdArray.create(local.scopeEnds.count(), zeroed: false)
+		let exits = BlockIdArray.create(local.scopeEnds.count(), zeroed: false)
 
 		for exit in local.scopeEnds 'eachScopeExit'
 			exits.push(self.blockHoldingTheExitOf(func, byId: byId, start: exit))
@@ -717,7 +717,7 @@ export type IrModule uses Op
 	// after calling this (the function returns the allocated id via the block).
 	function createAndRegisterBlock(blockRefs BlockRefArray, id BlockId, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef, role BlockRole) returns IrBlock
 		let blockIdx = blocks.count()
-		var block = IrBlock.create(id, label: label, heat: heat, inlineSite: inlineSite, role: role)
+		let block = IrBlock.create(id, label: label, heat: heat, inlineSite: inlineSite, role: role)
 		blocks.push(block)
 		blockRefs.push(blockIdx)
 		return block
@@ -765,12 +765,12 @@ export type IrModule uses Op
 		self.spans.appendFrom(source.spans, count: source.ops.count())
 
 		for i in 0 upto source.blocks.count() 'eachBlock'
-			var srcBlock = try source.blocks.get(i) otherwise panic("merge: blocks.get out of bounds")
+			let srcBlock = try source.blocks.get(i) otherwise panic("merge: blocks.get out of bounds")
 			self.blocks.push(relocateIrBlock(srcBlock, opOffset: opOffset))
 		end 'eachBlock'
 
 		for srcFunc in source.functions 'eachFunc'
-			var relocated = IrFunction.relocateFunction(srcFunc, blockOffset: blockOffset)
+			let relocated = IrFunction.relocateFunction(srcFunc, blockOffset: blockOffset)
 
 			if not srcFunc.capabilityNotes.holdsNothing() 'opKeyedNotes'
 				relocated.capabilityNotes = srcFunc.capabilityNotes.shiftedBy(opOffset)
@@ -863,7 +863,7 @@ end 'OpCompactionPlan'
 // (entries with `live[i] == false`) are left at `deadMarker` (= `count`).
 function assignCompactionSlots(live FixedBoolArray, count ElementIndex) returns OpCompactionPlan
 	let deadMarker = count
-	var forward = FixedOpIndexArray.create(count)
+	let forward = FixedOpIndexArray.create(count)
 	var nextSlot = 0 as ElementIndex
 
 	for oldIdx in 0 upto count 'assign'
@@ -887,7 +887,7 @@ end 'assignCompactionSlots'
 // forwarding) are the only allocations and are dwarfed by the orphan bytes
 // reclaimed.
 function computeOpCompaction(functions IrFunctionArray, blocks IrBlockArray, opCount ElementIndex) returns OpCompactionPlan
-	var live = FixedBoolArray.create(opCount)
+	let live = FixedBoolArray.create(opCount)
 
 	for func in functions 'markFunc'
 		for blockRef in func.blockRefs 'markBlock'
@@ -914,9 +914,9 @@ end 'computeOpCompaction'
 function rewriteBlockOpRefs(functions IrFunctionArray, blocks IrBlockArray, plan OpCompactionPlan)
 	for func in functions 'rewriteFunc'
 		for blockRef in func.blockRefs 'rewriteBlock'
-			var block = try blocks.get(blockRef) otherwise panic("rewriteBlockOpRefs: blockRef from func.blockRefs not in blocks")
+			let block = try blocks.get(blockRef) otherwise panic("rewriteBlockOpRefs: blockRef from func.blockRefs not in blocks")
 
-			var ops = block.bodyOps()
+			let ops = block.bodyOps()
 
 			for pos in 0 upto ops.count() 'eachRef'
 				let oldIdx = try ops.get(pos) otherwise panic("rewriteBlockOpRefs: ops.get OOB at {pos}")
@@ -967,7 +967,7 @@ end 'rewriteBlockOpRefs'
 // in-place writer anywhere in the compiler (`rewriteEdgeArgsIn`, at the Target tier)
 // copies before it writes. See IrBlock's header for the ownership rules.
 function relocateIrBlock(src IrBlock, opOffset ElementIndex) returns IrBlock
-	var block = IrBlock.createLike(src)
+	let block = IrBlock.createLike(src)
 	block.blockArgs = src.blockArgs
 	block.branchEdges = src.branchEdges
 	block.replaceBodyOps(src.bodyOps().clone())

@@ -1052,7 +1052,7 @@ end 'widest'
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let digest = sha256("hi".toByteArray())
-	var tallies = api.ByteArray.create(0)
+	let tallies = api.ByteArray.create(0)
 	tallies.push(900)
 
 	return ((widest(tallies) - 900) + (digest.count() as Tally)) as ExitCode
@@ -1384,49 +1384,43 @@ end 'main'
 error E3167: api/<fragment>:8:12: module constant 'api.BIG' names file-private enum 'Status' in its type
 ```
 
-<!-- test: error.a-public-let-of-a-module-type-is-refused -->
+<!-- test: error.a-public-let-of-a-module-enum-is-refused -->
 `public` outranks every other tier, so a `public` binding may not hold even an `export` type, and a `module`
-type is two tiers short. The type here comes from the initializer: `Config.create(7)` is the whole of what
+enum is two tiers short. The type here comes from the initializer: `Config.small` is the whole of what
 says what `DEFAULT` holds.
 ```maxon
 // --- file: api/config.maxon
-module type Config
-	module var size as ExitCode
-
-	module static function create(size ExitCode) returns Self
-		return Self{size: size}
-	end 'create'
+module enum Config
+	small
+	large
 end 'Config'
 
-public let DEFAULT = Config.create(7)
+public let DEFAULT = Config.small
 
 // --- file: api/main.maxon
 function main() returns ExitCode
-	return DEFAULT.size
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:11:12: public constant 'api.DEFAULT' names module type 'Config' in its type
+error E3167: api/<fragment>:8:12: public constant 'api.DEFAULT' names module enum 'Config' in its type
 ```
 
-<!-- test: error.an-exported-var-of-an-inferred-file-private-record-is-refused -->
-No type is written anywhere on the binding: the record is the value of the initializer and nothing else
+<!-- test: error.an-exported-let-of-an-inferred-file-private-enum-is-refused -->
+No type is written anywhere on the binding: the enum is the value of the initializer and nothing else
 names it.
 
 ⚠ `SHARED` is read nowhere outside `api/lib.maxon`, which is E3092, and `checkUnusedExports` audits only a
 program no other check has refused (`UnusedExportCheck`), so the stderr below is the whole of it. A
-reader that touched `SHARED.n` would be refused at its own use, before this pass runs.
+reader that touched `SHARED` would be refused at its own use, before this pass runs.
 ```maxon
 // --- file: api/lib.maxon
-type Secret
-	export var n as ExitCode
-
-	static function create(n ExitCode) returns Self
-		return Self{n: n}
-	end 'create'
+enum Secret
+	hidden
+	shown
 end 'Secret'
 
-export let SHARED = Secret.create(7)
+export let SHARED = Secret.hidden
 
 // --- file: app/main.maxon
 function main() returns ExitCode
@@ -1434,7 +1428,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3167: api/<fragment>:11:12: exported constant 'api.SHARED' names file-private type 'Secret' in its type
+error E3167: api/<fragment>:8:12: exported constant 'api.SHARED' names file-private enum 'Secret' in its type
 ```
 
 <!-- test: error.an-export-static-let-of-a-file-private-enum-type-is-refused -->
@@ -2272,7 +2266,7 @@ export typealias ModeArray = Array with Mode
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var modes = ModeArray.create(0)
+	let modes = ModeArray.create(0)
 	return (modes.count() as ExitCode) + 7
 end 'main'
 ```
@@ -2292,7 +2286,7 @@ module typealias ModeArray = Array with Mode
 
 // --- file: api/main.maxon
 function main() returns ExitCode
-	var modes = ModeArray.create(0)
+	let modes = ModeArray.create(0)
 	return (modes.count() as ExitCode) + 7
 end 'main'
 ```
@@ -2311,7 +2305,7 @@ end 'Mode'
 typealias ModeArray = Array with Mode
 
 export function code() returns ExitCode
-	var modes = ModeArray.create(0)
+	let modes = ModeArray.create(0)
 	return (modes.count() as ExitCode) + 7
 end 'code'
 
@@ -2789,7 +2783,7 @@ end 'start'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var workers = WorkerArray.create(0)
+	let workers = WorkerArray.create(0)
 	return start() + (workers.count() as ExitCode)
 end 'main'
 ```
@@ -2820,7 +2814,7 @@ end 'seed'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var rows = ItemRows.create(0)
+	let rows = ItemRows.create(0)
 	return seed() + (rows.count() as ExitCode)
 end 'main'
 ```

@@ -140,7 +140,7 @@ type FileReader
 			throw readFailureOf(e)
 		end 'sizeFailed'
 
-		var managed = try __ManagedMemory.create(size + ReadChunkBytes, 1) otherwise 'createErr'
+		let managed = try __ManagedMemory.create(size + ReadChunkBytes, 1) otherwise 'createErr'
 			panic("File.readAll: create — size + ReadChunkBytes is positive")
 		end 'createErr'
 
@@ -212,8 +212,8 @@ end 'openForWriting'
 public type File
 	/// Read text file content as a UTF-8 string
 	public static function readText(path FilePath) returns String throws FileReadError
-		var reader = try FileReader.open(path.path)
-		var managed = try reader.readAll(1)
+		let reader = try FileReader.open(path.path)
+		let managed = try reader.readAll(1)
 		let len = managed.length()
 
 		// Write null terminator: len is within capacity (extraBytes=1) but at the
@@ -235,14 +235,14 @@ public type File
 
 	/// Read file content as raw bytes
 	public static function readBinary(path FilePath) returns ByteArray throws FileReadError
-		var reader = try FileReader.open(path.path)
+		let reader = try FileReader.open(path.path)
 		let managed = try reader.readAll(0)
 		return ByteArray.init(managed)
 	end 'readBinary'
 
 	/// Write string content to a text file
 	public static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
-		var writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
+		let writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
 		try writer.writeAll(content.addressableBytes())
 	end 'writeText'
 
@@ -250,7 +250,7 @@ public type File
 	/// failed write deletes the file it created and throws the write's error; `partialFileLeft` when
 	/// that delete fails too.
 	public static function createText(path FilePath, content String) throws FileWriteError
-		var writer = try FileWriter.openNew(path.path.addressableBytes())
+		let writer = try FileWriter.openNew(path.path.addressableBytes())
 
 		try writer.writeAll(content.addressableBytes()) otherwise (e) 'unwritten'
 			try File.delete(path) otherwise (cleanup) 'kept'
@@ -267,7 +267,7 @@ public type File
 
 	/// Write binary content to a file
 	public static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
-		var writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
+		let writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
 		try writer.writeAll(content.managed)
 	end 'writeBinary'
 

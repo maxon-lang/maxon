@@ -22,7 +22,7 @@ function fixtureSpecNames() returns StringArray
 end 'fixtureSpecNames'
 
 function specsRunIn(said String) returns StringArray
-	var ran = StringArray.create(0)
+	let ran = StringArray.create(0)
 
 	for specName in fixtureSpecNames() 'eachSpec'
 		if ranVerdictIn(said, specName: specName) 'ranHere'
@@ -34,7 +34,7 @@ function specsRunIn(said String) returns StringArray
 end 'specsRunIn'
 
 function shardRun(index ShardNumber, shardCount ShardNumber, patterns StringArray = StringArray.create(0)) returns CollectedOutput
-	var arguments = filterFlags(patterns)
+	let arguments = filterFlags(patterns)
 	arguments.push(shardFlag(index, shardCount: shardCount))
 	return runGateFixtureOnce(arguments)
 end 'shardRun'
@@ -52,8 +52,8 @@ function timesNamed(names StringArray, specName String) returns RunTally
 end 'timesNamed'
 
 function collectSpecsNotRunExactlyOnce(shardCount ShardNumber, broken StringArray)
-	var ranInShards = StringArray.create(0)
-	var allSaid = StringBuilder.create()
+	let ranInShards = StringArray.create(0)
+	let allSaid = StringBuilder.create()
 
 	for index in 1 to shardCount 'eachShard'
 		let said = everythingSaid(shardRun(index, shardCount: shardCount))
@@ -114,7 +114,7 @@ function collectFilteredShardFailures(shardCount ShardNumber, broken StringArray
 end 'collectFilteredShardFailures'
 
 test 'every spec runs in exactly one shard'
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 
 	collectSpecsNotRunExactlyOnce(SplitIntoTwo, broken: broken)
 	collectSpecsNotRunExactlyOnce(SplitIntoThree, broken: broken)
@@ -124,7 +124,7 @@ end 'every spec runs in exactly one shard'
 
 test '--shard=1/1 runs every spec'
 	let said = everythingSaid(shardRun(WholeSuite, shardCount: WholeSuite))
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 
 	for specName in fixtureSpecNames() 'eachSpec'
 		if not ranVerdictIn(said, specName: specName) 'notRun'
@@ -136,7 +136,7 @@ test '--shard=1/1 runs every spec'
 end '--shard=1/1 runs every spec'
 
 test 'a --filter selecting only specs of other shards does not refuse the run'
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 
 	collectFilteredShardFailures(SplitIntoThree, broken: broken)
 
@@ -146,7 +146,7 @@ end 'a --filter selecting only specs of other shards does not refuse the run'
 test 'a --filter selecting nothing anywhere still refuses a sharded run'
 	let run = runGateFixtureOnce([shardFlag(WholeSuite, shardCount: SplitIntoTwo), filterFlag(UnmatchedPattern)])
 	let said = everythingSaid(run)
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 
 	if run.exitCode() == SuccessExitCode 'accepted'
 		broken.push("the run exited {SuccessExitCode} although `{filterFlag(UnmatchedPattern)}` selects no case in any shard. It said:\n{said}\n")
@@ -169,7 +169,7 @@ end 'a --filter selecting nothing anywhere still refuses a sharded run'
 
 test 'a sharded run that selects only live-network cases names them in every shard'
 	let label = testLabel(LiveSpecName, testName: LiveTestName)
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 
 	for index in 1 to SplitIntoTwo 'eachShard'
 		let flag = shardFlag(index, shardCount: SplitIntoTwo)

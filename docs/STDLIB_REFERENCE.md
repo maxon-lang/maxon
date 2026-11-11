@@ -18,7 +18,7 @@ typealias Score = int(0 to 100)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray.create(0)
+	let scores = ScoreArray.create(0)
 	scores.push(90)
 	print("{scores.count()}\n")
 	return 0
@@ -478,7 +478,7 @@ keeps the capacity for reuse; build with it and take the finished `String` at th
 
 ```maxon
 function main() returns ExitCode
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 
 	for i in 1 to 3 'each'
 		out.append("item {i};")
@@ -608,7 +608,7 @@ data, read as `CharacterSet.letters` with no call. `from` builds a set of exactl
 typealias Letters = Set with Character
 
 function main() returns ExitCode
-	var members = Letters.create()
+	let members = Letters.create()
 	members.insert('x')
 	members.insert('y')
 	let xy = CharacterSet.from(members)
@@ -633,7 +633,7 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var a = ScoreArray.create(0)
+	let a = ScoreArray.create(0)
 	a.push(5)
 	a.push(1)
 	a.push(4)
@@ -770,7 +770,7 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreList = List with Score
 
 function main() returns ExitCode
-	var list = ScoreList.create()
+	let list = ScoreList.create()
 	list.append(2)
 	list.prepend(1)
 	try list.insert(2, value: 3) otherwise panic("index is within [0, count]")
@@ -814,7 +814,7 @@ as a `b"..."` literal is inserted as it is, and a record or array built at run t
 is inserted (`counts.upsert(freeze ByteArray.create(3), value: 7)`); an unfrozen one is
 [E3207](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3207). A stored key is read-only: a key read back from
 the map, by iteration or otherwise, is `immutable` and takes no writes
-([E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159)), so a key's hash stays the one it was filed under,
+([E3197](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3197)), so a key's hash stays the one it was filed under,
 and it goes straight into an `immutable` holder with no copy. `clone()` gives a key to change.
 
 ```maxon
@@ -829,7 +829,7 @@ typealias Age = int(0 to 150)
 typealias Ages = Map with String, Age
 
 function main() returns ExitCode
-	var ages = Ages.create()
+	let ages = Ages.create()
 	try ages.insert("ann", value: 30) otherwise panic("new key")
 
 	try ages.insert("ann", value: 31) otherwise 'duplicate'
@@ -871,7 +871,7 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 
 An element is stored in an `immutable` slot, as a `Map` key is: a value type needs nothing, and a record or
 array built at run time is `freeze`d where it is inserted. An element read back from the set is `immutable` and
-takes no writes ([E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159)); `clone()` gives one to change.
+takes no writes ([E3197](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3197)); `clone()` gives one to change.
 `Set from values` over an `Array` of value types takes any array; over elements that are not value types, the
 array holds `immutable` elements (`Array with immutable Name`).
 
@@ -879,7 +879,7 @@ array holds `immutable` elements (`Array with immutable Name`).
 typealias Tags = Set with String
 
 function main() returns ExitCode
-	var tags = Tags.create()
+	let tags = Tags.create()
 	tags.insert("red")
 	tags.insert("red")
 	tags.insert("blue")
@@ -931,7 +931,7 @@ function readOr(v Vec3, index ElementIndex, fallback Coord) returns Coord
 end 'readOr'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(1, value: 7)
 
 	for i in 0 upto countof(Vec3) 'fill'
@@ -1044,13 +1044,13 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var values = ScoreArray.create(0)
+	let values = ScoreArray.create(0)
 
 	for i in 1 to 5 'fill'
 		values.push(i * 10)
 	end 'fill'
 
-	var c = try values.cursor() otherwise panic("not empty")
+	let c = try values.cursor() otherwise panic("not empty")
 	try c.advance() otherwise panic("has a second element")
 	let ahead = try c.peek(2) otherwise 0
 	print("{c.index()} {c.current()} {ahead}\n")
@@ -1171,7 +1171,7 @@ typealias Prices = Set with Money
 
 function main() returns ExitCode
 	let price = Money.create(250)
-	var prices = Prices.create()
+	let prices = Prices.create()
 	prices.insert(price)
 	prices.insert(price.clone())
 	print("{price} | {price:EUR} | {price == Money.create(250)} {price.compare(Money.create(1))} {prices.count()}\n")
@@ -1755,7 +1755,7 @@ E3074.
 
 ```maxon
 function main() returns ExitCode
-	var args = StringArray.create(0)
+	let args = StringArray.create(0)
 	args.push("--version")
 
 	let result = try Subprocess.run(Executable.name("git"), arguments: args) otherwise (e) 'failed'
@@ -2097,10 +2097,10 @@ the child follows.
 
 ```maxon
 function main() returns ExitCode
-	var args = StringArray.create(0)
+	let args = StringArray.create(0)
 	args.push("--version")
 
-	var child = try StreamingSubprocess.spawn(Executable.name("git"), arguments: args) otherwise (e) 'spawn'
+	let child = try StreamingSubprocess.spawn(Executable.name("git"), arguments: args) otherwise (e) 'spawn'
 		print("{e.displayReason()}\n")
 		return 1
 	end 'spawn'
@@ -2197,7 +2197,7 @@ name outlives the process until it is withdrawn or the machine restarts.
 
 ```maxon
 function main() returns ExitCode
-	var segment = try SharedSegment.create("docs-demo-segment", bytes: 4096) otherwise (e) 'failed'
+	let segment = try SharedSegment.create("docs-demo-segment", bytes: 4096) otherwise (e) 'failed'
 		print("no segment: {e}\n")
 		return 1
 	end 'failed'
@@ -2384,10 +2384,10 @@ stopped, and stderr carries one line per process:
 A `SampledStack` has `programCounter`, `framePointer` and `stackPointer`; `linkRegister`, a `LinkRegister`
 that `holds(address)` on macOS and is `absent` on Windows and Linux; `reservation`, a
 `StackReservation`; `suspendedCycles`, the thread's CPU time read while it was stopped; and `window`, a
-`StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` stays readable until the
-sampler's next `capture`: `byteCount()` is the bytes copied, 0 once a later capture has replaced them, and
+`StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` owns its bytes, so it stays
+readable after `close()` and after later captures: `byteCount()` is the bytes copied, and
 `word(offset StackWindowOffset)` is the word `offset` bytes in, throwing `SamplerError.outOfWindow` outside the
-copy or after a later capture.
+copy.
 
 | `StackReservation` case | Meaning |
 |-------------------------|---------|
@@ -2597,11 +2597,11 @@ was made, and the failed read is kept: every later connection that trusts the sy
 
 ```maxon
 function main() returns ExitCode
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 
 	try options.setApplicationProtocols(["h2", "http/1.1"]) otherwise return 1
 
-	var stream = try TlsClient.connect("example.com", port: 443, options: options) otherwise return 2
+	let stream = try TlsClient.connect("example.com", port: 443, options: options) otherwise return 2
 
 	_ = try stream.send("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n") otherwise return 3
 
@@ -2650,7 +2650,7 @@ With client certificates asked for, the CertificateRequest names the subjects of
 
 ```maxon
 function serve(listener TlsListener) returns ExitCode
-	var stream = try listener.accept() otherwise return 1
+	let stream = try listener.accept() otherwise return 1
 	let request = try stream.recv(4096) otherwise return 2
 
 	_ = try stream.send("echo:{request}") otherwise return 3
@@ -2663,7 +2663,7 @@ function main() returns ExitCode
 	let chain = "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
 	let key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 	let identity = try TlsIdentity.fromPem(chain, key: key) otherwise return 1
-	var listener = try TlsListener.bind("127.0.0.1", port: 8443, options: TlsServerOptions.create(identity)) otherwise return 2
+	let listener = try TlsListener.bind("127.0.0.1", port: 8443, options: TlsServerOptions.create(identity)) otherwise return 2
 
 	return serve(listener)
 end 'main'
@@ -2713,7 +2713,7 @@ or found by this side, ends the stream: the error is thrown once and every later
 
 ```maxon
 function main() returns ExitCode
-	var stream = try TlsClient.connect("example.com", port: 443) otherwise return 1
+	let stream = try TlsClient.connect("example.com", port: 443) otherwise return 1
 	let negotiated = try stream.cipherSuite() otherwise return 2
 	let protocol = try stream.protocol() otherwise return 3
 	let suite = match negotiated 'suite'
@@ -2892,7 +2892,7 @@ With a root of your own and a client certificate:
 
 ```maxon
 function fetch(url String, root ByteArray, identity TlsIdentity) returns String
-	var tls = TlsClientOptions.create()
+	let tls = TlsClientOptions.create()
 
 	try tls.setTrustedRoots(RootCertificates from [root]) otherwise return "no usable root"
 	tls.setIdentity(identity)
@@ -3026,11 +3026,8 @@ connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are o
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
 | `accept()` | `HttpExchange` | `HttpServerError` | Take the next connection and the one request on it. An `OPTIONS *` is answered here, and the next connection taken. |
-| `serve(handler immutable HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection in a service of its own. |
-| `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
-
-`close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
-[E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159).
+| `serve(handler immutable HttpHandler)` | `HttpServeEnd` | — | Accept and answer until a listener failure, the accept deadline, or `.cancel()` on the promise of the `async` call that runs it, serving each connection in a service of its own. On a server already closed it returns `closed` at once. |
+| `close()` | — | — | Stop listening and release the port: a later `accept()` throws `listenerClosed`, and a later `serve` returns `closed`. A server running in an `async` call is lent to that coroutine, so it is cancelled first and closed after (see [Starting a Coroutine](LANGUAGE_REFERENCE.md#starting-a-coroutine)). |
 
 `serve` moves each accepted connection, a `TcpClient` or a `TlsStream`, to a service of its own, which reads its
 request and runs its handler. A client that stalls delays only its own connection, and a handler that computes
@@ -3041,13 +3038,11 @@ connection it took has finished.
 
 The handler is one frozen value every connection reads at once: `serve` takes it `immutable`, so the caller
 passes `freeze Handler.create(…)` or an `immutable` handler it received. A handler whose methods write one
-of its fields fails to conform to `HttpHandler` ([E3210](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3210)),
-and is refused again where `serve` sends the handler to the connection's thread (in `HttpServer.maxon`,
-[E3138](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3138)). State the connections share, or the caller
+of its fields fails to conform to `HttpHandler` ([E3210](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3210)).
+State the connections share, or the caller
 reads when `serve` returns, lives in a [service](LANGUAGE_REFERENCE.md#services--spawn) the handler holds a handle
 to, as in the example below; give the handler a `handle.clone()` for each handle it keeps. A handler that
-holds an OS handle, a function value or a promise stops the program with exit code 96 at the first
-connection.
+holds an OS handle, a function value or a promise cannot be frozen for `serve`.
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -3105,7 +3100,7 @@ to the next connection. When the OS refuses one connection (`acceptInterrupted`)
 
 | Case | Meaning |
 |------|---------|
-| `closed` | `close()` was called |
+| `closed` | `serve` was called on a server already closed with `close()` |
 | `listenerFailed` | The listener failed (`acceptFailed`) |
 | `acceptDeadlinePassed` | The accept deadline passed (`acceptTimedOut`) |
 
@@ -3193,9 +3188,8 @@ lines ahead of the request line are skipped. Header lines follow [Header parsing
 | `respond(response HttpResponse)` | — | `HttpServerError` | Write the response and close the connection. Throws `alreadyResponded` on a second answer, `invalidResponse` for a response the rules below refuse, and `sendFailed` when the write fails or outlasts `writeDeadlineMs`. |
 | `respondWith(code StatusCode, body String, contentType String)` | — | `HttpServerError` | Answer a status, a body and its content type, as `respond` does. |
 
-`respond` and `respondWith` record that the exchange is answered, so an exchange from `accept()` is held in
-a `var` to answer it; through a `let` it is [E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159).
-A handler answers the `exchange` parameter `serve` hands it directly.
+`respond` and `respondWith` record that the exchange is answered, whether it came from `accept()` or is the
+`exchange` parameter `serve` hands a handler.
 
 Every response carries `Connection: close`, and a `Content-Length` computed from its body whenever its
 status allows a body: every status but 204 and 304, which end at their headers. The server writes both
@@ -3418,9 +3412,9 @@ function main() returns ExitCode
 	let second = try doc.arrayAt(tags, index: 1) otherwise 0
 	print("{doc.rootKind()} {name} {stars} {doc.get(second).stringValue}\n")
 
-	var built = JsonDoc.create()
-	var keys = StringArray.create(0)
-	var children = JsonNodeIdArray.create(0)
+	let built = JsonDoc.create()
+	let keys = StringArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 	keys.push("ok")
 	children.push(built.add(JsonNode.boolNode(true)))
 	keys.push("score")
@@ -3590,8 +3584,8 @@ function hex(bytes ByteArray) returns String
 end 'hex'
 
 function main() returns ExitCode
-	var outer = DerReader.create(ByteArray from [0x30, 0x06, 0x02, 0x01, 0x05, 0x02, 0x01, 0x80])
-	var numbers = try outer.enterSequence() otherwise return 1
+	let outer = DerReader.create(ByteArray from [0x30, 0x06, 0x02, 0x01, 0x05, 0x02, 0x01, 0x80])
+	let numbers = try outer.enterSequence() otherwise return 1
 	let first = try numbers.readInteger() otherwise return 1
 	print("{hex(first)} {numbers.isAtEnd()}\n")
 
@@ -3653,7 +3647,7 @@ function hex(bytes ByteArray) returns String
 end 'hex'
 
 function main() returns ExitCode
-	var digest = Digest.create(HashAlgorithm.sha256)
+	let digest = Digest.create(HashAlgorithm.sha256)
 	digest.update("a".toByteArray())
 	digest.update("bc".toByteArray())
 
@@ -3932,9 +3926,9 @@ Both calls run in time independent of the private key. Derive keys from the shar
 
 ```maxon
 function main() returns ExitCode
-	var alice = ByteArray.create(0)
+	let alice = ByteArray.create(0)
 	alice.growFilled(32, value: 1)
-	var bob = ByteArray.create(0)
+	let bob = ByteArray.create(0)
 	bob.growFilled(32, value: 2)
 
 	try 'agree'
@@ -4145,7 +4139,7 @@ then `"bc"`. When hashing a sequence of parts, combine each part's length too.
 
 ```maxon
 function main() returns ExitCode
-	var hasher = Hasher.create()
+	let hasher = Hasher.create()
 	hasher.combineBytes("ab".toByteArray())
 	hasher.combine(7)
 
@@ -4380,7 +4374,7 @@ typealias Payload = Array with Byte
 
 function main() returns ExitCode
 	let before = HeapStats.processAllocations()
-	var kept = Payload.create(0)
+	let kept = Payload.create(0)
 	kept.push(1)
 	let after = HeapStats.processAllocations()
 	print("{after > before} {HeapStats.slab().live > 0} {kept.count()}\n")
@@ -4400,8 +4394,8 @@ fields, `Array` and `Map` publish as well as scalars, strings and service handle
 a registry key's `default` ([`SharedValue`](LANGUAGE_REFERENCE.md#sharedvalue--a-live-value-made-at-run-time)).
 
 A value `current()` returns, like a registry `default`'s, is read-only all the way down: a write through it is
-[E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159) and binding it to a `var` is
-[E3078](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3078); `clone()` gives a mutable copy. `publish` takes a
+[E3197](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3197), and handing it to a parameter the callee writes is
+[E3207](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3207); `clone()` gives a mutable copy. `publish` takes a
 value with no other owner ([E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174)); publish a fresh value
 or a `clone()`. A tuple of heap-free elements is published as a copy
 ([Moves and Sharing](LANGUAGE_REFERENCE.md#moves-and-sharing)).

@@ -157,7 +157,7 @@ type Box uses T
 end 'Box'
 typealias IntBox = Box with Integer
 function main() returns ExitCode
-	var b = IntBox.create(7)
+	let b = IntBox.create(7)
 	b.value = 99
 	if b.value == 99 'chk'
 		return 0
@@ -266,7 +266,7 @@ error E2056: <fragment>:7:17: generic type 'Pair' expects 2 type argument(s), bu
 ```
 
 <!-- test: error.an-instance-with-more-than-sixty-four-type-arguments-is-refused -->
-An instance records which of its arguments are `readonly` or `immutable` in 64-bit masks, so a type-argument list past 64 is refused
+An instance records which of its arguments are `immutable` in a 64-bit mask, so a type-argument list past 64 is refused
 where its sixty-fifth argument is written.
 
 ```maxon
@@ -283,7 +283,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:610: Unsupported: a type-argument list with more than 64 arguments — the arguments spelled `readonly` or `immutable` are recorded as one bit per position of a 64-bit mask, so an instance has no position to record a later argument at
+error E2015: <fragment>:8:610: Unsupported: a type-argument list with more than 64 arguments — an argument spelled `immutable` are recorded as one bit per position of a 64-bit mask, so an instance has no position to record a later argument at
 ```
 
 <!-- test: managed-string-arg -->
@@ -554,7 +554,7 @@ end 'Box'
 typealias SmallInt = int(0 to 100)
 typealias IntBox = Box with SmallInt
 function main() returns ExitCode
-	var b = IntBox.create(7)
+	let b = IntBox.create(7)
 	b.replace(9)
 	return 0
 end 'main'
@@ -580,7 +580,7 @@ type Box uses Element
 end 'Box'
 typealias StringBox = Box with String
 function main() returns ExitCode
-	var b = StringBox.create("alpha")
+	let b = StringBox.create("alpha")
 	b.replace("beta")
 	return 0
 end 'main'
@@ -603,7 +603,7 @@ type Box uses Element
 end 'Box'
 typealias StringBox = Box with String
 function main() returns ExitCode
-	var b = StringBox.create("alpha")
+	let b = StringBox.create("alpha")
 	b.saved = "beta"
 	return 0
 end 'main'
@@ -629,7 +629,7 @@ type Box uses Element
 end 'Box'
 typealias StringBox = Box with String
 function main() returns ExitCode
-	var b = StringBox.create("start")
+	let b = StringBox.create("start")
 	var i = 0 as Count
 	while i < 3 'loop'
 		b.replace("iter")
@@ -665,7 +665,7 @@ type Box uses Element
 end 'Box'
 typealias HolderBox = Box with Holder
 function main() returns ExitCode
-	var b = HolderBox.create(Holder.create("alpha"))
+	let b = HolderBox.create(Holder.create("alpha"))
 	b.replace(Holder.create("beta"))
 	return 0
 end 'main'
@@ -698,7 +698,7 @@ type Outer uses T
 end 'Outer'
 typealias OuterStr = Outer with String
 function main() returns ExitCode
-	var o = OuterStr.create("alpha")
+	let o = OuterStr.create("alpha")
 	o.inner.replace("beta")
 	return 0
 end 'main'
@@ -1356,8 +1356,8 @@ end 'Box'
 typealias N0 = Box with S0
 typealias N1 = Box with N0
 function main() returns ExitCode
-	var v0 = N0.create(S0.make("x"))
-	var v1 = N1.create(v0)
+	let v0 = N0.create(S0.make("x"))
+	let v1 = N1.create(v0)
 	v1.swap(N0.create(S0.make("y")))
 	return 0
 end 'main'
@@ -1389,7 +1389,7 @@ end 'Box'
 typealias N0 = Box with S0
 typealias N1 = Box with N0
 function main() returns ExitCode
-	var v1 = N1.create(N0.create(S0.make("start")))
+	let v1 = N1.create(N0.create(S0.make("start")))
 	for _ in 0 upto 200 'rounds'
 		v1.swap(N0.create(S0.make("round")))
 	end 'rounds'
@@ -2297,9 +2297,9 @@ typealias Reals = Array with Real
 typealias Vec2 = FixedArray with 2 Real
 
 function main() returns ExitCode
-	var a = Reals.create(0)
+	let a = Reals.create(0)
 	a.push(1.5)
-	var v = Vec2.create()
+	let v = Vec2.create()
 	v.set(0, value: 3.5)
 	return trunc((try a.get(0) otherwise 0.0) + v.get(0))
 end 'main'
@@ -2382,7 +2382,7 @@ typealias BoolSizer = Sizer with bool
 typealias BoolArray = Array with bool
 function main() returns ExitCode
 	let s = BoolSizer.create(true)
-	var a = BoolArray.create(0)
+	let a = BoolArray.create(0)
 	a.push(s.get())
 	return a.count() - 1
 end 'main'
@@ -2451,7 +2451,7 @@ typealias IntBox = Box with Integer
 typealias IntArray = Array with Integer
 function main() returns ExitCode
 	let b = IntBox.create(42)
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(b.get())
 	return (try a.get(0) otherwise 0) - 42
 end 'main'
@@ -2742,9 +2742,9 @@ end 'Holder'
 typealias IntBox = Box with Integer
 typealias BoxHolder = Holder with IntBox
 function main() returns ExitCode
-	var h = BoxHolder.hold(IntBox.create(7))
+	let h = BoxHolder.hold(IntBox.create(7))
 	h.item = IntBox.create(8)
-	view q = h.item
+	let q = h.item
 	print("{q.value}\n")
 	return q.value - 8
 end 'main'
@@ -2778,9 +2778,9 @@ type Box uses T
 end 'Box'
 typealias LabelBox = Box with Label
 function main() returns ExitCode
-	var b = LabelBox.create(Label.create("{9}", n: 3))
+	let b = LabelBox.create(Label.create("{9}", n: 3))
 	b.value = Label.create("{8}", n: 4)
-	view q = b.value
+	let q = b.value
 	print("{q.text} {q.n}\n")
 	return q.n - 4
 end 'main'
@@ -2919,10 +2919,10 @@ union Payload
 	empty
 end 'Payload'
 function main() returns ExitCode
-	var a = Nums.create(0)
+	let a = Nums.create(0)
 	a.push(4)
 	a.push(5)
-	view p = Payload.list(a)
+	let p = Payload.list(a)
 	match p 'k'
 		empty then print("none\n")
 		list(xs) then print("n={xs.count()} first={try xs.get(0) otherwise 0}\n")
@@ -3235,7 +3235,7 @@ type Box uses T
 end 'Box'
 typealias AlphaBox = Box with Alpha
 function main() returns ExitCode
-	var bx = AlphaBox.create()
+	let bx = AlphaBox.create()
 	let got = bx.echo(Alpha.create())
 	let back = bx.echo(got)
 	print("a={back.a}\n")
@@ -3273,7 +3273,7 @@ type Box uses T
 end 'Box'
 typealias AlphaBox = Box with Alpha
 function main() returns ExitCode
-	var bx = AlphaBox.create()
+	let bx = AlphaBox.create()
 	var i = 0 as Integer
 	var total = 0 as Integer
 	while i < 100 'loop'
@@ -3306,7 +3306,7 @@ type Box uses T
 end 'Box'
 typealias StrBox = Box with String
 function main() returns ExitCode
-	var bx = StrBox.create()
+	let bx = StrBox.create()
 	var i = 0 as Count
 	var total = 0 as BytePos
 	while i < 100 'loop'
@@ -3353,7 +3353,7 @@ type Box uses T
 end 'Box'
 typealias AlphaBox = Box with Alpha
 function main() returns ExitCode
-	var bx = AlphaBox.create()
+	let bx = AlphaBox.create()
 	let w = Wrap.create(bx.echo(Alpha.create(5)))
 	print("{w.held.a}\n")
 	return w.held.a - 5
@@ -3519,7 +3519,7 @@ type Box uses T
 end 'Box'
 typealias StrBox = Box with String
 function main() returns ExitCode
-	var bx = StrBox.create()
+	let bx = StrBox.create()
 	let s = bx.echo("hi")
 	print("{s}\n")
 	return s.byteLength() - 2
@@ -3565,7 +3565,7 @@ type Box uses T
 end 'Box'
 typealias AlphaBox = Box with Alpha
 function run(t Integer) returns Integer
-	var bx = AlphaBox.create(t)
+	let bx = AlphaBox.create(t)
 	try 'work'
 		let back = bx.echo(Alpha.create(9))
 		print("ok={back.a}\n")
@@ -4071,7 +4071,7 @@ type HoldA uses T
 	export typealias Items = Array with T
 	export var items as Items
 	static function create(seed T) returns Self
-		var arr = Items.create(0)
+		let arr = Items.create(0)
 		arr.resize(1)
 		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
 		return Self{items: arr}
@@ -4088,7 +4088,7 @@ typealias HoldANum = HoldA with Num
 
 function main() returns ExitCode
 	let b = HoldANum.create(7)
-	var a = HoldANum.create(1)
+	let a = HoldANum.create(1)
 	a.adopt(b.items)
 	if a.isSingle() 'ok'
 		print("ok\n")
@@ -4115,7 +4115,7 @@ typealias NumArray = Array with Num
 type HoldConcrete
 	export var items as NumArray
 	static function create(seed Num) returns Self
-		var arr = NumArray.create(0)
+		let arr = NumArray.create(0)
 		arr.resize(1)
 		try arr.set(0, value: seed) otherwise panic("seeded slot 0 must exist after resize(1)")
 		return Self{items: arr}
@@ -4130,7 +4130,7 @@ end 'HoldConcrete'
 
 function main() returns ExitCode
 	let b = HoldConcrete.create(7)
-	var a = HoldConcrete.create(1)
+	let a = HoldConcrete.create(1)
 	a.adopt(b.items)
 	if a.isSingle() 'ok'
 		print("ok\n")
@@ -4854,7 +4854,7 @@ type Box uses T
 	typealias Peers = Array with Self
 
 	static function twice(v T) returns Peers
-		var out = Peers.create(0)
+		let out = Peers.create(0)
 		out.push(Self{v: v})
 		out.push(Self{v: v})
 		return out
@@ -4868,14 +4868,14 @@ end 'Box'
 typealias TextBox = Box with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var boxes = TextBox.twice(heapString("first payload ", b: "long enough to allocate"))
+	let boxes = TextBox.twice(heapString("first payload ", b: "long enough to allocate"))
 	let first = try boxes.pop() otherwise panic("one")
 	_ = try boxes.pop() otherwise panic("two")
 	let noise = heapString("overwrite payload ", b: "long enough to allocate xxxxxxxx")
@@ -5035,7 +5035,7 @@ function work(n Whole) returns Whole
 end 'work'
 
 function longText(tag String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(tag)
 	sb.append(" payload long enough to allocate")
 	return sb.build()
@@ -5115,7 +5115,7 @@ caller's cell nor a second reference to the pushed value: the caller's variable 
 they hold, and the leak gate is clean.
 ```maxon
 function longText(tag String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(tag)
 	sb.append(" payload long enough to allocate")
 	return sb.build()
@@ -5126,7 +5126,7 @@ type Hold uses U
 	export var items as Items
 
 	static function of(first U, replacement U, swap bool) returns Hold
-		var xs = Items.create(0)
+		let xs = Items.create(0)
 		var chosen = first
 
 		if swap 'swapped'
@@ -5170,7 +5170,7 @@ The concrete twin of the case above: a `mutable` `String` parameter that is reas
 factory builds, with the caller's variable and the array each keeping what they hold.
 ```maxon
 function longText(tag String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(tag)
 	sb.append(" payload long enough to allocate")
 	return sb.build()
@@ -5181,7 +5181,7 @@ type Hold
 	export var items as Items
 
 	static function of(first mutable String, replacement String, swap bool) returns Hold
-		var xs = Items.create(0)
+		let xs = Items.create(0)
 
 		if swap 'swapped'
 			first = replacement
@@ -5235,7 +5235,7 @@ function work(n Whole) returns Whole
 end 'work'
 
 function longText(tag String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(tag)
 	sb.append(" payload long enough to allocate")
 	return sb.build()
@@ -5248,7 +5248,7 @@ type Holder uses T
 	typealias Pieces = Array with Self
 
 	static function create(item T, spare T, keep bool, refuse bool) returns Self throws KeepError
-		var pieces = Pieces.create(0)
+		let pieces = Pieces.create(0)
 		var made = 2 as Whole
 
 		if keep 'kept'
@@ -5321,7 +5321,7 @@ function work(n Whole) returns Whole
 end 'work'
 
 function longText(tag String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(tag)
 	sb.append(" payload long enough to allocate")
 	return sb.build()
@@ -5442,7 +5442,7 @@ A generic factory that copies its `T` parameter into a local it reassigns and th
 variable and the record each holding their own reference, and the leak gate is clean.
 ```maxon
 function longText(tag String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(tag)
 	sb.append(" payload long enough to allocate")
 	return sb.build()
@@ -5494,7 +5494,7 @@ loop leaves holds the last, and the leak gate is clean.
 typealias Whole = int(i64.min to i64.max)
 
 function longText(tag String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(tag)
 	sb.append(" payload long enough to allocate")
 	return sb.build()
@@ -5549,7 +5549,7 @@ stores the result and on the path that does not, without a leak.
 typealias Whole = int(i64.min to i64.max)
 
 function longText(tag String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(tag)
 	sb.append(" payload long enough to allocate")
 	return sb.build()
@@ -5876,7 +5876,7 @@ iteration, as the bodies over a `String` do, and the leak gate is clean.
 typealias Whole = int(i64.min to i64.max)
 
 function longText(tag String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(tag)
 	sb.append(" payload long enough to allocate")
 	return sb.build()

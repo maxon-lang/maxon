@@ -110,7 +110,7 @@ export type DapObject
 
 	export function objects(key String) returns DapObjectArray throws DapArgumentError
 		let held = try self.elements(key)
-		var found = DapObjectArray.create(held.count(), zeroed: false)
+		let found = DapObjectArray.create(held.count(), zeroed: false)
 
 		for element in held 'eachElement'
 			if self.doc.get(element).kind != JsonKind.jsonObject 'notAnObject'
@@ -125,7 +125,7 @@ export type DapObject
 
 	export function texts(key String) returns StringArray throws DapArgumentError
 		let held = try self.elements(key)
-		var found = StringArray.create(held.count(), zeroed: false)
+		let found = StringArray.create(held.count(), zeroed: false)
 
 		for element in held 'eachElement'
 			let value = self.doc.get(element)
@@ -141,7 +141,7 @@ export type DapObject
 	end 'texts'
 
 	export function textMap(key String) returns EnvMap throws DapArgumentError
-		var found = EnvMap.create()
+		let found = EnvMap.create()
 
 		if not self.has(key) 'absent'
 			return found
@@ -189,7 +189,7 @@ export type DapRequest
 	export let arguments as DapObject
 
 	export static function parse(body String) returns DapRequest throws DapProtocolError
-		var doc = try Json.parse(body) otherwise throw DapProtocolError.notJson
+		let doc = try Json.parse(body) otherwise throw DapProtocolError.notJson
 
 		if doc.rootKind() != JsonKind.jsonObject 'notAnObject'
 			throw DapProtocolError.notARequest
@@ -226,27 +226,27 @@ export type DapWriter
 	end 'create'
 
 	export function respond(request DapRequest, doc JsonDoc, body DapBody)
-		var envelope = self.responseEnvelope(request, doc: doc, success: true)
+		let envelope = self.responseEnvelope(request, doc: doc, success: true)
 		addBody(envelope, body: body)
 		self.send(doc, envelope: envelope)
 	end 'respond'
 
 	export function refuse(request DapRequest, message String)
-		var doc = JsonDoc.create()
-		var envelope = self.responseEnvelope(request, doc: doc, success: false)
+		let doc = JsonDoc.create()
+		let envelope = self.responseEnvelope(request, doc: doc, success: false)
 		envelope.addString(doc, key: MessageKey, value: message)
 		self.send(doc, envelope: envelope)
 	end 'refuse'
 
 	export function event(name String, doc JsonDoc, body DapBody)
-		var envelope = self.envelope(doc, messageType: EventType)
+		let envelope = self.envelope(doc, messageType: EventType)
 		envelope.addString(doc, key: EventKey, value: name)
 		addBody(envelope, body: body)
 		self.send(doc, envelope: envelope)
 	end 'event'
 
 	function responseEnvelope(request DapRequest, doc JsonDoc, success bool) returns JsonObjectBuilder
-		var envelope = self.envelope(doc, messageType: ResponseType)
+		let envelope = self.envelope(doc, messageType: ResponseType)
 		envelope.addNumber(doc, key: RequestSeqKey, value: request.seq as JsonFloat)
 		envelope.addBool(doc, key: SuccessKey, value: success)
 		envelope.addString(doc, key: CommandKey, value: request.command)
@@ -255,7 +255,7 @@ export type DapWriter
 	end 'responseEnvelope'
 
 	function envelope(doc JsonDoc, messageType String) returns JsonObjectBuilder
-		var envelope = JsonObjectBuilder.create()
+		let envelope = JsonObjectBuilder.create()
 		envelope.addNumber(doc, key: SeqKey, value: self.nextSeq as JsonFloat)
 		envelope.addString(doc, key: TypeKey, value: messageType)
 		self.nextSeq = self.nextSeq + 1

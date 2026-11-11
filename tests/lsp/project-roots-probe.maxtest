@@ -57,21 +57,21 @@ end 'WorkspaceFolderDocument'
 export typealias WorkspaceFolderDocumentArray = Array with WorkspaceFolderDocument
 
 export function projectRootsFolders(first FilePath) returns WorkspaceFolderRootArray
-	var folders = WorkspaceFolderRootArray.create(0)
+	let folders = WorkspaceFolderRootArray.create(0)
 	folders.push(first)
 
 	return folders
 end 'projectRootsFolders'
 
 export function projectRootsFolderPair(first FilePath, second FilePath) returns WorkspaceFolderRootArray
-	var folders = projectRootsFolders(first)
+	let folders = projectRootsFolders(first)
 	folders.push(second)
 
 	return folders
 end 'projectRootsFolderPair'
 
 export function projectRootsDocument(uri String, content String) returns WorkspaceFolderDocumentArray
-	var documents = WorkspaceFolderDocumentArray.create(0)
+	let documents = WorkspaceFolderDocumentArray.create(0)
 	documents.push(WorkspaceFolderDocument.create(uri, content: content))
 
 	return documents
@@ -106,7 +106,7 @@ export function ceilingReaderUri(outer FilePath) returns String
 end 'ceilingReaderUri'
 
 export function ceilingPositions(uri String) returns CorpusProbePointArray
-	var positions = projectRootsPosition(CorpusProbePoint.at(uri, line: CeilingOuterCallLine, character: CeilingCallCharacter))
+	let positions = projectRootsPosition(CorpusProbePoint.at(uri, line: CeilingOuterCallLine, character: CeilingCallCharacter))
 	positions.push(CorpusProbePoint.at(uri, line: CeilingNeighbourCallLine, character: CeilingCallCharacter))
 
 	return positions
@@ -158,7 +158,7 @@ export function listedProjects(probe ListProjectsProbe) returns ListProjectsResu
 end 'listedProjects'
 
 export function listProjectsIn(session ProjectRootsSession, documents WorkspaceFolderDocumentArray) returns ListProjectsProbe
-	var client = LspClient.start()
+	let client = LspClient.start()
 	let probe = collectListedProjects(client, session: session, documents: documents)
 	client.release()
 
@@ -218,7 +218,7 @@ function followUpTheOpen(client LspClient, document WorkspaceFolderDocument) thr
 end 'followUpTheOpen'
 
 export function projectRootsPosition(position CorpusProbePoint) returns CorpusProbePointArray
-	var positions = CorpusProbePointArray.create(0)
+	let positions = CorpusProbePointArray.create(0)
 	positions.push(position)
 
 	return positions
@@ -234,7 +234,7 @@ export function probesAnswered(outcome WorkspaceFolderDefinitionOutcome) returns
 end 'probesAnswered'
 
 export function definitionsAcrossWorkspaceFolders(initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions CorpusProbePointArray) returns WorkspaceFolderDefinitionOutcome
-	var client = LspClient.start()
+	let client = LspClient.start()
 	let outcome = collectWorkspaceFolderDefinitions(client, initialFolders: initialFolders, addedFolders: addedFolders, removedFolders: removedFolders, documents: documents, positions: positions)
 	client.release()
 
@@ -250,7 +250,7 @@ function collectWorkspaceFolderDefinitions(client LspClient, initialFolders Work
 end 'collectWorkspaceFolderDefinitions'
 
 function workspaceFolderDefinitionsSession(client LspClient, initialFolders WorkspaceFolderRootArray, addedFolders WorkspaceFolderRootArray, removedFolders WorkspaceFolderRootArray, documents WorkspaceFolderDocumentArray, positions CorpusProbePointArray) returns CorpusDefinitionProbeArray throws LspClientError
-	var probes = CorpusDefinitionProbeArray.create(0)
+	let probes = CorpusDefinitionProbeArray.create(0)
 
 	_ = try client.initializeAtWorkspaceFolders(initialFolders)
 	try client.initialized()

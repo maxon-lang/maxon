@@ -619,7 +619,7 @@ type Tally
 	export var total as Count
 
 	static function create(one Count) returns Tally
-		var t = Self{total: one shl 62}
+		let t = Self{total: one shl 62}
 		t.total = one shl 63
 		return t
 	end 'create'
@@ -735,7 +735,7 @@ function packed(bytes ByteArray) returns Word
 end 'packed'
 
 function main() returns ExitCode
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for i in 1 upto 8 'eachLowByte'
 		bytes.push(i as Byte)
@@ -1328,7 +1328,7 @@ type Tally
 	export var h as Count
 
 	static function create() returns Tally
-		var t = Self{a: u64.max - 1, b: 0, c: 0, d: 0, e: 0, h: 0}
+		let t = Self{a: u64.max - 1, b: 0, c: 0, d: 0, e: 0, h: 0}
 		t.b = u64.max xor 1
 		t.c = (u64.max as Count) / 1
 		t.d = (0xcbf29ce484222325 as Count) * 1
@@ -1530,7 +1530,7 @@ type Tally
 	export var total as Count
 
 	static function create(c Count) returns Tally
-		var t = Self{total: 0}
+		let t = Self{total: 0}
 		t.total = c - 1
 		return t
 	end 'create'
@@ -1598,7 +1598,7 @@ type Tally
 	export var total as Count
 
 	static function create(c Count) returns Tally
-		var t = Self{total: 0}
+		let t = Self{total: 0}
 		t.total = c - 5
 		return t
 	end 'create'

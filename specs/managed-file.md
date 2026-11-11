@@ -120,7 +120,7 @@ end 'TestFile'
 function main() returns ExitCode
 	let path = "test_managed_file_rw.txt"
 	// Write a file
-	var wf = try TestFile.openWrite(path.toByteArray().managed) otherwise 'writeFail'
+	let wf = try TestFile.openWrite(path.toByteArray().managed) otherwise 'writeFail'
 		print("write open failed")
 		return 1
 	end 'writeFail'
@@ -132,14 +132,14 @@ function main() returns ExitCode
 	wf.file.close()
 
 	// Read it back
-	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise 'readFail'
+	let rf = try TestFile.openRead(path.toByteArray().managed) otherwise 'readFail'
 		print("read open failed")
 		return 2
 	end 'readFail'
 	let size = try rf.file.size() otherwise 'sizeErr'
 		return 8
 	end 'sizeErr'
-	var buffer = try __ManagedMemory.create(size + 1, 1) otherwise 'allocFail'
+	let buffer = try __ManagedMemory.create(size + 1, 1) otherwise 'allocFail'
 		return 5
 	end 'allocFail'
 	let bytesRead = try rf.file.read(buffer, size) otherwise 'rErr'
@@ -197,7 +197,7 @@ type TestFile
 end 'TestFile'
 
 function createEmptyFile(path String) throws TestFileError
-	var f = try TestFile.openWrite(path.toByteArray().managed)
+	let f = try TestFile.openWrite(path.toByteArray().managed)
 	f.file.close()
 end 'createEmptyFile'
 
@@ -281,7 +281,7 @@ function main() returns ExitCode
 	writeFile(path)
 
 	// Verify we can read it (file was properly closed by destructor)
-	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise 'readFail'
+	let rf = try TestFile.openRead(path.toByteArray().managed) otherwise 'readFail'
 		print("read failed")
 		return 1
 	end 'readFail'
@@ -436,7 +436,7 @@ both covered by the file: this one and `managed-file.write-and-read`.
 function main() returns ExitCode
 	let oldPath = "test_managed_rename_src.txt"
 	let newPath = "test_managed_rename_dst.txt"
-	var f = try __ManagedFile.openWrite(oldPath.toByteArray().managed) otherwise 'openFail'
+	let f = try __ManagedFile.openWrite(oldPath.toByteArray().managed) otherwise 'openFail'
 		return 1
 	end 'openFail'
 	try f.write("rename me".toByteArray().managed) otherwise 'writeFail'
@@ -470,14 +470,14 @@ end 'main'
 leaves the first file's bytes in place.
 ```maxon
 function createsNew(path String) returns bool
-	var file = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise return false
+	let file = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise return false
 	file.close()
 	return true
 end 'createsNew'
 
 function main() returns ExitCode
 	let path = "test_managed_create_new.txt"
-	var first = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise 'firstFail'
+	let first = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise 'firstFail'
 		return 1
 	end 'firstFail'
 	try first.write("first".toByteArray().managed) otherwise 'writeFail'
@@ -488,7 +488,7 @@ function main() returns ExitCode
 
 	let refused = not createsNew(path)
 
-	var reader = try __ManagedFile.openRead(path.toByteArray().managed) otherwise 'readFail'
+	let reader = try __ManagedFile.openRead(path.toByteArray().managed) otherwise 'readFail'
 		return 3
 	end 'readFail'
 	let size = try reader.size() otherwise 'sizeFail'
@@ -517,14 +517,14 @@ The refusal of an existing path is the `alreadyExists` case, not the catch-all `
 ```maxon
 function main() returns ExitCode
 	let path = "test_managed_create_new_exists.txt"
-	var first = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise 'firstFail'
+	let first = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise 'firstFail'
 		return 1
 	end 'firstFail'
 	first.close()
 
 	var answer = 2 as ExitCode
 
-	var second = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise (e) 'refused'
+	let second = try __ManagedFile.openCreateNew(path.toByteArray().managed) otherwise (e) 'refused'
 		answer = 42 if e == __ManagedFileError.alreadyExists else 3
 		try __ManagedFile.delete(path.toByteArray().managed) otherwise return 4
 		return answer
@@ -546,12 +546,12 @@ each grows the buffer's length by what it read.
 ```maxon
 function main() returns ExitCode
 	let path = "test_managed_read_appending.txt"
-	var w = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
+	let w = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
 	try w.write("hello world".toByteArray().managed) otherwise return 2
 	w.close()
 
-	var r = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
-	var buffer = try __ManagedMemory.create(32, 1) otherwise return 4
+	let r = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
+	let buffer = try __ManagedMemory.create(32, 1) otherwise return 4
 	let first = try r.readAppending(buffer, 5) otherwise return 5
 	let second = try r.readAppending(buffer, 20) otherwise return 6
 	let third = try r.readAppending(buffer, 20) otherwise return 7
@@ -578,12 +578,12 @@ A `readAppending` whose bytes would run past the buffer's capacity is `readFaile
 ```maxon
 function main() returns ExitCode
 	let path = "test_managed_read_appending_over.txt"
-	var w = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
+	let w = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
 	try w.write("abcdef".toByteArray().managed) otherwise return 2
 	w.close()
 
-	var r = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
-	var buffer = try __ManagedMemory.create(4, 1) otherwise return 4
+	let r = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
+	let buffer = try __ManagedMemory.create(4, 1) otherwise return 4
 	let first = try r.readAppending(buffer, 3) otherwise return 5
 	var answer = 6 as ExitCode
 
@@ -618,12 +618,12 @@ end 'advance'
 
 function main() returns ExitCode
 	let path = "test_managed_read_appending_by_reference.txt"
-	var w = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
+	let w = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
 	try w.write("abcdef".toByteArray().managed) otherwise return 2
 	w.close()
 
-	var r = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
-	var buffer = try __ManagedMemory.create(8, 1) otherwise return 4
+	let r = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
+	let buffer = try __ManagedMemory.create(8, 1) otherwise return 4
 	let look = observe
 	look(buffer, 1)
 	let got = try r.readAppending(buffer, 6) otherwise return 5
@@ -669,15 +669,15 @@ writing, written, and deleted.
 ```maxon
 function main() returns ExitCode
 	let path = "test_managed_held_open_for_reading.txt"
-	var first = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
+	let first = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
 	try first.write("held".toByteArray().managed) otherwise return 2
 	first.close()
 
-	var held = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
+	let held = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
 	var answer = 42 as ExitCode
 
 	if let rewrite = try __ManagedFile.openWrite(path.toByteArray().managed) 'rewritten'
-		var w = rewrite
+		let w = rewrite
 		try w.write("rewritten".toByteArray().managed) otherwise 'unwritten'
 			answer = 4
 		end 'unwritten'
@@ -724,7 +724,7 @@ What the case pins, and why each half is here rather than one of them:
 ```maxon
 function main() returns ExitCode
 	let path = "test_managed_stat_round_trip.txt"
-	var f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
+	let f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
 		return 1
 	end 'openFail'
 	try f.write("abcde".toByteArray().managed) otherwise 'writeFail'
@@ -846,16 +846,16 @@ end 'TestFile'
 
 function main() returns ExitCode
 	let path = "test_mf_read_non_owned.txt"
-	var wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("openWrite: the runner's working directory is writable")
+	let wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("openWrite: the runner's working directory is writable")
 	try wf.file.write("ZZZZZZZZZZZZZZZZZZZZZZZZ".toByteArray().managed) otherwise panic("write: 24 bytes to a freshly opened file")
 	wf.file.close()
 
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(65)
 	arr.push(66)
 	arr.push(67)
 	arr.push(68)
-	var view = try arr.slice(0, endIndex: 4) otherwise panic("slice: 0..4 of a length-4 array")
+	let view = try arr.slice(0, endIndex: 4) otherwise panic("slice: 0..4 of a length-4 array")
 
 	// Guard the PREMISE rather than the sentinel's value: if a slice ever stops being a zero-copy view this
 	// case stops testing its subject, and it must go red then rather than quiet.
@@ -864,7 +864,7 @@ function main() returns ExitCode
 		return 1
 	end 'sliceMustStillBeAView'
 
-	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise panic("openRead: the file just written")
+	let rf = try TestFile.openRead(path.toByteArray().managed) otherwise panic("openRead: the file just written")
 	let within = try rf.file.read(view.managed, 2) otherwise 999
 	let over = try rf.file.read(view.managed, 24) otherwise 999
 	rf.file.close()
@@ -917,12 +917,12 @@ end 'TestFile'
 
 function main() returns ExitCode
 	let path = "test_mf_read_owned_bound.txt"
-	var wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("openWrite: the runner's working directory is writable")
+	let wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("openWrite: the runner's working directory is writable")
 	try wf.file.write("0123456789".toByteArray().managed) otherwise panic("write: 10 bytes to a freshly opened file")
 	wf.file.close()
 
-	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise panic("openRead: the file just written")
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create: a 4-byte owned buffer")
+	let rf = try TestFile.openRead(path.toByteArray().managed) otherwise panic("openRead: the file just written")
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create: a 4-byte owned buffer")
 	let atCapacity = try rf.file.read(mm, 4) otherwise 999
 	let overCapacity = try rf.file.read(mm, 5) otherwise 999
 	rf.file.close()

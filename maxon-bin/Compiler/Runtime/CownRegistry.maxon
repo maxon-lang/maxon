@@ -20,7 +20,7 @@ export function installServiceRegistryRuntime(module StdModule, globalData Globa
 		return
 	end 'noServiceRegistry'
 
-	view released = releasedRegistryPanicLabel(globalData)
+	let released = releasedRegistryPanicLabel(globalData)
 	buildRegistryServiceCurrent(module, released: released)
 	buildRegistryServiceRegister(module, released: released)
 	buildRegistryServiceReplace(module, released: released)
@@ -35,8 +35,8 @@ module function releasedRegistryPanicLabel(globalData GlobalDataTable) returns i
 end 'releasedRegistryPanicLabel'
 
 module function emitHeldOrPanic(module StdModule, func IrFunction, block IrBlock, held ValueId, released ByteArray, holdsRegistryLock bool, ids ValueMinter) returns IrBlock
-	var releasedBlock = module.addBlock(func, label: b"regreleased", heat: BlockHeat.cold)
-	var live = module.addBlock(func, label: b"reglive", heat: BlockHeat.normal)
+	let releasedBlock = module.addBlock(func, label: b"regreleased", heat: BlockHeat.cold)
+	let live = module.addBlock(func, label: b"reglive", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: block, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: releasedBlock, whenFalse: live, ids: ids)
 
 	if holdsRegistryLock 'leaveTheLockFirst'
@@ -54,14 +54,14 @@ function emitLockedSlotHandle(module StdModule, block IrBlock, slot ValueId, ids
 end 'emitLockedSlotHandle'
 
 function buildRegistryServiceCurrent(module StdModule, released ByteArray)
-	var func = openRuntimeFunction(RegistryServiceCurrentName, paramCount: 1, returnsAWord: true)
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(RegistryServiceCurrentName, paramCount: 1, returnsAWord: true)
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let slot = 0
 
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsRegistryLock: true, ids: ids)
+	let live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsRegistryLock: true, ids: ids)
 	let cown = emitLoadField(module, block: live, record: held, offset: ServiceHandleCownOffset, ids: ids)
 	let table = emitLoadField(module, block: live, record: held, offset: InterfaceHandleTableOffset, ids: ids)
 	_ = emitCownSharesStep(module, block: live, cown: cown, delta: CownShareUnit, ids: ids)
@@ -71,15 +71,15 @@ function buildRegistryServiceCurrent(module StdModule, released ByteArray)
 end 'buildRegistryServiceCurrent'
 
 function buildRegistryServiceRegister(module StdModule, released ByteArray)
-	var func = openRuntimeFunction(RegistryServiceRegisterName, paramCount: 2, returnsAWord: false)
-	var ids = ValueMinter.create(2)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(RegistryServiceRegisterName, paramCount: 2, returnsAWord: false)
+	let ids = ValueMinter.create(2)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let slot = 0
 	let handle = 1
 
 	let replaced = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: replaced, released: released, holdsRegistryLock: true, ids: ids)
+	let live = emitHeldOrPanic(module, func: func, block: entry, held: replaced, released: released, holdsRegistryLock: true, ids: ids)
 	emitStoreField(module, block: live, record: slot, offset: SharedValueHolderCellOffset, value: handle)
 	emitLockWordLeave(module, block: live, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	module.appendOp(live, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(replaced)))
@@ -88,9 +88,9 @@ function buildRegistryServiceRegister(module StdModule, released ByteArray)
 end 'buildRegistryServiceRegister'
 
 function buildRegistryServiceInstall(module StdModule)
-	var func = openRuntimeFunction(RegistryServiceInstallName, paramCount: 2, returnsAWord: false)
-	var ids = ValueMinter.create(2)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(RegistryServiceInstallName, paramCount: 2, returnsAWord: false)
+	let ids = ValueMinter.create(2)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 
 	emitLockWordEnter(module, block: entry, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
@@ -101,11 +101,11 @@ function buildRegistryServiceInstall(module StdModule)
 end 'buildRegistryServiceInstall'
 
 function buildRegistryServiceRelease(module StdModule)
-	var func = openRuntimeFunction(RegistryServiceReleaseName, paramCount: 1, returnsAWord: false)
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var dropIt = module.addBlock(func, label: b"regdrop", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"regreleasedone", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(RegistryServiceReleaseName, paramCount: 1, returnsAWord: false)
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let dropIt = module.addBlock(func, label: b"regdrop", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"regreleasedone", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let slot = 0
 
@@ -122,19 +122,19 @@ function buildRegistryServiceRelease(module StdModule)
 end 'buildRegistryServiceRelease'
 
 function buildRegistryServiceReplace(module StdModule, released ByteArray)
-	var func = openRuntimeFunction(RegistryServiceReplaceName, paramCount: 3, returnsAWord: true)
-	var ids = ValueMinter.create(3)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var compareTable = module.addBlock(func, label: b"regcomparetable", heat: BlockHeat.normal)
-	var swap = module.addBlock(func, label: b"regswap", heat: BlockHeat.normal)
-	var decline = module.addBlock(func, label: b"regdecline", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(RegistryServiceReplaceName, paramCount: 3, returnsAWord: true)
+	let ids = ValueMinter.create(3)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let compareTable = module.addBlock(func, label: b"regcomparetable", heat: BlockHeat.normal)
+	let swap = module.addBlock(func, label: b"regswap", heat: BlockHeat.normal)
+	let decline = module.addBlock(func, label: b"regdecline", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let slot = 0
 	let handle = 1
 	let expected = 2
 
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsRegistryLock: true, ids: ids)
+	let live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsRegistryLock: true, ids: ids)
 	emitBranchOnCompareValues(module, block: live, a: emitLoadField(module, block: live, record: held, offset: ServiceHandleCownOffset, ids: ids), pred: StdCmpPred.eq, b: emitLoadField(module, block: live, record: expected, offset: ServiceHandleCownOffset, ids: ids), whenTrue: compareTable, whenFalse: decline, ids: ids)
 
 	emitBranchOnCompareValues(module, block: compareTable, a: emitLoadField(module, block: compareTable, record: held, offset: InterfaceHandleTableOffset, ids: ids), pred: StdCmpPred.eq, b: emitLoadField(module, block: compareTable, record: expected, offset: InterfaceHandleTableOffset, ids: ids), whenTrue: swap, whenFalse: decline, ids: ids)

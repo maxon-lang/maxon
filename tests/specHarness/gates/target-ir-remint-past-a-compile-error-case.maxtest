@@ -2,7 +2,7 @@ let RemintPastErrorSpecName = "remint-past-error"
 let RemintPastErrorSpecFileName = "remint-past-error.md"
 let RemintPastErrorRejectedCase = "remint-past-error.rejected"
 let RemintPastErrorPinnedCase = "remint-past-error.pinned"
-let RemintPastErrorFilter = filterFlag("remint-past-error/")
+let RemintPastErrorPattern = "remint-past-error/"
 let RemintPastErrorPinnedMarker = "<!-- test: remint-past-error.pinned -->"
 let RemintPastErrorPinCount = 1
 
@@ -12,9 +12,9 @@ test 'update-required over a spec holding a pin re-mints it and passes the compi
 	plantBogusTargetIrPin(specPath)
 	plantPlaceholderPinsBeneath(specPath, markers: [RemintPastErrorPinnedMarker])
 
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push(UpdateRequiredFlag)
-	arguments.push(RemintPastErrorFilter)
+	arguments.push(filterFlag(RemintPastErrorPattern))
 
 	let remint = runSpecTest(staged, includeNetwork: false, extraArguments: arguments)
 	let written = fileText(specPath)
@@ -25,7 +25,7 @@ test 'update-required over a spec holding a pin re-mints it and passes the compi
 	let lines = written.split("\n")
 	let pins = linesOpening(lines, prefix: hostTargetIrFence())
 	let pinnedAt = firstLineOpening(lines, prefix: RemintPastErrorPinnedMarker, said: said)
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 	let caseNames = [RemintPastErrorRejectedCase, RemintPastErrorPinnedCase]
 
 	collectNotPassed(everythingSaid(remint), specName: RemintPastErrorSpecName, testNames: caseNames, broken: broken)

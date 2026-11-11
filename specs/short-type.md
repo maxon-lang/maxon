@@ -146,7 +146,7 @@ end 'main'
 typealias U16 = int(0 to 65535)
 
 function main() returns ExitCode
-	var arr = [0 as U16, 0 as U16, 0 as U16]
+	let arr = [0 as U16, 0 as U16, 0 as U16].clone()
 	try arr.set(1, value: 42) otherwise panic("test invariant: set OOB")
 	let v = try arr.get(1) otherwise 0
 	return v

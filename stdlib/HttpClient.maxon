@@ -36,13 +36,13 @@ public type HttpHeaders
 
 	/// Set a header (name is lowercased for case-insensitive storage).
 	public function set(name String, value String)
-		var key = name
+		let key = name
 		headers.upsert(key.toLower(), value: value)
 	end 'set'
 
 	/// Get a header value by name. Throws if not present.
 	public function get(name String) returns String throws HttpError
-		var key = name
+		let key = name
 		let val = try headers.get(key.toLower()) otherwise 'notFound'
 			throw HttpError.invalidResponse
 		end 'notFound'
@@ -52,7 +52,7 @@ public type HttpHeaders
 
 	/// Check if a header is present.
 	public function has(name String) returns bool
-		var key = name
+		let key = name
 		return headers.contains(key.toLower())
 	end 'has'
 end 'HttpHeaders'
@@ -321,17 +321,19 @@ public type HttpClient
 			throw HttpError.timedOut if cause == NetworkError.timedOut else HttpError.connectFailed
 		end 'connFail'
 
-		var transport = try transportOver(client, target: target, tls: tls, start: start, timeoutMs: limits.timeoutMs)
+		let transport = try transportOver(client, target: target, tls: tls, start: start, timeoutMs: limits.timeoutMs)
 
 		try boundByTheDeadline(transport, start: start, timeoutMs: limits.timeoutMs)
 
-		let response = try exchangeOver(transport, request: request, rawRequest: rawRequest, limits: limits) otherwise (cause) 'failed'
-			transport.close()
+		let inbound = HttpInbound.over(transport)
+
+		let response = try exchangeOver(inbound, request: request, rawRequest: rawRequest, limits: limits) otherwise (cause) 'failed'
+			inbound.connection.close()
 
 			throw cause
 		end 'failed'
 
-		transport.close()
+		inbound.connection.close()
 
 		return response
 	end 'send'
@@ -344,7 +346,7 @@ public type HttpClient
 
 	/// Perform an HTTP POST request with a body.
 	public static function post(url String, body String) returns HttpResponse throws HttpError
-		var request = try HttpRequest.create(HttpMethod.post, url: url)
+		let request = try HttpRequest.create(HttpMethod.post, url: url)
 		request.setBody(body)
 		request.setHeader(HttpContentTypeHeaderName, value: FormContentType)
 		return try send(request)
@@ -352,7 +354,7 @@ public type HttpClient
 
 	/// Perform an HTTP PUT request with a body.
 	public static function put(url String, body String) returns HttpResponse throws HttpError
-		var request = try HttpRequest.create(HttpMethod.put, url: url)
+		let request = try HttpRequest.create(HttpMethod.put, url: url)
 		request.setBody(body)
 		return try send(request)
 	end 'put'
@@ -428,7 +430,7 @@ function transportOver(client TcpClient, target HttpConnectTarget, tls TlsClient
 end 'transportOver'
 
 function secureTransportOver(client TcpClient, target HttpConnectTarget, tls TlsClientOptions, start InstantMs, timeoutMs HttpExchangeDeadlineMs) returns HttpTransport throws HttpError
-	var options = tls.clone()
+	let options = tls.clone()
 
 	try options.setApplicationProtocols([HttpApplicationProtocol]) otherwise panic("HttpClient: `{HttpApplicationProtocol}` is a usable ALPN protocol name")
 
@@ -441,12 +443,12 @@ function secureTransportOver(client TcpClient, target HttpConnectTarget, tls Tls
 	return HttpTransport.secure(stream)
 end 'secureTransportOver'
 
-function exchangeOver(transport HttpTransport, request HttpRequest, rawRequest String, limits HttpClientLimits) returns HttpResponse throws HttpError
-	try transport.send(rawRequest) otherwise (cause) 'sendFail'
+function exchangeOver(inbound HttpInbound, request HttpRequest, rawRequest String, limits HttpClientLimits) returns HttpResponse throws HttpError
+	try inbound.connection.send(rawRequest) otherwise (cause) 'sendFail'
 		throw clientWriteFault(cause)
 	end 'sendFail'
 
-	return try receiveResponse(transport, method: request.method(), cap: limits.maxBodyBytes)
+	return try receiveResponse(inbound, method: request.method(), cap: limits.maxBodyBytes)
 end 'exchangeOver'
 
 function remainingBudget(start InstantMs, timeoutMs HttpExchangeDeadlineMs) returns SocketDeadlineMs throws HttpError
@@ -476,9 +478,7 @@ function exceedsCap(cap HttpBodyCap, bodyBytes BytePos) returns bool
 	end 'which'
 end 'exceedsCap'
 
-function receiveResponse(transport HttpTransport, method HttpMethod, cap HttpBodyCap) returns HttpResponse throws HttpError
-	var inbound = HttpInbound.over(transport)
-
+function receiveResponse(inbound HttpInbound, method HttpMethod, cap HttpBodyCap) returns HttpResponse throws HttpError
 	for _ in 0 to MostInterimResponses 'eachHead'
 		let head = try readDelimited(inbound, delimiter: HttpDelimiter.head, cap: MaxResponseHeadBytes)
 
@@ -561,7 +561,7 @@ function readUntilClosed(inbound HttpInbound, cap HttpBodyCap) returns String th
 end 'readUntilClosed'
 
 function readChunkedBody(inbound HttpInbound, cap HttpBodyCap) returns String throws HttpError
-	var body = StringBuilder.create()
+	let body = StringBuilder.create()
 	var bodyBytes = 0 as BytePos
 	var size = try chunkSizeOf(try readDelimited(inbound, delimiter: HttpDelimiter.line, cap: MaxChunkLineBytes))
 

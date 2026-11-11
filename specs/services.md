@@ -77,16 +77,7 @@ literal — are **moved** across: the far side becomes the value's one owner, an
 so a later read of it is **E3102**, as is handing one binding twice in one send. A scalar is copied. The
 handler owns what it was sent: it may keep it or write it, and nothing is written back to the sender. This is not ergonomics: a refcount step on a box one
 green thread holds is a plain load/add/store, so a send that put one box into two green threads' hands without
-saying so would not be slow, it would corrupt the heap. Two refusals are static. A ROOT this frame does not
-solely own — a value a closure or a container also holds, or a borrowed parameter other than a `String` — is **E3138**, and a value
-that cannot have exactly one owner on the far side at all is **E3135**: a `Promise` or any type that can hold one (a
-handle its awaiter owns, whose coroutine belongs to the strand that started it), a function value (a closure record its copies share), an opaque type parameter (no layout at the send).
-Every other aggregate — a container, a record with a managed field, a union with a managed payload, a value
-held at an interface type — is admitted after a runtime WALK over its graph at the send (an interface-typed
-value through its witness, whose table names the conformer's walk): no reachable refcounted record may have an
-owner outside the graph (a record the graph reaches twice is legal when both references are its owners; an
-immortal literal has no count and passes), a shared copy-on-write buffer is detached, and a RECORD with an
-owner outside the graph aborts the process with exit **96** rather than hand one box to two green threads.
+saying so would not be slow, it would corrupt the heap. Every record that crosses is `isolated` or `immutable`, and the static rules decide who owns it: an `isolated` value comes only from clean inputs (E3200), and a binding handed to a send is consumed (E3102). A value that cannot cross at all is refused at the `spawn` as E3217: a `Promise` or any type that can hold one (a handle its awaiter owns, whose coroutine belongs to the strand that started it), a function value (a closure record its copies share), an opaque type parameter (no layout at the send), and a thread-bound handle. A `String`, a number, an enum and a service handle own nothing a second thread could write, so they cross as they are.
 
 A message parameter, a reply or a factory parameter whose type is a record, a union that carries data, a container
 or an interface value names how it crosses (**E3217**, specified in `service-message-capabilities`): `isolated` moves a
@@ -131,7 +122,7 @@ pin is not what the compiler emits there. They expire when wasm grows a service 
 rule moves — which is why the reason is written here rather than left to the marker.
 
 ⚠ **Almost every REFUSAL in this file is unmarked, and that is the same rule read from the other end.** A
-verdict the PARSE reaches — a token shape, a declaration, a transferability rule, a move, E3137, E3140 — is
+verdict the PARSE reaches — a token shape, a declaration, a transferability rule, a move, E3140 — is
 target-neutral by construction, so a marker on one would hide a green lane rather than describe a red one.
 `spawn-is-not-a-keyword` is unmarked for the neighbouring reason: it RUNS, but it starts no service and
 reaches no scheduler at all.
@@ -140,7 +131,7 @@ reaches no scheduler at all.
 reported only for a program the Maxon tier otherwise accepts: `checkCalls` files one for every `spawn`, every
 send and every reply cell, and they are printed only when no other diagnostic was reported. A verdict from the
 parse or from a whole-program `SemanticCheck` pass — **E3139**'s cycle graph, **E3100**'s await linearity,
-**E3138**'s soleness walk — therefore prints alone on `--target=wasm32-wasi`, exactly as it does on a native
+**E3217**'s transferability verdict — therefore prints alone on `--target=wasm32-wasi`, exactly as it does on a native
 lane, and its case is unmarked. A ranged-literal **E3005** the parser defers to `InsertRangeChecks` is
 decided after lowering, which the E3104s stop, so on wasm it never prints at all. ⇒ **a case whose
 refusal is decided after the Maxon tier needs the marker, however target-neutral the rule.**
@@ -668,7 +659,7 @@ end 'main'
 public typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3135: <fragment>:17:10: parameter `p` of the message `Calc.hold` is a Promise, which is a green-thread handle its awaiter owns, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3217: <fragment>:17:10: parameter `p` of the message `Calc.hold` is a Promise, which is a green-thread handle its awaiter owns, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.message-param-function-value-not-transferable -->
@@ -696,7 +687,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3135: <fragment>:17:10: parameter `op` of the message `Calc.apply` is a function value, a closure record that owns what it captures and does not cross to another thread, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3217: <fragment>:17:10: parameter `op` of the message `Calc.apply` is a function value, a closure record that owns what it captures and does not cross to another thread, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.message-param-array-of-promises-not-transferable -->
@@ -734,7 +725,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:24:10: parameter `ps` of the message `Sink.take` is a `PromiseArray` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3217: <fragment>:24:10: parameter `ps` of the message `Sink.take` is a `PromiseArray` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.message-param-empty-array-of-promises-not-transferable -->
@@ -765,7 +756,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:19:10: parameter `ps` of the message `Sink.take` is a `PromiseArray` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3217: <fragment>:19:10: parameter `ps` of the message `Sink.take` is a `PromiseArray` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.message-param-union-carrying-a-promise-not-transferable -->
@@ -803,7 +794,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:26:10: parameter `s` of the message `Sink.take` is a `Slot` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3217: <fragment>:26:10: parameter `s` of the message `Sink.take` is a `Slot` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.message-reply-record-holding-a-promise-not-transferable -->
@@ -844,7 +835,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:31:10: the message `Sink.make` returns a `Holder` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose reply is handed to the green thread that awaits it. `await` the promise in the handler and return the result it yields, or drop the `returns` clause
+error E3217: <fragment>:31:10: the message `Sink.make` returns a `Holder` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` makes `Sink` a service — whose reply is handed to the green thread that awaits it. `await` a promise in the handler and return the result it yields, return a value whose graph holds no function value or thread-bound handle, or drop the `returns` clause
 ```
 
 <!-- test: error.spawn-factory-argument-promise-not-transferable -->
@@ -879,7 +870,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:24:28: argument 1 of `spawn Sink.create(…)` is a Promise, which is a green-thread handle its awaiter owns, and a send hands it to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message
+error E3217: <fragment>:24:10: parameter `p` of the factory `Sink.create` is a `IntPromise` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` moves its arguments into the state of `Sink`, a service — which another green thread runs. Pass a value whose graph holds no function value, promise or thread-bound handle, or drop the parameter from the factory
 ```
 
 <!-- test: error.spawn-factory-argument-record-holding-a-promise-not-transferable -->
@@ -921,7 +912,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:32:28: argument 1 of `spawn Sink.create(…)` is a `Holder` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and a send hands it to another green thread — which would leave a second green thread holding a thread this one is still waiting on. Send the scalar it is derived from, `await` it and send the RESULT, or drop the parameter from the message
+error E3217: <fragment>:32:10: parameter `h` of the factory `Sink.create` is a `Holder` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it, and this `spawn` moves its arguments into the state of `Sink`, a service — which another green thread runs. Pass a value whose graph holds no function value, promise or thread-bound handle, or drop the parameter from the factory
 ```
 
 <!-- test: services.a-message-may-carry-a-value-at-an-interface-type -->
@@ -999,7 +990,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:15:10: parameter `x` of the message `Box.put` is an opaque type parameter, whose layout is not known at the send, and this `spawn` makes `Box` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3217: <fragment>:15:10: parameter `x` of the message `Box.put` is an opaque type parameter, whose layout is not known at the send, and this `spawn` makes `Box` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.a-constrained-generic-service-is-refused -->
@@ -1799,7 +1790,7 @@ type Calc
 end 'Calc'
 
 function main() returns ExitCode
-	var direct = Calc.create()
+	let direct = Calc.create()
 	direct.bump(4)
 	direct.total()
 
@@ -2176,7 +2167,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var ps = ValuePromiseArray.create(0)
+	let ps = ValuePromiseArray.create(0)
 	ps.push(try h.value() otherwise panic("an open mailbox with room takes the send"))
 	try h.add(5) otherwise panic("an open mailbox with room takes the send")
 	ps.push(try h.value() otherwise panic("an open mailbox with room takes the send"))
@@ -2732,10 +2723,9 @@ typealias Integer = int(i64.min to i64.max)
 error E3168: <fragment>:14:10: 'throws Store.ping.sendError' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause
 ```
 
-<!-- test: error.a-send-error-may-not-be-thrown-from-a-value-the-function-does-not-own -->
-A send-error a function is handed is borrowed from its caller, so throwing it would give the catcher a box
-another owner still reads. Only the failed send's own error, a bare `try` propagation, or the binding that caught
-it may be thrown.
+<!-- test: a-send-error-may-be-thrown-from-a-value-the-function-was-handed -->
+A send-error a function is handed may be thrown by it: the box the send failed on is counted, so the catcher and
+the function each hold a counted reference to it.
 ```maxon
 type Store
 	var n as Integer
@@ -2745,8 +2735,7 @@ type Store
 	end 'create'
 
 	export function keep(s String)
-		self.n = self.n + 1
-		print("kept {s}\n")
+		self.n = self.n + (s.byteLength() as Integer)
 	end 'keep'
 end 'Store'
 
@@ -2766,8 +2755,8 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```maxoncstderr
-error E3191: <fragment>:16:2: `Store.keep.sendError` is thrown from a value this function does not solely own, and its caller would take the arguments out of it as the only owner. Only the failed send's own error may be thrown: propagate it with a bare `try`, or `throw` the binding that caught it, which hands the error over and is not read again
+```exitcode
+0
 ```
 
 <!-- test: error.a-capacity-out-of-range-is-refused -->
@@ -4126,7 +4115,7 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	var logger = spawn Logger.create()
+	let logger = spawn Logger.create()
 	let worker = spawn Worker.create()
 	try worker.run(logger) otherwise panic("an open mailbox with room takes the send")
 	return 0
@@ -4159,7 +4148,7 @@ end 'Counter'
 typealias CounterHandleArray = Array with Counter.handle
 
 function main() returns ExitCode
-	var hs = CounterHandleArray.create(0)
+	let hs = CounterHandleArray.create(0)
 	hs.push(spawn Counter.create())
 	hs.push(spawn Counter.create())
 	return hs.count() as ExitCode
@@ -4202,12 +4191,12 @@ typealias CounterHandleArray = Array with Counter.handle
 typealias BumpReplyArray = Array with Promise with Integer
 
 function main() returns ExitCode
-	var hs = CounterHandleArray.create(0)
+	let hs = CounterHandleArray.create(0)
 	hs.push(spawn Counter.create())
 
-	var replies = BumpReplyArray.create(0)
+	let replies = BumpReplyArray.create(0)
 	for step in 1 to 3 'eachSend'
-		var h = try hs.get(0) otherwise panic("hs.get(0)")
+		let h = try hs.get(0) otherwise panic("hs.get(0)")
 		replies.push(try h.bump(step) otherwise panic("an open mailbox with room takes the send"))
 	end 'eachSend'
 
@@ -4308,9 +4297,9 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var a = "one-{1}"
+	let a = "one-{1}"
 	try h.keep(a) otherwise panic("an open mailbox with room takes the send")
-	var b = "two-{2}"
+	let b = "two-{2}"
 	try h.keep(b) otherwise panic("an open mailbox with room takes the send")
 	try h.keep("a literal") otherwise panic("an open mailbox with room takes the send")
 	return 0
@@ -4675,9 +4664,9 @@ kept hello padded out long enough to heap allocate 1
 47
 ```
 
-<!-- test: error.a-co-owned-value-may-not-be-sent -->
-A value a container holds has a second owner on this green thread, which is exactly what the plain refcount
-forbids across two. The send is refused rather than silently increfed, and `.clone()` is the fix.
+<!-- test: a-string-a-container-also-holds-is-sent-with-its-owners-counted -->
+A String a container also holds has a second owner on this green thread, and a send of it is correct: the box
+counts its owners, so the service and the sender each hold a counted reference to one String.
 ```maxon
 type Store
 	var n as Integer
@@ -4686,25 +4675,29 @@ type Store
 		return Self{n: 0}
 	end 'create'
 
-	export function keep(s String)
+	export function keep(s String) returns Integer
 		self.n = self.n + 1
-		print("kept {s}\n")
+		return s.byteLength()
 	end 'keep'
 end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let buf = "hello {1}"
-	var held = Strings.create(0)
+	let held = Strings.create(0)
 	held.push(buf)
-	try h.keep(buf) otherwise panic("an open mailbox with room takes the send")
-	return held.count() as ExitCode
+	let got = try await h.keep(buf) otherwise panic("an open mailbox with room takes the send")
+	print("{got} {held.count()}\n")
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 typealias Strings = Array with String
 ```
-```maxoncstderr
-error E3138: <fragment>:20:13: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+```stdout
+7 1
+```
+```exitcode
+0
 ```
 
 <!-- test: a-borrowed-parameter-nothing-writes-is-shared-with-the-service -->
@@ -5200,7 +5193,7 @@ type Holder
 	export var cells as CellArray
 
 	static function create(k Integer) returns Self
-		var cells = CellArray.create(0)
+		let cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{tag: "literal", label: "heap {k}", cells: cells}
@@ -5248,7 +5241,7 @@ type Source
 	end 'create'
 
 	export function values() returns isolated IntegerArray
-		var xs = IntegerArray.create(0) as isolated IntegerArray
+		let xs = IntegerArray.create(0) as isolated IntegerArray
 
 		modify xs 'fill'
 			xs.push(1)
@@ -5392,7 +5385,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var cs = CellArray.create(0) as isolated CellArray
+	let cs = CellArray.create(0) as isolated CellArray
 
 	modify cs 'fill'
 		cs.push(Cell.create())
@@ -5478,7 +5471,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var a = IntegerArray.create(0)
+	let a = IntegerArray.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)
@@ -5583,12 +5576,11 @@ svc payload 42!
 main payload 42!? after the service kept 7 and 11 bytes
 ```
 
-<!-- test: deepmove.abort.a-string-whose-bytes-the-sender-still-views-aborts -->
-An owned `String` keeps its bytes inline, so a `toByteArray()` view counts the String's own RECORD. That owner
-is invisible to the static soleness question — `s` is a `var` nothing else names — so only the walk can see
-it: moving `s` would leave the view on this green thread stepping a plain count the service steps too. The
-walk finds the record at a count of 2 and aborts before anything is enqueued, exactly as the send of the same
-graph from a `let` does (`borrow.abort.a-let-string-whose-bytes-the-sender-still-views-aborts`).
+<!-- test: deepmove.a-string-whose-bytes-the-sender-still-views-crosses-the-send -->
+An owned `String` keeps its bytes inline, so a `toByteArray()` view counts the String's own RECORD. The view is the
+record's second owner, so the record's count turns shared at the view and every step of it from then on is
+atomic: the service drops the String on its own green thread while this one drops the view, and neither frees the
+bytes early nor leaks them. The send is a plain move and nothing walks the String.
 ```maxon
 type Svc
 	var n as Integer
@@ -5597,25 +5589,27 @@ type Svc
 		return Self{n: 0}
 	end 'create'
 
-	export function take(s String)
-		print("svc {s}\n")
+	export function take(s String) returns Integer
+		return s.byteLength() as Integer
 	end 'take'
 end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	var s = "payload {42}"
+	var s = ""
+	s = "payload {42}"
 	let bytes = s.toByteArray()
-	try h.take(s) otherwise panic("an open mailbox with room takes the send")
-	return bytes.count() as ExitCode
+	let n = try await h.take(s) otherwise 0
+	print("service {n} view {bytes.count()}\n")
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
-96
+0
 ```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```stdout
+service 10 view 10
 ```
 
 <!-- test: deepmove.a-grown-string-whose-bytes-the-sender-still-views-detaches-at-the-send -->
@@ -5651,14 +5645,14 @@ end 'Reader'
 typealias ReaderHandles = Array with Reader.handle
 
 function main() returns ExitCode
-	var readers = ReaderHandles.create(0)
+	let readers = ReaderHandles.create(0)
 	for _ in 1 to serviceCount 'spawnEach'
 		readers.push(spawn(capacity: rounds) Reader.create())
 	end 'spawnEach'
 
 	var kept = 0 as Count
 	for i in 1 to rounds 'round'
-		view r = try readers.get(i mod serviceCount) otherwise panic("readers.get")
+		let r = try readers.get(i mod serviceCount) otherwise panic("readers.get")
 		var s = ""
 		s.append("payload {i mod 10}")
 		let bytes = s.toByteArray()
@@ -5668,7 +5662,70 @@ function main() returns ExitCode
 
 	var total = 0 as Integer
 	for k in 0 upto serviceCount 'collect'
-		view r = try readers.get(k) otherwise panic("readers.get({k})")
+		let r = try readers.get(k) otherwise panic("readers.get({k})")
+		total = total + (try await r.report() otherwise 0)
+	end 'collect'
+
+	print("total {total} kept {kept}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+total 900000 kept 900000
+```
+
+<!-- test: deepmove.a-string-viewed-by-the-sender-crosses-repeatedly -->
+<!-- procs: 16 -->
+A String whose bytes live inline in its record is viewed by the sender and sent, round after round, to eight
+readers. The view is the record's second owner and turns its count shared, so the sender's release of the view and
+the reader's release of the String step one atomic count. Without that, a lost update leaks the record (exit 101) or
+frees it under the view.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let serviceCount = 8
+let rounds = 100000
+
+type Reader
+	var sum as Integer
+
+	static function create() returns Self
+		return Self{sum: 0}
+	end 'create'
+
+	export function take(s String)
+		self.sum = self.sum + (s.byteLength() as Integer)
+	end 'take'
+
+	export function report() returns Integer
+		return self.sum
+	end 'report'
+end 'Reader'
+
+typealias ReaderHandles = Array with Reader.handle
+
+function main() returns ExitCode
+	let readers = ReaderHandles.create(0)
+	for _ in 1 to serviceCount 'spawnEach'
+		readers.push(spawn(capacity: rounds) Reader.create())
+	end 'spawnEach'
+
+	var kept = 0 as Count
+	for i in 1 to rounds 'round'
+		let r = try readers.get(i mod serviceCount) otherwise panic("readers.get")
+		var s = ""
+		s = "payload {i mod 10}"
+		let bytes = s.toByteArray()
+		try r.take(s) otherwise panic("an open mailbox with room takes the send")
+		kept = kept + bytes.count()
+	end 'round'
+
+	var total = 0 as Integer
+	for k in 0 upto serviceCount 'collect'
+		let r = try readers.get(k) otherwise panic("readers.get({k})")
 		total = total + (try await r.report() otherwise 0)
 	end 'collect'
 
@@ -5706,7 +5763,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var xs = Texts.create() as isolated Texts
+	let xs = Texts.create() as isolated Texts
 
 	modify xs 'fill'
 		xs.append("a {1}")
@@ -5789,7 +5846,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var m = Names.create() as isolated Names
+	let m = Names.create() as isolated Names
 
 	modify m 'fill'
 		m.upsert("a {1}", value: "x {2}")
@@ -5851,9 +5908,9 @@ error E3200: <fragment>:29:13: 'm' is not isolated: only a clean call, a `swap` 
 
 <!-- test: deepmove.a-map-releases-a-removed-entry-so-the-map-crosses -->
 `remove` releases the key and the value it takes out, so the map no longer owns them. `main` still holds both
-records, but they are not in the moved graph: the walk reaches the tombstoned slot and finds it empty, and the
-map crosses. A tombstone that kept its occupants would reach `key` and `text` inside the graph while `main`
-owns them outside it, and the walk would abort with exit 96.
+records, but the map's slot is empty, and the map crosses. A tombstone that kept its occupants would share `key`
+and `text` between `main` and the service while `main` owns them outside the map, and the service's release of the
+map would free them under `main`.
 ```maxon
 typealias Texts = Map with (String, String)
 
@@ -5870,7 +5927,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var m = Texts.create() as isolated Texts
+	let m = Texts.create() as isolated Texts
 	let key = "gone {1}"
 	let text = "value {7}"
 	var removed = false
@@ -5930,7 +5987,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var s = Cells.create() as isolated Cells
+	let s = Cells.create() as isolated Cells
 	let cell = Cell.create(1)
 	var removed = false
 
@@ -5983,9 +6040,9 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var m = Cells.create() as isolated Cells
+	let m = Cells.create() as isolated Cells
 	let key = "gone {1}"
-	var cell = Cell.create(7)
+	let cell = Cell.create(7)
 	var removed = false
 
 	modify m 'fill'
@@ -6031,7 +6088,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var s = Names.create() as isolated Names
+	let s = Names.create() as isolated Names
 	let gone = "gone {1}"
 	var removed = false
 
@@ -6084,7 +6141,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	var m = Cells.create() as isolated Cells
+	let m = Cells.create() as isolated Cells
 
 	modify m 'fill'
 		m.upsert("kept {2}", value: Cell.create())
@@ -6826,7 +6883,7 @@ type Bag
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create(0)
+		let cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{n: 1, cells: cells}
@@ -6838,7 +6895,7 @@ type Pair
 	export var right as Bag
 
 	static function create() returns Self
-		var bag = Bag.create()
+		let bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
 end 'Pair'
@@ -6885,8 +6942,8 @@ end 'Cell'
 typealias CellArray = Array with Cell
 
 function oneCellTwice() returns CellArray
-	var cs = CellArray.create(0)
-	var c = Cell.create()
+	let cs = CellArray.create(0)
+	let c = Cell.create()
 	cs.push(c)
 	cs.push(c)
 	return cs
@@ -6900,9 +6957,9 @@ type Svc
 	end 'create'
 
 	export function report()
-		var first = try self.cells.get(0) otherwise panic("two cells were pushed")
+		let first = try self.cells.get(0) otherwise panic("two cells were pushed")
 		first.n = 7
-		view second = try self.cells.get(1) otherwise panic("two cells were pushed")
+		let second = try self.cells.get(1) otherwise panic("two cells were pushed")
 		print("{second.n}\n")
 	end 'report'
 end 'Svc'
@@ -6998,7 +7055,7 @@ type Bag
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create(0)
+		let cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{n: 1, cells: cells}
@@ -7010,7 +7067,7 @@ type Pair
 	export var right as Bag
 
 	static function create() returns Self
-		var bag = Bag.create()
+		let bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
 end 'Pair'
@@ -7029,7 +7086,7 @@ end 'Maker'
 
 function main() returns ExitCode
 	let h = spawn Maker.create()
-	var p = try await h.make() otherwise Pair.create()
+	let p = try await h.make() otherwise Pair.create()
 	p.left.n = 5
 	print("{p.right.n} {p.right.cells.count()}\n")
 	return 0
@@ -7129,7 +7186,7 @@ end 'Reader'
 
 function main() returns ExitCode
 	let r = spawn Reader.create()
-	var holder = Holder.around("payload {42}") as isolated Holder
+	let holder = Holder.around("payload {42}") as isolated Holder
 	let n = try await r.read(holder) otherwise 0
 	print("n={n}\n")
 	return 0
@@ -7158,8 +7215,8 @@ end 'Cell'
 typealias Cells = Map with (String, Cell)
 
 function oneCellUnderTwoKeys() returns Cells
-	var m = Cells.create()
-	var c = Cell.create()
+	let m = Cells.create()
+	let c = Cell.create()
 	m.upsert("a", value: c)
 	m.upsert("b", value: c)
 	return m
@@ -7173,9 +7230,9 @@ type Svc
 	end 'create'
 
 	export function report()
-		var a = try self.cells.get("a") otherwise panic("a was inserted")
+		let a = try self.cells.get("a") otherwise panic("a was inserted")
 		a.n = 7
-		view b = try self.cells.get("b") otherwise panic("b was inserted")
+		let b = try self.cells.get("b") otherwise panic("b was inserted")
 		print("{b.n}\n")
 	end 'report'
 end 'Svc'
@@ -7209,8 +7266,8 @@ end 'Cell'
 typealias Cells = List with Cell
 
 function oneCellTwice() returns Cells
-	var xs = Cells.create()
-	var c = Cell.create()
+	let xs = Cells.create()
+	let c = Cell.create()
 	xs.append(c)
 	xs.append(c)
 	return xs
@@ -7224,7 +7281,7 @@ type Svc
 	end 'create'
 
 	export function report()
-		var first = try self.cells.first() otherwise panic("two cells were appended")
+		let first = try self.cells.first() otherwise panic("two cells were appended")
 		first.n = 7
 
 		for c in self.cells 'each'
@@ -7262,10 +7319,10 @@ end 'Cell'
 typealias CellArray = Array with Cell
 
 function pairedCells(pairs Integer) returns CellArray
-	var cs = CellArray.create(0)
+	let cs = CellArray.create(0)
 
 	for _ in 1 to pairs 'each'
-		var c = Cell.create()
+		let c = Cell.create()
 		cs.push(c)
 		cs.push(c)
 	end 'each'
@@ -7475,8 +7532,8 @@ type Keeper
 end 'Keeper'
 
 function shelf(indexed bool) returns Shelf
-	var leaves = Leaves.create(0)
-	var byName = LeafIndex.create()
+	let leaves = Leaves.create(0)
+	let byName = LeafIndex.create()
 	leaves.push(Leaf.create("a", weight: 1))
 	leaves.push(Leaf.create("bb", weight: 2))
 
@@ -7495,7 +7552,7 @@ function main() returns ExitCode
 	print("let copy: service {firstSaw}, sender {original.weight()}\n")
 
 	let unindexed = shelf(false)
-	var moved = unindexed.clone() as isolated Shelf
+	let moved = unindexed.clone() as isolated Shelf
 	let second = spawn Keeper.create(moved)
 	let secondSaw = try await second.weight() otherwise 0
 	print("var copy: service {secondSaw}, sender {unindexed.weight()}\n")
@@ -7511,10 +7568,10 @@ let copy: service 17, sender 17
 var copy: service 5, sender 5
 ```
 
-<!-- test: borrow.abort.a-let-string-whose-bytes-the-sender-still-views-aborts -->
+<!-- test: borrow.a-let-string-whose-bytes-the-sender-still-views-crosses-the-send -->
 A `toByteArray()` view of an owned `String` counts the String's own record, because its bytes are inline. The
-send's walk finds that owner outside the sent graph and aborts
-(`deepmove.abort.a-string-whose-bytes-the-sender-still-views-aborts`).
+send turns that count shared, so the service's release and the view's release step one atomic count
+(`deepmove.a-string-whose-bytes-the-sender-still-views-crosses-the-send`).
 ```maxon
 type Meter
 	var n as Integer
@@ -7533,15 +7590,16 @@ function main() returns ExitCode
 	let s = "payload {42}"
 	let bytes = s.toByteArray()
 	let n = try await h.measure(s) otherwise 0
-	return (n + (bytes.count() as Integer)) as ExitCode
+	print("service {n} view {bytes.count()}\n")
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
-96
+0
 ```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```stdout
+service 10 view 10
 ```
 
 <!-- test: borrow.two-services-and-the-sender-each-read-a-copy-of-one-graph -->
@@ -7570,7 +7628,7 @@ type Doc
 	export var note as Note
 
 	static function create(k Integer) returns Self
-		var tags = Tags.create(0)
+		let tags = Tags.create(0)
 		tags.push(Tag.create("red {k}"))
 		tags.push(Tag.create("green {k}"))
 		tags.push(Tag.create("blue {k}"))
@@ -7649,7 +7707,7 @@ type Tree
 	export var leaves as Leaves
 
 	static function create(size Integer) returns Self
-		var leaves = Leaves.create(0)
+		let leaves = Leaves.create(0)
 		for i in 1 to size 'grow'
 			leaves.push(Leaf.create("leaf {i}"))
 		end 'grow'
@@ -7723,7 +7781,7 @@ type Tree
 	export var leaves as Leaves
 
 	static function create(size Integer) returns Self
-		var leaves = Leaves.create(0)
+		let leaves = Leaves.create(0)
 		for i in 1 to size 'grow'
 			leaves.push(Leaf.create("leaf {i}"))
 		end 'grow'
@@ -7804,7 +7862,7 @@ type Svc
 	end 'create'
 
 	export function poke(target isolated Holder)
-		var copy = target.inner.clone()
+		let copy = target.inner.clone()
 		copy.bump()
 		print("{copy.n}\n")
 	end 'poke'
@@ -7844,7 +7902,7 @@ type Bag
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create(0)
+		let cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{n: 3, cells: cells}
@@ -7856,7 +7914,7 @@ type Pair
 	export var right as Bag
 
 	static function create() returns Self
-		var bag = Bag.create()
+		let bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
 end 'Pair'
@@ -7909,7 +7967,7 @@ type Bag
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create(0)
+		let cells = CellArray.create(0)
 		cells.push(Cell.create())
 		cells.push(Cell.create())
 		return Self{n: 3, cells: cells}
@@ -7921,7 +7979,7 @@ type Pair
 	export var right as Bag
 
 	static function create() returns Self
-		var bag = Bag.create()
+		let bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
 end 'Pair'
@@ -7975,8 +8033,8 @@ type Shelf
 	export var cells as CellArray
 
 	static function create() returns Self
-		var cells = CellArray.create(0)
-		var c = Cell.create()
+		let cells = CellArray.create(0)
+		let c = Cell.create()
 		cells.push(c)
 		cells.push(c)
 		return Self{cells: cells}
@@ -8309,11 +8367,11 @@ end 'route'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	var xs = Boxes.create(0)
+	let xs = Boxes.create(0)
 	route(h, xs: xs, n: 2, way: Route.toService)
 	route(h, xs: xs, n: 5, way: Route.toArray)
 	let seen = try await h.total() otherwise 0
-	view kept = try xs.get(0) otherwise panic("nothing was kept")
+	let kept = try xs.get(0) otherwise panic("nothing was kept")
 	print("the service saw {seen}\n")
 	print("kept {xs.count()} holding {kept.n}\n")
 	return 0
@@ -8494,7 +8552,7 @@ end 'routeFor'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	var xs = Boxes.create(0)
+	let xs = Boxes.create(0)
 	var trip = 0 as Integer
 	while trip < 4 'eachTrip'
 		let b = Box.create(trip + 1) as isolated Box
@@ -9146,7 +9204,7 @@ type Svc
 	end 'create'
 
 	export function poke(target isolated Holder)
-		var ownedTarget = merge target
+		let ownedTarget = merge target
 
 		pick(ownedTarget).push(1)
 	end 'poke'
@@ -9170,7 +9228,7 @@ thread — so sending one would leave a second thread holding a thread this one 
 
 ⛔ **THE DIAGNOSTIC IS E3005, BECAUSE A PROMISE IS TYPED, AND THAT IS THE HONEST FAULT.**
 `keep(value Integer)` does not accept a `Promise with Integer`, so the ordinary argument check refuses this
-send before the service rule is consulted. The E3135 arm is the structural backstop for the case the type check cannot reach — a
+send before the service rule is consulted. The E3217 rule is the structural backstop for the case the type check cannot reach — a
 message that DECLARES a promise parameter, which typechecks and must still be refused.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -9434,8 +9492,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3137: <fragment>:10:3: `Store.itself` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:15:10: the `spawn` that makes `Store` a service
+error E3209: <fragment>:10:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: a-reply-swapped-out-of-a-field-is-sole -->
@@ -9514,8 +9571,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3206: <fragment>:16:18: parameter the receiver is used as mutable at line 19 and as immutable at line 20; a parameter cannot be both
-error E3137: <fragment>:20:3: `Store.take` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:25:10: the `spawn` that makes `Store` a service
 error E3209: <fragment>:20:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
@@ -9558,19 +9613,13 @@ end 'main'
 ```
 ```maxoncstderr
 error E3206: <fragment>:20:18: parameter the receiver is used as mutable at line 22 and as immutable at line 23; a parameter cannot be both
-error E3137: <fragment>:23:3: `Store.take` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:28:10: the `spawn` that makes `Store` a service
 error E3209: <fragment>:23:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
-<!-- test: error.a-reply-may-not-return-a-message-parameter -->
-⭐⭐ **THE SECOND POPULATION E3137 REFUSES.** `s`
-is reachable from nothing — it is a message PARAMETER, which arrives BORROWED out of the message the behaviour
-still owns and releases (`ServiceBehaviour.dropUnconsumedPayloads`). Handing it back would give the awaiter a
-second reference to it, which is the same two-green-threads-one-refcount picture `return self` draws.
-
-⚠ **THE CURE IS THE SAME `.clone()`**, but the refusal does not tell the author their value is reachable
-from `self`, because it is not, and a refusal's noun is what a reader takes away.
+<!-- test: a-reply-may-be-a-message-parameter -->
+`s` is a message PARAMETER, which arrives borrowed out of the message the behaviour still owns. Handing it back
+gives the awaiter a counted reference to the same String, which is correct because the String's box counts its
+owners.
 ```maxon
 type Store
 	var n as Integer
@@ -9592,9 +9641,11 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```maxoncstderr
-error E3137: <fragment>:10:3: `Store.echo` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Store` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:15:10: the `spawn` that makes `Store` a service
+```stdout
+hi
+```
+```exitcode
+0
 ```
 
 <!-- test: a-reply-a-method-of-the-state-builds-fresh-crosses -->
@@ -10476,7 +10527,7 @@ end 'Slow'
 
 function main() returns ExitCode
 	let h = spawn Slow.create()
-	var ps = ReplyPromiseArray.create(0)
+	let ps = ReplyPromiseArray.create(0)
 	ps.push(try h.value() otherwise panic("a running service with room takes the send"))
 	let ready = ps.awaitAny()
 	let p = try ps.get(ready) otherwise panic("awaitAny named a slot that is in range")
@@ -10519,7 +10570,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	var ps = DivideReplyArray.create(0)
+	let ps = DivideReplyArray.create(0)
 	ps.push(try h.divide(10, by: 0) otherwise panic("a running service with room takes the send"))
 	let p = try ps.get(0) otherwise panic("the reply was pushed into slot 0")
 	try await p otherwise (e) 'oops'
@@ -10570,10 +10621,10 @@ typealias TallyReplyArray = Array with TallyReply
 
 function main() returns ExitCode
 	let h = spawn Counter.create()
-	var ps = TallyReplyArray.create(0)
+	let ps = TallyReplyArray.create(0)
 	ps.push(try h.bumped(4) otherwise panic("a running service with room takes the send"))
 	let p = try ps.remove(0) otherwise panic("the reply was pushed into slot 0")
-	view tally = await p
+	let tally = await p
 	return tally.n as ExitCode
 end 'main'
 ```
@@ -10650,7 +10701,7 @@ function main() returns ExitCode
 	var stops = 0 as Integer
 	let h = spawn Slow.create()
 	h.shutdown()
-	var ps = ReplyPromiseArray.create(0)
+	let ps = ReplyPromiseArray.create(0)
 	if let reply = try h.value() 'sent'
 		ps.push(reply)
 	end 'sent' else (e) 'gone'
@@ -10769,10 +10820,10 @@ typealias Integer = int(i64.min to i64.max)
 42
 ```
 
-<!-- test: error.a-generic-reply-that-is-the-services-own-string-state-is-refused-at-the-spawn -->
-The reply IS the state, at a type the body cannot see: one body serves every instantiation, so the `spawn`
-that fixes `T` is where the reply is judged. With `T` a `String`, the caller and the service's own green
-thread would hold one string record between them.
+<!-- test: a-generic-reply-that-is-the-services-own-string-state-crosses -->
+The reply IS the state, at a type the body cannot see: one body serves every instantiation. With `T` a `String`,
+the caller and the service's own green thread each hold a counted reference to one string record, which is
+correct because the String's box counts its owners.
 ```maxon
 type Box uses T
 	var item as T
@@ -10792,8 +10843,8 @@ function main() returns ExitCode
 	return s.byteLength() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3137: <fragment>:15:10: `Box.peek` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Box` a service over a `String`, which is a value it would then share with the caller on another green thread. Return a `.clone()`, or return the scalars the caller needs
+```exitcode
+2
 ```
 
 <!-- test: a-generic-reply-of-a-fresh-container-over-a-managed-record-crosses -->
@@ -10815,9 +10866,9 @@ type Box uses T
 	export typealias Items = List with T
 	var seen as Count
 
-	static function create(first T) returns Self
-		var held = Items.create()
-		held.append(first)
+	static function create(first isolated T) returns Self
+		let held = Items.create()
+		held.append(merge first)
 		return Self{seen: held.count() as Count}
 	end 'create'
 
@@ -10966,9 +11017,9 @@ typealias SmallBoxHandle = Box.handle with Small
 typealias HandleArray = Array with SmallBoxHandle
 
 function main() returns ExitCode
-	var hs = HandleArray.create(0)
+	let hs = HandleArray.create(0)
 	hs.push(spawn Box.create(6 as Small))
-	view h = try hs.get(0) otherwise return 1
+	let h = try hs.get(0) otherwise return 1
 	let s = try await h.peek() otherwise 0
 	return s as ExitCode
 end 'main'
@@ -11467,12 +11518,10 @@ typealias Integer = int(i64.min to i64.max)
 so `main` is the only writer and the awaited `report` is what puts the service's `keep` before the line that
 reads it back — a CAUSAL order rather than a timed one.
 
-⭐⭐ **THE CURE THE REFUSALS NAME FIRST, AND IT WORKS BECAUSE THE FRESH-RETURN CLAIM CLOSES OVER A
-HOP.** `String.clone`'s body is `return sliceBytes(…)` — a call to a function that IS fresh by
+⭐⭐ **A `.clone()` IS A FRESH STRING, BECAUSE THE FRESH-RETURN CLAIM CLOSES OVER A HOP.** `String.clone`'s body is `return sliceBytes(…)` — a call to a function that IS fresh by
 `Parser.noteFreshReturnShape`'s record-literal criterion — and `ProgramSignatures.closeFreshReturnForwards`
-carries the claim that one frame out. A claim that died one frame short would make `h.keep(buf.clone())`
-and `let c = buf.clone()` + `h.keep(c)` BOTH E3138, on a program whose only fault is following the
-diagnostic's own advice.
+carries the claim that one frame out, so `h.keep(buf.clone())` and `let c = buf.clone()` + `h.keep(c)` both
+send a String nothing else names.
 
 ⚠ **WHAT MAKES THE HOP SOUND IS THAT THE FORWARDING FRAME BINDS NOTHING.** `return f(…)` with the call
 ending the line has no statement between the callee's hand-off and its own, so the reference it passes on is
@@ -11901,7 +11950,7 @@ type Probe
 end 'Probe'
 
 function main() returns ExitCode
-	var handles = ProbeHandles.create(0)
+	let handles = ProbeHandles.create(0)
 	var total = 0 as Integer
 
 	for i in 0 upto services 'eachService'
@@ -11943,7 +11992,7 @@ type Keeper
 	var size as Sizer
 
 	static function create() returns Self
-		var ps = PromiseArray.create(0)
+		let ps = PromiseArray.create(0)
 		ps.push(async compute())
 		let w = function() gives ps.count() as Count
 		return Self{size: w}
@@ -12505,8 +12554,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:20:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:29:15: the `spawn` that makes `Worker` a service
+error E3209: <fragment>:20:3: a return does not fit the declared result: the returned value is read-only, the result is immutable
 ```
 
 <!-- test: error.reply-forwarded-through-a-function-returning-its-parameter-refused -->
@@ -12547,8 +12595,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:24:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:29:15: the `spawn` that makes `Worker` a service
+error E3209: <fragment>:24:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: error.reply-forwarded-from-a-sibling-that-keeps-the-record-refused -->
@@ -12593,8 +12640,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:21:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:32:15: the `spawn` that makes `Worker` a service
+error E3209: <fragment>:21:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: error.reply-forwarded-to-a-local-closure-named-like-a-fresh-function-refused -->
@@ -12642,8 +12688,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:24:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:35:15: the `spawn` that makes `Worker` a service
+error E3209: <fragment>:24:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: error.spawn-factory-delegating-to-a-factory-that-returns-its-parameter-refused -->
@@ -12919,8 +12964,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:25:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:35:15: the `spawn` that makes `Worker` a service
+error E3209: <fragment>:25:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: services.a-reply-built-by-a-user-type-named-like-a-stdlib-type-is-fresh -->
@@ -13042,7 +13086,7 @@ type Worker
 
 	export function report() returns isolated Cell
 		self.calls = self.calls + 1
-		var flags = Flags.create(0) as isolated Flags
+		let flags = Flags.create(0) as isolated Flags
 
 		modify flags 'fill'
 			flags.push(false)
@@ -13098,7 +13142,7 @@ end 'Worker'
 
 function main() returns ExitCode
 	let worker = spawn Worker.create()
-	var flags = Flags.create(0) as isolated Flags
+	let flags = Flags.create(0) as isolated Flags
 
 	modify flags 'fill'
 		flags.push(true)
@@ -13145,7 +13189,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:19:10: `Box.peek` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Box` a service over a `Flags`, which is a value it would then share with the caller on another green thread. Return a `.clone()`, or return the scalars the caller needs
+error E3217: <fragment>:19:10: the message `Box.peek` returns a `Flags` with no capability word, and this `spawn` makes `Box` a service — whose reply is handed to the green thread that awaits it, so what crosses must be owned by one side or read-only on both. `isolated` gives the value away: the sender builds it for this one send and no other name reaches it afterwards. `immutable` shares it: the sender freezes it (`freeze x.clone()`), and both threads only read it. Write it `returns isolated …` or `returns immutable …`
 ```
 
 <!-- test: services.a-reply-of-records-holding-an-interface-field-crosses -->
@@ -13189,7 +13233,7 @@ type Maker
 	var items as isolated Holders
 
 	static function create(side Integer) returns Self
-		var items = Holders.create() as isolated Holders
+		let items = Holders.create() as isolated Holders
 
 		modify items 'fill'
 			items.append(Holder.create(Square.create(side)))
@@ -13206,8 +13250,12 @@ end 'Maker'
 function main() returns ExitCode
 	let h = spawn Maker.create(2)
 	let items = try await h.drain() otherwise panic("the maker is running")
-	let holder = try items.first() otherwise panic("the maker held one item")
-	print("{items.count()} {holder.area()}\n")
+
+	modify items 'read'
+		let holder = try items.first() otherwise panic("the maker held one item")
+		print("{items.count()} {holder.area()}\n")
+	end 'read'
+
 	h.shutdown()
 	return 0
 end 'main'
@@ -13218,7 +13266,7 @@ end 'main'
 
 <!-- test: error.a-generic-factory-argument-that-is-an-os-handle-is-refused -->
 The factory's argument fixes `T`, and it crosses to the service's thread. A `MachinePin`'s machine pin is walked by
-no per-type walk that could prove it sole, so the `spawn` refuses the argument (E3138). A socket is not such a
+no per-type walk that could prove it sole, so the `spawn` refuses the argument (E3217). A socket is not such a
 handle: its box counts its owners, and a `TcpListener` crosses when its sender holds it alone.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -13233,21 +13281,21 @@ type Maker uses T
 		return Self{seen: first.count() as Integer}
 	end 'create'
 
-	export function make() returns Items
+	export function make() returns Integer
 		self.seen = self.seen + 1
-		return Items.create(0)
+		return self.seen
 	end 'make'
 end 'Maker'
 
 function main() returns ExitCode
 	let h = spawn Maker.create(MachinePin.acquire())
 	let items = try await h.make() otherwise panic("the maker is running")
-	print("{items.count()}\n")
+	print("{items}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:21:29: argument `seed` of `spawn Maker.create(…)` is a `MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3217: <fragment>:21:10: parameter `seed` of the factory `Maker.create` is a `MachinePin` whose graph reaches an OS handle other than a socket, or a base-struct-less generic instance, which cannot cross to another green thread, and this `spawn` moves its arguments into the state of `Maker`, a service — which another green thread runs. Pass a value whose graph holds no function value, promise or thread-bound handle, or drop the parameter from the factory
 ```
 
 <!-- test: services.a-reply-a-sibling-builds-in-a-local-is-fresh -->
@@ -13323,7 +13371,7 @@ type Worker
 
 	function summarize(n Tally) returns isolated Report
 		let scaled = n * self.scale
-		var report = Report.create() as isolated Report
+		let report = Report.create() as isolated Report
 
 		modify report 'fill'
 			report.lines.push("scaled")
@@ -13388,8 +13436,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:21:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:32:15: the `spawn` that makes `Worker` a service
+error E3209: <fragment>:21:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: error.reply-a-sibling-returns-a-local-another-local-aliases-refused -->
@@ -13433,8 +13480,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:20:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:32:15: the `spawn` that makes `Worker` a service
+error E3209: <fragment>:20:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: error.reply-a-sibling-returns-a-local-its-own-method-stored-refused -->
@@ -13483,8 +13529,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:25:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:36:15: the `spawn` that makes `Worker` a service
+error E3209: <fragment>:25:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: error.reply-a-sibling-returns-a-local-it-keys-a-map-with-refused -->
@@ -13538,59 +13583,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:29:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:41:15: the `spawn` that makes `Worker` a service
-error E3078: <fragment>:35:17: cannot pass a value this function also hands out to parameter 'key' of 'Map.upsert', which stores it into a `Map` key, `Set` element or shared value: a `Map` key, `Set` element or shared value has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
-```
-
-<!-- test: error.reply-a-sibling-returns-a-global-a-match-arm-local-shadows-refused -->
-The `let report` in the first arm is that arm's alone, so the `return report` in the `default` arm hands back
-the module-level `report` — a record the program still holds.
-```maxon
-typealias Tally = int(0 to 1000000)
-
-type Report
-	export var total as Tally
-
-	static function create(total Tally) returns Self
-		return Self{total: total}
-	end 'create'
-end 'Report'
-
-let report = Report.create(7)
-
-type Worker
-	var scale as Tally
-
-	static function create() returns Self
-		return Self{scale: 2}
-	end 'create'
-
-	export function measure(n Tally) returns immutable Report
-		return summarize(n)
-	end 'measure'
-
-	function summarize(n Tally) returns Report
-		match n 'pick'
-			0 then let report = Report.create(n)
-			default then return report
-		end 'pick'
-
-		return Report.create(n * self.scale)
-	end 'summarize'
-end 'Worker'
-
-function main() returns ExitCode
-	let worker = spawn Worker.create()
-	let got = try await worker.measure(21) otherwise panic("the worker is running")
-	print("{got.total}\n")
-	worker.shutdown()
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3137: <fragment>:22:3: `Worker.measure` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Worker` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:36:15: the `spawn` that makes `Worker` a service
+error E3209: <fragment>:29:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: services.a-reply-whose-local-shares-a-field-with-the-state-is-refused -->
@@ -13900,7 +13893,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	var shape = labelOf(1234) as isolated Shape
+	let shape = labelOf(1234) as isolated Shape
 	try h.measure(shape) otherwise panic("a running service with room takes the send")
 	let total = try await h.total() otherwise panic("the service is running")
 	print("{total}\n")
@@ -14387,7 +14380,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:39:16: 'shape' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
+error E3217: <fragment>:37:10: parameter `s` of the message `Calc.measure` is a `Shape` held at an interface type, whose conformer `Port` cannot cross to another green thread, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.a-conformer-no-walk-reaches-sent-at-its-own-type-is-refused -->
@@ -14431,7 +14424,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:34:16: argument `s` of the message `Calc.measure` is a `Port` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3217: <fragment>:33:10: parameter `s` of the message `Calc.measure` is a `Shape` held at an interface type, whose conformer `Port` cannot cross to another green thread, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.a-reply-may-not-alias-an-interface-value-the-state-holds -->
@@ -14475,8 +14468,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3137: <fragment>:28:3: `Surveyor.peek` returns a value this frame does not solely own — `self`, something reached through it, or a message PARAMETER, which the request box still holds — and this `spawn` makes `Surveyor` a service. The caller would then hold a second reference to that box, on another green thread. Return a `.clone()`, or return the scalars the caller needs
-note: <fragment>:33:17: the `spawn` that makes `Surveyor` a service
+error E3209: <fragment>:28:3: a return does not fit the declared result: the returned value is mutable, the result is immutable; freeze it
 ```
 
 <!-- test: services.a-spawn-factory-delegating-to-a-factory-that-stores-its-argument-starts-once -->
@@ -15269,7 +15261,7 @@ end 'Summer'
 
 function main() returns ExitCode
 	let h = spawn Summer.create()
-	var items = Words.create(0) as isolated Words
+	let items = Words.create(0) as isolated Words
 
 	modify items 'fill'
 		items.push("first padded out long enough to heap allocate {1}")
@@ -15380,7 +15372,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:29:12: argument `j` of the message `Calc.run` is a `Job` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3217: <fragment>:28:10: parameter `j` of the message `Calc.run` is a `Job` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: services.error.a-function-valued-reply-is-refused -->
@@ -15409,7 +15401,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:14:3: the reply of the message `Maker.make` is a function value, a closure record that owns what it captures and does not cross to another thread. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3217: <fragment>:19:10: the message `Maker.make` returns a function value, a closure record that owns what it captures and does not cross to another thread, and this `spawn` makes `Maker` a service — whose reply is handed to the green thread that awaits it. `await` a promise in the handler and return the result it yields, return a value whose graph holds no function value or thread-bound handle, or drop the `returns` clause
 ```
 
 <!-- test: services.a-handle-bound-to-a-local-then-pushed-is-freed-once -->
@@ -15432,7 +15424,7 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	var workers = WorkerHandleArray.create(0)
+	let workers = WorkerHandleArray.create(0)
 
 	for _ in 1 to 4 'spawnThem'
 		let w = spawn Worker.create()
@@ -15474,7 +15466,7 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	var workers = WorkerHandleArray.create(0)
+	let workers = WorkerHandleArray.create(0)
 
 	for _ in 1 to 4 'spawnThem'
 		workers.push(spawn Worker.create())
@@ -15497,7 +15489,7 @@ end 'main'
 ```
 
 <!-- test: services.a-view-of-an-immutable-record-sent-to-a-service-is-sent -->
-`v` is a `view` of a record with only `let` fields of a value type, so it is a value and crosses to the service; a second `view` elsewhere in the body changes nothing.
+`v` is a `let` bound to a record with only `let` fields of a value type, so it is a value and crosses to the service; a second `let` elsewhere in the body changes nothing.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -15533,12 +15525,12 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var b = Box.create(1)
+	let b = Box.create(1)
 	b.n = 2
-	view w = b
+	let w = b
 	print("{w.n}\n")
 	let p = Point.create(7)
-	view v = p
+	let v = p
 	let r = try await h.show(v) otherwise 0
 	print("{r}\n")
 	return 0
@@ -15553,7 +15545,7 @@ end 'main'
 ```
 
 <!-- test: services.error.a-var-sent-after-it-has-been-viewed-is-refused -->
-`view w = b` moves `b` into `w`, as `let w = b` does, so `b` cannot be sent afterwards, even though `w` is not read again.
+`let w = b` moves `b` into `w`, as `let w = b` does, so `b` cannot be sent afterwards, even though `w` is not read again.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -15587,7 +15579,7 @@ function main() returns ExitCode
 		b.n = 2
 	end 'fill'
 
-	view w = b
+	let w = b
 	print("{w.n}\n")
 	let r = try await h.keep(b) otherwise 0
 	print("{r}\n")
@@ -15599,7 +15591,7 @@ error E3102: <fragment>:35:27: use of moved value 'b': its ownership moved to an
 ```
 
 <!-- test: services.error.a-var-sent-after-it-has-been-viewed-and-read-afterwards-is-refused -->
-`view w = b` moves `b` into `w`, which is read after the send, so the send of `b` is refused rather than leaving `w` reading a record the service now owns and writes.
+`let w = b` moves `b` into `w`, which is read after the send, so the send of `b` is refused rather than leaving `w` reading a record the service now owns and writes.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -15634,7 +15626,7 @@ function main() returns ExitCode
 		b.n = 2
 	end 'fill'
 
-	view w = b
+	let w = b
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
 	return 0
@@ -15645,7 +15637,7 @@ error E3102: <fragment>:35:27: use of moved value 'b': its ownership moved to an
 ```
 
 <!-- test: services.a-text-field-read-through-a-view-is-sent-as-a-value -->
-A `String` crosses to the service as a value, so a field read through a `view` may be sent after the record has been viewed.
+A `String` crosses to the service as a value, so a field read through a `let` may be sent after the record has been viewed.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -15674,9 +15666,9 @@ end 'Greeter'
 
 function main() returns ExitCode
 	let h = spawn Greeter.create()
-	var b = Person.create("ada")
+	let b = Person.create("ada")
 	b.age = 3
-	view v = b
+	let v = b
 	let r = try await h.greet(v.name) otherwise ""
 	print("{r} {v.age}\n")
 	return 0
@@ -15732,14 +15724,14 @@ function main() returns ExitCode
 		b.child.n = 2
 	end 'fill'
 
-	view w = b.child
+	let w = b.child
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3202: <fragment>:41:11: 'b.child' is mutable and cannot leave the statement that opens 'the isolated value'; a value leaving a one-statement open must be a value, immutable or a fresh isolated
+error E3202: <fragment>:41:10: 'b.child' is mutable and cannot leave the statement that opens 'the isolated value'; a value leaving a one-statement open must be a value, immutable or a fresh isolated
 ```
 
 <!-- test: services.error.a-var-a-ternary-view-may-name-sent-is-refused -->
@@ -15782,14 +15774,14 @@ function main() returns ExitCode
 		c.n = 4
 	end 'fillC'
 
-	view w = b if b.n > c.n else c
+	let w = b if b.n > c.n else c
 	let r = try await h.keep(c) otherwise 0
 	print("{w.n} {r}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3202: <fragment>:38:11: 'b if b.n > c.n else c' is mutable and cannot leave the statement that opens 'the isolated value'; a value leaving a one-statement open must be a value, immutable or a fresh isolated
+error E3202: <fragment>:38:10: 'b if b.n > c.n else c' is mutable and cannot leave the statement that opens 'the isolated value'; a value leaving a one-statement open must be a value, immutable or a fresh isolated
 ```
 
 <!-- test: services.error.a-var-an-otherwise-view-may-name-sent-is-refused -->
@@ -15834,14 +15826,14 @@ function main() returns ExitCode
 		spare.n = 2
 	end 'fill'
 
-	view w = try boxes.get(0) otherwise spare
+	let w = try boxes.get(0) otherwise spare
 	let r = try await h.keep(spare) otherwise 0
 	print("{w.n} {r}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:40:11: a join of an isolated value with data that is not isolated is refused: every arm must be isolated, or a fresh value
+error E3200: <fragment>:40:10: a join of an isolated value with data that is not isolated is refused: every arm must be isolated, or a fresh value
 ```
 
 <!-- test: services.error.a-var-a-view-of-a-calls-result-may-name-sent-is-refused -->
@@ -15883,14 +15875,14 @@ function main() returns ExitCode
 		b.n = 2
 	end 'fill'
 
-	view w = pick(b)
+	let w = pick(b)
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:37:11: 'pick' hands back mutable data of the isolated region it opens; use it inside a `modify` block
+error E3201: <fragment>:37:10: 'pick' hands back mutable data of the isolated region it opens; use it inside a `modify` block
 ```
 
 <!-- test: services.error.a-var-a-view-of-a-methods-result-may-name-sent-is-refused -->
@@ -15941,14 +15933,14 @@ function main() returns ExitCode
 		b.n = 2
 	end 'fill'
 
-	view w = c.pick(b)
+	let w = c.pick(b)
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:46:13: 'pick' hands back mutable data of the isolated region it opens; use it inside a `modify` block
+error E3201: <fragment>:46:12: 'pick' hands back mutable data of the isolated region it opens; use it inside a `modify` block
 ```
 
 <!-- test: services.error.a-var-a-match-view-may-name-sent-is-refused -->
@@ -15997,7 +15989,7 @@ function main() returns ExitCode
 		c.n = 4
 	end 'fillC'
 
-	view w = match side 'which'
+	let w = match side 'which'
 		left gives b
 		right gives c
 	end 'which'
@@ -16047,18 +16039,18 @@ function main() returns ExitCode
 		boxes.push(Box.create(1))
 	end 'fill'
 
-	view e = try boxes.get(0) otherwise return 1
+	let e = try boxes.get(0) otherwise return 1
 	let r = try await h.keepAll(boxes) otherwise 0
 	print("{e.n} {r}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3198: <fragment>:34:11: 'try boxes.get(0) otherwise return 1' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
+error E3198: <fragment>:34:10: 'try boxes.get(0) otherwise return 1' is isolated and cannot be read outside a block; open it with `modify`, or take it out with `swap`
 ```
 
 <!-- test: services.an-array-an-if-view-dead-before-the-send-is-sent -->
-The `if view` binder views an element of `boxes` only inside the `if`, and it is not read after the `if`, so the send after it is accepted.
+The `if let` binder views an element of `boxes` only inside the `if`, and it is not read after the `if`, so the send after it is accepted.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -16087,13 +16079,13 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var boxes = Boxes.create(0) as isolated Boxes
+	let boxes = Boxes.create(0) as isolated Boxes
 
 	modify boxes 'fill'
 		boxes.push(Box.create(1))
 	end 'fill'
 
-	if view e = try boxes.get(0) 'first'
+	if let e = try boxes.get(0) 'first'
 		print("{e.n}\n")
 	end 'first'
 
@@ -16111,7 +16103,7 @@ end 'main'
 ```
 
 <!-- test: services.error.a-var-viewed-earlier-in-a-loop-body-sent-later-in-it-is-refused -->
-Inside one trip of the loop, `view w = b` moves `b` before the send, so the send is refused on every trip.
+Inside one trip of the loop, `let w = b` moves `b` before the send, so the send is refused on every trip.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -16147,7 +16139,7 @@ function main() returns ExitCode
 			b.n = 2
 		end 'fill'
 
-		view w = b
+		let w = b
 		print("{w.n}\n")
 		let r = try await h.keep(b) otherwise 0
 		print("{r}\n")
@@ -16161,7 +16153,7 @@ error E3102: <fragment>:37:28: use of moved value 'b': its ownership moved to an
 ```
 
 <!-- test: services.error.a-var-viewed-then-handed-to-spawn-as-state-is-refused -->
-The state `spawn` starts the service with is moved into it, so a `var` that `view w = b` has already moved cannot be that state.
+The state `spawn` starts the service with is moved into it, so a `var` that `let w = b` has already moved cannot be that state.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -16194,7 +16186,7 @@ function main() returns ExitCode
 		b.n = 2
 	end 'fill'
 
-	view w = b
+	let w = b
 	let h = spawn Worker.create(b)
 	let r = try await h.bump() otherwise 0
 	print("{w.n} {r}\n")
@@ -16236,7 +16228,7 @@ function main() returns ExitCode
 	let h = spawn Store.create()
 	var b = Box.create(1)
 	b = Box.create(2)
-	view w = b
+	let w = b
 	let r = try await h.keep(b) otherwise 0
 	print("{w.n} {r}\n")
 	return 0
@@ -16295,7 +16287,7 @@ function main() returns ExitCode
 	end 'fill'
 
 	let flag = a.n > other.n
-	view w = boxed(try await h.keep(a if flag else other) otherwise 0)
+	let w = boxed(try await h.keep(a if flag else other) otherwise 0)
 	a.n = 9
 	print("{w.n}\n")
 	return 0
@@ -16338,7 +16330,7 @@ function main() returns ExitCode
 	let h = spawn Store.create()
 	var b = CountCell.create(1)
 	b = CountCell.create(3)
-	view w = b
+	let w = b
 	let r = try await h.keep(b) otherwise 0
 	print("{w.v} {r}\n")
 	return 0
@@ -16383,7 +16375,7 @@ function main() returns ExitCode
 	let h = spawn Store.create()
 	var n = Note.text("a")
 	n = Note.text("bb")
-	view w = n
+	let w = n
 	let r = try await h.keep(n) otherwise 0
 
 	let mine = match w 'note'
@@ -16435,7 +16427,7 @@ function main() returns ExitCode
 	var boxes = Boxes.create(0)
 	var b = Box.create(1) as isolated Box
 	boxes.push(b)
-	view w = boxes
+	let w = boxes
 	let r = try await h.keep(b) otherwise 0
 	print("{b.n} {r} {w.count()}\n")
 	return 0
@@ -16446,7 +16438,7 @@ error E3196: <fragment>:30:13: cannot store an isolated 'Box' into 'an element o
 ```
 
 <!-- test: services.error.an-immutable-record-no-view-reaches-is-moved-by-the-send -->
-`b`'s record is solely owned, so the send moves it even though its type has only `let` fields; the `view` of `other` reaches a different record and changes nothing, so reading `b` afterwards is a use of a moved value.
+`b`'s record is solely owned, so the send moves it even though its type has only `let` fields; the `let` of `other` reaches a different record and changes nothing, so reading `b` afterwards is a use of a moved value.
 
 ```maxon
 typealias Count = int(i64.min to i64.max)
@@ -16475,7 +16467,7 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let other = Box.create(7)
-	view z = other
+	let z = other
 	var b = Box.create(1)
 	b = Box.create(2)
 	let r = try await h.keep(b) otherwise 0
@@ -16600,7 +16592,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	var tags = lib.Names.create(0) as isolated lib.Names
+	let tags = lib.Names.create(0) as isolated lib.Names
 
 	modify tags 'fill'
 		tags.push("a")
@@ -16864,8 +16856,8 @@ type Echo
 end 'Echo'
 
 function main() returns ExitCode
-	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	var out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
 	let accepted = try listener.accept() otherwise return 3
 	let echo = spawn Echo.create(accepted)
 	let reply = try echo.serve() otherwise return 4
@@ -16924,8 +16916,8 @@ type Echo
 end 'Echo'
 
 function main() returns ExitCode
-	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	var out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
 	let accepted = try listener.accept() otherwise return 3
 	let echo = spawn Echo.create(accepted)
 	let reply = try echo.serve() otherwise return 4
@@ -16961,11 +16953,8 @@ seven
 0
 ```
 
-<!-- test: deepmove.abort.a-tcp-client-another-owner-still-holds-aborts-at-the-send -->
-`kept` holds the accepted connection beside the binding that is moved into the service, so the `TcpClient` record has
-two owners and only one of them is in the graph the send walks. Handing it across would put one socket in two green
-threads' hands with a plain reference count between them, so the walk aborts with exit **96** before anything is
-enqueued, exactly as it does for any other record.
+<!-- test: deepmove.error.a-tcp-client-an-array-holds-is-refused-at-the-send -->
+A `TcpClient` is a unique OS handle with one owner. `kept.push(accepted)` moves the accepted connection into the array, so handing `accepted` to the service afterwards reads a moved value: no second owner of the connection can exist to meet the service's close on another green thread.
 ```maxon
 typealias Tally = int(0 to 1000000)
 typealias Clients = Array with TcpClient
@@ -16985,10 +16974,10 @@ type Echo
 end 'Echo'
 
 function main() returns ExitCode
-	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	var out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
-	var accepted = try listener.accept() otherwise return 3
-	var kept = Clients.create(0)
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let accepted = try listener.accept() otherwise return 3
+	let kept = Clients.create(0)
 
 	kept.push(accepted)
 
@@ -17002,19 +16991,13 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3102: <fragment>:27:31: use of moved value 'accepted': its ownership moved to another binding at an earlier bind or assignment
 ```
 
-<!-- test: deepmove.abort.a-socket-box-two-tcp-clients-share-aborts-at-the-send -->
+<!-- test: deepmove.error.a-socket-adopted-by-two-tcp-clients-is-refused -->
 <!-- tier: stdlib -->
-Two `TcpClient`s adopt one socket, so the socket's box has three owners — the binding and the two clients — and the
-send walks only one client's graph. The `TcpClient` record itself is sole; the walk finds the count on the socket's
-box above the one owner it met and aborts with exit **96**, so the socket is never closed by one thread while the other
-still uses it.
+`TcpClient.adopt` keeps the socket it is given, and the socket is a unique OS handle with one owner, so a second client over the same socket reads a moved value. Two clients, and so a socket box with several owners releasing from several green threads, cannot be built.
 ```maxon
 typealias Tally = int(0 to 1000000)
 
@@ -17033,10 +17016,10 @@ type Echo
 end 'Echo'
 
 function main() returns ExitCode
-	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	var socket = try __ManagedSocket.tcpConnect("127.0.0.1".addressableBytes(), port: listener.port(), milliseconds: 0) otherwise return 2
-	var first = TcpClient.adopt(socket)
-	var second = TcpClient.adopt(socket)
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let socket = try __ManagedSocket.tcpConnect("127.0.0.1".addressableBytes(), port: listener.port(), milliseconds: 0) otherwise return 2
+	let first = TcpClient.adopt(socket)
+	let second = TcpClient.adopt(socket)
 	let echo = spawn Echo.create(first)
 	let reply = try echo.serve() otherwise return 4
 	let served = await reply
@@ -17047,11 +17030,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-96
-```
-```stderr
-fatal error: runtime abort 96 (transferredRecordNotSole)
+```maxoncstderr
+error E3102: <fragment>:22:31: use of moved value 'socket': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.a-tcp-client-held-at-an-interface-type-crosses-and-echoes -->
@@ -17097,8 +17077,8 @@ type Stage
 end 'Stage'
 
 function main() returns ExitCode
-	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
-	var out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
+	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let out = try TcpClient.connect("127.0.0.1", port: listener.port()) otherwise return 2
 	let accepted = try listener.accept() otherwise return 3
 	let stage = spawn Stage.create(accepted)
 	let reply = try stage.perform() otherwise return 4
@@ -17154,11 +17134,11 @@ function main() returns ExitCode
 	let port = listener.port()
 	let acceptor = spawn Acceptor.create(listener)
 	let pending = try acceptor.next() otherwise return 2
-	var out = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused3x23'
+	let out = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused3x23'
 		pending.cancel()
 		return 3
 	end 'refused3x23'
-	var served = try await pending otherwise return 4
+	let served = try await pending otherwise return 4
 
 	_ = try out.send("accepted") otherwise return 5
 
@@ -17202,11 +17182,11 @@ function main() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let dialer = spawn Dialer.create(listener.port())
 	let pending = try dialer.next() otherwise return 2
-	var peer = try listener.accept() otherwise 'refused3x22'
+	let peer = try listener.accept() otherwise 'refused3x22'
 		pending.cancel()
 		return 3
 	end 'refused3x22'
-	var dialled = try await pending otherwise return 4
+	let dialled = try await pending otherwise return 4
 
 	_ = try peer.send("dialled") otherwise return 5
 
@@ -18138,7 +18118,7 @@ function main() returns ExitCode
 		end 'which'
 	end 'failed'
 
-	var more = WholeArray.create(0) as isolated WholeArray
+	let more = WholeArray.create(0) as isolated WholeArray
 
 	modify more 'fill'
 		more.push(1)
@@ -18239,7 +18219,7 @@ type Worker uses T
 	var extra as Whole
 
 	static function create(seed T, extra Whole) returns Self
-		var items = Items.create(0)
+		let items = Items.create(0)
 		items.push(seed)
 		return Self{items: items, extra: extra}
 	end 'create'
@@ -18281,10 +18261,10 @@ function plain() returns Whole
 end 'plain'
 
 function main() returns ExitCode
-	var numbers = NumberPool.create()
+	let numbers = NumberPool.create()
 	numbers.add(1)
 	numbers.add(2)
-	var words = WordPool.create()
+	let words = WordPool.create()
 	words.add("a label long enough to be a heap string")
 	print("{plain()} {numbers.launch()} {words.launch()}\n")
 	return 0
@@ -18346,8 +18326,8 @@ end 'runB'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var direct = a.Calc.create()
-	var other = b.Calc.create()
+	let direct = a.Calc.create()
+	let other = b.Calc.create()
 
 	return runA() + runB() + direct.bump(1) + other.bump(2)
 end 'main'

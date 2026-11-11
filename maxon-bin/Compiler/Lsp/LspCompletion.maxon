@@ -43,7 +43,7 @@ let EnumMemberCompletionKind = 20
 let CompletionMemberSeparator = "."
 
 module function completionServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create(0)
+	let served = LspMethodArray.create(0)
 	served.push(LspMethod.completion)
 	return served
 end 'completionServedMethods'
@@ -51,10 +51,10 @@ end 'completionServedMethods'
 // This server's `CompletionOptions`. Declaring the trigger character is what makes an editor ask the
 // moment a `.` is typed rather than only when the user asks for the list by hand.
 module function completionCapabilityOptions(doc JsonDoc) returns JsonNodeId
-	var triggers = JsonNodeIdArray.create(0)
+	let triggers = JsonNodeIdArray.create(0)
 	triggers.push(doc.add(JsonNode.stringNode(MemberAccessTrigger)))
 
-	var options = LspJsonObject.create(doc)
+	let options = LspJsonObject.create(doc)
 	options.putNode(TriggerCharactersKey, value: doc.add(JsonNode.arrayNode(triggers)))
 	return options.finish()
 end 'completionCapabilityOptions'
@@ -68,12 +68,12 @@ module function completionAnswer(request LspRequest) returns LspAnswer throws Ls
 	let index = LspLineIndex.build(request.text)
 	let offset = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: request.params, key: LspPositionKey))
 
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 	let offers = offersAt(request.text, tokens: tokens, keywords: request.keywords, scopes: LspLineScopes.of(lspDocumentBlocks(tokens)), offset: offset, uri: request.uri, workspace: request.workspace)
-	var items = JsonNodeIdArray.create(offers.count(), zeroed: false)
+	let items = JsonNodeIdArray.create(offers.count(), zeroed: false)
 
 	for offer in offers 'eachOffer'
-		var item = LspJsonObject.create(doc)
+		let item = LspJsonObject.create(doc)
 		item.put(LabelKey, value: JsonNode.stringNode(offer.label))
 		item.put(LspKindKey, value: JsonNode.numberNode(offer.kind as JsonFloat))
 		items.push(item.finish())
@@ -116,7 +116,7 @@ function offersAt(text String, tokens TokenArray, keywords KeywordTable, scopes 
 		end 'aTypeThisBufferDeclares'
 	end 'aNamedSubject'
 
-	var corpus = lspDocumentCorpus(workspace, uri: uri)
+	let corpus = lspDocumentCorpus(workspace, uri: uri)
 
 	return offersFor(lspSubjectAt(text, tokens: tokens, keywords: keywords, offset: offset, corpus: corpus), tokens: tokens, scopes: scopes, corpus: corpus, enclosing: enclosing)
 end 'offersAt'
@@ -127,8 +127,8 @@ function offersFor(subject LspSubject, tokens TokenArray, scopes LspLineScopes, 
 	let typeName = try lspSubjectTypeName(subject) otherwise return CompletionOfferArray.create(0)
 
 	let declaring = lspBlocksDeclaring(scopes.blocks, typeName: typeName)
-	var offers = CompletionOfferArray.create(0)
-	var offered = OfferedLabelSet.create()
+	let offers = CompletionOfferArray.create(0)
+	let offered = OfferedLabelSet.create()
 
 	for block in declaring 'eachDeclaringBody'
 		addBufferMembers(offers, offered: offered, tokens: tokens, scopes: scopes, block: block, subject: subject, site: lspReaderSite(enclosing, typeName: block.name, sharesTheTypesFile: true))

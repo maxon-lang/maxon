@@ -217,9 +217,9 @@ function getFirst(arr ItemArray) returns Item
 end 'getFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	arr.push(Item.create(99))
-	view result = getFirst(arr)
+	let result = getFirst(arr)
 	print("{result.value}\n")
 	return 0
 end 'main'
@@ -251,10 +251,10 @@ function popFirst(arr ItemArray) returns Item throws ArrayError
 end 'popFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	arr.push(Item.create(77))
 	arr.push(Item.create(88))
-	view first = try popFirst(arr) otherwise 'err'
+	let first = try popFirst(arr) otherwise 'err'
 		return 99
 	end 'err'
 	print("{first.value}\n")
@@ -366,7 +366,7 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var arr = NodeArray.create(0)
+	let arr = NodeArray.create(0)
 	var count = 0 as Count
 	if true 'scope'
 		let n = Node.create(10)
@@ -374,7 +374,7 @@ function main() returns ExitCode
 		count = arr.count()
 	end 'scope'
 	print("{count}\n")
-	view elem = try arr.get(0) otherwise Node.create(-1)
+	let elem = try arr.get(0) otherwise Node.create(-1)
 	print("{elem.id}\n")
 	return 0
 end 'main'
@@ -403,11 +403,11 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	arr.push(Item.create(1))
 	arr.push(Item.create(2))
 	arr.push(Item.create(3))
-	view removed = try arr.remove(1) otherwise 'err'
+	let removed = try arr.remove(1) otherwise 'err'
 		return 99
 	end 'err'
 	print("{removed.value}\n")
@@ -439,7 +439,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	var i = 0 as Integer
 	while i < 10 'push'
 		arr.push(Item.create(i))
@@ -447,7 +447,7 @@ function main() returns ExitCode
 	end 'push'
 	var total = 0 as Integer
 	while arr.count() > 0 'remove'
-		view elem = try arr.remove(0) otherwise 'err'
+		let elem = try arr.remove(0) otherwise 'err'
 			return 99
 		end 'err'
 		total = total + elem.value
@@ -479,10 +479,10 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	arr.push(Item.create(100))
 	try arr.set(0, value: Item.create(200)) otherwise panic("test invariant: set OOB")
-	view elem = try arr.get(0) otherwise Item.create(-1)
+	let elem = try arr.get(0) otherwise Item.create(-1)
 	print("{elem.value}\n")
 	return 0
 end 'main'
@@ -510,7 +510,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function fillArray() returns Integer
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	arr.push(Item.create(1))
 	arr.push(Item.create(2))
 	arr.push(Item.create(3))
@@ -592,7 +592,7 @@ end 'Container'
 
 function main() returns ExitCode
 	let old = Data.create(10)
-	var c = Container.create(old)
+	let c = Container.create(old)
 	c.setData(Data.create(20))
 	print("{c.data.value}\n")
 	return 0
@@ -621,9 +621,9 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	var managedList = ItemManagedList.create()
+	let managedList = ItemManagedList.create()
 	let item = Item.create(99)
-	view node = managedList.insertFirst(item)
+	let node = managedList.insertFirst(item)
 	print("{node.value().value}\n")
 	print("{managedList.count()}\n")
 	return 0
@@ -653,8 +653,8 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	var managedList = ItemManagedList.create()
-	view node = managedList.insertFirst(Item.create(50))
+	let managedList = ItemManagedList.create()
+	let node = managedList.insertFirst(Item.create(50))
 	managedList.remove(node)
 	print("{managedList.count()}\n")
 	return 0
@@ -683,7 +683,7 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-	var managedList = ItemManagedList.create()
+	let managedList = ItemManagedList.create()
 	managedList.insertFirst(Item.create(1))
 	managedList.insertLast(Item.create(2))
 	managedList.insertLast(Item.create(3))
@@ -720,9 +720,9 @@ function pushLocal(kept mutable ItemArray)
 end 'pushLocal'
 
 function main() returns ExitCode
-	var globalArr = ItemArray.create(0)
+	let globalArr = ItemArray.create(0)
 	pushLocal(globalArr)
-	view elem = try globalArr.get(0) otherwise Item.create(-1)
+	let elem = try globalArr.get(0) otherwise Item.create(-1)
 	print("{elem.value}\n")
 	return 0
 end 'main'
@@ -750,10 +750,10 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var globalArr = ItemArray.create(0)
+	let globalArr = ItemArray.create(0)
 	globalArr.push(Item.create(10))
 	globalArr.push(Item.create(20))
-	view removed = try globalArr.remove(0) otherwise 'err'
+	let removed = try globalArr.remove(0) otherwise 'err'
 		return 99
 	end 'err'
 	print("{removed.value}\n")
@@ -785,7 +785,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var globalArr = ItemArray.create(0)
+	let globalArr = ItemArray.create(0)
 	var i = 0 as Integer
 	while i < 20 'push'
 		globalArr.push(Item.create(i))
@@ -793,7 +793,7 @@ function main() returns ExitCode
 	end 'push'
 	var total = 0 as Integer
 	while globalArr.count() > 0 'remove'
-		view elem = try globalArr.remove(0) otherwise 'err'
+		let elem = try globalArr.remove(0) otherwise 'err'
 			return 99
 		end 'err'
 		total = total + elem.value
@@ -925,7 +925,7 @@ end 'Score'
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray.create(0)
+	let scores = ScoreArray.create(0)
 	scores.push(Score.create(10))
 	scores.push(Score.create(20))
 	scores.push(Score.create(30))
@@ -1170,12 +1170,12 @@ end 'Table'
 typealias TableArray = Array with Table
 
 function main() returns ExitCode
-	var tables = TableArray.create(0)
-	var rows1 = RowArray.create(0)
+	let tables = TableArray.create(0)
+	let rows1 = RowArray.create(0)
 	rows1.push(Row.create(1))
 	rows1.push(Row.create(2))
 	tables.push(Table.create(rows1))
-	var rows2 = RowArray.create(0)
+	let rows2 = RowArray.create(0)
 	rows2.push(Row.create(3))
 	tables.push(Table.create(rows2))
 	print("{tables.count()}\n")
@@ -1205,7 +1205,7 @@ end 'Item'
 typealias ItemManagedList = __ManagedList with Item
 
 function buildManagedList() returns ItemManagedList
-	var managedList = ItemManagedList.create()
+	let managedList = ItemManagedList.create()
 	managedList.insertLast(Item.create(10))
 	managedList.insertLast(Item.create(20))
 	managedList.insertLast(Item.create(30))

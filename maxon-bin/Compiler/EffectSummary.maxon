@@ -157,7 +157,7 @@ module type MergeEdges
 end 'MergeEdges'
 
 module function noteMergeEdges(module MaxonModule, func IrFunction, into MergeEdges)
-	var positions = OptionalElementIndexColumn.absent(func.nextBlockId)
+	let positions = OptionalElementIndexColumn.absent(func.nextBlockId)
 
 	for position in 0 upto func.blockRefs.count() 'indexBlocks'
 		let block = try module.blocks.get(try func.blockRefs.get(position) otherwise panic("noteMergeEdges: blockRefs.get OOB at {position}")) otherwise panic("noteMergeEdges: blockRef at {position} not in module.blocks")
@@ -196,15 +196,15 @@ type CalleeFacts
 	static function create(funcIndexByName FuncIndexByName, functionCount ElementIndex) returns CalleeFacts
 		let flags = FixedBoolArray.create(functionCount)
 		let retMasks = ParamPositionMaskArray.create(functionCount)
-		var retBottoms = FixedBoolArray.create(functionCount)
+		let retBottoms = FixedBoolArray.create(functionCount)
 		retBottoms.refill(true)
 		let directOwns = ParamPositionMaskArray.create(functionCount)
 		let directDeeps = ParamPositionMaskArray.create(functionCount)
-		var directBottoms = FixedBoolArray.create(functionCount)
+		let directBottoms = FixedBoolArray.create(functionCount)
 		directBottoms.refill(true)
-		var importsOwn = ParamPositionMaskArray.create(functionCount, zeroed: false)
+		let importsOwn = ParamPositionMaskArray.create(functionCount, zeroed: false)
 		importsOwn.refill(functionCount, value: everyParamPosition())
-		var importsBelow = ParamPositionMaskArray.create(functionCount, zeroed: false)
+		let importsBelow = ParamPositionMaskArray.create(functionCount, zeroed: false)
 		importsBelow.refill(functionCount, value: everyParamPosition())
 		return Self{funcIndexByName: funcIndexByName, flags: flags, retMasks: retMasks, retBottoms: retBottoms, directOwns: directOwns, directDeeps: directDeeps, directBottoms: directBottoms, importsOwn: importsOwn, importsBelow: importsBelow}
 	end 'create'
@@ -303,7 +303,7 @@ type ValueOrigins
 	end 'empty'
 
 	static function ofBody(module MaxonModule, func IrFunction, signatures ProgramSignatures, typeNames TypeNameInterner, calleeFacts CalleeFacts) returns ValueOrigins
-		var origins = ValueOrigins.empty(signatures, typeNames: typeNames, calleeFacts: calleeFacts)
+		let origins = ValueOrigins.empty(signatures, typeNames: typeNames, calleeFacts: calleeFacts)
 		origins.populate(module, func: func)
 		return origins
 	end 'ofBody'
@@ -360,7 +360,7 @@ type ValueOrigins
 	// No op defines the error flags of `tryCall`, `tryAwait` and `witnessTryDispatch`. Left unvisited,
 	// a merge would read them as "no information" and take its other incoming's answer.
 	function settleUndefined()
-		var isMerge = MergePhiFlags.create(self.codes.count())
+		let isMerge = MergePhiFlags.create(self.codes.count())
 
 		for index in 0 upto self.merges.count() 'eachMerge'
 			try isMerge.set(self.merges.phiAt(index), value: true) otherwise panic("ValueOrigins.settleUndefined: phi {self.merges.phiAt(index)} is past the {self.codes.count()} values")
@@ -443,7 +443,7 @@ type ValueOrigins
 			return
 		end 'notTheCodeSlot'
 
-		view name = try self.codeRefs.get(value) otherwise return
+		let name = try self.codeRefs.get(value) otherwise return
 
 		if self.boxCode.contains(addr) 'storedTwice'
 			self.ambiguousBoxes.insert(addr)
@@ -495,8 +495,8 @@ type ValueOrigins
 		end 'mintedHere'
 
 		return match op 'op'
-			call(_, callee, args, _, _, _, _, _) gives self.callResultOrigin(callee, args: args)
-			tryCall(_, _, callee, _, _, _, _, _, _) gives OriginLocal if self.callReturnsAFreshRecord(callee) else OriginUnknown
+			call(_, callee, args, _, _, _, _) gives self.callResultOrigin(callee, args: args)
+			tryCall(_, _, callee, _, _, _, _, _) gives OriginLocal if self.callReturnsAFreshRecord(callee) else OriginUnknown
 			loadIndirect(_, addr, _, _) gives self.withinOrigin(addr)
 			holdValue(_, held, _, _, _) gives self.raw(held)
 			literal or
@@ -804,7 +804,7 @@ type ValueOrigins
 	end 'everyReturnIsLocal'
 
 	function returnedValues(module MaxonModule, func IrFunction) returns ValueIdArray
-		var returned = ValueIdArray.create(0)
+		let returned = ValueIdArray.create(0)
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("ValueOrigins.returnedValues: blockRef from func.blockRefs not in module.blocks")
@@ -936,7 +936,7 @@ type EffectContext
 	end 'ofInstance'
 
 	function withBinding(position ParamCount, node ElementIndex) returns EffectContext
-		var extended = self.bindings.clone()
+		let extended = self.bindings.clone()
 		extended.push(ClosureBinding.create(position, node: node))
 		return Self{instance: self.instance, bindings: extended}
 	end 'withBinding'
@@ -1077,15 +1077,15 @@ type EffectNodes
 
 	function instanceFromArguments(declared IrFunction, args ValueIdArray, func IrFunction, owner ByteArray) returns GenericInstanceId throws AbsentError
 		let arity = self.signatures.structTypeParamsOf(owner).count()
-		var positions = ElementIndexArray.create(0)
-		var bound = MaxonTypeArray.create(0)
+		let positions = ElementIndexArray.create(0)
+		let bound = MaxonTypeArray.create(0)
 
 		for index in 0 upto declared.maxonParamTypes.count() 'eachParameter'
 			let argument = try args.get(index) otherwise break
 			self.bindOwnerParameters(try declared.maxonParamTypes.get(index) otherwise panic("instanceFromArguments: maxonParamTypes.get OOB at {index} below its own count"), actual: argument, func: func, owner: owner, positions: positions, bound: bound)
 		end 'eachParameter'
 
-		var ordered = MaxonTypeArray.create(arity, zeroed: false)
+		let ordered = MaxonTypeArray.create(arity, zeroed: false)
 
 		for position in 0 upto arity 'eachOwnerParameter'
 			var found = false
@@ -1249,7 +1249,7 @@ type EffectNodes
 		end 'anotherTypesParameter'
 
 		let conformer = self.signatures.conformerTypeArgName(outer, position: owner.position).toByteArray()
-		var targets = ElementIndexArray.create(0)
+		let targets = ElementIndexArray.create(0)
 
 		for candidate in candidates 'eachCandidate'
 			let candidateOwner = try ownerTypeOf(candidate)
@@ -1287,7 +1287,7 @@ end 'EffectNodes'
 // undeclared callee, a spawn, an await, a write whose target is not known — and the cost of that is a
 // missed diagnostic, never a refused legal program.
 module function buildEffectFreeSummary(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) returns BoolArray
-	var builder = EffectSummaryBuilder.create(project.funcSignatures, signatures: signatures, typeNames: project.typeNames, funcNames: funcNames, runtimeTier: project.libraryFacts.runtimeTier)
+	let builder = EffectSummaryBuilder.create(project.funcSignatures, signatures: signatures, typeNames: project.typeNames, funcNames: funcNames, runtimeTier: project.libraryFacts.runtimeTier)
 	return builder.build(module, functions: funcNames.functions, calleesFirst: calleesFirstOrder(module, funcNames: funcNames))
 end 'buildEffectFreeSummary'
 
@@ -1323,8 +1323,8 @@ type EffectSummaryBuilder
 	var siteOrigins as ValueOriginColumn
 
 	static function create(funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner, funcNames FunctionNameIndex, runtimeTier FunctionNameSet) returns EffectSummaryBuilder
-		var dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
-		var calleeFacts = CalleeFacts.create(funcNames.byName, functionCount: funcNames.functions.count())
+		let dispatch = WitnessDispatchTargets.create(signatures, functions: funcNames.functions)
+		let calleeFacts = CalleeFacts.create(funcNames.byName, functionCount: funcNames.functions.count())
 
 		return Self{funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames, ownersByInstance: ResourceByInstance.create(), ownersByName: ResourceByTypeName.create(), funcIndexByName: funcNames.byName, runtimeTier: runtimeTier, nodes: EffectNodes.create(signatures, functions: funcNames.functions, dispatch: dispatch), calleeFacts: calleeFacts, facts: ValueOrigins.empty(signatures, typeNames: typeNames, calleeFacts: calleeFacts), hard: BoolArray.create(0), taintEnabled: false, imports: ParamPositionMaskArray.create(0), importsBelow: ParamPositionMaskArray.create(0), shallow: ParamPositionMaskArray.create(0), near: ParamPositionMaskArray.create(0), far: ParamPositionMaskArray.create(0), siteCallers: CsrColumn.create(0), siteCallees: CsrColumn.create(0), siteFirstOrigins: CsrColumn.create(0), siteOriginCounts: CsrColumn.create(0), siteOrigins: ValueOriginColumn.create(0)}
 	end 'create'
@@ -1416,7 +1416,7 @@ type EffectSummaryBuilder
 				continue
 			end 'nothingToLearn'
 
-			var origins = ValueOrigins.ofBody(module, func: func, signatures: self.signatures, typeNames: self.typeNames, calleeFacts: self.calleeFacts)
+			let origins = ValueOrigins.ofBody(module, func: func, signatures: self.signatures, typeNames: self.typeNames, calleeFacts: self.calleeFacts)
 			self.nodes.current = EffectContext.plain()
 			self.settleTaint(origins, module: module, func: func)
 			var mask = NoParamPositions
@@ -1464,8 +1464,8 @@ type EffectSummaryBuilder
 	function taintOp(origins ValueOrigins, op MaxonOp, func IrFunction)
 		match op 'op'
 			storeIndirect(addr, _, value, _) then origins.storeInto(addr, value: value, func: func)
-			call(result, callee, args, argLabels, _, _, _, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
-			tryCall(result, _, callee, args, argLabels, _, _, _, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
+			call(result, callee, args, argLabels, _, _, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
+			tryCall(result, _, callee, args, argLabels, _, _, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
 			indirectCall then self.taintIndirectCall(origins, op: op)
 			witnessDispatch(_, args, _, _, _, _, _, _) then self.taintArguments(origins, args: args)
 			witnessTryDispatch(_, _, args, _, _, _, _, _) then self.taintArguments(origins, args: args)
@@ -1755,12 +1755,12 @@ type EffectSummaryBuilder
 	function walkNode(node ElementIndex, functionIndex ElementIndex, module MaxonModule, functions IrFunctionArray)
 		let func = try functions.get(functionIndex) otherwise panic("EffectSummaryBuilder.walkNode: functions.get OOB at {functionIndex}")
 
-		if bodyIsUnreadable(func) or func.writesModuleStorage or self.signatures.functionNeverReturns(func.name) 'hardFromTheStart'
+		if bodyIsUnreadable(func) or self.signatures.functionNeverReturns(func.name) 'hardFromTheStart'
 			self.markHard(node)
 			return
 		end 'hardFromTheStart'
 
-		var origins = ValueOrigins.ofBody(module, func: func, signatures: self.signatures, typeNames: self.typeNames, calleeFacts: self.calleeFacts)
+		let origins = ValueOrigins.ofBody(module, func: func, signatures: self.signatures, typeNames: self.typeNames, calleeFacts: self.calleeFacts)
 
 		if self.taintEnabled 'mayHoldOnlyWhatItMade'
 			self.settleTaint(origins, module: module, func: func)
@@ -1783,8 +1783,8 @@ type EffectSummaryBuilder
 
 	function walkOp(op MaxonOp, node ElementIndex, func IrFunction)
 		match op 'op'
-			call(result, callee, args, argLabels, _, _, _, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
-			tryCall(result, _, callee, args, argLabels, _, _, _, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
+			call(result, callee, args, argLabels, _, _, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
+			tryCall(result, _, callee, args, argLabels, _, _, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels)
 			storeIndirect(addr, _, value, _) then self.noteStore(node, addr: addr, value: value, func: func)
 			indirectCall then self.walkIndirectCall(node, func: func, op: op)
 			witnessDispatch(_, args, _, _, methodIndex, interfaceDeclIndex, _, _) then self.walkDispatch(node, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
@@ -1949,7 +1949,7 @@ type EffectSummaryBuilder
 			return
 		end 'anotherShape'
 
-		var userArguments = ValueIdArray.create(targetParamCount, zeroed: false)
+		let userArguments = ValueIdArray.create(targetParamCount, zeroed: false)
 
 		for position in 0 upto targetParamCount 'eachUserArgument'
 			userArguments.push(try args.get(position) otherwise panic("EffectSummaryBuilder.callThroughValue: args.get OOB at {position}"))
@@ -1965,7 +1965,7 @@ type EffectSummaryBuilder
 		end 'chosenAtRunTime'
 
 		let requirement = self.nodes.dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
-		view candidates = self.nodes.dispatch.candidatesFor(requirement)
+		let candidates = self.nodes.dispatch.candidatesFor(requirement)
 
 		if let targets = try self.nodes.contextualTargets(func, args: args, requirement: requirement, candidates: candidates, funcIndexByName: self.funcIndexByName, runtimeTier: self.runtimeTier) 'resolvedForTheInstance'
 			for target in targets 'eachTarget'
@@ -2018,15 +2018,15 @@ type EffectSummaryBuilder
 	// bounded number of times; a round-based rescan would cost the call graph's depth on top.
 	function settle()
 		let nodeCount = self.nodes.totalCount()
-		var siteIds = CsrColumn.create(self.siteCallers.count(), zeroed: false)
+		let siteIds = CsrColumn.create(self.siteCallers.count(), zeroed: false)
 
 		for site in 0 upto self.siteCallers.count() 'eachSite'
 			siteIds.push(site as CsrIndex)
 		end 'eachSite'
 
 		let sitesByCallee = buildCsr(self.siteCallees, to: siteIds, nodeCount: nodeCount as CsrIndex)
-		var queue = CsrColumn.create(0)
-		var queued = BoolArray.create(nodeCount, zeroed: false)
+		let queue = CsrColumn.create(0)
+		let queued = BoolArray.create(nodeCount, zeroed: false)
 
 		for node in 0 upto nodeCount 'seed'
 			let known = self.isHard(node) or summaryMaskAt(self.shallow, index: node) != NoParamPositions or summaryMaskAt(self.near, index: node) != NoParamPositions or summaryMaskAt(self.far, index: node) != NoParamPositions or summaryMaskAt(self.imports, index: node) != NoParamPositions or summaryMaskAt(self.importsBelow, index: node) != NoParamPositions
@@ -2202,7 +2202,7 @@ type EffectSummaryBuilder
 	// A function that returns nothing exists for its effects, so it is never effect-free itself. Callers
 	// inherit what its body does, not that it returns nothing.
 	function verdicts() returns BoolArray
-		var effectFree = BoolArray.create(self.nodes.baseCount(), zeroed: false)
+		let effectFree = BoolArray.create(self.nodes.baseCount(), zeroed: false)
 
 		for index in 0 upto self.nodes.baseCount() 'eachFunction'
 			let func = try self.nodes.functions.get(index) otherwise panic("EffectSummaryBuilder.verdicts: functions.get OOB at {index}")
@@ -2212,3 +2212,23 @@ type EffectSummaryBuilder
 		return effectFree
 	end 'verdicts'
 end 'EffectSummaryBuilder'
+
+module function emptySummaryColumn(funcCount ElementIndex) returns ParamPositionMaskArray
+	return ParamPositionMaskArray.create(funcCount)
+end 'emptySummaryColumn'
+
+module function summaryMaskAt(column ParamPositionMaskArray, index ElementIndex) returns ParamPositionMask
+	return try column.get(index) otherwise panic("summaryMaskAt: function index {index} is outside the column — it is built over `funcNames.functions`")
+end 'summaryMaskAt'
+
+module function widenSummaryColumn(column ParamPositionMaskArray, index ElementIndex, by ParamPositionMask) returns bool
+	let before = summaryMaskAt(column, index: index)
+	let after = before or by
+
+	if after == before 'nothingNew'
+		return false
+	end 'nothingNew'
+
+	try column.set(index, value: after) otherwise panic("widenSummaryColumn: set OOB at {index}")
+	return true
+end 'widenSummaryColumn'

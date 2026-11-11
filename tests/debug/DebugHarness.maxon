@@ -62,7 +62,7 @@ export let DebugStreamGlobalName = "__ds_base"
 let SidecarNameTerminator = ":"
 
 export function sidecarTableNames(rows StringArray, names StringArray, published bool) returns StringArray
-	var matching = StringArray.create(0)
+	let matching = StringArray.create(0)
 
 	for name in names 'eachName'
 		if sidecarTableRowsName(rows, name: name) == published 'wanted'
@@ -88,7 +88,7 @@ end 'sidecarTableRowsName'
 // The rows under one section heading: every line after it, up to the line that opens the NEXT section. A
 // heading nothing opens yields no rows, which the caller reports as the section being absent.
 export function dumpSectionRows(dump String, heading String) returns StringArray
-	var rows = StringArray.create(0)
+	let rows = StringArray.create(0)
 	var inSection = false
 
 	for rawLine in dump.split(LineFeed) 'eachLine'
@@ -152,7 +152,7 @@ end 'hexDigitOf'
 // Every line of every staged source, CR folded — the roster a case over a multi-file fixture derives its
 // demands from.
 export function everyStagedSourceLine(staged FilePath) returns StringArray
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	for entry in listing(staged) 'eachEntry'
 		if not entry.filename().endsWith(MaxonSourceSuffix) 'notASource'
@@ -173,7 +173,7 @@ end 'everyStagedSourceLine'
 // ⚠ The prefix is unindented on purpose: a `static function` inside a `type` opens with a TAB, and a
 // method is not what a case asking "which functions did this file declare" means.
 export function declaredFunctionNames(staged FilePath) returns StringArray
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 
 	for line in linesOfStagedSource(staged.join(StagedProgramFileName)) 'eachLine'
 		if line.startsWith(FunctionDeclarationPrefix) 'aDeclaration'
@@ -287,7 +287,7 @@ end 'CodeRangeLookup'
 // ============================================================================================
 
 function debugBatchArguments(executable FilePath, commands String, extraOptions StringArray) returns StringArray
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push(DebugSubcommandName)
 	arguments.push(DebugBatchOption)
 	arguments.push("{DebugCommandsOptionPrefix}{commands}")
@@ -346,7 +346,7 @@ export union BoundedSession
 end 'BoundedSession'
 
 export function boundedDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment, timeoutMs DurationMs) returns BoundedSession
-	var config = Configuration.create(Executable.path(testedCompilerPath()), workingDirectory: staged)
+	let config = Configuration.create(Executable.path(testedCompilerPath()), workingDirectory: staged)
 	config.arguments = debugBatchArguments(executable, commands: commands, extraOptions: extraOptions)
 	config.environment = environment
 	config.timeoutMs = timeoutMs
@@ -373,7 +373,7 @@ function cutOffBy(failure SubprocessError) returns BoundedSession
 end 'cutOffBy'
 
 export function spawnDebugComplete(executable FilePath, staged FilePath, partial String) returns CollectedOutput
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push(DebugSubcommandName)
 	arguments.push("{DebugCompleteOptionPrefix}{partial}")
 	arguments.push(executable.toString())
@@ -410,7 +410,7 @@ end 'debugCommandLine'
 // line that is neither blank nor an object is the gate having nothing to read rather than a driver
 // answering wrongly.
 export function batchEvents(stdout String) returns JsonDocArray
-	var events = JsonDocArray.create(0)
+	let events = JsonDocArray.create(0)
 
 	for rawLine in withoutCarriageReturns(stdout).split(LineFeed) 'eachLine'
 		let line = rawLine.trim()
@@ -431,7 +431,7 @@ function eventKind(event JsonDoc) returns String
 end 'eventKind'
 
 export function eventKinds(events JsonDocArray) returns StringArray
-	var kinds = StringArray.create(0)
+	let kinds = StringArray.create(0)
 
 	for event in events 'eachEvent'
 		kinds.push(eventKind(event))
@@ -441,7 +441,7 @@ export function eventKinds(events JsonDocArray) returns StringArray
 end 'eventKinds'
 
 export function eventsOfKind(events JsonDocArray, kind String) returns JsonDocArray
-	var matching = JsonDocArray.create(0)
+	let matching = JsonDocArray.create(0)
 
 	for event in events 'eachEvent'
 		if eventKind(event) == kind 'thisKind'
@@ -475,7 +475,7 @@ end 'flagOf'
 // The one node a key names, as a list of AT MOST ONE — so "the key is absent" is a count of zero
 // rather than a node id standing in for nothing.
 export function memberOf(doc JsonDoc, node JsonNodeId, key String) returns JsonNodeIdArray
-	var found = JsonNodeIdArray.create(0)
+	let found = JsonNodeIdArray.create(0)
 	let child = try doc.getChild(node, key: key) otherwise return found
 	found.push(child)
 
@@ -485,7 +485,7 @@ end 'memberOf'
 // The elements of an array-valued key, EMPTY when the key is absent or is not an array — which the
 // caller reports as the list being missing, naming the key.
 export function childrenOf(doc JsonDoc, node JsonNodeId, key String) returns JsonNodeIdArray
-	var children = JsonNodeIdArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 	let arrayId = try doc.getChild(node, key: key) otherwise return children
 	let length = try doc.arrayLength(arrayId) otherwise return children
 
@@ -537,7 +537,7 @@ export function functionRowOf(functionRows StringArray, name String) returns Str
 end 'functionRowOf'
 
 export function localRowsOf(functionRows StringArray, name String) returns StringArray
-	var locals = StringArray.create(0)
+	let locals = StringArray.create(0)
 	var inside = false
 
 	for row in functionRows 'eachRow'
@@ -555,7 +555,7 @@ export function localRowsOf(functionRows StringArray, name String) returns Strin
 end 'localRowsOf'
 
 export function declaredFunctionRows(functionRows StringArray) returns StringArray
-	var rows = StringArray.create(0)
+	let rows = StringArray.create(0)
 
 	for row in functionRows 'eachRow'
 		if row.contains(FunctionRowColumn) 'aFunctionRow'
@@ -577,7 +577,7 @@ export function typeRowOf(typeRows StringArray, name String) returns String
 end 'typeRowOf'
 
 export function typeFieldRowsOf(typeRows StringArray, name String) returns StringArray
-	var fields = StringArray.create(0)
+	let fields = StringArray.create(0)
 	var inside = false
 
 	for row in typeRows 'eachRow'
@@ -731,7 +731,7 @@ let HeldStopDeadlineMs = 120000
 
 export function sessionHeldAt(staged FilePath, anchor String, environment Environment = Environment.inherit) returns ReplSession
 	let line = anchorLine(staged.join(StagedProgramFileName), anchor: anchor)
-	var session = ReplSession.open(builtExecutable(staged), staged: staged, environment: environment)
+	let session = ReplSession.open(builtExecutable(staged), staged: staged, environment: environment)
 
 	session.say("{BreakCommand} {lineTarget(line)}")
 	session.say(RunCommand)
@@ -768,7 +768,7 @@ end 'runBuiltProgram'
 // A command repeated: the only honest way to drive a session past a breakpoint whose hit count is a
 // property of the fixture's loops rather than of the debugger.
 export function repeatedCommand(command String, times EventTally) returns StringArray
-	var commands = StringArray.create(0)
+	let commands = StringArray.create(0)
 
 	for _ in 0 upto times 'eachRepeat'
 		commands.push(command)
@@ -778,7 +778,7 @@ export function repeatedCommand(command String, times EventTally) returns String
 end 'repeatedCommand'
 
 export function appendedCommands(first StringArray, rest StringArray) returns StringArray
-	var all = StringArray.create(0)
+	let all = StringArray.create(0)
 
 	for command in first 'eachFirst'
 		all.push(command)
@@ -798,7 +798,7 @@ export function stringAt(doc JsonDoc, node JsonNodeId) returns String
 end 'stringAt'
 
 export function stringsOf(doc JsonDoc, node JsonNodeId, key String) returns StringArray
-	var strings = StringArray.create(0)
+	let strings = StringArray.create(0)
 
 	for element in childrenOf(doc, node: node, key: key) 'eachElement'
 		strings.push(stringAt(doc, node: element))
@@ -814,7 +814,7 @@ end 'stringsOf'
 // Every value of a list as `name=display`, which is what a disagreement has to show a reader: a
 // display that is wrong is only legible beside the name it was rendered for.
 export function valueRows(doc JsonDoc, node JsonNodeId, key String) returns StringArray
-	var rows = StringArray.create(0)
+	let rows = StringArray.create(0)
 
 	for value in childrenOf(doc, node: node, key: key) 'eachValue'
 		rows.push("{textOf(doc, node: value, key: NameKey)}={textOf(doc, node: value, key: DisplayKey)}")
@@ -826,7 +826,7 @@ end 'valueRows'
 // The one value of a list carrying `name` — EMPTY when the list holds none, which the caller reports
 // as the value being missing rather than as a wrong rendering of it.
 export function valueNamed(doc JsonDoc, node JsonNodeId, key String, name String) returns JsonNodeIdArray
-	var found = JsonNodeIdArray.create(0)
+	let found = JsonNodeIdArray.create(0)
 
 	for value in childrenOf(doc, node: node, key: key) 'eachValue'
 		if textOf(doc, node: value, key: NameKey) == name 'thisValue'
@@ -898,7 +898,7 @@ export function overlapOfRowsInDifferentPlaces(left String, right String) return
 end 'overlapOfRowsInDifferentPlaces'
 
 export function pairsOfRowsThatShadow(rows StringArray) returns StringArray
-	var shadowing = StringArray.create(0)
+	let shadowing = StringArray.create(0)
 
 	for (leftAt, left) in rows.withIterator() 'eachRow'
 		for rightAt in leftAt.index() + 1 upto rows.count() 'eachLaterRow'
@@ -997,7 +997,7 @@ export function lowestOffsetOf(offsets SidecarNumberArray) returns PrintedNumber
 end 'lowestOffsetOf'
 
 export function armedAndClearedAtEvery(offsets SidecarNumberArray) returns StringArray
-	var commands = StringArray.create(0)
+	let commands = StringArray.create(0)
 
 	for offset in offsets 'eachOffset'
 		commands.push("{BreakCommand} {exactOffsetTarget(offset)}")
@@ -1024,7 +1024,7 @@ export function statementOffsetsOfTheProgram(executable FilePath, staged FilePat
 end 'statementOffsetsOfTheProgram'
 
 function statementOffsetsAmong(rows DumpedLineRowArray, atMost ElementIndex) returns SidecarNumberArray
-	var offsets = SidecarNumberArray.create(0)
+	let offsets = SidecarNumberArray.create(0)
 
 	for row in rows 'eachRow'
 		if offsets.count() >= atMost 'enough'
@@ -1046,7 +1046,7 @@ export function dumpedRowsAt(executable FilePath, staged FilePath, scope DumpedR
 	end 'rows'
 
 	let dump = spawnDumpInfo(executable, staged: staged, sections: [LinesSectionName])
-	var rows = DumpedLineRowArray.create(0)
+	let rows = DumpedLineRowArray.create(0)
 
 	for row in dumpSectionRows(withoutCarriageReturns(dump.stdout), heading: DumpLineTableHeading) 'eachRow'
 		let tokens = whitespaceTokens(row)
@@ -1067,7 +1067,7 @@ export function statementOffsetsOfLine(executable FilePath, staged FilePath, lin
 end 'statementOffsetsOfLine'
 
 function lineRowTagsIn(row String) returns StringArray
-	var tags = StringArray.create(0)
+	let tags = StringArray.create(0)
 	let pieces = row.split(RowTagListOpen)
 
 	if pieces.count() < 2 'noTagList'
@@ -1207,7 +1207,7 @@ export function countThreadsWhere(doc JsonDoc, key String, value String) returns
 end 'countThreadsWhere'
 
 export function renderedThreads(doc JsonDoc) returns String
-	var rows = StringArray.create(0)
+	let rows = StringArray.create(0)
 
 	for row in threadRows(doc) 'eachRow'
 		rows.push("#{numberOf(doc, node: row, key: IdKey)} {textOf(doc, node: row, key: StatusKey)} {textOf(doc, node: row, key: FunctionKey)}")
@@ -1241,7 +1241,7 @@ export function stopsOnThreadInRange(events JsonDocArray, id EventNumber, after 
 end 'stopsOnThreadInRange'
 
 export function eventsOfKindBeforeTheExit(events JsonDocArray, kind String) returns JsonDocArray
-	var matching = JsonDocArray.create(0)
+	let matching = JsonDocArray.create(0)
 	let ended = firstIndexOfKind(events, kind: ExitEventName)
 
 	for (iter, event) in events.withIterator() 'eachEvent'
@@ -1300,7 +1300,7 @@ export function innermostPhysicalFrameFunction(doc JsonDoc, key String) returns 
 end 'innermostPhysicalFrameFunction'
 
 export function tracedEventTexts(doc JsonDoc) returns String
-	var rows = StringArray.create(0)
+	let rows = StringArray.create(0)
 
 	for event in childrenOf(doc, node: doc.root, key: EventsKey) 'eachEvent'
 		rows.push(textOf(doc, node: event, key: TextKey))
@@ -1428,7 +1428,7 @@ type TraceeRoster
 	end 'note'
 
 	function lines() returns StringArray
-		var spelled = StringArray.create(0)
+		let spelled = StringArray.create(0)
 
 		for id in self.ids 'eachThread'
 			spelled.push("{id}")
@@ -1463,14 +1463,14 @@ end 'TracedChild'
 
 export function unservicedTracee(caseLabel String) returns TracedChild
 	let staged = builtFixture(caseLabel, fixture: TraceeFixtureName)
-	var child = try StreamingSubprocess.spawnTraceable(Executable.path(builtExecutable(staged)), arguments: StringArray.create(0), workingDirectory: staged, environment: Environment.inherit, traced: true) otherwise panic("tracee: the traced spawn of the built fixture was refused")
+	let child = try StreamingSubprocess.spawnTraceable(Executable.path(builtExecutable(staged)), arguments: StringArray.create(0), workingDirectory: staged, environment: Environment.inherit, traced: true) otherwise panic("tracee: the traced spawn of the built fixture was refused")
 	let process = try child.processId() otherwise panic("tracee: the spawned child recorded no process id")
 
 	return TracedChild.create(child, trace: ProcessTrace.create(), pid: process, threads: StringArray.create(0), staged: staged)
 end 'unservicedTracee'
 
 export function startedTracee(caseLabel String) returns TracedChild
-	var spawned = unservicedTracee(caseLabel)
+	let spawned = unservicedTracee(caseLabel)
 	let roster = traceeServiced(spawned.trace, child: spawned.child, process: spawned.pid as DebuggeeProcessId)
 
 	if roster.count() < TraceeThreadsNeeded 'tooFewThreads'
@@ -1485,7 +1485,7 @@ export function startedTracee(caseLabel String) returns TracedChild
 end 'startedTracee'
 
 function traceeServiced(trace ProcessTrace, child StreamingSubprocess, process DebuggeeProcessId) returns TraceeRoster
-	var roster = TraceeRoster.create()
+	let roster = TraceeRoster.create()
 	var ready = false
 	var quiet = 0 as TraceeTally
 	var slices = 0 as TraceeTally

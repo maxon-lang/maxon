@@ -81,8 +81,8 @@ let VendorDirSegment = "vendor"
 // TO DISAGREE ABOUT.** It stays parameterized on the DIRECTORY rather than hard-wired to `vendor/`,
 // because the rule is about the HOST and not about where a binary happens to live.
 function hostBinaryCandidates(dirSegments StringArray, stem String) returns StringArrayArray
-	var exe = StringArray.create(dirSegments.count() + 1, zeroed: false)
-	var noExt = StringArray.create(dirSegments.count() + 1, zeroed: false)
+	let exe = StringArray.create(dirSegments.count() + 1, zeroed: false)
+	let noExt = StringArray.create(dirSegments.count() + 1, zeroed: false)
 
 	for segment in dirSegments 'eachSegment'
 		exe.push(segment)
@@ -92,7 +92,7 @@ function hostBinaryCandidates(dirSegments StringArray, stem String) returns Stri
 	exe.push("{stem}.exe")
 	noExt.push(stem)
 
-	var candidates = StringArrayArray.create(0)
+	let candidates = StringArrayArray.create(0)
 
 	if detectHostTarget().os == Os.windows 'winHost'
 		candidates.push(exe)
@@ -108,7 +108,7 @@ end 'hostBinaryCandidates'
 // A vendored tool's candidates: `vendor/<tool>/<tool>[.exe]`. `tool` is the vendor subdir, which equals
 // the tool's basename (e.g. "wasm-tools" → `vendor/wasm-tools/wasm-tools`).
 export function hostWasmToolCandidates(tool String) returns StringArrayArray
-	var dir = StringArray.create(0)
+	let dir = StringArray.create(0)
 	dir.push(VendorDirSegment)
 	dir.push(tool)
 
@@ -157,7 +157,7 @@ export function locateWasmComponentTools() returns WasmComponentTools throws Was
 		throw WasmComponentError.toolNotFound("`{WasmToolsName}`", spelledAs: "{VendorDirSegment}/{WasmToolsName}/{WasmToolsName}", search: e)
 	end 'noWasmTools'
 
-	var witCandidates = StringArrayArray.create(0)
+	let witCandidates = StringArrayArray.create(0)
 	witCandidates.push([VendorDirSegment, WitDirSegment, WitWorldFileName])
 
 	let witWorld = try findFileUpward(witCandidates) otherwise (e) 'noWit'

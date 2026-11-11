@@ -47,7 +47,7 @@ right answer and exited **101**, which is why the exit code is pinned and not ju
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	list.append("cccccccccccccccccccccccccccccc")
 	try list.insert(1, value: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") otherwise 'oob'
@@ -79,7 +79,7 @@ at 3 and `get(1)` would read the slot the move-out had just emptied.
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	list.append("cccccccccccccccccccccccccccccc")
 	try list.insert(1, value: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") otherwise 'oob'
@@ -116,7 +116,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.append(1)
 	list.append(3)
 	try list.insert(1, value: 2) otherwise 'oob'

@@ -556,7 +556,7 @@ A program the harness cannot build for a reason of the environment (a staging di
 missing standard library or runtime, a driver failure), and a spent trial budget, leave every case involved
 to its own run alone. Each such program prints one `harness error:` line on stderr, after the report,
 naming those cases and the cause, and the run exits 1 even when every case passed. Output outside the markers belongs to no single case: a
-`static` or module-level initializer runs before `main` for every case of a program, so what it prints
+`default` declaration's expression runs before `main` for every case of a program, so what it prints
 lands ahead of the first marker, and a `--select=` rerun of the same binary prints it too. A program whose
 run left such output FAILS every one of its cases, and so does a case whose alone rerun died before the
 entry began, each with a message naming the cause: a case ran code before `main` that the batching checks
@@ -582,10 +582,11 @@ the whole process shares. A case declaring any name the standard library
 also declares (an enum such as `StringError`, an alias such as `ByteArray`, an interface such as
 `InitableFromStringLiteral`) runs alone too, because every other case's use of that name would change meaning.
 
-So does a case whose own module-level `let` or `static` initializers run program code, which the
-compiler's front end answers before any batch is built (`ModuleInitNeed.runsProgramCode`): such an initializer
-runs before `main` for every case of a program, so its effects would belong to no case. A case the front end
-refuses is placed alone, and its own compile reports why.
+So does a case whose own `default` declaration runs program code, or whose module-level `let` or `static let`
+initializer contains a call, which the compiler's front end answers before any batch is built
+(`ModuleInitNeed.runsProgramCode`): a `default` expression runs before `main` for every case of a program, so
+its effects would belong to no case, and an initializer with a call is refused (E3220) by the case's own
+compile. A case the front end refuses is placed alone, and its own compile reports why.
 
 The line under `N passed, M failed` counts them: `N run case(s) ran batched in M program(s); K ran alone`.
 

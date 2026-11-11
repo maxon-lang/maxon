@@ -110,7 +110,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(0)
+	let c = Counter.create(0)
 	c.increment()
 	c.increment()
 	c.increment()
@@ -143,7 +143,7 @@ type Adder
 end 'Adder'
 
 function main() returns ExitCode
-	var a = Adder.create(0)
+	let a = Adder.create(0)
 	a.add(10)
 	a.add(20)
 	a.add(12)
@@ -202,7 +202,7 @@ type Calculator
 end 'Calculator'
 
 function main() returns ExitCode
-	var calc = Calculator.create(0)
+	let calc = Calculator.create(0)
 	calc.addTwo(20, b: 22)
 	return calc.get()
 end 'main'
@@ -273,7 +273,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(10, y: 10)
+	let p = Point.create(10, y: 10)
 	p.moveBy(10, dy: 12)
 	return p.sum()
 end 'main'
@@ -360,7 +360,7 @@ type Calculator
 end 'Calculator'
 
 function main() returns ExitCode
-	var calc = Calculator.create(0)
+	let calc = Calculator.create(0)
 	calc.compute(10, c: 4, b: 8)
 	return calc.get()
 end 'main'

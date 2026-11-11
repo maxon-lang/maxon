@@ -294,7 +294,7 @@ export let counter = 10
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var cell = Cell.make()
+	let cell = Cell.make()
 	cell.bump()
 
 	return cell.counter + alpha.counter + beta.counter
@@ -460,7 +460,7 @@ export let SmallSortThreshold = 7
 typealias Numbers = Array with ExitCode
 
 function main() returns ExitCode
-	var xs = Numbers.create(0)
+	let xs = Numbers.create(0)
 
 	for i in 0 upto 40 'fill'
 		xs.push((40 - i) as ExitCode)

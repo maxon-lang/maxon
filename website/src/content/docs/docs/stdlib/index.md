@@ -23,7 +23,7 @@ typealias Score = int(0 to 100)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray.create(0)
+	let scores = ScoreArray.create(0)
 	scores.push(90)
 	print("{scores.count()}\n")
 	return 0

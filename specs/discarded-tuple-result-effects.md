@@ -54,7 +54,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	(_, _) = c.bump()
 	(_, _) = c.bump()
 	return c.n
@@ -84,7 +84,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	(_, _) = c.bump()
 	(_, _) = c.bump()
 	(_, _) = c.bump()
@@ -115,7 +115,7 @@ function poke(c Counter) returns (Count, Count)
 end 'poke'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	(_, _) = poke(c)
 	return c.n
 end 'main'
@@ -152,7 +152,7 @@ function twoHops(c Counter) returns (Count, Count)
 end 'twoHops'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	(_, _) = twoHops(c)
 	return c.n
 end 'main'

@@ -191,7 +191,7 @@ export function groupTestsByFile(tests DiscoveredTestArray) returns TestFileGrou
 		throw TestStagingError.refused("{tests.count()} tests exceeds the {MaxTestsPerRun} a single run is numbered for")
 	end 'moreTestsThanTheRunIsNumberedFor'
 
-	var groups = TestFileGroupArray.create(0)
+	let groups = TestFileGroupArray.create(0)
 
 	// The group the PREVIOUS test landed in. 0 before there is one, which names no group and so takes the
 	// scan — see `groupHoldsFile`, which answers FALSE for an ordinal nothing occupies.
@@ -203,7 +203,7 @@ export function groupTestsByFile(tests DiscoveredTestArray) returns TestFileGrou
 
 		// MUTATED in place rather than assembled and then pushed, which is what makes this ONE pass: a
 		// member is appended the moment it is read, in the order it was read.
-		var group = try groups.get(ordinal) otherwise panic("groupTestsByFile: ordinal {ordinal} names no group — `groupOrdinalFor` either found one or appended one, so it cannot hand back a position nothing occupies")
+		let group = try groups.get(ordinal) otherwise panic("groupTestsByFile: ordinal {ordinal} names no group — `groupOrdinalFor` either found one or appended one, so it cannot hand back a position nothing occupies")
 		group.tests.push(IndexedTest.create(testCursor.index(), test: test))
 	end 'eachTest'
 
@@ -277,7 +277,7 @@ export function stageTestBuild(stagingRoot FilePath, subject TestSubject, groups
 		panic("stageTestBuild: asked to stage a build with no test groups. A zero-test run is the command's to report and exit on; there is no dispatcher to generate for it.")
 	end 'nothingToDispatch'
 
-	var build = try GeneratedBuild.begin(stagingRoot)
+	let build = try GeneratedBuild.begin(stagingRoot)
 
 	match subject 'sources'
 		projectDirectory(_, sources) then try stageProjectSources(build, inputs: sources, groups: groups)
@@ -326,7 +326,7 @@ end 'stageOneSource'
 // also what `fileDispatcherSource` declares and what `entrySource` calls, so the declaration door cannot
 // come to admit a spelling the generator has stopped producing.
 function mintedNamesForDispatcher(group TestFileGroup) returns immutable NameRoster
-	var names = NameRoster.create(1, zeroed: false) as isolated NameRoster
+	let names = NameRoster.create(1, zeroed: false) as isolated NameRoster
 	names.push(freeze group.runnerName.toByteArray())
 	return freeze names
 end 'mintedNamesForDispatcher'
@@ -338,7 +338,7 @@ end 'mintedNamesForDispatcher'
 // list answers ONE question — which `__` names the declaration door must admit — and a name no rule refuses
 // has nothing to be admitted from.
 function mintedNamesForEntry() returns immutable NameRoster
-	var names = NameRoster.create(3, zeroed: false) as isolated NameRoster
+	let names = NameRoster.create(3, zeroed: false) as isolated NameRoster
 	names.push(freeze MaxonTestIndexAlias.toByteArray())
 	names.push(freeze MaxonTestHelperType.toByteArray())
 	names.push(freeze MaxonTestEntrySymbol.toByteArray())

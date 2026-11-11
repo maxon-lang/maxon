@@ -22,7 +22,7 @@ slot back out.
 
 ```maxon
 function main() returns ExitCode
-	var a = FullRangeIntArray from [1, 2, 3]
+	let a = FullRangeIntArray from [1, 2, 3]
 	a.refill(6, value: 7)
 	return (try a.get(5) otherwise 9) as ExitCode
 end 'main'

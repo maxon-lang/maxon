@@ -81,7 +81,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create(0)
+	let arr = SlotArray.create(0)
 	arr.push(Slot.create(1))
 	arr.push(Slot.create(2))
 	try arr.get(5) otherwise (e) 'handler'
@@ -159,9 +159,9 @@ type Chain uses T
 	function churn(d Num) returns Num
 		print("churn\n")
 		let pad = 1
-		var arr = CellArray.create(0)
+		let arr = CellArray.create(0)
 		arr.push(Cell.init(pad))
-		view missed = try arr.get(7) otherwise Cell.init(3)
+		let missed = try arr.get(7) otherwise Cell.init(3)
 		return try (missed.v / d) otherwise 9
 	end 'churn'
 end 'Chain'

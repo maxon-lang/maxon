@@ -222,8 +222,8 @@ type FunctionTupleFlow
 	export var cascadeSymbols as DestructorSet
 
 	static function create(valueBound ValueId, exitChains ExitChainsByReturn) returns FunctionTupleFlow
-		var hasRow = FixedBoolArray.create(valueBound)
-		var rowAt = UseTallyArray.create(valueBound)
+		let hasRow = FixedBoolArray.create(valueBound)
+		let rowAt = UseTallyArray.create(valueBound)
 		return Self{rows: TupleValueRowArray.create(0), hasRow: hasRow, rowAt: rowAt, exitChains: exitChains, returnPlumbing: BlockIdSet.create(), cascadeSymbols: DestructorSet.create()}
 	end 'create'
 
@@ -231,7 +231,7 @@ type FunctionTupleFlow
 	// chain, each held to this file's admitted shapes; the block argument itself would be
 	// `elsewhere`.
 	function exitValuesOf(retValId ValueId) returns ValueIdArray
-		var values = ValueIdArray.create(0)
+		let values = ValueIdArray.create(0)
 
 		if let chain = try self.exitChains.get(retValId) 'aSharedReturn'
 			for leaf in chain.leaves 'eachLeaf'
@@ -366,8 +366,8 @@ end 'applyValueTupleReturn'
 function convertWithNameIndex(project Project, module StdModule, signatures ProgramSignatures, byName FunctionNameIndex)
 	// PHASE 1 — the structural candidates, and one analysis per function a verdict can turn on or that
 	// holds a frame-local pair.
-	var onTheConvention = collectCandidates(project, module: module)
-	var flows = analyseAffectedFunctions(module, byName: byName, onTheConvention: onTheConvention)
+	let onTheConvention = collectCandidates(project, module: module)
+	let flows = analyseAffectedFunctions(module, byName: byName, onTheConvention: onTheConvention)
 	let catalog = StructDropCatalog.create(project, signatures: signatures, needed: cascadeSymbolsOf(flows))
 
 	// PHASES 2 and 3 — the two verdict lists, and the fixpoint that removes every candidate one of them
@@ -385,7 +385,7 @@ function convertWithNameIndex(project Project, module StdModule, signatures Prog
 	end 'someCandidateKeptIt'
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		var flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
+		let flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
 		rewriteOneFunction(module, funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, catalog: catalog, project: project)
 	end 'eachFunc'
 end 'convertWithNameIndex'
@@ -395,7 +395,7 @@ end 'convertWithNameIndex'
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 
 function cascadeSymbolsOf(flows FunctionTupleFlowSlotArray) returns DestructorSet
-	var symbols = DestructorSet.create()
+	let symbols = DestructorSet.create()
 
 	for slot in flows 'eachFunc'
 		match slot 'slot'
@@ -429,7 +429,7 @@ end 'anyCandidate'
 // function and walks nothing; the address scan below it is a walk of every op in the module, and a program
 // that declares no tuple-returning function must not pay for one. Most programs are that program.
 function collectCandidates(project Project, module StdModule) returns BoolArray
-	var candidates = BoolArray.create(module.funcCount(), zeroed: false)
+	let candidates = BoolArray.create(module.funcCount(), zeroed: false)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
@@ -480,12 +480,12 @@ end 'refuseAddressTakenCandidates'
 //     that thunk does not exist yet at this point in the pipeline, so a candidate asks about BOTH
 //     spellings of its own name.
 module function collectAddressTakenFunctions(project Project, module StdModule) returns FnRefThunkSet
-	var taken = FnRefThunkSet.create()
+	let taken = FnRefThunkSet.create()
 
 	// ⚠ HOISTED, because this walk is WHOLE-MODULE: `liveOpIndices` mints a fresh column per call, which
 	// over every function of the program is one allocation per function for an answer discarded at the end
 	// of the iteration. `collectLiveOpIndices` refills this one, keeping its capacity.
-	var liveOps = OpIndexArray.create(0)
+	let liveOps = OpIndexArray.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		module.collectLiveOpIndices(module.getFunc(funcIndex), into: liveOps)
@@ -665,13 +665,13 @@ end 'typeIsATupleRecord'
 // function holding a direct call to one (whose call sites are). Everything else stays `absent`, which in
 // most programs is every function there is.
 function analyseAffectedFunctions(module StdModule, byName FunctionNameIndex, onTheConvention BoolArray) returns FunctionTupleFlowSlotArray
-	var flows = FunctionTupleFlowSlotArray.create(0)
+	let flows = FunctionTupleFlowSlotArray.create(0)
 
 	// Hoisted for `collectAddressTakenFunctions`' reason: the screen below is whole-module.
-	var liveOps = OpIndexArray.create(0)
+	let liveOps = OpIndexArray.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		view func = module.getFunc(funcIndex)
+		let func = module.getFunc(funcIndex)
 		module.collectLiveOpIndices(func, into: liveOps)
 		let consts = constantsFeedingAllocations(module, liveOps: liveOps)
 
@@ -689,14 +689,14 @@ end 'analyseAffectedFunctions'
 // The constants a function's `__mm_alloc` calls read — the size and the destructor — and nothing else:
 // most functions allocate nothing, and those pay one scan and no map.
 module function constantsFeedingAllocations(module StdModule, liveOps OpIndexArray) returns ConstValueMap
-	var consts = ConstValueMap.create()
-	var call = StdCallOperands.create()
+	let consts = ConstValueMap.create()
+	let call = StdCallOperands.create()
 
 	if not anyAllocation(module, liveOps: liveOps, call: call) 'nothingToSize'
 		return consts
 	end 'nothingToSize'
 
-	var def = StdFoldableDef.create()
+	let def = StdFoldableDef.create()
 
 	for opIdx in liveOps 'eachConst'
 		classifyFoldableDef(try module.ops.get(opIdx) otherwise panic("constantsFeedingAllocations: live op index {opIdx} not in module.ops"), def: def)
@@ -726,7 +726,7 @@ function allocatesATwoWordTrivialBox(module StdModule, liveOps OpIndexArray, con
 		return false
 	end 'allocatesNothing'
 
-	var call = StdCallOperands.create()
+	let call = StdCallOperands.create()
 
 	for opIdx in liveOps 'eachOp'
 		classifyCallOperands(try module.ops.get(opIdx) otherwise panic("allocatesATwoWordTrivialBox: live op index {opIdx} not in module.ops"), call: call)
@@ -921,7 +921,7 @@ end 'isCandidateCallee'
 // value, so an op variant appended tomorrow costs a missed rewrite and never a wrong one.
 function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexArray, byName FunctionNameIndex, onTheConvention BoolArray, consts ConstValueMap) returns FunctionTupleFlow
 	let returned = returnedValuesOf(module, func: func, exits: ReturnExits.everyExit)
-	var flow = FunctionTupleFlow.create(nextFreeValueId(module, func: func), exitChains: module.exitChainsOf(func, returned: returned))
+	let flow = FunctionTupleFlow.create(nextFreeValueId(module, func: func), exitChains: module.exitChainsOf(func, returned: returned))
 
 	// ⚠ THE RETURNED VALUES FIRST, AND SEPARATELY. A `const` gets a row only where a `ret` already named it
 	// (every function holds constants, and a row per constant would make the census as large as the code) —
@@ -934,7 +934,7 @@ function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexAr
 		trackValueOrigin(try module.ops.get(opIdx) otherwise panic("analyseOneFunction: live op index {opIdx} not in module.ops"), byName: byName, onTheConvention: onTheConvention, flow: flow, consts: consts)
 	end 'eachDef'
 
-	var readByOneOp = StdValueUseSet.createRecordingIds()
+	let readByOneOp = StdValueUseSet.createRecordingIds()
 
 	for opIdx in liveOps 'eachUse'
 		classifyOneOp(try module.ops.get(opIdx) otherwise panic("analyseOneFunction: live op index {opIdx} not in module.ops"), flow: flow, readByOneOp: readByOneOp)
@@ -945,7 +945,7 @@ function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexAr
 	// exception is a returned value's exit chain, which `widenTheExitChain` carries as two block
 	// arguments.
 	for blockRef in func.blockRefs 'eachBlock'
-		view block = try module.blocks.get(blockRef) otherwise panic("analyseOneFunction: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("analyseOneFunction: blockRef from func.blockRefs not in module.blocks")
 
 		for edge in block.branchEdges 'eachEdge'
 			if flow.returnPlumbing.contains(edge.targetBlockId) 'intoAReturnsChain'
@@ -1111,7 +1111,7 @@ function trackConstant(resultId ValueId, flow FunctionTupleFlow)
 		return
 	end 'noReturnNamesIt'
 
-	var row = flow.rowOf(resultId)
+	let row = flow.rowOf(resultId)
 	row.origin = TupleValueOrigin.constant
 end 'trackConstant'
 
@@ -1129,7 +1129,7 @@ function trackCallResult(resultId ValueId, callee ByteArray, args ValueIdArray, 
 			return
 		end 'noReturnNamesIt'
 
-		var box = flow.rowOf(resultId)
+		let box = flow.rowOf(resultId)
 		box.origin = TupleValueOrigin.freshBox
 		return
 	end 'aHeapBox'
@@ -1141,7 +1141,7 @@ function trackCallResult(resultId ValueId, callee ByteArray, args ValueIdArray, 
 	end 'notACandidate'
 
 	flow.track(resultId)
-	var pair = flow.rowOf(resultId)
+	let pair = flow.rowOf(resultId)
 	pair.origin = TupleValueOrigin.directCall(calleeIndex)
 end 'trackCallResult'
 
@@ -1458,7 +1458,7 @@ function noteOtherUse(flow FunctionTupleFlow, value ValueId)
 		return
 	end 'notOurs'
 
-	var row = flow.rowOf(value)
+	let row = flow.rowOf(value)
 	row.other = row.other + 1
 end 'noteOtherUse'
 
@@ -1468,7 +1468,7 @@ function noteReturnedValue(flow FunctionTupleFlow, retValId ValueId)
 			continue
 		end 'notOurs'
 
-		var row = flow.rowOf(value)
+		let row = flow.rowOf(value)
 		row.returnUses = row.returnUses + 1
 	end 'eachExitValue'
 end 'noteReturnedValue'
@@ -1480,7 +1480,7 @@ function noteDrop(flow FunctionTupleFlow, callee ByteArray, args ValueIdArray)
 		return
 	end 'notOurs'
 
-	var row = flow.rowOf(drop.box)
+	let row = flow.rowOf(drop.box)
 
 	match drop.kind 'kind'
 		trivial then row.trivialDrops = row.trivialDrops + 1
@@ -1489,7 +1489,7 @@ function noteDrop(flow FunctionTupleFlow, callee ByteArray, args ValueIdArray)
 end 'noteDrop'
 
 function noteCascadeDrop(flow FunctionTupleFlow, box ValueId, callee ByteArray)
-	var row = flow.rowOf(box)
+	let row = flow.rowOf(box)
 
 	// A box's slot releases are planned from one destructor, so a second would have its sites given
 	// the first one's releases.
@@ -1507,7 +1507,7 @@ function noteHalfLoad(flow FunctionTupleFlow, addrId ValueId, offset ByteOffset,
 		return
 	end 'notAHalfOfATrackedPair'
 
-	var row = flow.rowOf(addrId)
+	let row = flow.rowOf(addrId)
 
 	if offset == LowHalfOffset 'low'
 		row.loadLow = row.loadLow + 1
@@ -1522,7 +1522,7 @@ function noteHalfStore(flow FunctionTupleFlow, addrId ValueId, offset ByteOffset
 		return
 	end 'notAHalfOfATrackedPair'
 
-	var row = flow.rowOf(addrId)
+	let row = flow.rowOf(addrId)
 
 	if offset == LowHalfOffset 'low'
 		row.storeLow = row.storeLow + 1
@@ -1539,7 +1539,7 @@ end 'noteHalfStore'
 // ══════════════════════════════════════════════════════════════════════════════════════════════════════
 
 function collectRetVerdicts(module StdModule, flows FunctionTupleFlowSlotArray, onTheConvention BoolArray) returns ValueTupleRetVerdictArray
-	var verdicts = ValueTupleRetVerdictArray.create(0)
+	let verdicts = ValueTupleRetVerdictArray.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		if not isOnTheConvention(onTheConvention, funcIndex: funcIndex) 'notACandidate'
@@ -1603,7 +1603,7 @@ end 'forwardedKindOf'
 
 // Every direct call to a candidate, wherever it is, with what that site can do.
 function collectCallSites(module StdModule, byName FunctionNameIndex, flows FunctionTupleFlowSlotArray, onTheConvention BoolArray, catalog StructDropCatalog) returns ValueTupleCallSiteArray
-	var sites = ValueTupleCallSiteArray.create(0)
+	let sites = ValueTupleCallSiteArray.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let flow = try flowOf(flows, funcIndex: funcIndex) otherwise continue
@@ -1792,11 +1792,11 @@ end 'readsOutAndDrops'
 // answers in O(candidates + edges) and a re-scan until nothing changes answers at one pass per LINK of
 // the longest refusal chain, which is quadratic in a program of forwarding wrappers.
 function settleTheConvention(onTheConvention BoolArray, retVerdicts ValueTupleRetVerdictArray, callSites ValueTupleCallSiteArray)
-	var dependedOn = CsrColumn.create(0)
-	var dependent = CsrColumn.create(0)
+	let dependedOn = CsrColumn.create(0)
+	let dependent = CsrColumn.create(0)
 	collectDependencyEdges(dependedOn, dependent: dependent, retVerdicts: retVerdicts)
 
-	var seeds = BoolArray.create(onTheConvention.count())
+	let seeds = BoolArray.create(onTheConvention.count())
 	seedRefusals(seeds, retVerdicts: retVerdicts, callSites: callSites)
 
 	let refused = reverseReachabilityMark(buildCsr(dependedOn, to: dependent, nodeCount: onTheConvention.count() as CsrIndex), seeds: seeds)
@@ -1840,8 +1840,8 @@ function seedRefusals(seeds BoolArray, retVerdicts ValueTupleRetVerdictArray, ca
 		end 'kind'
 	end 'eachReturn'
 
-	var called = FlagColumn.create(seeds.count())
-	var consumed = FlagColumn.create(seeds.count())
+	let called = FlagColumn.create(seeds.count())
+	let consumed = FlagColumn.create(seeds.count())
 
 	for site in callSites 'eachSite'
 		try called.set(site.calleeIndex, value: true) otherwise panic("seedRefusals: called.set OOB at {site.calleeIndex} against a column of {called.count()}")
@@ -1876,7 +1876,7 @@ function stampTheConvention(module StdModule, onTheConvention BoolArray)
 			continue
 		end 'notOnIt'
 
-		var func = module.getFunc(funcIndex)
+		let func = module.getFunc(funcIndex)
 		func.usesValueTupleReturn = true
 	end 'eachFunc'
 end 'stampTheConvention'
@@ -1928,7 +1928,7 @@ type StructDropCatalog
 	export var targetsBySymbol as SlotDropTargetsBySymbol
 
 	static function create(project Project, signatures ProgramSignatures, needed DestructorSet) returns StructDropCatalog
-		var targetsBySymbol = SlotDropTargetsBySymbol.create()
+		let targetsBySymbol = SlotDropTargetsBySymbol.create()
 
 		if needed.count() == 0 'nothingToResolve'
 			return Self{targetsBySymbol: targetsBySymbol}
@@ -1954,7 +1954,7 @@ type StructDropCatalog
 end 'StructDropCatalog'
 
 function directSlotDropTargets(entry StructRosterEntry, signatures ProgramSignatures) returns SlotDropTargetArray throws NoSlotDrops
-	var targets = SlotDropTargetArray.create(0)
+	let targets = SlotDropTargetArray.create(0)
 
 	for field in structDestructorDrops(entry.layout, typeNames: entry.typeNames, signatures: signatures) 'eachManagedSlot'
 		match field.kind 'kind'
@@ -1995,8 +1995,8 @@ function planSlotReleases(plan ValueTuplePlan, box ValueId, row TupleValueRow, l
 		return
 	end 'nothingCascades'
 
-	view targets = try plan.catalog.targetsBySymbol.get(row.cascadeCallee) otherwise panic("planSlotReleases: box {box} is cascade-dropped through a destructor the catalog holds no slot releases for — `markTheBoxIfFrameLocal` and `callShapeOf` admit a cascade-dropped box only where `StructDropCatalog.releasesTheSlotsOf` answers true")
-	var drops = SlotDropArray.create(targets.count(), zeroed: false)
+	let targets = try plan.catalog.targetsBySymbol.get(row.cascadeCallee) otherwise panic("planSlotReleases: box {box} is cascade-dropped through a destructor the catalog holds no slot releases for — `markTheBoxIfFrameLocal` and `callShapeOf` admit a cascade-dropped box only where `StructDropCatalog.releasesTheSlotsOf` answers true")
+	let drops = SlotDropArray.create(targets.count(), zeroed: false)
 
 	for target in targets 'eachTarget'
 		drops.push(SlotDrop.create(target.callee, value: valueAtSlot(target.offset, low: low, high: high)))
@@ -2134,14 +2134,14 @@ function halfColumn(valueBound ValueId) returns FixedValueIdArray
 end 'halfColumn'
 
 function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray, catalog StructDropCatalog, project Project)
-	view func = module.getFunc(funcIndex)
+	let func = module.getFunc(funcIndex)
 	let liveOps = module.liveOpIndices(func)
 
 	// The value space, read ONCE: it is a walk of the function, and the minter and the plan's columns are
 	// two readings of the same number.
 	let valueBound = nextFreeValueId(module, func: func)
-	var mint = ValueMinter.resuming(valueBound)
-	var plan = ValueTuplePlan.create(valueBound, onTheConvention: isOnTheConvention(onTheConvention, funcIndex: funcIndex), catalog: catalog, project: project)
+	let mint = ValueMinter.resuming(valueBound)
+	let plan = ValueTuplePlan.create(valueBound, onTheConvention: isOnTheConvention(onTheConvention, funcIndex: funcIndex), catalog: catalog, project: project)
 
 	for opIdx in liveOps 'eachOp'
 		planOneOp(try module.ops.get(opIdx) otherwise panic("rewriteOneFunction: live op index {opIdx} not in module.ops"), funcIndex: funcIndex, flow: flow, onTheConvention: onTheConvention, plan: plan, mint: mint)
@@ -2151,8 +2151,8 @@ function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow Funct
 		return
 	end 'nothingToDoHere'
 
-	var subst = ValueIdArray.create(0)
-	var doomed = DoomedOpSet.create()
+	let subst = ValueIdArray.create(0)
+	let doomed = DoomedOpSet.create()
 
 	for retValId in returnedValuesOf(module, func: func, exits: ReturnExits.everyExit) 'eachChainReturn'
 		widenTheExitChain(retValId, flow: flow, plan: plan)
@@ -2185,10 +2185,10 @@ end 'rewriteOneFunction'
 // orphaned plus whatever was already dead in that one function; the removal itself is `removeOpsDefining`,
 // the one block rebuild every Std pass that retires a def shares.
 function removeConstantsNothingReadsAnyMore(module StdModule, func IrFunction)
-	var stillRead = StdValueUseSet.create()
+	let stillRead = StdValueUseSet.create()
 	collectFunctionValueUses(module, func: func, referenced: stillRead)
 
-	var orphaned = StdValueUseSet.create()
+	let orphaned = StdValueUseSet.create()
 
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		noteOrphanedConstant(try module.ops.get(opIdx) otherwise panic("removeConstantsNothingReadsAnyMore: live op index {opIdx} not in module.ops"), stillRead: stillRead, orphaned: orphaned)
@@ -2699,9 +2699,9 @@ function widenTheExitChain(retValId ValueId, flow FunctionTupleFlow, plan ValueT
 	end 'notAPairReturn'
 
 	if let chain = try flow.exitChains.get(retValId) 'aSharedReturn'
-		var webById = ExitWebByBlock.create()
-		var webByPhi = ExitWebByPhi.create()
-		var rewritten = BlockIdSet.create()
+		let webById = ExitWebByBlock.create()
+		let webByPhi = ExitWebByPhi.create()
+		let rewritten = BlockIdSet.create()
 
 		for entry in chain.web 'eachWebBlock'
 			webById.upsert(entry.block.id, value: entry)
@@ -2728,20 +2728,20 @@ end 'widenArrivalSources'
 typealias ExitWebByBlock = Map with (BlockId, ExitWebBlock)
 
 function widenBlockArgs(block IrBlock, high ValueId)
-	var widened = IrBlockArgArray.create(0)
+	let widened = IrBlockArgArray.create(0)
 	widened.append(block.blockArgs)
 	widened.push(IrBlockArg.create(high, argType: StdType.i64))
-	var target = block
+	let target = block
 	target.blockArgs = widened
 end 'widenBlockArgs'
 
 function replaceEdges(block IrBlock, edges BranchEdgeArray)
-	var target = block
+	let target = block
 	target.branchEdges = edges
 end 'replaceEdges'
 
 function widenedEdges(edges BranchEdgeArray, webById ExitWebByBlock, webByPhi ExitWebByPhi, plan ValueTuplePlan) returns BranchEdgeArray
-	var widened = BranchEdgeArray.create(0)
+	let widened = BranchEdgeArray.create(0)
 
 	for edge in edges 'eachEdge'
 		if let target = try webById.get(edge.targetBlockId) 'intoTheChain'
@@ -2757,7 +2757,7 @@ end 'widenedEdges'
 
 function widenedEdge(edge BranchEdge, target ExitWebBlock, webByPhi ExitWebByPhi, plan ValueTuplePlan) returns BranchEdge
 	let carried = try edge.argIds.get(target.slot) otherwise panic("widenedEdge: an edge into block {edge.targetBlockId} carries fewer values than the slot {target.slot}")
-	var argIds = ValueIdArray.create(0)
+	let argIds = ValueIdArray.create(0)
 	argIds.append(edge.argIds)
 
 	if let owner = try webByPhi.get(carried) 'theChainsOwnPhi'
@@ -2813,8 +2813,8 @@ function rewriteOneCall(module StdModule, opIdx ElementIndex, resultId ValueId, 
 end 'rewriteOneCall'
 
 function replaceTheCascadeWithSlotReleases(module StdModule, opIdx ElementIndex, resultId ValueId, box ValueId, plan ValueTuplePlan, mint ValueMinter)
-	view drops = try plan.slotDrops.get(box) otherwise panic("replaceTheCascadeWithSlotReleases: box {box} has no record any more but no slot releases were planned for it — `markTheBoxIfFrameLocal` and `markThePairIfTheCalleeKeptTheConvention` mark a cascade-dropped box only once its releases are planned")
-	var following = OpIndexArray.create(0)
+	let drops = try plan.slotDrops.get(box) otherwise panic("replaceTheCascadeWithSlotReleases: box {box} has no record any more but no slot releases were planned for it — `markTheBoxIfFrameLocal` and `markThePairIfTheCalleeKeptTheConvention` mark a cascade-dropped box only once its releases are planned")
+	let following = OpIndexArray.create(0)
 	module.spans.current = module.spans.at(opIdx)
 
 	for index in 0 upto drops.count() 'eachRelease'
@@ -2840,7 +2840,7 @@ function buildThePairRecord(module StdModule, opIdx ElementIndex, resultId Value
 
 	let size = mint.mint()
 	let destructor = mint.mint()
-	var following = OpIndexArray.create(0)
+	let following = OpIndexArray.create(0)
 	following.push(module.pushDetachedOp(StdOp.const(size, value: PairBytes as FullRangeInt, valueType: StdType.i64)))
 	following.push(module.pushDetachedOp(StdOp.const(destructor, value: TrivialDestructor, valueType: StdType.i64)))
 
@@ -2859,8 +2859,8 @@ function insertFollowingOps(module StdModule, func IrFunction, plan ValueTuplePl
 	end 'nothingFollows'
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("insertFollowingOps: blockRef from func.blockRefs not in module.blocks")
-		var rebuilt = OpIndexArray.create(0)
+		let block = try module.blocks.get(blockRef) otherwise panic("insertFollowingOps: blockRef from func.blockRefs not in module.blocks")
+		let rebuilt = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachRef'
 			rebuilt.push(opIdx)
@@ -2906,8 +2906,8 @@ function removeDoomedOps(module StdModule, func IrFunction, doomed DoomedOpSet)
 	end 'nothingDoomed'
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("removeDoomedOps: blockRef from func.blockRefs not in module.blocks")
-		var kept = OpIndexArray.create(0)
+		let block = try module.blocks.get(blockRef) otherwise panic("removeDoomedOps: blockRef from func.blockRefs not in module.blocks")
+		let kept = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachRef'
 			if doomed.contains(opIdx) 'removed'

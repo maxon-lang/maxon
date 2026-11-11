@@ -52,7 +52,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -101,11 +101,11 @@ function errorName(failure DerError) returns String
 end 'errorName'
 
 function readKey(id String, hex String) throws DerError
-	var outer = DerReader.create(fromHex(hex))
-	var info = try outer.enterSequence()
+	let outer = DerReader.create(fromHex(hex))
+	let info = try outer.enterSequence()
 	try outer.finish()
 
-	var algorithm = try info.enterSequence()
+	let algorithm = try info.enterSequence()
 	let identifier = try algorithm.readObjectIdentifier()
 	try algorithm.readNull()
 	print("{id} algorithm [{toHex(identifier)}] {algorithm.isAtEnd()}\n")
@@ -115,8 +115,8 @@ function readKey(id String, hex String) throws DerError
 	try info.finish()
 	print("{id} key {key.unusedBits} [{toHex(key.bytes())}]\n")
 
-	var inner = DerReader.create(key.bytes())
-	var numbers = try inner.enterSequence()
+	let inner = DerReader.create(key.bytes())
+	let numbers = try inner.enterSequence()
 	try inner.finish()
 
 	while not numbers.isAtEnd() 'eachInteger'
@@ -171,7 +171,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -292,7 +292,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -341,7 +341,7 @@ function errorName(failure DerError) returns String
 end 'errorName'
 
 function report(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let value = try reader.readInteger() 'read'
 		print("{id} [{toHex(value)}] {reader.isAtEnd()}\n")
@@ -402,7 +402,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -451,7 +451,7 @@ function errorName(failure DerError) returns String
 end 'errorName'
 
 function readOid(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let identifier = try reader.readObjectIdentifier() 'read'
 		print("{id} [{toHex(identifier)}]\n")
@@ -461,7 +461,7 @@ function readOid(id String, hex String)
 end 'readOid'
 
 function readNull(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	try reader.readNull() otherwise (failure) 'refused'
 		print("{id} {errorName(failure)}\n")
@@ -472,7 +472,7 @@ function readNull(id String, hex String)
 end 'readNull'
 
 function readBits(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let bits = try reader.readBitString() 'read'
 		print("{id} {bits.unusedBits} [{toHex(bits.bytes())}]\n")
@@ -482,7 +482,7 @@ function readBits(id String, hex String)
 end 'readBits'
 
 function readOctets(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let octets = try reader.readOctetString() 'read'
 		print("{id} [{toHex(octets)}]\n")
@@ -557,7 +557,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -606,8 +606,8 @@ function errorName(failure DerError) returns String
 end 'errorName'
 
 function readSet(id String, hex String) throws DerError
-	var outer = DerReader.create(fromHex(hex))
-	var members = try outer.enterSet()
+	let outer = DerReader.create(fromHex(hex))
+	let members = try outer.enterSet()
 	try outer.finish()
 	var count = 0 as Count
 
@@ -620,9 +620,9 @@ function readSet(id String, hex String) throws DerError
 end 'readSet'
 
 function readVersion(id String, hex String, tagNumber DerTagNumber) throws DerError
-	var outer = DerReader.create(fromHex(hex))
-	var tbs = try outer.enterSequence()
-	var explicit = try tbs.enterExplicit(tagNumber)
+	let outer = DerReader.create(fromHex(hex))
+	let tbs = try outer.enterSequence()
+	let explicit = try tbs.enterExplicit(tagNumber)
 	let version = try explicit.readInteger()
 	try explicit.finish()
 	let serial = try tbs.readInteger()
@@ -689,7 +689,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -728,7 +728,7 @@ function errorName(failure DerError) returns String
 end 'errorName'
 
 function readUtc(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let seconds = try reader.readUtcTime() 'read'
 		print("{id} {seconds}\n")
@@ -738,7 +738,7 @@ function readUtc(id String, hex String)
 end 'readUtc'
 
 function readGeneralized(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let seconds = try reader.readGeneralizedTime() 'read'
 		print("{id} {seconds}\n")
@@ -825,7 +825,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -874,7 +874,7 @@ function errorName(failure DerError) returns String
 end 'errorName'
 
 function readBoolean(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let value = try reader.readBoolean() 'read'
 		print("{id} {value}\n")
@@ -884,7 +884,7 @@ function readBoolean(id String, hex String)
 end 'readBoolean'
 
 function readSigned(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let content = try reader.readSignedInteger() 'read'
 		print("{id} [{toHex(content)}]\n")
@@ -894,7 +894,7 @@ function readSigned(id String, hex String)
 end 'readSigned'
 
 function readImplicit(id String, tagNumber DerTagNumber, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let content = try reader.readImplicit(tagNumber) 'read'
 		print("{id} [{toHex(content)}]\n")
@@ -904,7 +904,7 @@ function readImplicit(id String, tagNumber DerTagNumber, hex String)
 end 'readImplicit'
 
 function readImplicitBits(id String, tagNumber DerTagNumber, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let bits = try reader.readImplicitBitString(tagNumber) 'read'
 		print("{id} {bits.unusedBits} [{toHex(bits.bytes())}]\n")
@@ -914,7 +914,7 @@ function readImplicitBits(id String, tagNumber DerTagNumber, hex String)
 end 'readImplicitBits'
 
 function readImplicitSigned(id String, tagNumber DerTagNumber, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let content = try reader.readImplicitSignedInteger(tagNumber) 'read'
 		print("{id} [{toHex(content)}]\n")
@@ -924,7 +924,7 @@ function readImplicitSigned(id String, tagNumber DerTagNumber, hex String)
 end 'readImplicitSigned'
 
 function readElements(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	while not reader.isAtEnd() 'eachElement'
 		let element = try reader.readElement() otherwise (failure) 'refused'
@@ -937,7 +937,7 @@ function readElements(id String, hex String)
 end 'readElements'
 
 function readText(id String, hex String)
-	var reader = DerReader.create(fromHex(hex))
+	let reader = DerReader.create(fromHex(hex))
 
 	if let text = try reader.readString() 'read'
 		print("{id} [{toHex(text.toByteArray())}]\n")

@@ -679,7 +679,7 @@ function scan(op Op, state State)
 end 'scan'
 
 function main() returns ExitCode
-	var s = State.make()
+	let s = State.make()
 	scan(Op.mark, state: s)
 	return 1 if s.flag else 0
 end 'main'
@@ -707,7 +707,7 @@ type Lookup
 	var names as StringArray
 
 	static function make() returns Lookup
-		var a = StringArray.create(0)
+		let a = StringArray.create(0)
 		a.push("alpha")
 		return Lookup{names: a}
 	end 'make'
@@ -726,7 +726,7 @@ type Lookup
 end 'Lookup'
 
 function main() returns ExitCode
-	var l = Lookup.make()
+	let l = Lookup.make()
 	return l.nameLen(0)
 end 'main'
 ```
@@ -767,7 +767,7 @@ function nameOf(op Op) returns Idx
 end 'nameOf'
 
 function main() returns ExitCode
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.push(65)
 	return nameOf(Op.alloc(b))
 end 'main'

@@ -78,7 +78,7 @@ typealias Xs = Array with Integer
 typealias Ys = Array with Integer
 
 function makeYs() returns Ys
-	var xs = Xs.create(0)
+	let xs = Xs.create(0)
 	xs.push(1)
 	return xs
 end 'makeYs'
@@ -179,7 +179,7 @@ function sumXs(xs Xs) returns Integer
 end 'sumXs'
 
 function main() returns ExitCode
-	var xs = Xs.create(0)
+	let xs = Xs.create(0)
 	xs.push(4)
 	var a = [3 as Integer]
 	a = xs
@@ -600,7 +600,7 @@ export typealias Integer = int(0 to 1000)
 export typealias Rows = Array with Integer
 
 export function makeRows() returns Rows
-	var rows = Rows.create(0)
+	let rows = Rows.create(0)
 	rows.push(7)
 	return rows
 end 'makeRows'
@@ -641,7 +641,7 @@ type Holder
 	var seeds as Wide
 
 	static function create() returns Self
-		var xs = Wide.create(0)
+		let xs = Wide.create(0)
 		xs.push(7)
 		return Self{xs: xs, seeds: [8]}
 	end 'create'
@@ -688,7 +688,7 @@ function addOne(n Integer) returns Integer
 end 'addOne'
 
 export function makeScores() returns Scores
-	var scores = Scores.create(0)
+	let scores = Scores.create(0)
 	scores.push(addOne)
 	return scores
 end 'makeScores'
@@ -770,7 +770,7 @@ function total(ys Ys) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	var rows = Inline.create(0)
+	let rows = Inline.create(0)
 	rows.push([1, 2])
 	rows.push([3])
 	var acc = 0 as Integer
@@ -957,11 +957,11 @@ function sumYs(ys Ys) returns Integer
 end 'sumYs'
 
 function main() returns ExitCode
-	var xs = Xs.create(0)
+	let xs = Xs.create(0)
 	xs.push(20)
 	xs.push(22)
-	view ys = xs as Ys
-	view back = ys as Xs
+	let ys = xs as Ys
+	let back = ys as Xs
 	print("{sumYs(ys)} {sumXs(back)}")
 	return 0
 end 'main'
@@ -983,7 +983,7 @@ export typealias Integer = int(0 to 1000)
 export typealias Grid = Array with (Array with Integer)
 
 export function makeGrid() returns Grid
-	var grid = Grid.create(0)
+	let grid = Grid.create(0)
 	grid.push([7])
 	return grid
 end 'makeGrid'
@@ -1075,7 +1075,7 @@ function firstOf(xs Counts) returns Count
 end 'firstOf'
 
 function main() returns ExitCode
-	var theirs = LibCounts.create(0)
+	let theirs = LibCounts.create(0)
 	theirs.push(3)
 	theirs.push(4)
 	let mine = theirs as Counts
@@ -1156,7 +1156,7 @@ function first(b Bytes) returns ExitCode
 end 'first'
 
 function main() returns ExitCode
-	var a = Bytes.create(0)
+	let a = Bytes.create(0)
 	a.push(7)
 	return first(a.managed)
 end 'main'
@@ -1225,9 +1225,9 @@ function first(b Bytes) returns ExitCode
 end 'first'
 
 function main() returns ExitCode
-	var rows = Rows.create(0)
+	let rows = Rows.create(0)
 	rows.push([7, 9])
-	view row = try rows.get(0) otherwise panic("no row")
+	let row = try rows.get(0) otherwise panic("no row")
 	print("{first(row.managed)}\n")
 	return 0
 end 'main'
@@ -1292,7 +1292,7 @@ function main() returns ExitCode
 	let viaOtherBrand = totalYs([1, 2, 3])
 	let viaScalar = one(3)
 
-	var built = Xs.create(0)
+	let built = Xs.create(0)
 	built.push(1)
 	built.push(2)
 	let viaPush = totalXs(built)
@@ -1409,9 +1409,9 @@ typealias Items = Array with Key
 typealias ItemIndex = Map with (Key, Items)
 
 function main() returns ExitCode
-	var index = ItemIndex.create()
+	let index = ItemIndex.create()
 	index.upsert(500, value: [1, 2])
-	view found = try index.get(500) otherwise [0]
+	let found = try index.get(500) otherwise [0]
 	print("{index.count()} {found.count()}\n")
 	return 0
 end 'main'
@@ -1440,7 +1440,7 @@ typealias Label = Box with String
 
 function main() returns ExitCode
 	let original = Label.create("first")
-	var copy = original.clone()
+	let copy = original.clone()
 	copy.item = "second"
 	print("{original.item} {copy.item}\n")
 	return 0
@@ -1541,12 +1541,12 @@ function total(p Pair) returns Count
 end 'total'
 
 function main() returns ExitCode
-	var x = Xs.create(0)
+	let x = Xs.create(0)
 	x.push("a")
 	x.push("b")
 	let p = make(x)
 	print("{total(p)}\n")
-	var y = Xs.create(0)
+	let y = Xs.create(0)
 	y.push("c")
 	let q = (y, 2 as Count)
 	print("{total(q)}\n")

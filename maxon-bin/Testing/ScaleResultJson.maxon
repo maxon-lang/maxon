@@ -82,9 +82,9 @@ end 'RepeatSampling'
 export function writeResultJson(path String, results RungResultArray, trend LoggedMemory, repeat RepeatSampling, mintedAt String, bytes ByteDelta) throws ScaleError
 	let target = try FilePath.from(path) otherwise throw ScaleError.reason("'{path}' is not a valid --result-json path")
 
-	var doc = JsonDoc.create()
-	var keys = StringArray.create(0)
-	var children = JsonNodeIdArray.create(0)
+	let doc = JsonDoc.create()
+	let keys = StringArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 
 	addRepeatSampling(doc, keys: keys, children: children, repeat: repeat)
 
@@ -126,13 +126,13 @@ end 'addRepeatSampling'
 // ===========================================================================================
 
 function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, bytes ByteDelta) returns JsonNodeId
-	var items = JsonNodeIdArray.create(results.count(), zeroed: false)
+	let items = JsonNodeIdArray.create(results.count(), zeroed: false)
 
 	for i in 0 upto results.count() 'eachRung'
 		let result = try results.get(i) otherwise panic("rungsNode: i < count but results.get({i}) failed")
 
-		var keys = StringArray.create(0)
-		var children = JsonNodeIdArray.create(0)
+		let keys = StringArray.create(0)
+		let children = JsonNodeIdArray.create(0)
 
 		pushJsonNumber(doc, keys: keys, children: children, key: "rung", value: result.rung as JsonFloat)
 		pushJsonNumber(doc, keys: keys, children: children, key: "sourceBytes", value: result.sourceBytes as JsonFloat)
@@ -154,8 +154,8 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory, byt
 		// The per-phase breakdown, off the ONE phase enumeration the human table also walks
 		// (ScaleTestRunner.scalePhaseSources) — so a phase added to `CompilePhase` appears in the report
 		// and in this document together, or in neither.
-		var phases = JsonNodeIdArray.create(CompilePhase.allCases.count(), zeroed: false)
-		var subs = JsonNodeIdArray.create(RegAllocPhase.allCases.count(), zeroed: false)
+		let phases = JsonNodeIdArray.create(CompilePhase.allCases.count(), zeroed: false)
+		let subs = JsonNodeIdArray.create(RegAllocPhase.allCases.count(), zeroed: false)
 
 		for source in scalePhaseSources() 'eachPhase'
 			let node = metricNode(doc, name: phaseSourceName(source), metric: phaseMetricOf(source, result: result))
@@ -209,8 +209,8 @@ function signedDifference(current Delta, before Delta) returns JsonFloat
 end 'signedDifference'
 
 function metricNode(doc JsonDoc, name String, metric PhaseMetric) returns JsonNodeId
-	var keys = StringArray.create(0)
-	var children = JsonNodeIdArray.create(0)
+	let keys = StringArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 	pushJsonString(doc, keys: keys, children: children, key: "name", value: name)
 	addMetricFields(doc, keys: keys, children: children, metric: metric)
 	return doc.add(JsonNode.objectNode(keys, children: children))
@@ -244,8 +244,8 @@ end 'addMetricFields'
 // weakest, and not the average, because one rung that folded is one rung that measured nothing, and an
 // average would hide it behind five rungs that did not.
 function corpusNode(doc JsonDoc, results RungResultArray) returns JsonNodeId
-	var keys = StringArray.create(0)
-	var children = JsonNodeIdArray.create(0)
+	let keys = StringArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 	pushJsonNumber(doc, keys: keys, children: children, key: "floorPermille", value: (MinCodeGrowthRatio * PermillePerHundredth) as JsonFloat)
 
 	match weakestCodeGrowth(results) 'g'
@@ -316,15 +316,15 @@ function previousNode(doc JsonDoc, trend LoggedMemory, bytes ByteDelta) returns 
 end 'previousNode'
 
 function noPreviousNode(doc JsonDoc) returns JsonNodeId
-	var keys = StringArray.create(0)
-	var children = JsonNodeIdArray.create(0)
+	let keys = StringArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 	pushJsonBool(doc, keys: keys, children: children, key: "present", value: false)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'noPreviousNode'
 
 function previousRunNode(doc JsonDoc, date String, mintedAt MintedAt, note String, bytes ByteDelta) returns JsonNodeId
-	var keys = StringArray.create(0)
-	var children = JsonNodeIdArray.create(0)
+	let keys = StringArray.create(0)
+	let children = JsonNodeIdArray.create(0)
 	pushJsonBool(doc, keys: keys, children: children, key: "present", value: true)
 	pushJsonString(doc, keys: keys, children: children, key: "date", value: date)
 

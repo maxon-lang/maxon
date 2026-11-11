@@ -89,7 +89,7 @@ type Options
 	export var stats = false
 
 	static function parse(args StringArray) returns Options throws UsageError
-		var options = Self{jobs: availableWorkers()}
+		let options = Self{jobs: availableWorkers()}
 		var flagsEnded = false
 
 		for (argument, text) in args.withIterator() 'eachArgument'
@@ -287,7 +287,7 @@ type TextKey implements KeyReader
 	end 'create'
 
 	function read(text ByteArray) returns SortKey
-		var folded = ByteArray.create(0)
+		let folded = ByteArray.create(0)
 		folded.reserve(text.count())
 
 		for b in text 'eachByte'
@@ -406,7 +406,7 @@ type Row
 end 'Row'
 
 function rowsFrom(lines LineArray, maker KeyMaker) returns RowArray
-	var rows = RowArray.create(0)
+	let rows = RowArray.create(0)
 	rows.reserve(lines.count())
 
 	for line in lines 'eachLine'
@@ -424,7 +424,7 @@ type Sorter
 	end 'create'
 
 	export function sortLines(lines isolated LineArray) returns isolated LineArray
-		var sorted = LineArray.create(0) as isolated LineArray
+		let sorted = LineArray.create(0) as isolated LineArray
 
 		modify lines 'read'
 			let rows = self.sortRows(lines)
@@ -442,7 +442,7 @@ type Sorter
 	end 'sortLines'
 
 	function sortRows(lines LineArray) returns RowArray
-		var rows = rowsFrom(lines, maker: self.settings.keyMaker())
+		let rows = rowsFrom(lines, maker: self.settings.keyMaker())
 		rows.sortBy(self.settings.comparator())
 		return rows
 	end 'sortRows'
@@ -458,7 +458,7 @@ function readLines(path FilePath) returns LineArray throws ReadError
 end 'readLines'
 
 function splitLines(text String) returns LineArray
-	var lines = text.split(lineFeed)
+	let lines = text.split(lineFeed)
 
 	if lines.isEmpty() 'nothing'
 		return lines
@@ -474,8 +474,8 @@ function splitLines(text String) returns LineArray
 end 'splitLines'
 
 function standardInputLines() returns LineArray
-	var stdin = Console.stdin()
-	var lines = LineArray.create(0)
+	let stdin = Console.stdin()
+	let lines = LineArray.create(0)
 
 	while true 'eachLine'
 		let line = try stdin.readLine() otherwise break
@@ -490,16 +490,16 @@ function readInput(options Options, summary RunSummary) returns LineArray
 		return standardInputLines()
 	end 'standardInput'
 
-	var reads = ReadPromiseArray.create(0)
+	let reads = ReadPromiseArray.create(0)
 
 	for path in options.paths 'startReads'
 		reads.push(async readLines(path.clone()))
 	end 'startReads'
 
-	var lines = LineArray.create(0)
+	let lines = LineArray.create(0)
 
 	for (read, pending) in reads.withIterator() 'finishReads'
-		view fileLines = try await pending otherwise 'unreadable'
+		let fileLines = try await pending otherwise 'unreadable'
 			let path = try options.paths.get(read.index()) otherwise panic("readInput: one read per FILE")
 			printError("msort: {path}: cannot read\n")
 			summary.troubled = true
@@ -513,28 +513,28 @@ function readInput(options Options, summary RunSummary) returns LineArray
 end 'readInput'
 
 function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCount, maker KeyMaker) returns ChunkArray
-	var sorters = SorterArray.create(0)
+	let sorters = SorterArray.create(0)
 
 	for _ in 1 to workers 'spawnWorkers'
 		sorters.push(spawn Sorter.create(freeze settings.clone()))
 	end 'spawnWorkers'
 
-	var replies = SortedPromiseArray.create(0)
+	let replies = SortedPromiseArray.create(0)
 	var first = 0 as ElementIndex
 
 	for slot in 0 upto (workers as ElementIndex) 'sendChunks'
-		var sorter = try sorters.get(slot) otherwise panic("sortedChunks: one sorter per slot")
+		let sorter = try sorters.get(slot) otherwise panic("sortedChunks: one sorter per slot")
 		let remaining = (workers - slot) as WorkerCount
 		let share = (lines.count() - first) / remaining
 		let stop = first + share
-		var chunk = LineArray.create(0) as isolated LineArray
+		let chunk = LineArray.create(0) as isolated LineArray
 
 		modify chunk 'fill'
 			chunk.reserve(share)
 
 			for position in first upto stop 'eachLine'
 				let line = try lines.get(position) otherwise panic("sortedChunks: every position lies inside the input")
-				chunk.push(line.clone())
+				chunk.push(line)
 			end 'eachLine'
 		end 'fill'
 
@@ -542,7 +542,7 @@ function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCoun
 		first = stop
 	end 'sendChunks'
 
-	var chunks = ChunkArray.create(0)
+	let chunks = ChunkArray.create(0)
 
 	for reply in replies 'receiveChunks'
 		chunks.push(rowsFrom(await reply, maker: maker))
@@ -560,7 +560,7 @@ function rowAt(rows RowArray, position LineCount) returns Row
 end 'rowAt'
 
 function mergedPair(left RowArray, right RowArray, compare RowComparator) returns RowArray
-	var merged = RowArray.create(0)
+	let merged = RowArray.create(0)
 	merged.reserve(left.count() + right.count())
 	var nextLeft = 0 as LineCount
 	var nextRight = 0 as LineCount
@@ -592,11 +592,11 @@ function mergeChunks(chunks ChunkArray, compare RowComparator) returns RowArray
 	var round = chunks
 
 	while round.count() > 1 'eachRound'
-		var joined = ChunkArray.create(0)
+		let joined = ChunkArray.create(0)
 		var slot = 0 as ChunkPosition
 
 		while slot < round.count() 'eachPair'
-			var left = chunkAt(round, position: slot)
+			let left = chunkAt(round, position: slot)
 
 			if slot + 1 == round.count() 'anOddOneOut'
 				joined.push(left)
@@ -626,11 +626,11 @@ function sortedRows(lines LineArray, settings SortSettings, workers WorkerCount,
 end 'sortedRows'
 
 function withoutDuplicates(rows RowArray, compare RowComparator) returns RowArray
-	var kept = RowArray.create(0)
+	let kept = RowArray.create(0)
 
 	for row in rows 'eachRow'
 		if not kept.isEmpty() 'hasPrevious'
-			view previous = try kept.last() otherwise panic("withoutDuplicates: a non-empty array has a last element")
+			let previous = try kept.last() otherwise panic("withoutDuplicates: a non-empty array has a last element")
 
 			if compare(previous, row) == Ordering.equalTo 'sameKey'
 				continue
@@ -644,7 +644,7 @@ function withoutDuplicates(rows RowArray, compare RowComparator) returns RowArra
 end 'withoutDuplicates'
 
 function printRows(rows RowArray)
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 
 	for row in rows 'eachRow'
 		out.append("{row.text}{lineFeed}")
@@ -684,7 +684,7 @@ function main() returns ExitCode
 		return Outcome.troubled
 	end 'badUsage'
 
-	var summary = RunSummary.create()
+	let summary = RunSummary.create()
 	let settings = options.sortSettings()
 	let maker = settings.keyMaker()
 	let compare = settings.comparator()

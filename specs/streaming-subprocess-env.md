@@ -43,14 +43,14 @@ byte length — `seen`, 4. A spawn that inherited instead would echo the unexpan
 exit code rather than a near miss.
 ```maxon
 function main() returns ExitCode
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("%MAXON_STREAM_ENV_PROBE%")
 
 	let inheritCwd = try FilePath.from("") otherwise return 3
 	let childEnvironment = Environment.inheritUpdating(["MAXON_STREAM_ENV_PROBE": "seen"])
-	var child = try StreamingSubprocess.spawnWithEnvironment(Executable.name("cmd"), arguments: argv, workingDirectory: inheritCwd, environment: childEnvironment) otherwise return 4
+	let child = try StreamingSubprocess.spawnWithEnvironment(Executable.name("cmd"), arguments: argv, workingDirectory: inheritCwd, environment: childEnvironment) otherwise return 4
 	let line = try child.readStdoutLine() otherwise return 5
 	let code = try child.wait() otherwise return 6
 	child.release()

@@ -44,7 +44,7 @@ let KeywordNote = "Maxon language keyword."
 let TopLevelColumn = 1
 
 module function hoverServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create(0)
+	let served = LspMethodArray.create(0)
 	served.push(LspMethod.hover)
 	return served
 end 'hoverServedMethods'
@@ -55,7 +55,7 @@ module function hoverAnswer(request LspRequest) returns LspAnswer throws LspPara
 	// A buffer mid-edit routinely does not even LEX — an unterminated string is enough. That is LSP's
 	// "nothing here" and not a refusal: the client asked a well-formed question about a place with
 	// nothing to say.
-	var document = try HoverDocument.of(request.text, keywords: request.keywords, corpus: LspCorpus.unavailable) otherwise return LspAnswer.nothing()
+	let document = try HoverDocument.of(request.text, keywords: request.keywords, corpus: LspCorpus.unavailable) otherwise return LspAnswer.nothing()
 	let cursor = try document.cursorTokenIndex(position) otherwise return LspAnswer.nothing()
 
 	match hoverRenderingOf(request, document: document, cursor: cursor) 'answer'
@@ -73,10 +73,6 @@ function bindingKindWord(keyword TokenKind) returns String
 	if keyword == TokenKind.var 'aVar'
 		return "variable"
 	end 'aVar'
-
-	if keyword == TokenKind.view 'aView'
-		return "view"
-	end 'aView'
 
 	panic("bindingKindWord: '{keyword.rawValue}' is not a binding keyword")
 end 'bindingKindWord'
@@ -122,7 +118,7 @@ function hoverAcrossFiles(request LspRequest, document HoverDocument, cursor Ele
 		return HoverRendering.absent
 	end 'notAName'
 
-	var readByTheProject = document.withCorpus(lspDocumentCorpus(request.workspace, uri: request.uri))
+	let readByTheProject = document.withCorpus(lspDocumentCorpus(request.workspace, uri: request.uri))
 	let inTheBuffer = readByTheProject.renderingForToken(cursor)
 
 	match inTheBuffer 'buffer'
@@ -141,20 +137,20 @@ function reservedWordRendering(tok Token) returns HoverRendering
 end 'reservedWordRendering'
 
 function keywordRendering(tok Token) returns HoverRendering
-	var prose = StringArray.create(0)
+	let prose = StringArray.create(0)
 	prose.push(KeywordNote)
 
 	return HoverRendering.present(hoverMarkdown(String.from(tok.value), prose: prose))
 end 'keywordRendering'
 
 function markdownAnswer(markdown String) returns LspAnswer
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 
-	var contents = LspJsonObject.create(doc)
+	let contents = LspJsonObject.create(doc)
 	contents.put(LspKindKey, value: JsonNode.stringNode(MarkdownKind))
 	contents.put(ValueKey, value: JsonNode.stringNode(markdown))
 
-	var result = LspJsonObject.create(doc)
+	let result = LspJsonObject.create(doc)
 	result.putNode(ContentsKey, value: contents.finish())
 
 	return LspAnswer.of(doc, result: result.finish())
@@ -177,7 +173,7 @@ end 'HoverRendering'
 // the rendering is the same act for a function and for a type, and doing it once is what keeps them from
 // drifting apart.
 union HoverDeclaration
-	// A `let`/`var`/`view`, at its keyword.
+	// A `let`/`var`, at its keyword.
 	binding(index ElementIndex)
 
 	// A parameter: the `function` token whose list it is in, and the name token itself.
@@ -400,7 +396,7 @@ module type HoverDocument
 		end 'shownAsWritten'
 
 		let respellings = libraryNameRespellings(self.naming.roster.spellings)
-		var respelled = StringArray.create(prose.count(), zeroed: false)
+		let respelled = StringArray.create(prose.count(), zeroed: false)
 
 		for paragraph in prose 'eachParagraph'
 			respelled.push(respellings.respell(paragraph))
@@ -514,7 +510,7 @@ module type HoverDocument
 	function declarationInTheCorpus(cursor ElementIndex) returns HoverRendering
 		let site = try lspDeclaringSiteOfTheCursor(corpus, text: text, tokens: tokens, keywords: keywords, cursor: cursor) otherwise return HoverRendering.absent
 
-		var declaringDocument = documentOfCorpusFile(lspDeclaringSitePath(site))
+		let declaringDocument = documentOfCorpusFile(lspDeclaringSitePath(site))
 
 		match declaringDocument 'declaring'
 			at(declaring) then return declaring.renderingAtSite(site, name: tokenAt(cursor).value)
@@ -530,7 +526,7 @@ module type HoverDocument
 	end 'renderingAtSite'
 
 	function documentOfCorpusFile(path FilePath) returns HoverDeclaringDocument
-		var heldCorpus = self.corpus
+		let heldCorpus = self.corpus
 
 		match heldCorpus 'held'
 			loaded(project, _, _) then return project.hoverDocumentOf(path, reading: keywords, corpus: corpus)
@@ -739,7 +735,7 @@ module type HoverDocument
 	// description of a declaration there is.
 	function declarationHeadRendering(keyword ElementIndex) returns HoverRendering
 		let start = declarationStart(keyword)
-		var prose = StringArray.create(0)
+		let prose = StringArray.create(0)
 		appendDocComment(prose, above: start)
 		return HoverRendering.present(self.hoverMarkdownHere(headText(start), prose: prose))
 	end 'declarationHeadRendering'
@@ -750,7 +746,7 @@ module type HoverDocument
 	function bindingRendering(keyword ElementIndex) returns HoverRendering
 		let start = declarationStart(keyword)
 		let inferred = bindingType(keyword, reach: HoverDeclarationHopBudget)
-		var prose = StringArray.create(0)
+		let prose = StringArray.create(0)
 		appendDocComment(prose, above: start)
 		prose.push(bindingNote(keyword, inferred: inferred))
 
@@ -763,7 +759,7 @@ module type HoverDocument
 	end 'bindingRendering'
 
 	function parameterRendering(functionIndex ElementIndex, nameIndex ElementIndex) returns HoverRendering
-		var prose = StringArray.create(0)
+		let prose = StringArray.create(0)
 		prose.push("Parameter of {routineNamePhrase(functionIndex)}.")
 		return HoverRendering.present(self.hoverMarkdownHere(parameterText(nameIndex), prose: prose))
 	end 'parameterRendering'
@@ -1328,7 +1324,7 @@ module type HoverDocument
 	end 'typeArgumentAfter'
 
 	function corpusTypeArgument(written ByteArray, position ElementIndex) returns HoverType
-		var heldCorpus = self.corpus
+		let heldCorpus = self.corpus
 
 		match heldCorpus 'held'
 			loaded(_, signatures, readerPath) then return declaredTypeArgument(signatures, written: written, position: position, readerPath: readerPath)
@@ -1459,7 +1455,7 @@ module type HoverDocument
 	end 'memberType'
 
 	function corpusFieldType(owner ByteArray, member ByteArray, near ElementIndex) returns HoverMemberType
-		var heldCorpus = self.corpus
+		let heldCorpus = self.corpus
 
 		match heldCorpus 'held'
 			loaded(_, signatures, readerPath) then return declaredFieldType(signatures, owner: owner, member: member, readerPath: readerPath, enclosing: lspEnclosingTypeAtToken(tokens, index: near))
@@ -1547,7 +1543,7 @@ module type HoverDocument
 	end 'aliasTargetAt'
 
 	function corpusBaseName(base ByteArray) returns immutable ByteArray
-		var heldCorpus = self.corpus
+		let heldCorpus = self.corpus
 
 		match heldCorpus 'held'
 			loaded(_, signatures, readerPath) then return signatures.denotedGenericBaseName(base, readerFilePath: readerPath)
@@ -1616,7 +1612,7 @@ module type HoverDocument
 			return declaredMethodRendering(owner, method: method)
 		end 'declaredInThisDocument'
 
-		var declaringDocument = memberDeclaringDocument(owner, member: method, near: near)
+		let declaringDocument = memberDeclaringDocument(owner, member: method, near: near)
 
 		match declaringDocument 'elsewhere'
 			at(declaring) then return declaring.declaredMethodRendering(owner, method: method)
@@ -1740,7 +1736,7 @@ module type HoverDocument
 		end 'notALibraryType'
 
 		let source = try File.readText(path) otherwise return HoverDeclaringDocument.none
-		var module = try Self.of(source, keywords: keywords, corpus: corpus) otherwise return HoverDeclaringDocument.none
+		let module = try Self.of(source, keywords: keywords, corpus: corpus) otherwise return HoverDeclaringDocument.none
 
 		return HoverDeclaringDocument.at(module.consultedAsLibrary())
 	end 'stdlibDocumentFor'
@@ -1888,10 +1884,10 @@ end 'HoverDocument'
 
 extension Project
 	function hoverDocumentOf(path FilePath, reading KeywordTable, corpus LspCorpus) returns HoverDeclaringDocument
-		view declTokens = try queryActiveTokens(self, path: path) otherwise return HoverDeclaringDocument.none
-		view entry = try sourceEntryOf(self, path: path) otherwise return HoverDeclaringDocument.none
+		let declTokens = try queryActiveTokens(self, path: path) otherwise return HoverDeclaringDocument.none
+		let entry = try sourceEntryOf(self, path: path) otherwise return HoverDeclaringDocument.none
 
-		var declaring = HoverDocument.ofTokens(entry.content, tokens: declTokens, keywords: reading, corpus: corpus)
+		let declaring = HoverDocument.ofTokens(entry.content, tokens: declTokens, keywords: reading, corpus: corpus)
 
 		return HoverDeclaringDocument.at(declaring.consultedAsLibrary() if isStdlibTierSourceFile(self, path: path) else declaring)
 	end 'hoverDocumentOf'
@@ -1964,7 +1960,7 @@ end 'hoverMarkdown'
 // user what they can already see from the call they are looking at; `Truncates \`value\` toward zero` is
 // the part they came for. `tests/lsp/hover-values.maxtest` pins both halves for `sqrt` and `trunc`.
 function mathBuiltinMarkdown(builtin MathBuiltin) returns String
-	var prose = StringArray.create(0)
+	let prose = StringArray.create(0)
 	prose.push(mathBuiltinHelp(builtin))
 	return hoverMarkdown(mathBuiltinSignature(builtin), prose: prose)
 end 'mathBuiltinMarkdown'

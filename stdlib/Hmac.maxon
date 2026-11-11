@@ -8,11 +8,11 @@ public function hmac(algorithm HashAlgorithm, key ByteArray, message ByteArray) 
 	let blockBytes = algorithm.blockBytes()
 	let blockKey = hmacBlockKey(algorithm, key: key, blockBytes: blockBytes)
 
-	var inner = Digest.create(algorithm)
+	let inner = Digest.create(algorithm)
 	inner.update(hmacMaskedKey(blockKey, mask: hmacInnerPadByte, blockBytes: blockBytes))
 	inner.update(message)
 
-	var outer = Digest.create(algorithm)
+	let outer = Digest.create(algorithm)
 	outer.update(hmacMaskedKey(blockKey, mask: hmacOuterPadByte, blockBytes: blockBytes))
 	outer.update(inner.finalize())
 	return outer.finalize()
@@ -27,7 +27,7 @@ function hmacBlockKey(algorithm HashAlgorithm, key ByteArray, blockBytes HashBlo
 end 'hmacBlockKey'
 
 function hmacMaskedKey(key ByteArray, mask Byte, blockBytes HashBlockBytes) returns ByteArray
-	var masked = ByteArray.create(blockBytes, zeroed: false)
+	let masked = ByteArray.create(blockBytes, zeroed: false)
 
 	for byte in key 'eachKeyByte'
 		masked.push(byte xor mask)

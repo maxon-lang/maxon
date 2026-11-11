@@ -126,7 +126,7 @@ function main() returns ExitCode
 
 	// --- section 1: struct literal + alias ---
 	var a = Point.create(1, y: 2)
-	var b = a
+	let b = a
 	b.x = 99
 	a = b
 	total = total + a.x
@@ -136,26 +136,26 @@ function main() returns ExitCode
 	total = total + sum_point(Point.create(5, y: 6))
 
 	// --- section 3: loop-carried container pushes ---
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 	for i in 0 upto 5 'names_loop'
 		names.push("name_{i}")
 	end 'names_loop'
 	total = total + names_total(names)
 
 	// --- section 4: nested container ---
-	var row1 = IntArray.create(0)
+	let row1 = IntArray.create(0)
 	row1.push(1)
 	row1.push(2)
-	var row2 = IntArray.create(0)
+	let row2 = IntArray.create(0)
 	row2.push(3)
 	row2.push(4)
-	var matrix = Matrix.create(0)
+	let matrix = Matrix.create(0)
 	matrix.push(row1)
 	matrix.push(row2)
 	total = total + matrix_total(matrix)
 
 	// --- section 5: function parameter passing ---
-	var origin = Point.create(0, y: 0)
+	let origin = Point.create(0, y: 0)
 	total = total + sum_point(origin)
 	total = total + sum_point(origin)
 
@@ -164,7 +164,7 @@ function main() returns ExitCode
 	total = total + made.x
 
 	// --- section 7: struct field reassignment ---
-	var person = Person.create("alice", age: 30)
+	let person = Person.create("alice", age: 30)
 	person.name = "bob"
 	person.name = "carol"
 	total = total + person.age
@@ -185,7 +185,7 @@ function main() returns ExitCode
 
 	// --- section 10: for-in over managed elements, primitive body ---
 	// exercises the for-in lowering pattern (__forin_result + user var alias)
-	var points = PointArray.create(0)
+	let points = PointArray.create(0)
 	points.push(Point.create(1, y: 2))
 	points.push(Point.create(3, y: 4))
 	points.push(Point.create(5, y: 6))
@@ -198,12 +198,12 @@ function main() returns ExitCode
 	// elimination collapses the bracket: the try-result owns the rc=1
 	// transferred reference and the direct call is borrow-only, so the
 	// extra +1/-1 is pure overhead.
-	var triplet = PointArray.create(0)
+	let triplet = PointArray.create(0)
 	triplet.push(Point.create(7, y: 8))
 	triplet.push(Point.create(9, y: 10))
 	triplet.push(Point.create(11, y: 12))
 	for i in 0 upto 3 'alias_loop'
-		view p = try triplet.get(i) otherwise 'missErr'
+		let p = try triplet.get(i) otherwise 'missErr'
 			panic("alias_loop: triplet.get({i}) invariant violated")
 		end 'missErr'
 		total = total + sum_point(p)
@@ -425,7 +425,7 @@ function stash(arr BoxArray, b Box) returns Integer throws BoxError
 end 'stash'
 
 function main() returns ExitCode
-	var arr = BoxArray.create(0)
+	let arr = BoxArray.create(0)
 	@heap let a = Box.create(42)
 	let b = a
 	let n = try stash(arr, b: b) otherwise 0

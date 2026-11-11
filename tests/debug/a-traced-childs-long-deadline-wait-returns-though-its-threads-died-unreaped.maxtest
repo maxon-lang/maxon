@@ -6,7 +6,7 @@ let TracedLongWaitExitCode = 0
 
 test 'a wait with a long deadline on a traced child whose threads died while their tracer was not waiting sees the child exit before the deadline'
 	#if os(Linux)
-		var tracee = startedTracee(TracedLongWaitCaseLabel)
+		let tracee = startedTracee(TracedLongWaitCaseLabel)
 		let (returnedInTime, code) = traceeWaitOutcome(tracee, timeoutMs: TracedLongWaitDeadlineMs)
 
 		Expect.isTrue(returnedInTime, message: "⛔ THE CHILD EXITED AND ITS THREADS DIED TRACED, SO ITS POLL SOURCE NEVER BECAME READABLE. A wait whose deadline is {TracedLongWaitDeadlineMs} ms away parks until then unless it asks again, and had not returned after {TraceeWaitDeadlineMs} ms. The child's threads were: {listedLines(tracee.threads)}.")

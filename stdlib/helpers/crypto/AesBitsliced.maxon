@@ -685,7 +685,7 @@ type AesKeyExpansion
 	var constant as AesConstantIndex
 
 	static function create(key ByteArray) returns AesKeyExpansion
-		var words = AesKeyWords.create()
+		let words = AesKeyWords.create()
 		let keyWords = key.count() shr aesWordShift
 
 		for i in 0 upto keyWords 'keyWords'
@@ -718,7 +718,7 @@ type AesKeyExpansion
 	end 'advance'
 
 	function roundKeys(rounds AesRoundCount) returns AesRoundKeys
-		var keys = AesRoundKeys.create()
+		let keys = AesRoundKeys.create()
 
 		for round in 0 upto ((rounds as Count) + 1) 'eachRound'
 			let roundIndex = round as AesRoundIndex
@@ -738,7 +738,7 @@ end 'AesKeyExpansion'
 function aesExpandKey(key ByteArray, rounds AesRoundCount) returns AesRoundKeys
 	let keyWords = key.count() shr aesWordShift
 	let totalWords = ((rounds + 1) shl aesWordShift) as Count
-	var expansion = AesKeyExpansion.create(key)
+	let expansion = AesKeyExpansion.create(key)
 
 	for i in keyWords upto totalWords 'eachWord'
 		expansion.advance(i, keyWords: keyWords)
@@ -786,7 +786,7 @@ export type AesBitsliced
 		try aesRequireBlock(block)
 
 		let (firstLane, secondLane) = crypted(block, direction: direction).lanes()
-		var output = ByteArray.create(aesBlockBytes, zeroed: false)
+		let output = ByteArray.create(aesBlockBytes, zeroed: false)
 		__Builtins.appendLittleEndian(output, firstLane as OrderedWord, aesLaneBytes)
 		__Builtins.appendLittleEndian(output, secondLane as OrderedWord, aesLaneBytes)
 
@@ -806,8 +806,8 @@ export type AesBitsliced
 		let blocks = aesBlockCount(data.count())
 		let firstBlock = counter as Count
 		let (nonceLow, nonceMid) = try streamNonceWords(nonce, firstCounter: firstBlock, streamBlocks: blocks)
-		var state = AesState.create()
-		var output = ByteArray.create(data.count(), zeroed: false)
+		let state = AesState.create()
+		let output = ByteArray.create(data.count(), zeroed: false)
 		xorBatches(state, nonceLow: nonceLow, nonceMid: nonceMid, firstCounter: firstBlock, streamBlocks: blocks, lead: 0, data: data, output: output, startBlock: 0)
 
 		return output
@@ -820,7 +820,7 @@ export type AesBitsliced
 		let streamBlocks = aesBlockCount(data.count()) + aesMaskLeadBlocks
 		let firstBlock = counter as Count
 		let (nonceLow, nonceMid) = try streamNonceWords(nonce, firstCounter: firstBlock, streamBlocks: streamBlocks)
-		var state = AesState.create()
+		let state = AesState.create()
 		encryptCounters(state, nonceLow: nonceLow, nonceMid: nonceMid, counter: firstBlock)
 		state.ortho()
 		state.xorBatchPastMask(output, data: data)
@@ -860,7 +860,7 @@ export type AesBitsliced
 	end 'xorBatches'
 
 	function crypted(block ByteArray, direction AesDirection) returns AesState
-		var state = AesState.create()
+		let state = AesState.create()
 		state.loadBlock(block)
 
 		match direction 'operation'

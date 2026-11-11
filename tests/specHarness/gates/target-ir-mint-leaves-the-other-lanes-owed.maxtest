@@ -1,7 +1,7 @@
 let MintOwesSpecName = "mint-owes-lanes"
 let MintOwesSpecFileName = "mint-owes-lanes.md"
 let MintOwesCase = "mint-owes-lanes.fresh"
-let MintOwesFilter = filterFlag("mint-owes-lanes/")
+let MintOwesPattern = "mint-owes-lanes/"
 let TargetFlagPrefix = "--target="
 let MintOwesRefusalHeadline = "has no pin for"
 
@@ -10,9 +10,9 @@ test 'update-required mints the host lane of a spec still owing other lanes, and
 	let specPath = staged.join(MintOwesSpecFileName)
 	plantBogusTargetIrPin(specPath)
 
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push(UpdateRequiredFlag)
-	arguments.push(MintOwesFilter)
+	arguments.push(filterFlag(MintOwesPattern))
 
 	let mint = runSpecTest(staged, includeNetwork: false, extraArguments: arguments)
 	let written = fileText(specPath)
@@ -21,7 +21,7 @@ test 'update-required mints the host lane of a spec still owing other lanes, and
 
 	let said = "The file now reads:\n{written}\nThe minting run said:\n{everythingSaid(mint)}\nThe plain run said:\n{everythingSaid(plain)}"
 	let refusal = everythingSaid(plain)
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 
 	collectNotPassed(everythingSaid(mint), specName: MintOwesSpecName, testNames: [MintOwesCase], broken: broken)
 
@@ -42,7 +42,7 @@ test 'update-required mints the host lane of a spec still owing other lanes, and
 	end 'caseUnnamed'
 
 	for lane in otherNativeLanes() 'eachOwedLane'
-		let fix = "{UpdateRequiredFlag} {TargetFlagPrefix}{lane} {MintOwesFilter}"
+		let fix = "{UpdateRequiredFlag} {TargetFlagPrefix}{lane} {filterFlag(MintOwesPattern)}"
 
 		if not refusal.contains(fix) 'fixUnnamed'
 			broken.push("the refusal does not give the run that mints {lane}: '{fix}'. {said}\n")

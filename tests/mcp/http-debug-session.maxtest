@@ -5,14 +5,14 @@ test 'a debug session over http survives from one request to the next'
 	let executable = buildStagedProgram(program)
 	let anchored = anchorLine(program, anchor: DebuggableProgramAnchor)
 
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
 
-	let started = httpToolCall(server, sessionId: sessionId, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
-	let armed = httpToolCall(server, sessionId: sessionId, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
-	let continued = httpToolCall(server, sessionId: sessionId, id: 4, name: DebugContinueTool)
-	let locals = httpToolCall(server, sessionId: sessionId, id: 5, name: DebugLocalsTool)
-	let stopped = httpToolCall(server, sessionId: sessionId, id: 6, name: DebugStopTool)
+	let started = httpToolCall(server.address, sessionId: sessionId, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
+	let armed = httpToolCall(server.address, sessionId: sessionId, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	let continued = httpToolCall(server.address, sessionId: sessionId, id: 4, name: DebugContinueTool)
+	let locals = httpToolCall(server.address, sessionId: sessionId, id: 5, name: DebugLocalsTool)
+	let stopped = httpToolCall(server.address, sessionId: sessionId, id: 6, name: DebugStopTool)
 
 	try server.stop()
 
@@ -38,13 +38,13 @@ test 'debug_stop reaps the debuggee, so its image can be deleted'
 	let executable = buildStagedProgram(program)
 	let anchored = anchorLine(program, anchor: DebuggableProgramAnchor)
 
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
 
-	let started = httpToolCall(server, sessionId: sessionId, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
-	_ = httpToolCall(server, sessionId: sessionId, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
-	let continued = httpToolCall(server, sessionId: sessionId, id: 4, name: DebugContinueTool)
-	let stopped = httpToolCall(server, sessionId: sessionId, id: 5, name: DebugStopTool)
+	let started = httpToolCall(server.address, sessionId: sessionId, id: 2, name: DebugStartTool, argumentsJson: debugExecutableArgument(executable))
+	_ = httpToolCall(server.address, sessionId: sessionId, id: 3, name: DebugBreakTool, argumentsJson: debugBreakTargetArgument(anchored))
+	let continued = httpToolCall(server.address, sessionId: sessionId, id: 4, name: DebugContinueTool)
+	let stopped = httpToolCall(server.address, sessionId: sessionId, id: 5, name: DebugStopTool)
 
 	var deletable = true
 

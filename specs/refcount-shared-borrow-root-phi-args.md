@@ -88,8 +88,8 @@ function firstFailing(m ClauseMap, key String) returns Count
 end 'firstFailing'
 
 function main() returns ExitCode
-	var m = ClauseMap.create()
-	var arr = ClauseArray.create(0)
+	let m = ClauseMap.create()
+	let arr = ClauseArray.create(0)
 	arr.push(Clause.create("Item", traitName: "Comparable", typeName: "NotComparable"))
 	try m.insert("MyHolder.isGreater", value: arr) otherwise return 1
 	// "Item"(4) + "Comparable"(10) + "NotComparable"(13) = 27

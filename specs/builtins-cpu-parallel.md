@@ -268,7 +268,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "cmd")
 	appendToken(argv, token: "/c")
 	appendToken(argv, token: "echo")
@@ -589,7 +589,7 @@ type Greeter
 end 'Greeter'
 
 function main() returns ExitCode
-	var greeter = spawn Greeter.create()
+	let greeter = spawn Greeter.create()
 	try greeter.greet(2) otherwise panic("an open mailbox with room takes the send")
 	greeter.shutdown()
 

@@ -651,10 +651,8 @@ type Box
 	end 'create'
 end 'Box'
 
-let G = Box.create()
-
 export function runA()
-	print("a {G.n}\n")
+	print("a {Box.create().n}\n")
 end 'runA'
 
 // --- file: b/b.maxon
@@ -666,10 +664,8 @@ type Box
 	end 'create'
 end 'Box'
 
-let H = Box.create()
-
 export function runB()
-	print("b {H.label}\n")
+	print("b {Box.create().label}\n")
 end 'runB'
 
 // --- file: main.maxon
@@ -932,7 +928,7 @@ it actually has, and 7 comes back.
 ```maxon
 // --- file: a.maxon
 export function makeA() returns ByteArray
-	var xs = ByteArray.create(0)
+	let xs = ByteArray.create(0)
 	xs.push(7)
 	return xs
 end 'makeA'
@@ -945,7 +941,7 @@ end 'take'
 typealias ByteArray = Array with String
 
 export function fromB() returns ExitCode
-	var own = ByteArray.create(0)
+	let own = ByteArray.create(0)
 	own.push("ab")
 	print("{try own.get(0) otherwise ""}\n")
 
@@ -3034,7 +3030,7 @@ type Tally
 end 'Tally'
 
 function main() returns ExitCode
-	var t = Tally.create()
+	let t = Tally.create()
 	let before = t.value()
 	let same = t.raise()
 	print("{before} {t.value()} {same}")
@@ -3958,7 +3954,7 @@ public interface Comparable
 end 'Comparable'
 
 function main() returns ExitCode
-	var values = FullRangeIntArray from [3, 1, 2]
+	let values = FullRangeIntArray from [3, 1, 2]
 	values.sort()
 	let first = try values.get(0) otherwise return 3
 	print("{first}\n")
@@ -3980,7 +3976,7 @@ public interface Comparable
 end 'Comparable'
 
 function main() returns ExitCode
-	var words = ["b", "a"]
+	let words = ["b", "a"]
 	words.sort()
 	let first = try words.get(0) otherwise return 3
 	print("{first}\n")
@@ -4086,11 +4082,11 @@ typealias CountsByWord = Map with (String, Count)
 typealias CountsByColor = Map with (Color, Count)
 
 function main() returns ExitCode
-	var byNumber = CountsByNumber.create()
+	let byNumber = CountsByNumber.create()
 	byNumber.upsert(3, value: 1)
-	var byWord = CountsByWord.create()
+	let byWord = CountsByWord.create()
 	byWord.upsert("a", value: 2)
-	var byColor = CountsByColor.create()
+	let byColor = CountsByColor.create()
 	byColor.upsert(Color.green, value: 3)
 	let n = try byNumber.get(3) otherwise return 3
 	let w = try byWord.get("a") otherwise return 3
@@ -4203,7 +4199,7 @@ end 'Comparable'
 
 function main() returns ExitCode
 	let held = Comparable.create()
-	var values = FullRangeIntArray from [3, 1, 2]
+	let values = FullRangeIntArray from [3, 1, 2]
 	values.sort()
 	let first = try values.get(0) otherwise return 3
 	print("{first} {held.count}\n")
@@ -4578,8 +4574,8 @@ end 'main'
 error E3008: <fragment>:8:9: type 'OverlayPrivateOp' is not exported
 ```
 
-<!-- test: a-factory-type-beside-the-librarys-names-the-authors-at-top-level -->
-A directory exports a `FilePath` with a `create()` factory beside the library's; a top-level `FilePath.create()`
+<!-- test: a-factory-type-beside-the-librarys-names-the-authors -->
+A directory exports a `FilePath` with a `create()` factory beside the library's; a `FilePath.create()`
 in another directory calls the user's factory.
 ```maxon
 // --- file: lib/path.maxon
@@ -4592,9 +4588,9 @@ export type FilePath
 end 'FilePath'
 
 // --- file: app/main.maxon
-let g = FilePath.create()
-
 function main() returns ExitCode
+	let g = FilePath.create()
+
 	return g.size
 end 'main'
 ```
@@ -4829,23 +4825,23 @@ end 'main'
 error E2073: app/<fragment>:6:18: 'Ordering' is a ranged alias and has no member 'lessThan'
 ```
 
-<!-- test: error.a-member-beside-the-librarys-union-is-refused-on-the-authors-alias-at-top-level -->
+<!-- test: error.a-member-beside-the-librarys-union-is-refused-on-the-authors-alias -->
 A directory exports a typealias `LogValue` beside the library's union. The bare name means the author's int alias,
 because the library takes no part in ambiguity, and a ranged alias declares no members, so
-a top-level construction of the union's case `LogValue.boolean(true)` is refused.
+a construction of the union's case `LogValue.boolean(true)` is refused.
 ```maxon
 // --- file: lib/value.maxon
 export typealias LogValue = int(0 to 9)
 
 // --- file: app/main.maxon
-let v = LogValue.boolean(true)
-
 function main() returns ExitCode
+	let v = LogValue.boolean(true)
+
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3004: app/<fragment>:6:18: call to undefined function 'LogValue.boolean'
+error E3004: app/<fragment>:7:19: call to undefined function 'LogValue.boolean'
 ```
 
 <!-- test: error.a-member-beside-the-librarys-union-is-refused-on-the-authors-alias-in-a-function-body -->
@@ -4883,23 +4879,23 @@ end 'main'
 error E2073: app/<fragment>:6:20: 'StatusCode' is a ranged alias and has no member 'ok'
 ```
 
-<!-- test: error.a-member-beside-the-librarys-type-is-refused-on-the-authors-alias-at-top-level -->
+<!-- test: error.a-member-beside-the-librarys-type-is-refused-on-the-authors-alias -->
 A directory exports a typealias `Console` beside the library's type. The bare name means the author's int alias,
 because the library takes no part in ambiguity, and a ranged alias declares no members, so
-a top-level call of the library type's static factory `Console.stdin()` is refused.
+a call of the library type's static factory `Console.stdin()` is refused.
 ```maxon
 // --- file: lib/console.maxon
 export typealias Console = int(0 to 9)
 
 // --- file: app/main.maxon
-let c = Console.stdin()
-
 function main() returns ExitCode
+	let c = Console.stdin()
+
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3004: app/<fragment>:6:17: call to undefined function 'Console.stdin'
+error E3004: app/<fragment>:7:18: call to undefined function 'Console.stdin'
 ```
 
 <!-- test: error.a-member-beside-the-librarys-type-is-refused-on-the-authors-alias-in-a-function-body -->

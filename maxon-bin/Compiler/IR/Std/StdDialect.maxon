@@ -4878,7 +4878,7 @@ export type StdValueDefs
 	end 'create'
 
 	export static function build(module StdModule, func IrFunction) returns StdValueDefs
-		var defs = StdValueDefs.create()
+		let defs = StdValueDefs.create()
 		defs.rebuild(module, func: func)
 		return defs
 	end 'build'
@@ -5063,7 +5063,7 @@ type BlockArgSources
 	end 'create'
 
 	static function build(module StdModule, func IrFunction, valueBound ValueId) returns BlockArgSources
-		var sources = Self{head: OptionalElementIndexColumn.absent(valueBound), chain: OptionalElementIndexColumn.create(), values: ValueIdArray.create(0)}
+		let sources = Self{head: OptionalElementIndexColumn.absent(valueBound), chain: OptionalElementIndexColumn.create(), values: ValueIdArray.create(0)}
 		let byId = module.blockIndexById(func)
 
 		for position in 0 upto func.blockRefs.count() 'eachBlock'
@@ -5477,7 +5477,7 @@ end 'collectStdOpUses'
 // array per function would be an allocation the scale ladder sees.
 export function nextFreeValueId(module StdModule, func IrFunction) returns ValueId
 	var maxId = 0 as ValueId
-	var def = StdDefinedValues.create()
+	let def = StdDefinedValues.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("nextFreeValueId: blockRef from func.blockRefs not in module.blocks")
@@ -6049,7 +6049,7 @@ export function compressValueSubstitutions(subst ValueIdArray)
 end 'compressValueSubstitutions'
 
 module function remappedArgs(args ValueIdArray, subst ValueIdArray) returns ValueIdArray
-	var out = ValueIdArray.create(args.count(), zeroed: false)
+	let out = ValueIdArray.create(args.count(), zeroed: false)
 
 	for a in args 'each'
 		out.push(remappedValue(a, subst: subst))
@@ -6085,8 +6085,8 @@ end 'remappedArgs'
 // a pool worker is not a splice and does not come through here: `StdUnit` deep-clones each op as it is.
 //
 // ⭐ **A COPY MADE ON A POOL WORKER OWNS ITS MANAGED PAYLOADS.** The unswitcher's loop copies are made on
-// a worker and cross back in a reply, which MOVES: the transfer walk aborts the process on a record with
-// a second owner (`RuntimeAbort.transferredRecordNotSole`), so a return-type union shared between the
+// a worker and cross back in a reply, which MOVES: a seed-built runtime's transfer walk aborts the process
+// on a record with a second owner (exit 96), so a return-type union shared between the
 // copy and its original — fine inside one module, where the two ops are immutable — is copied for it
 // (`ClonePayloads.owned`; `ownedReturnType`). A callee name or a label is `immutable` data and is shared
 // as it is; a `switch`'s table and a call's `args` are built fresh either way.
@@ -6381,7 +6381,7 @@ end 'clonedBlock'
 // A dense `switch` table's whole target list, mapped. A jump table names MANY blocks and one default,
 // so a clone that reached only the default would leave every case arm branching into the callee.
 function clonedBlocks(ids BlockIdArray, subst BlockIdArray) returns BlockIdArray
-	var out = BlockIdArray.create(ids.count(), zeroed: false)
+	let out = BlockIdArray.create(ids.count(), zeroed: false)
 
 	for id in ids 'each'
 		out.push(clonedBlock(id, subst: subst))
@@ -6429,7 +6429,7 @@ end 'substituteValuesInBlock'
 // The op half, on its own for a caller that holds the READ SITES of the values it rewrites
 // (`unswitchInvariantGuards` indexes them) and so touches only the ops that read one.
 module function substituteOpUses(module StdModule, opIdx ElementIndex, subst ValueIdArray)
-	var op = module.getOp(opIdx)
+	let op = module.getOp(opIdx)
 	try module.ops.set(opIdx, value: remapStdOpUses(op, subst: subst)) otherwise panic("substituteValuesInBlock: ops.set({opIdx}) OOB")
 end 'substituteOpUses'
 
@@ -6446,8 +6446,8 @@ module function substituteEdgeArgsInBlock(block IrBlock, subst ValueIdArray)
 		return
 	end 'edgesUnchanged'
 
-	var rewritten = block
-	var newEdges = BranchEdgeArray.create(rewritten.branchEdges.count(), zeroed: false)
+	let rewritten = block
+	let newEdges = BranchEdgeArray.create(rewritten.branchEdges.count(), zeroed: false)
 
 	for edge in rewritten.branchEdges 'eachEdge'
 		newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: remappedArgs(edge.argIds, subst: subst)))
@@ -6495,16 +6495,16 @@ module function removeOpsDefining(module StdModule, func IrFunction, doomed StdV
 		return
 	end 'nothingDoomed'
 
-	var def = StdDefinedValues.create()
+	let def = StdDefinedValues.create()
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("removeOpsDefining: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("removeOpsDefining: blockRef from func.blockRefs not in module.blocks")
 
 		if not blockDefinesADoomedValue(module, block: block, doomed: doomed, def: def) 'nothingToRemove'
 			continue
 		end 'nothingToRemove'
 
-		var kept = OpIndexArray.create(0)
+		let kept = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachRef'
 			if opDefinesADoomedValue(module, opIdx: opIdx, doomed: doomed, def: def) 'removed'
@@ -6638,7 +6638,7 @@ end 'assertNoSugarOps'
 // callee through (`BackendDispatch.buildBackend`), so "does the module contain this callee" is answered
 // here exactly as the encoder will answer it.
 export function assertCallsMatchCalleeArity(module StdModule, byName FunctionNameIndex)
-	var call = StdCallOperands.create()
+	let call = StdCallOperands.create()
 
 	for func in module.functions 'eachFunc'
 		for opIdx in module.liveOpIndices(func) 'eachOp'
@@ -6818,8 +6818,8 @@ export typealias PredecessorCounts = Array with ElementIndex
 // Counts the edges terminators draw into each block id; the function entry's own entry is not an edge
 // and is not counted.
 export function stdPredecessorCounts(module StdModule, func IrFunction) returns PredecessorCounts
-	var counts = PredecessorCounts.create(func.nextBlockId as ElementIndex)
-	var successors = BlockIdArray.create(0)
+	let counts = PredecessorCounts.create(func.nextBlockId as ElementIndex)
+	let successors = BlockIdArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
 		successors.clear()

@@ -29,7 +29,7 @@
 // whichever OS thread the scheduler gives it, which rules out the trace-span stack, the `.rdata`
 // table and every `Project` table. It may not await — E3139 refuses a service that blocks on
 // another, and this one never sends. And it may not be handed anything a second frame still owns —
-// E3138 at the send, exit 96 at run time — which is why a unit is an `isolated` value and each
+// refused at the send, exit 96 at run time in a seed-built binary — which is why a unit is an `isolated` value and each
 // worker is handed its own clone of the callee ABI table.
 
 // How many jobs are kept in flight PER WORKER.
@@ -85,7 +85,7 @@ export type LandingSlots
 	// Filled with the one value no landing slot has — the job count — so a job that never landed is a panic
 	// at the fold rather than job 0's answer folded twice.
 	export static function create(jobCount ElementIndex) returns LandingSlots
-		var slotOfJob = LandingSlotArray.create(jobCount)
+		let slotOfJob = LandingSlotArray.create(jobCount)
 		slotOfJob.refill(jobCount)
 		return Self{slotOfJob: slotOfJob, jobCount: jobCount}
 	end 'create'
@@ -163,23 +163,23 @@ export type PoolDispatch
 
 	static function withBound(sizes PoolJobSizeArray, workerCount PoolSize, assignment PoolAssignment, sizeBound InFlightSizeBound) returns PoolDispatch
 		let jobCount = sizes.count() as PoolSize
-		var order = PoolJobArray.create(0)
-		var sizeInDispatchOrder = PoolJobSizeArray.create(0)
+		let order = PoolJobArray.create(0)
+		let sizeInDispatchOrder = PoolJobSizeArray.create(0)
 		fillLongestFirstOrder(sizes, jobCount: jobCount, order: order, sizeInDispatchOrder: sizeInDispatchOrder)
-		var outstandingPerWorker = InFlightCountArray.create(workerCount as ElementIndex)
-		var handedToWorker = FixedPoolSlotArray.create(workerCount as ElementIndex)
-		var positionOfJob = FixedPoolSlotArray.create(jobCount as ElementIndex)
+		let outstandingPerWorker = InFlightCountArray.create(workerCount as ElementIndex)
+		let handedToWorker = FixedPoolSlotArray.create(workerCount as ElementIndex)
+		let positionOfJob = FixedPoolSlotArray.create(jobCount as ElementIndex)
 
 		for position in 0 upto order.count() 'eachPosition'
 			let job = try order.get(position) otherwise panic("PoolDispatch.withBound: order.get OOB at {position} below {order.count()}")
 			try positionOfJob.set(job, value: position) otherwise panic("PoolDispatch.withBound: positionOfJob.set OOB at job {job} below {jobCount}")
 		end 'eachPosition'
 
-		var arrivedAtPosition = FixedBoolArray.create(jobCount as ElementIndex)
+		let arrivedAtPosition = FixedBoolArray.create(jobCount as ElementIndex)
 		let depth = pipelineDepthOf(workerCount, jobCount: jobCount)
-		var replyJob = PoolJobArray.create(depth, zeroed: false)
-		var replyWorker = PoolSlotArray.create(depth, zeroed: false)
-		var replySize = PoolJobSizeArray.create(depth, zeroed: false)
+		let replyJob = PoolJobArray.create(depth, zeroed: false)
+		let replyWorker = PoolSlotArray.create(depth, zeroed: false)
+		let replySize = PoolJobSizeArray.create(depth, zeroed: false)
 		return Self{handedToWorker: handedToWorker, positionOfJob: positionOfJob, arrivedAtPosition: arrivedAtPosition, settled: 0, order: order, sizeInDispatchOrder: sizeInDispatchOrder, jobCount: jobCount, workerCount: workerCount, assignment: assignment, dispatched: 0, replyJob: replyJob, replyWorker: replyWorker, replySize: replySize, outstandingPerWorker: outstandingPerWorker, inFlightSize: 0, sizeBound: sizeBound}
 	end 'withBound'
 
@@ -437,7 +437,7 @@ end 'lowerUnitWith'
 // sub-phase.
 module function lowerAndSplitUnit(lowering UnitLowering, unitModule StdModule, permitsTailCalls bool, target Target, costs PoolPhaseCosts, iselCost PhaseDelta) returns LoweredUnit
 	let iselProbe = PhaseProbe.beginCounters()
-	var lowered = lowerUnitWith(lowering, unitModule: unitModule, permitsTailCalls: permitsTailCalls)
+	let lowered = lowerUnitWith(lowering, unitModule: unitModule, permitsTailCalls: permitsTailCalls)
 	iselProbe.elapsedInto(iselCost)
 
 	let edgeProbe = PhaseProbe.beginCounters()
@@ -453,7 +453,7 @@ end 'lowerAndSplitUnit'
 // ⚠ **IT IS HANDED `cpu` AND `os`, NOT A `Target`, AND ITS OWN CLONE OF THE ABI TABLE.** A
 // `spawn`'s factory arguments are MOVED, and the driver keeps its own `target` and its own table
 // for the rest of the compile — so passing either record would be handing a box to a second green
-// thread while this one still holds it, which is E3138 at best and exit 96 at worst. Two enums are
+// thread while this one still holds it, which the send refuses at best and aborts a seed-built binary at worst. Two enums are
 // scalars and copy; the table arrives `isolated`, cloned per worker.
 //
 // ⛔ **THE ISEL IS BUILT PER MESSAGE AND NEVER HELD.** Its scratches (`CompareFusionCensus`,
@@ -493,7 +493,7 @@ export type BackendWorker
 		let idle = swap self.slot with unit
 
 		modify self.slot 'work'
-			var body = try self.slot.holder.pop() otherwise panic("BackendWorker.run: the unit for function {self.slot.funcIndex} carried no body — `BackendUnit.extract` pushes exactly one")
+			let body = try self.slot.holder.pop() otherwise panic("BackendWorker.run: the unit for function {self.slot.funcIndex} carried no body — `BackendUnit.extract` pushes exactly one")
 			let finished = try self.finish(body)
 			self.slot.finished.push(finished)
 		end 'work'
@@ -507,20 +507,20 @@ export type BackendWorker
 	// op in the flat array beside the coloured one that replaced it, sharing its managed payloads, and
 	// a reply moves, so every record reachable from it must have one owner.
 	module function finish(body BackendUnitBody) returns FinishedUnit throws RegAllocRefusal
-		var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
-		var iselCost = PhaseDelta.zero()
+		let costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
+		let iselCost = PhaseDelta.zero()
 
 		// A `var`: the allocator rewrites its module and function in place.
-		var lowered = lowerAndSplitUnit(self.lowering(), unitModule: body.unitModule, permitsTailCalls: body.encoding.permitsTailCalls, target: self.target, costs: costs, iselCost: iselCost)
+		let lowered = lowerAndSplitUnit(self.lowering(), unitModule: body.unitModule, permitsTailCalls: body.encoding.permitsTailCalls, target: self.target, costs: costs, iselCost: iselCost)
 		body.unitModule.releaseBody()
-		var unitFunc = lowered.targetModule.getFunc(UnitFunctionIndex)
-		var counters = RegAllocCounters.create()
-		var facts = RegAllocFacts.create()
-		var refusal = RegAllocRefusalSite.create()
-		var debugLocations = DebugValueLocationArray.create(0)
-		var debugRanges = DebugValueRangeArray.create(0)
-		var debugSpans = DebugSpanRows.create()
-		var opFacts = OpVariantFacts.create()
+		let unitFunc = lowered.targetModule.getFunc(UnitFunctionIndex)
+		let counters = RegAllocCounters.create()
+		let facts = RegAllocFacts.create()
+		let refusal = RegAllocRefusalSite.create()
+		let debugLocations = DebugValueLocationArray.create(0)
+		let debugRanges = DebugValueRangeArray.create(0)
+		let debugSpans = DebugSpanRows.create()
+		let opFacts = OpVariantFacts.create()
 		try allocateFunctionCore(lowered.targetModule, func: unitFunc, hasAuthor: body.hasAuthor, pool: self.pool, callerSaved: self.callerSaved, file: self.file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: body.debugValues, debugLocations: debugLocations, debugRanges: debugRanges, debugSpans: debugSpans)
 		unitFunc.debugLocalLocations = debugLocations
 		unitFunc.debugLocalRanges = debugRanges
@@ -535,7 +535,7 @@ export type BackendWorker
 		// cleanup rearranges, and a range resolved after it lands on the wrong op without a word.
 		resolveDebugRanges(lowered.targetModule, unitFunc: unitFunc)
 
-		var tail = self.finishFunction(lowered.targetModule, func: unitFunc, encoding: body.encoding)
+		let tail = self.finishFunction(lowered.targetModule, func: unitFunc, encoding: body.encoding)
 		lowered.targetModule.spans.requireParallelTo(lowered.targetModule.ops.count(), what: "after the backend tail")
 		lowered.targetModule.compactOps()
 
@@ -549,17 +549,17 @@ export type BackendWorker
 	// Cleanup before the frame: the frame pass then sees only the surviving blocks, so a callee-saved
 	// register or a call that only unreachable code used is not paid for.
 	function finishFunction(module TargetModule, func IrFunction, encoding FunctionEncodingFacts) returns BackendUnitTail
-		var branchCleanupCost = PhaseDelta.zero()
+		let branchCleanupCost = PhaseDelta.zero()
 		let cleanupProbe = PhaseProbe.beginCounters()
 		cleanUpFunctionBranches(module, func: func)
 		cleanupProbe.elapsedInto(branchCleanupCost)
 
-		var prologueEpilogueCost = PhaseDelta.zero()
+		let prologueEpilogueCost = PhaseDelta.zero()
 		let frameProbe = PhaseProbe.beginCounters()
 		let frame = self.insertFrame(module, func: func)
 		frameProbe.elapsedInto(prologueEpilogueCost)
 
-		var encodeCost = PhaseDelta.zero()
+		let encodeCost = PhaseDelta.zero()
 		let encodeProbe = PhaseProbe.beginCounters()
 		let chunk = self.encode(module, func: func, frame: frame, encoding: encoding)
 		encodeProbe.elapsedInto(encodeCost)
@@ -613,10 +613,10 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	// `regalloc` phase the backend measures around this call, and the whole-compile report nests them
 	// under it and reconciles the two. A locally-created stats object would be a second, disconnected
 	// accounting of the same wall time.
-	var stats = project.timings.regAlloc
+	let stats = project.timings.regAlloc
 
 	let abi = CalleeAbiTable.build(funcNames)
-	var module = assembleTargetModule(stdModule)
+	let module = assembleTargetModule(stdModule)
 	let funcCount = stdModule.funcCount()
 	let sizing = PoolSizing.forJobs(funcCount)
 
@@ -630,14 +630,14 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 		return module
 	end 'nothingToLower'
 
-	var workers = BackendWorkerHandleArray.create(sizing.workerCount, zeroed: false)
+	let workers = BackendWorkerHandleArray.create(sizing.workerCount, zeroed: false)
 
 	for _ in 0 upto sizing.workerCount 'eachWorker'
 		workers.push(spawn BackendWorker.create(target.cpu, os: target.os, abi: abi.clone(), usesGt: usesGt))
 	end 'eachWorker'
 
-	var landed = BackendUnitLandingArray.create(funcCount, zeroed: false)
-	var slots = LandingSlots.create(funcCount)
+	let landed = BackendUnitLandingArray.create(funcCount, zeroed: false)
+	let slots = LandingSlots.create(funcCount)
 
 	// ⭐ **WHAT THE SCHEDULER DID WHILE THE POOL RAN.** A pool of W workers over P processors is only
 	// parallel if the runtime actually SPREADS it, and a work-STEAL is the one event that says an idle
@@ -661,8 +661,8 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 	chunks.reserve(funcCount)
 
 	for funcIndex in 0 upto funcCount 'foldInIndexOrder'
-		var landing = try landed.get(slots.slotOf(funcIndex)) otherwise panic("lowerAndAllocateOnAWorkerPool: landed.get OOB for function {funcIndex}")
-		var func = module.getFunc(funcIndex)
+		let landing = try landed.get(slots.slotOf(funcIndex)) otherwise panic("lowerAndAllocateOnAWorkerPool: landed.get OOB for function {funcIndex}")
+		let func = module.getFunc(funcIndex)
 		performRdataRequests(globalData, module: module, func: func, chunk: landing.tail.chunk, requests: landing.rdata)
 		attachInlineSites(landing.tail.chunk, func: func)
 		foldPoolPhaseDelta(project, phase: CompilePhase.isel, driver: CompilePhase.regalloc, delta: landing.iselCost)
@@ -684,7 +684,7 @@ end 'lowerAndAllocateOnAWorkerPool'
 // records, which the Target tier shares with the Std tier — over empty `ops` and `blocks`, carrying spans
 // exactly when the Std module does.
 function assembleTargetModule(stdModule StdModule) returns TargetModule
-	var module = TargetModule.create()
+	let module = TargetModule.create()
 	module.spans.armed = stdModule.spans.armed
 
 	for func in stdModule.functions 'eachFunc'
@@ -715,9 +715,9 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 	// First-free: a worker keeps no scratch across jobs, and the small functions at the end of the
 	// longest-first order cost what their size does not predict, so a fixed share leaves one worker
 	// running while the rest wait.
-	var dispatch = PoolDispatch.boundedByInFlightSize(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount, assignment: PoolAssignment.firstFree)
-	var replies = BackendReplyArray.create(dispatch.pipelineDepth(), zeroed: false)
-	var arrivedUnits = BackendArrivedUnits.create(stdModule.funcCount(), spent: TargetModule.create())
+	let dispatch = PoolDispatch.boundedByInFlightSize(functionOpTallies(stdModule.functions, blocks: stdModule.blocks), workerCount: workerCount, assignment: PoolAssignment.firstFree)
+	let replies = BackendReplyArray.create(dispatch.pipelineDepth(), zeroed: false)
+	let arrivedUnits = BackendArrivedUnits.create(stdModule.funcCount(), spent: TargetModule.create())
 
 	while dispatch.fillAdmitsAnother() 'fillThePipeline'
 		dispatchOneBackendJob(stdModule, workers: workers, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies, runtimeTier: runtimeTier, spanTable: spanTable)
@@ -737,8 +737,8 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 		let reply = try replies.remove(ready) otherwise panic("drainTheBackendPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
 		if let answer = try await reply 'finished'
-			var returned = answer
-			var done = returned.takeFinished()
+			let returned = answer
+			let done = returned.takeFinished()
 			slots.record(job, slot: landed.count())
 			arrivedUnits.arrive(done.unitModule)
 			landed.push(done.landing)
@@ -778,7 +778,7 @@ export type ArrivedUnits uses Unit
 	var spent as Unit
 
 	export static function create(capacity ElementIndex, spent Unit) returns Self
-		var units = UnitColumn.create(capacity, zeroed: false)
+		let units = UnitColumn.create(capacity, zeroed: false)
 		return Self{units: units, spent: spent}
 	end 'create'
 
@@ -808,7 +808,7 @@ end 'workerRefusedSendMessage'
 // Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch` just
 // recorded the job in.
 function dispatchOneBackendJob(stdModule StdModule, workers BackendWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies BackendReplyArray, runtimeTier FunctionNameSet, spanTable DebugSpanTable)
-	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneBackendJob: workers.get OOB at {workerSlot} below count {workers.count()}")
+	let worker = try workers.get(workerSlot) otherwise panic("dispatchOneBackendJob: workers.get OOB at {workerSlot} below count {workers.count()}")
 	let funcIndex = dispatch.nextJob(workerSlot)
 	replies.push(try worker.run(BackendUnit.extract(stdModule, func: stdModule.getFunc(funcIndex), funcIndex: funcIndex, runtimeTier: runtimeTier, spanTable: spanTable)) otherwise panic("{workerRefusedSendMessage("dispatchOneBackendJob", subject: "the worker running function {funcIndex}")}"))
 end 'dispatchOneBackendJob'
@@ -827,7 +827,7 @@ end 'dispatchOneBackendJob'
 // comparator closure to carry: `size * jobCount + job` is injective for `job < jobCount`, and it is bounded
 // by the total size times the job count. Read back DESCENDING, which is what makes it longest-first.
 function fillLongestFirstOrder(sizes PoolJobSizeArray, jobCount PoolSize, order PoolJobArray, sizeInDispatchOrder PoolJobSizeArray)
-	var keys = LongestFirstKeyArray.create(sizes.count(), zeroed: false)
+	let keys = LongestFirstKeyArray.create(sizes.count(), zeroed: false)
 	let keyStride = jobCount as LongestFirstKey
 
 	for (position, size) in sizes.withIterator() 'eachJob'
@@ -846,7 +846,7 @@ end 'fillLongestFirstOrder'
 // Every function's live op count, in index order — the size both backend pools dispatch a function by. It
 // takes the two arrays rather than a module because it serves two pools over the same Std module.
 export function functionOpTallies(functions IrFunctionArray, blocks IrBlockArray) returns PoolJobSizeArray
-	var sizes = PoolJobSizeArray.create(functions.count(), zeroed: false)
+	let sizes = PoolJobSizeArray.create(functions.count(), zeroed: false)
 
 	for func in functions 'eachFunc'
 		sizes.push(liveOpTallyOf(blocks, func: func) as PoolJobSize)

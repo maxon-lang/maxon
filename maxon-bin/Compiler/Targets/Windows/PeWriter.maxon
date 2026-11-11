@@ -1036,7 +1036,7 @@ end 'importSymbolOf'
 // carries no producer for. ⭐ **ONE WALK SERVES BOTH DLLs** — a second copy for ws2_32 would be
 // exactly the one-fact-written-twice bug this project keeps paying for.
 function importNamesFor(dll ImportDll, optionalImports bool) returns StringArray
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 
 	for slot in IatSlot.allCases 'each'
 		if slotDll(slot) == dll and slotIsEmitted(slot, optionalImports: optionalImports) 'include'
@@ -1191,7 +1191,7 @@ end 'sumHintSizes'
 // The even-padded DLL-name string field (name + NUL, plus one extra NUL when odd
 // so the strings that follow stay even-aligned).
 function dllNameField(name String) returns ByteArray
-	var field = ByteArray.create(0)
+	let field = ByteArray.create(0)
 	field.append(name.toByteArray())
 	field.push(0)
 
@@ -1237,7 +1237,7 @@ end 'appendThunkPass'
 // the two disagreed on order, every DLL would be loaded under its neighbour's name. Emission order is the
 // enum's declaration order, once, in every loop here.
 function buildImportSection(idataRva Rva, gates ImportGates) returns ImportSection
-	var data = ByteArray.create(256, zeroed: false)
+	let data = ByteArray.create(256, zeroed: false)
 
 	let thunkBytes = thunkTableBytes(gates)
 	let iatOffset = 0
@@ -1480,7 +1480,7 @@ end 'writeCoffSymbolEntry'
 // format-5 section-definition aux record) then one external function symbol per
 // DebugSymbol, then the COFF string table. Returns the total symbol count.
 function writeCoffSymbolTable(pe ByteArray, debugSymbols DebugSymbolArray, sections PeSectionList) returns SymbolTally
-	var stringTable = ByteArray.create(0)
+	let stringTable = ByteArray.create(0)
 	writeZeros(stringTable, n: 4)  // reserved 4-byte size prefix, patched below
 
 	var total = 0 as SymbolTally
@@ -1516,7 +1516,7 @@ end 'writeCoffSymbolTable'
 // Build the emitted-section list in emission order — the section-symbol numbering
 // must match the section header order in `writePe`.
 function buildSectionList(codeSize BytePos, hasRdata bool, rdataSize BytePos, hasSymdata bool, symdataSize BytePos, hasData bool, dataSize BytePos, idataSize BytePos, rsrcSize BytePos) returns PeSectionList
-	var sections = PeSectionList.create(0)
+	let sections = PeSectionList.create(0)
 	sections.push(PeSectionRec.create(".text", rawSize: codeSize))
 
 	if hasRdata 'rdata'
@@ -1576,7 +1576,7 @@ let PeVersionComponentCount = 4
 let PeVersionComponentMax = 65535 as VersionComponent
 
 export function peVersionFieldLayout() returns VersionFieldLayout
-	var limits = VersionComponentArray.create(PeVersionComponentCount, zeroed: false)
+	let limits = VersionComponentArray.create(PeVersionComponentCount, zeroed: false)
 
 	for _ in 0 upto PeVersionComponentCount 'eachComponent'
 		limits.push(PeVersionComponentMax)
@@ -1648,7 +1648,7 @@ let VerHeaderBytes = 6
 // widening each byte IS the conversion. `peVersionInfoFor` refuses a non-ASCII stem rather than letting
 // it be mangled here.
 function verUtf16(text String) returns ByteArray
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 
 	for b in text.toByteArray() 'eachByte'
 		writeWord(out, value: b as MachineWord)
@@ -1661,7 +1661,7 @@ end 'verUtf16'
 // The bytes needed to reach the next 32-bit boundary, returned rather than appended so each caller
 // decides whether they count toward its own length.
 function verPadding(length BytePos) returns ByteArray
-	var pad = ByteArray.create(0)
+	let pad = ByteArray.create(0)
 	var n = length
 
 	while n mod 4 != 0 'align'
@@ -1690,12 +1690,12 @@ function verStringEntry(key String, value String) returns ByteArray
 	let keyBytes = verUtf16(key)
 	let valueBytes = verUtf16(value)
 
-	var body = ByteArray.create(0)
+	let body = ByteArray.create(0)
 	body.append(keyBytes)
 	body.append(verPadding((VerHeaderBytes + body.count()) as BytePos))
 	body.append(valueBytes)
 
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	writeWord(out, value: (VerHeaderBytes + body.count()) as MachineWord)
 	writeWord(out, value: (valueBytes.count() / 2) as MachineWord)
 	writeWord(out, value: VerTypeText)
@@ -1708,12 +1708,12 @@ end 'verStringEntry'
 function verContainer(key String, children ByteArray) returns ByteArray
 	let keyBytes = verUtf16(key)
 
-	var body = ByteArray.create(0)
+	let body = ByteArray.create(0)
 	body.append(keyBytes)
 	body.append(verPadding((VerHeaderBytes + body.count()) as BytePos))
 	body.append(children)
 
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	writeWord(out, value: (VerHeaderBytes + body.count()) as MachineWord)
 	writeWord(out, value: 0)
 	writeWord(out, value: VerTypeText)
@@ -1728,7 +1728,7 @@ function verFixedFileInfo(version PeVersionInfo) returns ByteArray
 	let high = ((version.major * VerHighWord) + version.minor) as MachineWord
 	let low = ((version.patch * VerHighWord) + version.build) as MachineWord
 
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	writeDword(out, value: VerFixedFileInfoSignature)
 	writeDword(out, value: VerFixedFileInfoStrucVersion)
 	writeDword(out, value: high)
@@ -1748,7 +1748,7 @@ end 'verFixedFileInfo'
 // The string table's name: the language and the code page as one DWORD in hex, most significant digit
 // first. Prepending each little-endian byte is what puts them in that order.
 function verStringTableName() returns String
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	writeDword(bytes, value: (VerLangIdEnUs * VerHighWord) + VerCodePageUtf16)
 
 	var name = ""
@@ -1764,7 +1764,7 @@ end 'verStringTableName'
 function buildVersionResource(version PeVersionInfo) returns ByteArray
 	let dotted = "{version.major}.{version.minor}.{version.patch}.{version.build}"
 
-	var strings = ByteArray.create(0)
+	let strings = ByteArray.create(0)
 	verAppendChild(strings, base: 0, child: verStringEntry("Comments", value: version.comments))
 	verAppendChild(strings, base: 0, child: verStringEntry("FileDescription", value: version.product))
 	verAppendChild(strings, base: 0, child: verStringEntry("FileVersion", value: dotted))
@@ -1778,17 +1778,17 @@ function buildVersionResource(version PeVersionInfo) returns ByteArray
 
 	// ⚠ `Translation` IS THE ONE BINARY VALUE HERE, and its two words are in the OPPOSITE order to
 	// the string table's name: the language first, then the code page.
-	var translation = ByteArray.create(0)
+	let translation = ByteArray.create(0)
 	writeWord(translation, value: VerLangIdEnUs)
 	writeWord(translation, value: VerCodePageUtf16)
 
 	let translationKey = verUtf16("Translation")
-	var varBody = ByteArray.create(0)
+	let varBody = ByteArray.create(0)
 	varBody.append(translationKey)
 	varBody.append(verPadding((VerHeaderBytes + varBody.count()) as BytePos))
 	varBody.append(translation)
 
-	var varEntry = ByteArray.create(0)
+	let varEntry = ByteArray.create(0)
 	writeWord(varEntry, value: (VerHeaderBytes + varBody.count()) as MachineWord)
 	writeWord(varEntry, value: translation.count() as MachineWord)
 	writeWord(varEntry, value: VerTypeBinary)
@@ -1798,7 +1798,7 @@ function buildVersionResource(version PeVersionInfo) returns ByteArray
 	let rootKey = verUtf16("VS_VERSION_INFO")
 	let fixed = verFixedFileInfo(version)
 
-	var rootBody = ByteArray.create(0)
+	let rootBody = ByteArray.create(0)
 	rootBody.append(rootKey)
 	rootBody.append(verPadding((VerHeaderBytes + rootBody.count()) as BytePos))
 	rootBody.append(fixed)
@@ -1806,7 +1806,7 @@ function buildVersionResource(version PeVersionInfo) returns ByteArray
 	verAppendChild(rootBody, base: VerHeaderBytes, child: stringFileInfo)
 	verAppendChild(rootBody, base: VerHeaderBytes, child: varFileInfo)
 
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	writeWord(out, value: (VerHeaderBytes + rootBody.count()) as MachineWord)
 	writeWord(out, value: fixed.count() as MachineWord)
 	writeWord(out, value: VerTypeBinary)
@@ -1879,7 +1879,7 @@ end 'writeResourceDirHeader'
 // directory-entry offset here, which is section-relative. Getting that one field wrong produces a
 // binary that loads and whose resources cannot be read.
 function buildRsrcSection(rsrcRva Rva, version PeVersionInfo) returns ByteArray
-	var rsrc = ByteArray.create(0)
+	let rsrc = ByteArray.create(0)
 	let manifest = manifestXml()
 	let versionBlob = buildVersionResource(version)
 
@@ -1929,9 +1929,9 @@ end 'buildRsrcSection'
 // --- Main PE writer ---
 
 export function writePe(outputPath FilePath, codeResult CodeResult, target Target, productVersion VersionComponentArray) returns ImagePlacement
-	var pe = ByteArray.create(4096, zeroed: false)
+	let pe = ByteArray.create(4096, zeroed: false)
 
-	var code = codeResult.code
+	let code = codeResult.code
 	let codeSize = code.count()
 	let rdataSize = codeResult.rdata.count()
 	let symdataSize = codeResult.symdata.count()

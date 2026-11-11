@@ -176,8 +176,8 @@ module function unswitchInFunc(module StdModule, func IrFunction, origins Derive
 	end 'loopless'
 
 	let tree = StdDominatorTree.buildFromSuccessors(succ, blockCount: blockCount)
-	var analysis = UnswitchFunction.gather(module, func: func, tree: tree, scratch: scratch)
-	var plans = UnswitchPlanArray.create(0)
+	let analysis = UnswitchFunction.gather(module, func: func, tree: tree, scratch: scratch)
+	let plans = UnswitchPlanArray.create(0)
 
 	// Outermost first: the discovery order is innermost-first for a nest (`NaturalLoops.headers`).
 	var next = loops.headers.count()
@@ -187,7 +187,7 @@ module function unswitchInFunc(module StdModule, func IrFunction, origins Derive
 		let header = (try loops.headers.get(next) otherwise panic("unswitchInvariantGuards: headers.get OOB at {next}"))
 		loops.collect(analysis.tree.pred, header: header, into: scratch.members)
 
-		var plan = UnswitchPlan.create(header, members: scratch.members.blocks)
+		let plan = UnswitchPlan.create(header, members: scratch.members.blocks)
 
 		if analyzeLoop(module, func: func, analysis: analysis, plan: plan, budget: budget, scratch: scratch) 'admitted'
 			analysis.markVersioned(plan)
@@ -200,16 +200,16 @@ module function unswitchInFunc(module StdModule, func IrFunction, origins Derive
 	end 'nothingAdmitted'
 
 	// Seeded ONCE, past every id the function uses; every copy, chain value and exit phi mints from here.
-	var minter = ValueMinter.resuming(analysis.valueBound)
-	var columns = RewriteColumns.identity(analysis.valueBound, blockBound: func.nextBlockId, origins: origins)
+	let minter = ValueMinter.resuming(analysis.valueBound)
+	let columns = RewriteColumns.identity(analysis.valueBound, blockBound: func.nextBlockId, origins: origins)
 
 	for index in 0 upto plans.count() 'eachExitPhi'
-		var plan = try plans.get(index) otherwise panic("unswitchInvariantGuards: plans.get OOB at {index}")
+		let plan = try plans.get(index) otherwise panic("unswitchInvariantGuards: plans.get OOB at {index}")
 		substituteExitPhis(module, func: func, analysis: analysis, plan: plan, scratch: scratch, columns: columns, minter: minter)
 	end 'eachExitPhi'
 
 	for index in 0 upto plans.count() 'eachCopy'
-		var plan = try plans.get(index) otherwise panic("unswitchInvariantGuards: plans.get OOB at {index}")
+		let plan = try plans.get(index) otherwise panic("unswitchInvariantGuards: plans.get OOB at {index}")
 		applyPlan(module, func: func, plan: plan, analysis: analysis, scratch: scratch, columns: columns, minter: minter)
 	end 'eachCopy'
 
@@ -265,8 +265,8 @@ type UnswitchFunction
 	static function gather(module StdModule, func IrFunction, tree StdDominatorTree, scratch UnswitchScratch) returns UnswitchFunction
 		let reader = StdShapeReader.create(module, func: func)
 		let valueBound = reader.defs.valueBound()
-		var insideVersioned = FixedBoolArray.create(tree.blockCount)
-		var versionedHeader = FixedBoolArray.create(tree.blockCount)
+		let insideVersioned = FixedBoolArray.create(tree.blockCount)
+		let versionedHeader = FixedBoolArray.create(tree.blockCount)
 		return Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, sites: ReadSites.collect(module, func: func, valueBound: valueBound, scratch: scratch), valueBound: valueBound, insideVersioned: insideVersioned, versionedHeader: versionedHeader}
 	end 'gather'
 
@@ -308,11 +308,11 @@ type ReadSites
 	export var edgeReaders as CsrGraph
 
 	static function collect(module StdModule, func IrFunction, valueBound ValueId, scratch UnswitchScratch) returns ReadSites
-		var sites = Self{opReaders: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0)), siteOp: OpIndexArray.create(0), sitePosition: BlockPositionColumn.create(0), edgeReaders: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0))}
-		var readValue = CsrColumn.create(0)
-		var readSite = CsrColumn.create(0)
-		var edgeValue = CsrColumn.create(0)
-		var edgeAt = CsrColumn.create(0)
+		let sites = Self{opReaders: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0)), siteOp: OpIndexArray.create(0), sitePosition: BlockPositionColumn.create(0), edgeReaders: CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0))}
+		let readValue = CsrColumn.create(0)
+		let readSite = CsrColumn.create(0)
+		let edgeValue = CsrColumn.create(0)
+		let edgeAt = CsrColumn.create(0)
 
 		for position in 0 upto func.blockRefs.count() 'eachBlock'
 			let block = module.blockAtPosition(func, position: position)
@@ -442,7 +442,7 @@ type UnswitchPlan
 	export var exitPhis as ValueIdArray
 
 	static function create(header ElementIndex, members CsrColumn) returns UnswitchPlan
-		var positions = BlockPositionColumn.create(members.count(), zeroed: false)
+		let positions = BlockPositionColumn.create(members.count(), zeroed: false)
 
 		for member in members 'eachMember'
 			positions.push(member)
@@ -473,9 +473,6 @@ type UnswitchPlan
 		return false
 	end 'hasGuard'
 
-	// An INDEX loop rather than `withIterator`, here and at the two sites below: an iterator's `current`
-	// and `advance` are witness dispatches, and this pass runs on a pool worker, where a dispatch the
-	// compiler cannot name makes every address-taken function in the program message-reachable.
 	function guardAt(position ElementIndex) returns UnswitchGuard throws UnswitchGuardLookup
 		for index in 0 upto self.guards.count() 'eachGuard'
 			let guard = try self.guards.get(index) otherwise panic("unswitchInvariantGuards: guards.get OOB at {index}")
@@ -1000,7 +997,7 @@ end 'servesAsTheExit'
 // The hoisted set: every invariant record-field and refcount load, every admitted guard's compare, and
 // every invariant loop-defined value those compares read, transitively.
 function markHoisted(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch)
-	var worklist = ValueIdArray.create(0)
+	let worklist = ValueIdArray.create(0)
 
 	for position in plan.walkOrder 'eachBlock'
 		let block = module.blockAtPosition(func, position: position)
@@ -1104,7 +1101,7 @@ end 'HoistNumbering'
 // read through the numbering already made, so a chain of duplicates — the refcount load over a
 // duplicate buffer load over one record — collapses whole.
 function numberHoisted(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, scratch UnswitchScratch)
-	var numbering = HoistNumbering.create()
+	let numbering = HoistNumbering.create()
 
 	for index in 0 upto plan.walkOrder.count() 'eachBlock'
 		let position = try plan.walkOrder.get(index) otherwise panic("unswitchInvariantGuards: walkOrder.get OOB at {index}")
@@ -1131,7 +1128,7 @@ function numberHoisted(module StdModule, func IrFunction, analysis UnswitchFunct
 end 'numberHoisted'
 
 function numberHoistedOp(analysis UnswitchFunction, scratch UnswitchScratch, numbering HoistNumbering, valueId ValueId) returns ValueId
-	var reader = analysis.reader
+	let reader = analysis.reader
 
 	if reader.loadDefining(valueId) 'aLoad'
 		return numbering.numberOf(HoistShape.load, left: canonicalOf(scratch.canonical, valueId: reader.load.addrId) as HoistKeyWord, right: reader.load.offset as HoistKeyWord, opcode: NoOpcodeInKey, operandWidth: reader.load.valueType.ordinal as HoistKeyWord, valueId: valueId)
@@ -1304,13 +1301,13 @@ type RewriteColumns
 	var origins as DerivedOrigins
 
 	static function identity(valueBound ValueId, blockBound BlockId, origins DerivedOrigins) returns RewriteColumns
-		var valueSubst = ValueIdArray.create(valueBound, zeroed: false)
+		let valueSubst = ValueIdArray.create(valueBound, zeroed: false)
 
 		for valueId in 0 upto valueBound 'eachValue'
 			valueSubst.push(valueId)
 		end 'eachValue'
 
-		var blockSubst = BlockIdArray.create(blockBound, zeroed: false)
+		let blockSubst = BlockIdArray.create(blockBound, zeroed: false)
 
 		for blockId in 0 upto blockBound 'eachBlock'
 			blockSubst.push(blockId)
@@ -1378,15 +1375,15 @@ function applyPlan(module StdModule, func IrFunction, plan UnswitchPlan, analysi
 end 'applyPlan'
 
 function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
-	var copyRefs = BlockRefArray.create(plan.members.count(), zeroed: false)
+	let copyRefs = BlockRefArray.create(plan.members.count(), zeroed: false)
 
 	for index in 0 upto plan.members.count() 'eachMember'
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
-		view original = module.blockAtPosition(func, position: position)
+		let original = module.blockAtPosition(func, position: position)
 
 		// The label and the site are the copy's OWN boxes: this pass runs on a pool worker, and the function
 		// crosses back to the driver as a graph whose every record must have one owner (`StdUnit`).
-		view copy = module.addBlock(func, label: original.label, heat: original.heat, inlineSite: copiedInlineSite(original.inlineSite), role: original.role)
+		let copy = module.addBlock(func, label: original.label, heat: original.heat, inlineSite: copiedInlineSite(original.inlineSite), role: original.role)
 		columns.mapBlock(original.id, fresh: copy.id)
 		copyRefs.push(registeredBlockRef(module, func: func, block: copy))
 	end 'eachMember'
@@ -1404,8 +1401,8 @@ end 'copyLoop'
 // of one — an op's, the terminator's or an edge's — reads the chain's value.
 function readHoistedInPlace(module StdModule, func IrFunction, plan UnswitchPlan, scratch UnswitchScratch, columns RewriteColumns)
 	for position in plan.members 'eachMember'
-		var block = module.blockAtPosition(func, position: position)
-		var kept = OpIndexArray.create(0)
+		let block = module.blockAtPosition(func, position: position)
+		let kept = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
@@ -1471,7 +1468,7 @@ type TestChain
 	function block(module StdModule, func IrFunction) returns IrBlock
 		if not self.open 'openOne'
 			// The chain runs once per loop entry.
-			view fresh = module.addBlock(func, label: UnswitchTestLabel, heat: BlockHeat.normal, inlineSite: copiedInlineSite(self.inlineSite))
+			let fresh = module.addBlock(func, label: UnswitchTestLabel, heat: BlockHeat.normal, inlineSite: copiedInlineSite(self.inlineSite))
 			self.currentRef = registeredBlockRef(module, func: func, block: fresh)
 			self.open = true
 
@@ -1510,12 +1507,12 @@ end 'TestChain'
 // each admitted guard's compare closing a block whose refusal goes to `__us_slow` (which enters the
 // original) and whose pass goes on to the next test, the last pass entering the copy.
 function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, analysis UnswitchFunction, scratch UnswitchScratch, columns RewriteColumns, minter ValueMinter)
-	var chain = TestChain.create(module.blockAtPosition(func, position: plan.header).inlineSite)
+	let chain = TestChain.create(module.blockAtPosition(func, position: plan.header).inlineSite)
 	var guardCursor = 0 as ElementIndex
 	var hoistCursor = 0 as ElementIndex
 
 	for position in plan.walkOrder 'eachBlock'
-		view block = module.blockAtPosition(func, position: position)
+		let block = module.blockAtPosition(func, position: position)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
@@ -1638,18 +1635,18 @@ function wireTestChain(module StdModule, func IrFunction, plan UnswitchPlan, cha
 		return
 	end 'nothingEmitted'
 
-	view header = module.blockAtPosition(func, position: plan.header)
+	let header = module.blockAtPosition(func, position: plan.header)
 	let headerId = header.id
 	let copyHeaderId = clonedBlock(headerId, subst: columns.blockSubst)
-	var preheader = module.blockAtPosition(func, position: plan.preheader)
+	let preheader = module.blockAtPosition(func, position: plan.preheader)
 	let takesArgs = header.blockArgs.count() != 0
-	var entryArgs = edgeArgsTo(preheader, targetId: headerId, takesArgs: takesArgs)
+	let entryArgs = edgeArgsTo(preheader, targetId: headerId, takesArgs: takesArgs)
 
 	// Ops hoisted after the last test sit in an open block that enters the copy directly.
 	var fastEntry = copyHeaderId
 
 	if chain.open 'trailingOps'
-		var trailing = module.getBlock(chain.currentRef)
+		let trailing = module.getBlock(chain.currentRef)
 		module.setTerminator(trailing, op: StdOp.branch(copyHeaderId))
 
 		if takesArgs 'headerTakesArgs'
@@ -1661,7 +1658,7 @@ function wireTestChain(module StdModule, func IrFunction, plan UnswitchPlan, cha
 
 	if chain.testRefs.count() != 0 'aTestCanRefuse'
 		// Entered once per loop entry whose guards refuse; it only forwards to the original loop.
-		var slow = module.addBlock(func, label: UnswitchSlowLabel, heat: BlockHeat.normal, inlineSite: copiedInlineSite(header.inlineSite))
+		let slow = module.addBlock(func, label: UnswitchSlowLabel, heat: BlockHeat.normal, inlineSite: copiedInlineSite(header.inlineSite))
 		module.setTerminator(slow, op: StdOp.branch(headerId))
 
 		if takesArgs 'slowCarriesArgs'
@@ -1685,7 +1682,7 @@ end 'wireTestChain'
 
 function wireTests(module StdModule, chain TestChain, slowId BlockId, fastEntry BlockId, copyHeaderId BlockId, takesArgs bool, entryArgs ValueIdArray)
 	for k in 0 upto chain.testRefs.count() 'eachTest'
-		var test = module.getBlock(try chain.testRefs.get(k) otherwise panic("unswitchInvariantGuards: testRefs.get OOB at {k}"))
+		let test = module.getBlock(try chain.testRefs.get(k) otherwise panic("unswitchInvariantGuards: testRefs.get OOB at {k}"))
 		let condId = try chain.testConds.get(k) otherwise panic("unswitchInvariantGuards: testConds.get OOB at {k}")
 		var passId = fastEntry
 
@@ -1705,11 +1702,11 @@ end 'wireTests'
 // `condBranch` becomes `branch(else)` and keeps only that edge — and its edges, with the exit phis'
 // values appended on every edge into the exit block.
 function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, position ElementIndex, copyRef ElementIndex, scratch UnswitchScratch, columns RewriteColumns)
-	view original = module.blockAtPosition(func, position: position)
-	var copy = module.getBlock(copyRef)
+	let original = module.blockAtPosition(func, position: position)
+	let copy = module.getBlock(copyRef)
 
 	if original.blockArgs.count() != 0 'hasPhis'
-		var blockArgs = IrBlockArgArray.create(original.blockArgs.count(), zeroed: false)
+		let blockArgs = IrBlockArgArray.create(original.blockArgs.count(), zeroed: false)
 
 		for blockArg in original.blockArgs 'eachPhi'
 			blockArgs.push(IrBlockArg.create(clonedValue(blockArg.valueId, subst: columns.valueSubst), argType: blockArg.argType))
@@ -1749,7 +1746,7 @@ end 'copyMember'
 // targets and args remapped. An exiting member's edge into the exit already carries the escaping
 // values — `attachExitPhis` runs before any copy — and the column maps each to the copy's own.
 function copiedEdges(original IrBlock, folded bool, keptTargetId BlockId, columns RewriteColumns) returns BranchEdgeArray
-	var edges = BranchEdgeArray.create(original.branchEdges.count(), zeroed: false)
+	let edges = BranchEdgeArray.create(original.branchEdges.count(), zeroed: false)
 
 	for edge in original.branchEdges 'eachEdge'
 		if folded and edge.targetBlockId != keptTargetId 'theRefusedArm'
@@ -1765,8 +1762,8 @@ end 'copiedEdges'
 // The exit block takes one phi per escaping value, and every exiting member's edge into it carries the
 // value itself — the copy's edges, remapped from these, then carry the copy's.
 function attachExitPhis(module StdModule, func IrFunction, analysis UnswitchFunction, plan UnswitchPlan, columns RewriteColumns, minter ValueMinter)
-	var exit = module.blockAtPosition(func, position: plan.exit)
-	var blockArgs = IrBlockArgArray.create(exit.blockArgs.count() + plan.escapingTypes.count(), zeroed: false)
+	let exit = module.blockAtPosition(func, position: plan.exit)
+	let blockArgs = IrBlockArgArray.create(exit.blockArgs.count() + plan.escapingTypes.count(), zeroed: false)
 
 	for blockArg in exit.blockArgs 'eachExisting'
 		blockArgs.push(blockArg)
@@ -1789,13 +1786,13 @@ function attachExitPhis(module StdModule, func IrFunction, analysis UnswitchFunc
 			continue
 		end 'notAnExitingMember'
 
-		var member = module.blockAtPosition(func, position: position)
+		let member = module.blockAtPosition(func, position: position)
 		member.branchEdges = edgesWithEscapingAppended(member, exitId: exit.id, plan: plan)
 	end 'eachMember'
 end 'attachExitPhis'
 
 function edgesWithEscapingAppended(member IrBlock, exitId BlockId, plan UnswitchPlan) returns BranchEdgeArray
-	var edges = BranchEdgeArray.create(member.branchEdges.count(), zeroed: false)
+	let edges = BranchEdgeArray.create(member.branchEdges.count(), zeroed: false)
 	var exitEdgeCarried = false
 
 	for edge in member.branchEdges 'eachEdge'
@@ -1804,7 +1801,7 @@ function edgesWithEscapingAppended(member IrBlock, exitId BlockId, plan Unswitch
 			continue
 		end 'elsewhere'
 
-		var args = ValueIdArray.create(0)
+		let args = ValueIdArray.create(0)
 		args.append(edge.argIds)
 		args.append(plan.escaping)
 		edges.push(BranchEdge.create(exitId, argIds: args))
@@ -1812,7 +1809,7 @@ function edgesWithEscapingAppended(member IrBlock, exitId BlockId, plan Unswitch
 	end 'eachEdge'
 
 	if not exitEdgeCarried 'newEdgeIntoTheExit'
-		var args = ValueIdArray.create(0)
+		let args = ValueIdArray.create(0)
 		args.append(plan.escaping)
 		edges.push(BranchEdge.create(exitId, argIds: args))
 	end 'newEdgeIntoTheExit'

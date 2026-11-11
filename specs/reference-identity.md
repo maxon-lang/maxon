@@ -272,7 +272,7 @@ end 'Point'
 
 function main() returns ExitCode
 	let a = Point.create(1, y: 2)
-	var b = a.clone()
+	let b = a.clone()
 	b.x = 99
 	return a.x
 end 'main'
@@ -358,7 +358,7 @@ and shares the one record, so `b is A` — that is `assignment-creates-alias` an
 a container OUTLIVES the statement and may be written through later, and a write through it would land on
 the image. So a store into a container whose elements are writable is `E3196`: the program takes its
 private copy with `.clone()` (`a-durable-store-of-a-cloned-constant-is-its-own-object`) or declares the
-container's elements `immutable` or `readonly` (`a-readonly-container-accepts-a-constant`).
+container's elements `immutable` (`an-immutable-container-accepts-a-constant`).
 
 ⚠ **THE REFUSAL IS WHAT KEEPS THE PAGE UNWRITTEN.** Push a constant into an array, take the element back
 out and `push` to it: without the refusal that write reaches `.rdata` and faults on x64, or — with no
@@ -400,9 +400,9 @@ function main() returns ExitCode
 		result = result + 1
 	end 'bindingBorrows'
 
-	var h = Holder.create(0)
+	let h = Holder.create(0)
 	h.push(Anchor.clone())
-	view stored = try h.get(0) otherwise NumArray.create(0)
+	let stored = try h.get(0) otherwise NumArray.create(0)
 	if stored is not Anchor 'storeCopies'
 		result = result + 2
 	end 'storeCopies'
@@ -414,21 +414,21 @@ end 'main'
 3
 ```
 
-<!-- test: a-readonly-container-accepts-a-constant -->
-⭐ **A `readonly` ELEMENT TYPE TAKES A READ-ONLY VALUE.** Nothing can write through the container's elements,
+<!-- test: an-immutable-container-accepts-a-constant -->
+⭐ **AN `immutable` ELEMENT TYPE TAKES A FROZEN VALUE.** Nothing can write through the container's elements,
 so the image is never written and the store the case above refuses is accepted: the container holds the
 constant and reads it back.
 ```maxon
 typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
-typealias Holder = Array with readonly NumArray
+typealias Holder = Array with immutable NumArray
 
 let Anchor = NumArray.create(0)
 
 function main() returns ExitCode
-	var h = Holder.create(0)
+	let h = Holder.create(0)
 	h.push(Anchor)
-	view stored = try h.get(0) otherwise NumArray.create(0)
+	let stored = try h.get(0) otherwise NumArray.create(0)
 	return (h.count() as ExitCode) + (stored.count() as ExitCode)
 end 'main'
 ```
@@ -436,21 +436,21 @@ end 'main'
 1
 ```
 
-<!-- test: a-readonly-container-keeps-the-constants-identity -->
-⭐ **A `readonly` ELEMENT NEEDS NO PRIVATE COPY OF AN IMMORTAL IMAGE.** The container shares the constant's own
+<!-- test: an-immutable-container-keeps-the-constants-identity -->
+⭐ **AN `immutable` ELEMENT NEEDS NO PRIVATE COPY OF AN IMMORTAL IMAGE.** The container shares the constant's own
 record, so the element read back IS the constant: `stored is Anchor`, where a container of writable elements
 holds a private copy and `is` answers false (`a-durable-store-of-a-cloned-constant-is-its-own-object`).
 ```maxon
 typealias Num = int(0 to 1000)
 typealias NumArray = Array with Num
-typealias Holder = Array with readonly NumArray
+typealias Holder = Array with immutable NumArray
 
 let Anchor = NumArray.create(0)
 
 function main() returns ExitCode
-	var h = Holder.create(0)
+	let h = Holder.create(0)
 	h.push(Anchor)
-	view stored = try h.get(0) otherwise NumArray.create(0)
+	let stored = try h.get(0) otherwise NumArray.create(0)
 
 	if stored is Anchor 'keepsIdentity'
 		return 1
@@ -461,92 +461,4 @@ end 'main'
 ```
 ```exitcode
 1
-```
-
-<!-- test: a-durable-store-of-a-let-map-is-refused -->
-⭐ **THE REFUSAL IS ABOUT IMAGE DATA, NOT ABOUT ARRAYS**, and a `Map` is the shape that proves it. The
-case above pins the rule with an `Array`; a `Map` is `genericInstance`-tagged and would reach the same sink
-by a different road, holding the module-level `let` itself, where a write through it lands on the image: **a
-panic in `Map.ensureCapacity` on x64, and on wasm32-wasi — which has no read-only section — a SILENT rewrite
-of the constant.** The store is `E3196` for a `Map` as for an `Array`.
-```maxon
-typealias Key = int(0 to 1000)
-typealias KeyMap = Map with (Key, Key)
-typealias MapBox = Array with KeyMap
-
-let Shared = KeyMap.create()
-
-function main() returns ExitCode
-	var box = MapBox.create(0)
-	box.push(Shared)
-	return box.count() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3196: <fragment>:10:11: cannot store an immutable 'KeyMap' into 'an element of the container push writes', which holds a mutable 'KeyMap'; declare the element `immutable KeyMap`
-```
-
-<!-- test: a-durable-store-of-a-cloned-let-map-copies-it -->
-⭐ **THE CLONE IS THE COPY, AND THE `Map` BEHIND IT IS WRITABLE.** `held` must see its own entry and `Shared`
-must still be empty — `1` and `0`, so `10`. `11` here would mean the `upsert` reached `Shared`: the wrong
-answer a copy exists to prevent, and a write to a read-only page besides.
-```maxon
-typealias Key = int(0 to 1000)
-typealias KeyMap = Map with (Key, Key)
-typealias MapBox = Array with KeyMap
-
-let Shared = KeyMap.create()
-
-function main() returns ExitCode
-	var box = MapBox.create(0)
-	box.push(Shared.clone())
-	var held = try box.get(0) otherwise KeyMap.create()
-	held.upsert(7, value: 7)
-	return ((held.count() as ExitCode) * 10) + (Shared.count() as ExitCode)
-end 'main'
-```
-```exitcode
-10
-```
-
-<!-- test: a-field-of-an-imaged-container-let-is-readable -->
-⭐ **AN IMAGED RECORD IS STILL A RECORD, AND ITS FIELDS ARE STILL FIELDS.** Imaging changes where a
-module-level `let` LIVES, never what may be read from it. A `String`, a `b"…"` blob and an empty
-`Array` have no field a caller can name; a declared container box has fields, and the receiver road for
-a managed constant must reach them rather than resolve the chain to `undefinedVariable`.
-
-⚠ **THE TWO LINES BELOW TAKE DIFFERENT ROADS.** `Shared.size()` is a
-method call and resolves through the receiver dispatch; `Shared.items` is a field chain. A diagnostic
-that fires on the second while the first compiles reports the base as undefined on the line AFTER the
-line that used it successfully, which sends the reader hunting for a typo in a name that is plainly
-declared. `Shared.version` pins the scalar field beside the container one, because a struct is admitted
-to the image on the strength of its scalar fields folding and it is exactly that admission which puts
-the record on this road.
-```maxon
-typealias Ver = int(0 to 100)
-
-type Bag uses T
-	typealias Items = Array with T
-	export var items = Items.create(0)
-	export var version = 7 as Ver
-	static function create() returns Self
-		return Self{}
-	end 'create'
-	function size() returns ExitCode
-		return self.items.count() as ExitCode
-	end 'size'
-end 'Bag'
-
-typealias StrBag = Bag with String
-
-let Shared = StrBag.create()
-
-function main() returns ExitCode
-	let viaMethod = Shared.size()
-	let viaField = Shared.items.count() as ExitCode
-	return ((Shared.version as ExitCode) * 10) + viaMethod + viaField
-end 'main'
-```
-```exitcode
-70
 ```

@@ -1077,7 +1077,7 @@ function putElement(values IntArray, index ElementIndex, value Integer)
 end 'putElement'
 
 function main() returns ExitCode
-	var values = IntArray.create(0)
+	let values = IntArray.create(0)
 	values.push(20)
 	values.push(0)
 	putElement(values, index: 1, value: 1)
@@ -1564,7 +1564,7 @@ function fill(output ByteArray, count ByteCount, value Byte)
 end 'fill'
 
 function main() returns ExitCode
-	var output = ByteArray.create(0)
+	let output = ByteArray.create(0)
 	fill(output, count: 42, value: 7)
 	return output.count() as ExitCode
 end 'main'
@@ -2938,7 +2938,7 @@ typealias Total = int(0 to 1000000)
 
 function walk(values ByteArray) returns Total
 	var total = 0 as Total
-	var cursor = try values.createIterator() otherwise return total
+	let cursor = try values.createIterator() otherwise return total
 
 	while true 'visit'
 		total = (total as FullRangeInt + cursor.current() as FullRangeInt + cursor.index() as FullRangeInt) as Total
@@ -2950,12 +2950,12 @@ function walk(values ByteArray) returns Total
 end 'walk'
 
 function main() returns ExitCode
-	var first = ByteArray.create(0)
+	let first = ByteArray.create(0)
 	first.push(10)
 	first.push(20)
 	first.push(9)
 
-	var second = ByteArray.create(0)
+	let second = ByteArray.create(0)
 	second.push(1)
 	second.push(2)
 
@@ -7331,7 +7331,7 @@ func @main {
     x64.movRegReg r14, r10
     x64.storeSlotReg slot3, r14
     x64.movRegReg rcx, rbx
-    x64.callMem [r12 + 48]
+    x64.callMem [r12 + 40]
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -7347,7 +7347,7 @@ func @main {
     x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
     x64.movRegReg rcx, r13
-    x64.callMem [r14 + 48]
+    x64.callMem [r14 + 40]
     x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -7622,7 +7622,7 @@ func @main {
     x64.movRegReg r14, r10
     x64.storeSlotReg slot3, r14
     x64.movRegReg rcx, rbx
-    x64.callMem [r12 + 48]
+    x64.callMem [r12 + 40]
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -7638,7 +7638,7 @@ func @main {
     x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
     x64.movRegReg rcx, r13
-    x64.callMem [r14 + 48]
+    x64.callMem [r14 + 40]
     x64.movRegReg r13, r8
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
@@ -7894,7 +7894,7 @@ func @main {
     arm64.movRegReg x22, x9
     arm64.storeSlotReg slot3, x22
     arm64.movRegReg x0, x19
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
     arm64.blr x16
     arm64.movRegReg x19, x0
     arm64.movImm x0, 21
@@ -7910,7 +7910,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.movRegReg x0, x21
-    arm64.loadRegBaseDisp.word64 x16, [x22 + 48]
+    arm64.loadRegBaseDisp.word64 x16, [x22 + 40]
     arm64.blr x16
     arm64.movRegReg x21, x0
     arm64.movImm x0, 21
@@ -8169,7 +8169,7 @@ func @main {
     arm64.movRegReg x22, x9
     arm64.storeSlotReg slot3, x22
     arm64.movRegReg x0, x19
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
     arm64.blr x16
     arm64.movRegReg x19, x0
     arm64.movImm x0, 21
@@ -8185,7 +8185,7 @@ func @main {
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.movRegReg x0, x21
-    arm64.loadRegBaseDisp.word64 x16, [x22 + 48]
+    arm64.loadRegBaseDisp.word64 x16, [x22 + 40]
     arm64.blr x16
     arm64.movRegReg x21, x0
     arm64.movImm x0, 21

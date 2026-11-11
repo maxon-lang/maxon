@@ -412,7 +412,7 @@ function machoDylibIsLinked(dylib OsImportDylib, usesTrustStore bool) returns bo
 end 'machoDylibIsLinked'
 
 function machoLinkedDylibs(usesTrustStore bool) returns OsImportDylibArray
-	var linked = OsImportDylibArray.create(0)
+	let linked = OsImportDylibArray.create(0)
 
 	for dylib in OsImportDylib.allCases 'each'
 		if machoDylibIsLinked(dylib, usesTrustStore: usesTrustStore) 'isLinked'
@@ -434,7 +434,7 @@ function machoDylibOrdinal(dylib OsImportDylib, usesTrustStore bool) returns Byt
 end 'machoDylibOrdinal'
 
 function machoLinkedImportSlots(usesTrustStore bool) returns OsImportSlotArray
-	var slots = OsImportSlotArray.create(0)
+	let slots = OsImportSlotArray.create(0)
 	var dropped = false
 
 	for slot in OsImportSlot.allCases 'each'
@@ -524,7 +524,7 @@ end 'writeMachoSectionHeader'
 // boundary) this fails the build instead of shipping a binary that jumps into the bind words.
 function buildGot(usesTrustStore bool) returns ByteArray
 	let count = machoImportCount(usesTrustStore)
-	var got = ByteArray.create(count * MachoGotEntryBytes, zeroed: false)
+	let got = ByteArray.create(count * MachoGotEntryBytes, zeroed: false)
 
 	if count * MachoGotEntryBytes > MachoPageSize 'gotCrossesPage'
 		panic("buildGot: the __got is {count * MachoGotEntryBytes} bytes and no longer fits the single page its unbroken bind chain assumes — cut the chain at each page boundary and give buildMachoDataPageStarts one start per page the GOT touches")
@@ -616,8 +616,8 @@ end 'sortMachoRebases'
 // offset carrying a DIFFERENT target is not a duplicate at all but two mechanisms claiming one slot, so it
 // panics rather than silently keeping whichever sorted first.
 function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, debugSymbols DebugSymbolArray, constImageOffset MachineWord, textImageOffset MachineWord) returns ByteOffsetArray
-	var offsets = ByteOffsetArray.create(globalData.pendingRdataAbsRelocs.count() + globalData.pendingRdataRelocs.count(), zeroed: false)
-	var targets = ByteOffsetArray.create(globalData.pendingRdataAbsRelocs.count() + globalData.pendingRdataRelocs.count(), zeroed: false)
+	let offsets = ByteOffsetArray.create(globalData.pendingRdataAbsRelocs.count() + globalData.pendingRdataRelocs.count(), zeroed: false)
+	let targets = ByteOffsetArray.create(globalData.pendingRdataAbsRelocs.count() + globalData.pendingRdataRelocs.count(), zeroed: false)
 
 	for reloc in globalData.pendingRdataAbsRelocs 'collectDataSlots'
 		offsets.push(rdataAbsSlotOffset(globalData, reloc: reloc))
@@ -638,8 +638,8 @@ function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, deb
 	sortMachoRebases(offsets, targets: targets)
 
 	// Deduplicate consecutive equal slot offsets (sorted ⇒ duplicates are adjacent).
-	var slots = ByteOffsetArray.create(0)
-	var slotTargets = ByteOffsetArray.create(0)
+	let slots = ByteOffsetArray.create(0)
+	let slotTargets = ByteOffsetArray.create(0)
 
 	for (iter, slotOffset) in offsets.withIterator() 'dedup'
 		let target = try targets.get(iter.index()) otherwise panic("writeMachoRdataRebases: offsets/targets fell out of lockstep at {iter.index()}")
@@ -701,7 +701,7 @@ end 'writeMachoRdataRebases'
 // count the chained-fixups header advertises; the prelude pages beyond carry no fixups and are
 // simply not indexed.
 function buildMachoDataPageStarts(rebaseSlots ByteOffsetArray, rdataPages BytePos) returns ByteOffsetArray
-	var pageStarts = ByteOffsetArray.create(0)
+	let pageStarts = ByteOffsetArray.create(0)
 
 	for page in 0 upto rdataPages 'rdataPage'
 		let pageBase = page * MachoPageSize
@@ -732,7 +732,7 @@ end 'buildMachoDataPageStarts'
 // still points dyld at the right page; a page that is not indexed reports
 // "chain overflow … max=1" at launch.
 function buildChainedFixups(dataSegmentFileOff MachineWord, pageStarts ByteOffsetArray, usesTrustStore bool) returns ByteArray
-	var cf = ByteArray.create(256, zeroed: false)
+	let cf = ByteArray.create(256, zeroed: false)
 
 	let importCount = machoImportCount(usesTrustStore)
 	let startsOffset = 0x20
@@ -853,7 +853,7 @@ function buildCodeSignature(fileData ByteArray, execSegLimit MachineWord, layout
 	let cdSize = codeDirectorySizeOf(layout.identLen, codeSlots: nCodeSlots as BytePos, blobs: blobs) as MachineWord
 	let codeSignatureSize = layout.size
 
-	var sig = ByteArray.create(codeSignatureSize as ElementIndex, zeroed: false)
+	let sig = ByteArray.create(codeSignatureSize as ElementIndex, zeroed: false)
 
 	writeDwordBE(sig, value: CsMagicEmbeddedSignature)
 	writeDwordBE(sig, value: codeSignatureSize as MachineWord)
@@ -911,7 +911,7 @@ function buildCodeSignature(fileData ByteArray, execSegLimit MachineWord, layout
 			pageEnd = codeLimit
 		end 'clamp'
 
-		var pageData = ByteArray.create((pageEnd - pageStart) as ElementIndex, zeroed: false)
+		let pageData = ByteArray.create((pageEnd - pageStart) as ElementIndex, zeroed: false)
 
 		for i in pageStart upto pageEnd 'copyPage'
 			// pageEnd <= codeLimit <= fileData.count() (the caller signs the file it
@@ -979,7 +979,7 @@ function isWrittenCodeDirectoryFlags(flags MachineWord) returns bool
 end 'isWrittenCodeDirectoryFlags'
 
 function getTaskAllowBlobs() returns SignedBlobArray
-	var blobs = SignedBlobArray.create(0)
+	let blobs = SignedBlobArray.create(0)
 	blobs.push(SignedBlob.create(CsSlotEntitlements, bytes: entitlementsPlistBlob()))
 	blobs.push(SignedBlob.create(CsSlotDerEntitlements, bytes: entitlementsDerBlob()))
 
@@ -1018,7 +1018,7 @@ function specialSlotHash(blobs SignedBlobArray, slot MachineWord) returns ByteAr
 		end 'named'
 	end 'eachBlob'
 
-	var unused = ByteArray.create(0)
+	let unused = ByteArray.create(0)
 	writeZeros(unused, n: CsSha256Len)
 
 	return unused
@@ -1043,7 +1043,7 @@ function codeSignatureSizeOf(identLen BytePos, codeSlots BytePos, blobs SignedBl
 end 'codeSignatureSizeOf'
 
 function entitlementsBlob(magic MachineWord, payload ByteArray) returns ByteArray
-	var blob = ByteArray.create((CsBlobHeaderSize + payload.count()) as ElementIndex, zeroed: false)
+	let blob = ByteArray.create((CsBlobHeaderSize + payload.count()) as ElementIndex, zeroed: false)
 	writeDwordBE(blob, value: magic)
 	writeDwordBE(blob, value: (CsBlobHeaderSize + payload.count()) as MachineWord)
 	blob.append(payload)
@@ -1058,18 +1058,18 @@ function entitlementsPlistBlob() returns ByteArray
 end 'entitlementsPlistBlob'
 
 function entitlementsDerBlob() returns ByteArray
-	var entry = ByteArray.create(0)
+	let entry = ByteArray.create(0)
 	entry.append(derElement(DerTagUtf8String, content: GetTaskAllowEntitlement.toByteArray()))
 	entry.append(derElement(DerTagBoolean, content: derByteArrayOf(DerBooleanTrue)))
 
-	var version = derElement(DerTagInteger, content: derByteArrayOf(DerEntitlementsVersion))
+	let version = derElement(DerTagInteger, content: derByteArrayOf(DerEntitlementsVersion))
 	version.append(derElement(DerTagContext16, content: derElement(DerTagSequence, content: entry)))
 
 	return entitlementsBlob(CsMagicEmbeddedDerEntitlements, payload: derElement(DerTagApplication16, content: version))
 end 'entitlementsDerBlob'
 
 function derByteArrayOf(value MachineWord) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.push((value and DerByteMask) as Byte)
 
 	return bytes
@@ -1080,7 +1080,7 @@ function derElement(tag MachineWord, content ByteArray) returns ByteArray
 		panic("derElement: a {content.count()}-byte element needs DER's long length form, and the one entitlement this writer signs in never does")
 	end 'longForm'
 
-	var element = ByteArray.create(0)
+	let element = ByteArray.create(0)
 	element.push((tag and DerByteMask) as Byte)
 	element.push((content.count() and DerByteMask) as Byte)
 	element.append(content)
@@ -1099,9 +1099,9 @@ type MachoSymtab
 	export var nameOffsets as ByteOffsetArray
 
 	static function build(debugSymbols DebugSymbolArray) returns MachoSymtab
-		var strtab = ByteArray.create(0)
+		let strtab = ByteArray.create(0)
 		strtab.push(0)
-		var nameOffsets = ByteOffsetArray.create(debugSymbols.count(), zeroed: false)
+		let nameOffsets = ByteOffsetArray.create(debugSymbols.count(), zeroed: false)
 
 		for sym in debugSymbols 'eachSym'
 			nameOffsets.push(strtab.count() as ByteOffset)
@@ -1122,7 +1122,7 @@ end 'MachoSymtab'
 // byte-identical) yet distinct across distinct programs.
 function machoUuid(code ByteArray) returns ByteArray
 	let digest = sha256(code)
-	var uuid = ByteArray.create(16, zeroed: false)
+	let uuid = ByteArray.create(16, zeroed: false)
 
 	for i in 0 upto 16 'take'
 		let b = try digest.get(i) otherwise panic("machoUuid: sha256 returned fewer than 16 bytes")
@@ -1141,7 +1141,7 @@ let MachOSourceVersionRestBits = 10
 let MachOSourceVersionRestMax = 1023 as VersionComponent
 
 export function machOSourceVersionLayout() returns VersionFieldLayout
-	var limits = VersionComponentArray.create(MachOSourceVersionComponentCount, zeroed: false)
+	let limits = VersionComponentArray.create(MachOSourceVersionComponentCount, zeroed: false)
 	limits.push(MachOSourceVersionFirstMax)
 
 	for _ in 1 upto MachOSourceVersionComponentCount 'eachLaterComponent'
@@ -1169,7 +1169,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 		panic("writeMachO: the Mach-O writer emits arm64-macos only (got {targetToString(target)})")
 	end 'wrongTarget'
 
-	var code = codeResult.code
+	let code = codeResult.code
 	let codeSize = code.count()
 	let rdataSize = codeResult.rdata.count()
 	let preludeSize = codeResult.dataPrelude.count()
@@ -1269,7 +1269,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let chainedFixupsSize = chainedFixupsData.count()
 
 	// A minimal (empty) exports trie — one 8-byte terminal node.
-	var exportsTrieData = ByteArray.create(0)
+	let exportsTrieData = ByteArray.create(0)
 	writeQword(exportsTrieData, value: 0)
 	let exportsTrieOff = alignUp(chainedFixupsOff + chainedFixupsSize as BytePos, alignment: 8)
 	let exportsTrieSize = exportsTrieData.count()
@@ -1308,7 +1308,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let flags = MhDyldLink or MhTwoLevel or MhPie
 
 	// --- Emit ---
-	var macho = ByteArray.create(((codeSignatureOff + 4096) as ElementIndex), zeroed: false)
+	let macho = ByteArray.create(((codeSignatureOff + 4096) as ElementIndex), zeroed: false)
 
 	// mach_header_64.
 	writeDword(macho, value: MhMagic64)
@@ -1562,7 +1562,7 @@ export function resignedWithGetTaskAllow(image ByteArray) returns ByteArray thro
 	let signatureLayout = CodeSignatureLayout.planned(layout.identifier, codeLimit: layout.signatureOffset as MachineWord, blobs: getTaskAllowBlobs())
 	let linkeditFileSize = linkeditFileSizeFor(layout.linkeditFileOff, signatureEnd: layout.signatureOffset + signatureLayout.size)
 
-	var resigned = try image.slice(0, endIndex: layout.signatureOffset as ElementIndex) otherwise panic("resignedWithGetTaskAllow: the signature offset {layout.signatureOffset} was held inside the {image.count()}-byte image")
+	let resigned = try image.slice(0, endIndex: layout.signatureOffset as ElementIndex) otherwise panic("resignedWithGetTaskAllow: the signature offset {layout.signatureOffset} was held inside the {image.count()}-byte image")
 	patchDword(resigned, offset: layout.signatureCommand + LcSignatureDataSizeField, value: signatureLayout.size as MachineWord)
 	patchQword(resigned, offset: layout.linkeditCommand + SegVmsizeOffset, value: linkeditFileSize as MachineWord)
 	patchQword(resigned, offset: layout.linkeditCommand + SegFilesizeOffset, value: linkeditFileSize as MachineWord)
@@ -1671,7 +1671,7 @@ function identifierOfCodeDirectory(image ByteArray, directory BytePos, signature
 		throw MachOResignError.malformedImage("the CodeDirectory names its identifier outside itself")
 	end 'identPastTheDirectory'
 
-	var identifier = ByteArray.create(0)
+	let identifier = ByteArray.create(0)
 
 	for position in identStart upto length 'eachIdentifierByte'
 		let byte = imageByteAt(image, at: start + position)

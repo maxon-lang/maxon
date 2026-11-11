@@ -518,7 +518,7 @@ public type Subprocess
 	/// Run `executable arguments...` and collect output. An empty working directory inherits the
 	/// parent's, and a timeout of 0 waits indefinitely.
 	public static function run(executable Executable, arguments StringArray, workingDirectory FilePath = FilePath.empty(), timeoutMs DurationMs = 0) returns CollectedOutput throws SubprocessError
-		var c = Configuration.create(executable, workingDirectory: workingDirectory)
+		let c = Configuration.create(executable, workingDirectory: workingDirectory)
 		c.arguments = arguments
 		c.timeoutMs = timeoutMs
 		return try c.run()
@@ -684,7 +684,7 @@ end 'resolveByName'
 /// The runtime walks the blob using argc as the token count (NUL bytes act as
 /// separators; the runtime advances past each NUL between tokens).
 function buildArgvBlob(executablePath String, args StringArray) returns String
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	appendNulTerminated(out, source: executablePath)
 	let n = args.count()
 
@@ -783,7 +783,7 @@ end 'subprocessEmptyCString'
 /// entry reads the same field itself — and no length travels beside them, so the terminating NUL after
 /// the last entry is the only thing that tells a runtime where the block ends.
 function spawnEnvironmentFor(env Environment) returns SpawnEnvironment throws SubprocessError
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 
 	match env 'e'
 		inherit then return SpawnEnvironment.create(emptyEnvBlock(), source: EnvSource.parent.rawValue)
@@ -799,7 +799,7 @@ end 'spawnEnvironmentFor'
 /// terminator. The runtime never reads it — `EnvSource.parent` tells it not to — but the slot is a
 /// buffer pointer that the argument lowering dereferences either way, so it has to be a real one.
 function emptyEnvBlock() returns String
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	out.push(BlobTokenTerminator)
 	return String.from(out)
 end 'emptyEnvBlock'
@@ -813,7 +813,7 @@ end 'emptyEnvBlock'
 /// its block sorted and CreateProcess documents wanting a sorted one; a map's iteration order would
 /// answer neither, and would move the platform's own `=X:=X:\dir` drive entries, which come first.
 function appendInheritedEntries(out ByteArray, overrides EnvMap) throws SubprocessError
-	var pending = try namesByKey(overrides)
+	let pending = try namesByKey(overrides)
 	let inherited = try Process.currentEnvironmentEntries() otherwise throw SubprocessError.spawnFailed("this process's environment could not be read, so no child can inherit it")
 
 	for entry in inherited 'eachInherited'
@@ -832,7 +832,7 @@ end 'appendInheritedEntries'
 
 // Two spellings of one Windows variable are refused: which one Windows would keep is undefined.
 function namesByKey(vars EnvMap) returns EnvMap throws SubprocessError
-	var names = EnvMap.create()
+	let names = EnvMap.create()
 
 	for (name, _) in vars 'eachVar'
 		let key = Process.envNameKey(name)
@@ -1050,11 +1050,11 @@ end 'readStdoutBytesOf'
 ///
 /// Forgetting `release()` leaks the handle and an OS process slot. Treat
 /// `release()` like `close()` on a file.
-public type StreamingSubprocess
+public type StreamingSubprocess is unique
 	// Raw runtime handle from subprocessSpawnStreaming. Valid until release()
 	// is called; the runtime owns the underlying pipe + process objects keyed
 	// off this integer.
-	public var handle as StreamingHandle
+	var handle as StreamingHandle
 
 	// Latched once release() runs so subsequent release() calls are no-ops
 	// (matches the "treat like file close" contract documented above).

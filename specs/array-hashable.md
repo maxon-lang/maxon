@@ -101,7 +101,7 @@ typealias IntArr = Array with Val
 typealias IntArrMap = Map with (IntArr, Val)
 
 function threeKey() returns IntArr
-	var key = IntArr.create(0)
+	let key = IntArr.create(0)
 	key.push(1)
 	key.push(2)
 	key.push(3)
@@ -109,9 +109,9 @@ function threeKey() returns IntArr
 end 'threeKey'
 
 function main() returns ExitCode
-	var m = IntArrMap.create()
+	let m = IntArrMap.create()
 	try m.insert(freeze threeKey(), value: 42) otherwise ignore
-	var lookup = IntArr.create(0)
+	let lookup = IntArr.create(0)
 	lookup.push(1)
 	lookup.push(2)
 	lookup.push(3)
@@ -133,7 +133,7 @@ typealias ByteVal = int(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode
-	var arr = ByteArr.create(0)
+	let arr = ByteArr.create(0)
 	arr.push(65)
 	arr.push(66)
 	arr.push(67)
@@ -156,10 +156,10 @@ typealias ByteVal = int(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode
-	var a = ByteArr.create(0)
+	let a = ByteArr.create(0)
 	a.push(65)
 	a.push(66)
-	var b = ByteArr.create(0)
+	let b = ByteArr.create(0)
 	b.push(65)
 	b.push(66)
 	if a.equals(b) 'eq'
@@ -268,7 +268,7 @@ typealias Val = int(i64.min to i64.max)
 typealias StrArr = Array with String
 
 function numbered(first Val, count Val) returns StrArr
-	var arr = StrArr.create(0)
+	let arr = StrArr.create(0)
 	for i in first upto first + count 'fill'
 		arr.push("p{i}")
 	end 'fill'
@@ -300,7 +300,7 @@ typealias Val = int(i64.min to i64.max)
 typealias StrArr = Array with String
 
 function numbered(first Val, count Val) returns StrArr
-	var arr = StrArr.create(0)
+	let arr = StrArr.create(0)
 	for i in first upto first + count 'fill'
 		arr.push("p{i}")
 	end 'fill'
@@ -330,7 +330,7 @@ typealias StrArr = Array with String
 typealias StrArrMap = Map with (StrArr, Val)
 
 function numbered(first Val, count Val) returns StrArr
-	var arr = StrArr.create(0)
+	let arr = StrArr.create(0)
 	for i in first upto first + count 'fill'
 		arr.push("p{i}")
 	end 'fill'
@@ -338,7 +338,7 @@ function numbered(first Val, count Val) returns StrArr
 end 'numbered'
 
 function main() returns ExitCode
-	var m = StrArrMap.create()
+	let m = StrArrMap.create()
 	try m.insert(freeze numbered(1, count: 3), value: 42) otherwise ignore
 	let found = try m.get(numbered(1, count: 3)) otherwise 'notFound'
 		print("not found\n")
@@ -363,7 +363,7 @@ typealias Val = int(i64.min to i64.max)
 typealias StrArr = Array with String
 
 function numbered(first Val, count Val) returns StrArr
-	var arr = StrArr.create(0)
+	let arr = StrArr.create(0)
 	for i in first upto first + count 'fill'
 		arr.push("p{i}")
 	end 'fill'
@@ -396,7 +396,7 @@ typealias IntArrMap = Map with (IntArr, Val)
 typealias StrArrMap = Map with (StrArr, Val)
 
 function numbered(first Val, count Val) returns StrArr
-	var arr = StrArr.create(0)
+	let arr = StrArr.create(0)
 	for i in first upto first + count 'fill'
 		arr.push("p{i}")
 	end 'fill'
@@ -404,17 +404,17 @@ function numbered(first Val, count Val) returns StrArr
 end 'numbered'
 
 function seven() returns IntArr
-	var xs = IntArr.create(0)
+	let xs = IntArr.create(0)
 	xs.push(7)
 	return xs
 end 'seven'
 
 function main() returns ExitCode
-	var ints = IntArrMap.create()
+	let ints = IntArrMap.create()
 	try ints.insert(freeze seven(), value: 1) otherwise ignore
-	var strings = StrArrMap.create()
+	let strings = StrArrMap.create()
 	try strings.insert(freeze numbered(1, count: 3), value: 2) otherwise ignore
-	var intProbe = IntArr.create(0)
+	let intProbe = IntArr.create(0)
 	intProbe.push(7)
 	let a = try ints.get(intProbe) otherwise 0
 	let b = try strings.get(numbered(1, count: 3)) otherwise 0
@@ -448,7 +448,7 @@ typealias H = Holder with Val
 typealias ValArray = Array with Val
 function main() returns ExitCode
 	let holder = H.create(1)
-	var items = ValArray.create(0)
+	let items = ValArray.create(0)
 	items.push(41)
 	items.push(1099511627817)
 	items.push(-1099511627817)
@@ -489,13 +489,13 @@ typealias ValArray = Array with Val
 
 function main() returns ExitCode
 	let holder = H.create(1)
-	var first = ValArray.create(0)
+	let first = ValArray.create(0)
 	first.push(41)
 	first.push(42)
-	var second = ValArray.create(0)
+	let second = ValArray.create(0)
 	second.push(41)
 	second.push(42)
-	var third = ValArray.create(0)
+	let third = ValArray.create(0)
 	third.push(41)
 	third.push(43)
 	print("{holder.same(first, b: second)}\n")
@@ -535,14 +535,14 @@ typealias H = Holder with Val
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	var held = ValArray.create(0)
+	let held = ValArray.create(0)
 	held.push(41)
 	held.push(42)
-	view holder = H.create(held)
-	var equal = ValArray.create(0)
+	let holder = H.create(held)
+	let equal = ValArray.create(0)
 	equal.push(41)
 	equal.push(42)
-	var unequal = ValArray.create(0)
+	let unequal = ValArray.create(0)
 	unequal.push(41)
 	unequal.push(43)
 	print("{holder.matches(equal)}\n")
@@ -587,14 +587,14 @@ typealias H = Holder with Val
 typealias ValArray = Array with Val
 
 function numbers() returns ValArray
-	var xs = ValArray.create(0)
+	let xs = ValArray.create(0)
 	xs.push(41)
 	xs.push(42)
 	return xs
 end 'numbers'
 
 function main() returns ExitCode
-	var holder = H.create()
+	let holder = H.create()
 	holder.note(freeze numbers())
 	holder.note(freeze numbers())
 	print("{holder.seenCount()}\n")
@@ -640,9 +640,9 @@ typealias IntTag = Tag with Val
 typealias IntTags = Array with IntTag
 typealias H = Holder with Val
 function main() returns ExitCode
-	var a = IntTags.create(0)
+	let a = IntTags.create(0)
 	a.push(IntTag.create(7))
-	var b = IntTags.create(0)
+	let b = IntTags.create(0)
 	b.push(IntTag.create(7))
 	print("{H.create(a).sameAs(H.create(b))}\n")
 	return 0
@@ -687,7 +687,7 @@ typealias IntTag = Tag with Val
 typealias IntTags = Array with IntTag
 typealias H = Holder with Val
 function main() returns ExitCode
-	var a = IntTags.create(0)
+	let a = IntTags.create(0)
 	a.push(IntTag.create(7))
 	let expected = a.hash()
 	print("{H.create(a).hashOf() == expected}\n")
@@ -765,30 +765,30 @@ function foldSigned(values SignedArray) returns HashValue
 end 'foldSigned'
 
 function main() returns ExitCode
-	var wide = WideArray.create(0)
+	let wide = WideArray.create(0)
 	wide.push(-3)
 	wide.push(7)
 	wide.push(-9000000000000)
 	wide.push(9000000000000)
 	print("{wide.hash() == foldWide(wide)}\n")
 
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.push(0)
 	bytes.push(200)
 	bytes.push(255)
 	print("{bytes.hash() == foldBytes(bytes)}\n")
 
-	var words = WordArray.create(0)
+	let words = WordArray.create(0)
 	words.push(65535)
 	words.push(1)
 	print("{words.hash() == foldWords(words)}\n")
 
-	var dwords = DwordArray.create(0)
+	let dwords = DwordArray.create(0)
 	dwords.push(4294967295)
 	dwords.push(2)
 	print("{dwords.hash() == foldDwords(dwords)}\n")
 
-	var signed = SignedArray.create(0)
+	let signed = SignedArray.create(0)
 	signed.push(-100)
 	signed.push(5)
 	signed.push(100)
@@ -820,7 +820,7 @@ typealias SignedArray = Array with Signed
 typealias SignedArraySet = Set with SignedArray
 
 function signedKey() returns SignedArray
-	var key = SignedArray.create(0)
+	let key = SignedArray.create(0)
 	key.push(-100)
 	key.push(5)
 	key.push(100)
@@ -828,20 +828,20 @@ function signedKey() returns SignedArray
 end 'signedKey'
 
 function main() returns ExitCode
-	var key = SignedArray.create(0)
+	let key = SignedArray.create(0)
 	key.push(-100)
 	key.push(5)
 	key.push(100)
-	var probe = SignedArray.create(0)
+	let probe = SignedArray.create(0)
 	probe.push(-100)
 	probe.push(5)
 	probe.push(100)
-	var other = SignedArray.create(0)
+	let other = SignedArray.create(0)
 	other.push(-100)
 	other.push(6)
 	other.push(100)
 	let sameHash = key.hash() == probe.hash()
-	var seen = SignedArraySet.create()
+	let seen = SignedArraySet.create()
 	seen.insert(freeze signedKey())
 	print("{seen.contains(probe)}\n")
 	print("{seen.contains(other)}\n")
@@ -876,12 +876,12 @@ function fold(values Bs) returns HashValue
 end 'fold'
 
 function main() returns ExitCode
-	var a = Bs.create(0)
+	let a = Bs.create(0)
 	a.push(0.0)
-	var b = Bs.create(0)
+	let b = Bs.create(0)
 	b.push(-0.0)
 	print("{a == b} {a.equals(b)}\n")
-	var c = Bs.create(0)
+	let c = Bs.create(0)
 	c.push(0.5)
 	print("{c.hash() == fold(c)}\n")
 	return 0
@@ -902,13 +902,13 @@ true
 typealias Reals = Array with FullRangeFloat
 
 function main() returns ExitCode
-	var a = Reals.create(0)
+	let a = Reals.create(0)
 	a.push(1.5)
 	a.push(2.5)
-	var b = Reals.create(0)
+	let b = Reals.create(0)
 	b.push(1.5)
 	b.push(2.5)
-	var c = Reals.create(0)
+	let c = Reals.create(0)
 	c.push(1.5)
 	c.push(3.5)
 	print("{a == b} {a == c} {a.equals(c)}\n")

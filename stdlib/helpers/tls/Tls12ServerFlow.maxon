@@ -48,16 +48,16 @@ module type Tls12ServerFlow implements TlsMessageHandler
 	end 'create'
 
 	module function begin(raw ByteArray, hello TlsClientHello, scan TlsExtensionScan) throws TlsHandshakeError
-		var choice = try tls12Negotiate(config, hello: hello, scan: scan)
-		var secret = try entropy.secret(choice.group)
-		var parameters = Tls12Parameters.create(choice.suite, clientRandom: hello.random(), serverRandom: tls12ServerRandom(config, entropy: entropy), extendedMasterSecret: choice.extendedMasterSecret)
+		let choice = try tls12Negotiate(config, hello: hello, scan: scan)
+		let secret = try entropy.secret(choice.group)
+		let parameters = Tls12Parameters.create(choice.suite, clientRandom: hello.random(), serverRandom: tls12ServerRandom(config, entropy: entropy), extendedMasterSecret: choice.extendedMasterSecret)
 
 		session.input.version = TlsInboundVersion.tls12
 		session.negotiation = TlsNegotiation.keyed12(choice.suite, group: choice.group)
 		session.alpn = choice.alpn
 		session.transcript.append(raw)
 
-		var flight = ByteArray.create(0)
+		let flight = ByteArray.create(0)
 
 		try session.emit(flight, message: TlsHandshakeMessage.serverHello(tls12ServerHello(choice, parameters: parameters)))
 		try session.emit(flight, message: TlsHandshakeMessage.tls12Certificate(config.chain))
@@ -70,7 +70,7 @@ module type Tls12ServerFlow implements TlsMessageHandler
 		try session.emit(flight, message: TlsHandshakeMessage.serverHelloDone)
 		try session.writer.writeHandshake(flight)
 
-		var context = Tls12ServerContext.create(parameters, secret: secret)
+		let context = Tls12ServerContext.create(parameters, secret: secret)
 
 		phase = match config.clientAuthentication 'authentication'
 			none gives Tls12ServerPhase.awaitingClientKeyExchange(context, proof: Tls12ClientProof.anonymous)
@@ -117,7 +117,7 @@ module type Tls12ServerFlow implements TlsMessageHandler
 
 		session.transcript.append(raw)
 
-		var secrets = try Tls12Secrets.derive(context.parameters, preMasterSecret: shared, sessionHash: session.transcript.hash(context.parameters.suite.hashAlgorithm()))
+		let secrets = try Tls12Secrets.derive(context.parameters, preMasterSecret: shared, sessionHash: session.transcript.hash(context.parameters.suite.hashAlgorithm()))
 
 		match proof 'proof'
 			anonymous then try awaitClientFinished(secrets)
@@ -204,14 +204,14 @@ function tls12ServerRandom(config TlsServerConfig, entropy TlsServerEntropy) ret
 		return entropy.random
 	end 'single'
 
-	var random = tlsRecordPart(entropy.random, start: 0, endIndex: tlsDowngradeSentinelOffset)
+	let random = tlsRecordPart(entropy.random, start: 0, endIndex: tlsDowngradeSentinelOffset)
 	random.append(tlsDowngradeSentinelTls12)
 
 	return random
 end 'tls12ServerRandom'
 
 function tls12ServerHello(choice Tls12ServerChoice, parameters Tls12Parameters) returns TlsServerHello
-	var extensions = TlsExtensionArray.create(0)
+	let extensions = TlsExtensionArray.create(0)
 
 	if choice.acknowledgesName 'name'
 		extensions.push(TlsExtension.serverNameAcknowledgement)
@@ -241,7 +241,7 @@ function tls12KeyExchange(config TlsServerConfig, entropy TlsServerEntropy, choi
 end 'tls12KeyExchange'
 
 function tls12CertificateRequest(config TlsServerConfig) returns TlsHandshakeMessage
-	var authorities = TlsAuthorityNameArray.create(0)
+	let authorities = TlsAuthorityNameArray.create(0)
 
 	for authority in config.clientAuthorities 'eachAuthority'
 		authorities.push(authority)

@@ -51,7 +51,7 @@ function apply(step Step, counter Counter) returns Tally
 end 'apply'
 
 function main() returns ExitCode
-	var counter = Counter.create()
+	let counter = Counter.create()
 	let first = apply(advance, counter: counter)
 	let second = apply(advance, counter: counter)
 	print("{first} {second}\n")
@@ -96,7 +96,7 @@ function stretch(g Grows)
 end 'stretch'
 
 function main() returns ExitCode
-	var bag = Bag.create()
+	let bag = Bag.create()
 	stretch(bag)
 	print("{bag.size()}\n")
 	return 0

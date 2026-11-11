@@ -240,7 +240,7 @@ export function scriptlibPackageSources(scriptlibDir FilePath) returns MaxonSour
 	end 'noPackages'
 
 	let entries = try Directory.list(scriptlibDir) otherwise throw CompileError.directoryNotFound(scriptlibDir.path)
-	var packageDirectories = MaxonSourcePathArray.create(0)
+	let packageDirectories = MaxonSourcePathArray.create(0)
 
 	// A `.maxon` directly in the directory belongs to no package, so no `scriptlib.<package>` can name
 	// it; it is skipped and draws no diagnostic.
@@ -315,7 +315,7 @@ function loadLibraryRoot(project Project, root FilePath, usersOwn MaxonSourcePat
 		return false
 	end 'theTierDidNotArrive'
 
-	var found = MaxonSourcePathArray.create(0)
+	let found = MaxonSourcePathArray.create(0)
 	_ = try collectMaxonSources(root, into: found)
 
 	if found.isEmpty() 'contributedNothing'
@@ -359,8 +359,8 @@ end 'loadLibraryRoot'
 // classified two ways. Under a `stdlib/` or `scriptlib/` root the project's own files stay the user's
 // and are not recorded.
 function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePathSet throws CompileError
-	var setAside = MaxonSourcePathSet.create()
-	var libraryFiles = MaxonSourcePathArray.create(0)
+	let setAside = MaxonSourcePathSet.create()
+	let libraryFiles = MaxonSourcePathArray.create(0)
 
 	// ⚠ `Project.rootIsUnder`, not another copy of the same containment test:
 	// `Queries.livesUnderStdlibDirectory`'s soundness proof is a claim about this exact predicate holding
@@ -391,7 +391,7 @@ end 'setAsideTheUsersOwnLibraryFiles'
 // stamp stops describing it. `observedAt` is sampled before any file is read, because a whole-second mtime cannot tell a
 // same-size edit made in that second (see `SourceFileStamp`).
 module function libraryRoster(project Project) returns LibraryNameRoster throws CompileError
-	var found = MaxonSourcePathArray.create(0)
+	let found = MaxonSourcePathArray.create(0)
 
 	if not Directory.exists(project.stdlibDir) 'theTierDidNotArrive'
 		return LibraryNameRoster.create(SourceFileStampMap.create(), names: NameRoster.create(0), interfaces: LibraryInterfaceMap.create())
@@ -407,9 +407,9 @@ module function libraryRoster(project Project) returns LibraryNameRoster throws 
 	end 'aRosterOfTheseFiles'
 
 	let observedAt = WallClock.nowUnixSeconds() as Timestamp
-	var stamps = SourceFileStampMap.create()
-	var names = NameRoster.create(0)
-	var written = LibraryInterfaceMap.create()
+	let stamps = SourceFileStampMap.create()
+	let names = NameRoster.create(0)
+	let written = LibraryInterfaceMap.create()
 
 	for path in found 'eachFile'
 		match fileStateOf(path) 'state'
@@ -433,7 +433,7 @@ module function libraryRoster(project Project) returns LibraryNameRoster throws 
 end 'libraryRoster'
 
 function declaredInterfacesOnly(written LibraryInterfaceMap) returns LibraryInterfaceMap
-	var interfaces = LibraryInterfaceMap.create()
+	let interfaces = LibraryInterfaceMap.create()
 
 	for (name, entry) in written 'eachWritten'
 		if entry.declared 'anInterface'
@@ -451,7 +451,7 @@ function noteInterfacesOfLibraryFile(project Project, path FilePath, entries Lib
 		return
 	end 'declaresNeither'
 
-	view tokens = try queryActiveTokens(project, path: path)
+	let tokens = try queryActiveTokens(project, path: path)
 
 	for position in 0 upto tokens.count() 'eachToken'
 		let token = try tokens.get(position) otherwise panic("noteInterfacesOfLibraryFile: tokens.get OOB at {position} below count {tokens.count()}")
@@ -476,7 +476,7 @@ end 'declarationNameAfter'
 
 function noteLibraryInterface(tokens TokenArray, keywordAt ElementIndex, entries LibraryInterfaceMap)
 	let name = try declarationNameAfter(tokens, keywordAt: keywordAt) otherwise return
-	var entry = try entries.get(name) otherwise LibraryInterface.create()
+	let entry = try entries.get(name) otherwise LibraryInterface.create()
 	var listingParents = false
 	entry.declared = true
 
@@ -499,7 +499,7 @@ end 'noteLibraryInterface'
 
 function noteLibraryExtension(tokens TokenArray, keywordAt ElementIndex, entries LibraryInterfaceMap)
 	let name = try declarationNameAfter(tokens, keywordAt: keywordAt) otherwise return
-	var entry = try entries.get(name) otherwise LibraryInterface.create()
+	let entry = try entries.get(name) otherwise LibraryInterface.create()
 
 	for body in keywordAt + 2 upto tokens.count() 'eachBodyToken'
 		let token = try tokens.get(body) otherwise panic("noteLibraryExtension: tokens.get OOB at {body} below count {tokens.count()}")

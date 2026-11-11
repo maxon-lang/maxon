@@ -329,16 +329,16 @@ end 'UnknownTypeName'
 module function resolveTypes(project Project, module MaxonModule)
 	// Fetched ONCE for the whole pass, not per named type: `denotedNamedType` reads it for every
 	// reference, and the memoized query is a map probe that has no business being on that path.
-	var signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+	let signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
 	project.unknownTypeReports = UnknownTypeReports.create()
 
 	// Index-based so each function is a mutable binding (a `for x in ...` loop
 	// var is immutable; field assignment through it is rejected).
 	for i in 0 upto module.functions.count() 'eachFunc'
-		var func = try module.functions.get(i) otherwise panic("resolveTypes: functions.get OOB at {i}")
+		let func = try module.functions.get(i) otherwise panic("resolveTypes: functions.get OOB at {i}")
 		func.maxonReturnType = resolveReturnType(project, signatures: signatures, ret: func.maxonReturnType, readerFilePath: func.sourceFilePath, site: func.typeSites.returnTypeSite(), declaration: func.name)
 
-		var resolvedParams = MaxonTypeArray.create(func.maxonParamTypes.count(), zeroed: false)
+		let resolvedParams = MaxonTypeArray.create(func.maxonParamTypes.count(), zeroed: false)
 
 		for position in 0 upto func.maxonParamTypes.count() 'eachParam'
 			let pt = try func.maxonParamTypes.get(position) otherwise panic("resolveTypes: maxonParamTypes.get OOB at {position} below its own count")
@@ -497,20 +497,20 @@ end 'reportedAtTheDeclaration'
 // declaration (`FunctionTypeAlias.typeSites`). `resolveType` answers `unresolved` for it, which is what
 // lands in a resolved shape, and the pipeline's error gate stops the build before anything reads it.
 function functionAliasShapesIn(project Project, signatures ProgramSignatures, form FunctionAliasShapeForm) returns FunctionShapeMap
-	var names = NameRoster.create(project.functionTypeAliases.count(), zeroed: false)
+	let names = NameRoster.create(project.functionTypeAliases.count(), zeroed: false)
 
 	for (name, _) in project.functionTypeAliases 'eachDeclaredAlias'
 		names.push(name)
 	end 'eachDeclaredAlias'
 
-	var shapes = FunctionShapeMap.create()
+	let shapes = FunctionShapeMap.create()
 
 	for name in names 'eachAlias'
-		var alias = try project.functionTypeAliases.get(name) otherwise panic("functionAliasShapesIn: '{String.from(name)}' was read out of the alias registry and is no longer in it")
-		var params = MaxonTypeArray.create(alias.paramTypes.count(), zeroed: false)
-		var preErasedNames = NameRoster.create(alias.paramTypes.count(), zeroed: false)
-		var spellings = NameRoster.create(alias.paramTypes.count(), zeroed: false)
-		var capabilities = ParamCapabilityArray.create(alias.paramTypes.count(), zeroed: false)
+		let alias = try project.functionTypeAliases.get(name) otherwise panic("functionAliasShapesIn: '{String.from(name)}' was read out of the alias registry and is no longer in it")
+		let params = MaxonTypeArray.create(alias.paramTypes.count(), zeroed: false)
+		let preErasedNames = NameRoster.create(alias.paramTypes.count(), zeroed: false)
+		let spellings = NameRoster.create(alias.paramTypes.count(), zeroed: false)
+		let capabilities = ParamCapabilityArray.create(alias.paramTypes.count(), zeroed: false)
 
 		for position in 0 upto alias.paramTypes.count() 'eachParam'
 			let param = try alias.paramTypes.get(position) otherwise panic("functionAliasShapesIn: paramTypes.get OOB at {position} below its own count")
@@ -623,7 +623,7 @@ function signatureReturnIdentity(registry FunctionTypeRegistry, sig FuncSignatur
 		return sig.returnAggregateName
 	end 'itsOwnResult'
 
-	view offered = try registry.aliasShapes.get(sig.offeredResultAlias) otherwise return sig.returnAggregateName
+	let offered = try registry.aliasShapes.get(sig.offeredResultAlias) otherwise return sig.returnAggregateName
 
 	if offered.returnAggregateName.isEmpty() 'theAliasRecordsNoIdentity'
 		return sig.returnAggregateName
@@ -870,7 +870,7 @@ end 'exactParameterAgrees'
 // only local work is putting each erased position's identity back as the `named` type it was before
 // resolution, which is precisely what the shared renderer already knows how to print.
 export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNameInterner, signatures ProgramSignatures) returns String
-	var unerasedParams = MaxonTypeArray.create(shape.paramTypes.count(), zeroed: false)
+	let unerasedParams = MaxonTypeArray.create(shape.paramTypes.count(), zeroed: false)
 
 	for i in 0 upto shape.paramTypes.count() 'eachParam'
 		unerasedParams.push(unerasedType(try shape.paramTypes.get(i) otherwise panic("formatFunctionShapeDisplay: paramTypes.get OOB at {i} — the count was just read from the same array"), identity: shapeParamIdentity(shape, index: i as ParamCount), typeNames: typeNames))
@@ -1091,7 +1091,7 @@ end 'pairIsUnderComparison'
 // `pending` plus this pair, as a FRESH array — every list above this one
 // in the descent must stay untouched, because a sibling parameter compared after this one is not under it.
 function pendingWithPair(pending FunctionTypePairArray, declaredName ByteArray, gotName ByteArray) returns FunctionTypePairArray
-	var extended = FunctionTypePairArray.create(pending.count() + 1, zeroed: false)
+	let extended = FunctionTypePairArray.create(pending.count() + 1, zeroed: false)
 
 	for pair in pending 'eachPending'
 		extended.push(pair)
@@ -1130,7 +1130,7 @@ end 'pendingWithPair'
 // hashes the same names into the same slots), which is what the byte-identical-output gate needs;
 // and a program with two undeclared field types has two independent bugs, not an ordering.
 function checkStructFieldTypes(project Project, signatures ProgramSignatures)
-	var layouts = StructLayoutArray.create(project.structTypes.count(), zeroed: false)
+	let layouts = StructLayoutArray.create(project.structTypes.count(), zeroed: false)
 
 	for (_, layout) in project.structTypes 'eachDeclaredStruct'
 		layouts.push(layout)
@@ -1145,7 +1145,7 @@ end 'checkStructFieldTypes'
 // finds is owed a report from one of these occurrences (`requireUnplacedUnknownTypesWereReported`).
 function checkWrittenTupleTypes(project Project, signatures ProgramSignatures)
 	for written in project.writtenTupleTypes 'eachWrittenTuple'
-		view layout = try project.structTypes.get(written.tupleName) otherwise panic("checkWrittenTupleTypes: the tuple `{String.from(written.tupleName)}` written in '{written.filePath.toString()}' is not in project.structTypes — the parser files the layout in the same call that records the written type")
+		let layout = try project.structTypes.get(written.tupleName) otherwise panic("checkWrittenTupleTypes: the tuple `{String.from(written.tupleName)}` written in '{written.filePath.toString()}' is not in project.structTypes — the parser files the layout in the same call that records the written type")
 		checkLayoutFieldTypes(project, signatures: signatures, layout: layout, readerFilePath: written.filePath, sites: written.sites)
 	end 'eachWrittenTuple'
 end 'checkWrittenTupleTypes'
@@ -1158,7 +1158,7 @@ function checkLayoutFieldTypes(project Project, signatures ProgramSignatures, la
 end 'checkLayoutFieldTypes'
 
 function checkEnumPayloadTypes(project Project, signatures ProgramSignatures)
-	var layouts = FrozenEnumLayoutArray.create(project.enumTypes.count(), zeroed: false)
+	let layouts = FrozenEnumLayoutArray.create(project.enumTypes.count(), zeroed: false)
 
 	for (_, layout) in project.enumTypes 'eachDeclaredEnum'
 		layouts.push(layout)
@@ -1198,7 +1198,7 @@ function syncResolvedSignature(project Project, func IrFunction)
 	end 'aRefusedDuplicate'
 
 	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	var resolved = FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, returnBrand: sig.returnBrand, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams, offeredResultAlias: sig.offeredResultAlias, byRefParams: sig.byRefParams, returnCapability: sig.returnCapability, paramCapabilities: sig.paramCapabilities, selfCapability: sig.selfCapability, writtenParams: sig.writtenParams)
+	let resolved = FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, returnBrand: sig.returnBrand, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams, offeredResultAlias: sig.offeredResultAlias, byRefParams: sig.byRefParams, returnCapability: sig.returnCapability, paramCapabilities: sig.paramCapabilities, selfCapability: sig.selfCapability, writtenParams: sig.writtenParams)
 	project.funcSignatures.upsert(func.name, value: resolved)
 end 'syncResolvedSignature'
 
@@ -1222,7 +1222,7 @@ function sourceParamTypesOf(func IrFunction, declaredCount ParamCount) returns M
 		return func.maxonParamTypes
 	end 'alreadyExact'
 
-	var sourceParams = MaxonTypeArray.create(declaredCount, zeroed: false)
+	let sourceParams = MaxonTypeArray.create(declaredCount, zeroed: false)
 
 	for i in 0 upto declaredCount 'eachDeclared'
 		sourceParams.push(try func.maxonParamTypes.get(i) otherwise panic("sourceParamTypesOf: '{String.from(func.name)}' declares {declaredCount} parameter names but its type column holds only {func.maxonParamTypes.count()} — the compiler may APPEND a hidden parameter (a lifted closure's `__env`), never omit a declared one"))

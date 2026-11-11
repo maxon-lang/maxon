@@ -79,7 +79,7 @@ function total(source IntegerSeq) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	var u = Upto.create(4)
+	let u = Upto.create(4)
 	print("{total(u)}\n")
 	return 0
 end 'main'
@@ -402,7 +402,7 @@ end 'fromField'
 function main() returns ExitCode
 	print("{fromCall(4)}\n")
 	print("{fromLocal(4)}\n")
-	var h = Holder.create(makeSeq(4))
+	let h = Holder.create(makeSeq(4))
 	print("{fromField(h)}\n")
 	return 0
 end 'main'

@@ -370,8 +370,8 @@ type Bag uses Element
 end 'Bag'
 
 function main() returns ExitCode
-	var a = IntBag.create()
-	var b = IntBag.create()
+	let a = IntBag.create()
+	let b = IntBag.create()
 	return a.pairWith(b)
 end 'main'
 ```

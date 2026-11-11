@@ -86,7 +86,7 @@ function main() returns ExitCode
 	let sink = spawn(capacity: sinkCapacity) Sink.create()
 	let delivered = Tally.create(0 as Integer)
 	let refused = Tally.create(0 as Integer)
-	var senders = SenderHandleArray.create(0)
+	let senders = SenderHandleArray.create(0)
 	var i = 0 as Integer
 
 	while i < senderCount 'spawnEach'
@@ -97,7 +97,7 @@ function main() returns ExitCode
 	var k = 0 as ElementIndex
 
 	while k < senderCount 'startEach'
-		view sender = try senders.get(k) otherwise panic("cown-send-wait-torture: senders.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let sender = try senders.get(k) otherwise panic("cown-send-wait-torture: senders.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		try sender.run(sink.clone(), count: messagesPerSender, quick: k mod 2 == 0) otherwise panic("cown-send-wait-torture: a fresh sender refused its only message")
 		k = k + 1
 	end 'startEach'

@@ -299,7 +299,7 @@ type Box uses Element
 end 'Box'
 typealias PointBox = Box with Point
 function main() returns ExitCode
-	var b = PointBox.create(Point.create(7))
+	let b = PointBox.create(Point.create(7))
 	b.replace(Point.create(9))
 	print("{b.saved.x}\n")
 	return 0
@@ -338,8 +338,8 @@ type Box uses Element
 end 'Box'
 typealias PointBox = Box with Point
 function main() returns ExitCode
-	var kept = Point.create(4)
-	var b = PointBox.create(Point.create(1))
+	let kept = Point.create(4)
+	let b = PointBox.create(Point.create(1))
 	b.replace(kept)
 	b.replace(Point.create(2))
 	b.replace(kept)
@@ -376,7 +376,7 @@ type Box uses Element
 		return Self{ saved: first }
 	end 'create'
 	static function rebuilt(first Element, second Element) returns Self
-		var built = Self.create(first)
+		let built = Self.create(first)
 		built.saved = second
 		return built
 	end 'rebuilt'
@@ -388,7 +388,7 @@ typealias PointBox = Box with Point
 function main() returns ExitCode
 	let b = PointBox.rebuilt(Point.create(1), second: Point.create(2))
 	print("{b.saved.x}\n")
-	var c = PointBox.create(Point.create(0))
+	let c = PointBox.create(Point.create(0))
 	for round in 1 to 50 'rounds'
 		c.replace(Point.create((round * 7) as Coord))
 	end 'rounds'
@@ -429,9 +429,9 @@ typealias PointBox = Box with Point
 typealias TextBox = Box with String
 typealias SmallBox = Box with Small
 function main() returns ExitCode
-	var p = PointBox.create(Point.create(1))
-	var t = TextBox.create("one")
-	var s = SmallBox.create(1)
+	let p = PointBox.create(Point.create(1))
+	let t = TextBox.create("one")
+	let s = SmallBox.create(1)
 	p.replace(Point.create(2))
 	t.replace("two")
 	s.replace(2)
@@ -466,15 +466,15 @@ type Box uses Element
 		return Self{ saved: first }
 	end 'create'
 	function rotate(other Self)
-		var held = other.saved
+		let held = other.saved
 		other.saved = self.saved
 		self.saved = held
 	end 'rotate'
 end 'Box'
 typealias PointBox = Box with Point
 function main() returns ExitCode
-	var b = PointBox.create(Point.create(1))
-	var c = PointBox.create(Point.create(2))
+	let b = PointBox.create(Point.create(1))
+	let c = PointBox.create(Point.create(2))
 	b.rotate(c)
 	print("{b.saved.x} {c.saved.x}\n")
 	return 0
@@ -496,15 +496,15 @@ type Box uses Element
 		return Self{ saved: first }
 	end 'create'
 	function rotate(other Self)
-		var held = other.saved
+		let held = other.saved
 		other.saved = self.saved
 		self.saved = held
 	end 'rotate'
 end 'Box'
 typealias TextBox = Box with String
 function main() returns ExitCode
-	var b = TextBox.create("one")
-	var c = TextBox.create("two")
+	let b = TextBox.create("one")
+	let c = TextBox.create("two")
 	b.rotate(c)
 	print("{b.saved} {c.saved}\n")
 	return 0
@@ -533,15 +533,15 @@ type Box uses Element
 		return Self{ saved: first }
 	end 'create'
 	function swapWith(other Self)
-		var held = self.saved
+		let held = self.saved
 		self.saved = other.saved
 		other.saved = held
 	end 'swapWith'
 end 'Box'
 typealias PointBox = Box with Point
 function main() returns ExitCode
-	var b = PointBox.create(Point.create(1))
-	var c = PointBox.create(Point.create(2))
+	let b = PointBox.create(Point.create(1))
+	let c = PointBox.create(Point.create(2))
 	b.swapWith(c)
 	print("{b.saved.x} {c.saved.x}\n")
 	return 0
@@ -592,7 +592,7 @@ type Point
 end 'Point'
 typealias PointOuter = Outer with Point
 function main() returns ExitCode
-	var o = PointOuter.create(Point.create(7))
+	let o = PointOuter.create(Point.create(7))
 	o.swapInner(Point.create(9))
 	print("{o.inner.saved.xValue()}\n")
 	return 0
@@ -620,7 +620,7 @@ type Point
 end 'Point'
 typealias PointOuter = Outer with Point
 function main() returns ExitCode
-	var o = PointOuter.create(Point.create(7))
+	let o = PointOuter.create(Point.create(7))
 	o.swapInner(Point.create(9))
 	print("{o.inner.saved.xValue()}\n")
 	return 0
@@ -675,10 +675,10 @@ end 'Box'
 typealias PointBox = Box with Point
 typealias TextBox = Box with String
 function main() returns ExitCode
-	var points = PointBox.create(Point.create(1))
-	var texts = TextBox.create("one")
-	var keptPoint = Point.create(7)
-	var keptText = "seven"
+	let points = PointBox.create(Point.create(1))
+	let texts = TextBox.create("one")
+	let keptPoint = Point.create(7)
+	let keptText = "seven"
 	for _ in 0 upto 20 'swap'
 		points.replace(keptPoint)
 		texts.replace(keptText)

@@ -209,7 +209,7 @@ type Particle
 end 'Particle'
 
 function main() returns ExitCode
-	var p = Particle.make(2.5, velocity: 4.0)
+	let p = Particle.make(2.5, velocity: 4.0)
 	p.velocity = 6.0
 	return trunc(p.momentum())
 end 'main'
@@ -244,7 +244,7 @@ type Particle
 end 'Particle'
 
 function main() returns ExitCode
-	var p = Particle.make(2.5, velocity: 4.0)
+	let p = Particle.make(2.5, velocity: 4.0)
 	p.velocity = 6.0
 	return trunc(p.momentum())
 end 'main'

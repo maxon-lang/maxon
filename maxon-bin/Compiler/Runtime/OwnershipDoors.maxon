@@ -6,6 +6,8 @@ export enum OwnershipDoor
 	managedIncref
 	boxRetain
 	boxIncref
+	boxRetainSticky
+	boxIncrefSticky
 	stringRetain
 	typeParamRetain
 	managedDecref
@@ -67,6 +69,14 @@ export function ownershipDoorNamed(callee ByteArray) returns OwnershipDoor throw
 		return OwnershipDoor.boxIncref
 	end 'boxIncref'
 
+	if callee.equals(MmRetainStickyName) 'boxRetainSticky'
+		return OwnershipDoor.boxRetainSticky
+	end 'boxRetainSticky'
+
+	if callee.equals(MmIncrefStickyName) 'boxIncrefSticky'
+		return OwnershipDoor.boxIncrefSticky
+	end 'boxIncrefSticky'
+
 	if callee.equals(StrRetainName) 'stringRetain'
 		return OwnershipDoor.stringRetain
 	end 'stringRetain'
@@ -112,6 +122,8 @@ export function ownershipDoorName(door OwnershipDoor) returns immutable ByteArra
 		managedIncref then return ManagedIncrefName
 		boxRetain then return MmRetainName
 		boxIncref then return MmIncrefName
+		boxRetainSticky then return MmRetainStickyName
+		boxIncrefSticky then return MmIncrefStickyName
 		stringRetain then return StrRetainName
 		typeParamRetain then return RetainTypeParamName
 		managedDecref then return ManagedDecrefName
@@ -130,6 +142,8 @@ export function doorRole(door OwnershipDoor) returns DoorRole
 		managedIncref or
 		boxRetain or
 		boxIncref or
+		boxRetainSticky or
+		boxIncrefSticky or
 		stringRetain or
 		typeParamRetain gives DoorRole.retain
 		managedDecref or
@@ -149,6 +163,8 @@ export function doorFamily(door OwnershipDoor) returns DoorFamily
 		managedDecref gives DoorFamily.buffer
 		boxRetain or
 		boxIncref or
+		boxRetainSticky or
+		boxIncrefSticky or
 		boxDecref or
 		destructor gives DoorFamily.box
 		stringRetain or
@@ -181,9 +197,11 @@ export function doorHandsBack(door OwnershipDoor) returns DoorHandsBack
 		managedRetain or
 		stringRetain or
 		typeParamRetain gives DoorHandsBack.operandOrClone
-		boxRetain gives DoorHandsBack.operand
+		boxRetain or
+		boxRetainSticky gives DoorHandsBack.operand
 		managedIncref or
 		boxIncref or
+		boxIncrefSticky or
 		managedDecref or
 		boxDecref or
 		stringDecref or
@@ -205,6 +223,8 @@ function doorReleasesOwnedElements(door OwnershipDoor) returns bool
 		managedIncref or
 		boxRetain or
 		boxIncref or
+		boxRetainSticky or
+		boxIncrefSticky or
 		stringRetain or
 		typeParamRetain or
 		boxDecref or

@@ -365,7 +365,7 @@ type Reading
 end 'Reading'
 
 function main() returns ExitCode
-	var r = Reading.make()
+	let r = Reading.make()
 	r.value = 3
 	if r.value == 3.0 'exact'
 		return trunc(r.value * 14.0)
@@ -395,7 +395,7 @@ type Reading
 end 'Reading'
 
 function main() returns ExitCode
-	var r = Reading.make()
+	let r = Reading.make()
 	let done = r.bump()
 	if r.value == 3.0 'exact'
 		return trunc(r.value * 14.0) + done

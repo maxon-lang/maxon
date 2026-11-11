@@ -57,14 +57,14 @@ type Hub
 	end 'seed'
 
 	function orphan() returns Keeper
-		view old = self.a
+		let old = self.a
 		self.a = CounterArray.create(0)
 		return Keeper.create(try old.get(0) otherwise panic("seeded before"))
 	end 'orphan'
 end 'Hub'
 
 function main() returns ExitCode
-	var hub = Hub.create()
+	let hub = Hub.create()
 	hub.seed(Counter.create(4))
 	let kept = hub.orphan()
 	return kept.inner.v as ExitCode
@@ -203,7 +203,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias NameMap = Map with (String, Integer)
 
 function main() returns ExitCode
-	var names = NameMap.create()
+	let names = NameMap.create()
 
 	for i in 0 upto 200 'fill'
 		names.upsert("key number {i} padded out long enough to heap allocate", value: i as Integer)
@@ -251,7 +251,7 @@ end 'Wrap'
 function main() returns ExitCode
 	let cell = Cell.create()
 	let wrap = Wrap.create(cell)
-	var mine = cell
+	let mine = cell
 	mine.n = 7
 	return wrap.cell.n as ExitCode
 end 'main'
@@ -384,7 +384,7 @@ type Wrap
 end 'Wrap'
 
 function main() returns ExitCode
-	var cell = Cell.create(1)
+	let cell = Cell.create(1)
 	cell.n = 9
 	let wrap = Wrap.create(cell)
 	return wrap.cell.n as ExitCode

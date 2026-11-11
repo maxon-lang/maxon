@@ -55,7 +55,7 @@ function refusedDocument(workspace LspWorkspaceState, uri String, path FilePath,
 end 'refusedDocument'
 
 function publishedDocumentDiagnostics(workspace LspWorkspaceState, uri String, document ReaderDocument, text String, arrival BufferArrival) returns BufferPublish
-	var checked = lspDocumentProject(workspace, document: document, content: text)
+	let checked = lspDocumentProject(workspace, document: document, content: text)
 
 	match checked 'buffer'
 		loaded(project, reader) then return project.publishDocumentDiagnostics(uri, reader: reader, arrival: arrival, path: lspBufferPathOf(reader), text: text)
@@ -118,7 +118,7 @@ extension Project
 		let root = workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument)
 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
 
-		view fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
+		let fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
 		let (refusal, notice) = projectFileSaid(reader, path: path)
 		submitToLspWriter(reader.workspace.writer, command: LspWriterCommand.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: refusal, notices: notice)))
 
@@ -184,7 +184,7 @@ extension Project
 	end 'correctedCheck'
 
 	function explainedByTheCorpus(reported DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
-		var swept = lspProjectCorpus(reader, root: root)
+		let swept = lspProjectCorpus(reader, root: root)
 
 		match swept 'corpus'
 			loaded(_, signatures, readerPath) then return self.unsuppressedRefusals(reported, signatures: signatures, reader: readerPath, buffer: buffer, text: text, tokens: tokens, road: RefusalRoad.aCleanParsesCheck)
@@ -197,7 +197,7 @@ extension Project
 	function bufferParse(path FilePath) returns BufferParse
 		let before = self.diagnostics.count()
 
-		view artifact = try queryParseOps(self, path: path) otherwise return BufferParse.compilable
+		let artifact = try queryParseOps(self, path: path) otherwise return BufferParse.compilable
 
 		// The refusals only: a recorded diagnostic (E3010) refuses nothing, and taken for one it would
 		// hide every diagnostic the later passes report.
@@ -215,7 +215,7 @@ extension Project
 	end 'bufferParse'
 
 	function correctedRefusal(reported DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
-		var swept = lspProjectCorpus(reader, root: root)
+		let swept = lspProjectCorpus(reader, root: root)
 
 		match swept 'corpus'
 			loaded(corpus, signatures, readerPath) then return self.refusalCorrectedBy(corpus, signatures: signatures, reader: readerPath, buffer: buffer, reported: reported, text: text, tokens: tokens)
@@ -224,7 +224,7 @@ extension Project
 	end 'correctedRefusal'
 
 	function refusalCorrectedBy(corpus Project, signatures ProgramSignatures, reader FilePath, buffer FilePath, reported DiagnosticArray, text String, tokens TokenArray) returns DiagnosticArray
-		view live = try queryActiveTokens(self, path: buffer) otherwise return reported
+		let live = try queryActiveTokens(self, path: buffer) otherwise return reported
 
 		match corpus.sweptParseDiagnostics(reader, live: live) 'sweptParse'
 			parsed(published) then return published
@@ -234,13 +234,13 @@ extension Project
 	end 'refusalCorrectedBy'
 
 	function sweptParseDiagnostics(reader FilePath, live TokenArray) returns SweptParse
-		view swept = try queryActiveTokens(self, path: reader) otherwise return SweptParse.unavailable
+		let swept = try queryActiveTokens(self, path: reader) otherwise return SweptParse.unavailable
 
 		if not tokenStreamsAgree(live, swept: swept) 'theAuthorHasTyped'
 			return SweptParse.bufferHasBeenTypedInto
 		end 'theAuthorHasTyped'
 
-		view query = try parseQueryOf(self, path: reader) otherwise return SweptParse.unavailable
+		let query = try parseQueryOf(self, path: reader) otherwise return SweptParse.unavailable
 
 		self.diagnostics.clear()
 
@@ -251,7 +251,7 @@ extension Project
 	end 'sweptParseDiagnostics'
 
 	function landedSweptParse(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp, reader FilePath) returns SweptParse
-		view artifact = landParse(self, path: reader, artifact: parseFile(job, tokens: tokens, overrides: overrides, signatures: try queryProgramSignatures(self) otherwise return SweptParse.unavailable), stamp: stamp)
+		let artifact = landParse(self, path: reader, artifact: parseFile(job, tokens: tokens, overrides: overrides, signatures: try queryProgramSignatures(self) otherwise return SweptParse.unavailable), stamp: stamp)
 
 		return self.publishedParse(artifact)
 	end 'landedSweptParse'
@@ -276,10 +276,10 @@ extension Project
 			return reported
 		end 'nothingToAttribute'
 
-		var own = try queryProgramSignatures(self) otherwise return reported
+		let own = try queryProgramSignatures(self) otherwise return reported
 		let document = HoverDocument.ofTokens(text, tokens: tokens, keywords: self.keywords, corpus: LspCorpus.unavailable)
-		var verdicts = SiblingVerdictMap.create()
-		var kept = DiagnosticArray.create(0)
+		let verdicts = SiblingVerdictMap.create()
+		let kept = DiagnosticArray.create(0)
 
 		for diagnostic in reported 'eachRefusal'
 			if theProjectDeclaresTheSubject(diagnosticSubject(diagnostic, tokens: tokens), verdicts: verdicts, buffer: buffer, document: document, corpus: signatures, reader: reader, own: own) 'blindToASibling'
@@ -311,8 +311,8 @@ function projectFileSaid(reader LspReaderSearch, path FilePath) returns (StringA
 	reader.workspace.recordWatches.upsert(projectDir.key(), value: observeRecord(dir))
 
 	let answer = reader.workspace.projectInputsOf(reader.workspace.held.settled(projectDir))
-	var refusal = answer.refusal.clone()
-	var notice = answer.notice.clone()
+	let refusal = answer.refusal.clone()
+	let notice = answer.notice.clone()
 
 	// Read in an untrusted workspace too: reading the record runs no project code. A `.maxproj` gets no
 	// project check, so this publish is the only one that carries these notices.
@@ -328,9 +328,9 @@ function projectFileSaid(reader LspReaderSearch, path FilePath) returns (StringA
 end 'projectFileSaid'
 
 module function documentDiagnosticsText(uri String, text String, tokens TokenArray, diagnostics DiagnosticArray, path FilePath, unbuilt StringArray, notices StringArray) returns String
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 	let index = LspLineIndex.build(text)
-	var items = JsonNodeIdArray.create(0)
+	let items = JsonNodeIdArray.create(0)
 
 	for diagnostic in thisDocumentsOwn(diagnostics, path: path) 'each'
 		items.push(diagnosticNode(doc, diagnostic: diagnostic, source: text, index: index, tokens: tokens))
@@ -348,7 +348,7 @@ module function documentDiagnosticsText(uri String, text String, tokens TokenArr
 end 'documentDiagnosticsText'
 
 function thisDocumentsOwn(diagnostics DiagnosticArray, path FilePath) returns DiagnosticArray
-	var kept = DiagnosticArray.create(0)
+	let kept = DiagnosticArray.create(0)
 
 	for diagnostic in diagnostics 'each'
 		if claimsAboutTheWholeProgram(diagnostic.code) or not reportsOn(diagnostic, path: path) 'notThisDocuments'
@@ -362,7 +362,7 @@ function thisDocumentsOwn(diagnostics DiagnosticArray, path FilePath) returns Di
 end 'thisDocumentsOwn'
 
 module function attributedTo(diagnostics DiagnosticArray, path FilePath, alone DiagnosticArray) returns DiagnosticArray
-	var kept = DiagnosticArray.create(0)
+	let kept = DiagnosticArray.create(0)
 
 	for diagnostic in thisDocumentsOwn(diagnostics, path: path) 'each'
 		if diagnostic.anchor.isProgramWide() and not raisedAmong(diagnostic, others: alone) 'reportedOverTheWholeProject'
@@ -641,7 +641,7 @@ function projectNoticeNode(doc JsonDoc, notice String, source String, index LspL
 end 'projectNoticeNode'
 
 function itemAt(doc JsonDoc, span LspSpan, severity LspSeverity, message String, source String, index LspLineIndex) returns LspJsonObject
-	var item = LspJsonObject.create(doc)
+	let item = LspJsonObject.create(doc)
 	item.putNode(LspRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: span))
 	item.put(DiagnosticSeverityKey, value: JsonNode.numberNode(severity as JsonFloat))
 	item.put(DiagnosticSourceKey, value: JsonNode.stringNode(DiagnosticSourceName))
@@ -650,7 +650,7 @@ function itemAt(doc JsonDoc, span LspSpan, severity LspSeverity, message String,
 end 'itemAt'
 
 function diagnosticNode(doc JsonDoc, diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns JsonNodeId
-	var item = itemAt(doc, span: diagnosticSpan(diagnostic, source: source, index: index, tokens: tokens), severity: LspErrorSeverity, message: diagnostic.message, source: source, index: index)
+	let item = itemAt(doc, span: diagnosticSpan(diagnostic, source: source, index: index, tokens: tokens), severity: LspErrorSeverity, message: diagnostic.message, source: source, index: index)
 
 	// The code, because it is the field a Maxon author can act on: `E3005` can be looked up in the
 	// error code reference, where the message alone cannot. `rawValue` is the registry's own spelling
@@ -705,7 +705,7 @@ end 'documentStartSpan'
 // `PublishDiagnosticsParams` for `uri`, as the message's text. The document travels with the items
 // because each of them is a node inside it.
 function diagnosticsNotificationText(uri String, items JsonNodeIdArray, doc JsonDoc) returns String
-	var params = LspJsonObject.create(doc)
+	let params = LspJsonObject.create(doc)
 	params.put(LspUriKey, value: JsonNode.stringNode(uri))
 	params.putNode(DiagnosticsKey, value: doc.add(JsonNode.arrayNode(items)))
 

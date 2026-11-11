@@ -127,7 +127,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	let flag = 0
 	if flag > 0 'b'
 		let u = a
@@ -160,7 +160,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	let flag = 0
 	if flag > 0 'b'
 		let u = a
@@ -235,7 +235,7 @@ function build(x Integer) returns String
 end 'build'
 
 function pick(c Color) returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	var moved = ""
 	match c 'm'
 		red then moved = a
@@ -323,7 +323,7 @@ end 'build'
 function run(n Integer) returns ExitCode
 	var i = 0 as Integer
 	while i < n 'l'
-		var s = build(i)
+		let s = build(i)
 		if i > 0 'b'
 			let u = s
 			print(u)
@@ -421,7 +421,7 @@ function build(x Integer) returns String
 end 'build'
 
 function run(n Integer) returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	var i = 0 as Integer
 	while i < n 'l'
 		if i > 0 'b'
@@ -470,7 +470,7 @@ function step(k Code) returns Code throws StepError
 end 'step'
 
 function run(k Code) returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	let v = try step(k) otherwise 'bad'
 		let u = a
 		print("handed={u}\n")
@@ -517,7 +517,7 @@ function step(k Code) returns Code throws StepError
 end 'step'
 
 function run(k Code) returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	try step(k) otherwise 'bad'
 		let u = a
 		print("moved={u}\n")
@@ -565,7 +565,7 @@ function keep(s String) returns bool
 end 'keep'
 
 function run(flag Integer) returns bool
-	var a = build(flag)
+	let a = build(flag)
 	let kept = flag > 0 and keep(a)
 	return kept
 end 'run'
@@ -592,7 +592,7 @@ function label(n Integer) returns String
 end 'label'
 
 function movedOnceThenLeaves(stop Integer) returns Integer
-	var s = label(stop)
+	let s = label(stop)
 	var i = 0 as Integer
 	var seen = 0 as Integer
 
@@ -731,7 +731,7 @@ function label(n Integer) returns String
 end 'label'
 
 function forMoveThenBreak(stop Integer) returns Integer
-	var s = label(stop)
+	let s = label(stop)
 	var seen = 0 as Integer
 
 	for i in 0 upto 3 'trips'

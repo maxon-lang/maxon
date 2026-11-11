@@ -1253,7 +1253,7 @@ function total(cells Cells) returns Count
 end 'total'
 
 function main() returns ExitCode
-	var cells = Cells.create(0)
+	let cells = Cells.create(0)
 	cells.push(Cell.create("hello"))
 	return (useAlpha() as Count + total(cells)) as ExitCode
 end 'main'
@@ -1410,8 +1410,8 @@ end 'main'
 ```
 
 
-<!-- test: a-top-level-initializer-call-resolves-past-an-invisible-root-competitor -->
-A top-level `let`'s initializer resolves its bare call the way a body does: the root's `make` is
+<!-- test: a-let-initializer-call-resolves-past-an-invisible-root-competitor -->
+A `let`'s initializer resolves its bare call the way a body does: the root's `make` is
 file-private, so it is no candidate in `app/`, and beta's exported declaration is the one meant.
 ```maxon
 // --- file: r.maxon
@@ -1439,9 +1439,8 @@ export function make(n Integer) returns Box
 end 'make'
 
 // --- file: app/main.maxon
-let G = make(7)
-
 function main() returns ExitCode
+	let G = make(7)
 	return (useRoot() * 10 + G.n) as ExitCode
 end 'main'
 ```
@@ -1450,9 +1449,9 @@ end 'main'
 ```
 
 
-<!-- test: a-top-level-initializer-call-resolves-to-its-one-visible-contested-declaration -->
+<!-- test: a-let-initializer-call-resolves-to-its-one-visible-contested-declaration -->
 Two sibling directories declare `make`; `alpha`'s is file-private, so `beta`'s is the one visible from
-`app/`, and a top-level `let`'s initializer means it as a body call would. Returns 37.
+`app/`, and a `let`'s initializer means it as a body call would. Returns 37.
 ```maxon
 // --- file: r.maxon
 public typealias Integer = int(0 to 125)
@@ -1480,9 +1479,8 @@ export function make(n Integer) returns Box
 end 'make'
 
 // --- file: app/main.maxon
-let G = make(7)
-
 function main() returns ExitCode
+	let G = make(7)
 	return (useAlpha() * 10 + G.n) as ExitCode
 end 'main'
 ```
@@ -1491,8 +1489,8 @@ end 'main'
 ```
 
 
-<!-- test: a-top-level-initializer-call-named-by-its-directory-resolves -->
-A top-level `let`'s initializer may name the callee by its directory, as a body call may. Returns 7.
+<!-- test: a-let-initializer-call-named-by-its-directory-resolves -->
+A `let`'s initializer may name the callee by its directory, as a body call may. Returns 7.
 ```maxon
 // --- file: r.maxon
 public typealias Integer = int(0 to 125)
@@ -1516,9 +1514,8 @@ export function make(n Integer) returns Box
 end 'make'
 
 // --- file: app/main.maxon
-let G = beta.make(7)
-
 function main() returns ExitCode
+	let G = beta.make(7)
 	return (alpha.make(1).n * 10 + G.n) as ExitCode
 end 'main'
 ```
@@ -1526,8 +1523,8 @@ end 'main'
 37
 ```
 
-<!-- test: error.an-ambiguous-top-level-initializer-call-is-ambiguous -->
-Two sibling directories export `make` and the initializer names neither, so it is ambiguous as a body call
+<!-- test: error.an-ambiguous-let-initializer-call-is-ambiguous -->
+Two sibling directories export `make` and the `let` initializer names neither, so it is ambiguous as a body call
 would be.
 ```maxon
 // --- file: r.maxon
@@ -1552,34 +1549,32 @@ export function make(n Integer) returns Box
 end 'make'
 
 // --- file: app/main.maxon
-let G = make(7)
-
 function main() returns ExitCode
+	let G = make(7)
 	return G.n as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3095: app/<fragment>:24:9: Ambiguous bare-name call to 'make': more than one visible declaration matches it. Qualify it as one of: alpha.make, beta.make
+error E3095: app/<fragment>:25:10: Ambiguous bare-name call to 'make': more than one visible declaration matches it. Qualify it as one of: alpha.make, beta.make
 ```
 
-<!-- test: error.an-undeclared-top-level-initializer-call-is-refused-as-a-body-call-is -->
-An initializer calling a function nobody declares is refused as a body call naming it is.
+<!-- test: error.an-undeclared-let-initializer-call-is-refused-as-a-body-call-is -->
+A `let` initializer calling a function nobody declares is refused as a body call naming it is.
 ```maxon
 public typealias Integer = int(0 to 125)
 
-let G = nothere(7)
-
 function main() returns ExitCode
+	let G = nothere(7)
 	return G as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:4:9: call to undefined function 'nothere'
+error E3004: <fragment>:5:10: call to undefined function 'nothere'
 ```
 
 
-<!-- test: error.a-top-level-initializer-call-to-a-name-only-invisible-declarations-carry -->
-The root's and `alpha`'s `make` are both file-private, so `app/` can name neither; the initializer is
+<!-- test: error.a-let-initializer-call-to-a-name-only-invisible-declarations-carry -->
+The root's and `alpha`'s `make` are both file-private, so `app/` can name neither; the `let` initializer is
 refused as a body call naming it is.
 ```maxon
 // --- file: r.maxon
@@ -1603,14 +1598,13 @@ export function useAlpha() returns Integer
 end 'useAlpha'
 
 // --- file: app/main.maxon
-let G = make(7)
-
 function main() returns ExitCode
+	let G = make(7)
 	return (useRoot() + useAlpha() + G) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: app/<fragment>:23:9: function 'make' is not exported
+error E3008: app/<fragment>:24:10: function 'make' is not exported
 ```
 
 
@@ -3027,43 +3021,6 @@ function main() returns ExitCode
 	let base = scaled(1, api: 2)
 	return base + api.Score.make().v + (local as ExitCode)
 end 'main'
-```
-```exitcode
-37
-```
-
-<!-- test: a-top-level-binding-named-like-a-directory-keeps-its-member-access -->
-A top-level binding shadows a directory of the same name exactly as a local one does: in the file that declares
-`api`, `api.Upper` reads the binding's field, while a file the binding is hidden from names the directory's type.
-```maxon
-// --- file: api/upper.maxon
-export type Upper
-	export let v as ExitCode
-
-	export static function make() returns Upper
-		return Upper{v: 30}
-	end 'make'
-end 'Upper'
-
-// --- file: app/main.maxon
-type Holder
-	export let Upper as ExitCode
-
-	static function make() returns Holder
-		return Holder{Upper: 7}
-	end 'make'
-end 'Holder'
-
-let api = Holder.make()
-
-function main() returns ExitCode
-	return api.Upper + seven()
-end 'main'
-
-// --- file: app/other.maxon
-module function seven() returns ExitCode
-	return api.Upper.make().v
-end 'seven'
 ```
 ```exitcode
 37

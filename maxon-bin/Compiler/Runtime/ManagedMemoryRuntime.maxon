@@ -252,7 +252,7 @@ export function registerImmortalStringTableRecord(globalData GlobalDataTable, te
 		panic("registerImmortalStringTableRecord: a table of addresses is being registered at element stride {elementSize}, not the {ManagedArrayElementBytes}-byte pointer slot a managed element occupies — the buffer this lays down and the stride the record is stamped with would describe different geometry")
 	end 'notAPointerSlot'
 
-	var elementLabels = StringArray.create(texts.count(), zeroed: false)
+	let elementLabels = StringArray.create(texts.count(), zeroed: false)
 
 	for text in texts 'eachElement'
 		elementLabels.push(registerStringLiteralRecord(globalData, bytes: text, debugStream: debugStream))
@@ -268,7 +268,7 @@ end 'registerImmortalStringTableRecord'
 // The element buffer's bytes: one pointer slot per element, seeded with that element's record offset — see
 // the dedup argument at the door above. Every slot is OVERWRITTEN with a real address by the writers.
 function stringTableBufferBytes(globalData GlobalDataTable, elementLabels StringArray) returns immutable ByteArray
-	var buffer = ByteArray.create(0) as isolated ByteArray
+	let buffer = ByteArray.create(0) as isolated ByteArray
 
 	modify buffer 'fill'
 		for label in elementLabels 'eachSlot'
@@ -512,22 +512,7 @@ export let ManagedSliceManagedName = b"__managed_slice_managed"
 export let ManagedCloneManagedName = b"__managed_clone_managed"
 export let ManagedAppendManagedName = b"__managed_append_managed"
 
-// ⭐⭐ **THE SOLENESS WALK OVER A CONTAINER RECORD** — the third answer beside `__managed_decref` and
-// `__managed_clone_managed`, and the one a String record takes too (it IS this record format). It counts the
-// record's owners in the moved graph, DETACHES a shared copy-on-write buffer, and — the `_managed` entry — walks each live
-// element through the per-element walk the call site stamps (`funcAddr(__sole_<E>)`), exactly as the clone
-// pair passes an element cloner.
-//
-// ⭐ **A SHARED BUFFER IS DETACHED RATHER THAN REFUSED, AND THAT IS THE WHOLE DIFFERENCE BETWEEN THE TWO
-// THINGS A COUNT CAN MEAN HERE.** A counted RECORD with an owner outside the graph is what a move may not leave behind. A
-// shared BUFFER is copy-on-write — `.clone()`/`.slice()` share bytes until a write — and a counted buffer's
-// count steps plain, so leaving the two records on two green threads would race that word. **A MOVE IS A
-// WRITE-LIKE EVENT**, so the answer is the one a write already gives: `__managed_cow_detach`, called rather
-// than restated.
-export let ManagedSoleName = b"__managed_sole"
-export let ManagedSoleManagedName = b"__managed_sole_managed"
-
-// ⭐⭐ **THE SHARE WALK OVER A CONTAINER RECORD** — the soleness pair's twin for a SHARE. It marks
+// ⭐⭐ **THE SHARE WALK OVER A CONTAINER RECORD.** It marks
 // the record shared, marks the allocation its bytes live in — views step that count from any green
 // thread once the record is shared — and — the `_managed` entry — walks each live element through
 // the stamped `funcAddr(__share_<E>)`.
@@ -537,11 +522,6 @@ export let ManagedSoleManagedName = b"__managed_sole_managed"
 // — finds the marked buffer's count non-zero and copies out rather than writing in place.
 export let ManagedShareName = b"__managed_share"
 export let ManagedShareManagedName = b"__managed_share_managed"
-
-// The soleness and share walks over a record handed over as the whole graph — a `String` or `Character` message
-// argument or reply — which meet no record twice and keep no visit table.
-export let ManagedSoleAloneName = b"__managed_sole_alone"
-export let ManagedShareAloneName = b"__managed_share_alone"
 
 // ⭐⭐ **THE TWO CO-OWN ENTRIES A BUFFER RECORD TAKES INSTEAD OF THE PLAIN BOX'S, BECAUSE ONE SUCH RECORD
 // IS IMAGE DATA.** A module-level managed constant materializes as an immortal `.rdata` record
@@ -1247,7 +1227,7 @@ export function verifyManagedMemoryRuntimeOrdinals(project Project)
 end 'verifyManagedMemoryRuntimeOrdinals'
 
 function claimArrayErrorOrdinals(project Project, declaration EnumLayout)
-	var arrayErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ArrayErrorOrdinalInstaller)
+	let arrayErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ArrayErrorOrdinalInstaller)
 	arrayErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: ArrayErrorIndexOutOfBoundsOrdinal)
 	arrayErrors.claim(ManagedMemoryEmptySlotCaseName, ordinal: ArrayErrorEmptySlotOrdinal)
 
@@ -1258,7 +1238,7 @@ function claimArrayErrorOrdinals(project Project, declaration EnumLayout)
 end 'claimArrayErrorOrdinals'
 
 function claimManagedMemoryOrdinals(project Project, declaration EnumLayout)
-	var memoryErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedMemoryOrdinalInstaller)
+	let memoryErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedMemoryOrdinalInstaller)
 	memoryErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: MemoryIndexOutOfBoundsOrdinal)
 
 	// The two this runtime never throws — see the ordinal block beside `MemoryIndexOutOfBoundsOrdinal`.
@@ -1363,12 +1343,8 @@ export function installManagedMemoryRuntime(module StdModule, globalData GlobalD
 		buildManagedAppendOpaque(module)
 	end 'opaqueCopy'
 
-	// The SOLENESS walks and the SHARE walks — each set under its OWN bit, so a program that hands nothing to a
-	// green thread does not carry them.
-	if usage.usesSoleWalk 'soleWalk'
-		buildManagedWalks(module, action: CascadeAction.soleWalk)
-	end 'soleWalk'
-
+	// The SHARE walks — under their own bit, so a program that shares nothing with a green thread does not
+	// carry them.
 	if usage.usesShareWalk 'shareWalk'
 		buildManagedWalks(module, action: CascadeAction.shareWalk)
 	end 'shareWalk'
@@ -1387,7 +1363,7 @@ export function installDropTypeParamRuntime(module StdModule, usage RuntimeUsage
 		return
 	end 'noDrop'
 
-	buildRecordGatedAction(module, symbolName: DropTypeParamName, wordOffset: LAYOUT_OFFSET_DESTROY_FUNC, action: RecordGatedAction.destroyThroughWord)
+	buildRecordGatedAction(module, symbolName: DropTypeParamName, wordOffset: LAYOUT_OFFSET_DESTROY_FUNC, action: RecordGatedAction.callThroughWord)
 end 'installDropTypeParamRuntime'
 
 // ⭐ **INSTALL THE SINGLE-VALUE DESCRIPTOR-GATED RETAIN** (`__retain_type_param`) — its own bit for
@@ -1426,7 +1402,7 @@ export function installDropExistentialRuntime(module StdModule, usage RuntimeUsa
 		return
 	end 'noDrop'
 
-	buildRecordGatedAction(module, symbolName: DropExistentialName, wordOffset: WitnessDestroyFuncOffset, action: RecordGatedAction.destroyThroughWord)
+	buildRecordGatedAction(module, symbolName: DropExistentialName, wordOffset: WitnessDestroyFuncOffset, action: RecordGatedAction.callThroughWord)
 end 'installDropExistentialRuntime'
 
 // ⭐ **INSTALL `__retain_existential`** — its own bit for
@@ -1489,9 +1465,10 @@ end 'verifyThrowingAccessorsMatchPredicate'
 // rides a union rather than a bool because the actions also differ in what they take and RETURN, and a bool
 // plus a second parameter would be one fact spelled twice.
 module union RecordGatedAction
-	// DESTROY `value` through the loaded word with a `callIndirect` — `__drop_type_param`,
-	// `__drop_existential`. A void `(i64, i64) -> void`, so the taken path falls into the shared exit.
-	destroyThroughWord
+	// CALL the loaded word on `value` with a `callIndirect` — `__drop_type_param`, `__drop_existential`
+	// (the destroy) and `__mm_share_existential` (the share walk). A void `(i64, i64) -> void`, so the taken
+	// path falls into the shared exit.
+	callThroughWord
 
 	// DESTROY `value` through the layout descriptor's `destroyFunc@40` when the loaded word is
 	// non-zero — `__release_type_param`, gated on `retainFunc@64` (see `ReleaseTypeParamName`).
@@ -1508,11 +1485,6 @@ module union RecordGatedAction
 	// `IrInterface.WitnessRetainFuncOffset`) and the caller must store what it was given, not what it gave.
 	// The inert path answers `value` itself, so a scalar conformer passes through unchanged.
 	retainThroughWord
-
-	// WALK `value` through the loaded word, handing it the visit table — `__mm_sole_existential`,
-	// `__mm_share_existential`. A `(i64, i64, i64) -> i64` answering the table the walk handed back; the inert
-	// path answers the table it was given.
-	walkThroughWord
 end 'RecordGatedAction'
 
 // ⭐⭐ **`<symbolName>(record, value)` — THE SINGLE-VALUE ANALOGUE of the managed-element destroy gate
@@ -1521,7 +1493,7 @@ end 'RecordGatedAction'
 // `destroyWhenUnretained`, which acts only on a zero word. `value` is a LIVE owner (or a live
 // borrow) at every call site, so unlike the array walk it needs no per-slot null guard.
 //
-// **NINE ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
+// **EIGHT ENTRIES ARE THIS SHAPE, AND THEY DIFFER IN THE RECORD, THE OFFSET AND THE ACTION:**
 //   • `__drop_type_param(descriptor, value)` — a shared generic body dropping a consumed
 //     opaque type-parameter binding (a `push`/forward feed parameter left live on some path). The record is
 //     the enclosing instance's LAYOUT DESCRIPTOR and the word is `destroyFunc@40` — the same word the
@@ -1543,46 +1515,37 @@ end 'RecordGatedAction'
 //     `retainFunc@64` and the destroying one `destroyFunc@40` (see `ReleaseTypeParamName`).
 //   • `__reclaim_type_param(descriptor, value)` — the same two words with the retain gate inverted:
 //     the feed drop guard's destroy of a value no store took (see `ReclaimTypeParamName`).
-//   • `__mm_sole_existential(witness, value, visits) -> visits` / `__mm_share_existential(…)` — a value held
-//     at an interface type walked before it crosses to another green thread, through the table's
-//     `soleWalkFunc@24` / `shareWalkFunc@32`.
+//   • `__mm_share_existential(witness, value)` — a value held at an interface type walked before it crosses to
+//     another green thread, through the table's `shareWalkFunc@24`.
 //   • `__mm_clone_existential(witness, value) -> value'` — the DEEP COPY of an interface-typed field's value
 //     half, through the same table's `cloneFunc@40`.
 //
-// All nine are "a per-type fact nobody can name statically, read out of a record at run time", so
-// one emitter builds all nine: the element-destructor ABI (`emitElementDestructorCall`) and the
+// All eight are "a per-type fact nobody can name statically, read out of a record at run time", so
+// one emitter builds all eight: the element-destructor ABI (`emitElementDestructorCall`) and the
 // zero-means-nothing-to-do convention are then stated once and cannot drift between them.
 //
-// ⚠ **THE RETAIN'S AND THE WALK'S TAKEN PATHS RETURN FROM `doact` RATHER THAN FALLING INTO `done`**, so the two
+// ⚠ **THE RETAIN'S TAKEN PATH RETURNS FROM `doact` RATHER THAN FALLING INTO `done`**, so the two
 // exits are two `ret` terminators and no block-arg join is needed: `done` answers what it was handed and
 // `doact` answers what the word handed back.
 module function buildRecordGatedAction(module StdModule, symbolName ByteArray, wordOffset ByteOffset, action RecordGatedAction)
-	let paramCount = recordGatedParamCount(action)
-	var paramTypes = StdTypeArray.create(paramCount, zeroed: false)
+	let func = IrFunction.createFromStd(symbolName, returnType: recordGatedReturnType(action), paramCount: RecordGatedParamCount, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(RecordGatedParamCount)
 
-	for _ in 0 upto paramCount 'eachParam'
-		paramTypes.push(StdType.i64)
-	end 'eachParam'
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let doAct = module.addBlock(func, label: b"doact", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
-	var func = IrFunction.createFromStd(symbolName, returnType: recordGatedReturnType(action), paramCount: paramCount, paramTypes: paramTypes)
-	var ids = ValueMinter.create(paramCount)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var doAct = module.addBlock(func, label: b"doact", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: paramCount)
+	emitParams(module, block: entry, count: RecordGatedParamCount)
 	let record = 0
 	let value = 1
 
 	let word = emitRecordWordLoad(module, block: entry, record: record, offset: wordOffset, ids: ids)
 
 	match action 'act'
-		destroyThroughWord then emitDestroyWhenPresent(module, entry: entry, doAct: doAct, done: done, gateWord: word, destroyWord: word, value: value, ids: ids)
+		callThroughWord then emitDestroyWhenPresent(module, entry: entry, doAct: doAct, done: done, gateWord: word, destroyWord: word, value: value, ids: ids)
 		destroyWhenRetainable then emitDestroyWhenPresent(module, entry: entry, doAct: doAct, done: done, gateWord: word, destroyWord: emitRecordWordLoad(module, block: doAct, record: record, offset: LAYOUT_OFFSET_DESTROY_FUNC, ids: ids), value: value, ids: ids)
 		destroyWhenUnretained then emitDestroyWhenAbsent(module, func: func, entry: entry, doAct: doAct, done: done, record: record, retainWord: word, value: value, ids: ids)
 		retainThroughWord then emitAnswerWhenPresent(module, entry: entry, doAct: doAct, done: done, word: word, args: argsOf(value), inert: value, ids: ids)
-		walkThroughWord then emitAnswerWhenPresent(module, entry: entry, doAct: doAct, done: done, word: word, args: twoArgs(value, second: RecordGatedVisitsParam), inert: RecordGatedVisitsParam, ids: ids)
 	end 'act'
 
 	module.functions.push(func)
@@ -1599,16 +1562,13 @@ function emitAnswerWhenPresent(module StdModule, entry IrBlock, doAct IrBlock, d
 end 'emitAnswerWhenPresent'
 
 function emitDestroyWhenAbsent(module StdModule, func IrFunction, entry IrBlock, doAct IrBlock, done IrBlock, record ValueId, retainWord ValueId, value ValueId, ids ValueMinter)
-	var check = module.addBlock(func, label: b"check", heat: BlockHeat.normal)
+	let check = module.addBlock(func, label: b"check", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: entry, value: retainWord, pred: StdCmpPred.eq, against: 0, whenTrue: check, whenFalse: done, ids: ids)
 
 	let destroyWord = emitRecordWordLoad(module, block: check, record: record, offset: LAYOUT_OFFSET_DESTROY_FUNC, ids: ids)
 	emitBranchOnCompare(module, block: check, value: destroyWord, pred: StdCmpPred.ne, against: 0, whenTrue: doAct, whenFalse: done, ids: ids)
 	emitRecordGatedDestroyTail(module, doAct: doAct, done: done, word: destroyWord, value: value, ids: ids)
 end 'emitDestroyWhenAbsent'
-
-// The visit table a `walkThroughWord` entry is handed, after the record and the value.
-let RecordGatedVisitsParam = 2
 
 function emitRecordWordLoad(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let word = ids.mint()
@@ -1625,9 +1585,9 @@ function emitRecordGatedDestroyTail(module StdModule, doAct IrBlock, done IrBloc
 end 'emitRecordGatedDestroyTail'
 
 // The ANSWERING tail: `callIndirect` the word on `args` and RETURN WHAT IT ANSWERED, which for a retain of a
-// byte-record conformer is a fresh `__str_clone` record rather than `value` itself, and for a walk is the visit
-// table it grew. The inert path answers `inert`. The two paths return DIFFERENT values and each terminates with
-// its own `ret` — a join block-arg would say the same thing with a phi the backend would only coalesce away.
+// byte-record conformer is a fresh `__str_clone` record rather than `value` itself. The inert path answers
+// `inert`. The two paths return DIFFERENT values and each terminates with its own `ret` — a join block-arg
+// would say the same thing with a phi the backend would only coalesce away.
 function emitRecordGatedAnsweringTail(module StdModule, doAct IrBlock, done IrBlock, word ValueId, args ValueIdArray, inert ValueId, ids ValueMinter)
 	let taken = ids.mint()
 	module.appendOp(doAct, op: StdOp.callIndirect(taken, calleeReg: word, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: args))
@@ -1635,27 +1595,18 @@ function emitRecordGatedAnsweringTail(module StdModule, doAct IrBlock, done IrBl
 	module.setTerminator(done, op: StdOp.ret(inert))
 end 'emitRecordGatedAnsweringTail'
 
-// The Std return type each action's entry declares — void for a destroy, the answered word for a retain and a
-// walk. Split out because `IrFunction.createFromStd` needs it before the body's `match` runs.
+// The Std return type each action's entry declares — void for a call and a destroy, the answered word for a
+// retain. Split out because `IrFunction.createFromStd` needs it before the body's `match` runs.
 function recordGatedReturnType(action RecordGatedAction) returns StdReturnType
 	return match action 'a'
-		destroyThroughWord or
+		callThroughWord or
 		destroyWhenRetainable or
 		destroyWhenUnretained gives StdReturnType.void
-		retainThroughWord or
-		walkThroughWord gives StdReturnType.value(StdType.i64)
+		retainThroughWord gives StdReturnType.value(StdType.i64)
 	end 'a'
 end 'recordGatedReturnType'
 
-function recordGatedParamCount(action RecordGatedAction) returns ParamCount
-	return match action 'a'
-		destroyThroughWord or
-		destroyWhenRetainable or
-		destroyWhenUnretained or
-		retainThroughWord gives 2 as ParamCount
-		walkThroughWord gives 3 as ParamCount
-	end 'a'
-end 'recordGatedParamCount'
+let RecordGatedParamCount = 2
 
 // --- The range builders: the runtime-polymorphic element_size lives HERE ---
 //
@@ -1732,10 +1683,10 @@ function emitCopyRun(module StdModule, func IrFunction, cur IrBlock, dest ValueI
 		addrOpcode = StdBinOpcode.sub
 	end 'highestChunkFirst'
 
-	var loop = openCountedLoop(module, func: func, cur: cur, from: run.lower, to: run.upper, label: run.label, ids: ids)
+	let loop = openCountedLoop(module, func: func, cur: cur, from: run.lower, to: run.upper, label: run.label, ids: ids)
 
 	let srcAddr = emitBin(module, block: loop.body, a: srcAnchor, b: loop.index, opcode: addrOpcode, ids: ids)
-	var moved = ValueIdArray.create(shape.accesses() as ElementIndex, zeroed: false)
+	let moved = ValueIdArray.create(shape.accesses() as ElementIndex, zeroed: false)
 	var offset = 0 as ByteOffset
 
 	for _ in 1 to shape.accesses() 'eachLoad'
@@ -1793,8 +1744,8 @@ end 'emitCopyRuns'
 // element-stride arithmetic lives in exactly one place per direction"), and the low-address-first direction
 // is exactly what a fresh buffer needs.
 export function emitForwardCopy(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, byteCount ValueId, ids ValueMinter, widest CopyChunk = CopyChunk.word) returns IrBlock
-	var split = openCopyRunSplit(module, func: func, cur: cur, byteCount: byteCount, widest: widest, label: b"cpyf", ids: ids)
-	var afterRuns = emitCopyRuns(module, func: func, cur: split.run, dest: dest, src: src, split: split, fromTheTop: false, ids: ids)
+	let split = openCopyRunSplit(module, func: func, cur: cur, byteCount: byteCount, widest: widest, label: b"cpyf", ids: ids)
+	let afterRuns = emitCopyRuns(module, func: func, cur: split.run, dest: dest, src: src, split: split, fromTheTop: false, ids: ids)
 
 	return closeCopyRunSplit(module, split: split, tail: afterRuns)
 end 'emitForwardCopy'
@@ -1817,8 +1768,8 @@ end 'emitForwardCopy'
 // copy in the tree goes to `emitForwardCopy`. Calling this one on a `dest < src` overlap would smear just as
 // surely as calling the forward one on a `dest > src` overlap.
 function emitBackwardCopy(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, byteCount ValueId, ids ValueMinter, widest CopyChunk) returns IrBlock
-	var split = openCopyRunSplit(module, func: func, cur: cur, byteCount: byteCount, widest: widest, label: b"cpyb", ids: ids)
-	var afterRuns = emitCopyRuns(module, func: func, cur: split.run, dest: dest, src: src, split: split, fromTheTop: true, ids: ids)
+	let split = openCopyRunSplit(module, func: func, cur: cur, byteCount: byteCount, widest: widest, label: b"cpyb", ids: ids)
+	let afterRuns = emitCopyRuns(module, func: func, cur: split.run, dest: dest, src: src, split: split, fromTheTop: true, ids: ids)
 
 	return closeCopyRunSplit(module, split: split, tail: afterRuns)
 end 'emitBackwardCopy'
@@ -1832,9 +1783,9 @@ end 'emitBackwardCopy'
 // move-only model rather than netted through a refcount. Threads through `cur` (sets its terminator) and returns the
 // continuation block. Caller guards `destroy != 0` (a trivial-element array never reaches here).
 function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, start ValueId, stop ValueId, elementSize ValueId, destroy ValueId, ids ValueMinter) returns IrBlock
-	var header = module.addBlock(func, label: b"dtorh", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"dtorb", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"dtordone", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"dtorh", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"dtorb", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"dtordone", heat: BlockHeat.normal)
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
@@ -1846,7 +1797,7 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 	let slot = emitSlotAddr(module, block: body, buffer: buffer, index: i, elementSize: elementSize, ids: ids)
 	let elem = ids.mint()
 	module.appendOp(body, op: StdOp.loadIndirect(elem, addrId: slot, offset: 0, valueType: StdType.i64))
-	var step = emitDestroyOccupant(module, func: func, cur: body, destroy: destroy, occupant: elem, ids: ids)
+	let step = emitDestroyOccupant(module, func: func, cur: body, destroy: destroy, occupant: elem, ids: ids)
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
@@ -1856,9 +1807,9 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 end 'emitElementDestroyRange'
 
 function emitOccupantRead(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, index ValueId, elementSize ValueId, destroy ValueId, ids ValueMinter) returns (IrBlock, ValueId)
-	var readIt = module.addBlock(func, label: b"occread", heat: BlockHeat.normal)
-	var none = module.addBlock(func, label: b"occnone", heat: BlockHeat.normal)
-	var joined = module.addBlock(func, label: b"occjoin", heat: BlockHeat.normal)
+	let readIt = module.addBlock(func, label: b"occread", heat: BlockHeat.normal)
+	let none = module.addBlock(func, label: b"occnone", heat: BlockHeat.normal)
+	let joined = module.addBlock(func, label: b"occjoin", heat: BlockHeat.normal)
 
 	let occupant = ids.mint()
 	joined.blockArgs.push(IrBlockArg.create(occupant, argType: StdType.i64))
@@ -1873,8 +1824,8 @@ function emitOccupantRead(module StdModule, func IrFunction, cur IrBlock, buffer
 end 'emitOccupantRead'
 
 function emitDestroyOccupant(module StdModule, func IrFunction, cur IrBlock, destroy ValueId, occupant ValueId, ids ValueMinter) returns IrBlock
-	var doDrop = module.addBlock(func, label: b"dtordo", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"dtorstep", heat: BlockHeat.normal)
+	let doDrop = module.addBlock(func, label: b"dtordo", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"dtorstep", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: cur, value: occupant, pred: StdCmpPred.ne, against: 0, whenTrue: doDrop, whenFalse: done, ids: ids)
 	emitElementDestructorCall(module, block: doDrop, destroy: destroy, elem: occupant, ids: ids)
@@ -1908,8 +1859,8 @@ end 'emitElementDestructorCall'
 function emitDestroyRangeIfManaged(module StdModule, func IrFunction, cur IrBlock, record ValueId, start ValueId, ids ValueMinter) returns IrBlock
 	let dtor = emitLoadField(module, block: cur, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
 	let hasDtor = emitElementIsManaged(module, block: cur, destroy: dtor, ids: ids)
-	var walk = module.addBlock(func, label: b"mwalk", heat: BlockHeat.normal)
-	var cont = module.addBlock(func, label: b"mcont", heat: BlockHeat.normal)
+	let walk = module.addBlock(func, label: b"mwalk", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"mcont", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(hasDtor, thenBlockId: walk.id, elseBlockId: cont.id))
 
 	module.appendOp(walk, op: StdOp.call(ids.mint(), callee: ManagedDestroyRangeName, args: twoArgs(record, second: start)))
@@ -1925,10 +1876,10 @@ end 'emitDestroyRangeIfManaged'
 // the old length. It is stack-guarded, unlike the flat `__managed_*` entries, because the walk recurses
 // through element destructors and the depth follows the data.
 function buildManagedDestroyRange(module StdModule)
-	var func = IrFunction.createFromStd(ManagedDestroyRangeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedDestroyRangeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let record = 0
 	let start = 1
@@ -1937,7 +1888,7 @@ function buildManagedDestroyRange(module StdModule)
 	let dtor = emitLoadField(module, block: entry, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
 	let buffer = emitLoadField(module, block: entry, record: record, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadElementStride(module, block: entry, record: record, ids: ids)
-	var afterWalk = emitElementDestroyRange(module, func: func, cur: entry, buffer: buffer, start: start, stop: stop, elementSize: es, destroy: dtor, ids: ids)
+	let afterWalk = emitElementDestroyRange(module, func: func, cur: entry, buffer: buffer, start: start, stop: stop, elementSize: es, destroy: dtor, ids: ids)
 	module.setTerminator(afterWalk, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1951,12 +1902,12 @@ end 'buildManagedDestroyRange'
 // fallback. A TRIVIAL element's 0 is a genuine value (not empty), so the null-check is gated on the destructor
 // and never fires for a trivial array — its ok-return is unchanged.
 function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, index ValueId, greenThreads bool, ids ValueMinter)
-	var checkDtor = module.addBlock(func, label: b"gchkdtor", heat: BlockHeat.normal)
+	let checkDtor = module.addBlock(func, label: b"gchkdtor", heat: BlockHeat.normal)
 	let value = emitLoadElemAt(module, func: func, cur: cur, exit: checkDtor, record: record, buffer: buffer, index: index, ids: ids)
 
-	var checkNull = module.addBlock(func, label: b"gchknull", heat: BlockHeat.normal)
-	var ok = module.addBlock(func, label: b"gok", heat: BlockHeat.normal)
-	var empty = module.addBlock(func, label: b"gempty", heat: BlockHeat.normal)
+	let checkNull = module.addBlock(func, label: b"gchknull", heat: BlockHeat.normal)
+	let ok = module.addBlock(func, label: b"gok", heat: BlockHeat.normal)
+	let empty = module.addBlock(func, label: b"gempty", heat: BlockHeat.normal)
 
 	// checkDtor: a trivial element (destructor 0) skips the null-check; a managed one falls to checkNull.
 	let dtor = emitLoadField(module, block: checkDtor, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
@@ -1982,9 +1933,9 @@ export function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids 
 end 'emitCowDetach'
 
 function emitCowDetachInto(module StdModule, func IrFunction, entry IrBlock, arr ValueId, continuation IrBlock, prefix String, ids ValueMinter)
-	var checkBuffer = module.addBlock(func, label: freeze "{prefix}dbuf".toByteArray(), heat: BlockHeat.normal)
-	var checkShared = module.addBlock(func, label: freeze "{prefix}dshared".toByteArray(), heat: BlockHeat.normal)
-	var detach = module.addBlock(func, label: freeze "{prefix}ddetach".toByteArray(), heat: BlockHeat.cold)
+	let checkBuffer = module.addBlock(func, label: freeze "{prefix}dbuf".toByteArray(), heat: BlockHeat.normal)
+	let checkShared = module.addBlock(func, label: freeze "{prefix}dshared".toByteArray(), heat: BlockHeat.normal)
+	let detach = module.addBlock(func, label: freeze "{prefix}ddetach".toByteArray(), heat: BlockHeat.cold)
 
 	_ = emitBranchOnDetachNeeded(module, entry: entry, checkBuffer: checkBuffer, checkShared: checkShared, arr: arr, needed: detach, notNeeded: continuation, absent: AbsentBuffer.skipsTheDetach, ids: ids)
 	emitCowDetach(module, block: detach, arr: arr, ids: ids)
@@ -1996,7 +1947,7 @@ end 'emitCowDetachInto'
 // enters only when the detach has work to do. Returns the block to keep emitting into; `block` is
 // terminated.
 export function emitCowDetachWhenNeeded(module StdModule, func IrFunction, block IrBlock, arr ValueId, prefix String, ids ValueMinter) returns IrBlock
-	var detached = module.addBlock(func, label: freeze "{prefix}ddone".toByteArray(), heat: BlockHeat.normal)
+	let detached = module.addBlock(func, label: freeze "{prefix}ddone".toByteArray(), heat: BlockHeat.normal)
 	emitCowDetachInto(module, func: func, entry: block, arr: arr, continuation: detached, prefix: prefix, ids: ids)
 
 	return detached
@@ -2508,7 +2459,7 @@ end 'strideChainArmFor'
 // minted instead of minting one: a store writes the same low bytes either way, and only a load must extend.
 // The roster therefore lists an unsigned width before its signed one (`strideChainArmFor` panics otherwise).
 export function emitStrideChain(module StdModule, func IrFunction, cur IrBlock, stamp ValueId, strides SingleOpStrideArray, signedSharesUnsignedArm bool, other BlockId, armLabelPrefix ByteArray, checkLabel ByteArray, ids ValueMinter) returns StrideChainArmArray
-	var arms = StrideChainArmArray.create(0)
+	let arms = StrideChainArmArray.create(0)
 	var test = cur
 
 	for position in 0 upto strides.count() 'eachStride'
@@ -2521,7 +2472,7 @@ export function emitStrideChain(module StdModule, func IrFunction, cur IrBlock, 
 		end 'sharedArm'
 
 		if not sharesArm 'ownArm'
-			var arm = module.addBlock(func, label: strideArmLabel(armLabelPrefix, stride: stride), heat: BlockHeat.normal)
+			let arm = module.addBlock(func, label: strideArmLabel(armLabelPrefix, stride: stride), heat: BlockHeat.normal)
 			let armRef = registeredBlockRef(module, func: func, block: arm)
 			arms.push(StrideChainArm.create(arm.id, ref: armRef, stride: stride))
 			target = arm.id
@@ -2534,7 +2485,7 @@ export function emitStrideChain(module StdModule, func IrFunction, cur IrBlock, 
 			continue
 		end 'lastTest'
 
-		var next = module.addBlock(func, label: checkLabel, heat: BlockHeat.normal)
+		let next = module.addBlock(func, label: checkLabel, heat: BlockHeat.normal)
 		module.setTerminator(test, op: StdOp.condBranch(isStride, thenBlockId: target, elseBlockId: next.id))
 		test = next
 	end 'eachStride'
@@ -2689,12 +2640,12 @@ function emitStrideArm(module StdModule, func IrFunction, arm IrBlock, stride Si
 end 'emitStrideArm'
 
 function emitStrideArms(module StdModule, func IrFunction, cur IrBlock, record ValueId, work StrideArmWork, join IrBlock, label ByteArray, ids ValueMinter)
-	var fatal = module.addBlock(func, label: label, heat: BlockHeat.cold)
+	let fatal = module.addBlock(func, label: label, heat: BlockHeat.cold)
 	let stamp = emitLoadElementStamp(module, block: cur, record: record, ids: ids)
 	let arms = emitStrideChain(module, func: func, cur: cur, stamp: stamp, strides: SingleOpStride.allCases, signedSharesUnsignedArm: not strideArmWorkIsLoad(work), other: fatal.id, armLabelPrefix: label, checkLabel: label, ids: ids)
 
 	for arm in arms 'eachArm'
-		var block = try module.blocks.get(arm.ref) otherwise panic("emitStrideArms: arm block {arm.ref} is not in module.blocks")
+		let block = try module.blocks.get(arm.ref) otherwise panic("emitStrideArms: arm block {arm.ref} is not in module.blocks")
 		emitStrideArm(module, func: func, arm: block, stride: arm.stride, work: work, join: join, label: label, ids: ids)
 
 		if not block.hasTerminatorOp() 'aStoreArm'
@@ -2706,7 +2657,7 @@ function emitStrideArms(module StdModule, func IrFunction, cur IrBlock, record V
 end 'emitStrideArms'
 
 function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, record ValueId, buffer ValueId, index ValueId, ids ValueMinter) returns ValueId
-	var join = module.addBlock(func, label: b"ldjoin", heat: BlockHeat.normal)
+	let join = module.addBlock(func, label: b"ldjoin", heat: BlockHeat.normal)
 
 	let value = ids.mint()
 	join.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
@@ -2718,7 +2669,7 @@ function emitLoadElemAt(module StdModule, func IrFunction, cur IrBlock, exit IrB
 end 'emitLoadElemAt'
 
 function emitStoreElemAt(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, index ValueId, value ValueId, ids ValueMinter) returns IrBlock
-	var join = module.addBlock(func, label: b"stjoin", heat: BlockHeat.normal)
+	let join = module.addBlock(func, label: b"stjoin", heat: BlockHeat.normal)
 
 	emitStrideArms(module, func: func, cur: cur, record: record, work: StrideArmWork.store(buffer, index: index, value: value), join: join, label: b"st", ids: ids)
 
@@ -2773,20 +2724,20 @@ end 'emitPackedFieldStore'
 // elements starting at an arbitrary index has no byte alignment to blit on, so the packed arm reads and
 // writes one field at a time.
 function buildManagedMoveElems(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMoveElemsName, returnType: StdReturnType.void, paramCount: 6, paramTypes: sixI64Params())
-	var ids = ValueMinter.create(6)
+	let func = IrFunction.createFromStd(ManagedMoveElemsName, returnType: StdReturnType.void, paramCount: 6, paramTypes: sixI64Params())
+	let ids = ValueMinter.create(6)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var sameBuf = module.addBlock(func, label: b"mvsame", heat: BlockHeat.normal)
-	var otherBuf = module.addBlock(func, label: b"mvother", heat: BlockHeat.normal)
-	var direction = module.addBlock(func, label: b"mvdir", heat: BlockHeat.normal)
-	var packedArm = module.addBlock(func, label: b"mvpack", heat: BlockHeat.normal)
-	var byteArm = module.addBlock(func, label: b"mvbyte", heat: BlockHeat.normal)
-	var packedTop = module.addBlock(func, label: b"mvpacktop", heat: BlockHeat.normal)
-	var packedBottom = module.addBlock(func, label: b"mvpackbot", heat: BlockHeat.normal)
-	var byteTop = module.addBlock(func, label: b"mvbytetop", heat: BlockHeat.normal)
-	var byteBottom = module.addBlock(func, label: b"mvbytebot", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let sameBuf = module.addBlock(func, label: b"mvsame", heat: BlockHeat.normal)
+	let otherBuf = module.addBlock(func, label: b"mvother", heat: BlockHeat.normal)
+	let direction = module.addBlock(func, label: b"mvdir", heat: BlockHeat.normal)
+	let packedArm = module.addBlock(func, label: b"mvpack", heat: BlockHeat.normal)
+	let byteArm = module.addBlock(func, label: b"mvbyte", heat: BlockHeat.normal)
+	let packedTop = module.addBlock(func, label: b"mvpacktop", heat: BlockHeat.normal)
+	let packedBottom = module.addBlock(func, label: b"mvpackbot", heat: BlockHeat.normal)
+	let byteTop = module.addBlock(func, label: b"mvbytetop", heat: BlockHeat.normal)
+	let byteBottom = module.addBlock(func, label: b"mvbytebot", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 6)
 	let destBuffer = 0
@@ -2828,9 +2779,9 @@ function buildManagedMoveElems(module StdModule)
 	// packedArm: one field at a time, from whichever end the shared answer names.
 	emitBranchOnCompareValues(module, block: packedArm, a: fromTheTop, pred: StdCmpPred.eq, b: zero, whenTrue: packedBottom, whenFalse: packedTop, ids: ids)
 
-	var afterTop = emitPackedElementMove(module, func: func, cur: packedTop, destBuffer: destBuffer, destIndex: destIndex, srcBuffer: srcBuffer, srcIndex: srcIndex, count: count, es: es, fromTheTop: true, ids: ids)
+	let afterTop = emitPackedElementMove(module, func: func, cur: packedTop, destBuffer: destBuffer, destIndex: destIndex, srcBuffer: srcBuffer, srcIndex: srcIndex, count: count, es: es, fromTheTop: true, ids: ids)
 	module.setTerminator(afterTop, op: StdOp.branch(done.id))
-	var afterBottom = emitPackedElementMove(module, func: func, cur: packedBottom, destBuffer: destBuffer, destIndex: destIndex, srcBuffer: srcBuffer, srcIndex: srcIndex, count: count, es: es, fromTheTop: false, ids: ids)
+	let afterBottom = emitPackedElementMove(module, func: func, cur: packedBottom, destBuffer: destBuffer, destIndex: destIndex, srcBuffer: srcBuffer, srcIndex: srcIndex, count: count, es: es, fromTheTop: false, ids: ids)
 	module.setTerminator(afterBottom, op: StdOp.branch(done.id))
 
 	// byteArm: the blit the two copy helpers already are, over addresses derived the way they always were,
@@ -2840,9 +2791,9 @@ function buildManagedMoveElems(module StdModule)
 	let byteCount = emitElementByteLen(module, block: byteArm, count: count, es: es, ids: ids)
 	emitBranchOnCompareValues(module, block: byteArm, a: fromTheTop, pred: StdCmpPred.eq, b: zero, whenTrue: byteBottom, whenFalse: byteTop, ids: ids)
 
-	var afterByteTop = emitBackwardCopy(module, func: func, cur: byteTop, dest: destAddr, src: srcAddr, byteCount: byteCount, ids: ids, widest: CopyChunk.block)
+	let afterByteTop = emitBackwardCopy(module, func: func, cur: byteTop, dest: destAddr, src: srcAddr, byteCount: byteCount, ids: ids, widest: CopyChunk.block)
 	module.setTerminator(afterByteTop, op: StdOp.branch(done.id))
-	var afterByteBottom = emitForwardCopy(module, func: func, cur: byteBottom, dest: destAddr, src: srcAddr, byteCount: byteCount, ids: ids, widest: CopyChunk.block)
+	let afterByteBottom = emitForwardCopy(module, func: func, cur: byteBottom, dest: destAddr, src: srcAddr, byteCount: byteCount, ids: ids, widest: CopyChunk.block)
 	module.setTerminator(afterByteBottom, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
@@ -2854,8 +2805,8 @@ end 'buildManagedMoveElems'
 // one loop shape serves both and the direction is arithmetic rather than a second loop.
 function emitPackedElementMove(module StdModule, func IrFunction, cur IrBlock, destBuffer ValueId, destIndex ValueId, srcBuffer ValueId, srcIndex ValueId, count ValueId, es ValueId, fromTheTop bool, ids ValueMinter) returns IrBlock
 	let firstIndex = emitConst(module, block: cur, value: 0, ids: ids)
-	var loop = openCountedLoop(module, func: func, cur: cur, from: firstIndex, to: count, label: b"pmv", ids: ids)
-	var body = loop.body
+	let loop = openCountedLoop(module, func: func, cur: cur, from: firstIndex, to: count, label: b"pmv", ids: ids)
+	let body = loop.body
 
 	var step = loop.index
 
@@ -2890,13 +2841,13 @@ end 'emitPackedElementMove'
 // ANSWER is wrong. See `emitRecordContentByteLen` for the measurement and for the remedy if this ever has to
 // change (mask the final byte there, in that one place).
 function buildManagedZeroElems(module StdModule)
-	var func = IrFunction.createFromStd(ManagedZeroElemsName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(ManagedZeroElemsName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
+	let ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var packedArm = module.addBlock(func, label: b"zrpack", heat: BlockHeat.normal)
-	var byteArm = module.addBlock(func, label: b"zrbyte", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let packedArm = module.addBlock(func, label: b"zrpack", heat: BlockHeat.normal)
+	let byteArm = module.addBlock(func, label: b"zrbyte", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let buffer = 0
@@ -2906,7 +2857,7 @@ function buildManagedZeroElems(module StdModule)
 
 	emitBranchOnCompare(module, block: entry, value: es, pred: StdCmpPred.lt, against: 0, whenTrue: packedArm, whenFalse: byteArm, ids: ids)
 
-	var afterPacked = emitPackedElementZero(module, func: func, cur: packedArm, buffer: buffer, start: start, count: count, es: es, ids: ids)
+	let afterPacked = emitPackedElementZero(module, func: func, cur: packedArm, buffer: buffer, start: start, count: count, es: es, ids: ids)
 	module.setTerminator(afterPacked, op: StdOp.branch(done.id))
 
 	let startAddr = emitSlotAddr(module, block: byteArm, buffer: buffer, index: start, elementSize: es, ids: ids)
@@ -2921,7 +2872,7 @@ end 'buildManagedZeroElems'
 // The packed arm of the erase: `count` iterations of write-zero-into-one-field.
 function emitPackedElementZero(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, start ValueId, count ValueId, es ValueId, ids ValueMinter) returns IrBlock
 	let firstIndex = emitConst(module, block: cur, value: 0, ids: ids)
-	var loop = openCountedLoop(module, func: func, cur: cur, from: firstIndex, to: count, label: b"pz", ids: ids)
+	let loop = openCountedLoop(module, func: func, cur: cur, from: firstIndex, to: count, label: b"pz", ids: ids)
 
 	let at = emitBin(module, block: loop.body, a: start, b: loop.index, opcode: StdBinOpcode.add, ids: ids)
 	let blank = emitConst(module, block: loop.body, value: 0, ids: ids)
@@ -2935,7 +2886,7 @@ end 'emitPackedElementZero'
 // Call `__managed_move_elems`. The callee is void, so the minted result is unread; it exists because a `call` op
 // always defines a value — the shape `emitCowDetach` already uses.
 function emitMoveElems(module StdModule, block IrBlock, destBuffer ValueId, destIndex ValueId, srcBuffer ValueId, srcIndex ValueId, count ValueId, es ValueId, ids ValueMinter)
-	var args = ValueIdArray.create(0)
+	let args = ValueIdArray.create(0)
 	args.push(destBuffer)
 	args.push(destIndex)
 	args.push(srcBuffer)
@@ -3533,10 +3484,10 @@ end 'emitOobReturn'
 // A source whose buffer is co-allocated is copied the same way: its bytes are freed with its record, which a
 // view may outlive. `emitBufferHostAllocation` aborts rather than count a view of one.
 function emitRecordView(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, srcRecord ValueId, start ValueId, sliceLen ValueId, ids ValueMinter) returns ValueId
-	var copyArm = module.addBlock(func, label: b"vwcopy", heat: BlockHeat.normal)
-	var checkOwner = module.addBlock(func, label: b"vwowner", heat: BlockHeat.normal)
-	var checkBuffer = module.addBlock(func, label: b"vwbuffer", heat: BlockHeat.normal)
-	var shareArm = module.addBlock(func, label: b"vwshare", heat: BlockHeat.normal)
+	let copyArm = module.addBlock(func, label: b"vwcopy", heat: BlockHeat.normal)
+	let checkOwner = module.addBlock(func, label: b"vwowner", heat: BlockHeat.normal)
+	let checkBuffer = module.addBlock(func, label: b"vwbuffer", heat: BlockHeat.normal)
+	let shareArm = module.addBlock(func, label: b"vwshare", heat: BlockHeat.normal)
 
 	let stamp = emitLoadElementStamp(module, block: cur, record: srcRecord, ids: ids)
 	let dtor = emitLoadField(module, block: cur, record: srcRecord, offset: ManagedRecordElementDestroyOffset, ids: ids)
@@ -3555,8 +3506,8 @@ function emitRecordView(module StdModule, func IrFunction, cur IrBlock, exit IrB
 
 	emitWindowCopy(module, cur: copyArm, exit: exit, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, stamp: stamp, elementDestroy: dtor, ids: ids)
 
-	var baseJoin = module.addBlock(func, label: b"vwbase", heat: BlockHeat.normal)
-	var shareDone = module.addBlock(func, label: b"vwshared", heat: BlockHeat.normal)
+	let baseJoin = module.addBlock(func, label: b"vwbase", heat: BlockHeat.normal)
+	let shareDone = module.addBlock(func, label: b"vwshared", heat: BlockHeat.normal)
 	let newRec = emitViewRecordHead(module, block: shareArm, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, stamp: stamp, elementDestroy: dtor, ids: ids)
 	let base = emitBufferHostAllocation(module, func: func, cur: shareArm, join: baseJoin, record: srcRecord, ids: ids)
 	emitViewRecordTail(module, func: func, cur: baseJoin, exit: shareDone, view: newRec, base: base, ids: ids)
@@ -3614,7 +3565,7 @@ end 'emitViewRecordHead'
 // ownership it names. `cur` is the join the base arrived on; `exit` is the caller's continuation.
 function emitViewRecordTail(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, view ValueId, base ValueId, ids ValueMinter)
 	emitStoreField(module, block: cur, record: view, offset: ManagedRecordParentOffset, value: base)
-	var afterIncref = emitReleaseOwedBase(module, func: func, cur: cur, base: base, callee: MmIncrefName, ids: ids)
+	let afterIncref = emitReleaseOwedBase(module, func: func, cur: cur, base: base, callee: MmIncrefStickyName, ids: ids)
 	module.setTerminator(afterIncref, op: StdOp.branch(exit.id))
 end 'emitViewRecordTail'
 
@@ -3693,14 +3644,14 @@ end 'emitViewRecordTail'
 // and `parent@32` returns to `NoOwedAllocation`, because a record that has just copied its bytes out owes
 // nothing to anyone.
 function buildManagedCowDetach(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCowDetachName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedCowDetachName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkBuffer = module.addBlock(func, label: b"chkbuf", heat: BlockHeat.normal)
-	var checkShared = module.addBlock(func, label: b"chkshared", heat: BlockHeat.normal)
-	var detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkBuffer = module.addBlock(func, label: b"chkbuf", heat: BlockHeat.normal)
+	let checkShared = module.addBlock(func, label: b"chkshared", heat: BlockHeat.normal)
+	let detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0
@@ -3720,7 +3671,7 @@ function buildManagedCowDetach(module StdModule)
 	// the instant the detach returns; a caller whose blit reads the buffer the detach has just released may
 	// not, which is why the base comes back as a return value rather than being released inside — see
 	// `BufferOwnership`'s header for the aliasing that forces it.
-	var afterRelease = emitReleaseOwedBase(module, func: func, cur: detach, base: base, callee: MmDecrefName, ids: ids)
+	let afterRelease = emitReleaseOwedBase(module, func: func, cur: detach, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
@@ -3791,17 +3742,17 @@ end 'emitDetachHeadRefusingAbsent'
 // `__managed_grown_cap(current, required) -> newCap` — the growth policy; see the `GrowthThreshold` note
 // above for why it eases. An ask that outruns doubling is taken at face value with no slack.
 function buildManagedGrownCap(module StdModule)
-	var func = IrFunction.createFromStd(ManagedGrownCapName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedGrownCapName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var takeAsk = module.addBlock(func, label: b"takeask", heat: BlockHeat.normal)
-	var checkSmall = module.addBlock(func, label: b"chksmall", heat: BlockHeat.normal)
-	var takeDoubled = module.addBlock(func, label: b"takedbl", heat: BlockHeat.normal)
-	var easeInit = module.addBlock(func, label: b"easeinit", heat: BlockHeat.normal)
-	var easeHeader = module.addBlock(func, label: b"easeh", heat: BlockHeat.normal)
-	var easeBody = module.addBlock(func, label: b"easeb", heat: BlockHeat.normal)
-	var easeDone = module.addBlock(func, label: b"eased", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let takeAsk = module.addBlock(func, label: b"takeask", heat: BlockHeat.normal)
+	let checkSmall = module.addBlock(func, label: b"chksmall", heat: BlockHeat.normal)
+	let takeDoubled = module.addBlock(func, label: b"takedbl", heat: BlockHeat.normal)
+	let easeInit = module.addBlock(func, label: b"easeinit", heat: BlockHeat.normal)
+	let easeHeader = module.addBlock(func, label: b"easeh", heat: BlockHeat.normal)
+	let easeBody = module.addBlock(func, label: b"easeb", heat: BlockHeat.normal)
+	let easeDone = module.addBlock(func, label: b"eased", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let current = 0
@@ -3841,8 +3792,8 @@ end 'buildManagedGrownCap'
 
 // Terminate `block` with `ret max(value, MinimumCapacity)`, so a small ask does not bounce up through 1→2→3.
 function emitAtLeastMinimumReturn(module StdModule, func IrFunction, block IrBlock, value ValueId, ids ValueMinter)
-	var retFloor = module.addBlock(func, label: b"retfloor", heat: BlockHeat.normal)
-	var retVal = module.addBlock(func, label: b"retval", heat: BlockHeat.normal)
+	let retFloor = module.addBlock(func, label: b"retfloor", heat: BlockHeat.normal)
+	let retVal = module.addBlock(func, label: b"retval", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: block, value: value, pred: StdCmpPred.lt, against: MinimumCapacity, whenTrue: retFloor, whenFalse: retVal, ids: ids)
 	let floorRet = emitConst(module, block: retFloor, value: MinimumCapacity, ids: ids)
 	module.setTerminator(retFloor, op: StdOp.ret(floorRet))
@@ -3853,14 +3804,14 @@ end 'emitAtLeastMinimumReturn'
 // copying the live bytes) when it does not. A fresh `__mm_alloc` is zeroed, and only `length·es` bytes
 // are copied in, so the new `[length, newCap)` slots read zero — the capacity-slot invariant, for free.
 function buildManagedGrow(module StdModule)
-	var func = IrFunction.createFromStd(ManagedGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkCapacity = module.addBlock(func, label: b"chkcap", heat: BlockHeat.normal)
-	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
-	var sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.cold)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkCapacity = module.addBlock(func, label: b"chkcap", heat: BlockHeat.normal)
+	let grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
+	let sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.cold)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
@@ -3886,7 +3837,7 @@ function buildManagedGrow(module StdModule)
 	let newCap = ids.mint()
 	module.appendOp(grow, op: StdOp.call(newCap, callee: ManagedGrownCapName, args: twoArgs(capacity, second: required)))
 	emitRuntimeAbort(module, func: func, block: sizeOverflow, abort: RuntimeAbort.arrayCapacityOverflow, ids: ids)
-	var afterPublish = emitReallocateToCapacity(module, func: func, cur: grow, arr: arr, newCap: newCap, onByteOverflow: sizeOverflow, ids: ids)
+	let afterPublish = emitReallocateToCapacity(module, func: func, cur: grow, arr: arr, newCap: newCap, onByteOverflow: sizeOverflow, ids: ids)
 	module.setTerminator(afterPublish, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
@@ -3910,7 +3861,7 @@ function emitCheckedByteLength(module StdModule, func IrFunction, cur IrBlock, c
 	let bits = emitElementBits(module, block: cur, es: es, ids: ids)
 	let totalBits = emitBin(module, block: cur, a: count, b: bits, opcode: StdBinOpcode.mul, ids: ids)
 	let bytes = emitBitsToBytes(module, block: cur, totalBits: totalBits, ids: ids)
-	var wide = module.addBlock(func, label: b"wide", heat: BlockHeat.cold)
+	let wide = module.addBlock(func, label: b"wide", heat: BlockHeat.cold)
 	let operands = emitBin(module, block: cur, a: count, b: bits, opcode: StdBinOpcode.bitOr, ids: ids)
 	let operandsHigh = emitBin(module, block: cur, a: operands, b: emitConst(module, block: cur, value: NonWrappingOperandShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: operandsHigh, pred: StdCmpPred.ne, against: 0, whenTrue: wide, whenFalse: fits, ids: ids)
@@ -3936,7 +3887,7 @@ end 'emitCheckedByteLength'
 // condition differently and neither answer belongs to the reallocation: an overflow from the growth policy
 // is a compiler bug (abort), one from a source-written capacity is a program error (throw).
 function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock, arr ValueId, newCap ValueId, onByteOverflow IrBlock, ids ValueMinter) returns IrBlock
-	var alloc = module.addBlock(func, label: b"alloc", heat: BlockHeat.normal)
+	let alloc = module.addBlock(func, label: b"alloc", heat: BlockHeat.normal)
 
 	let es = emitLoadElementStride(module, block: cur, record: arr, ids: ids)
 	let newBytes = emitCheckedByteLength(module, func: func, cur: cur, count: newCap, es: es, fits: alloc, overflow: onByteOverflow, ids: ids)
@@ -3950,7 +3901,7 @@ function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock
 	let oldBuf = emitLoadField(module, block: alloc, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let oldLen = emitLoadField(module, block: alloc, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let oldBytes = emitElementByteLen(module, block: alloc, count: oldLen, es: es, ids: ids)
-	var afterCopy = emitForwardCopy(module, func: func, cur: alloc, dest: newBuf, src: oldBuf, byteCount: oldBytes, ids: ids)
+	let afterCopy = emitForwardCopy(module, func: func, cur: alloc, dest: newBuf, src: oldBuf, byteCount: oldBytes, ids: ids)
 
 	// afterCopy: release the OLD buffer if there was one, then publish the new one. It needs no "is this
 	// buffer MINE?" test: the caller's detach already replaced any non-owned buffer, so whatever is here
@@ -3962,11 +3913,11 @@ function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock
 	// IS the last owner, so `__mm_decref` and `__mm_free` are equivalent here today; using the one rule
 	// everywhere is what stops them diverging tomorrow, and a mistaken decref leaks loudly where a mistaken
 	// free corrupts silently.)
-	var baseJoin = module.addBlock(func, label: b"oldbase", heat: BlockHeat.normal)
+	let baseJoin = module.addBlock(func, label: b"oldbase", heat: BlockHeat.normal)
 	let oldBase = ids.mint()
 	baseJoin.blockArgs.push(IrBlockArg.create(oldBase, argType: StdType.i64))
 	emitCarryOwnedBufferBase(module, func: func, cur: afterCopy, join: baseJoin, record: arr, buffer: oldBuf, ids: ids)
-	var afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: oldBase, callee: MmDecrefName, ids: ids)
+	let afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: oldBase, callee: MmDecrefName, ids: ids)
 
 	emitStoreField(module, block: afterRelease, record: arr, offset: ManagedRecordBufferOffset, value: newBuf)
 	emitStoreField(module, block: afterRelease, record: arr, offset: ManagedRecordCapacityOffset, value: newCap)
@@ -3978,11 +3929,11 @@ end 'emitReallocateToCapacity'
 // from `__mm_alloc`, so only the two non-zero fields are stamped (`buffer`/`length`/`capacity`/`parent`
 // are the zeroing contract's job); a 0 element size is a compiler bug and diverges.
 function buildManagedCreate(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var ok = module.addBlock(func, label: b"ok", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let ok = module.addBlock(func, label: b"ok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let elementSize = 0
@@ -4000,7 +3951,7 @@ end 'buildManagedCreate'
 // Both callers RETURN a record pointer, so the abort's dead terminator must carry a value — which
 // `emitRuntimeAbort` derives from `func.returnType` rather than being told.
 function emitRequireElementSize(module StdModule, func IrFunction, entry IrBlock, elementSize ValueId, proceed IrBlock, ids ValueMinter)
-	var badSize = module.addBlock(func, label: b"badsize", heat: BlockHeat.normal)
+	let badSize = module.addBlock(func, label: b"badsize", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: entry, value: elementSize, pred: StdCmpPred.eq, against: 0, whenTrue: badSize, whenFalse: proceed, ids: ids)
 
@@ -4071,23 +4022,23 @@ end 'SizedCreateFrame'
 // It allocates through `__mm_alloc` itself: a chain through `__managed_reserve` and `__managed_grow` under
 // `__managed_clone` overruns the guard margin.
 function buildManagedCreateSized(module StdModule, name ByteArray, placement BufferPlacement)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
+	let ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkCapacity = module.addBlock(func, label: b"chkcap", heat: BlockHeat.normal)
-	var checkSign = module.addBlock(func, label: b"chksign", heat: BlockHeat.normal)
-	var emptyArm = module.addBlock(func, label: b"emptyarm", heat: BlockHeat.normal)
-	var floorCapacity = module.addBlock(func, label: b"floorcap", heat: BlockHeat.normal)
-	var takeMinimum = module.addBlock(func, label: b"takemin", heat: BlockHeat.normal)
-	var takeAsk = module.addBlock(func, label: b"takeask", heat: BlockHeat.normal)
-	var fit = module.addBlock(func, label: b"fit", heat: BlockHeat.normal)
-	var sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.cold)
-	var measure = module.addBlock(func, label: b"measure", heat: BlockHeat.normal)
-	var coAllocatedArm = module.addBlock(func, label: b"coarm", heat: BlockHeat.normal)
-	var alloc = module.addBlock(func, label: b"alloc", heat: BlockHeat.normal)
-	var coPublish = module.addBlock(func, label: b"copublish", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkCapacity = module.addBlock(func, label: b"chkcap", heat: BlockHeat.normal)
+	let checkSign = module.addBlock(func, label: b"chksign", heat: BlockHeat.normal)
+	let emptyArm = module.addBlock(func, label: b"emptyarm", heat: BlockHeat.normal)
+	let floorCapacity = module.addBlock(func, label: b"floorcap", heat: BlockHeat.normal)
+	let takeMinimum = module.addBlock(func, label: b"takemin", heat: BlockHeat.normal)
+	let takeAsk = module.addBlock(func, label: b"takeask", heat: BlockHeat.normal)
+	let fit = module.addBlock(func, label: b"fit", heat: BlockHeat.normal)
+	let sizeOverflow = module.addBlock(func, label: b"overflow", heat: BlockHeat.cold)
+	let measure = module.addBlock(func, label: b"measure", heat: BlockHeat.normal)
+	let coAllocatedArm = module.addBlock(func, label: b"coarm", heat: BlockHeat.normal)
+	let alloc = module.addBlock(func, label: b"alloc", heat: BlockHeat.normal)
+	let coPublish = module.addBlock(func, label: b"copublish", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let elementSize = 0
@@ -4125,7 +4076,7 @@ function buildManagedCreateSized(module StdModule, name ByteArray, placement Buf
 	let leadBytes = emitConst(module, block: coAllocatedArm, value: coAllocatedBufferOffset(), ids: ids)
 	let coAllocatedBytes = emitBin(module, block: coAllocatedArm, a: leadBytes, b: bytes, opcode: StdBinOpcode.add, ids: ids)
 
-	var frame = SizedCreateFrame.create(func, emptyArm: emptyArm, measure: measure, coAllocatedArm: coAllocatedArm, alloc: alloc, coPublish: coPublish, done: done, recordBytes: recordBytes, noBuffer: noBuffer, bytes: bytes, room: room, coAllocatedBytes: coAllocatedBytes, allocBytes: allocBytes, reservedRoom: reservedRoom, elementSize: elementSize, elementDestroy: elementDestroy, length: length)
+	let frame = SizedCreateFrame.create(func, emptyArm: emptyArm, measure: measure, coAllocatedArm: coAllocatedArm, alloc: alloc, coPublish: coPublish, done: done, recordBytes: recordBytes, noBuffer: noBuffer, bytes: bytes, room: room, coAllocatedBytes: coAllocatedBytes, allocBytes: allocBytes, reservedRoom: reservedRoom, elementSize: elementSize, elementDestroy: elementDestroy, length: length)
 
 	match placement 'placement'
 		bounded then placeBufferUpToTheBound(module, frame: frame, ids: ids)
@@ -4136,9 +4087,9 @@ function buildManagedCreateSized(module StdModule, name ByteArray, placement Buf
 end 'buildManagedCreateSized'
 
 function placeBufferUpToTheBound(module StdModule, frame SizedCreateFrame, ids ValueMinter)
-	var separateArm = module.addBlock(frame.func, label: b"separm", heat: BlockHeat.normal)
-	var checkSeparate = module.addBlock(frame.func, label: b"chksep", heat: BlockHeat.normal)
-	var separatePublish = module.addBlock(frame.func, label: b"seppublish", heat: BlockHeat.normal)
+	let separateArm = module.addBlock(frame.func, label: b"separm", heat: BlockHeat.normal)
+	let checkSeparate = module.addBlock(frame.func, label: b"chksep", heat: BlockHeat.normal)
+	let separatePublish = module.addBlock(frame.func, label: b"seppublish", heat: BlockHeat.normal)
 
 	let bufferBytes = ids.mint()
 	frame.alloc.blockArgs.insert(1, value: IrBlockArg.create(bufferBytes, argType: StdType.i64))
@@ -4251,7 +4202,7 @@ end 'CoAllocatedCreated'
 let MostInlineSlabAllocBytes = 512
 
 export function emitCoAllocatedCreate(module StdModule, func IrFunction, cur IrBlock, traced bool, road CoAllocatedAllocRoad, target Target, shape CoAllocatedCreateShape, elementSize ValueId, length ValueId, elementDestroy ValueId, ids ValueMinter) returns CoAllocatedCreated
-	var created = emitCoAllocatedRecord(module, func: func, cur: cur, traced: traced, road: road, target: target, shape: shape, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids)
+	let created = emitCoAllocatedRecord(module, func: func, cur: cur, traced: traced, road: road, target: target, shape: shape, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids)
 	let room = emitConst(module, block: created.block, value: shape.room, ids: ids)
 	emitPublishCoAllocatedBuffer(module, block: created.block, record: created.record, capacity: room, ids: ids)
 	emitStoreField(module, block: created.block, record: created.record, offset: ManagedRecordLengthOffset, value: length)
@@ -4265,7 +4216,7 @@ function emitCoAllocatedRecord(module StdModule, func IrFunction, cur IrBlock, t
 
 	if road == CoAllocatedAllocRoad.slabHit and allocBytesKnown <= MostInlineSlabAllocBytes 'inlineHit'
 		let recordDestructor = emitConst(module, block: cur, value: TrivialDestructor, ids: ids)
-		var box = emitMmAllocInline(module, func: func, cur: cur, size: allocBytes, destructor: recordDestructor, model: machineModel(target), ids: ids)
+		let box = emitMmAllocInline(module, func: func, cur: cur, size: allocBytes, destructor: recordDestructor, model: machineModel(target), ids: ids)
 		emitStoreElementFields(module, block: box.block, record: box.payload, elementSize: elementSize, elementDestroy: elementDestroy)
 
 		return CoAllocatedCreated.create(box.block, record: box.payload)
@@ -4276,10 +4227,10 @@ end 'emitCoAllocatedRecord'
 
 // `__managed_push(arr, value)` — append `value`, growing first if the buffer is full.
 function buildManagedPush(module StdModule)
-	var func = IrFunction.createFromStd(ManagedPushName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedPushName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
 	let value = 1
@@ -4292,7 +4243,7 @@ function buildManagedPush(module StdModule)
 
 	// Reload buffer AFTER grow (it may have replaced it); `length`/`es` are unchanged by a grow.
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	var afterStore = emitStoreElemAt(module, func: func, cur: entry, record: arr, buffer: buffer, index: length, value: value, ids: ids)
+	let afterStore = emitStoreElemAt(module, func: func, cur: entry, record: arr, buffer: buffer, index: length, value: value, ids: ids)
 
 	let newLen = emitBin(module, block: afterStore, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: afterStore, record: arr, offset: ManagedRecordLengthOffset, value: newLen)
@@ -4303,12 +4254,12 @@ end 'buildManagedPush'
 
 // `__managed_get(arr, index) -> (value, flag)` — bounds-checked element read (throws indexOutOfBounds).
 function buildManagedGet(module StdModule, greenThreads bool)
-	var func = IrFunction.createFromStd(ManagedGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
-	var load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	let load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
@@ -4339,14 +4290,14 @@ end 'emitGetLoadAndReturn'
 // `LowerMaxonToStd.lowerSlottedOrProvenCall` an index the parser proved inside the fixed size, and
 // `ManagedWordRuntime.buildWordGet` an index its `emitSpanGuards` check put inside the record.
 function buildManagedGetUnchecked(module StdModule)
-	var func = IrFunction.createFromStd(ManagedGetUncheckedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedGetUncheckedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	// `emitLoadElemAt` branches to this exit from its join once its arms complete, so the block must
 	// exist before it runs — the same order `emitLoadElemAndOkReturn` creates its `checkDtor` in.
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
@@ -4361,12 +4312,12 @@ end 'buildManagedGetUnchecked'
 
 // See `ManagedVacateName` for the contract and for why neither setter can stand in.
 function buildManagedVacate(module StdModule)
-	var func = IrFunction.createFromStd(ManagedVacateName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedVacateName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var consumedTwice = module.addBlock(func, label: b"vacated", heat: BlockHeat.cold)
-	var empty = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let consumedTwice = module.addBlock(func, label: b"vacated", heat: BlockHeat.cold)
+	let empty = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let arr = 0
 	let index = 1
@@ -4406,11 +4357,11 @@ end 'emitPromiseSlotVacateTail'
 // two must stay separate functions. `specs/arrays.md` and the array corpus are written against
 // this bound.
 function buildManagedSet(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: arrayErrorThrows())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
 	var store = module.addBlock(func, label: b"store", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
@@ -4422,7 +4373,7 @@ function buildManagedSet(module StdModule)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: store.id))
 
-	var afterReject = emitDestroyRejectedElement(module, func: func, cur: oob, record: arr, value: value, destroyOffset: ManagedRecordElementDestroyOffset, ids: ids)
+	let afterReject = emitDestroyRejectedElement(module, func: func, cur: oob, record: arr, value: value, destroyOffset: ManagedRecordElementDestroyOffset, ids: ids)
 	emitOobReturn(module, block: afterReject, ids: ids)
 
 	// Detach BEFORE the buffer pointer is loaded (`__managed_cow_detach` trap 1), and after the bounds check, so a
@@ -4435,10 +4386,10 @@ function buildManagedSet(module StdModule)
 end 'buildManagedSet'
 
 function buildManagedIndexRefused(module StdModule)
-	var func = IrFunction.createFromStd(ManagedIndexRefusedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedIndexRefusedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	emitOobReturn(module, block: entry, ids: ids)
@@ -4451,8 +4402,8 @@ end 'buildManagedIndexRefused'
 // be shared with a copy or be an immortal `.rdata` image of a constant, and a store into either without a
 // detach writes through to the other owner or faults.
 function buildManagedSetUnchecked(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSetUncheckedName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedSetUncheckedName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
@@ -4462,7 +4413,7 @@ function buildManagedSetUnchecked(module StdModule)
 	let value = 2
 
 	entry = emitCowDetachWhenNeeded(module, func: func, block: entry, arr: arr, prefix: "su", ids: ids)
-	var afterStore = emitElementStore(module, func: func, store: entry, arr: arr, index: index, value: value, ids: ids)
+	let afterStore = emitElementStore(module, func: func, store: entry, arr: arr, index: index, value: value, ids: ids)
 	module.setTerminator(afterStore, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -4493,7 +4444,7 @@ end 'buildManagedSetUnchecked'
 // costs nothing extra, and is pinned by `managed-memory-methods.staging-a-managed-element-twice-releases-
 // the-first` (a leak there is exit 101).
 function emitElementStoreAndOkReturn(module StdModule, func IrFunction, store IrBlock, arr ValueId, index ValueId, value ValueId, ids ValueMinter)
-	var afterStore = emitElementStore(module, func: func, store: store, arr: arr, index: index, value: value, ids: ids)
+	let afterStore = emitElementStore(module, func: func, store: store, arr: arr, index: index, value: value, ids: ids)
 	let okVal = emitConst(module, block: afterStore, value: 0, ids: ids)
 	emitOkReturn(module, block: afterStore, value: okVal, ids: ids)
 end 'emitElementStoreAndOkReturn'
@@ -4502,8 +4453,8 @@ function emitElementStore(module StdModule, func IrFunction, store IrBlock, arr 
 	let buffer = emitLoadField(module, block: store, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadElementStride(module, block: store, record: arr, ids: ids)
 	let destroy = emitLoadField(module, block: store, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
-	var (occupantRead, occupant) = emitOccupantRead(module, func: func, cur: store, buffer: buffer, index: index, elementSize: es, destroy: destroy, ids: ids)
-	var stored = emitStoreElemAt(module, func: func, cur: occupantRead, record: arr, buffer: buffer, index: index, value: value, ids: ids)
+	let (occupantRead, occupant) = emitOccupantRead(module, func: func, cur: store, buffer: buffer, index: index, elementSize: es, destroy: destroy, ids: ids)
+	let stored = emitStoreElemAt(module, func: func, cur: occupantRead, record: arr, buffer: buffer, index: index, value: value, ids: ids)
 	return emitDestroyOccupant(module, func: func, cur: stored, destroy: destroy, occupant: occupant, ids: ids)
 end 'emitElementStore'
 
@@ -4528,9 +4479,9 @@ end 'emitElementStore'
 // `destroy` and confirmed it non-null"), honoured at a second call site rather than assumed away.
 // Threads `cur` and returns the continuation block.
 export function emitDestroyRejectedElement(module StdModule, func IrFunction, cur IrBlock, record ValueId, value ValueId, destroyOffset ByteOffset, ids ValueMinter) returns IrBlock
-	var checkNull = module.addBlock(func, label: b"rejchk", heat: BlockHeat.normal)
-	var drop = module.addBlock(func, label: b"rejdrop", heat: BlockHeat.normal)
-	var cont = module.addBlock(func, label: b"rejcont", heat: BlockHeat.normal)
+	let checkNull = module.addBlock(func, label: b"rejchk", heat: BlockHeat.normal)
+	let drop = module.addBlock(func, label: b"rejdrop", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"rejcont", heat: BlockHeat.normal)
 
 	let dtor = emitLoadField(module, block: cur, record: record, offset: destroyOffset, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: dtor, pred: StdCmpPred.ne, against: 0, whenTrue: checkNull, whenFalse: cont, ids: ids)
@@ -4545,9 +4496,9 @@ end 'emitDestroyRejectedElement'
 
 // `__managed_count(arr) -> length`.
 function buildManagedCount(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = IrFunction.createFromStd(ManagedCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let length = emitLoadField(module, block: entry, record: 0, offset: ManagedRecordLengthOffset, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(length))
@@ -4555,12 +4506,12 @@ function buildManagedCount(module StdModule)
 end 'buildManagedCount'
 
 function buildManagedSlotUnfilled(module StdModule, greenThreads bool)
-	var func = IrFunction.createFromStd(ManagedSlotUnfilledName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkSlot = module.addBlock(func, label: b"slotchk", heat: BlockHeat.normal)
-	var filled = module.addBlock(func, label: b"slotfilled", heat: BlockHeat.normal)
-	var unfilled = module.addBlock(func, label: b"slotunfilled", heat: BlockHeat.normal)
+	let func = IrFunction.createFromStd(ManagedSlotUnfilledName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkSlot = module.addBlock(func, label: b"slotchk", heat: BlockHeat.normal)
+	let filled = module.addBlock(func, label: b"slotfilled", heat: BlockHeat.normal)
+	let unfilled = module.addBlock(func, label: b"slotunfilled", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
@@ -4579,9 +4530,9 @@ end 'buildManagedSlotUnfilled'
 
 // `__managed_element_size(arr) -> element_size@24`, signed — see `ManagedElementSizeName`.
 function buildManagedElementSize(module StdModule)
-	var func = IrFunction.createFromStd(ManagedElementSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = IrFunction.createFromStd(ManagedElementSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let elementSize = emitLoadElementStride(module, block: entry, record: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(elementSize))
@@ -4590,9 +4541,9 @@ end 'buildManagedElementSize'
 
 // `__managed_capacity(arr) -> capacity`.
 function buildManagedCapacity(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCapacityName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = IrFunction.createFromStd(ManagedCapacityName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let capacity = emitLoadField(module, block: entry, record: 0, offset: ManagedRecordCapacityOffset, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(capacity))
@@ -4601,9 +4552,9 @@ end 'buildManagedCapacity'
 
 // `__managed_reserve(arr, n)` — ensure capacity ≥ n. `__managed_grow` is a no-op when capacity already suffices.
 function buildManagedReserve(module StdModule)
-	var func = IrFunction.createFromStd(ManagedReserveName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = IrFunction.createFromStd(ManagedReserveName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
 	let n = 1
@@ -4626,14 +4577,14 @@ end 'buildManagedReserve'
 // `insert` documents a `[0, length]` clamping contract and `resize` documents none — a caller
 // asking for a negative length has a bug, and silently resizing to empty would hide it.
 function buildManagedResize(module StdModule)
-	var func = IrFunction.createFromStd(ManagedResizeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedResizeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var badLength = module.addBlock(func, label: b"badlen", heat: BlockHeat.normal)
-	var resize = module.addBlock(func, label: b"resize", heat: BlockHeat.normal)
-	var doZero = module.addBlock(func, label: b"dozero", heat: BlockHeat.normal)
-	var setLen = module.addBlock(func, label: b"setlen", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let badLength = module.addBlock(func, label: b"badlen", heat: BlockHeat.normal)
+	let resize = module.addBlock(func, label: b"resize", heat: BlockHeat.normal)
+	let doZero = module.addBlock(func, label: b"dozero", heat: BlockHeat.normal)
+	let setLen = module.addBlock(func, label: b"setlen", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
@@ -4661,12 +4612,12 @@ end 'buildManagedResize'
 
 // `__managed_first(arr) -> (value, flag)` — element 0 (throws on empty).
 function buildManagedFirst(module StdModule, greenThreads bool)
-	var func = IrFunction.createFromStd(ManagedFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: arrayErrorThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
-	var load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	let load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0
@@ -4686,8 +4637,8 @@ end 'buildManagedFirst'
 // `__managed_clear(arr)` — length ← 0, zeroing the whole live region (capacity-slot invariant). The buffer
 // and capacity are left in place for reuse.
 function buildManagedClear(module StdModule)
-	var func = IrFunction.createFromStd(ManagedClearName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedClearName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
@@ -4706,11 +4657,11 @@ end 'buildManagedClear'
 // `__managed_remove(arr, index) -> (value, flag)` — remove and return element `index` (throws OOB), shifting
 // the tail left by one slot (a forward copy — low address first) and zeroing the vacated last slot.
 function buildManagedRemove(module StdModule)
-	var func = IrFunction.createFromStd(ManagedRemoveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedRemoveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
 	var remove = module.addBlock(func, label: b"remove", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
@@ -4728,7 +4679,7 @@ function buildManagedRemove(module StdModule)
 	remove = emitCowDetachWhenNeeded(module, func: func, block: remove, arr: arr, prefix: "rm", ids: ids)
 	let es = emitLoadElementStride(module, block: remove, record: arr, ids: ids)
 	let buffer = emitLoadField(module, block: remove, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	var afterLoad = module.addBlock(func, label: b"rmloaded", heat: BlockHeat.normal)
+	let afterLoad = module.addBlock(func, label: b"rmloaded", heat: BlockHeat.normal)
 	let value = emitLoadElemAt(module, func: func, cur: remove, exit: afterLoad, record: arr, buffer: buffer, index: index, ids: ids)
 
 	// afterLoad: shift `[index+1, length)` down one element onto `index`.
@@ -4768,13 +4719,13 @@ end 'buildManagedRemove'
 // 0, and its `parent@32` is simply 0 when the source never allocated a buffer). The cost is that an empty
 // slice keeps its parent's bytes alive until it drops, which no program can observe.
 function buildManagedSlice(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSliceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedSliceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: arrayErrorThrows())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
-	var view = module.addBlock(func, label: b"view", heat: BlockHeat.normal)
-	var ret = module.addBlock(func, label: b"ret", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	let view = module.addBlock(func, label: b"view", heat: BlockHeat.normal)
+	let ret = module.addBlock(func, label: b"ret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let arr = 0
@@ -4798,11 +4749,11 @@ end 'buildManagedSlice'
 // always in bounds — so it reuses `emitRecordView` directly with `start = 0`, `sliceLen = length` and needs
 // no bounds check (`Array.clone` is literally `slice(0, len)`).
 function buildManagedClone(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var ret = module.addBlock(func, label: b"ret", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let ret = module.addBlock(func, label: b"ret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0
@@ -4820,12 +4771,12 @@ end 'buildManagedClone'
 // The clone is `__managed_clone`, so the copy an immortal record produces is the same COW view any other
 // `.clone()` produces: a fresh 48-byte record over the same immortal blob, detaching at its first write.
 function buildManagedRetain(module StdModule)
-	var func = IrFunction.createFromStd(ManagedRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var imageData = module.addBlock(func, label: b"imagedata", heat: BlockHeat.normal)
-	var countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let imageData = module.addBlock(func, label: b"imagedata", heat: BlockHeat.normal)
+	let countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
@@ -4849,12 +4800,12 @@ end 'buildManagedRetain'
 // `emitRecordIsImmortal` test, so the acquire and the release decline together — the pairing
 // `BufferOwnership.emitRecordIsImmortal` requires of every reader of that test.
 function buildManagedIncref(module StdModule)
-	var func = IrFunction.createFromStd(ManagedIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0
@@ -4893,12 +4844,12 @@ end 'managedRecordRetainCallee'
 // (`RuntimeAbort.arrayAppendElementSizeMismatch`) otherwise — the file's "a corrupt operation must never proceed" shape.
 // It compares the whole stamps, so two records of one stride and different signed-slot flags diverge too.
 function buildManagedAppend(module StdModule)
-	var func = IrFunction.createFromStd(ManagedAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var mismatch = module.addBlock(func, label: b"esmismatch", heat: BlockHeat.normal)
-	var append = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let mismatch = module.addBlock(func, label: b"esmismatch", heat: BlockHeat.normal)
+	let append = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let dest = 0
@@ -4962,7 +4913,7 @@ end 'ArrayHashElement'
 // An element's term is `float.hash`'s value for it, `-0.0` arm included (`buildFloatHash`): `[0.0]`
 // and `[-0.0]` are equal arrays and must hash equal.
 function emitFloatElementHashStep(module StdModule, func IrFunction, fold IrBlock, header IrBlock, i ValueId, h ValueId, bits ValueId, ids ValueMinter)
-	var step = module.addBlock(func, label: b"step", heat: BlockHeat.normal)
+	let step = module.addBlock(func, label: b"step", heat: BlockHeat.normal)
 	let term = emitFloatHashInto(module, func: func, entry: fold, bits: bits, join: step, ids: ids)
 	emitArrayHashStepTail(module, block: step, header: header, i: i, h: h, term: term, ids: ids)
 end 'emitFloatElementHashStep'
@@ -4975,14 +4926,14 @@ end 'emitFloatElementHashStep'
 // where `int.hash` keeps only the low 32 bits. `ProgramSignatures.requireNativeHashSlotWidth`
 // refuses any slot width at which a load could leave that range.
 function buildArrayHash(module StdModule, name ByteArray, element ArrayHashElement)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofNominal(HashValueTypeName))), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
-	var fold = module.addBlock(func, label: b"fold", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
+	let fold = module.addBlock(func, label: b"fold", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0
@@ -5024,13 +4975,13 @@ end 'buildArrayHash'
 //
 // ⚠ Both operands are BORROWED, exactly as `buildStrEq`'s are.
 function buildArrayEquals(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofTag(ValueTypeTag.boolean))), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofTag(ValueTypeTag.boolean))), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var notEqual = module.addBlock(func, label: b"notEqual", heat: BlockHeat.normal)
-	var lenMatch = module.addBlock(func, label: b"lenMatch", heat: BlockHeat.normal)
-	var allMatch = module.addBlock(func, label: b"allMatch", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let notEqual = module.addBlock(func, label: b"notEqual", heat: BlockHeat.normal)
+	let lenMatch = module.addBlock(func, label: b"lenMatch", heat: BlockHeat.normal)
+	let allMatch = module.addBlock(func, label: b"allMatch", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let a = 0
@@ -5110,13 +5061,13 @@ end 'buildArrayEquals'
 // `__managed_create_sized`'s can only be a compiler bug. Letting it through would end the process for a
 // program error.
 function buildManagedMemCreate(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedMemCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkCount = module.addBlock(func, label: b"chkcount", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"badalloc", heat: BlockHeat.normal)
-	var build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkCount = module.addBlock(func, label: b"chkcount", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"badalloc", heat: BlockHeat.normal)
+	let build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let count = 0
@@ -5163,15 +5114,15 @@ end 'buildManagedMemCreate'
 // safe precisely because this check reads only the ARGUMENT: the load-bearing part of the order
 // above is "the CAPACITY read comes after the detach", and it still does.
 function buildManagedSetLength(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSetLengthName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedSetLengthName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var checkHigh = module.addBlock(func, label: b"chkhigh", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"badlen", heat: BlockHeat.normal)
-	var pick = module.addBlock(func, label: b"pick", heat: BlockHeat.normal)
-	var doZero = module.addBlock(func, label: b"dozero", heat: BlockHeat.normal)
-	var setLen = module.addBlock(func, label: b"setlen", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"badlen", heat: BlockHeat.normal)
+	let pick = module.addBlock(func, label: b"pick", heat: BlockHeat.normal)
+	let doZero = module.addBlock(func, label: b"dozero", heat: BlockHeat.normal)
+	let setLen = module.addBlock(func, label: b"setlen", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
@@ -5210,10 +5161,10 @@ end 'buildManagedSetLength'
 // ⚠ `n` is at most the current length, and the caller has already detached: the zeroing writes through the
 // buffer, which through a shared one would rewrite the parent's bytes.
 function buildManagedShrinkLength(module StdModule)
-	var func = IrFunction.createFromStd(ManagedShrinkLengthName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedShrinkLengthName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
 	let n = 1
@@ -5221,7 +5172,7 @@ function buildManagedShrinkLength(module StdModule)
 	let oldLen = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let es = emitLoadElementStride(module, block: entry, record: arr, ids: ids)
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: arr, start: n, ids: ids)
+	let afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: arr, start: n, ids: ids)
 	let vacatedCount = emitBin(module, block: afterDestroy, a: oldLen, b: n, opcode: StdBinOpcode.sub, ids: ids)
 	emitZeroElems(module, block: afterDestroy, buffer: buffer, start: n, count: vacatedCount, es: es, ids: ids)
 	emitStoreField(module, block: afterDestroy, record: arr, offset: ManagedRecordLengthOffset, value: n)
@@ -5238,13 +5189,13 @@ end 'buildManagedShrinkLength'
 // is its own entry rather than that one's alias. The bound, the detach and the reason both differ from
 // `__managed_byte_at`'s live — in one place, `emitBufferAccessGuard`.
 function buildManagedSetByte(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSetByteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedSetByteName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkHigh = module.addBlock(func, label: b"chkhigh", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"badrange", heat: BlockHeat.normal)
-	var store = module.addBlock(func, label: b"store", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkHigh = module.addBlock(func, label: b"chkhigh", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"badrange", heat: BlockHeat.normal)
+	let store = module.addBlock(func, label: b"store", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let arr = 0
@@ -5269,13 +5220,13 @@ end 'buildManagedSetByte'
 // `.rdata`-backed literal, an inline String's bytes — is a perfectly good thing to read THROUGH. That is
 // the one asymmetry with the setter, and it is the whole of it.
 function buildManagedByteAt(module StdModule)
-	var func = IrFunction.createFromStd(ManagedByteAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedByteAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkHigh = module.addBlock(func, label: b"chkhigh", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"badrange", heat: BlockHeat.normal)
-	var load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkHigh = module.addBlock(func, label: b"chkhigh", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"badrange", heat: BlockHeat.normal)
+	let load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
@@ -5367,8 +5318,6 @@ end 'buildManagedByteAt'
 // element — but a future member added to `addressesBytes: true` inherits the hazard and not the refusal,
 // which is why the pointer-versus-data fact is stated at the guard and not only at the two gates.
 function emitBufferAccessGuard(module StdModule, func IrFunction, block IrBlock, checkHigh IrBlock, bad IrBlock, ok IrBlock, arr ValueId, offset ValueId, isWrite bool, addressesBytes bool, ids ValueMinter)
-	// A BlockId rather than a rebound block handle: threading an `IrBlock` through a reassigned `var` trips
-	// the struct-aliasing policy (E3078), and a terminator names an id anyway.
 	var limitEntryId = checkHigh.id
 
 	if isWrite 'writerMustOwnItsBuffer'
@@ -5414,13 +5363,13 @@ end 'emitBufferAccessGuard'
 // `ManagedGetUncheckedName` pin each other. Relax the refusal and this call becomes load-bearing again with no
 // edit; delete this call and nothing will tell you.
 function buildManagedMemSet(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedMemSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkHigh = module.addBlock(func, label: b"chkhigh", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"badindex", heat: BlockHeat.normal)
-	var store = module.addBlock(func, label: b"store", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkHigh = module.addBlock(func, label: b"chkhigh", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"badindex", heat: BlockHeat.normal)
+	let store = module.addBlock(func, label: b"store", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let arr = 0
@@ -5429,7 +5378,7 @@ function buildManagedMemSet(module StdModule)
 
 	emitBufferAccessGuard(module, func: func, block: entry, checkHigh: checkHigh, bad: bad, ok: store, arr: arr, offset: index, isWrite: true, addressesBytes: false, ids: ids)
 
-	var afterReject = emitDestroyRejectedElement(module, func: func, cur: bad, record: arr, value: value, destroyOffset: ManagedRecordElementDestroyOffset, ids: ids)
+	let afterReject = emitDestroyRejectedElement(module, func: func, cur: bad, record: arr, value: value, destroyOffset: ManagedRecordElementDestroyOffset, ids: ids)
 	emitMemoryThrow(module, block: afterReject, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
 
 	emitElementStoreAndOkReturn(module, func: func, store: store, arr: arr, index: index, value: value, ids: ids)
@@ -5476,17 +5425,17 @@ end 'buildManagedMemSet'
 // exist — an `Array with bool` refill writes FIELDS through the same one call an `Array with Int` refill
 // writes words through.
 function buildManagedFill(module StdModule)
-	var func = IrFunction.createFromStd(ManagedFillName, returnType: StdReturnType.value(valueTagToStdType(ValueTypeTag.boolean)), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(ManagedFillName, returnType: StdReturnType.value(valueTagToStdType(ValueTypeTag.boolean)), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkCount = module.addBlock(func, label: b"chkcount", heat: BlockHeat.normal)
-	var checkHigh = module.addBlock(func, label: b"chkhigh", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"badrange", heat: BlockHeat.normal)
-	var classify = module.addBlock(func, label: b"classify", heat: BlockHeat.normal)
-	var declined = module.addBlock(func, label: b"declined", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkCount = module.addBlock(func, label: b"chkcount", heat: BlockHeat.normal)
+	let checkHigh = module.addBlock(func, label: b"chkhigh", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"badrange", heat: BlockHeat.normal)
+	let classify = module.addBlock(func, label: b"classify", heat: BlockHeat.normal)
+	let declined = module.addBlock(func, label: b"declined", heat: BlockHeat.normal)
 	var prepare = module.addBlock(func, label: b"prepare", heat: BlockHeat.normal)
-	var applied = module.addBlock(func, label: b"applied", heat: BlockHeat.normal)
+	let applied = module.addBlock(func, label: b"applied", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let arr = 0
@@ -5549,7 +5498,7 @@ function buildManagedFill(module StdModule)
 end 'buildManagedFill'
 
 function emitStrideFillLoop(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, buffer ValueId, from ValueId, to ValueId, value ValueId, stride SingleOpStride, label ByteArray, ids ValueMinter)
-	var loop = openCountedLoop(module, func: func, cur: cur, from: from, to: to, label: label, ids: ids)
+	let loop = openCountedLoop(module, func: func, cur: cur, from: from, to: to, label: label, ids: ids)
 	emitStrideSlotStore(module, block: loop.body, buffer: buffer, index: loop.index, value: value, stride: stride, ids: ids)
 	closeCountedLoop(module, loop: loop, tail: loop.body, step: SingleStep, ids: ids)
 	module.setTerminator(loop.done, op: StdOp.branch(exit.id))
@@ -5569,13 +5518,13 @@ end 'emitStrideFillLoop'
 // live elements' own bytes (`emitElementByteLen(length, es)`) into a fresh `__mm_alloc` (which is zeroed). Destructors run on a SHRINK
 // (`__managed_set_length`, `__managed_clear`) and nowhere else.
 function buildManagedMemGrow(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedMemGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"badcap", heat: BlockHeat.cold)
-	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"badcap", heat: BlockHeat.cold)
+	let grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
@@ -5590,7 +5539,7 @@ function buildManagedMemGrow(module StdModule)
 	// why it throws where `__managed_grow`'s aborts. It reuses this arm rather than adding a second throw block.
 	emitMemoryThrow(module, block: bad, flag: MemoryInvalidCapacityFlag, ids: ids)
 
-	var afterPublish = emitReallocateToCapacity(module, func: func, cur: grow, arr: arr, newCap: newCapacity, onByteOverflow: bad, ids: ids)
+	let afterPublish = emitReallocateToCapacity(module, func: func, cur: grow, arr: arr, newCap: newCapacity, onByteOverflow: bad, ids: ids)
 	module.setTerminator(afterPublish, op: StdOp.branch(done.id))
 
 	emitVoidOkReturn(module, block: done, ids: ids)
@@ -5617,16 +5566,16 @@ end 'buildManagedMemGrow'
 // It is also the one input where the exchange itself would be observable if the reads and writes were
 // interleaved, which is the second reason it is answered rather than performed.
 function buildManagedMemSwap(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemSwapName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedMemSwapName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var oob = module.addBlock(func, label: b"swoob", heat: BlockHeat.normal)
-	var checkSame = module.addBlock(func, label: b"swsame", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let oob = module.addBlock(func, label: b"swoob", heat: BlockHeat.normal)
+	let checkSame = module.addBlock(func, label: b"swsame", heat: BlockHeat.normal)
 	var exchange = module.addBlock(func, label: b"swxchg", heat: BlockHeat.normal)
-	var readSecond = module.addBlock(func, label: b"swread2", heat: BlockHeat.normal)
-	var write = module.addBlock(func, label: b"swwrite", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"swdone", heat: BlockHeat.normal)
+	let readSecond = module.addBlock(func, label: b"swread2", heat: BlockHeat.normal)
+	let write = module.addBlock(func, label: b"swwrite", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"swdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let arr = 0
@@ -5649,8 +5598,8 @@ function buildManagedMemSwap(module StdModule)
 	let buffer = emitLoadField(module, block: exchange, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let iValue = emitLoadElemAt(module, func: func, cur: exchange, exit: readSecond, record: arr, buffer: buffer, index: i, ids: ids)
 	let jValue = emitLoadElemAt(module, func: func, cur: readSecond, exit: write, record: arr, buffer: buffer, index: j, ids: ids)
-	var afterFirstStore = emitStoreElemAt(module, func: func, cur: write, record: arr, buffer: buffer, index: i, value: jValue, ids: ids)
-	var afterSecondStore = emitStoreElemAt(module, func: func, cur: afterFirstStore, record: arr, buffer: buffer, index: j, value: iValue, ids: ids)
+	let afterFirstStore = emitStoreElemAt(module, func: func, cur: write, record: arr, buffer: buffer, index: i, value: jValue, ids: ids)
+	let afterSecondStore = emitStoreElemAt(module, func: func, cur: afterFirstStore, record: arr, buffer: buffer, index: j, value: iValue, ids: ids)
 	module.setTerminator(afterSecondStore, op: StdOp.branch(done.id))
 
 	emitVoidOkReturn(module, block: done, ids: ids)
@@ -5671,15 +5620,15 @@ end 'buildManagedMemSwap'
 // must be below `length` — `Array.insert`, the only corpus caller, resizes first — and the element
 // in that slot is released before the slide lands on it. A `count` of 0 moves and erases nothing.
 function buildManagedMemShiftRight(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemShiftRightName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedMemShiftRightName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkRange = module.addBlock(func, label: b"srrange", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"srbad", heat: BlockHeat.normal)
-	var nothing = module.addBlock(func, label: b"srnothing", heat: BlockHeat.normal)
-	var shift = module.addBlock(func, label: b"srshift", heat: BlockHeat.normal)
-	var move = module.addBlock(func, label: b"srmove", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkRange = module.addBlock(func, label: b"srrange", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"srbad", heat: BlockHeat.normal)
+	let nothing = module.addBlock(func, label: b"srnothing", heat: BlockHeat.normal)
+	let shift = module.addBlock(func, label: b"srshift", heat: BlockHeat.normal)
+	let move = module.addBlock(func, label: b"srmove", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let arr = 0
@@ -5689,7 +5638,7 @@ function buildManagedMemShiftRight(module StdModule)
 	let negativeArgument = emitShiftArgumentIsNegative(module, block: entry, index: index, count: count, floor: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(negativeArgument, thenBlockId: bad.id, elseBlockId: checkRange.id))
 
-	var (detached, rangeEnd) = emitShiftDetachedRangeEnd(module, func: func, block: checkRange, arr: arr, index: index, count: count, prefix: "sr", ids: ids)
+	let (detached, rangeEnd) = emitShiftDetachedRangeEnd(module, func: func, block: checkRange, arr: arr, index: index, count: count, prefix: "sr", ids: ids)
 	let liveLength = emitLoadField(module, block: detached, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let pastLength = emitIndexOutOfRange(module, block: detached, index: rangeEnd, length: liveLength, ids: ids)
 	module.setTerminator(detached, op: StdOp.condBranch(pastLength, thenBlockId: bad.id, elseBlockId: shift.id))
@@ -5706,10 +5655,10 @@ function buildManagedMemShiftRight(module StdModule)
 	let openedAt = emitBin(module, block: move, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let overwrittenAt = emitBin(module, block: move, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
 	let destroy = emitLoadField(module, block: move, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
-	var (occupantRead, occupant) = emitOccupantRead(module, func: func, cur: move, buffer: buffer, index: overwrittenAt, elementSize: es, destroy: destroy, ids: ids)
+	let (occupantRead, occupant) = emitOccupantRead(module, func: func, cur: move, buffer: buffer, index: overwrittenAt, elementSize: es, destroy: destroy, ids: ids)
 	emitMoveElems(module, block: occupantRead, destBuffer: buffer, destIndex: openedAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
 	emitZeroElems(module, block: occupantRead, buffer: buffer, start: index, count: one, es: es, ids: ids)
-	var released = emitDestroyOccupant(module, func: func, cur: occupantRead, destroy: destroy, occupant: occupant, ids: ids)
+	let released = emitDestroyOccupant(module, func: func, cur: occupantRead, destroy: destroy, occupant: occupant, ids: ids)
 	emitVoidOkReturn(module, block: released, ids: ids)
 
 	module.functions.push(func)
@@ -5726,15 +5675,15 @@ end 'buildManagedMemShiftRight'
 // VACATES**, so no managed element is left held twice or overwritten unreleased. `index + count`
 // must not pass `length`.
 function buildManagedMemShiftLeft(module StdModule)
-	var func = IrFunction.createFromStd(ManagedMemShiftLeftName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedMemShiftLeftName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkRange = module.addBlock(func, label: b"slrange", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"slbad", heat: BlockHeat.normal)
-	var nothing = module.addBlock(func, label: b"slnothing", heat: BlockHeat.normal)
-	var shift = module.addBlock(func, label: b"slshift", heat: BlockHeat.normal)
-	var move = module.addBlock(func, label: b"slmove", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkRange = module.addBlock(func, label: b"slrange", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"slbad", heat: BlockHeat.normal)
+	let nothing = module.addBlock(func, label: b"slnothing", heat: BlockHeat.normal)
+	let shift = module.addBlock(func, label: b"slshift", heat: BlockHeat.normal)
+	let move = module.addBlock(func, label: b"slmove", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let arr = 0
@@ -5744,7 +5693,7 @@ function buildManagedMemShiftLeft(module StdModule)
 	let belowFloor = emitShiftArgumentIsNegative(module, block: entry, index: index, count: count, floor: 1, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(belowFloor, thenBlockId: bad.id, elseBlockId: checkRange.id))
 
-	var (detached, checkedEnd) = emitShiftDetachedRangeEnd(module, func: func, block: checkRange, arr: arr, index: index, count: count, prefix: "sl", ids: ids)
+	let (detached, checkedEnd) = emitShiftDetachedRangeEnd(module, func: func, block: checkRange, arr: arr, index: index, count: count, prefix: "sl", ids: ids)
 	let liveLength = emitLoadField(module, block: detached, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let pastLength = emitBoundaryPositionOutOfRange(module, block: detached, position: checkedEnd, length: liveLength, ids: ids)
 	module.setTerminator(detached, op: StdOp.condBranch(pastLength, thenBlockId: bad.id, elseBlockId: shift.id))
@@ -5760,12 +5709,12 @@ function buildManagedMemShiftLeft(module StdModule)
 	let one = emitConst(module, block: move, value: 1, ids: ids)
 	let landsAt = emitBin(module, block: move, a: index, b: one, opcode: StdBinOpcode.sub, ids: ids)
 	let destroy = emitLoadField(module, block: move, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
-	var (occupantRead, occupant) = emitOccupantRead(module, func: func, cur: move, buffer: buffer, index: landsAt, elementSize: es, destroy: destroy, ids: ids)
+	let (occupantRead, occupant) = emitOccupantRead(module, func: func, cur: move, buffer: buffer, index: landsAt, elementSize: es, destroy: destroy, ids: ids)
 	emitMoveElems(module, block: occupantRead, destBuffer: buffer, destIndex: landsAt, srcBuffer: buffer, srcIndex: index, count: count, es: es, ids: ids)
 	let rangeEnd = emitBin(module, block: occupantRead, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
 	let vacatedAt = emitBin(module, block: occupantRead, a: rangeEnd, b: one, opcode: StdBinOpcode.sub, ids: ids)
 	emitZeroElems(module, block: occupantRead, buffer: buffer, start: vacatedAt, count: one, es: es, ids: ids)
-	var released = emitDestroyOccupant(module, func: func, cur: occupantRead, destroy: destroy, occupant: occupant, ids: ids)
+	let released = emitDestroyOccupant(module, func: func, cur: occupantRead, destroy: destroy, occupant: occupant, ids: ids)
 	emitVoidOkReturn(module, block: released, ids: ids)
 
 	module.functions.push(func)
@@ -5785,7 +5734,7 @@ function emitShiftArgumentIsNegative(module StdModule, block IrBlock, index Valu
 end 'emitShiftArgumentIsNegative'
 
 function emitShiftDetachedRangeEnd(module StdModule, func IrFunction, block IrBlock, arr ValueId, index ValueId, count ValueId, prefix String, ids ValueMinter) returns (IrBlock, ValueId)
-	var detached = emitCowDetachWhenNeeded(module, func: func, block: block, arr: arr, prefix: prefix, ids: ids)
+	let detached = emitCowDetachWhenNeeded(module, func: func, block: block, arr: arr, prefix: prefix, ids: ids)
 	let rangeEnd = emitBin(module, block: detached, a: index, b: count, opcode: StdBinOpcode.add, ids: ids)
 
 	return (detached, rangeEnd)
@@ -5806,12 +5755,12 @@ end 'emitShiftDetachedRangeEnd'
 // out of its range, which is what `indexOutOfBounds` names. Nothing observable moves: the only consumer
 // (`stdlib/Array.maxon:491`) relabels every failure as `IterationError.exhausted`.
 function buildManagedCursorCreate(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCursorCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedCursorCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var refuse = module.addBlock(func, label: b"curempty", heat: BlockHeat.normal)
-	var build = module.addBlock(func, label: b"curbuild", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let refuse = module.addBlock(func, label: b"curempty", heat: BlockHeat.normal)
+	let build = module.addBlock(func, label: b"curbuild", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0
@@ -5841,8 +5790,8 @@ function buildManagedCursorCreate(module StdModule)
 	// ⚠⚠ **NO LEGAL PROGRAM IN THE SUITE REACHES IT**: nothing in `stdlib/` iterates an
 	// `addressableBytes()` result, and that member is the only door an immortal record has onto the
 	// buffer surface. It guards a shape that member makes POSSIBLE, not a crash anyone has seen.
-	var countSource = module.addBlock(func, label: b"curcount", heat: BlockHeat.normal)
-	var storeSource = module.addBlock(func, label: b"curstore", heat: BlockHeat.normal)
+	let countSource = module.addBlock(func, label: b"curcount", heat: BlockHeat.normal)
+	let storeSource = module.addBlock(func, label: b"curstore", heat: BlockHeat.normal)
 
 	let sourceIsImmortal = emitRecordIsImmortal(module, block: build, record: arr, ids: ids)
 	module.setTerminator(build, op: StdOp.condBranch(sourceIsImmortal, thenBlockId: storeSource.id, elseBlockId: countSource.id))
@@ -5879,12 +5828,12 @@ end 'buildManagedCursorCreate'
 // would have exactly one caller — this one. **The cursor is the only box of this shape in the compiler**;
 // if a second appears, lift them together.
 function buildManagedCursorDecref(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCursorDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedCursorDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
-	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	let release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let cursor = 0
@@ -5901,10 +5850,10 @@ end 'buildManagedCursorDecref'
 
 // `__managed_cursor_index(cursor) -> position` — the one member that reads nothing but the cursor itself.
 function buildManagedCursorIndex(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCursorIndexName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedCursorIndexName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let cursor = 0
 
@@ -5921,16 +5870,16 @@ end 'buildManagedCursorIndex'
 // live length; an unfilled managed slot panics with `site` in the empty-slot message
 // `stdlib/Builtins.maxon` states.
 function buildManagedCursorCurrent(module StdModule, greenThreads bool, pastEnd ByteArray, slotText EmptySlotText)
-	var func = IrFunction.createFromStd(ManagedCursorCurrentName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedCursorCurrentName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var pastEndBlock = module.addBlock(func, label: b"curpastend", heat: BlockHeat.cold)
-	var read = module.addBlock(func, label: b"curread", heat: BlockHeat.normal)
-	var loaded = module.addBlock(func, label: b"curloaded", heat: BlockHeat.normal)
-	var checkSlot = module.addBlock(func, label: b"curchkslot", heat: BlockHeat.normal)
-	var emptySlot = module.addBlock(func, label: b"curempty", heat: BlockHeat.normal)
-	var ret = module.addBlock(func, label: b"curret", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let pastEndBlock = module.addBlock(func, label: b"curpastend", heat: BlockHeat.cold)
+	let read = module.addBlock(func, label: b"curread", heat: BlockHeat.normal)
+	let loaded = module.addBlock(func, label: b"curloaded", heat: BlockHeat.normal)
+	let checkSlot = module.addBlock(func, label: b"curchkslot", heat: BlockHeat.normal)
+	let emptySlot = module.addBlock(func, label: b"curempty", heat: BlockHeat.normal)
+	let ret = module.addBlock(func, label: b"curret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let cursor = 0
@@ -5992,7 +5941,7 @@ end 'EmptySlotText'
 
 export function emptySlotTextIn(signatures ProgramSignatures, stdlibPath FilePath) returns EmptySlotText
 	let suffixText = signatures.byteConstantIn(EmptySlotMessageSuffixName, filePath: stdlibPath)
-	var suffix = ByteArray.create(0) as isolated ByteArray
+	let suffix = ByteArray.create(0) as isolated ByteArray
 
 	modify suffix 'fill'
 		suffix.append(suffixText)
@@ -6033,13 +5982,13 @@ end 'emitRuntimePanic'
 // because the offset is the caller's and may leave the buffer in either direction (`emitIndexOutOfRange`
 // rejects a negative `position + ahead` as well as one at or past the length).
 function buildManagedCursorPeek(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCursorPeekName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedCursorPeekName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var refuse = module.addBlock(func, label: b"pkoob", heat: BlockHeat.normal)
-	var read = module.addBlock(func, label: b"pkread", heat: BlockHeat.normal)
-	var ret = module.addBlock(func, label: b"pkret", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let refuse = module.addBlock(func, label: b"pkoob", heat: BlockHeat.normal)
+	let read = module.addBlock(func, label: b"pkread", heat: BlockHeat.normal)
+	let ret = module.addBlock(func, label: b"pkret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let cursor = 0
@@ -6082,12 +6031,12 @@ function buildManagedCursorNavigator(module StdModule, name ByteArray, step Curs
 	let takesTarget = step == CursorStep.absolute
 	let paramCount = 2 if takesTarget else 1
 	let paramTypes = twoI64Params() if takesTarget else oneI64Param()
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, throwsTypeName: managedMemoryThrows())
-	var ids = ValueMinter.create(paramCount)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: paramTypes, throwsTypeName: managedMemoryThrows())
+	let ids = ValueMinter.create(paramCount)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var refuse = module.addBlock(func, label: b"navoob", heat: BlockHeat.normal)
-	var move = module.addBlock(func, label: b"navmove", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let refuse = module.addBlock(func, label: b"navoob", heat: BlockHeat.normal)
+	let move = module.addBlock(func, label: b"navmove", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramCount)
 	let cursor = 0
@@ -6176,23 +6125,23 @@ end 'emitMemoryThrow'
 // then releases the buffer and frees the record. A function of its own so the lean decref carries
 // no stack guard; the element walk recurses as deep as the data does, so this one does.
 function buildManagedRelease(module StdModule)
-	var func = IrFunction.createFromStd(ManagedReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var releaseBuf = module.addBlock(func, label: b"relbuf", heat: BlockHeat.normal)
-	var baseJoin = module.addBlock(func, label: b"basejoin", heat: BlockHeat.normal)
-	var freeRec = module.addBlock(func, label: b"freerec", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let releaseBuf = module.addBlock(func, label: b"relbuf", heat: BlockHeat.normal)
+	let baseJoin = module.addBlock(func, label: b"basejoin", heat: BlockHeat.normal)
+	let freeRec = module.addBlock(func, label: b"freerec", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0
 
 	let start = emitConst(module, block: entry, value: 0, ids: ids)
-	var afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: record, start: start, ids: ids)
+	let afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: record, start: start, ids: ids)
 	module.setTerminator(afterWalk, op: StdOp.branch(releaseBuf.id))
 
 	let base = emitOwedAllocationBase(module, func: func, cur: releaseBuf, join: baseJoin, record: record, ids: ids)
-	var afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
+	let afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(freeRec.id))
 
 	let recFreed = ids.mint()
@@ -6214,8 +6163,8 @@ end 'buildManagedRelease'
 // skips a null. `srcBase`/`destBase` are already offset to the first element of their respective windows.
 // Threads `cur` (sets its terminator) and returns the continuation block.
 function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, srcBase ValueId, destBase ValueId, count ValueId, elementSize ValueId, cloneFn ValueId, ids ValueMinter) returns IrBlock
-	var visit = module.addBlock(func, label: b"clndo", heat: BlockHeat.normal)
-	var loop = emitElementRange(module, func: func, cur: cur, base: srcBase, count: count, elementSize: elementSize, visit: visit, carried: ValueIdArray.create(0), labels: elementRangeLabels(CascadeAction.clone), ids: ids)
+	let visit = module.addBlock(func, label: b"clndo", heat: BlockHeat.normal)
+	let loop = emitElementRange(module, func: func, cur: cur, base: srcBase, count: count, elementSize: elementSize, visit: visit, carried: ValueIdArray.create(0), labels: elementRangeLabels(CascadeAction.clone), ids: ids)
 
 	let cloned = ids.mint()
 
@@ -6237,19 +6186,19 @@ end 'emitElementCloneRange'
 // Threads `cur` (sets its terminator); `carried` are the values entering the loop.
 //
 // The bounds test, the null rule and the advance are what must not diverge — a second copy of them is free to
-// visit a different set of slots, which on the soleness side is one element of a moved graph left unproved.
-export function emitElementRange(module StdModule, func IrFunction, cur IrBlock, base ValueId, count ValueId, elementSize ValueId, visit IrBlock, carried ValueIdArray, labels ElementRangeLabels, ids ValueMinter) returns ElementRangeLoop
-	var header = module.addBlock(func, label: labels.header, heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: labels.body, heat: BlockHeat.normal)
-	var step = emitCascadeJoin(module, func: func, label: labels.step, template: carried, ids: ids)
-	var done = module.addBlock(func, label: labels.done, heat: BlockHeat.normal)
+// visit a different set of slots, which on the share side is one element of a moved graph left unmarked.
+function emitElementRange(module StdModule, func IrFunction, cur IrBlock, base ValueId, count ValueId, elementSize ValueId, visit IrBlock, carried ValueIdArray, labels ElementRangeLabels, ids ValueMinter) returns ElementRangeLoop
+	let header = module.addBlock(func, label: labels.header, heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: labels.body, heat: BlockHeat.normal)
+	let step = emitCascadeJoin(module, func: func, label: labels.step, template: carried, ids: ids)
+	let done = module.addBlock(func, label: labels.done, heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	var onThisTrip = appendCarriedBlockArgs(header, template: carried, ids: ids)
-	var entering = argsOf(zero)
+	let onThisTrip = appendCarriedBlockArgs(header, template: carried, ids: ids)
+	let entering = argsOf(zero)
 	entering.append(carried)
 	emitBranchCarrying(module, from: cur, to: header, values: entering)
 	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: count, whenTrue: done, whenFalse: body, ids: ids)
@@ -6262,7 +6211,7 @@ export function emitElementRange(module StdModule, func IrFunction, cur IrBlock,
 
 	let one = emitConst(module, block: step.block, value: 1, ids: ids)
 	let iNext = emitBin(module, block: step.block, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	var looping = argsOf(iNext)
+	let looping = argsOf(iNext)
 	looping.append(step.carried)
 	emitBranchCarrying(module, from: step.block, to: header, values: looping)
 
@@ -6273,12 +6222,12 @@ end 'emitElementRange'
 // carried values on that trip (which dominate `visit` and `done` alike), the join `visit` ends at, and the block
 // the loop leaves through. A record rather than out-parameters, so a caller cannot spend one loop's element
 // against another loop's index.
-export type ElementRangeLoop
+type ElementRangeLoop
 	export let element as ValueId
 	export let index as ValueId
 	export var carried as ValueIdArray
-	export var step as CascadeCursor
-	export var done as IrBlock
+	export let step as CascadeCursor
+	export let done as IrBlock
 
 	static function create(element ValueId, index ValueId, carried ValueIdArray, step CascadeCursor, done IrBlock) returns ElementRangeLoop
 		return Self{element: element, index: index, carried: carried, step: step, done: done}
@@ -6288,13 +6237,13 @@ end 'ElementRangeLoop'
 // The four skeleton block names one action's loop wears (the caller names its own `visit`). They exist for an
 // IR dump and nothing else: a `__`-prefixed runtime body is withheld from the rendered Target IR,
 // so a program that both clones and moves is where the two name sets earn their keep.
-export type ElementRangeLabels
+type ElementRangeLabels
 	export let header as immutable ByteArray
 	export let body as immutable ByteArray
 	export let step as immutable ByteArray
 	export let done as immutable ByteArray
 
-	export static function create(header ByteArray, body ByteArray, step ByteArray, done ByteArray) returns ElementRangeLabels
+	static function create(header ByteArray, body ByteArray, step ByteArray, done ByteArray) returns ElementRangeLabels
 		return Self{header: header, body: body, step: step, done: done}
 	end 'create'
 end 'ElementRangeLabels'
@@ -6302,7 +6251,6 @@ end 'ElementRangeLabels'
 function elementRangeLabels(action CascadeAction) returns ElementRangeLabels
 	return match action 'action'
 		clone gives ElementRangeLabels.create(b"clnh", body: b"clnb", step: b"clnstep", done: b"clndone")
-		soleWalk gives ElementRangeLabels.create(b"solh", body: b"solb", step: b"solstep", done: b"soldone")
 		shareWalk gives ElementRangeLabels.create(b"shrh", body: b"shrb", step: b"shrstep", done: b"shrdone")
 	end 'action'
 end 'elementRangeLabels'
@@ -6313,10 +6261,10 @@ end 'elementRangeLabels'
 // deep-cloned in. The result is a full OWNER (`parent@32 = 0`), NOT a COW view — a managed view would let both
 // arrays' `__managed_decref` walks destroy the shared elements, which is the whole reason a managed copy deep-clones.
 function buildManagedCloneManaged(module StdModule)
-	var func = IrFunction.createFromStd(ManagedCloneManagedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedCloneManagedName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
 	let cloneFn = 1
@@ -6330,7 +6278,7 @@ function buildManagedCloneManaged(module StdModule)
 
 	let srcBuf = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let destBuf = emitLoadField(module, block: entry, record: newRec, offset: ManagedRecordBufferOffset, ids: ids)
-	var afterClone = emitElementCloneRange(module, func: func, cur: entry, srcBase: srcBuf, destBase: destBuf, count: length, elementSize: es, cloneFn: cloneFn, ids: ids)
+	let afterClone = emitElementCloneRange(module, func: func, cur: entry, srcBase: srcBuf, destBase: destBuf, count: length, elementSize: es, cloneFn: cloneFn, ids: ids)
 
 	emitStoreField(module, block: afterClone, record: newRec, offset: ManagedRecordLengthOffset, value: length)
 	module.setTerminator(afterClone, op: StdOp.ret(newRec))
@@ -6338,12 +6286,9 @@ function buildManagedCloneManaged(module StdModule)
 	module.functions.push(func)
 end 'buildManagedCloneManaged'
 
-// ⭐⭐ **`__managed_sole(arr, visits)` / `__managed_sole_managed(arr, visits, soleFn)` — PROVE A CONTAINER RECORD
-// MOVEABLE; `__managed_share(arr, visits)` / `__managed_share_managed(arr, visits, shareFn)` — MARK ONE LENT; and
-// `__managed_sole_alone(arr)` / `__managed_share_alone(arr)`, the same over a record handed over as the whole
-// graph.** The graph entries answer the visit table (`WalkVisitTable`). One builder for every entry, for
-// `buildListClone`'s reason: the record's meeting and what follows it are ONE answer per action, and the entries
-// differ only by the element walk and the scope.
+// ⭐⭐ **`__managed_share(arr)` / `__managed_share_managed(arr, shareFn)` — MARK ONE LENT.** One builder for
+// every entry, for `buildListClone`'s reason: the record's meeting and what follows it are ONE answer per
+// action, and the entries differ only by the element walk.
 //
 // ⚠ **THE MEETING COMES FIRST** (`MmRuntime.emitBoxWalkStep`), and it is what sends an image record and an
 // already-shared record home untouched: an `ImmortalRecordCapacity` record carries the immortal header too
@@ -6353,20 +6298,19 @@ end 'buildManagedCloneManaged'
 // ⚠ **A MANAGED-ELEMENT ARRAY'S OWN BUFFER IS NEVER SHARED** — `.clone()`/`.slice()` on one deep-copy through
 // the `_managed` entries rather than viewing — so the move's detach is a no-op there. It is called anyway because
 // "a move is a write" is a rule about the RECORD FORMAT, not about which elements the record holds.
-// Every entry of one action, installed together because they are one operation split by scope and by whether the
-// elements are managed, and one program reaches several of them: a `String` argument, a `String` field and an
+// Every entry of one action, installed together because they are one operation split by whether the elements are
+// managed, and one program reaches several of them: a `String` argument, a `String` field and an
 // `Array with <struct>` field.
 function buildManagedWalks(module StdModule, action CascadeAction)
 	let entries = managedRecordCascadeEntries(action)
-	buildManagedWalk(module, name: entries.trivial, scope: WalkScope.graph, walksElements: false, action: action)
-	buildManagedWalk(module, name: entries.perElement, scope: WalkScope.graph, walksElements: true, action: action)
-	buildManagedWalk(module, name: byteRecordAloneWalk(action), scope: WalkScope.record, walksElements: false, action: action)
+	buildManagedWalk(module, name: entries.trivial, walksElements: false, action: action)
+	buildManagedWalk(module, name: entries.perElement, walksElements: true, action: action)
 end 'buildManagedWalks'
 
-function buildManagedWalk(module StdModule, name ByteArray, scope WalkScope, walksElements bool, action CascadeAction)
-	var body = beginWalkBody(module, name: name, scope: scope, walksElements: walksElements, recursesPerLevel: walksElements)
+function buildManagedWalk(module StdModule, name ByteArray, walksElements bool, action CascadeAction)
+	let body = beginWalkBody(module, name: name, walksElements: walksElements, recursesPerLevel: walksElements)
 	let arr = WalkBoxParam
-	var stepped = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: arr, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
+	let stepped = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: arr, stop: body.done, ids: body.ids)
 	var walked = emitWalkedRecordBytes(module, func: body.func, cursor: stepped, arr: arr, action: action, ids: body.ids)
 
 	if walksElements 'eachElement'
@@ -6386,21 +6330,20 @@ export function emitWalkedRecordElements(module StdModule, func IrFunction, curs
 end 'emitWalkedRecordElements'
 
 // ⭐ **WHAT A WALK OWES THE BYTES OF A RECORD IT DESCENDS.** A view's reference to the allocation its bytes live in
-// is met (`WalkMeeting.view`), because that allocation may be a String record the graph also owns; an owner's
+// is walked as a box (`emitBoxWalkStep`), because that allocation may be a String record the graph also owns; an owner's
 // separate buffer is a share walk's to mark, and no owner reference but the record's reaches it. A
 // move then detaches either, since a move is a write. Answers the cursor the walk continues at.
 export function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor CascadeCursor, arr ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
-	var ownedBytes = module.addBlock(func, label: b"ownbytes", heat: BlockHeat.normal)
-	var viewedBytes = module.addBlock(func, label: b"viewbytes", heat: BlockHeat.normal)
-	var meetParent = module.addBlock(func, label: b"viewparent", heat: BlockHeat.normal)
-	var bytesWalked = emitCascadeJoin(module, func: func, label: b"byteswalked", template: cursor.carried, ids: ids)
+	let ownedBytes = module.addBlock(func, label: b"ownbytes", heat: BlockHeat.normal)
+	let viewedBytes = module.addBlock(func, label: b"viewbytes", heat: BlockHeat.normal)
+	let meetParent = module.addBlock(func, label: b"viewparent", heat: BlockHeat.normal)
+	let bytesWalked = emitCascadeJoin(module, func: func, label: b"byteswalked", template: cursor.carried, ids: ids)
 
 	let notOwned = emitBufferNotOwned(module, block: cursor.block, record: arr, ids: ids)
 	module.setTerminator(cursor.block, op: StdOp.condBranch(notOwned, thenBlockId: viewedBytes.id, elseBlockId: ownedBytes.id))
 
 	match action 'action'
 		clone then panic("emitWalkedRecordBytes: a clone is `__managed_clone`/`__managed_clone_managed`, not a walk")
-		soleWalk then emitCascadeBranch(module, from: cursor.at(ownedBytes), to: bytesWalked)
 		shareWalk then emitSharedOwnBuffer(module, func: func, from: cursor.at(ownedBytes), arr: arr, to: bytesWalked, ids: ids)
 	end 'action'
 
@@ -6408,12 +6351,8 @@ export function emitWalkedRecordBytes(module StdModule, func IrFunction, cursor 
 	emitRouteOnOwedBase(module, block: viewedBytes, base: parent, whenOwed: meetParent, whenNone: bytesWalked.block, ids: ids)
 	pushCascadeEdge(viewedBytes, to: bytesWalked, values: cursor.carried)
 
-	var parentMet = emitBoxWalkStep(module, func: func, cursor: cursor.at(meetParent), box: parent, action: action, meeting: WalkMeeting.view, stop: bytesWalked, ids: ids)
+	let parentMet = emitBoxWalkStep(module, func: func, cursor: cursor.at(meetParent), box: parent, stop: bytesWalked, ids: ids)
 	emitCascadeBranch(module, from: parentMet, to: bytesWalked)
-
-	if action == CascadeAction.soleWalk 'aMoveWrites'
-		emitCowDetach(module, block: bytesWalked.block, arr: arr, ids: ids)
-	end 'aMoveWrites'
 
 	return bytesWalked
 end 'emitWalkedRecordBytes'
@@ -6422,8 +6361,8 @@ end 'emitWalkedRecordBytes'
 // co-allocated buffer is marked too: its refcount word is what the write path's detach test reads, so a
 // record frozen for sharing detaches to a buffer of its own before any write.
 function emitSharedOwnBuffer(module StdModule, func IrFunction, from CascadeCursor, arr ValueId, to CascadeCursor, ids ValueMinter)
-	var mark = module.addBlock(func, label: b"shrbuf", heat: BlockHeat.normal)
-	var marked = module.addBlock(func, label: b"shrbufdone", heat: BlockHeat.normal)
+	let mark = module.addBlock(func, label: b"shrbuf", heat: BlockHeat.normal)
+	let marked = module.addBlock(func, label: b"shrbufdone", heat: BlockHeat.normal)
 
 	let buffer = emitLoadField(module, block: from.block, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	emitRouteOnOwnedBuffer(module, func: func, cur: from.block, record: arr, buffer: buffer, absent: marked, coAllocated: mark, separate: mark, ids: ids)
@@ -6434,19 +6373,14 @@ function emitSharedOwnBuffer(module StdModule, func IrFunction, from CascadeCurs
 	emitCascadeBranch(module, from: from.at(marked), to: to)
 end 'emitSharedOwnBuffer'
 
-// Walk each live element through the caller's `(box, visits) -> visits` `elementWalk`, over the same per-element
-// skeleton `emitElementCloneRange` copies through, carrying the visit table from element to element. Threads
-// `cur` and returns the continuation.
+// Walk each live element through the caller's `(box) -> void` `elementWalk`, over the same per-element
+// skeleton `emitElementCloneRange` copies through. Threads `cur` and returns the continuation.
 function emitElementWalkRange(module StdModule, func IrFunction, cur CascadeCursor, base ValueId, count ValueId, elementSize ValueId, elementWalk ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
-	var visit = module.addBlock(func, label: b"walkdo", heat: BlockHeat.normal)
-	var loop = emitElementRange(module, func: func, cur: cur.block, base: base, count: count, elementSize: elementSize, visit: visit, carried: cur.carried, labels: elementRangeLabels(action), ids: ids)
-	view trip = CascadeCursor.create(visit, carried: loop.carried)
+	let visit = module.addBlock(func, label: b"walkdo", heat: BlockHeat.normal)
+	let loop = emitElementRange(module, func: func, cur: cur.block, base: base, count: count, elementSize: elementSize, visit: visit, carried: cur.carried, labels: elementRangeLabels(action), ids: ids)
 
-	// Both ABI masks are 0 for `emitElementDestructorCall`'s reason: a stamped element walk takes two
-	// whole-machine-word arguments, a POINTER and a table address.
-	let visited = ids.mint()
-	module.appendOp(visit, op: StdOp.callIndirect(visited, calleeReg: elementWalk, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: twoArgs(loop.element, second: trip.visits())))
-	emitCascadeBranch(module, from: CascadeCursor.create(visit, carried: argsOf(visited)), to: loop.step)
+	emitElementDestructorCall(module, block: visit, destroy: elementWalk, elem: loop.element, ids: ids)
+	emitCascadeBranch(module, from: CascadeCursor.create(visit, carried: loop.carried), to: loop.step)
 
 	return CascadeCursor.create(loop.done, carried: loop.carried)
 end 'emitElementWalkRange'
@@ -6456,12 +6390,12 @@ end 'emitElementWalkRange'
 // OWNER over deep clones of `arr[start, end)`. The source window's first element is `srcBuf + start·es`; the
 // clones land at `[0, sliceLen)` of the new buffer.
 function buildManagedSliceManaged(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSliceManagedName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(ManagedSliceManagedName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: arrayErrorThrows())
+	let ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
-	var doSlice = module.addBlock(func, label: b"slice", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	let doSlice = module.addBlock(func, label: b"slice", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let arr = 0
@@ -6484,7 +6418,7 @@ function buildManagedSliceManaged(module StdModule)
 	let srcBuf = emitLoadField(module, block: doSlice, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let srcBase = emitSlotAddr(module, block: doSlice, buffer: srcBuf, index: start, elementSize: es, ids: ids)
 	let destBuf = emitLoadField(module, block: doSlice, record: newRec, offset: ManagedRecordBufferOffset, ids: ids)
-	var afterClone = emitElementCloneRange(module, func: func, cur: doSlice, srcBase: srcBase, destBase: destBuf, count: sliceLen, elementSize: es, cloneFn: cloneFn, ids: ids)
+	let afterClone = emitElementCloneRange(module, func: func, cur: doSlice, srcBase: srcBase, destBase: destBuf, count: sliceLen, elementSize: es, cloneFn: cloneFn, ids: ids)
 
 	emitStoreField(module, block: afterClone, record: newRec, offset: ManagedRecordLengthOffset, value: sliceLen)
 	emitOkReturn(module, block: afterClone, value: newRec, ids: ids)
@@ -6497,12 +6431,12 @@ end 'buildManagedSliceManaged'
 // up front (one grow), then clone each `src` element into the freshly-grown tail `[destLen, destLen+srcLen)`.
 // The element-size seam is guarded exactly as `__managed_append`'s is (a cross-stride blit must never proceed).
 function buildManagedAppendManaged(module StdModule)
-	var func = IrFunction.createFromStd(ManagedAppendManagedName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedAppendManagedName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var mismatch = module.addBlock(func, label: b"esmismatch", heat: BlockHeat.normal)
-	var append = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let mismatch = module.addBlock(func, label: b"esmismatch", heat: BlockHeat.normal)
+	let append = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let dest = 0
@@ -6525,7 +6459,7 @@ function buildManagedAppendManaged(module StdModule)
 	let destBuf = emitLoadField(module, block: append, record: dest, offset: ManagedRecordBufferOffset, ids: ids)
 	let srcBuf = emitLoadField(module, block: append, record: src, offset: ManagedRecordBufferOffset, ids: ids)
 	let destBase = emitSlotAddr(module, block: append, buffer: destBuf, index: destLen, elementSize: es, ids: ids)
-	var afterClone = emitElementCloneRange(module, func: func, cur: append, srcBase: srcBuf, destBase: destBase, count: srcLen, elementSize: es, cloneFn: cloneFn, ids: ids)
+	let afterClone = emitElementCloneRange(module, func: func, cur: append, srcBase: srcBuf, destBase: destBase, count: srcLen, elementSize: es, cloneFn: cloneFn, ids: ids)
 
 	emitStoreField(module, block: afterClone, record: dest, offset: ManagedRecordLengthOffset, value: newLen)
 	module.setTerminator(afterClone, op: StdOp.retVoid)
@@ -6560,13 +6494,13 @@ end 'emitCopyFuncBranch'
 // `(value, flag)` through a joined `errorReturn`, so an out-of-bounds slice throws exactly as the inner
 // `__managed_slice`/`__managed_slice_managed` would.
 function buildManagedSliceOpaque(module StdModule)
-	var func = IrFunction.createFromStd(ManagedSliceOpaqueName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(ManagedSliceOpaqueName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), throwsTypeName: arrayErrorThrows())
+	let ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var trivial = module.addBlock(func, label: b"trivial", heat: BlockHeat.normal)
-	var managed = module.addBlock(func, label: b"managed", heat: BlockHeat.normal)
-	var join = module.addBlock(func, label: b"join", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let trivial = module.addBlock(func, label: b"trivial", heat: BlockHeat.normal)
+	let managed = module.addBlock(func, label: b"managed", heat: BlockHeat.normal)
+	let join = module.addBlock(func, label: b"join", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let arr = 0
@@ -6599,13 +6533,13 @@ end 'buildManagedSliceOpaque'
 // the block-copy `__managed_append`; managed → the deep-clone `__managed_append_managed(dest, src, copyFunc)`. `src` is
 // borrowed and preserved by both inner helpers.
 function buildManagedAppendOpaque(module StdModule)
-	var func = IrFunction.createFromStd(ManagedAppendOpaqueName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(ManagedAppendOpaqueName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var trivial = module.addBlock(func, label: b"trivial", heat: BlockHeat.normal)
-	var managed = module.addBlock(func, label: b"managed", heat: BlockHeat.normal)
-	var join = module.addBlock(func, label: b"join", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let trivial = module.addBlock(func, label: b"trivial", heat: BlockHeat.normal)
+	let managed = module.addBlock(func, label: b"managed", heat: BlockHeat.normal)
+	let join = module.addBlock(func, label: b"join", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let dest = 0

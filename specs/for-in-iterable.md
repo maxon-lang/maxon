@@ -84,7 +84,7 @@ type IntSeq
 end 'IntSeq'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(10)
 	a.push(20)
 	a.push(30)
@@ -155,7 +155,7 @@ function main() returns ExitCode
 	let empty = IntSeq.create(IntArray.create(0))
 	print("empty={total(empty)}\n")
 
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(1)
 	a.push(2)
 	print("filled={total(IntSeq.create(a))}\n")
@@ -231,12 +231,12 @@ function earlyReturn(s IntSeq) returns Integer
 end 'earlyReturn'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(10)
 	a.push(20)
 	a.push(30)
-	var filled = IntSeq.create(a)
-	var empty = IntSeq.create(IntArray.create(0))
+	let filled = IntSeq.create(a)
+	let empty = IntSeq.create(IntArray.create(0))
 	print("break={firstOver(filled, floor: 15)} breakEmpty={firstOver(empty, floor: 15)}\n")
 	print("return={earlyReturn(filled)} returnEmpty={earlyReturn(empty)}\n")
 	return 0
@@ -333,12 +333,12 @@ type Resumable
 end 'Resumable'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(10)
 	a.push(20)
 	a.push(30)
 	a.push(40)
-	var it = Resumable.create(a)
+	let it = Resumable.create(a)
 	try it.advance() otherwise panic("advance")
 	try it.advance() otherwise panic("advance")
 	var sum = 0 as Integer

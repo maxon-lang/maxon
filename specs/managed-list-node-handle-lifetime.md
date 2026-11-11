@@ -73,7 +73,7 @@ typealias IntChain = __ManagedList with Small
 typealias IntNode = __ManagedListNode with Small
 
 function nodeOfAFreshChain(value Small) returns IntNode
-	var chain = IntChain.create()
+	let chain = IntChain.create()
 	return chain.insertLast(value)
 end 'nodeOfAFreshChain'
 
@@ -97,7 +97,7 @@ typealias IntChain = __ManagedList with Small
 typealias IntNode = __ManagedListNode with Small
 
 function nodeOfAFreshChain(value Small) returns IntNode
-	var chain = IntChain.create()
+	let chain = IntChain.create()
 	return chain.insertLast(value)
 end 'nodeOfAFreshChain'
 
@@ -142,7 +142,7 @@ type Cursor
 end 'Cursor'
 
 function cursorOverAFreshChain(value Small) returns Cursor
-	var chain = IntChain.create()
+	let chain = IntChain.create()
 	return Cursor.create(chain.insertLast(value))
 end 'cursorOverAFreshChain'
 
@@ -186,8 +186,8 @@ type Cursor
 end 'Cursor'
 
 function cursorOnTheSecondOfTwo(first Small, second Small) returns Cursor
-	var chain = IntChain.create()
-	var cursor = Cursor.create(chain.insertLast(first))
+	let chain = IntChain.create()
+	let cursor = Cursor.create(chain.insertLast(first))
 	cursor.retarget(chain.insertLast(second))
 	return cursor
 end 'cursorOnTheSecondOfTwo'
@@ -211,7 +211,7 @@ typealias StringChain = __ManagedList with String
 typealias StringNode = __ManagedListNode with String
 
 function nodeOfAFreshStringChain() returns StringNode
-	var chain = StringChain.create()
+	let chain = StringChain.create()
 	chain.insertLast("alpha")
 	return chain.insertLast("a heap string long enough not to be inline")
 end 'nodeOfAFreshStringChain'
@@ -239,7 +239,7 @@ typealias IntChain = __ManagedList with Small
 typealias IntNode = __ManagedListNode with Small
 
 function nodeOfAFreshChain() returns IntNode
-	var chain = IntChain.create()
+	let chain = IntChain.create()
 	chain.insertLast(1)
 	return chain.insertLast(64)
 end 'nodeOfAFreshChain'
@@ -271,8 +271,8 @@ function appendTo(chain IntChain, value Small) returns IntNode
 end 'appendTo'
 
 function main() returns ExitCode
-	var chain = IntChain.create()
-	view node = appendTo(chain, value: 55)
+	let chain = IntChain.create()
+	let node = appendTo(chain, value: 55)
 	return node.value()
 end 'main'
 ```
@@ -302,8 +302,8 @@ function appendTo(chain IntChain, value Small) returns IntNode
 end 'appendTo'
 
 function main() returns ExitCode
-	var chain = IntChain.create()
-	view n = appendTo(chain, value: 7)
+	let chain = IntChain.create()
+	let n = appendTo(chain, value: 7)
 	chain.clear()
 	print("{n.value()}\n")
 	return 0
@@ -339,7 +339,7 @@ type Cursor
 end 'Cursor'
 
 function main() returns ExitCode
-	var chain = IntChain.create()
+	let chain = IntChain.create()
 	let c = Cursor.create(chain.insertLast(7))
 	chain.clear()
 	print("{c.read()}\n")
@@ -453,7 +453,7 @@ the handle. It runs, hands the element straight back out, and leaves the chain e
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
+	let chain = StrChain.create()
 	let got = chain.remove(chain.insertLast("a heap string long enough to be a real allocation"))
 	print("[{got}]\n")
 	print("{chain.count()}\n")
@@ -619,9 +619,9 @@ union Slot
 end 'Slot'
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view n = chain.insertLast("a heap string long enough to be a real allocation")
-	view s = Slot.held(n)
+	let chain = StrChain.create()
+	let n = chain.insertLast("a heap string long enough to be a real allocation")
+	let s = Slot.held(n)
 	match s 'take'
 		held(node) then print("[{chain.remove(node)}]\n")
 		empty then return 1
@@ -672,8 +672,8 @@ doors under the one exemption, each cased.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view a = chain.insertLast("the element that stays behind, on the heap")
+	let chain = StrChain.create()
+	let a = chain.insertLast("the element that stays behind, on the heap")
 	let spliced = chain.remove(chain.insertAfter(a, value: "an element spliced in and taken straight out"))
 	print("[{spliced}]\n")
 	let last = chain.remove(try chain.tail() otherwise 'empty'
@@ -734,10 +734,10 @@ function headOf(c StrChain) returns String
 end 'headOf'
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	var n1 = chain.insertLast("one, long enough to be a real heap allocation")
-	var n2 = chain.insertLast("two, long enough to be a real heap allocation")
-	view k = Keeper.create(n2)
+	let chain = StrChain.create()
+	let n1 = chain.insertLast("one, long enough to be a real heap allocation")
+	let n2 = chain.insertLast("two, long enough to be a real heap allocation")
+	let k = Keeper.create(n2)
 	chain.reinsertFirst(k.node)
 	print("field: {headOf(chain)} / {k.read()}\n")
 	chain.reinsertLast(k.held())
@@ -775,7 +775,7 @@ typealias StrChain = __ManagedList with String
 typealias StrNode = __ManagedListNode with String
 
 function headOfAFreshChain() returns StrNode throws ArrayError
-	var chain = StrChain.create()
+	let chain = StrChain.create()
 	chain.insertLast("the element the handle keeps alive, on the heap")
 	chain.insertLast("an element nothing keeps alive, on the heap")
 	return try chain.head()
@@ -828,11 +828,11 @@ type Cursor
 end 'Cursor'
 
 function main() returns ExitCode
-	var chain = StrChain.create()
+	let chain = StrChain.create()
 	chain.insertLast("one, long enough to be a real heap allocation")
 	chain.insertLast("two, long enough to be a real heap allocation")
 	chain.insertLast("three, long enough to be a real heap allocation")
-	var cursor = Cursor.create(try chain.head() otherwise 'empty'
+	let cursor = Cursor.create(try chain.head() otherwise 'empty'
 		return 1
 	end 'empty')
 	print("{cursor.at.value()}\n")
@@ -868,7 +868,7 @@ per trip is invisible; two hundred is not.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var empty = StrChain.create()
+	let empty = StrChain.create()
 	var caught = 0 as Count
 	for _ in 0 upto 50 'headSpin'
 		let n = try empty.head() otherwise 'noHead'
@@ -884,17 +884,17 @@ function main() returns ExitCode
 		end 'noTail'
 		print("{n.value()}\n")
 	end 'tailSpin'
-	var one = StrChain.create()
-	view solo = one.insertFirst("the only node there is, on the heap")
+	let one = StrChain.create()
+	let solo = one.insertFirst("the only node there is, on the heap")
 	for _ in 0 upto 50 'nextSpin'
-		view n = try solo.next() otherwise 'atEnd'
+		let n = try solo.next() otherwise 'atEnd'
 			caught = caught + 1
 			continue
 		end 'atEnd'
 		print("{n.value()}\n")
 	end 'nextSpin'
 	for _ in 0 upto 50 'prevSpin'
-		view n = try solo.prev() otherwise 'atStart'
+		let n = try solo.prev() otherwise 'atStart'
 			caught = caught + 1
 			continue
 		end 'atStart'
@@ -925,10 +925,10 @@ refuse earlier or deliberately retarget is a semantic question `specs/managed-li
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var a = StrChain.create()
-	var b = StrChain.create()
-	view n1 = a.insertLast("first element of chain a, long enough for the heap")
-	view n2 = a.insertLast("second element of chain a, long enough for the heap")
+	let a = StrChain.create()
+	let b = StrChain.create()
+	let n1 = a.insertLast("first element of chain a, long enough for the heap")
+	let n2 = a.insertLast("second element of chain a, long enough for the heap")
 	let got = b.remove(n1)
 	print("[{got}] a={a.count()} b={b.count()} n2={n2.value()}\n")
 	return 0
@@ -955,8 +955,8 @@ run would end **139**. The move-out is in the block both arms dominate.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view n = chain.insertLast("a heap string long enough to be a real allocation")
+	let chain = StrChain.create()
+	let n = chain.insertLast("a heap string long enough to be a real allocation")
 	chain.clear()
 	let got = chain.remove(n)
 	print("[{got}]\n")
@@ -988,8 +988,8 @@ type, so the narrowing cannot quietly widen.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view n = chain.insertLast("a heap string long enough not to be inline")
+	let chain = StrChain.create()
+	let n = chain.insertLast("a heap string long enough not to be inline")
 	chain.detach(n)
 	print("{n.value()}\n")
 	print("{chain.count()}\n")
@@ -1088,9 +1088,9 @@ that is stopped, not the semantics that are settled — what `n.value()` on an e
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view a = chain.insertLast("the only element, long enough to be a real heap allocation")
-	view h = try chain.head() otherwise 'empty'
+	let chain = StrChain.create()
+	let a = chain.insertLast("the only element, long enough to be a real heap allocation")
+	let h = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	let got = chain.remove(a)
@@ -1120,16 +1120,16 @@ door further in.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view a = chain.insertLast("the only element, long enough to be a real heap allocation")
-	view h = try chain.head() otherwise 'empty'
+	let chain = StrChain.create()
+	let a = chain.insertLast("the only element, long enough to be a real heap allocation")
+	let h = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	let got = chain.remove(a)
 	print("removed [{got}] count={chain.count()}\n")
 	chain.reinsertFirst(h)
 	print("relinked count={chain.count()}\n")
-	view back = try chain.head() otherwise 'empty'
+	let back = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	print("the chain's own head reads [{back.value()}]\n")
@@ -1156,10 +1156,10 @@ whose predicate is never shown to be quiet is a guard nobody can tell from a bug
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view a = chain.insertLast("")
-	var s = ""
-	view b = chain.insertLast(s)
+	let chain = StrChain.create()
+	let a = chain.insertLast("")
+	let s = ""
+	let b = chain.insertLast(s)
 	print("[{a.value()}][{b.value()}] {chain.count()}\n")
 	return 0
 end 'main'
@@ -1181,7 +1181,7 @@ typealias Small = int(0 to 100)
 typealias SmallChain = __ManagedList with Small
 
 function main() returns ExitCode
-	var chain = SmallChain.create()
+	let chain = SmallChain.create()
 	let a = chain.insertLast(0)
 	let b = chain.insertLast(7)
 	print("{a.value()} {b.value()} {chain.count()}\n")

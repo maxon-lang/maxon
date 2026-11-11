@@ -13,7 +13,7 @@ typealias OriginDepthArray = Array with OriginDepth
 // A range bound admits only a literal, so the bound above restates this.
 let MaxOriginDepth = 4
 
-typealias OriginKey = int(0 to u64.max)
+module typealias OriginKey = int(0 to u64.max)
 typealias OriginByKey = Map with (OriginKey, OriginIndex)
 typealias HandleByKey = Map with (OriginKey, ElementIndex)
 typealias OriginNameMap = Map with (OriginIndex, immutable ByteArray)
@@ -30,8 +30,6 @@ typealias HeldGlobalsByLabel = Map with (ByteArray, GlobalLabelSet)
 typealias GlobalEffectArray = Array with GlobalEffect
 typealias StoreSiteByValue = Map with (ValueId, ElementIndex)
 typealias ForwardedLoads = Map with (ValueId, ValueId)
-typealias OpPositionMap = Map with (ElementIndex, OriginKey)
-typealias ReachMemo = Map with (ElementIndex, BoolArray)
 typealias KnownStoresByBlock = Map with (ElementIndex, KnownFieldStores)
 
 enum OriginKind
@@ -83,15 +81,15 @@ function declarationRank(kind DeclarationKind, position OriginKey) returns Origi
 	return ((kind.ordinal as OriginKey) shl DeclarationKindShift) or position
 end 'declarationRank'
 
-function keyOf(high ElementIndex, low ElementIndex) returns OriginKey
+module function keyOf(high ElementIndex, low ElementIndex) returns OriginKey
 	return ((high as OriginKey) shl KeyHalfShift) or (low as OriginKey)
 end 'keyOf'
 
-function highHalfOf(key OriginKey) returns ElementIndex
+module function highHalfOf(key OriginKey) returns ElementIndex
 	return (key shr KeyHalfShift) as ElementIndex
 end 'highHalfOf'
 
-function lowHalfOf(key OriginKey) returns ElementIndex
+module function lowHalfOf(key OriginKey) returns ElementIndex
 	return (key and (u32.max as OriginKey)) as ElementIndex
 end 'lowHalfOf'
 
@@ -142,7 +140,7 @@ type GlobalEffects
 			return try self.effects.get(slot) otherwise panic("GlobalEffects.effectFor: effects.get OOB at {slot}")
 		end 'known'
 
-		var effect = GlobalEffect.create(label)
+		let effect = GlobalEffect.create(label)
 		self.slotOfLabel.upsert(label, value: self.effects.count())
 		self.effects.push(effect)
 		return effect
@@ -212,11 +210,11 @@ type CycleSummary
 	var globals as GlobalEffectsColumn
 
 	static function create(funcCount ElementIndex) returns CycleSummary
-		var noStores = ParamPositionMaskArray.create(0)
-		var noGlobals = GlobalEffects.create()
-		var masks = ParamMaskRows.create(0)
-		var stores = CycleStoreColumns.create(0)
-		var globals = GlobalEffectsColumn.create(0)
+		let noStores = ParamPositionMaskArray.create(0)
+		let noGlobals = GlobalEffects.create()
+		let masks = ParamMaskRows.create(0)
+		let stores = CycleStoreColumns.create(0)
+		let globals = GlobalEffectsColumn.create(0)
 		globals.refill(funcCount, value: noGlobals)
 
 		for _ in CycleMaskColumns 'eachMaskColumn'
@@ -277,7 +275,7 @@ type CycleSummary
 			return effects
 		end 'ownsEffects'
 
-		var owned = GlobalEffects.create()
+		let owned = GlobalEffects.create()
 		try self.globals.set(index, value: owned) otherwise panic("CycleSummary.effectsToWiden: globals.set OOB at {index}")
 		return owned
 	end 'effectsToWiden'
@@ -291,7 +289,7 @@ type CycleSummary
 			keys.pushStoreRow(self.storeColumn(kind), index: index)
 		end 'eachStoreColumn'
 
-		view effects = self.globalsAt(index).effects
+		let effects = self.globalsAt(index).effects
 		keys.pushCount(effects.count())
 
 		for effect in effects 'eachGlobal'
@@ -314,12 +312,12 @@ type CycleSummary
 	end 'globalsAt'
 end 'CycleSummary'
 
-module function checkClosureCycles(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, provenance ProvenanceTracer) throws CompileError
+module function checkClosureCycles(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, calls CallSummaryIndex) throws CompileError
 	if not anyClosureCaptures(module) 'noClosureHoldsAnything'
 		return
 	end 'noClosureHoldsAnything'
 
-	var checker = ClosureCycleChecker.create(project, module: module, signatures: signatures, funcNames: funcNames, resolution: provenance.calls.resolution)
+	let checker = ClosureCycleChecker.create(project, module: module, signatures: signatures, funcNames: funcNames, resolution: calls)
 	try checker.settle()
 	checker.judgeEveryBody()
 end 'checkClosureCycles'
@@ -444,7 +442,6 @@ type ClosureCycleChecker implements SummarizedBodies
 	export var heldGlobals as HeldGlobalsByLabel
 	export var globalsGrew as bool
 	var reported as ReportedPositionSet
-	export let noSites as immutable ProvenanceSites
 	var globalOrdinals as GlobalSlotByLabel
 
 	// Every trace's origin lists, kept across traces: a trace's lists are dead once it settles, so the next
@@ -455,14 +452,14 @@ type ClosureCycleChecker implements SummarizedBodies
 
 	static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, resolution CallSummaryIndex) returns ClosureCycleChecker
 		let funcCount = funcNames.functions.count()
-		var globalOrdinals = GlobalSlotByLabel.create()
+		let globalOrdinals = GlobalSlotByLabel.create()
 
 		for (iter, global) in project.managedGlobals.withIterator() 'eachGlobal'
 			globalOrdinals.upsert(global.label, value: iter.index())
 		end 'eachGlobal'
 
 		let relevant = FixedBoolArray.create(funcCount)
-		return Self{project: project, module: module, signatures: signatures, funcNames: funcNames, globalOrdinals: globalOrdinals, calls: CallSiteCursor.create(resolution), summary: CycleSummary.create(funcCount), relevant: relevant, holdings: FunctionHoldingAnswers.plain(), heldGlobals: HeldGlobalsByLabel.create(), globalsGrew: false, reported: ReportedPositionSet.create(), noSites: freeze ProvenanceSites.create(ProvenanceColumns.create()), listPool: OriginListArray.create(0), bodyIndexes: CycleBodyIndexByFunction.create(), noOrigins: OriginList.create(0)}
+		return Self{project: project, module: module, signatures: signatures, funcNames: funcNames, globalOrdinals: globalOrdinals, calls: CallSiteCursor.create(resolution), summary: CycleSummary.create(funcCount), relevant: relevant, holdings: FunctionHoldingAnswers.plain(), heldGlobals: HeldGlobalsByLabel.create(), globalsGrew: false, reported: ReportedPositionSet.create(), listPool: OriginListArray.create(0), bodyIndexes: CycleBodyIndexByFunction.create(), noOrigins: OriginList.create(0)}
 	end 'create'
 
 	function settle() throws CompileError
@@ -487,7 +484,7 @@ type ClosureCycleChecker implements SummarizedBodies
 	end 'tracesFirst'
 
 	function traceAndWiden(index ElementIndex) returns bool
-		var traced = self.trace(index, mode: CycleTraceMode.summarize)
+		let traced = self.trace(index, mode: CycleTraceMode.summarize)
 		return self.summary.widen(index, row: traced.row)
 	end 'traceAndWiden'
 
@@ -511,7 +508,7 @@ type ClosureCycleChecker implements SummarizedBodies
 	end 'judgeEveryBody'
 
 	function trace(index ElementIndex, mode CycleTraceMode) returns CycleTrace
-		var trace = CycleTrace.begin(self, func: self.functionAt(index), index: index)
+		let trace = CycleTrace.begin(self, func: self.functionAt(index), index: index)
 		trace.settle(mode)
 		return trace
 	end 'trace'
@@ -551,7 +548,7 @@ type ClosureCycleChecker implements SummarizedBodies
 			self.heldGlobals.upsert(label, value: GlobalLabelSet.create())
 		end 'firstForThisGlobal'
 
-		var labels = try self.heldGlobals.get(label) otherwise panic("ClosureCycleChecker.noteHeldGlobal: '{String.from(label)}' left the table after its insert")
+		let labels = try self.heldGlobals.get(label) otherwise panic("ClosureCycleChecker.noteHeldGlobal: '{String.from(label)}' left the table after its insert")
 
 		if not labels.contains(held) 'aNewHolding'
 			labels.insert(held)
@@ -686,21 +683,18 @@ end 'KnownFieldStores'
 // and kept.
 type CycleBodyIndex
 	export var tracked as BoolArray
-	export var blockIndex as BlockIndexById
-	export var successors as OriginListArray
-	export var opPositions as OpPositionMap
+	export var flow as BlockFlow
 	export var forwarded as ForwardedLoads
 	export var fieldStoreOps as HandleByKey
 	export var fieldStoreOpsByLine as HandleByKey
 	export var elementSites as StoreSiteByValue
-	export var reachFrom as ReachMemo
 
-	static function create() returns CycleBodyIndex
-		return Self{tracked: BoolArray.create(0), blockIndex: BlockIndexById.create(), successors: OriginListArray.create(0), opPositions: OpPositionMap.create(), forwarded: ForwardedLoads.create(), fieldStoreOps: HandleByKey.create(), fieldStoreOpsByLine: HandleByKey.create(), elementSites: StoreSiteByValue.create(), reachFrom: ReachMemo.create()}
+	static function create(flow BlockFlow) returns CycleBodyIndex
+		return Self{tracked: BoolArray.create(0), flow: flow, forwarded: ForwardedLoads.create(), fieldStoreOps: HandleByKey.create(), fieldStoreOpsByLine: HandleByKey.create(), elementSites: StoreSiteByValue.create()}
 	end 'create'
 
-	static function of(tracked BoolArray, blockIndex BlockIndexById, successors OriginListArray, opPositions OpPositionMap, forwarded ForwardedLoads, fieldStoreOps HandleByKey, fieldStoreOpsByLine HandleByKey, elementSites StoreSiteByValue, reachFrom ReachMemo) returns CycleBodyIndex
-		return Self{tracked: tracked, blockIndex: blockIndex, successors: successors, opPositions: opPositions, forwarded: forwarded, fieldStoreOps: fieldStoreOps, fieldStoreOpsByLine: fieldStoreOpsByLine, elementSites: elementSites, reachFrom: reachFrom}
+	static function of(tracked BoolArray, flow BlockFlow, forwarded ForwardedLoads, fieldStoreOps HandleByKey, fieldStoreOpsByLine HandleByKey, elementSites StoreSiteByValue) returns CycleBodyIndex
+		return Self{tracked: tracked, flow: flow, forwarded: forwarded, fieldStoreOps: fieldStoreOps, fieldStoreOpsByLine: fieldStoreOpsByLine, elementSites: elementSites}
 	end 'of'
 end 'CycleBodyIndex'
 
@@ -711,7 +705,7 @@ type CycleTrace implements SummaryCallWalker
 	var traced as IrFunction
 	let tracedIndex as ElementIndex
 	var tracked as BoolArray
-	var blockIndex as BlockIndexById
+	var flow as BlockFlow
 	var kinds as OriginKindArray
 	var parents as OriginList
 	var depths as OriginDepthArray
@@ -744,9 +738,6 @@ type CycleTrace implements SummaryCallWalker
 	var eventOps as EntryIndexArray
 	var eventRecords as EntryIndexArray
 	var forwarded as ForwardedLoads
-	var opPositions as OpPositionMap
-	var successors as OriginListArray
-	var reachFrom as ReachMemo
 	var elementSites as StoreSiteByValue
 	var operands as ValueIdArray
 	var returned as ValueIdArray
@@ -758,12 +749,12 @@ type CycleTrace implements SummaryCallWalker
 
 	static function begin(checker ClosureCycleChecker, func IrFunction, index ElementIndex) returns CycleTrace
 		if let body = try checker.bodyIndexes.get(index) 'indexedBefore'
-			var trace = CycleTrace.over(checker, func: func, index: index, body: body)
+			let trace = CycleTrace.over(checker, func: func, index: index, body: body)
 			trace.seedParameters()
 			return trace
 		end 'indexedBefore'
 
-		var trace = CycleTrace.over(checker, func: func, index: index, body: CycleBodyIndex.create())
+		let trace = CycleTrace.over(checker, func: func, index: index, body: CycleBodyIndex.create(BlockFlow.over(checker.module, func: func)))
 		trace.trackValues()
 		trace.indexBody()
 		checker.bodyIndexes.upsert(index, value: trace.bodyIndex())
@@ -773,11 +764,11 @@ type CycleTrace implements SummaryCallWalker
 
 	static function over(checker ClosureCycleChecker, func IrFunction, index ElementIndex, body CycleBodyIndex) returns CycleTrace
 		let valueCount = func.valueTags.count()
-		return Self{checker: checker, traced: func, tracedIndex: index, tracked: body.tracked, blockIndex: body.blockIndex, kinds: OriginKindArray.create(0), parents: OriginList.create(0), depths: OriginDepthArray.create(0), rootParams: ParamCountArray.create(0), ranks: OriginKeyArray.create(0), offsets: ByteOffsetArray.create(0), rootedInAParameter: BoolArray.create(0), childOrigins: OriginByKey.create(), syntheticOrigins: OriginByKey.create(), freshOrigins: OptionalElementIndexColumn.absent(valueCount), holdingsOrigins: OptionalElementIndexColumn.absent(func.paramCount), globalOrigins: OriginByLabel.create(), globalLabels: OriginLabelMap.create(), closureBodies: OriginNameMap.create(), originNames: OriginNameMap.create(), lists: checker.listPool, listsInUse: 0, noOrigins: checker.noOrigins, membership: ListMembership.create(), baseHandles: OptionalElementIndexColumn.absent(valueCount), heldHandles: OptionalElementIndexColumn.create(), containerHandles: OptionalElementIndexColumn.create(), edgeHolders: OriginList.create(0), edgeOps: EntryIndexArray.create(0), edgeIds: OriginByKey.create(), fieldStoreOps: body.fieldStoreOps, fieldStoreOpsByLine: body.fieldStoreOpsByLine, originEvents: OptionalElementIndexColumn.create(), fieldEvents: HandleByKey.create(), eventOps: EntryIndexArray.create(0), eventRecords: EntryIndexArray.create(0), forwarded: body.forwarded, opPositions: body.opPositions, successors: body.successors, reachFrom: body.reachFrom, elementSites: body.elementSites, operands: ValueIdArray.create(0), returned: ValueIdArray.create(0), scratch: BoolArray.create(0), cycles: ClosureCycles.create(), changed: true, mode: CycleTraceMode.propagate, row: TracedCycleRow.create(func.paramCount)}
+		return Self{checker: checker, traced: func, tracedIndex: index, tracked: body.tracked, flow: body.flow, kinds: OriginKindArray.create(0), parents: OriginList.create(0), depths: OriginDepthArray.create(0), rootParams: ParamCountArray.create(0), ranks: OriginKeyArray.create(0), offsets: ByteOffsetArray.create(0), rootedInAParameter: BoolArray.create(0), childOrigins: OriginByKey.create(), syntheticOrigins: OriginByKey.create(), freshOrigins: OptionalElementIndexColumn.absent(valueCount), holdingsOrigins: OptionalElementIndexColumn.absent(func.paramCount), globalOrigins: OriginByLabel.create(), globalLabels: OriginLabelMap.create(), closureBodies: OriginNameMap.create(), originNames: OriginNameMap.create(), lists: checker.listPool, listsInUse: 0, noOrigins: checker.noOrigins, membership: ListMembership.create(), baseHandles: OptionalElementIndexColumn.absent(valueCount), heldHandles: OptionalElementIndexColumn.create(), containerHandles: OptionalElementIndexColumn.create(), edgeHolders: OriginList.create(0), edgeOps: EntryIndexArray.create(0), edgeIds: OriginByKey.create(), fieldStoreOps: body.fieldStoreOps, fieldStoreOpsByLine: body.fieldStoreOpsByLine, originEvents: OptionalElementIndexColumn.create(), fieldEvents: HandleByKey.create(), eventOps: EntryIndexArray.create(0), eventRecords: EntryIndexArray.create(0), forwarded: body.forwarded, elementSites: body.elementSites, operands: ValueIdArray.create(0), returned: ValueIdArray.create(0), scratch: BoolArray.create(0), cycles: ClosureCycles.create(), changed: true, mode: CycleTraceMode.propagate, row: TracedCycleRow.create(func.paramCount)}
 	end 'over'
 
 	function bodyIndex() returns CycleBodyIndex
-		return CycleBodyIndex.of(self.tracked, blockIndex: self.blockIndex, successors: self.successors, opPositions: self.opPositions, forwarded: self.forwarded, fieldStoreOps: self.fieldStoreOps, fieldStoreOpsByLine: self.fieldStoreOpsByLine, elementSites: self.elementSites, reachFrom: self.reachFrom)
+		return CycleBodyIndex.of(self.tracked, flow: self.flow, forwarded: self.forwarded, fieldStoreOps: self.fieldStoreOps, fieldStoreOpsByLine: self.fieldStoreOpsByLine, elementSites: self.elementSites)
 	end 'bodyIndex'
 
 	function trackValues()
@@ -798,41 +789,25 @@ type CycleTrace implements SummaryCallWalker
 	end 'trackValues'
 
 	function indexBody()
-		view module = self.checker.module
-		module.refillBlockIndexById(self.traced, into: self.blockIndex)
-		var targets = BlockIdArray.create(0)
-		var predecessorCounts = FixedEntryIndexArray.create(self.traced.blockRefs.count())
-		var lastPredecessor = FixedEntryIndexArray.create(self.traced.blockRefs.count())
+		let predecessorCounts = FixedEntryIndexArray.create(self.traced.blockRefs.count())
+		let lastPredecessor = FixedEntryIndexArray.create(self.traced.blockRefs.count())
 
-		for (blockIter, blockRef) in self.traced.blockRefs.withIterator() 'eachBlock'
-			view block = self.blockAt(blockRef)
-			var blockSuccessors = OriginList.create(0)
-			targets.clear()
-			collectMaxonBlockSuccessors(module, block: block, into: targets)
-
-			for target in targets 'eachSuccessor'
-				let position = self.positionOfBlock(target)
-				blockSuccessors.push(position as OriginIndex)
+		for (blockIter, successorRow) in self.flow.successors.withIterator() 'eachBlock'
+			for position in successorRow 'eachSuccessor'
 				try predecessorCounts.set(position, value: (try predecessorCounts.get(position) otherwise panic("CycleTrace.indexBody: predecessorCounts.get OOB at {position}")) + 1) otherwise panic("CycleTrace.indexBody: predecessorCounts.set OOB at {position}")
 				try lastPredecessor.set(position, value: blockIter.index()) otherwise panic("CycleTrace.indexBody: lastPredecessor.set OOB at {position}")
 			end 'eachSuccessor'
-
-			self.successors.push(blockSuccessors)
-
-			for (opIter, opIdx) in block.bodyOps().withIterator() 'eachOp'
-				self.opPositions.upsert(opIdx, value: keyOf(blockIter.index(), low: opIter.index()))
-			end 'eachOp'
 		end 'eachBlock'
 
 		self.indexForwardedLoads(predecessorCounts, lastPredecessor: lastPredecessor)
 	end 'indexBody'
 
 	function indexForwardedLoads(predecessorCounts FixedEntryIndexArray, lastPredecessor FixedEntryIndexArray)
-		view module = self.checker.module
-		var exits = KnownStoresByBlock.create()
+		let module = self.checker.module
+		let exits = KnownStoresByBlock.create()
 
 		for (blockIter, blockRef) in self.traced.blockRefs.withIterator() 'eachBlock'
-			var known = self.knownStoresEntering(blockIter.index(), predecessorCounts: predecessorCounts, lastPredecessor: lastPredecessor, exits: exits)
+			let known = self.knownStoresEntering(blockIter.index(), predecessorCounts: predecessorCounts, lastPredecessor: lastPredecessor, exits: exits)
 
 			for opIdx in self.blockAt(blockRef).bodyOps() 'eachOp'
 				self.noteKnownStores(try module.ops.get(opIdx) otherwise panic("CycleTrace.indexForwardedLoads: opIdx {opIdx} not in module.ops"), opIdx: opIdx, known: known)
@@ -868,8 +843,8 @@ type CycleTrace implements SummaryCallWalker
 			loadIndirect(result, addr, offset, _) then self.noteForwardedLoad(result, addr: addr, offset: offset, known: known)
 			storeIndirect(addr, offset, value, _) then self.noteFieldStore(addr, offset: offset, value: value, opIdx: opIdx, known: known)
 			globalAddr(result, _) then try self.tracked.set(result, value: true) otherwise panic("CycleTrace.noteKnownStores: v{result} is past the value columns")
-			call(result, callee, _, _, _, _, _, _) then self.noteCall(result, callee: callee, known: known)
-			tryCall(_, _, callee, _, _, _, _, _, _) then self.forgetAcrossACall(callee, known: known)
+			call(result, callee, _, _, _, _, _) then self.noteCall(result, callee: callee, known: known)
+			tryCall(_, _, callee, _, _, _, _, _) then self.forgetAcrossACall(callee, known: known)
 			asyncCall or
 			witnessDispatch or
 			witnessTryDispatch or
@@ -944,7 +919,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'seedParameters'
 
 	function settle(finalMode CycleTraceMode)
-		var cursor = self.checker.calls
+		let cursor = self.checker.calls
 		cursor.beginWalk(self.tracedIndex)
 
 		while self.changed 'untilNothingGrows'
@@ -968,7 +943,7 @@ type CycleTrace implements SummaryCallWalker
 	function walk(passMode CycleTraceMode)
 		self.mode = passMode
 		self.returned.clear()
-		var cursor = self.checker.calls
+		let cursor = self.checker.calls
 		cursor.startPass()
 
 		for position in callSiteWalkOrder(self.checker.module, func: self.traced) 'eachBlock'
@@ -983,7 +958,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'walk'
 
 	function walkBlock(block IrBlock)
-		view module = self.checker.module
+		let module = self.checker.module
 
 		for opIdx in block.bodyOps() 'eachOp'
 			self.walkOp(try module.ops.get(opIdx) otherwise panic("CycleTrace.walkBlock: opIdx {opIdx} not in module.ops"), opIdx: opIdx)
@@ -1005,10 +980,10 @@ type CycleTrace implements SummaryCallWalker
 		end 'terminated'
 
 		for edge in block.branchEdges 'eachEdge'
-			view target = self.blockAt(try self.traced.blockRefs.get(self.positionOfBlock(edge.targetBlockId)) otherwise panic("CycleTrace.walkBlock: block position past func.blockRefs"))
+			let target = self.blockAt(try self.traced.blockRefs.get(self.flow.positionOfBlock(edge.targetBlockId)) otherwise panic("CycleTrace.walkBlock: block position past func.blockRefs"))
 
 			for (iter, incoming) in edge.argIds.withIterator() 'eachIncoming'
-				view phi = try target.blockArgs.get(iter.index()) otherwise panic("CycleTrace.walkBlock: an edge into block {edge.targetBlockId} carries more values than it has block args")
+				let phi = try target.blockArgs.get(iter.index()) otherwise panic("CycleTrace.walkBlock: an edge into block {edge.targetBlockId} carries more values than it has block args")
 
 				if self.isTracked(phi.valueId) and self.isTracked(incoming) 'mayBeTheIncoming'
 					self.unionValueIntoBase(phi.valueId, from: incoming)
@@ -1021,9 +996,9 @@ type CycleTrace implements SummaryCallWalker
 		match op 'op'
 			loadIndirect(result, addr, offset, _) then self.walkLoad(result, addr: addr, offset: offset, opIdx: opIdx)
 			storeIndirect(addr, offset, value, _) then self.walkFieldStore(addr, offset: offset, value: value, opIdx: opIdx)
-			call(result, callee, args, argLabels, argRanges, _, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
-			tryCall(result, _, callee, args, argLabels, argRanges, _, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
-			asyncCall(result, callee, args, argLabels, argRanges, _, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+			call(result, callee, args, argLabels, argRanges, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+			tryCall(result, _, callee, args, argLabels, argRanges, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+			asyncCall(result, callee, args, argLabels, argRanges, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
 			witnessDispatch(result, args, _, _, methodIndex, interfaceDeclIndex, _, _) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
 			witnessTryDispatch(result, _, args, _, _, methodIndex, interfaceDeclIndex, _) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
 			indirectCall then self.walkIndirectCall(op, opIdx: opIdx)
@@ -1041,7 +1016,7 @@ type CycleTrace implements SummaryCallWalker
 			sizeofType(result, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
 			constArrayLiteral(result, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
 			errorFlagEncode(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
-			serviceSpawn(result, _, _, _, _, _, _, _, _, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
+			serviceSpawn(result, _, _, _, _, _, _, _, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
 			serviceSend(result, _, _, _, _, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
 			serviceReplyCell(result, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
 			rawIntrinsic(result, _, _, _) then self.walkUnknown(op, result: result, opIdx: opIdx)
@@ -1089,7 +1064,7 @@ type CycleTrace implements SummaryCallWalker
 			return
 		end 'storesNoFunction'
 
-		var records = OriginList.create(0)
+		let records = OriginList.create(0)
 
 		if sharesItsElements 'theSourcesElements'
 			self.collectContentsReaching(stored, opIdx: opIdx, into: records)
@@ -1111,8 +1086,8 @@ type CycleTrace implements SummaryCallWalker
 			return
 		end 'movesNoFunction'
 
-		view cursor = self.checker.calls
-		view summary = self.checker.summary
+		let cursor = self.checker.calls
+		let summary = self.checker.summary
 
 		for (receiverIter, receiver) in args.withIterator() 'eachReceiver'
 			let into = try cursor.argPositionAt(receiverIter.index() as ParamCount) otherwise continue
@@ -1152,7 +1127,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'applyCalleeSummary'
 
 	function applyStoreSummary(calleeIndex ElementIndex, into ParamCount, position ParamCount, receiver ValueId, stored ValueId, opIdx ElementIndex, at SourceRange)
-		view summary = self.checker.summary
+		let summary = self.checker.summary
 		let storesHeld = maskHasParam(summary.storeMaskAt(CycleStores.held, index: calleeIndex, into: into), param: position)
 		let storesRecord = maskHasParam(summary.storeMaskAt(CycleStores.record, index: calleeIndex, into: into), param: position)
 		let storesCaptured = maskHasParam(summary.storeMaskAt(CycleStores.captured, index: calleeIndex, into: into), param: position)
@@ -1161,8 +1136,8 @@ type CycleTrace implements SummaryCallWalker
 			return
 		end 'storesNothingOfIt'
 
-		var records = OriginList.create(0)
-		var held = OriginList.create(0)
+		let records = OriginList.create(0)
+		let held = OriginList.create(0)
 
 		if storesRecord 'theRecordItself'
 			self.appendDistinct(records, from: self.baseOf(stored))
@@ -1189,7 +1164,7 @@ type CycleTrace implements SummaryCallWalker
 	function applyGlobalEffect(effect GlobalEffect, result ValueId, args ValueIdArray, opIdx ElementIndex)
 		let global = self.globalOriginOf(effect.label)
 		let globalBase = self.listOfOne(global)
-		view cursor = self.checker.calls
+		let cursor = self.checker.calls
 
 		for (iter, arg) in args.withIterator() 'eachArg'
 			let position = try cursor.argPositionAt(iter.index() as ParamCount) otherwise continue
@@ -1208,12 +1183,12 @@ type CycleTrace implements SummaryCallWalker
 			end 'whatItHolds'
 
 			if maskHasParam(effect.storedCaptured, param: position) 'aClosureHoldingIt'
-				view captured = self.baseOf(arg)
+				let captured = self.baseOf(arg)
 				self.store(globalBase, offset: WildOffset, records: self.listOfOne(self.recordTheCalleeStored(opIdx, position: position, kind: SyntheticCapturedKind, holding: captured)), held: captured, opIdx: opIdx)
 			end 'aClosureHoldingIt'
 
 			if maskHasParam(effect.readInto, param: position) 'theGlobalsValue'
-				var records = OriginList.create(0)
+				let records = OriginList.create(0)
 				self.collectGlobalContents(global, read: ContentRead.before(opIdx), into: records)
 				let held = self.heldOfRecords(records)
 				self.store(self.baseOf(arg), offset: WildOffset, records: records, held: held, opIdx: opIdx)
@@ -1225,14 +1200,14 @@ type CycleTrace implements SummaryCallWalker
 		end 'eachArg'
 
 		if effect.resultReads and self.isTracked(result) 'handsBackTheGlobalsValue'
-			var records = OriginList.create(0)
+			let records = OriginList.create(0)
 			self.collectGlobalContents(global, read: ContentRead.reaching(opIdx), into: records)
 			self.unionIntoBase(result, from: records)
 		end 'handsBackTheGlobalsValue'
 	end 'applyGlobalEffect'
 
 	function applyResultSummary(calleeIndex ElementIndex, position ParamCount, result ValueId, fresh OriginIndex, arg ValueId, opIdx ElementIndex)
-		view summary = self.checker.summary
+		let summary = self.checker.summary
 
 		if maskHasParam(summary.maskAt(CycleMask.resultIs, index: calleeIndex), param: position) 'theArgument'
 			self.unionValueIntoBase(result, from: arg)
@@ -1326,7 +1301,7 @@ type CycleTrace implements SummaryCallWalker
 			return
 		end 'storesNoFunction'
 
-		view records = self.baseOf(value)
+		let records = self.baseOf(value)
 
 		if self.mode == CycleTraceMode.propagate and offset >= FunctionRecordCaptureBase 'mayBeACapture'
 			for origin in self.baseOf(addr) 'eachTarget'
@@ -1391,7 +1366,7 @@ type CycleTrace implements SummaryCallWalker
 			end 'aParametersRecord'
 
 			if let global = try self.globalRootOf(record) 'aGlobalsValue'
-				var effect = self.row.globals.effectFor(self.globalLabelOf(global))
+				let effect = self.row.globals.effectFor(self.globalLabelOf(global))
 				effect.readInto = maskWithParam(effect.readInto, param: into)
 			end 'aGlobalsValue'
 		end 'eachRecord'
@@ -1417,7 +1392,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'parametersHeld'
 
 	function summarizeGlobalStore(label ByteArray, records OriginList, held OriginList)
-		var effect = self.row.globals.effectFor(label)
+		let effect = self.row.globals.effectFor(label)
 
 		for record in records 'eachRecord'
 			if self.kindOf(record) == OriginKind.parameter 'aParametersRecord'
@@ -1444,7 +1419,7 @@ type CycleTrace implements SummaryCallWalker
 				end 'withinTheParameter'
 
 				if let global = try self.globalRootOf(origin) 'aGlobalsValue'
-					var effect = self.row.globals.effectFor(self.globalLabelOf(global))
+					let effect = self.row.globals.effectFor(self.globalLabelOf(global))
 					effect.resultReads = true
 				end 'aGlobalsValue'
 			end 'eachRecord'
@@ -1469,14 +1444,14 @@ type CycleTrace implements SummaryCallWalker
 	end 'noteResultCapturesWithin'
 
 	function summarizeGlobals()
-		var labels = NameRoster.create(self.globalOrigins.count(), zeroed: false)
+		let labels = NameRoster.create(self.globalOrigins.count(), zeroed: false)
 
 		for (label, _) in self.globalOrigins 'eachGlobal'
 			labels.push(label)
 		end 'eachGlobal'
 
 		for label in labels 'eachLabel'
-			var contents = OriginList.create(0)
+			let contents = OriginList.create(0)
 			self.collectContents(self.globalOriginOf(label), read: ContentRead.everything, into: contents)
 
 			for content in contents 'eachContent'
@@ -1490,7 +1465,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'summarizeGlobals'
 
 	function globalsHoldingDirectly(held OriginIndex) returns OriginList
-		var globals = OriginList.create(0)
+		let globals = OriginList.create(0)
 
 		if self.kindOf(held) == OriginKind.global 'theGlobalItself'
 			globals.push(held)
@@ -1584,12 +1559,12 @@ type CycleTrace implements SummaryCallWalker
 	function orderOf(judged JudgedStore) returns OriginKey
 		return match judged 'judged'
 			everyStore gives LastInTheBody
-			at(opIdx) gives self.positionOfOp(opIdx)
+			at(opIdx) gives self.flow.positionOfOp(opIdx)
 		end 'judged'
 	end 'orderOf'
 
 	function judgeStore(targets OriginList, held OriginList, deep bool, at SourceRange, storesAClosure bool, judged JudgedStore)
-		var holders = OriginList.create(0)
+		let holders = OriginList.create(0)
 
 		for origin in targets 'eachTarget'
 			self.appendDistinct(holders, from: self.chainAt(origin, judged: judged))
@@ -1606,7 +1581,7 @@ type CycleTrace implements SummaryCallWalker
 
 			for holder in holders 'eachHolder'
 				if self.originsMeet(h, other: holder) 'aCycle'
-					self.cycles.note(keyOf(h, low: holder), order: self.orderOf(judged), at: at, holder: self.holderOf(h), storesAClosure: storesAClosure)
+					self.cycles.note(keyOf(h, low: holder), order: self.orderOf(judged), at: at, holder: self.holderAtTheCall(h, judged: judged), storesAClosure: storesAClosure)
 					return
 				end 'aCycle'
 			end 'eachHolder'
@@ -1632,6 +1607,36 @@ type CycleTrace implements SummaryCallWalker
 		return kind == OriginKind.field or kind == OriginKind.element
 	end 'isAChild'
 
+	function holderAtTheCall(origin OriginIndex, judged JudgedStore) returns CycleHolder
+		let holder = self.holderOf(origin)
+
+		match holder 'holder'
+			named or
+			heldBy then return holder
+			heldHere then break
+		end 'holder'
+
+		match judged 'judged'
+			everyStore then return holder
+			at(opIdx) then return self.holderSpelledAtTheCall(origin, opIdx: opIdx, fallback: holder)
+		end 'judged'
+	end 'holderAtTheCall'
+
+	function holderSpelledAtTheCall(origin OriginIndex, opIdx ElementIndex, fallback CycleHolder) returns CycleHolder
+		let parts = try directCallPartsOf(try self.checker.module.ops.get(opIdx) otherwise panic("CycleTrace.holderSpelledAtTheCall: opIdx {opIdx} not in module.ops")) otherwise return fallback
+
+		for (iter, arg) in parts.1.withIterator() 'eachArg'
+			if not self.isTracked(arg) or self.valueIsAFunction(arg) or not self.baseOf(arg).contains(origin) 'notTheHolder'
+				continue
+			end 'notTheHolder'
+
+			let spelled = try self.traced.capabilityNotes.argumentNameAt(opIdx, position: iter.index() as ParamCount) otherwise continue
+			return CycleHolder.named(String.from(spelled))
+		end 'eachArg'
+
+		return fallback
+	end 'holderSpelledAtTheCall'
+
 	function holderOf(origin OriginIndex) returns CycleHolder
 		if let named = try self.originNames.get(origin) 'namedAtItsCapture'
 			return CycleHolder.named(String.from(named))
@@ -1642,7 +1647,7 @@ type CycleTrace implements SummaryCallWalker
 			field or
 			element then return self.holderOf(self.parentOf(origin))
 			global then return CycleHolder.named(self.checker.globalNameOf(self.globalLabelOf(origin)))
-			fresh then return self.freshHolderOf(origin)
+			fresh then return CycleHolder.heldHere
 			holdings then return CycleHolder.heldBy(self.parameterNameOf(self.rootParamOf(origin)))
 		end 'kind'
 	end 'holderOf'
@@ -1656,28 +1661,6 @@ type CycleTrace implements SummaryCallWalker
 
 		return "parameter {position + 1}"
 	end 'parameterNameOf'
-
-	function freshHolderOf(origin OriginIndex) returns CycleHolder
-		let sites = self.traced.provenanceSites(self.checker.noSites)
-
-		for site in sites.mutableBindingSites 'eachVar'
-			if self.bindsTheRecord(site.value, origin: origin) 'aVarHoldsIt'
-				return CycleHolder.named(displayParamName(site.name))
-			end 'aVarHoldsIt'
-		end 'eachVar'
-
-		for (iter, value) in sites.immutableBindings.values.withIterator() 'eachLet'
-			if self.bindsTheRecord(value, origin: origin) 'aLetHoldsIt'
-				return CycleHolder.named(displayParamName(try sites.immutableBindings.names.get(iter.index()) otherwise panic("CycleTrace.freshHolderOf: an immutable binding has no name at {iter.index()}")))
-			end 'aLetHoldsIt'
-		end 'eachLet'
-
-		return CycleHolder.heldHere
-	end 'freshHolderOf'
-
-	function bindsTheRecord(value ValueId, origin OriginIndex) returns bool
-		return self.isTracked(value) and self.baseOf(value).contains(origin)
-	end 'bindsTheRecord'
 
 	function anchorOfArgument(argRanges SourceRangeArray, argIndex ElementIndex, opIdx ElementIndex) returns SourceRange
 		return try argRanges.get(argIndex) otherwise self.checker.project.opRanges.get(opIdx)
@@ -1709,7 +1692,7 @@ type CycleTrace implements SummaryCallWalker
 			for e in 0 upto self.listCount(events) 'eachEvent'
 				let event = self.listItem(events, at: e)
 
-				if self.mayReach(self.eventOpAt(event), read: opIdx) 'storedBeforeTheRead'
+				if self.flow.mayReach(self.eventOpAt(event), read: opIdx) 'storedBeforeTheRead'
 					self.unionHandleIntoList(base, from: self.eventRecordsAt(event))
 				end 'storedBeforeTheRead'
 			end 'eachEvent'
@@ -1727,7 +1710,7 @@ type CycleTrace implements SummaryCallWalker
 		for k in 0 upto self.listCount(events) 'eachEvent'
 			let event = self.listItem(events, at: k)
 
-			if self.mayReach(self.eventOpAt(event), read: opIdx) 'storedBeforeTheRead'
+			if self.flow.mayReach(self.eventOpAt(event), read: opIdx) 'storedBeforeTheRead'
 				self.unionHandleIntoList(base, from: self.eventRecordsAt(event))
 			end 'storedBeforeTheRead'
 		end 'eachEvent'
@@ -1751,8 +1734,8 @@ type CycleTrace implements SummaryCallWalker
 	function storedBeforeTheRead(stored ElementIndex, read ContentRead) returns bool
 		return match read 'read'
 			everything gives true
-			reaching(opIdx) gives self.mayReach(stored, read: opIdx)
-			before(opIdx) gives stored != opIdx and self.mayReach(stored, read: opIdx)
+			reaching(opIdx) gives self.flow.mayReach(stored, read: opIdx)
+			before(opIdx) gives stored != opIdx and self.flow.mayReach(stored, read: opIdx)
 		end 'read'
 	end 'storedBeforeTheRead'
 
@@ -1797,54 +1780,9 @@ type CycleTrace implements SummaryCallWalker
 		return try self.eventRecords.get(event) otherwise panic("CycleTrace.eventRecordsAt: event {event} was never filed")
 	end 'eventRecordsAt'
 
-	function mayReach(store ElementIndex, read ElementIndex) returns bool
-		let stored = self.positionOfOp(store)
-		let reading = self.positionOfOp(read)
-
-		if highHalfOf(stored) == highHalfOf(reading) and lowHalfOf(stored) <= lowHalfOf(reading) 'earlierInTheBlock'
-			return true
-		end 'earlierInTheBlock'
-
-		return try self.reachableFrom(highHalfOf(stored)).get(highHalfOf(reading)) otherwise panic("CycleTrace.mayReach: block {highHalfOf(reading)} is past the reach of '{String.from(self.traced.name)}'")
-	end 'mayReach'
-
-	function positionOfOp(opIdx ElementIndex) returns OriginKey
-		return try self.opPositions.get(opIdx) otherwise panic("CycleTrace.positionOfOp: op {opIdx} is no op of '{String.from(self.traced.name)}'")
-	end 'positionOfOp'
-
-	function reachableFrom(block ElementIndex) returns BoolArray
-		if let memoized = try self.reachFrom.get(block) 'asked'
-			return memoized
-		end 'asked'
-
-		var reached = BoolArray.create(self.successors.count())
-		var pending = OriginList.create(0)
-		pending.push(block as OriginIndex)
-		var head = 0 as ElementIndex
-
-		while head < pending.count() 'eachPending'
-			let at = try pending.get(head) otherwise panic("CycleTrace.reachableFrom: pending.get OOB at {head}")
-			head = head + 1
-
-			for next in try self.successors.get(at) otherwise panic("CycleTrace.reachableFrom: block {at} has no successor row") 'eachSuccessor'
-				if not (try reached.get(next) otherwise panic("CycleTrace.reachableFrom: reached.get OOB at {next}")) 'firstVisit'
-					try reached.set(next, value: true) otherwise panic("CycleTrace.reachableFrom: reached.set OOB at {next}")
-					pending.push(next)
-				end 'firstVisit'
-			end 'eachSuccessor'
-		end 'eachPending'
-
-		self.reachFrom.upsert(block, value: reached)
-		return reached
-	end 'reachableFrom'
-
 	function blockAt(blockRef ElementIndex) returns IrBlock
 		return try self.checker.module.blocks.get(blockRef) otherwise panic("CycleTrace.blockAt: blockRef {blockRef} is not in module.blocks")
 	end 'blockAt'
-
-	function positionOfBlock(blockId BlockId) returns ElementIndex
-		return try self.blockIndex.get(blockId) otherwise panic("CycleTrace.positionOfBlock: block {blockId} is not a block of '{String.from(self.traced.name)}'")
-	end 'positionOfBlock'
 
 	function addToBase(value ValueId, origin OriginIndex)
 		if self.mode == CycleTraceMode.propagate 'growTheSets'
@@ -1961,7 +1899,7 @@ type CycleTrace implements SummaryCallWalker
 
 	function seedHeldGlobals(child OriginIndex)
 		let global = try self.globalRootOf(child) otherwise return
-		view labels = try self.checker.heldGlobalsOf(self.globalLabelOf(global)) otherwise return
+		let labels = try self.checker.heldGlobalsOf(self.globalLabelOf(global)) otherwise return
 
 		for label in labels 'eachHeldGlobal'
 			self.addToList(self.handleIn(self.heldHandles, key: child), origin: self.globalOriginOf(label))
@@ -2028,7 +1966,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'chainOf'
 
 	function chainAt(origin OriginIndex, judged JudgedStore) returns OriginList
-		var chain = OriginList.create(0)
+		let chain = OriginList.create(0)
 		self.markInto(chain, origin: origin)
 		var cursor = 0 as ElementIndex
 
@@ -2058,7 +1996,7 @@ type CycleTrace implements SummaryCallWalker
 	function edgeHeldBy(edge OriginIndex, judged JudgedStore) returns bool
 		return match judged 'judged'
 			everyStore gives true
-			at(opIdx) gives self.edgeOpAt(edge) != opIdx and self.mayReach(self.edgeOpAt(edge), read: opIdx)
+			at(opIdx) gives self.edgeOpAt(edge) != opIdx and self.flow.mayReach(self.edgeOpAt(edge), read: opIdx)
 		end 'judged'
 	end 'edgeHeldBy'
 
@@ -2092,7 +2030,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'heldOfValue'
 
 	function heldOfRecords(records OriginList) returns OriginList
-		var held = OriginList.create(0)
+		let held = OriginList.create(0)
 
 		for record in records 'eachRecord'
 			let handle = try self.heldHandles.get(record) otherwise continue
@@ -2119,7 +2057,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'baseOf'
 
 	function listOfOne(origin OriginIndex) returns OriginList
-		var list = OriginList.create(0)
+		let list = OriginList.create(0)
 		list.push(origin)
 		return list
 	end 'listOfOne'
@@ -2139,7 +2077,7 @@ type CycleTrace implements SummaryCallWalker
 		self.listsInUse = handle + 1
 
 		if handle < self.lists.count() 'aPooledList'
-			var pooled = try self.lists.get(handle) otherwise panic("CycleTrace.newList: lists.get OOB at {handle}, below the pool's count")
+			let pooled = try self.lists.get(handle) otherwise panic("CycleTrace.newList: lists.get OOB at {handle}, below the pool's count")
 			pooled.clear()
 			return handle
 		end 'aPooledList'
@@ -2185,7 +2123,7 @@ type CycleTrace implements SummaryCallWalker
 		end 'alreadyThere'
 
 		self.membership.insert(key)
-		var list = try self.lists.get(handle) otherwise panic("CycleTrace.addToList: handle {handle} is past the pool")
+		let list = try self.lists.get(handle) otherwise panic("CycleTrace.addToList: handle {handle} is past the pool")
 		list.push(origin)
 		self.changed = true
 	end 'addToList'
@@ -2253,7 +2191,7 @@ type CycleTrace implements SummaryCallWalker
 	// E3183 names the first holder in this order. It follows the source, by `DeclarationKind` then
 	// position, so the holder named is the same whatever order the trace minted its origins in.
 	function declarationOrdered(origins OriginList) returns OriginList
-		var ordered = origins.clone()
+		let ordered = origins.clone()
 		ordered.sortBy(function(first OriginIndex, second OriginIndex) gives self.declaredBefore(first, second: second))
 		return ordered
 	end 'declarationOrdered'
@@ -2322,7 +2260,7 @@ type ClosureCycles
 	end 'note'
 
 	function latestOfEach() returns ClosureCycleArray
-		var latest = ClosureCycleArray.create(0)
+		let latest = ClosureCycleArray.create(0)
 
 		for cycle in self.found 'eachCycle'
 			if not self.laterStoreCloses(cycle) 'theStoreThatClosesIt'
@@ -2365,3 +2303,47 @@ function fieldSiteBox(site ClosureStoreSite) returns ValueId throws AbsentError
 		element then throw AbsentError.absent
 	end 'destination'
 end 'fieldSiteBox'
+
+// One mask per parameter of a function: which of its parameters its body stores into that one's record.
+module typealias ParamMaskRows = Array with ParamPositionMaskArray
+
+typealias FixedEntryIndexArray = FixedArray with ElementIndex
+
+function emptyStoreRows(funcCount ElementIndex, sharedEmptyRow ParamPositionMaskArray) returns ParamMaskRows
+	let rows = ParamMaskRows.create(funcCount, zeroed: false)
+	rows.refill(funcCount, value: sharedEmptyRow)
+	return rows
+end 'emptyStoreRows'
+
+// A row shorter than `into` is one no store has reached that far along.
+function storeRowMaskAt(rows ParamMaskRows, index ElementIndex, into ParamCount) returns ParamPositionMask
+	let row = try rows.get(index) otherwise panic("storeRowMaskAt: function index {index} is outside the store rows — they are built over `funcNames.functions`")
+	return try row.get(into) otherwise NoParamPositions
+end 'storeRowMaskAt'
+
+function widenStoreRow(rows ParamMaskRows, index ElementIndex, by ParamPositionMaskArray, sharedEmptyRow ParamPositionMaskArray) returns bool
+	var row = try rows.get(index) otherwise panic("widenStoreRow: function index {index} is outside the store rows — they are built over `funcNames.functions`")
+	var grew = false
+
+	for into in 0 upto by.count() 'eachReceivingParameter'
+		let stored = try by.get(into) otherwise panic("widenStoreRow: by.get OOB at {into}")
+
+		if stored == NoParamPositions 'nothingStoredHere'
+			continue
+		end 'nothingStoredHere'
+
+		if row is sharedEmptyRow 'firstStore'
+			row = ParamPositionMaskArray.create(by.count())
+			try rows.set(index, value: row) otherwise panic("widenStoreRow: rows.set OOB at {index}")
+		end 'firstStore'
+
+		let before = try row.get(into) otherwise panic("widenStoreRow: row of function {index} is shorter than its {by.count()} parameters")
+
+		if (before or stored) != before 'widens'
+			try row.set(into, value: before or stored) otherwise panic("widenStoreRow: row.set OOB at {into}")
+			grew = true
+		end 'widens'
+	end 'eachReceivingParameter'
+
+	return grew
+end 'widenStoreRow'

@@ -28,12 +28,12 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 		return SidecarOutcome.notOwed
 	end 'nothingToDescribe'
 
-	var signatures = try queryProgramSignatures(project) otherwise 'noSignatures'
+	let signatures = try queryProgramSignatures(project) otherwise 'noSignatures'
 		compilerLogger(CompilerLogGroup.compiler).error("Could not read the program's signatures, so no debug-info sidecar was written beside {outputPath}")
 		return SidecarOutcome.failed
 	end 'noSignatures'
 
-	var writer = MxdbgWriter.create()
+	let writer = MxdbgWriter.create()
 
 	// Registered before the file walk below: a coverage point outlives its function, so a file whose
 	// every function was pruned still owes the file table its name.
@@ -48,7 +48,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 	// The type table is closed before any record points into it: a local names its type by id, so
 	// every id is fixed before the first local record is written.
 	let functionsByName = mxdbgFunctionIndex(codeResult.targetModule)
-	var types = MxdbgTypeTable.create()
+	let types = MxdbgTypeTable.create()
 	types.closeDeclaredTypes(project, signatures: signatures)
 
 	for func in codeResult.targetModule.functions 'eachClosure'
@@ -181,7 +181,7 @@ typealias SidecarFileIdMap = Map with (String, MxdbgIndex)
 // per specialization and every copy steps the ONE counter its source text owns, so a later copy's offset
 // describes the same point at a second address — and a record can carry one.
 function emittedCoveragePointOffsets(codeResult CodeResult) returns CovPointOffsetMap
-	var offsets = CovPointOffsetMap.create()
+	let offsets = CovPointOffsetMap.create()
 
 	for point in codeResult.covPointOffsets 'eachEmittedPoint'
 		if not offsets.contains(point.pointId) 'itsFirstCopy'
@@ -202,7 +202,7 @@ end 'emittedCoveragePointOffsets'
 // one row: an arm's counter and its first statement's counter are adjacent, and the line really is counted
 // by both.
 function coverageCountedRows(codeResult CodeResult, emitted CovPointOffsetMap) returns FixedBoolArray
-	var counted = FixedBoolArray.create(codeResult.debugLineRows.count())
+	let counted = FixedBoolArray.create(codeResult.debugLineRows.count())
 
 	for (_, codeOffset) in emitted 'eachEmittedPoint'
 		markRowAtOrPast(codeResult.debugLineRows, counted: counted, codeOffset: codeOffset)
@@ -280,7 +280,7 @@ end 'coveragePointFileId'
 // The sidecar file table, keyed by path — the id a coverage record names its file by. A point carries its
 // path rather than a span id, so this is the only route from one to the other.
 function sidecarFileIdsByPath(project Project) returns SidecarFileIdMap
-	var byPath = SidecarFileIdMap.create()
+	let byPath = SidecarFileIdMap.create()
 
 	for fileId in MxdbgFirstSourceFileId upto project.debugSpanTable.fileCount() 'eachFile'
 		byPath.upsert(project.debugSpanTable.filePath(fileId as DebugFileId), value: sidecarFileIdOf(fileId as DebugFileId))
@@ -310,16 +310,16 @@ function writeFunctionLocals(project Project, signatures ProgramSignatures, writ
 		return
 	end 'noBindings'
 
-	var records = MxdbgLocalDraftArray.create(func.debugLocals.count(), zeroed: false)
+	let records = MxdbgLocalDraftArray.create(func.debugLocals.count(), zeroed: false)
 
 	let runs = DebugRunsByOrdinal.over(range.localRanges, ordinalCount: func.debugLocalLocations.count())
 	var at = 0 as ElementIndex
 
 	for local in func.debugLocals 'eachBinding'
 		let past = at + local.versions.count()
-		view typeName = mxdbgTypeNameOf(project.typeNames, signatures: signatures, ref: local.declaredType)
+		let typeName = mxdbgTypeNameOf(project.typeNames, signatures: signatures, ref: local.declaredType)
 		let typeId = types.idOf(typeName)
-		var rows = MxdbgLocalRowArray.create(0)
+		let rows = MxdbgLocalRowArray.create(0)
 
 		if not local.heldInACell 'placeable'
 			collectPlacedRows(rows, project: project, func: func, range: range, runs: runs, first: at, past: past)
@@ -518,7 +518,7 @@ type MxdbgContestedStretches
 	end 'note'
 
 	function withoutShortOnes() returns MxdbgContestedStretches
-		var kept = MxdbgContestedStretches.empty()
+		let kept = MxdbgContestedStretches.empty()
 
 		for (iter, start) in self.starts.withIterator() 'eachStretch'
 			let past = try self.ends.get(iter.index()) otherwise panic("MxdbgContestedStretches.withoutShortOnes: ends.get OOB at {iter.index()}")
@@ -537,7 +537,7 @@ function resolveContestedPlaces(records MxdbgLocalDraftArray)
 	var at = 0 as ElementIndex
 
 	while at < records.count() 'eachNameRun'
-		view leader = try records.get(at) otherwise panic("resolveContestedPlaces: records.get OOB at {at}")
+		let leader = try records.get(at) otherwise panic("resolveContestedPlaces: records.get OOB at {at}")
 		var past = at
 
 		while past < records.count() 'eachRecordOfTheName'
@@ -554,7 +554,7 @@ function resolveContestedPlaces(records MxdbgLocalDraftArray)
 end 'resolveContestedPlaces'
 
 function resolveContestedPlacesOfOneName(records MxdbgLocalDraftArray, from ElementIndex, past ElementIndex)
-	var order = CfgIndexArray.create(past - from, zeroed: false)
+	let order = CfgIndexArray.create(past - from, zeroed: false)
 
 	for at in from upto past 'eachRecord'
 		order.push(at)
@@ -575,7 +575,7 @@ function resolveContestedPlacesOfOneName(records MxdbgLocalDraftArray, from Elem
 
 		if stretches.starts.count() > 0 'somethingContested'
 			for k in first upto last 'eachRecordToTrim'
-				var record = try records.get(try order.get(k) otherwise panic("resolveContestedPlacesOfOneName: order.get OOB at {k}")) otherwise panic("resolveContestedPlacesOfOneName: records.get OOB")
+				let record = try records.get(try order.get(k) otherwise panic("resolveContestedPlacesOfOneName: order.get OOB at {k}")) otherwise panic("resolveContestedPlacesOfOneName: records.get OOB")
 				record.rows = rowsWithoutTheContested(record.rows, stretches: stretches)
 			end 'eachRecordToTrim'
 		end 'somethingContested'
@@ -599,8 +599,8 @@ function compareRecordsBySite(records MxdbgLocalDraftArray, left ElementIndex, r
 end 'compareRecordsBySite'
 
 function contestedStretchesOf(records MxdbgLocalDraftArray, order CfgIndexArray, from ElementIndex, past ElementIndex) returns MxdbgContestedStretches
-	var byStart = MxdbgLocalRowArray.create(0)
-	var byEnd = MxdbgLocalRowArray.create(0)
+	let byStart = MxdbgLocalRowArray.create(0)
+	let byEnd = MxdbgLocalRowArray.create(0)
 
 	for k in from upto past 'eachRecord'
 		let record = try records.get(try order.get(k) otherwise panic("contestedStretchesOf: order.get OOB at {k}")) otherwise panic("contestedStretchesOf: records.get OOB")
@@ -613,7 +613,7 @@ function contestedStretchesOf(records MxdbgLocalDraftArray, order CfgIndexArray,
 		end 'eachRow'
 	end 'eachRecord'
 
-	var stretches = MxdbgContestedStretches.empty()
+	let stretches = MxdbgContestedStretches.empty()
 
 	if byStart.count() < 2 'nothingToContest'
 		return stretches
@@ -621,7 +621,7 @@ function contestedStretchesOf(records MxdbgLocalDraftArray, order CfgIndexArray,
 
 	byStart.sortBy(function(left MxdbgLocalRow, right MxdbgLocalRow) gives left.codeStart.compare(right.codeStart))
 	byEnd.sortBy(function(left MxdbgLocalRow, right MxdbgLocalRow) gives left.codeEnd.compare(right.codeEnd))
-	var occupancy = MxdbgPlaceOccupancy.empty()
+	let occupancy = MxdbgPlaceOccupancy.empty()
 	var starting = 0 as ElementIndex
 	var ending = 0 as ElementIndex
 	var cursor = (try byStart.get(0) otherwise panic("contestedStretchesOf: byStart.get OOB at 0")).codeStart
@@ -641,13 +641,13 @@ function contestedStretchesOf(records MxdbgLocalDraftArray, order CfgIndexArray,
 		cursor = boundary
 
 		while ending < byEnd.count() and (try byEnd.get(ending) otherwise panic("contestedStretchesOf: byEnd.get OOB at {ending}")).codeEnd == boundary 'rowsEndingHere'
-			view leaving = try byEnd.get(ending) otherwise panic("contestedStretchesOf: byEnd.get OOB at {ending}")
+			let leaving = try byEnd.get(ending) otherwise panic("contestedStretchesOf: byEnd.get OOB at {ending}")
 			occupancy.leave(leaving.locKind, value: leaving.locValue)
 			ending = ending + 1
 		end 'rowsEndingHere'
 
 		while starting < byStart.count() and (try byStart.get(starting) otherwise panic("contestedStretchesOf: byStart.get OOB at {starting}")).codeStart == boundary 'rowsStartingHere'
-			view entering = try byStart.get(starting) otherwise panic("contestedStretchesOf: byStart.get OOB at {starting}")
+			let entering = try byStart.get(starting) otherwise panic("contestedStretchesOf: byStart.get OOB at {starting}")
 			occupancy.enter(entering.locKind, value: entering.locValue)
 			starting = starting + 1
 		end 'rowsStartingHere'
@@ -657,7 +657,7 @@ function contestedStretchesOf(records MxdbgLocalDraftArray, order CfgIndexArray,
 end 'contestedStretchesOf'
 
 function rowsWithoutTheContested(rows MxdbgLocalRowArray, stretches MxdbgContestedStretches) returns MxdbgLocalRowArray
-	var kept = MxdbgLocalRowArray.create(0)
+	let kept = MxdbgLocalRowArray.create(0)
 
 	for row in rows 'eachRow'
 		if not mxdbgRowHasALocation(row.locKind) 'notPlaced'
@@ -695,7 +695,7 @@ function requireDisjointPlacesPerName(records MxdbgLocalDraftArray, functionName
 
 	while at < records.count() 'eachNameRun'
 		let leader = try records.get(at) otherwise panic("requireDisjointPlacesPerName: records.get OOB at {at}")
-		var rows = MxdbgSiteRowArray.create(0)
+		let rows = MxdbgSiteRowArray.create(0)
 		var past = at
 
 		while past < records.count() 'eachRecordOfTheName'
@@ -780,7 +780,7 @@ function unplacedRow(local DebugLocalDecl, writer MxdbgWriter, types MxdbgTypeTa
 		end 'folded'
 	end 'oneValueForTheWholeName'
 
-	return MxdbgLocalRow.create(MxdbgOptimizedOutPlacement, codeStart: range.codeStart, codeEnd: range.codeEnd)
+	return MxdbgLocalRow.create(mxdbgOptimizedOutPlacement(), codeStart: range.codeStart, codeEnd: range.codeEnd)
 end 'unplacedRow'
 
 union MxdbgAggregatePlacement
@@ -822,7 +822,7 @@ end 'foldedAggregatePlacement'
 
 function foldedRow(value FullRangeInt, range DebugFunctionRange) returns MxdbgLocalRow
 	if value < MxdbgSmallestConstant or value > MxdbgLargestConstant 'notRepresentable'
-		return MxdbgLocalRow.create(MxdbgOptimizedOutPlacement, codeStart: range.codeStart, codeEnd: range.codeEnd)
+		return MxdbgLocalRow.create(mxdbgOptimizedOutPlacement(), codeStart: range.codeStart, codeEnd: range.codeEnd)
 	end 'notRepresentable'
 
 	return MxdbgLocalRow.create(MxdbgPlacement.create(MxdbgLocKindConstant, locValue: value as MxdbgRecordFigure), codeStart: range.codeStart, codeEnd: range.codeEnd)
@@ -837,8 +837,8 @@ type DebugRunsByOrdinal
 	var ranges as DebugLocalCodeRangeArray
 
 	static function over(localRanges DebugLocalCodeRangeArray, ordinalCount ElementIndex) returns DebugRunsByOrdinal
-		var ordinals = CsrColumn.create(localRanges.count(), zeroed: false)
-		var runs = CsrColumn.create(localRanges.count(), zeroed: false)
+		let ordinals = CsrColumn.create(localRanges.count(), zeroed: false)
+		let runs = CsrColumn.create(localRanges.count(), zeroed: false)
 
 		for (iter, span) in localRanges.withIterator() 'eachRange'
 			ordinals.push(runOrdinalOf(span, ordinalCount: ordinalCount) as CsrIndex)
@@ -871,7 +871,7 @@ end 'runOrdinalOf'
 // `BranchCleanup` reorders blocks, so two runs that abut in the emitted code need not abut in that
 // order, and merging by it would leave a hole a reader reports as "not live here".
 function mergedLiveRanges(range DebugFunctionRange, runs DebugRunsByOrdinal, ordinal ElementIndex) returns DebugLocalCodeRangeArray
-	var mine = DebugLocalCodeRangeArray.create(0)
+	let mine = DebugLocalCodeRangeArray.create(0)
 
 	for k in 0 upto runs.count(ordinal) 'eachRange'
 		let span = runs.at(ordinal, k: k)
@@ -888,7 +888,7 @@ function mergedLiveRanges(range DebugFunctionRange, runs DebugRunsByOrdinal, ord
 
 	mine.sortBy(function(left DebugLocalCodeRange, right DebugLocalCodeRange) gives left.codeStart.compare(right.codeStart))
 
-	var merged = DebugLocalCodeRangeArray.create(0)
+	let merged = DebugLocalCodeRangeArray.create(0)
 	var openStart = 0 as CodeOffset
 	var openEnd = 0 as CodeOffset
 	var open = false
@@ -966,7 +966,9 @@ type MxdbgPlacement
 	end 'create'
 end 'MxdbgPlacement'
 
-let MxdbgOptimizedOutPlacement = MxdbgPlacement.create(MxdbgLocKindOptimizedOut, locValue: 0)
+function mxdbgOptimizedOutPlacement() returns MxdbgPlacement
+	return MxdbgPlacement.create(MxdbgLocKindOptimizedOut, locValue: 0)
+end 'mxdbgOptimizedOutPlacement'
 
 function mxdbgPlacementOf(project Project, location DebugValueLocation, range DebugFunctionRange) returns MxdbgPlacement
 	if location.kind == DebugValueInRegister 'aRegister'
@@ -1024,7 +1026,7 @@ end 'panicNoFrameOnWasm'
 // `IrFunction` carries the bindings and the locations the allocator sent home, and the two are joined
 // nowhere else.
 function mxdbgFunctionIndex(module TargetModule) returns MxdbgFunctionIndexMap
-	var index = MxdbgFunctionIndexMap.create()
+	let index = MxdbgFunctionIndexMap.create()
 
 	for i in 0 upto module.funcCount() 'eachFunction'
 		let func = try module.functions.get(i) otherwise panic("mxdbgFunctionIndex: functions.get OOB at {i} below the module's {module.funcCount()}")
@@ -1061,7 +1063,7 @@ type SidecarProvenance
 	let roster as ShadowSpellingRoster
 
 	static function of(signatures ProgramSignatures) returns SidecarProvenance
-		var tests = SidecarTestNameMap.create()
+		let tests = SidecarTestNameMap.create()
 
 		for declared in signatures.settledDeclarations().declaredTests 'eachTest'
 			tests.upsert(declared.symbol, value: testDisplayName(declared.displayName))

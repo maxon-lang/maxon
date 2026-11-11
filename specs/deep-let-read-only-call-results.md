@@ -1,7 +1,7 @@
 ---
 feature: deep-let-read-only-call-results
 status: experimental
-keywords: [let, immutable, call result, let field, readonly, module let, keeper]
+keywords: [let, immutable, call result, let field, immutable, module let, keeper]
 category: memory
 ---
 
@@ -13,8 +13,8 @@ A function that returns a value read out of a `let` field returns the record the
 that record: a `let` field of another record keeps it without a copy, whether or not its owner's `var` fields are
 written. A module-level `let` is `immutable`, so a function that returns it declares the result `immutable`, and
 the field that keeps the result is declared `immutable` too. A result that is the field on some paths and a fresh
-value on the others is accepted by a `let` field. A function that returns an element of a `readonly` container
-returns a value nothing can ever write, and another `readonly` container keeps it without a copy.
+value on the others is accepted by a `let` field. A function that returns an element of a `immutable` container
+returns a value nothing can ever write, and another `immutable` container keeps it without a copy.
 
 ## Tests
 
@@ -50,7 +50,7 @@ type Table
 end 'Table'
 
 function main() returns ExitCode
-	var table = Table.create()
+	let table = Table.create()
 	table.touch()
 	let label = Label.create(table.fixedName())
 
@@ -61,12 +61,12 @@ end 'main'
 4
 ```
 
-<!-- test: error.a-readonly-element-read-through-a-method-is-refused-by-a-let-field -->
-`nameOf` returns an element of a `readonly` array, which nothing can write. A `let` field names writable data, so
-it does not keep the read-only element: it keeps a clone.
+<!-- test: a-immutable-element-read-through-a-method-is-kept-by-a-let-field -->
+`nameOf` returns an element of a `immutable` array, which nothing can write. A `let` field keeps the read-only
+element itself, and the record that holds it is read-only too.
 
 ```maxon
-typealias Names = Array with readonly ByteArray
+typealias Names = Array with immutable ByteArray
 
 type Label
 	export let text as ByteArray
@@ -80,37 +80,37 @@ type Table
 	var names as Names
 
 	static function create() returns Self
-		var names = Names.create(0)
+		let names = Names.create(0)
 		names.push(b"alpha")
 		return Self{names: names}
 	end 'create'
 
-	function register(name ByteArray)
+	function register(name immutable ByteArray)
 		self.names.push(name)
 	end 'register'
 
-	function nameOf(index ElementIndex) returns ByteArray
+	function nameOf(index ElementIndex) returns immutable ByteArray
 		return try self.names.get(index) otherwise panic("nameOf: no such name")
 	end 'nameOf'
 end 'Table'
 
 function main() returns ExitCode
-	var table = Table.create()
+	let table = Table.create()
 	table.register(b"gamma")
 	let label = Label.create(table.nameOf(1))
 
 	return label.text.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:33:20: cannot pass a value read out of a `readonly` element, which is read-only, to parameter 'text' of 'Label.create', which keeps it where something may write it; pass a clone()
+```exitcode
+5
 ```
 
-<!-- test: a-readonly-element-read-through-a-method-is-kept-by-a-let-field-as-a-clone -->
+<!-- test: a-immutable-element-read-through-a-method-is-kept-by-a-let-field-as-a-clone -->
 The same program keeping a clone of the element: the `let` field holds data of its own.
 
 ```maxon
-typealias Names = Array with readonly ByteArray
+typealias Names = Array with immutable ByteArray
 
 type Label
 	export let text as ByteArray
@@ -124,22 +124,22 @@ type Table
 	var names as Names
 
 	static function create() returns Self
-		var names = Names.create(0)
+		let names = Names.create(0)
 		names.push(b"alpha")
 		return Self{names: names}
 	end 'create'
 
-	function register(name ByteArray)
+	function register(name immutable ByteArray)
 		self.names.push(name)
 	end 'register'
 
-	function nameOf(index ElementIndex) returns ByteArray
+	function nameOf(index ElementIndex) returns immutable ByteArray
 		return try self.names.get(index) otherwise panic("nameOf: no such name")
 	end 'nameOf'
 end 'Table'
 
 function main() returns ExitCode
-	var table = Table.create()
+	let table = Table.create()
 	table.register(b"gamma")
 	let label = Label.create(table.nameOf(1).clone())
 
@@ -150,34 +150,34 @@ end 'main'
 5
 ```
 
-<!-- test: a-readonly-element-read-through-a-method-is-pushed-into-a-readonly-container -->
-The same result is stored into another `readonly` container.
+<!-- test: a-immutable-element-read-through-a-method-is-pushed-into-a-immutable-container -->
+The same result is stored into another `immutable` container.
 
 ```maxon
-typealias Names = Array with readonly ByteArray
+typealias Names = Array with immutable ByteArray
 
 type Table
 	var names as Names
 
 	static function create() returns Self
-		var names = Names.create(0)
+		let names = Names.create(0)
 		names.push(b"alpha")
 		return Self{names: names}
 	end 'create'
 
-	function register(name ByteArray)
+	function register(name immutable ByteArray)
 		self.names.push(name)
 	end 'register'
 
-	function nameOf(index ElementIndex) returns ByteArray
+	function nameOf(index ElementIndex) returns immutable ByteArray
 		return try self.names.get(index) otherwise panic("nameOf: no such name")
 	end 'nameOf'
 end 'Table'
 
 function main() returns ExitCode
-	var table = Table.create()
+	let table = Table.create()
 	table.register(b"gamma")
-	var roster = Names.create(0)
+	let roster = Names.create(0)
 	roster.push(table.nameOf(1))
 
 	return roster.count() as ExitCode
@@ -187,20 +187,19 @@ end 'main'
 1
 ```
 
-<!-- test: error.a-writable-element-read-through-a-method-is-refused-by-a-readonly-container -->
-The twin of the case above with elements that are not `readonly`: `Table.nameOf` hands back an element its `var`
-field still holds, so storing the result into a `readonly` container would leave two holders with one of them able
-to write.
+<!-- test: error.a-writable-element-read-through-a-method-is-refused-by-a-immutable-container -->
+The twin of the case above with elements that are not `immutable`: `Table.nameOf` hands back a mutable
+element, so storing the result into a `immutable` container is refused until it is frozen.
 
 ```maxon
 typealias Names = Array with ByteArray
-typealias Roster = Array with readonly ByteArray
+typealias Roster = Array with immutable ByteArray
 
 type Table
 	var names as Names
 
 	static function create() returns Self
-		var names = Names.create(0)
+		let names = Names.create(0)
 		names.push("alpha".toByteArray())
 		return Self{names: names}
 	end 'create'
@@ -215,16 +214,16 @@ type Table
 end 'Table'
 
 function main() returns ExitCode
-	var table = Table.create()
+	let table = Table.create()
 	table.register("gamma".toByteArray())
-	var roster = Roster.create(0)
+	let roster = Roster.create(0)
 	roster.push(table.nameOf(1))
 
 	return roster.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:27:9: cannot store a value other names may still write into a `readonly` element of the container written by 'push': a `readonly` element has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+error E3196: <fragment>:27:14: cannot store a mutable 'ByteArray' into 'an element of the container push writes', which holds an immutable 'ByteArray'; freeze it
 ```
 
 <!-- test: a-module-let-returned-by-a-function-is-kept-by-a-let-field -->
@@ -292,7 +291,7 @@ type Table
 end 'Table'
 
 function main() returns ExitCode
-	var table = Table.create()
+	let table = Table.create()
 	table.touch()
 	let label = Label.create(table.pick(true))
 
@@ -321,7 +320,7 @@ type Table
 	var names as NameList
 
 	static function create() returns Self
-		var names = NameList.create(0)
+		let names = NameList.create(0)
 		names.push("alpha".toByteArray())
 		return Self{names: names}
 	end 'create'
@@ -336,7 +335,7 @@ type Table
 end 'Table'
 
 function main() returns ExitCode
-	var table = Table.create()
+	let table = Table.create()
 	table.register("gamma".toByteArray())
 	let label = Label.create(table.nameOf(1))
 
@@ -366,7 +365,7 @@ type Table
 	let fixed as ByteArray
 
 	static function create() returns Self
-		var names = NameList.create(0)
+		let names = NameList.create(0)
 		names.push("alpha".toByteArray())
 		return Self{names: names, fixed: "beta".toByteArray()}
 	end 'create'
@@ -385,7 +384,7 @@ type Table
 end 'Table'
 
 function main() returns ExitCode
-	var table = Table.create()
+	let table = Table.create()
 	table.register("gamma".toByteArray())
 	let label = Label.create(table.pick(true))
 
@@ -396,15 +395,15 @@ end 'main'
 4
 ```
 
-<!-- test: error.a-lookup-or-the-argument-is-read-only-when-the-argument-is -->
+<!-- test: a-lookup-or-the-argument-is-read-only-when-the-argument-is -->
 `spell` returns a read-only lookup on one path and its own parameter on the other. Its result is read-only when
-the argument is, here an element of a `readonly` array, so the `let` field of the label, which names writable data,
-refuses it.
+the argument is, here an element of a `immutable` array, so the `let` field of the label keeps it and the label is
+read-only too.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias RenameMap = Map with (ByteArray, readonly ByteArray)
-typealias Roster = Array with readonly ByteArray
+typealias RenameMap = Map with (ByteArray, immutable ByteArray)
+typealias Roster = Array with immutable ByteArray
 
 type Labelled
 	export let label as ByteArray
@@ -425,31 +424,31 @@ type Names
 		return Self{renames: RenameMap.create()}
 	end 'create'
 
-	function spell(name ByteArray) returns ByteArray
+	function spell(name immutable ByteArray) returns immutable ByteArray
 		return try self.renames.get(name) otherwise name
 	end 'spell'
 end 'Names'
 
 function main() returns ExitCode
 	let names = Names.create()
-	var roster = Roster.create(0)
+	let roster = Roster.create(0)
 	roster.push(b"first")
 	let labelled = Labelled.create(names.spell(try roster.get(0) otherwise panic("the roster holds one name")))
 
 	return labelled.size() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:34:26: cannot pass a value read out of a `readonly` element, which is read-only, to parameter 'label' of 'Labelled.create', which keeps it where something may write it; pass a clone()
+```exitcode
+5
 ```
 
 <!-- test: error.a-lookup-or-the-argument-is-refused-when-the-argument-may-be-written -->
-The same `spell` handed a `var` that is read again returns that `var`'s record on one path, which something may
-still write, so the `let` field of the label refuses the result.
+The same `spell` handed a mutable `var` that is read again is refused: `spell` takes an `immutable` name, and
+`scratch` is still writable.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias RenameMap = Map with (ByteArray, readonly ByteArray)
+typealias RenameMap = Map with (ByteArray, immutable ByteArray)
 
 type Labelled
 	export let label as ByteArray
@@ -470,14 +469,14 @@ type Names
 		return Self{renames: RenameMap.create()}
 	end 'create'
 
-	function spell(name ByteArray) returns ByteArray
+	function spell(name immutable ByteArray) returns immutable ByteArray
 		return try self.renames.get(name) otherwise name
 	end 'spell'
 end 'Names'
 
 function main() returns ExitCode
 	let names = Names.create()
-	var scratch = ByteArray.create(0)
+	let scratch = ByteArray.create(0)
 	scratch.push(1)
 	let labelled = Labelled.create(names.spell(scratch))
 
@@ -485,5 +484,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:33:26: cannot pass a value read out of a `readonly` element, which is read-only, to parameter 'label' of 'Labelled.create', which keeps it where something may write it; pass a clone()
+error E3207: <fragment>:33:45: 'spell' takes `immutable` 'name'; 'scratch' is mutable. Freeze it first
 ```

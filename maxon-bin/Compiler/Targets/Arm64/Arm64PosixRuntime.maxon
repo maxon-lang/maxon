@@ -339,7 +339,7 @@ end 'arm64EmitSecondsToFileTime'
 // Where a path's FINAL COMPONENT starts: just past the last `/`, or the path itself when it has none. It is a
 // pointer INTO the caller's string and owns nothing.
 export function buildArm64PosixBaseNameChunk() returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	let step = asm.newLabel()
 	let notSeparator = asm.newLabel()
@@ -370,7 +370,7 @@ end 'buildArm64PosixBaseNameChunk'
 // literal name the way the FILESYSTEM does, which on a case-insensitive volume is case-insensitively, while
 // both lanes' pattern matchers are case-sensitive. Handing the literal to `stat` lets the filesystem answer.
 export function buildArm64PosixHasWildcardChunk() returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	let step = asm.newLabel()
 	let found = asm.newLabel()
@@ -411,7 +411,7 @@ end 'buildArm64PosixHasWildcardChunk'
 // flag; the owner's is the one that decides whether the process that just created the file can write it,
 // which is the question `readOnly` is asked to answer.
 export function buildArm64PosixAttrsFromModeChunk(layout PosixStatLayout) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x1, base: Arm64Register.x0, byteOffset: layout.modeOffset)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixModeMask)
@@ -452,7 +452,7 @@ export function buildArm64PosixFillFindDataChunk(layout PosixStatLayout) returns
 	let SlotFindData = 0
 	let SlotStat = 1
 	let SlotName = 2
-	var asm = Arm64RuntimeAsm.beginFunction(3)
+	let asm = Arm64RuntimeAsm.beginFunction(3)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotFindData)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotStat)
@@ -617,7 +617,7 @@ end 'arm64EmitDwordWidening'
 export function buildArm64PosixTickMsChunk() returns FunctionCodeChunk
 	let SlotTicks = 0
 	let SlotFreq = 1
-	var asm = Arm64RuntimeAsm.beginFunction(2)
+	let asm = Arm64RuntimeAsm.beginFunction(2)
 
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x0, slot: SlotTicks)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotFreq)
@@ -661,7 +661,7 @@ export function buildArm64PosixPipeChunk(call PosixHostCall, flags MachineWord) 
 	let SlotReadOut = 0
 	let SlotWriteOut = 1
 	let SlotFds = 2
-	var asm = Arm64RuntimeAsm.beginFunction(3)
+	let asm = Arm64RuntimeAsm.beginFunction(3)
 
 	let created = asm.newLabel()
 	let published = asm.newLabel()
@@ -758,7 +758,7 @@ function arm64PosixEmitEnsureStdDescriptor(asm Arm64RuntimeAsm, globalData Globa
 end 'arm64PosixEmitEnsureStdDescriptor'
 
 export function buildArm64PosixCheckStdFdsChunk(globalData GlobalDataTable, os Os, fcntl PosixHostCall, open PosixHostCall) returns FunctionCodeChunk
-	var asm = arm64PosixBeginCheckStdFdsFrame(fcntl, open: open)
+	let asm = arm64PosixBeginCheckStdFdsFrame(fcntl, open: open)
 
 	let refused = asm.newLabel()
 	let done = asm.newLabel()
@@ -788,7 +788,7 @@ export function buildArm64PosixPipePeekChunk(poll PosixPollCall) returns Functio
 	let SlotPollfd = 1
 	let SlotTsSec = 2
 	let SlotTsNsec = 3
-	var asm = Arm64RuntimeAsm.beginFunction(4)
+	let asm = Arm64RuntimeAsm.beginFunction(4)
 
 	let notReady = asm.newLabel()
 	let interrupted = asm.newLabel()
@@ -1094,7 +1094,7 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall, scope PosixReap
 	let SlotStatus = 2
 	let SlotGroupWait = 3
 	let SlotInfo = PosixReapBaseSlots
-	var asm = Arm64RuntimeAsm.beginFunction(arm64PosixReapFrameSlots(scope))
+	let asm = Arm64RuntimeAsm.beginFunction(arm64PosixReapFrameSlots(scope))
 	let readsAFailedWaitItself = arm64PosixReapReadsAFailedWaitItself(scope)
 
 	let alreadySignalled = asm.newLabel()
@@ -1231,7 +1231,7 @@ module function arm64EmitProcyield(asm Arm64RuntimeAsm)
 end 'arm64EmitProcyield'
 
 export function buildArm64PosixSpinPauseChunk() returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitProcyield(asm)
 
@@ -1267,7 +1267,7 @@ export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
 	let SlotObj = 0
 	let SlotTimeout = 1
 	let SlotDeadline = 2
-	var asm = Arm64RuntimeAsm.beginFunction(3)
+	let asm = Arm64RuntimeAsm.beginFunction(3)
 
 	let bounded = asm.newLabel()
 	let boundedStep = asm.newLabel()
@@ -1333,7 +1333,7 @@ end 'buildArm64PosixProcAwaitChunk'
 export function buildArm64PosixProcExitCodeChunk() returns FunctionCodeChunk
 	let SlotCodeOut = 0
 	let SlotObj = 1
-	var asm = Arm64RuntimeAsm.beginFunction(2)
+	let asm = Arm64RuntimeAsm.beginFunction(2)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCodeOut)
 	arm64PosixEmitReapedField(asm, objSlot: SlotObj, field: PosixWaitOffChildStatus)
@@ -1347,7 +1347,7 @@ end 'buildArm64PosixProcExitCodeChunk'
 // no signal ended. The reap and its cached-status rule are the exit-code read's.
 export function buildArm64PosixProcExitSignalChunk() returns FunctionCodeChunk
 	let SlotObj = 0
-	var asm = Arm64RuntimeAsm.beginFunction(1)
+	let asm = Arm64RuntimeAsm.beginFunction(1)
 
 	arm64PosixEmitReapedField(asm, objSlot: SlotObj, field: PosixWaitOffChildSignal)
 
@@ -1397,7 +1397,7 @@ export function buildArm64PosixProcTerminateChunk(kill PosixHostCall, lane Posix
 	let SlotObj = 0
 	let SlotCode = 1
 	let SlotTreeBit = 2
-	var asm = Arm64RuntimeAsm.beginFunction(3)
+	let asm = Arm64RuntimeAsm.beginFunction(3)
 	let noChild = asm.newLabel()
 	let delivered = asm.newLabel()
 	let nothingLeftToKill = asm.newLabel()
@@ -1785,7 +1785,7 @@ export function buildArm64PosixProcAwaitEndedChunk(kill PosixHostCall, lane Posi
 	let SlotLate = 4
 	let SlotPid = 5
 	let SlotProbe = 6
-	var asm = Arm64RuntimeAsm.beginFunction(SlotProbe + posixEndedProbeSlots(lane))
+	let asm = Arm64RuntimeAsm.beginFunction(SlotProbe + posixEndedProbeSlots(lane))
 	let nextPid = asm.newLabel()
 	let check = asm.newLabel()
 	let giveUp = asm.newLabel()
@@ -1867,7 +1867,7 @@ export function buildArm64PosixProcTreeKillChunk(kill PosixHostCall, lane PosixT
 	let SlotRoot = SlotState + PosixTreeStateWords
 	let SlotBefore = SlotRoot + 1
 	let SlotIndex = SlotRoot + 2
-	var asm = Arm64RuntimeAsm.beginFunction(SlotIndex + 1)
+	let asm = Arm64RuntimeAsm.beginFunction(SlotIndex + 1)
 	let allocationFailed = asm.newLabel()
 	let sessionUnreadable = asm.newLabel()
 	let sessionUnknown = asm.newLabel()
@@ -1995,7 +1995,7 @@ export function buildArm64PosixProcDescendantsChunk(kill PosixHostCall, lane Pos
 	let SlotEntryPid = SlotRoot + 7
 	let SlotLine = SlotRoot + 8
 	let SlotInfo = SlotLine + runtimeFrameSlots(DescendantsLineBytes)
-	var asm = Arm64RuntimeAsm.beginFunction(SlotInfo + posixDescendantsInfoSlots(lane))
+	let asm = Arm64RuntimeAsm.beginFunction(SlotInfo + posixDescendantsInfoSlots(lane))
 
 	let sweep = asm.newLabel()
 	let finish = asm.newLabel()
@@ -2177,7 +2177,7 @@ end 'buildArm64PosixProcDescendantsChunk'
 export function buildArm64PosixProcProbeChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
 	let SlotPid = 0
 	let SlotProbe = 1
-	var asm = Arm64RuntimeAsm.beginFunction(SlotProbe + posixEndedProbeSlots(lane))
+	let asm = Arm64RuntimeAsm.beginFunction(SlotProbe + posixEndedProbeSlots(lane))
 	let answered = asm.newLabel()
 	let ended = asm.newLabel()
 
@@ -2218,7 +2218,7 @@ end 'buildArm64PosixProcProbeChunk'
 export function buildArm64PosixShmMapChunk(call PosixHostCall) returns FunctionCodeChunk
 	let SlotFd = 0
 	let SlotBytes = 1
-	var asm = Arm64RuntimeAsm.beginFunction(2)
+	let asm = Arm64RuntimeAsm.beginFunction(2)
 
 	let refused = asm.newLabel()
 	let answered = asm.newLabel()
@@ -2255,7 +2255,7 @@ end 'buildArm64PosixShmMapChunk'
 // do. A zero base is the no-op `UnmapViewOfFile(0)` is, which is what lets `__shm_close` run without a test
 // on a segment whose map never succeeded.
 export function buildArm64PosixShmUnmapChunk(call PosixHostCall) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let asm = Arm64RuntimeAsm.beginFunction(0)
 
 	let unmapped = asm.newLabel()
 
@@ -2302,7 +2302,7 @@ end 'shmPathSlot'
 function arm64PosixShmBegin(host PosixShmHost) returns Arm64RuntimeAsm
 	let fixedSlots = shmPathSlot(host)
 
-	var asm = match host.naming 'frame'
+	let asm = match host.naming 'frame'
 		sharedObjectName gives Arm64RuntimeAsm.beginVariadicCallerFunction(fixedSlots)
 		devShmPath gives Arm64RuntimeAsm.beginFunction(fixedSlots + runtimeFrameSlots(MaxPathBytes))
 	end 'frame'
@@ -2341,7 +2341,7 @@ end 'arm64PosixEmitShmCloseFd'
 // could not be sized loses its name again. Only `EEXIST` answers `nameTaken`, the one refusal the stdlib
 // answers by adopting; every other failure is `refused`.
 export function buildArm64PosixShmCreateChunk(host PosixShmHost) returns FunctionCodeChunk
-	var asm = arm64PosixShmBegin(host)
+	let asm = arm64PosixShmBegin(host)
 
 	let unsized = asm.newLabel()
 	let notOpened = asm.newLabel()
@@ -2381,7 +2381,7 @@ end 'buildArm64PosixShmCreateChunk'
 // `notYetPublished`, which the stdlib retries. A segment smaller than `bytes` is `refused`, since mapping
 // past its end would fault on first touch.
 export function buildArm64PosixShmAdoptChunk(host PosixShmHost) returns FunctionCodeChunk
-	var asm = arm64PosixShmBegin(host)
+	let asm = arm64PosixShmBegin(host)
 
 	let notOpened = asm.newLabel()
 	let unsized = asm.newLabel()

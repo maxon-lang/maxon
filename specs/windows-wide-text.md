@@ -70,7 +70,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -133,7 +133,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -184,7 +184,7 @@ function printLines(text String)
 end 'printLines'
 
 function main() returns ExitCode
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -219,12 +219,12 @@ function printLines(text String)
 end 'printLines'
 
 function main() returns ExitCode
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
 	argv.push("([int[]][char[]]$env:MAXON_WIDE_TEXT) -join ','")
-	var config = Configuration.create(Executable.name("powershell"))
+	let config = Configuration.create(Executable.name("powershell"))
 	config.arguments = argv
 	config.environment = Environment.inheritUpdating(["MAXON_WIDE_TEXT": "日本"])
 	let result = try config.run() otherwise return 2
@@ -253,7 +253,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -309,7 +309,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -386,7 +386,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -467,7 +467,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -535,12 +535,12 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String, workingDirectory FilePath) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
 	argv.push(script)
-	var config = Configuration.create(Executable.name("powershell"))
+	let config = Configuration.create(Executable.name("powershell"))
 	config.arguments = argv
 	config.workingDirectory = workingDirectory
 	var outcome = ""
@@ -599,7 +599,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -663,7 +663,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -721,7 +721,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -782,7 +782,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -822,9 +822,9 @@ function main() returns ExitCode
 			return 0
 		end 'probe'
 
-		var argv = StringArray.create(0)
+		let argv = StringArray.create(0)
 		argv.push("probe")
-		var probe = Configuration.create(Executable.name("maxon-wide-probe"))
+		let probe = Configuration.create(Executable.name("maxon-wide-probe"))
 		probe.arguments = argv
 		print(outcomeOf(probe))
 		return 0
@@ -837,11 +837,11 @@ function main() returns ExitCode
 	printLines(powershell("$d = Join-Path '{base.path}' ([string]([char]0x65E5) + [char]0x672C); New-Item -ItemType Directory -Force -Path $d | Out-Null; Copy-Item -LiteralPath '{me.path}' -Destination (Join-Path $d 'maxon-wide-probe.exe')"))
 
 	let inheritedPath = try Process.environmentVariable("PATH") otherwise return 4
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 	overrides.upsert("PATH", value: "{directory.path};{inheritedPath}")
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("resolve")
-	var resolver = Configuration.create(Executable.path(me))
+	let resolver = Configuration.create(Executable.path(me))
 	resolver.arguments = argv
 	resolver.environment = Environment.inheritUpdating(overrides)
 	print(outcomeOf(resolver))
@@ -875,12 +875,12 @@ function printLines(text String)
 end 'printLines'
 
 function powershellConfiguration(script String) returns Configuration
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
 	argv.push(script)
-	var config = Configuration.create(Executable.name("powershell"))
+	let config = Configuration.create(Executable.name("powershell"))
 	config.arguments = argv
 	return config
 end 'powershellConfiguration'
@@ -911,7 +911,7 @@ function main() returns ExitCode
 	removeTree(base)
 	printLines(powershell("New-Item -ItemType Directory -Force -Path '{base.path}' | Out-Null; Set-Content -LiteralPath (Join-Path '{base.path}' ([string]([char]0x672C) + [char]0x65E5 + '.txt')) -Value 'ping' -NoNewline"))
 
-	var copier = powershellConfiguration("[Console]::Out.Write([Console]::In.ReadToEnd())")
+	let copier = powershellConfiguration("[Console]::Out.Write([Console]::In.ReadToEnd())")
 	copier.standardInput = InputSource.file(base.join("本日.txt"))
 	copier.standardOutput = OutputDestination.file(base.join("日本.txt"))
 	printLines(outcomeOf(copier))
@@ -949,12 +949,12 @@ function printLines(text String)
 end 'printLines'
 
 function powershellConfiguration(script String) returns Configuration
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
 	argv.push(script)
-	var config = Configuration.create(Executable.name("powershell"))
+	let config = Configuration.create(Executable.name("powershell"))
 	config.arguments = argv
 	return config
 end 'powershellConfiguration'
@@ -986,11 +986,11 @@ function main() returns ExitCode
 	removeTree(base)
 	printLines(powershell("$d = Join-Path '{base.path}' ([string]([char]0x65E5) + [char]0x672C); New-Item -ItemType Directory -Force -Path (Join-Path $d 'in.txt') | Out-Null; New-Item -ItemType Directory -Force -Path (Join-Path $d 'out.txt') | Out-Null"))
 
-	var reader = powershellConfiguration("'launched'")
+	let reader = powershellConfiguration("'launched'")
 	reader.standardInput = InputSource.file(directory.join("in.txt"))
 	print("stdin {outcomeOf(reader)}")
 
-	var writer = powershellConfiguration("'launched'")
+	let writer = powershellConfiguration("'launched'")
 	writer.standardOutput = OutputDestination.file(directory.join("out.txt"))
 	print("stdout {outcomeOf(writer)}")
 	removeTree(base)
@@ -1021,7 +1021,7 @@ function printLines(text String)
 end 'printLines'
 
 function powershell(script String) returns String
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-NoProfile")
 	argv.push("-NonInteractive")
 	argv.push("-Command")
@@ -1041,7 +1041,7 @@ end 'powershell'
 function main() returns ExitCode
 	let args = CommandLine.args()
 	if args.count() > 1 'child'
-		var segment = try SharedSegment.create("maxon-wide-日本", bytes: 4096) otherwise return 3
+		let segment = try SharedSegment.create("maxon-wide-日本", bytes: 4096) otherwise return 3
 		let first = try segment.readWord(0) otherwise return 4
 		try segment.writeWord(8, value: 7) otherwise return 5
 		segment.close()

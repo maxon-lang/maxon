@@ -224,7 +224,7 @@ type ItemSeq implements Iterable with (Item, ItemCursor)
 end 'ItemSeq'
 
 function main() returns ExitCode
-	var a = ItemArray.create(0)
+	let a = ItemArray.create(0)
 	a.push(Item.create(10))
 	a.push(Item.create(20))
 	let s = ItemSeq.create(a)
@@ -320,7 +320,7 @@ function total(l Lst) returns Count
 end 'total'
 
 function main() returns ExitCode
-	var l = Lst.create()
+	let l = Lst.create()
 	l.add("ab")
 	l.add("cde")
 	print("{total(l)}\n")

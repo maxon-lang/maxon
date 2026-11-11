@@ -160,7 +160,7 @@ end 'connectionLines'
 
 function main() returns ExitCode
 	let plain = try HttpRequest.create(HttpMethod.get, url: "http://example.com/") otherwise return 1
-	var chosen = try HttpRequest.create(HttpMethod.get, url: "http://example.com/") otherwise return 2
+	let chosen = try HttpRequest.create(HttpMethod.get, url: "http://example.com/") otherwise return 2
 	chosen.setHeader("Connection", value: "keep-alive")
 
 	print("default={connectionLines(plain)} chosen={connectionLines(chosen)}\n")
@@ -327,7 +327,7 @@ function answerAndHold(listener TcpListener, answer String) returns String
 end 'answerAndHold'
 
 function fetch(port NetworkPort, method HttpMethod) returns String
-	var request = try HttpRequest.create(method, url: "http://127.0.0.1:{port}/") otherwise return "bad-url"
+	let request = try HttpRequest.create(method, url: "http://127.0.0.1:{port}/") otherwise return "bad-url"
 	request.setHeader("Connection", value: "keep-alive")
 
 	let response = try HttpClient.send(request) otherwise (e) 'failed'
@@ -338,8 +338,9 @@ function fetch(port NetworkPort, method HttpMethod) returns String
 end 'fetch'
 
 function exchange(listener TcpListener, method HttpMethod, answer String) returns String
+	let boundPort = listener.port()
 	let peer = async answerAndHold(listener, answer: answer)
-	let got = fetch(listener.port(), method: method)
+	let got = fetch(boundPort, method: method)
 	let held = await peer
 
 	return "{got} peer={held}"
@@ -379,9 +380,10 @@ function answer(listener TcpListener, reply String) returns String
 end 'answer'
 
 function exchange(listener TcpListener, reply String) returns String
+	let boundPort = listener.port()
 	let peer = async answer(listener, reply: reply)
 
-	let response = try HttpClient.get("http://127.0.0.1:{listener.port()}/") otherwise (e) 'failed'
+	let response = try HttpClient.get("http://127.0.0.1:{boundPort}/") otherwise (e) 'failed'
 		return "{e.name} peer={await peer}"
 	end 'failed'
 
@@ -506,17 +508,16 @@ function clientOutcome(request HttpRequest, limits HttpClientLimits) returns Str
 end 'clientOutcome'
 
 function exchangeOver(listener TcpListener) returns ExitCode
+	let boundPort = listener.port()
 	let peer = async staySilent(listener)
-	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise 'cancelled23'
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{boundPort}/") otherwise 'cancelled23'
 		peer.cancel()
 		return 2
 	end 'cancelled23'
-	var limits = HttpClientLimits.create()
+	let limits = HttpClientLimits.create()
 	limits.timeoutMs = ClientLimitMs
 
 	let outcome = clientOutcome(request, limits: limits)
-
-	listener.close()
 
 	let ended = await peer
 
@@ -556,8 +557,9 @@ function answer(listener TcpListener, reply String) returns String
 end 'answer'
 
 function exchange(listener TcpListener, reply String, limits HttpClientLimits) returns String
+	let boundPort = listener.port()
 	let peer = async answer(listener, reply: reply)
-	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise 'cancelled14'
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{boundPort}/") otherwise 'cancelled14'
 		peer.cancel()
 		return "bad-url"
 	end 'cancelled14'
@@ -575,9 +577,9 @@ function main() returns ExitCode
 	let chunked = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n0123\r\n6\r\n456789\r\n0\r\n\r\n"
 	let closeDelimited = "HTTP/1.1 200 OK\r\n\r\n{TenBytes}"
 	let uncapped = HttpClientLimits.create()
-	var capped = HttpClientLimits.create()
+	let capped = HttpClientLimits.create()
 	capped.maxBodyBytes = HttpBodyCap.atMost(4)
-	var roomy = HttpClientLimits.create()
+	let roomy = HttpClientLimits.create()
 	roomy.maxBodyBytes = HttpBodyCap.atMost(10)
 
 	print("declared-uncapped={exchange(listener, reply: declared, limits: uncapped)}\n")
@@ -633,7 +635,7 @@ function answer(listener TcpListener, reply String, hold bool) returns String
 end 'answer'
 
 function fetch(port NetworkPort) returns String
-	var request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{port}/") otherwise return "bad-url"
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{port}/") otherwise return "bad-url"
 	request.setHeader("Connection", value: "keep-alive")
 
 	let response = try HttpClient.send(request) otherwise (e) 'failed'
@@ -644,8 +646,9 @@ function fetch(port NetworkPort) returns String
 end 'fetch'
 
 function exchange(listener TcpListener, reply String, hold bool) returns String
+	let boundPort = listener.port()
 	let peer = async answer(listener, reply: reply, hold: hold)
-	let got = fetch(listener.port())
+	let got = fetch(boundPort)
 	let held = await peer
 
 	return "{got} peer={held}"
@@ -692,7 +695,7 @@ let EarlyHints = "HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\
 function answer(listener TcpListener, interimCount InterimCount) returns String
 	let conn = try listener.accept() otherwise return "accept-failed"
 	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
-	var reply = StringBuilder.create()
+	let reply = StringBuilder.create()
 
 	for _ in 0 upto interimCount 'eachInterim'
 		reply.append(EarlyHints)
@@ -706,9 +709,10 @@ function answer(listener TcpListener, interimCount InterimCount) returns String
 end 'answer'
 
 function exchange(listener TcpListener, interimCount InterimCount) returns String
+	let boundPort = listener.port()
 	let peer = async answer(listener, interimCount: interimCount)
 
-	let response = try HttpClient.get("http://127.0.0.1:{listener.port()}/") otherwise (e) 'failed'
+	let response = try HttpClient.get("http://127.0.0.1:{boundPort}/") otherwise (e) 'failed'
 		return "{e.name} peer={await peer}"
 	end 'failed'
 
@@ -755,9 +759,10 @@ function switchAndHold(listener TcpListener) returns String
 end 'switchAndHold'
 
 function exchangeOver(listener TcpListener) returns ExitCode
+	let boundPort = listener.port()
 	let peer = async switchAndHold(listener)
 
-	var request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{listener.port()}/") otherwise 'cancelled16'
+	let request = try HttpRequest.create(HttpMethod.get, url: "http://127.0.0.1:{boundPort}/") otherwise 'cancelled16'
 		peer.cancel()
 		return 2
 	end 'cancelled16'
@@ -799,7 +804,7 @@ function streamAHead(listener TcpListener) returns String
 	_ = try conn.recv(RequestBytes) otherwise return "recv-failed"
 	_ = try conn.send("HTTP/1.1 200 OK\r\n") otherwise return "send-failed"
 
-	var line = StringBuilder.create()
+	let line = StringBuilder.create()
 	line.append("X-Padding: ")
 
 	for _ in 0 upto 100 'pad'
@@ -820,9 +825,10 @@ function streamAHead(listener TcpListener) returns String
 end 'streamAHead'
 
 function exchangeOver(listener TcpListener) returns ExitCode
+	let boundPort = listener.port()
 	let peer = async streamAHead(listener)
 
-	let outcome = try HttpClient.get("http://127.0.0.1:{listener.port()}/") otherwise (e) 'failed'
+	let outcome = try HttpClient.get("http://127.0.0.1:{boundPort}/") otherwise (e) 'failed'
 		print("client={e.name} peer={await peer}\n")
 		return 0
 	end 'failed'

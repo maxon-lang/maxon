@@ -81,8 +81,8 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
-	var source = Strs.create(0)
+	let b = StrBag.create()
+	let source = Strs.create(0)
 	source.push("a borrowed string long enough to force a heap allocation")
 	b.takeFirstOf(source)
 	let stored = try b.at(0) otherwise return 1
@@ -140,8 +140,8 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
-	var source = Strs.create(0)
+	let b = StrBag.create()
+	let source = Strs.create(0)
 	source.push("the first copied string, long enough to force a heap allocation")
 	source.push("the second copied string, long enough to force a heap allocation")
 	source.push("the third copied string, long enough to force a heap allocation")
@@ -203,8 +203,8 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
-	var source = Strs.create(0)
+	let b = StrBag.create()
+	let source = Strs.create(0)
 	source.push("a repeated borrowed string long enough to force a heap allocation")
 	b.fillFrom(source, times: 100)
 	let middle = try b.at(50) otherwise return 1
@@ -241,7 +241,7 @@ type Bag uses Element
 	// The scratch container never leaves this frame: it takes a reference at the store and releases it
 	// at the method's exit, so the count it reports is the only thing that survives.
 	function scratchCountOf(other Items) returns Idx
-		var scratch = Items.create(0)
+		let scratch = Items.create(0)
 		let borrowed = try other.get(0) otherwise 'getErr'
 			panic("Bag.scratchCountOf: get(0) OOB — the caller passed a non-empty container")
 		end 'getErr'
@@ -253,8 +253,8 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
-	var source = Strs.create(0)
+	let b = StrBag.create()
+	let source = Strs.create(0)
 	source.push("a scratch-stored string long enough to force a heap allocation")
 	let n = b.scratchCountOf(source)
 	let survivor = try source.get(0) otherwise return 1
@@ -303,7 +303,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.of("a saved field string long enough to force a heap allocation")
+	let b = StrBag.of("a saved field string long enough to force a heap allocation")
 	b.keepSaved()
 	b.keepSaved()
 	let stored = try b.at(1) otherwise return 1
@@ -360,8 +360,8 @@ end 'Bag'
 typealias NumBag = Bag with Num
 
 function main() returns ExitCode
-	var b = NumBag.create()
-	var source = Nums.create(0)
+	let b = NumBag.create()
+	let source = Nums.create(0)
 	source.push(4 as Num)
 	source.push(7 as Num)
 	b.copyFrom(source)
@@ -410,8 +410,8 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function filled() returns StrBag
-	var b = StrBag.create()
-	var source = Strs.create(0)
+	let b = StrBag.create()
+	let source = Strs.create(0)
 	source.push("an outliving string long enough to force a heap allocation")
 	b.takeFirstOf(source)
 	return b

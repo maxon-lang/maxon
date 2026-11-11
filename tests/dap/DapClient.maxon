@@ -179,8 +179,8 @@ export type DapClient
 	end 'awaitMessageMatching'
 
 	export function collectOutputUntil(until String) returns DapOutputPieceArray throws DapClientError
-		var collected = DapOutputPieceArray.create(0)
-		var kept = StringArray.create(0)
+		let collected = DapOutputPieceArray.create(0)
+		let kept = StringArray.create(0)
 		var arrived = false
 
 		for body in self.stashed 'eachStashed'
@@ -232,12 +232,12 @@ export type DapClient
 	end 'collectOutputUntil'
 
 	function takeStashedMatching(matches DapMessageTest) returns JsonDoc throws DapClientError
-		var kept = StringArray.create(0)
+		let kept = StringArray.create(0)
 		var found = false
 		var wanted = JsonDoc.create()
 
 		for body in self.stashed 'eachStashed'
-			var doc = try Json.parse(body) otherwise continue
+			let doc = try Json.parse(body) otherwise continue
 
 			if not found and matches(doc) 'itsHere'
 				wanted = doc
@@ -473,7 +473,7 @@ let IdKey = "id"
 let VariablesReferenceKey = "variablesReference"
 
 function dapListNodes(doc JsonDoc, key String) returns JsonNodeIdArray
-	var nodes = JsonNodeIdArray.create(0)
+	let nodes = JsonNodeIdArray.create(0)
 	let listId = try doc.getChild(dapBody(doc), key: key) otherwise panic("dap tests: a message body carries no `{key}`: {Json.stringify(doc)}")
 	let count = try doc.arrayLength(listId) otherwise panic("dap tests: `{key}` is not an array: {Json.stringify(doc)}")
 
@@ -521,7 +521,7 @@ export function dapStackFrameColumns(doc JsonDoc) returns DapNumberArray
 end 'dapStackFrameColumns'
 
 function dapNumbersOf(doc JsonDoc, key String, field String) returns DapNumberArray
-	var values = DapNumberArray.create(0)
+	let values = DapNumberArray.create(0)
 
 	for node in dapListNodes(doc, key: key) 'eachElement'
 		values.push((try doc.getInt(node, key: field) otherwise panic("dap tests: an element of `{key}` carries no `{field}`: {Json.stringify(doc)}")) as DapNumber)
@@ -559,7 +559,7 @@ export function dapThreadNames(doc JsonDoc) returns StringArray
 end 'dapThreadNames'
 
 function dapStringsOf(doc JsonDoc, key String, field String) returns StringArray
-	var values = StringArray.create(0)
+	let values = StringArray.create(0)
 
 	for node in dapListNodes(doc, key: key) 'eachElement'
 		let value = try doc.getString(node, key: field) otherwise continue

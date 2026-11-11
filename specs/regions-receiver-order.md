@@ -55,7 +55,7 @@ type Pipeline
 end 'Pipeline'
 
 function main() returns ExitCode
-	var pipeline = Pipeline.create()
+	let pipeline = Pipeline.create()
 	print("{pipeline.step()}\n")
 	return 0
 end 'main'
@@ -107,7 +107,7 @@ type Pipeline
 end 'Pipeline'
 
 function main() returns ExitCode
-	var pipeline = Pipeline.create()
+	let pipeline = Pipeline.create()
 	print("{pipeline.step()}\n")
 	return 0
 end 'main'

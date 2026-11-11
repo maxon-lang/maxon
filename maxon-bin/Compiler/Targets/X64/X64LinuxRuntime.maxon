@@ -372,7 +372,7 @@ let X64LinuxOpenDirectoryFlags = 0o200000
 
 // ⭐ **THE `.data` WORD THE HOST SURFACE STASHES INTO** (`LinuxErrnoLabel`), on `linuxCarriesErrnoDataWord`.
 export function x64LinuxRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create(0)
+	let out = DataSectionEntryArray.create(0)
 
 	if target.cpu != CpuArch.x64 or target.os != Os.linux or not linuxCarriesErrnoDataWord(usage) 'notThisLane'
 		return out
@@ -782,7 +782,7 @@ end 'x64LinuxEmitMonotonicNanos'
 // 64-bit word some five centuries sooner than the FILETIME it is on its way to.
 function buildX64LinuxWallClockChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0
-	var asm = X64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
+	let asm = X64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx, wide: true)
 	x64LinuxReadClockTimespec(asm, clockId: LinuxClockRealtime)
@@ -815,7 +815,7 @@ end 'buildX64LinuxWallClockChunk'
 // SUBTRACTED, and scaling here to look like Windows would be a guess wearing a unit's name.
 function buildX64LinuxThreadCpuChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0
-	var asm = X64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
+	let asm = X64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx, wide: true)
 	x64LinuxReadClockTimespec(asm, clockId: LinuxClockThreadCpuTime)
@@ -838,7 +838,7 @@ end 'buildX64LinuxThreadCpuChunk'
 function buildX64LinuxReadLinkChunk(link ByteArray, name ByteArray) returns FunctionCodeChunk
 	let SlotBufPtr = 0
 	let SlotBufLen = 1
-	var asm = X64RuntimeAsm.beginFunction(2)
+	let asm = X64RuntimeAsm.beginFunction(2)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufPtr), srcReg: X64Register.rcx, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBufLen), srcReg: X64Register.rdx, wide: true)
@@ -897,7 +897,7 @@ function buildX64LinuxFdPathChunk() returns FunctionCodeChunk
 	let SlotBufLen = 1
 	let SlotPath = 2
 	let pathSlots = runtimeFrameSlots(LinuxFdPathBufferBytes)
-	var asm = X64RuntimeAsm.beginFunction(SlotPath + pathSlots)
+	let asm = X64RuntimeAsm.beginFunction(SlotPath + pathSlots)
 
 	let nextDigit = asm.newLabel()
 
@@ -938,7 +938,7 @@ end 'buildX64LinuxFdPathChunk'
 function buildX64LinuxRandomFillChunk() returns FunctionCodeChunk
 	let SlotCursor = 0
 	let SlotRemaining = 1
-	var asm = X64RuntimeAsm.beginFunction(2)
+	let asm = X64RuntimeAsm.beginFunction(2)
 
 	let issue = asm.newLabel()
 	let progressed = asm.newLabel()
@@ -995,7 +995,7 @@ end 'buildX64LinuxRandomFillChunk'
 // clamp already reads — the clamp must stay in exactly one place.
 function buildX64LinuxCpuCountChunk() returns FunctionCodeChunk
 	let SlotMask = 0
-	var asm = X64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxCpuSetBytes))
+	let asm = X64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxCpuSetBytes))
 
 	let count = asm.newLabel()
 	let wordStep = asm.newLabel()
@@ -1049,7 +1049,7 @@ end 'buildX64LinuxCpuCountChunk'
 
 // `GetLastError()` on a lane with no `errno`: read the word every chunk here stashes into, and translate.
 function buildX64LinuxLastErrorChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	x64LinuxEmitLoadErrno(asm, destReg: X64Register.rax, errnoHome: errnoHome)
 	x64LinuxEmitErrnoToWin32(asm)
@@ -1067,7 +1067,7 @@ end 'buildX64LinuxLastErrorChunk'
 // at a time. So the pattern is split at its last `/`, the prefix is opened and the suffix is matched
 // against every entry. The pattern is written in USER SOURCE, so the split is the backend's work.
 function buildX64LinuxBaseNameChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let step = asm.newLabel()
 	let notSeparator = asm.newLabel()
@@ -1096,7 +1096,7 @@ end 'buildX64LinuxBaseNameChunk'
 // it with a single `stat` rather than a directory walk is both faster and MORE FAITHFUL: `FindFirstFileW`
 // matches a literal name the way the FILESYSTEM does, while the pattern matcher below is case-sensitive.
 function buildX64LinuxHasWildcardChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let step = asm.newLabel()
 	let found = asm.newLabel()
@@ -1136,7 +1136,7 @@ end 'buildX64LinuxHasWildcardChunk'
 // ⚠ **READ-ONLY IS THE OWNER'S WRITE BIT AND NOTHING FINER.** POSIX has three write bits and Win32 has one
 // flag; the owner's is the one that decides whether the process that just created the file can write it.
 function buildX64LinuxAttrsFromModeChunk(layout PosixStatLayout) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let isDirectory = asm.newLabel()
 	let haveType = asm.newLabel()
@@ -1186,7 +1186,7 @@ function buildX64LinuxFillFindDataChunk(layout PosixStatLayout) returns Function
 	let SlotFindData = 0
 	let SlotStat = 1
 	let SlotName = 2
-	var asm = X64RuntimeAsm.beginFunction(3)
+	let asm = X64RuntimeAsm.beginFunction(3)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rcx, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStat), srcReg: X64Register.rdx, wide: true)
@@ -1239,7 +1239,7 @@ end 'x64LinuxFillFindDataTime'
 // reasons: the kernel answers `-errno` where the Std tier tests for exactly `-1`, and the reason has to be
 // stashed for the `osLastError` that follows.
 function buildX64LinuxFileOpenChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r10, src: X64Register.r8, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
@@ -1272,7 +1272,7 @@ function buildX64LinuxTransferChunk(name ByteArray, syscallNumber MachineWord, e
 	let SlotFd = 1
 	let SlotBuf = 2
 	let SlotLen = 3
-	var asm = X64RuntimeAsm.beginFunction(4)
+	let asm = X64RuntimeAsm.beginFunction(4)
 
 	let issue = asm.newLabel()
 	let transferred = asm.newLabel()
@@ -1329,7 +1329,7 @@ function buildX64LinuxFileSizeChunk(errnoHome LinuxErrnoHome) returns FunctionCo
 	let SlotOutPtr = 0
 	let SlotStat = 1
 	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
-	var asm = X64RuntimeAsm.beginFunction(1 + statSlots)
+	let asm = X64RuntimeAsm.beginFunction(1 + statSlots)
 	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
 
 	let measured = asm.newLabel()
@@ -1371,7 +1371,7 @@ end 'buildX64LinuxFileSizeChunk'
 // The Win32 directory create carries no permissions at all (a new directory inherits its parent's ACL), so
 // the POSIX side hands the widest mask over and lets the process umask narrow it.
 function buildX64LinuxPathOpChunk(name ByteArray, syscallNumber MachineWord, thirdArgument MachineWord, errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: thirdArgument)
@@ -1403,7 +1403,7 @@ function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Function
 	let SlotDirFd = 1
 	let SlotPrefix = 2
 	let prefixSlots = runtimeFrameSlots(MaxPathBytes)
-	var asm = X64RuntimeAsm.beginFunction(2 + prefixSlots)
+	let asm = X64RuntimeAsm.beginFunction(2 + prefixSlots)
 	let prefixDisp = x64LinuxBufferDisp(asm, firstSlot: SlotPrefix, slotCount: prefixSlots)
 
 	let renamed = asm.newLabel()
@@ -1461,7 +1461,7 @@ end 'buildX64LinuxFileRenameChunk'
 function buildX64LinuxFileAttributesChunk(name ByteArray, statFlags MachineWord, errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotStat = 0
 	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
-	var asm = X64RuntimeAsm.beginFunction(statSlots)
+	let asm = X64RuntimeAsm.beginFunction(statSlots)
 	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
 
 	let described = asm.newLabel()
@@ -1501,7 +1501,7 @@ end 'buildX64LinuxFileAttributesChunk'
 // a failure for a too-small buffer would throw on a long path.
 function buildX64LinuxDirCurrentPathChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotBufLen = 0
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	let refused = asm.newLabel()
 	let tooSmall = asm.newLabel()
@@ -1553,7 +1553,7 @@ end 'buildX64LinuxDirCurrentPathChunk'
 // last `*` and `resume` the name position it was first tried at; a mismatch rewinds to those and advances
 // `resume` by one, which is what lets one `*` absorb any number of characters without a stack.
 function buildX64LinuxGlobMatchChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let pattern = X64Register.rcx
 	let name = X64Register.rdx
@@ -1648,7 +1648,7 @@ function buildX64LinuxDirPrefixChunk() returns FunctionCodeChunk
 	let SlotPath = 0
 	let SlotDest = 1
 	let SlotLength = 2
-	var asm = X64RuntimeAsm.beginFunction(3)
+	let asm = X64RuntimeAsm.beginFunction(3)
 
 	let currentDirectory = asm.newLabel()
 	let haveLength = asm.newLabel()
@@ -1731,7 +1731,7 @@ function buildX64LinuxDirFindNextChunk(errnoHome LinuxErrnoHome) returns Functio
 	let SlotName = 2
 	let SlotStat = 3
 	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
-	var asm = X64RuntimeAsm.beginFunction(3 + statSlots)
+	let asm = X64RuntimeAsm.beginFunction(3 + statSlots)
 	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
 
 	let nextEntry = asm.newLabel()
@@ -1829,7 +1829,7 @@ function buildX64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns Functi
 	let SlotSearch = 3
 	let SlotStat = 4
 	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
-	var asm = X64RuntimeAsm.beginFunction(4 + statSlots)
+	let asm = X64RuntimeAsm.beginFunction(4 + statSlots)
 	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
 
 	let walk = asm.newLabel()
@@ -1972,7 +1972,7 @@ end 'x64LinuxEmitAllocateSearch'
 // and a `close` that failed would overwrite the reason it is about to publish.
 function buildX64LinuxDirFindCloseChunk() returns FunctionCodeChunk
 	let SlotSearch = 0
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	let unmap = asm.newLabel()
 
@@ -2003,7 +2003,7 @@ end 'buildX64LinuxDirFindCloseChunk'
 // caller compares against are `TerminalRuntime`'s, exactly as the errno map above answers in Win32's codes.
 function buildX64LinuxHandleFileTypeChunk() returns FunctionCodeChunk
 	let SlotTermios = 0
-	var asm = X64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxTermiosBytes))
+	let asm = X64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxTermiosBytes))
 
 	let terminal = asm.newLabel()
 	let answered = asm.newLabel()
@@ -2048,7 +2048,7 @@ function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
 	let SlotWritten = 3
 	let SlotCursor = 4
 	let SlotName = 5
-	var asm = X64RuntimeAsm.beginFunction(6)
+	let asm = X64RuntimeAsm.beginFunction(6)
 
 	let scan = asm.newLabel()
 	let compare = asm.newLabel()
@@ -2324,7 +2324,7 @@ end 'x64LinuxEmitPanicConstant'
 function buildX64LinuxMonotonicClockChunk() returns FunctionCodeChunk
 	let SlotTicksPtr = 0
 	let SlotFreqPtr = 3
-	var asm = X64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots + 1)
+	let asm = X64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots + 1)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTicksPtr), srcReg: X64Register.rcx, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFreqPtr), srcReg: X64Register.rdx, wide: true)
@@ -2346,7 +2346,7 @@ end 'buildX64LinuxMonotonicClockChunk'
 // ==========================================================================
 
 function buildX64LinuxThreadYieldChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallSchedYield)
 
@@ -2369,7 +2369,7 @@ end 'buildX64LinuxThreadYieldChunk'
 // condition after every step, so a short sleep costs one extra lap.
 function buildX64LinuxSleepChunk(name ByteArray, unit PosixTimeUnit) returns FunctionCodeChunk
 	let SlotTimespec = 0
-	var asm = X64RuntimeAsm.beginFunction(LinuxTimespecSlots)
+	let asm = X64RuntimeAsm.beginFunction(LinuxTimespecSlots)
 
 	x64LinuxEmitToTimespec(asm, amount: X64Register.rcx, unit: unit, firstSlot: SlotTimespec)
 
@@ -2417,7 +2417,7 @@ end 'x64LinuxEmitToTimespec'
 // events, and the alternative is a store through a negative errno several instructions later.
 function buildX64LinuxWaitNewChunk() returns FunctionCodeChunk
 	let SlotKind = 0
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	let mapped = asm.newLabel()
 	let kindOk = asm.newLabel()
@@ -2483,7 +2483,7 @@ function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
 	let SlotRegion = 4
 	let SlotStack = 5
 	let SlotTls = 6
-	var asm = X64RuntimeAsm.beginFunction(7)
+	let asm = X64RuntimeAsm.beginFunction(7)
 
 	let stackMapped = asm.newLabel()
 	let guarded = asm.newLabel()
@@ -2601,7 +2601,7 @@ end 'buildX64LinuxThreadCreateChunk'
 // emitted.
 function buildX64LinuxEventSetChunk() returns FunctionCodeChunk
 	let SlotSignal = 0
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	let nobodySleeps = asm.newLabel()
 
@@ -2647,7 +2647,7 @@ function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
 	let SlotResult = 2
 	let SlotTimespec = 3
 	let SlotObj = 5
-	var asm = X64RuntimeAsm.beginFunction(3 + LinuxTimespecSlots + 1)
+	let asm = X64RuntimeAsm.beginFunction(3 + LinuxTimespecSlots + 1)
 
 	let isObject = asm.newLabel()
 	let isEvent = asm.newLabel()
@@ -2767,7 +2767,7 @@ end 'buildX64LinuxWaitOneChunk'
 // a zombie for the parent's whole life, which a spawn/release loop turns into one per iteration.
 function buildX64LinuxWaitCloseChunk() returns FunctionCodeChunk
 	let SlotObj = 0
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	let releaseObject = asm.newLabel()
 	let unmapObject = asm.newLabel()
@@ -2809,7 +2809,7 @@ end 'buildX64LinuxWaitCloseChunk'
 // allocated. See `LinuxLockOffFutex` for the three words, why recursion is not optional and why all three are
 // written rather than assumed zero.
 function buildX64LinuxLockInitChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxMutexFree)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffFutex as Imm32, srcReg: X64Register.rax, wide: true)
@@ -2829,7 +2829,7 @@ function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 	let SlotRegion = 0
 	let SlotToken = 1
 	let SlotSpinRounds = 2
-	var asm = X64RuntimeAsm.beginFunction(3)
+	let asm = X64RuntimeAsm.beginFunction(3)
 
 	let acquire = asm.newLabel()
 	let activeRound = asm.newLabel()
@@ -2894,7 +2894,7 @@ end 'buildX64LinuxLockEnterChunk'
 // displaced word arrives in a register and the wake decision costs no second atomic.
 function buildX64LinuxLockLeaveChunk() returns FunctionCodeChunk
 	let SlotRegion = 0
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	let release = asm.newLabel()
 	let wake = asm.newLabel()
@@ -2942,7 +2942,7 @@ end 'buildX64LinuxLockLeaveChunk'
 // as "the scheduler has not started" — a scheduler that silently never runs, with no crash to find it by.
 // The counter pre-increments so the first key is 1; this is the check that says so out loud.
 function buildX64LinuxTlsAllocChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let keyOk = asm.newLabel()
 
@@ -2959,7 +2959,7 @@ function buildX64LinuxTlsAllocChunk() returns FunctionCodeChunk
 end 'buildX64LinuxTlsAllocChunk'
 
 function buildX64LinuxMainThreadBlockChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let mapped = asm.newLabel()
 	let published = asm.newLabel()
@@ -2995,7 +2995,7 @@ end 'x64LinuxEmitStoreBlockSelfAddress'
 // ==========================================================================
 
 function buildX64LinuxTlsSetChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.rcx, count: LinuxTlsKeyScaleBits)
 	encodeMovSegBaseReg(asm.code, base: X64Register.rcx, srcReg: X64Register.rdx, segment: x64ThreadPointerSegment(Os.linux))
@@ -3029,7 +3029,7 @@ let X64LinuxTlsPublishFailedMessage = b"panic: the runtime could not publish the
 function buildX64LinuxTickMsChunk() returns FunctionCodeChunk
 	let SlotTicks = 0
 	let SlotFreq = 1
-	var asm = X64RuntimeAsm.beginFunction(2)
+	let asm = X64RuntimeAsm.beginFunction(2)
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTicks))
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFreq))
@@ -3067,7 +3067,7 @@ function buildX64LinuxPipeChunk(errnoHome LinuxErrnoHome) returns FunctionCodeCh
 	let SlotReadOut = 0
 	let SlotWriteOut = 1
 	let SlotFds = 2
-	var asm = X64RuntimeAsm.beginFunction(3)
+	let asm = X64RuntimeAsm.beginFunction(3)
 
 	let created = asm.newLabel()
 	let published = asm.newLabel()
@@ -3114,7 +3114,7 @@ function buildX64LinuxPipePeekChunk() returns FunctionCodeChunk
 	let SlotAvailOut = 0
 	let SlotPollfd = 1
 	let SlotTimespec = 2
-	var asm = X64RuntimeAsm.beginFunction(2 + LinuxTimespecSlots)
+	let asm = X64RuntimeAsm.beginFunction(2 + LinuxTimespecSlots)
 
 	let notReady = asm.newLabel()
 	let interrupted = asm.newLabel()
@@ -3192,7 +3192,7 @@ function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
 	let SlotGroupWait = 3
 	let SlotInfo = 4
 	let InfoSlots = LinuxWaitidInfoBytes / SpillSlotBytes
-	var asm = X64RuntimeAsm.beginFunction(SlotInfo + InfoSlots)
+	let asm = X64RuntimeAsm.beginFunction(SlotInfo + InfoSlots)
 	let infoDisp = x64LinuxBufferDisp(asm, firstSlot: SlotInfo, slotCount: InfoSlots)
 
 	let alreadySignalled = asm.newLabel()
@@ -3370,7 +3370,7 @@ function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
 	let SlotObj = 0
 	let SlotTimeout = 1
 	let SlotDeadline = 2
-	var asm = X64RuntimeAsm.beginFunction(3)
+	let asm = X64RuntimeAsm.beginFunction(3)
 
 	let bounded = asm.newLabel()
 	let boundedStep = asm.newLabel()
@@ -3442,7 +3442,7 @@ end 'buildX64LinuxProcAwaitChunk'
 function buildX64LinuxProcExitCodeChunk() returns FunctionCodeChunk
 	let SlotCodeOut = 0
 	let SlotObj = 1
-	var asm = X64RuntimeAsm.beginFunction(2)
+	let asm = X64RuntimeAsm.beginFunction(2)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCodeOut), srcReg: X64Register.rdx, wide: true)
 	x64LinuxEmitReapedField(asm, objSlot: SlotObj, field: PosixWaitOffChildStatus)
@@ -3456,7 +3456,7 @@ end 'buildX64LinuxProcExitCodeChunk'
 // no signal ended.
 function buildX64LinuxProcExitSignalChunk() returns FunctionCodeChunk
 	let SlotObj = 0
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	x64LinuxEmitReapedField(asm, objSlot: SlotObj, field: PosixWaitOffChildSignal)
 
@@ -3481,7 +3481,7 @@ end 'x64LinuxEmitReapedField'
 function buildX64LinuxProcProbeChunk() returns FunctionCodeChunk
 	let SlotPid = 0
 	let SlotProbe = 1
-	var asm = X64RuntimeAsm.beginFunction(SlotProbe + EndedProbeSlots)
+	let asm = X64RuntimeAsm.beginFunction(SlotProbe + EndedProbeSlots)
 	let ended = asm.newLabel()
 	let answered = asm.newLabel()
 
@@ -3526,7 +3526,7 @@ function buildX64LinuxProcTerminateChunk(errnoHome LinuxErrnoHome) returns Funct
 	let SlotObj = 0
 	let SlotCode = 1
 	let SlotTreeBit = 2
-	var asm = X64RuntimeAsm.beginFunction(3)
+	let asm = X64RuntimeAsm.beginFunction(3)
 	let noChild = asm.newLabel()
 	let delivered = asm.newLabel()
 	let nothingLeftToKill = asm.newLabel()
@@ -4165,7 +4165,7 @@ function x64LinuxEmitPollSleep(asm X64RuntimeAsm, timespecSlot StackSize)
 end 'x64LinuxEmitPollSleep'
 
 function buildX64LinuxProcAwaitEndedChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(AwaitEndedSlotsEnd)
+	let asm = X64RuntimeAsm.beginFunction(AwaitEndedSlotsEnd)
 
 	let nextPid = asm.newLabel()
 	let check = asm.newLabel()
@@ -4216,7 +4216,7 @@ end 'buildX64LinuxProcAwaitEndedChunk'
 
 // The walk `buildArm64PosixProcTreeKillChunk` documents, with the `/proc` scan inline.
 function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(ProcWalkSlotsEnd)
+	let asm = X64RuntimeAsm.beginFunction(ProcWalkSlotsEnd)
 	let stateDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotState, slotCount: PosixTreeStateWords)
 
 	let procUnreadable = asm.newLabel()
@@ -4289,7 +4289,7 @@ function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns Functi
 end 'buildX64LinuxProcTreeKillChunk'
 
 function buildX64LinuxProcDescendantsChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(DescendantsSlotsEnd)
+	let asm = X64RuntimeAsm.beginFunction(DescendantsSlotsEnd)
 	let stateDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotState, slotCount: PosixTreeStateWords)
 	let lineDisp = x64LinuxBufferDisp(asm, firstSlot: DescendantsSlotLine, slotCount: DescendantsLineSlots)
 
@@ -4473,7 +4473,7 @@ end 'buildX64LinuxProcDescendantsChunk'
 export let HostTraceeReadOutIncomingSlot = 0 as MachineWord
 
 function buildX64LinuxTraceRequestChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
@@ -4491,7 +4491,7 @@ function buildX64LinuxTraceeReadChunk(errnoHome LinuxErrnoHome) returns Function
 	let SlotOut = 2
 	let SlotLocalIov = 3
 	let SlotRemoteIov = SlotLocalIov + LinuxIovecSlots
-	var asm = X64RuntimeAsm.beginFunction(SlotRemoteIov + LinuxIovecSlots)
+	let asm = X64RuntimeAsm.beginFunction(SlotRemoteIov + LinuxIovecSlots)
 
 	let shortRead = asm.newLabel()
 	let answered = asm.newLabel()
@@ -4539,7 +4539,7 @@ function buildX64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Functio
 	let SlotDeadline = 1
 	let SlotPid = 2
 	let SlotTimespec = 3
-	var asm = X64RuntimeAsm.beginFunction(SlotTimespec + LinuxTimespecSlots)
+	let asm = X64RuntimeAsm.beginFunction(SlotTimespec + LinuxTimespecSlots)
 
 	let poll = asm.newLabel()
 	let anyChild = asm.newLabel()
@@ -4587,7 +4587,7 @@ function buildX64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Functio
 end 'buildX64LinuxAwaitTraceeChunk'
 
 function buildX64LinuxThreadSignalChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
@@ -4599,7 +4599,7 @@ function buildX64LinuxThreadSignalChunk(errnoHome LinuxErrnoHome) returns Functi
 end 'buildX64LinuxThreadSignalChunk'
 
 function buildX64LinuxProcessSignalChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rdx, wide: true)
@@ -4661,7 +4661,7 @@ function buildX64LinuxSpawnChunk(errnoHome LinuxErrnoHome) returns FunctionCodeC
 	let SlotEnv = 12
 	let SlotCwdFd = 13
 	let SlotChildSigset = 14
-	var asm = X64RuntimeAsm.beginFunction(15)
+	let asm = X64RuntimeAsm.beginFunction(15)
 
 	let cwdReady = asm.newLabel()
 	let cwdFailed = asm.newLabel()
@@ -4972,7 +4972,7 @@ end 'emitX64LinuxChildDup3'
 // ⚠ **A NAME TOO LONG IS TRUNCATED RATHER THAN REFUSED**, and the refusal still happens: the caller's
 // `openat` then names a file that does not exist and answers the zero every caller here already tests for.
 function buildX64LinuxShmPathChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rdx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixPathStringCapacity as MachineWord)
@@ -5007,7 +5007,7 @@ let X64ShmSlotFd = 1
 let X64ShmSlotPath = 2
 
 function buildX64LinuxShmCreateChunk() returns FunctionCodeChunk
-	var asm = x64LinuxShmBegin()
+	let asm = x64LinuxShmBegin()
 	let pathDisp = x64LinuxShmPathDisp(asm)
 
 	let unsized = asm.newLabel()
@@ -5046,7 +5046,7 @@ end 'buildX64LinuxShmCreateChunk'
 
 function buildX64LinuxShmAdoptChunk() returns FunctionCodeChunk
 	let stat = x64LinuxStatLayout()
-	var asm = x64LinuxShmBegin()
+	let asm = x64LinuxShmBegin()
 	let pathDisp = x64LinuxShmPathDisp(asm)
 	let statDisp = x64LinuxBufferDisp(asm, firstSlot: x64LinuxShmStatSlot(), slotCount: x64LinuxShmStatSlots())
 
@@ -5121,7 +5121,7 @@ function x64LinuxShmPathDisp(asm X64RuntimeAsm) returns Imm32
 end 'x64LinuxShmPathDisp'
 
 function x64LinuxShmBegin() returns X64RuntimeAsm
-	var asm = X64RuntimeAsm.beginFunction(x64LinuxShmStatSlot() + x64LinuxShmStatSlots())
+	let asm = X64RuntimeAsm.beginFunction(x64LinuxShmStatSlot() + x64LinuxShmStatSlots())
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(X64ShmSlotBytes), srcReg: X64Register.rdx, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxShmPathDisp(asm))
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxShmPathName)
@@ -5146,7 +5146,7 @@ function buildX64LinuxShmOpenChunk() returns FunctionCodeChunk
 	let SlotBufPtr = 0
 	let SlotPath = 1
 	let pathSlots = runtimeFrameSlots(MaxPathBytes)
-	var asm = X64RuntimeAsm.beginFunction(1 + pathSlots)
+	let asm = X64RuntimeAsm.beginFunction(1 + pathSlots)
 	let pathDisp = x64LinuxBufferDisp(asm, firstSlot: SlotPath, slotCount: pathSlots)
 
 	let absent = asm.newLabel()
@@ -5178,7 +5178,7 @@ end 'buildX64LinuxShmOpenChunk'
 function buildX64LinuxShmUnlinkChunk() returns FunctionCodeChunk
 	let SlotPath = 0
 	let pathSlots = runtimeFrameSlots(MaxPathBytes)
-	var asm = X64RuntimeAsm.beginFunction(pathSlots)
+	let asm = X64RuntimeAsm.beginFunction(pathSlots)
 	let pathDisp = x64LinuxBufferDisp(asm, firstSlot: SlotPath, slotCount: pathSlots)
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: pathDisp)
@@ -5209,7 +5209,7 @@ end 'buildX64LinuxShmUnlinkChunk'
 function buildX64LinuxShmMapChunk() returns FunctionCodeChunk
 	let SlotFd = 0
 	let SlotBytes = 1
-	var asm = X64RuntimeAsm.beginFunction(2)
+	let asm = X64RuntimeAsm.beginFunction(2)
 
 	let refused = asm.newLabel()
 	let answered = asm.newLabel()
@@ -5247,7 +5247,7 @@ end 'buildX64LinuxShmMapChunk'
 // to do. A zero base is the no-op `UnmapViewOfFile(0)` is, which is what lets `__shm_close` run without a
 // test on a segment whose map never succeeded.
 function buildX64LinuxShmUnmapChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let unmapped = asm.newLabel()
 
@@ -5284,7 +5284,7 @@ function x64LinuxEmitEnsureStdDescriptor(asm X64RuntimeAsm, descriptor FullRange
 end 'x64LinuxEmitEnsureStdDescriptor'
 
 export function buildX64LinuxCheckStdFdsChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let refused = asm.newLabel()
 	let done = asm.newLabel()
@@ -5545,7 +5545,7 @@ end 'appendX64LinuxHostSurfaceChunks'
 
 // `mrt_host_netpoll_open() -> rax = the epoll descriptor, or -errno`.
 function buildX64LinuxNetpollOpenChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxEpollCloexec)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallEpollCreate1)
 	return asm.finishFunction(HostNetpollOpenName)
@@ -5561,7 +5561,7 @@ function buildX64LinuxNetpollOpenBreakChunk() returns FunctionCodeChunk
 	let SlotEventfd = 1
 	let SlotEvent = 2
 	let eventSlots = 2
-	var asm = X64RuntimeAsm.beginFunction(2 + eventSlots)
+	let asm = X64RuntimeAsm.beginFunction(2 + eventSlots)
 
 	let failed = asm.newLabel()
 	let eventDisp = x64LinuxBufferDisp(asm, firstSlot: SlotEvent, slotCount: eventSlots)
@@ -5603,7 +5603,7 @@ let LinuxEpollPackedDataOffset = 4
 function buildX64LinuxNetpollArmChunk(name ByteArray, events MachineWord) returns FunctionCodeChunk
 	let SlotEvent = 0
 	let eventSlots = 2
-	var asm = X64RuntimeAsm.beginFunction(eventSlots)
+	let asm = X64RuntimeAsm.beginFunction(eventSlots)
 
 	let eventDisp = x64LinuxBufferDisp(asm, firstSlot: SlotEvent, slotCount: eventSlots)
 
@@ -5627,7 +5627,7 @@ end 'buildX64LinuxNetpollArmChunk'
 // ⚠ **THE CHILD MUST STILL BE UNREAPED, AND EVERY CALLER'S IS.** A pidfd names a task, and the only party
 // that takes this one's status is the green thread that is about to park on this descriptor.
 function buildX64LinuxNetpollChildOpenChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
@@ -5651,7 +5651,7 @@ function x64LinuxEmitSigprocmaskSigChld(asm X64RuntimeAsm, how MachineWord, slot
 end 'x64LinuxEmitSigprocmaskSigChld'
 
 function buildX64LinuxNetpollChildProbeChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: 0)
@@ -5660,14 +5660,14 @@ function buildX64LinuxNetpollChildProbeChunk() returns FunctionCodeChunk
 end 'buildX64LinuxNetpollChildProbeChunk'
 
 function buildX64LinuxNetpollSignalBlockChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	x64LinuxEmitSigprocmaskSigChld(asm, how: LinuxSigBlock as MachineWord, slot: 0)
 	return asm.finishFunction(HostNetpollSignalBlockName)
 end 'buildX64LinuxNetpollSignalBlockChunk'
 
 function buildX64LinuxNetpollSignalOpenChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	x64LinuxEmitSigChldSet(asm, slot: 0)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxNoDescriptor)
@@ -5680,7 +5680,7 @@ end 'buildX64LinuxNetpollSignalOpenChunk'
 
 function buildX64LinuxNetpollSignalDrainChunk() returns FunctionCodeChunk
 	let infoSlots = LinuxSiginfoBytes / SpillSlotBytes
-	var asm = X64RuntimeAsm.beginFunction(infoSlots)
+	let asm = X64RuntimeAsm.beginFunction(infoSlots)
 
 	let infoDisp = x64LinuxBufferDisp(asm, firstSlot: 0, slotCount: infoSlots)
 
@@ -5693,7 +5693,7 @@ end 'buildX64LinuxNetpollSignalDrainChunk'
 
 function buildX64LinuxNetpollChildPollChunk() returns FunctionCodeChunk
 	let infoSlots = LinuxSiginfoBytes / SpillSlotBytes
-	var asm = X64RuntimeAsm.beginFunction(infoSlots)
+	let asm = X64RuntimeAsm.beginFunction(infoSlots)
 	let answered = asm.newLabel()
 
 	let infoDisp = x64LinuxBufferDisp(asm, firstSlot: 0, slotCount: infoSlots)
@@ -5731,7 +5731,7 @@ end 'buildX64LinuxNetpollChildPollChunk'
 // `F_SETFL` replaces the whole status word, which is right for a descriptor this call has just created: its
 // only other status bit is the access mode, which `F_SETFL` ignores.
 function buildX64LinuxNetpollArmPipeChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 	let answered = asm.newLabel()
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
@@ -5749,7 +5749,7 @@ end 'buildX64LinuxNetpollArmPipeChunk'
 // `mrt_host_netpoll_child_close(rcx = source) -> rax = 0, or -errno`. Closing the descriptor is also what
 // takes it out of the epoll set, exactly as closing a socket is.
 function buildX64LinuxNetpollChildCloseChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rcx, wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
@@ -5762,7 +5762,7 @@ end 'buildX64LinuxNetpollChildCloseChunk'
 // ⭐ **`WaitInfinite` NEEDS NO TRANSLATION HERE**: `epoll_wait` takes its timeout as an `int`, and the Win32
 // `INFINITE` the op carries reads as -1 there — epoll's own "for ever".
 function buildX64LinuxNetpollWaitChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 	let interrupted = asm.newLabel()
 	let answered = asm.newLabel()
 
@@ -5786,7 +5786,7 @@ end 'buildX64LinuxNetpollWaitChunk'
 // `descriptor` names the argument register the eventfd arrives in. Each answers the syscall's own result.
 function buildX64LinuxNetpollCounterChunk(name ByteArray, syscallNumber MachineWord, descriptor X64Register) returns FunctionCodeChunk
 	let SlotCounter = 0
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: descriptor, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: LinuxEventfdRaise)

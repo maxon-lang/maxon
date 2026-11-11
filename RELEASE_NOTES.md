@@ -33,11 +33,11 @@ release's version as its heading when the release is cut.
 - Every union payload is a `let`, and `let` before a payload (`case(let name T)`) is a syntax error. A `match`
   binding of a payload is never reassigned, so `full(value) then value = 42` is E2013 under a `var` scrutinee
   too, and a `var` that is only matched is E3077. A union whose payload types are all immutable is itself
-  immutable, so `isolated` and `merge` on it are refused (E3200), and a unique payload cannot be handed to a
-  call that keeps it (E3078).
+  immutable, so `isolated` and `merge` on it are refused (E3200), and a unique payload handed to a call that
+  keeps it moves out of the union, so reading the union afterwards is E3102.
   Fix: delete `let` before each payload; give a union a new payload by assigning it a new case
   (`b = Box.full(42)`); write `let` for a `var` that is only matched; drop `isolated`, `merge` and `freeze` on
-  a union of immutable payloads; match a unique payload out of a `let` union.
+  a union of immutable payloads; read the union before handing its unique payload to a call that keeps it.
 
 - A file-private top-level `function`, `let`, `type`, `enum`, `union` or `interface` that nothing live in its file
   names is E3219, the way an unused local is E3012 and an unused `typealias` is E3062. A declaration is live when
@@ -68,10 +68,14 @@ release's version as its heading when the release is cut.
   throw these. A `match` over `SubprocessError` that lists every case is no longer exhaustive (E2026).
   Fix: add arms for `treeNotEnded` and `detachRefused`; code that told these failures apart by the reason text
   of `ioFailed` or `spawnFailed` matches the cases.
-- `let` means the name is never reassigned, so a `var` that is never reassigned or mutated is E3077 whatever
-  it is bound from. A `var` bound from state something else writes (`var node = holder.box`), or from a
-  read-only value, compiled before only because a `let` there was refused.
-  Fix: write `let` (the compiler lists each site).
+- `let` means the name is never reassigned, so a `var` that is never reassigned is E3077 whatever else is done
+  with it. A field store, a `push`, a call whose callee writes the parameter and moving the name into another
+  binding no longer keep a `var`; what keeps it is an assignment, passing it to a `mutable` parameter and calling
+  a `mutable self` method on a value of a value type (`text.append("!")` over a `String`). A `var` bound from a
+  record, from state something else writes (`var node = holder.box`) or from a read-only value is reported alike,
+  and so is a `var` bound to a literal array or map that is written through.
+  Fix: write `let` (the compiler lists each site); write `let items = [..].clone()` where a `var` held a literal
+  container that is written through, since a plain `let` of a literal is constant data (E3207).
 - Reassigning a `let` is E2013 with the message `'x' is a let and cannot be reassigned` (`'f' is a let field and
   cannot be reassigned` for a field), and passing a `let` to a `mutable` parameter is E2013 (``'n' is a let and
   cannot be passed to the `mutable` parameter 'x'; bind it to a `var` ``), where it was E3159.
@@ -81,14 +85,21 @@ release's version as its heading when the release is cut.
   literal or another constant `let` (module, `static`, field or local), and every inline `b"…"` literal. Storing
   one into a plain `ByteArray` field, array element or union payload is E3196, returning one from an unmarked
   result is E3209, and writing through it, passing it to a parameter the callee writes, or writing a `var` bound
-  to a literal is E3207; each compiled before.
+  to a literal is E3207; each compiled before. The same holds through a `String` field of a `static` or module
+  `let` (`append` on it is E3207), a closure that returns such data (writing its result is E3207, and it converts
+  only to a function type that declares `returns immutable`, E3210), and a field default that names it
+  (`var names = sharedNames`, E3196).
   Fix: declare the holder `immutable ByteArray` (a field, an `Array with immutable ByteArray` element, a union
   payload `named(let name immutable ByteArray)`) and the result `returns immutable ByteArray`; to get a mutable
-  array build it with `ByteArray.create` and `push`, or `"text".toByteArray()`, or take `.clone()`.
+  array build it with `ByteArray.create` and `push`, or `"text".toByteArray()`, or take `.clone()`; build a field
+  default fresh, or declare the field `immutable`.
 - A `Map` key and a `Set` element are `immutable` slots: `Map.insert`, `Map.upsert` and `Set.insert` take an
   `immutable` key or element, so a record or array key built at run time is E3207 until it is frozen. Numbers,
-  `String` and other value types need nothing.
-  Fix: write `freeze` before the fresh key or element (`counts.upsert(freeze ByteArray.create(3), value: 7)`).
+  `String` and other value types need nothing. A generic body that keeps its type parameter in such a slot (a
+  `Set` of `T`, a `Map` key `T`) takes frozen arguments at every instantiation, so a collection of writable
+  records passed to it is E3207.
+  Fix: write `freeze` before the fresh key or element (`counts.upsert(freeze ByteArray.create(3), value: 7)`);
+  `freeze` or `.clone()` the argument of a generic body that keeps its elements frozen.
 - A record whose fields are all `let` is immutable only when every field's type is a value type or an immutable
   aggregate, so a record with a `let` array field is no longer immutable data: handing it to an `immutable`
   parameter, or sending it as `immutable`, is E3207.
@@ -168,16 +179,6 @@ release's version as its heading when the release is cut.
 - A `match` payload binding wears the typealias its payload was declared with, as the union's declaring
   file resolves it, so passing it where another typealias of the same instance is expected is E3005.
   Fix: convert the binding with `as`, or declare the parameter with the payload's typealias.
-- A tuple holding a value read out of read-only data, such as a `readonly` element or a module-level `let`
-  built by a call, is read-only wherever it goes, a tuple a call returns included. Binding it, or one of its read-only elements, to a `var`, assigning
-  it to existing `var` names, storing it into a `var` field or an array, or passing it to a function that
-  writes it is E3078 (E3159 for the call); each of these compiled before.
-  Fix: bind it with `let`, or take a `.clone()` of the elements.
-
-- Passing read-only data, such as a `readonly` element or a module-level `let` built by a call, to a function
-  whose result holds a closure capturing that parameter — in a container, a record or bare — is E3078, also
-  when the result is bound by a `let` and the closure only reads.
-  Fix: pass a `clone()`.
 - An element of another enum stored into an array by `push`, `set`, `insert` or `fill`, or written in an
   array literal, is refused (E3005).
   Fix: store a value of the element's own enum.
@@ -220,10 +221,6 @@ release's version as its heading when the release is cut.
 - A `?`, `;`, `|`, `&`, `$`, `%`, `~`, `^`, backtick, control character or non-ASCII character outside a
   string literal or a comment is E1010 (`Unexpected character`); the lexer skipped it before.
   Fix: delete the character, or move it into a string literal or a comment.
-- A fresh tuple or record that holds a record a `var` of the function may still write
-  is E3078 when it is stored into a `readonly` element, or passed to a parameter that stores it there, with
-  `p` a `var` written later; it compiled before, with the element's contents writable through `p`.
-  Fix: hold a `.clone()` of the record, or a record of its own.
 - A function value fits a function type only by variance: a read-only parameter may be wider than the
   type's, a `mutable` parameter must be the same type, and a result may be narrower.
   A function whose read-only parameter is narrower, whose written parameter differs, or whose result is
@@ -286,10 +283,9 @@ release's version as its heading when the release is cut.
 - `HttpServer.serve` moves each connection, a `TcpClient` or a `TlsStream`, to a green thread of its own, so a
   client that stalls and a handler that computes delay only their own connection, and it returns once every
   connection it took has finished. The handler is one value every connection reads at once, so it is
-  read-only: a handler whose methods write its fields is E3138 where `serve` sends it to a connection's
-  thread, in `stdlib/HttpServer.maxon`, and a handler that holds an OS handle, a function value or a promise,
-  or that the calling function also shares with a coroutine, stops the program with exit code 96. What the
-  handler wrote in place is no longer shared between requests or visible to the caller.
+  read-only: a handler whose methods write its fields is E3210 where it conforms to `HttpHandler`, and a
+  handler that holds an OS handle, a function value or a promise cannot be frozen, so `serve` refuses it at
+  compile time. What the handler wrote in place is no longer shared between requests or visible to the caller.
   Fix: keep what connections share, or what the caller reads after `serve`, in a service the handler holds a
   handle to (`CountingHandler.create(visits.clone())`), declare the handler's fields `let`, and build the
   handler where `serve` is called.
@@ -333,7 +329,7 @@ release's version as its heading when the release is cut.
   `options.setHandshakeDeadline(...)` where the old `deadlineMs` also had to bound the handshake (`0` waits
   without a limit).
 - A message parameter, a message reply or a `spawn` factory argument whose type can hold a promise is
-  E3135: a record with a promise in a field, a union with a case carrying one, or an array or list of
+  E3217: a record with a promise in a field, a union with a case carrying one, or an array or list of
   promises, empty or not; so is a bare promise handed to a factory. A coroutine belongs to the strand that
   started it, so a promise that crossed was dropped, awaited or cancelled by a strand that does not own it,
   and these programs compiled and aborted with `fatal error: promise dropped by a machine that does not
@@ -342,10 +338,10 @@ release's version as its heading when the release is cut.
 - `spawn Type.factory(args)` runs the factory on the new service's own green thread instead of on the
   spawner's, and its arguments move there the way a message's do. A coroutine the factory starts therefore
   belongs to the service's strand. Programs that compiled before are refused. A binding passed to a factory is moved whether or not the factory keeps it, so
-  reading it after the `spawn` is E3102, and a borrowed argument crosses on a message argument's terms, so
-  one read out of a `var` field or a container is E3138 even where the factory does not keep it. A factory,
-  or a function it calls, is held to the rules a message handler is: reading a module-level `let` no share walk can mark is E3163, and awaiting a
-  reply in a cycle of services is E3139. A factory argument held at an opaque type parameter (a `T` value
+  reading it after the `spawn` is E3102, and an argument is held to a message argument's terms (`isolated T` or
+  `immutable T`, E3217 without one), so one read out of a field or a container is not `isolated` (E3200) even
+  where the factory does not keep it. A factory, or a function it calls, is held to the rules a message
+  handler is: awaiting a reply in a cycle of services is E3139. A factory argument held at an opaque type parameter (a `T` value
   inside a generic function) is E2015.
   Fix: pass `binding.clone()` to keep reading the binding, and `.clone()` a borrowed argument; keep the
   value in a field of the service and reach it through a message; break the await cycle as E3139's entry
@@ -374,10 +370,11 @@ release's version as its heading when the release is cut.
   reassign, as in `function bump(n mutable Count)`, or copy the parameter into a local `var` and reassign the
   local. A record-type parameter is never rebound; copy it into a local `var`.
 - A `mutable` parameter takes a `var`, a field or an element that is writable: a literal or an expression
-  handed to it is E3159, where it was given a temporary, and a `let` handed to it is E2013. A function with a
+  handed to it is E2013, where it was given a temporary, and so is a `let`, a module-level `let`, a name a
+  closure captured, and a field of a `let` that is another name for a record held elsewhere. A function with a
   `mutable` parameter fits only a function type that spells `mutable` at that position (E3005), and a
   message or factory parameter cannot be `mutable` (E2010).
-  Fix: pass a `var`; write the marker in the function type, as in `typealias Step = function(mutable Count)`;
+  Fix: pass a `var` (a captured name or a module `let` goes through a local `var` or a `.clone()`); write the marker in the function type, as in `typealias Step = function(mutable Count)`;
   return the new value from a message or a factory instead of writing a parameter.
 - Maxon has no overloading. A function name is declared once per directory, a method name once per type and
   an interface requirement name once per interface, so a second function of one name, a `static` and an
@@ -508,9 +505,9 @@ release's version as its heading when the release is cut.
 - A type with a unique field is unique, `Promise` is declared `type Promise is unique`, and a unique value
   is never cloned or aliased. `clone()` of a record, array or promise holding a promise is E3214, and so is
   freezing one, or binding, returning, storing or handing to a keeping parameter a unique value read out of a
-  field or an element.
-  Fix: move the value out with `pop` or `remove`, or read it through a `view`; a holder of promises has no
-  `clone()`.
+  field, an element, a `for` loop variable or a tuple destructure.
+  Fix: move the value out with `pop` or `remove`, or `swap` it out of an `isolated` field; a holder of promises
+  has no `clone()`.
 - A `for` loop over an array whose elements move out as the loop runs, such as an array of promises, makes the
   array read-only in the body: pushing to it, clearing it or passing it to a function that writes it is E3197 or
   E3207.
@@ -629,9 +626,12 @@ release's version as its heading when the release is cut.
 - `freeze` of a record that is an immutable aggregate (every field a `let` of a value type or of such a
   record) is E3200, because the record already counts as a value: `freeze LogHandlerOptions.create()`.
   Fix: delete the `freeze`.
-- A `for` over a read-only `List` (frozen, or a module-level `let`) hands out read-only elements: writing one
-  is E3197.
-  Fix: iterate a `.clone()`, or write through a mutable list.
+- A `for` over a read-only `List` (frozen, or a module-level `let`), or over a collection whose element type is
+  `immutable` (`Array with immutable Box`), hands out read-only elements: writing one is E3197. The element an
+  iterator hands out of a frozen collection parameter is frozen too, so handing it to a function that writes its
+  parameter is E3207.
+  Fix: iterate a `.clone()`, or write through a mutable list; take a mutable collection, or `.clone()` the
+  element, where a callee writes it.
 - A closure that writes through a captured iterator writes the collection the iterator runs over, so a function
   whose parameter the closure iterates takes a mutable argument: a frozen one is E3207. A union parameter is
   judged like a record parameter, and a parameter a function passes only through a retained alias (an
@@ -642,7 +642,9 @@ release's version as its heading when the release is cut.
   fresh), and binding an element of an `isolated` container to a `let` or `var` outside a block is E3198.
   Fix: `freeze` or `.clone()` one argument so both share a capability; open the container with `modify`.
 - A bare `get(…)` inside an `extension Array` or `Array` body takes the capability of the receiver, so
-  writing through its result when the receiver is frozen or read-only is E3197.
+  writing through its result when the receiver is frozen or read-only is E3197, and so is writing through what
+  an `extension` member returns out of an instance whose elements are `immutable` (`return try self.get(0)`
+  over `Array with immutable Point`).
   Fix: take a `.clone()` of the element.
 - `SubprocessError` has a new case, `statusLost(stdout, stderr)`, thrown by `Subprocess.run` and by
   `StreamingSubprocess.wait()` and `waitWithTimeout()` for a child that ended while another process took its exit
@@ -674,6 +676,47 @@ release's version as its heading when the release is cut.
   generic type another directory exports as `Pair`; it is now E2055 (`Type 'Pair' has no associated types`), because
   an alias is not a generic type and the alias that wins is the declaration the bare name means.
   Fix: write the directory-qualified base for the generic type (`a.Pair with …`), or rename the alias.
+- `view` is removed: `view x = e` fails as any stray word does. It was another spelling of `let`.
+  Fix: write `let` (`view v = h.box` is `let v = h.box`).
+- The `readonly` element qualifier is removed, with E2075 and E2077: `Array with readonly T` and `Map with K,
+  readonly V` fail as any stray word does. A collection whose elements nothing may write is `Array with
+  immutable T` or `Map with K, immutable V`; a value stored into one must be frozen (E3196), and an element read
+  out is read-only (a write through it is E3197).
+  Fix: write `immutable` where `readonly` stood, and `freeze` a value built at run time where it is stored into
+  the collection.
+- The read-only value rules that made `let` deep are gone, and with them E3078, E3159, E3188, E3135, E3137,
+  E3138, E3163, E3164 and E3191: binding read-only data to a `var`, to a mutable place or to a keeping
+  parameter now compiles, and the write is what is refused. A write through frozen, constant or read-only data is
+  E3197 (E3207 where the data is handed to a parameter the callee writes), a store into a plain field, element or
+  payload is E3196, a `mutable` by-reference argument that is a literal, an expression, a captured name or a
+  module `let` is E2013, a message or factory value that cannot cross is E3217, and a `spawn` reachable from a
+  global initializer is E3220. A send no longer checks sole ownership at run time: a value that crosses is
+  `isolated` (E3200, E3102) or `immutable` (E3207), so a program whose message arguments were aliased by something
+  else is refused at compile time, and exit code 96 now means only that a `freeze` or publish walk reached a value
+  held at an interface type whose conformer no walk can be built for.
+  Fix: expect the replacement code wherever a script or test matches the old one; write `.clone()` where a
+  mutable copy of read-only data is wanted, and send `isolated` values or `freeze x.clone()`.
+- The initializer of a module-level `let` or a `static let` calls nothing: a call in it is E3220 (`let shared =
+  Cache.create()`, `let name = "ada".toByteArray()`, `static let set = CharacterSet.from(chars)`), and a call in
+  the initializer of a number, `bool` or enum binding is E2045 as before. A module `let` is image data, laid down
+  before the program starts and read as one `immutable` copy by every function and thread; a call that built a
+  value once before `main` no longer runs there.
+  Fix: write a literal; or build the value with a function where it is used, and call `.clone()` on a constant
+  where a mutable copy is wanted.
+- The OS handle types `TcpClient`, `TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`,
+  `StreamingSubprocess` and `SharedSegment`, and every type that holds one, are unique: one name owns a handle.
+  Binding one with `let`, pushing it into a container or handing it to a `spawn` moves it, so reading the name
+  afterwards is E3102, and `clone()` of one is E3214. `SampledProcess.clone`, `SeizedThreads.clone` and
+  `MachinePin.clone` are removed, and `StreamingSubprocess.handle` is private. Aliasing a handle used to stop the
+  program with exit code 96 at a send.
+  Fix: read what you need from a handle before it moves; let one owner hold it and lend it to calls; take it out
+  of a container with `pop`, `remove` or `swap`.
+- A `unique` value handed to an `async` call is lent to the coroutine until its promise is awaited or cancelled:
+  `async serve(server)` followed by a read, `close()` or pass of `server` before the await is E3102, and a
+  `HttpServer` is stopped with `.cancel()` on its serving promise, not by a concurrent `close()`. `serve` on a
+  server already closed returns `closed`.
+  Fix: read the value before the `async`, or after the await or cancel; stop a server with `.cancel()` on its
+  promise, then call `close()`.
 
 ## 0.5.0 — 2026-10-08
 

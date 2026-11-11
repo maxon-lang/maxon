@@ -226,7 +226,7 @@ function describedBuild(path FilePath, output FilePath, request BuildRecordReque
 end 'describedBuild'
 
 function stampedInputs(base FilePath, paths CompileInputArray) returns RecordedInputArray throws RunCacheError
-	var stamped = RecordedInputArray.create(paths.count(), zeroed: false)
+	let stamped = RecordedInputArray.create(paths.count(), zeroed: false)
 
 	for path in paths 'eachPath'
 		let anchored = path.anchoredAt(base)
@@ -242,7 +242,7 @@ function stampedInputs(base FilePath, paths CompileInputArray) returns RecordedI
 end 'stampedInputs'
 
 function optionsOf(request BuildRecordRequest) returns NamedValueArray
-	var options = NamedValueArray.create(RecordOption.allCases.count(), zeroed: false)
+	let options = NamedValueArray.create(RecordOption.allCases.count(), zeroed: false)
 
 	for option in RecordOption.allCases 'eachOption'
 		options.push(NamedValue.create(option.name, value: recordOptionValueOf(option, request: request)))
@@ -273,7 +273,7 @@ function sourceOrderText(order SourceOrder) returns String
 end 'sourceOrderText'
 
 function definesOf(request BuildRecordRequest) returns NamedValueArray
-	var defines = NamedValueArray.create(request.defines.count(), zeroed: false)
+	let defines = NamedValueArray.create(request.defines.count(), zeroed: false)
 
 	for define in request.defines 'eachDefine'
 		defines.push(NamedValue.create(define.name, value: define.value))
@@ -283,7 +283,7 @@ function definesOf(request BuildRecordRequest) returns NamedValueArray
 end 'definesOf'
 
 function versionText(version VersionComponentArray) returns String
-	var components = StringArray.create(version.count(), zeroed: false)
+	let components = StringArray.create(version.count(), zeroed: false)
 
 	for component in version 'eachComponent'
 		components.push("{component}")
@@ -297,7 +297,7 @@ function toolsOf(target Target) returns CompileInputArray throws RunCacheError
 		throw RunCacheError.unavailable(wasmComponentProblem(e))
 	end 'notLocated'
 
-	var files = CompileInputArray.create(0)
+	let files = CompileInputArray.create(0)
 
 	match located 'tools'
 		noTools then return files
@@ -381,7 +381,7 @@ function compilerChange(current BuildRecord, stored BuildRecord) returns StatedT
 end 'compilerChange'
 
 function valuesByName(entries NamedValueArray) returns NamedValueMap
-	var byName = NamedValueMap.create()
+	let byName = NamedValueMap.create()
 
 	for entry in entries 'eachEntry'
 		byName.upsert(entry.name, value: entry.value)
@@ -414,7 +414,7 @@ function firstNamedChange(label RecordLabel, current NamedValueArray, stored Nam
 end 'firstNamedChange'
 
 function namesOf(entries NamedValueArray) returns StringArray
-	var names = StringArray.create(entries.count(), zeroed: false)
+	let names = StringArray.create(entries.count(), zeroed: false)
 
 	for entry in entries 'eachEntry'
 		names.push(entry.name)
@@ -424,7 +424,7 @@ function namesOf(entries NamedValueArray) returns StringArray
 end 'namesOf'
 
 function pathsOf(inputs RecordedInputArray) returns StringArray
-	var spelled = StringArray.create(inputs.count(), zeroed: false)
+	let spelled = StringArray.create(inputs.count(), zeroed: false)
 
 	for input in inputs 'eachInput'
 		spelled.push(input.path.toString())
@@ -434,7 +434,7 @@ function pathsOf(inputs RecordedInputArray) returns StringArray
 end 'pathsOf'
 
 function setOf(keys StringArray) returns RecordedPathSet
-	var keyed = RecordedPathSet.create()
+	let keyed = RecordedPathSet.create()
 
 	for key in keys 'eachKey'
 		keyed.insert(key)
@@ -552,7 +552,7 @@ function sameStamp(stamp RecordedFileStamp, other RecordedFileStamp) returns boo
 end 'sameStamp'
 
 function currentFilesOf(record BuildRecord) returns NamedValueArray
-	var files = NamedValueArray.create(RecordedFile.allCases.count(), zeroed: false)
+	let files = NamedValueArray.create(RecordedFile.allCases.count(), zeroed: false)
 	files.push(NamedValue.create(RecordedFile.output.name, value: encodedStamp(stampOf(record.output))))
 	files.push(NamedValue.create(RecordedFile.sidecar.name, value: encodedStamp(stampOf(sidecarPathOf(record.output)))))
 
@@ -639,7 +639,7 @@ function decodedField(field String) returns String
 end 'decodedField'
 
 function recordLine(label RecordLabel, fields StringArray) returns String
-	var encoded = StringArray.create(fields.count(), zeroed: false)
+	let encoded = StringArray.create(fields.count(), zeroed: false)
 
 	for field in fields 'eachField'
 		encoded.push(encodedField(field))
@@ -686,7 +686,7 @@ end 'recordText'
 
 function recordLinesIn(text String) returns RecordLineArray throws RunCacheError
 	let rows = text.split(ManifestLineSeparator)
-	var lines = RecordLineArray.create(rows.count(), zeroed: false)
+	let lines = RecordLineArray.create(rows.count(), zeroed: false)
 
 	for line in rows 'eachLine'
 		if line.isEmpty() 'blank'
@@ -694,7 +694,7 @@ function recordLinesIn(text String) returns RecordLineArray throws RunCacheError
 		end 'blank'
 
 		let pieces = line.split(ManifestFieldSeparator)
-		var fields = StringArray.create(pieces.count(), zeroed: false)
+		let fields = StringArray.create(pieces.count(), zeroed: false)
 
 		for piece in pieces 'eachPiece'
 			fields.push(decodedField(piece))
@@ -702,7 +702,7 @@ function recordLinesIn(text String) returns RecordLineArray throws RunCacheError
 
 		let spelled = try fields.get(LabelField) otherwise panic("recordLinesIn: a split answers at least one piece")
 		let label = try RecordLabel.fromName(spelled) otherwise throw RunCacheError.unavailable("a line is labelled `{spelled}`, which names nothing a record holds")
-		var rest = try fields.slice(FirstFieldAfterTheLabel, endIndex: fields.count()) otherwise panic("recordLinesIn: a split answers at least one piece, so the fields after the label start within the array")
+		let rest = try fields.slice(FirstFieldAfterTheLabel, endIndex: fields.count()) otherwise panic("recordLinesIn: a split answers at least one piece, so the fields after the label start within the array")
 
 		lines.push(RecordLine.create(label, fields: rest))
 	end 'eachLine'
@@ -711,7 +711,7 @@ function recordLinesIn(text String) returns RecordLineArray throws RunCacheError
 end 'recordLinesIn'
 
 function fieldLinesOf(lines RecordLineArray, label RecordLabel) returns FieldLineArray
-	var matching = FieldLineArray.create(0)
+	let matching = FieldLineArray.create(0)
 
 	for line in lines 'eachLine'
 		if line.label == label 'thisLabel'
@@ -734,7 +734,7 @@ end 'soleFieldsOf'
 
 function namedValuesOf(lines RecordLineArray, label RecordLabel) returns NamedValueArray throws RunCacheError
 	let matching = fieldLinesOf(lines, label: label)
-	var values = NamedValueArray.create(matching.count(), zeroed: false)
+	let values = NamedValueArray.create(matching.count(), zeroed: false)
 
 	for fields in matching 'eachLine'
 		values.push(try namedValueOf(fields))
@@ -745,7 +745,7 @@ end 'namedValuesOf'
 
 function recordedInputsOf(lines RecordLineArray, label RecordLabel) returns RecordedInputArray throws RunCacheError
 	let matching = fieldLinesOf(lines, label: label)
-	var inputs = RecordedInputArray.create(matching.count(), zeroed: false)
+	let inputs = RecordedInputArray.create(matching.count(), zeroed: false)
 
 	for fields in matching 'eachLine'
 		let named = try namedValueOf(fields)
@@ -758,7 +758,7 @@ end 'recordedInputsOf'
 
 function readBuildRecord(path FilePath) returns RecordRead throws RunCacheError
 	let text = try File.readText(path) otherwise throw RunCacheError.unavailable("{path.toString()} could not be read")
-	var lines = try recordLinesIn(text)
+	let lines = try recordLinesIn(text)
 
 	let format = try fieldAt(try soleFieldsOf(lines, label: RecordLabel.format), index: FirstField)
 

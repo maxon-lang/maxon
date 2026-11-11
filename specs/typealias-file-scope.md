@@ -433,7 +433,7 @@ function ownClamp(i ElementIndex) returns ElementIndex
 end 'ownClamp'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.resize(20)
 	try a.set(9, value: 42) otherwise ignore
 	print("{try a.get(9) otherwise 0} {ownClamp(3)} {libClamp()}\n")
@@ -486,7 +486,7 @@ export typealias High = int(1000 to 2000)
 typealias Slots = Array with High
 
 export function fromHigh() returns High
-	var w = Slots.create(0)
+	let w = Slots.create(0)
 	w.push(1500)
 	return try w.get(0) otherwise 1000
 end 'fromHigh'
@@ -496,7 +496,7 @@ typealias Low = int(0 to 100)
 typealias Slots = Array with Low
 
 function main() returns ExitCode
-	var w = Slots.create(0)
+	let w = Slots.create(0)
 	w.push(40)
 	return (((fromHigh() / 100) as Low) + (try w.get(0) otherwise 0)) as ExitCode
 end 'main'
@@ -521,7 +521,7 @@ typealias Byte = int(300 to 1000)
 typealias Bytes = Array with Byte
 
 export function wide(v Integer) returns Integer
-	var b = Bytes.create(0)
+	let b = Bytes.create(0)
 	b.push(v as Byte)
 	return try b.get(0) otherwise 300
 end 'wide'
@@ -533,7 +533,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create(0)
+	let b = Bytes.create(0)
 	let two = 200 as Byte
 	b.push(two)
 	return (try b.get(0) otherwise 0) + ((wide(900) / 100) as Byte)
@@ -559,7 +559,7 @@ type Words
 	export var items as Bag
 
 	static function create() returns Words
-		var b = Bag.create(0)
+		let b = Bag.create(0)
 		b.push("hi")
 		return Words{items: b}
 	end 'create'
@@ -578,7 +578,7 @@ type Nums
 	export var items as Bag
 
 	static function create() returns Nums
-		var b = Bag.create(0)
+		let b = Bag.create(0)
 		b.push(7)
 		return Nums{items: b}
 	end 'create'
@@ -605,7 +605,7 @@ export typealias Tally = int(0 to 1000)
 typealias Counts = Array with Tally
 
 export function fromA() returns Tally
-	var c = Counts.create(0)
+	let c = Counts.create(0)
 	c.push(40)
 	return try c.get(0) otherwise 0
 end 'fromA'
@@ -614,7 +614,7 @@ end 'fromA'
 typealias Counts = Array with Tally
 
 function main() returns ExitCode
-	var c = Counts.create(0)
+	let c = Counts.create(0)
 	c.push(2)
 	return fromA() + (try c.get(0) otherwise 0)
 end 'main'
@@ -637,11 +637,11 @@ typealias Slots = Array with High
 typealias Grid = Array with Slots
 
 export function fromHigh() returns High
-	var g = Grid.create(0)
-	var row = Slots.create(0)
+	let g = Grid.create(0)
+	let row = Slots.create(0)
 	row.push(1500)
 	g.push(row)
-	view back = try g.get(0) otherwise Slots.create(0)
+	let back = try g.get(0) otherwise Slots.create(0)
 	return try back.get(0) otherwise 1000
 end 'fromHigh'
 
@@ -651,11 +651,11 @@ typealias Slots = Array with Low
 typealias Grid = Array with Slots
 
 function main() returns ExitCode
-	var g = Grid.create(0)
-	var row = Slots.create(0)
+	let g = Grid.create(0)
+	let row = Slots.create(0)
 	row.push(40)
 	g.push(row)
-	view back = try g.get(0) otherwise Slots.create(0)
+	let back = try g.get(0) otherwise Slots.create(0)
 	return (((fromHigh() / 100) as Low) + (try back.get(0) otherwise 0)) as ExitCode
 end 'main'
 ```
@@ -717,7 +717,7 @@ union WordBox
 end 'WordBox'
 
 export function words() returns ExitCode
-	var b = Bag.create(0)
+	let b = Bag.create(0)
 	b.push("hi")
 	let w = WordBox.filled(b)
 	return match w 'm'
@@ -736,7 +736,7 @@ union NumBox
 end 'NumBox'
 
 function main() returns ExitCode
-	var b = Bag.create(0)
+	let b = Bag.create(0)
 	b.push(7)
 	let n = NumBox.filled(b)
 	let mine = match n 'm'
@@ -767,14 +767,14 @@ typealias Elem = int(0 to 100)
 typealias Slots = Array with Elem
 
 module function fromPriv() returns ExitCode
-	var w = Slots.create(0)
+	let w = Slots.create(0)
 	w.push(40)
 	return try w.get(0) otherwise 0
 end 'fromPriv'
 
 // --- file: lib/main.maxon
 function main() returns ExitCode
-	var w = Slots.create(0)
+	let w = Slots.create(0)
 	w.push(1500)
 	let high = (try w.get(0) otherwise 1000) / 100
 	return (high as ExitCode) + fromPriv()
@@ -921,7 +921,7 @@ typealias Bag = Array with High
 typealias BB = Box with Bag
 
 export function fromHigh() returns Integer
-	var b = Bag.create(0)
+	let b = Bag.create(0)
 	b.push(1500)
 	let box = BB.create(b)
 	return 1 if box.value.count() == 1 else 0
@@ -934,9 +934,9 @@ typealias Bag = Array with Low
 typealias BB = Box with Bag
 
 function main() returns ExitCode
-	var b = Bag.create(0)
+	let b = Bag.create(0)
 	b.push(40)
-	var box = BB.create(b)
+	let box = BB.create(b)
 	box.swap(Bag.create(0))
 	return fromHigh() - 1
 end 'main'
@@ -1062,7 +1062,7 @@ typealias N0 = Box with S1
 typealias N1 = Box with N0
 
 export function useOther() returns Integer
-	var w1 = N1.create(N0.create(S1.make("other")))
+	let w1 = N1.create(N0.create(S1.make("other")))
 	w1.swap(N0.create(S1.make("other2")))
 	return 1
 end 'useOther'
@@ -1073,8 +1073,8 @@ typealias N0 = Box with S0
 typealias N1 = Box with N0
 
 function main() returns ExitCode
-	var v0 = N0.create(S0.make("x"))
-	var v1 = N1.create(v0)
+	let v0 = N0.create(S0.make("x"))
+	let v1 = N1.create(v0)
 	v1.swap(N0.create(S0.make("y")))
 	return useOther() - 1
 end 'main'
@@ -1119,7 +1119,7 @@ typealias N0 = Box with S1
 typealias N1 = Box with (Box with S1)
 
 export function useOther() returns Integer
-	var w1 = N1.create(N0.create(S1.make("other")))
+	let w1 = N1.create(N0.create(S1.make("other")))
 	w1.swap(N0.create(S1.make("other2")))
 	return 1
 end 'useOther'
@@ -1130,7 +1130,7 @@ typealias N0 = Box with S0
 typealias N1 = Box with (Box with S0)
 
 function main() returns ExitCode
-	var v1 = N1.create(N0.create(S0.make("x")))
+	let v1 = N1.create(N0.create(S0.make("x")))
 	v1.swap(N0.create(S0.make("y")))
 	return useOther() - 1
 end 'main'
@@ -1160,7 +1160,7 @@ public type Keeper
 	var p as Pair
 
 	export static function make() returns Self
-		var b = Bag.create(0)
+		let b = Bag.create(0)
 		b.push(7)
 		return Self{p: (b, 1)}
 	end 'make'
@@ -1178,7 +1178,7 @@ end 'useA'
 typealias Bag = Array with String
 
 export function useB() returns Integer
-	var b = Bag.create(0)
+	let b = Bag.create(0)
 	b.push("x")
 	return b.count()
 end 'useB'
@@ -1209,7 +1209,7 @@ neither the `otherwise ""` nor the `byteLength()` would compile.
 ```maxon
 // --- file: adef.maxon
 export function makeBag() returns StringArray
-	var b = StringArray.create(0)
+	let b = StringArray.create(0)
 	b.push("four")
 	b.push("nine")
 	return b
@@ -1220,9 +1220,9 @@ typealias Num = int(0 to 125)
 typealias StringArray = Array with Num
 
 function main() returns ExitCode
-	var mine = StringArray.create(0)
+	let mine = StringArray.create(0)
 	mine.push(4)
-	var theirs = makeBag()
+	let theirs = makeBag()
 	let word = try theirs.get(1) otherwise ""
 	return (word.byteLength() * 20 + mine.count() * 11) as ExitCode
 end 'main'
@@ -1240,7 +1240,7 @@ export typealias Num = int(0 to 125)
 export typealias Bag = Array with Num
 
 export function makeBag() returns Bag
-	var b = Bag.create(0)
+	let b = Bag.create(0)
 	b.push(4)
 	b.push(9)
 	return b
@@ -1250,9 +1250,9 @@ end 'makeBag'
 typealias Bag = Array with String
 
 function main() returns ExitCode
-	var mine = Bag.create(0)
+	let mine = Bag.create(0)
 	mine.push("x")
-	var theirs = makeBag()
+	let theirs = makeBag()
 	return ((try theirs.get(1) otherwise 0) * 10 + (mine.count() as Num)) as ExitCode
 end 'main'
 ```
@@ -1285,7 +1285,7 @@ public type Holder
 	var q as Pair
 
 	export static function make() returns Self
-		var b = Bag.create(0)
+		let b = Bag.create(0)
 		b.push("xy")
 		return Self{q: (b, 1)}
 	end 'make'
@@ -1314,7 +1314,7 @@ public type Keeper
 	var p as Pair
 
 	export static function make() returns Self
-		var b = Bag.create(0)
+		let b = Bag.create(0)
 		b.push(7)
 		return Self{p: (b, 1)}
 	end 'make'
@@ -1562,9 +1562,9 @@ end 'SlotA'
 
 export function alphaSide()
 	let h = HolderA.create()
-	var xs = PairsA.create(0)
+	let xs = PairsA.create(0)
 	xs.push((4, 1))
-	view e = try xs.get(0) otherwise return
+	let e = try xs.get(0) otherwise return
 	let b = BoxA.create((6, 3))
 	let s = SlotA.some((8, 5))
 	let ys = xs.clone()
@@ -1599,9 +1599,9 @@ end 'SlotG'
 
 export function gammaSide()
 	let h = HolderG.create()
-	var xs = PairsG.create(0)
+	let xs = PairsG.create(0)
 	xs.push(("c", "d"))
-	view e = try xs.get(0) otherwise return
+	let e = try xs.get(0) otherwise return
 	let b = BoxG.create(("e", "f"))
 	let s = SlotG.some(("g", "h"))
 	let ys = xs.clone()
@@ -1670,9 +1670,9 @@ end 'SlotG'
 
 export function gammaSide()
 	let h = HolderG.create()
-	var xs = PairsG.create(0)
+	let xs = PairsG.create(0)
 	xs.push(("c", "d"))
-	view e = try xs.get(0) otherwise return
+	let e = try xs.get(0) otherwise return
 	let b = BoxG.create(("e", "f"))
 	let s = SlotG.some(("g", "h"))
 	let ys = xs.clone()
@@ -1707,9 +1707,9 @@ end 'SlotA'
 
 export function alphaSide()
 	let h = HolderA.create()
-	var xs = PairsA.create(0)
+	let xs = PairsA.create(0)
 	xs.push((4, 1))
-	view e = try xs.get(0) otherwise return
+	let e = try xs.get(0) otherwise return
 	let b = BoxA.create((6, 3))
 	let s = SlotA.some((8, 5))
 	let ys = xs.clone()
@@ -2016,12 +2016,12 @@ typealias W = int(i64.min to i64.max)
 typealias WVec = FixedArray with 8 W
 
 export function wideCount() returns Wide
-	var v = WVec.create()
+	let v = WVec.create()
 	return v.count()
 end 'wideCount'
 
 export function wideSlot() returns Wide
-	var v = WVec.create()
+	let v = WVec.create()
 	v.set(7, value: 1779033703)
 	return v.get(7)
 end 'wideSlot'
@@ -2101,7 +2101,7 @@ typealias Measure = int(0 to 100)
 typealias IntMeasures = Array with Measure
 
 export function sumA() returns ExitCode
-	var xs = IntMeasures.create(0)
+	let xs = IntMeasures.create(0)
 	xs.push(40 as Measure)
 	xs.push(2 as Measure)
 	var total = 0 as Measure
@@ -2116,7 +2116,7 @@ typealias Measure = float(0.0 to 1.0)
 typealias FloatMeasures = Array with Measure
 
 export function sumB() returns ExitCode
-	var xs = FloatMeasures.create(0)
+	let xs = FloatMeasures.create(0)
 	xs.push(0.25 as Measure)
 	xs.push(0.25 as Measure)
 	var total = 0.0 as Measure
@@ -2428,7 +2428,7 @@ module typealias Level = int(0 to 255)
 typealias ALevels = Map with (String, Level)
 
 export function firstOfA() returns String
-	var xs = ALevels.create()
+	let xs = ALevels.create()
 	xs.upsert("k", value: 200)
 	let first = try xs.get("k") otherwise 0
 	return "{first} {xs.count()}"
@@ -2441,7 +2441,7 @@ module typealias Level = int(0 to 100000)
 typealias BLevels = Map with (String, Level)
 
 export function firstOfB() returns String
-	var xs = BLevels.create()
+	let xs = BLevels.create()
 	xs.upsert("k", value: 90000)
 	let first = try xs.get("k") otherwise 0
 	return "{first} {xs.count()}"
@@ -2802,7 +2802,7 @@ end 'countAll'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var xs = StringArray.create(0)
+	let xs = StringArray.create(0)
 	xs.push("a")
 	xs.push("b")
 	print("{countAll(xs)}\n")
@@ -2845,10 +2845,10 @@ end 'main'
 error E3063: <fragment>:18:11: Ambiguous type name 'StringArray': more than one visible declaration matches it. Qualify it as one of: alpha.StringArray, beta.StringArray
 ```
 
-<!-- test: a-top-level-factory-argument-cast-to-a-contested-name-keeps-the-casting-files-alias -->
-⭐ **A FOLDED CAST ARGUMENT CARRIES THE ALIAS ITS FILE MEANS, NOT THE BARE SPELLING.** `2 as Small` in the
+<!-- test: a-factory-argument-cast-to-a-contested-name-keeps-the-casting-files-alias -->
+⭐ **A CAST ARGUMENT CARRIES THE ALIAS ITS FILE MEANS, NOT THE BARE SPELLING.** `2 as Small` in the
 second file names that file's private `int(0 to 100)` alias, a subtype of the factory's `Wide` parameter; a
-sibling declares `type Small`. The folded scalar is typed through the reading file's identity, so the factory
+sibling declares `type Small`. The scalar is typed through the reading file's identity, so the factory
 argument is a `Small` of the alias and never the sibling's struct.
 
 ```maxon
@@ -2869,10 +2869,10 @@ type Holder
 	end 'create'
 end 'Holder'
 
-let Cell = Holder.create(2 as Small)
-
 export function cellValue() returns ExitCode
-	return Cell.n as ExitCode
+	let cell = Holder.create(2 as Small)
+
+	return cell.n as ExitCode
 end 'cellValue'
 
 // --- file: nnominal/n-nominal.maxon

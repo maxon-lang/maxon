@@ -17,7 +17,7 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var a = ScoreArray.create(0)
+	let a = ScoreArray.create(0)
 	a.push(5)
 	a.push(1)
 	a.push(4)
@@ -154,7 +154,7 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreList = List with Score
 
 function main() returns ExitCode
-	var list = ScoreList.create()
+	let list = ScoreList.create()
 	list.append(2)
 	list.prepend(1)
 	try list.insert(2, value: 3) otherwise panic("index is within [0, count]")
@@ -198,7 +198,7 @@ as a `b"..."` literal is inserted as it is, and a record or array built at run t
 is inserted (`counts.upsert(freeze ByteArray.create(3), value: 7)`); an unfrozen one is
 [E3207](/docs/cli/error-codes/#e3207--semanticargumentcapabilityrefused). A stored key is read-only: a key read back from
 the map, by iteration or otherwise, is `immutable` and takes no writes
-([E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord)), so a key's hash stays the one it was filed under,
+([E3197](/docs/cli/error-codes/#e3197--semanticwritethroughreadonly)), so a key's hash stays the one it was filed under,
 and it goes straight into an `immutable` holder with no copy. `clone()` gives a key to change.
 
 ```maxon
@@ -213,7 +213,7 @@ typealias Age = int(0 to 150)
 typealias Ages = Map with String, Age
 
 function main() returns ExitCode
-	var ages = Ages.create()
+	let ages = Ages.create()
 	try ages.insert("ann", value: 30) otherwise panic("new key")
 
 	try ages.insert("ann", value: 31) otherwise 'duplicate'
@@ -255,7 +255,7 @@ Output: `ann is already present`, `32 true true 1`, `ann: 32`.
 
 An element is stored in an `immutable` slot, as a `Map` key is: a value type needs nothing, and a record or
 array built at run time is `freeze`d where it is inserted. An element read back from the set is `immutable` and
-takes no writes ([E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord)); `clone()` gives one to change.
+takes no writes ([E3197](/docs/cli/error-codes/#e3197--semanticwritethroughreadonly)); `clone()` gives one to change.
 `Set from values` over an `Array` of value types takes any array; over elements that are not value types, the
 array holds `immutable` elements (`Array with immutable Name`).
 
@@ -263,7 +263,7 @@ array holds `immutable` elements (`Array with immutable Name`).
 typealias Tags = Set with String
 
 function main() returns ExitCode
-	var tags = Tags.create()
+	let tags = Tags.create()
 	tags.insert("red")
 	tags.insert("red")
 	tags.insert("blue")
@@ -315,7 +315,7 @@ function readOr(v Vec3, index ElementIndex, fallback Coord) returns Coord
 end 'readOr'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(1, value: 7)
 
 	for i in 0 upto countof(Vec3) 'fill'
@@ -428,13 +428,13 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var values = ScoreArray.create(0)
+	let values = ScoreArray.create(0)
 
 	for i in 1 to 5 'fill'
 		values.push(i * 10)
 	end 'fill'
 
-	var c = try values.cursor() otherwise panic("not empty")
+	let c = try values.cursor() otherwise panic("not empty")
 	try c.advance() otherwise panic("has a second element")
 	let ahead = try c.peek(2) otherwise 0
 	print("{c.index()} {c.current()} {ahead}\n")
@@ -555,7 +555,7 @@ typealias Prices = Set with Money
 
 function main() returns ExitCode
 	let price = Money.create(250)
-	var prices = Prices.create()
+	let prices = Prices.create()
 	prices.insert(price)
 	prices.insert(price.clone())
 	print("{price} | {price:EUR} | {price == Money.create(250)} {price.compare(Money.create(1))} {prices.count()}\n")

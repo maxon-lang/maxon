@@ -89,7 +89,7 @@ end 'DebugCommandRow'
 export typealias DebugCommandRowArray = Array with DebugCommandRow
 
 export function debugCommandRows() returns DebugCommandRowArray
-	var rows = DebugCommandRowArray.create(0)
+	let rows = DebugCommandRowArray.create(0)
 	rows.push(DebugCommandRow.create(BreakCommandWord, aliases: ["b"], completesAFunctionName: true))
 	rows.push(DebugCommandRow.create(ClearCommandWord, aliases: StringArray.create(0), completesAFunctionName: true))
 	rows.push(DebugCommandRow.create(RunCommandWord, aliases: ["r"], completesAFunctionName: false))
@@ -116,7 +116,7 @@ export function debugCommandRows() returns DebugCommandRowArray
 end 'debugCommandRows'
 
 export function debugCommandVocabulary() returns StringArray
-	var words = StringArray.create(0)
+	let words = StringArray.create(0)
 
 	for row in debugCommandRows() 'eachRow'
 		words.push(row.canonical)
@@ -131,7 +131,7 @@ end 'debugCommandVocabulary'
 
 function debugHelpLines() returns StringArray
 	let rows = debugCommandRows()
-	var lines = StringArray.create(rows.count(), zeroed: false)
+	let lines = StringArray.create(rows.count(), zeroed: false)
 
 	for row in rows 'eachRow'
 		var spelling = "{row.canonical}"
@@ -368,7 +368,7 @@ function debugWalkModeWord(mode DebugWalkMode) returns String
 end 'debugWalkModeWord'
 
 export function debugWalkModeWords() returns StringArray
-	var words = StringArray.create(DebugWalkMode.allCases.count(), zeroed: false)
+	let words = StringArray.create(DebugWalkMode.allCases.count(), zeroed: false)
 
 	for mode in DebugWalkMode.allCases 'eachMode'
 		words.push(debugWalkModeWord(mode))
@@ -378,7 +378,7 @@ export function debugWalkModeWords() returns StringArray
 end 'debugWalkModeWords'
 
 export function debugWalkModePhrases() returns StringArray
-	var phrases = StringArray.create(DebugWalkMode.allCases.count(), zeroed: false)
+	let phrases = StringArray.create(DebugWalkMode.allCases.count(), zeroed: false)
 
 	for mode in DebugWalkMode.allCases 'eachMode'
 		phrases.push("`{debugWalkModeWord(mode)}` {debugWalkModeMeaning(mode)}")
@@ -512,7 +512,7 @@ function traceLimitOf(spelling String) returns DebugTraceTally
 end 'traceLimitOf'
 
 function repliedWith(reply DebugReply) returns DebugReplyArray
-	var replies = DebugReplyArray.create(1, zeroed: false)
+	let replies = DebugReplyArray.create(1, zeroed: false)
 	replies.push(reply)
 
 	return replies
@@ -652,7 +652,7 @@ export enum DebugStopDelivery
 end 'DebugStopDelivery'
 
 export type DebugConversation
-	var engine as DebugEngine
+	export var engine as DebugEngine
 	var symbols as DebugSymbols
 	var position as DebugStopState
 	var outcome as TargetOutcome
@@ -730,7 +730,7 @@ export type DebugConversation
 	end 'performParsed'
 
 	export function perform(command DebugCommand) returns DebugReplyArray
-		var replies = DebugReplyArray.create(0)
+		let replies = DebugReplyArray.create(0)
 
 		match command 'which'
 			quit then self.leave(replies)
@@ -773,7 +773,7 @@ export type DebugConversation
 			return
 		end 'noStopToNotice'
 
-		var answered = DebugReplyArray.create(0)
+		let answered = DebugReplyArray.create(0)
 		self.performLive(answered, command: command)
 
 		// A stop this command was answered under is reported before the answer. One that landed
@@ -833,7 +833,7 @@ export type DebugConversation
 	end 'noticeAPendingStop'
 
 	export function pollForStop(sliceMs StopTimeoutMs) returns DebugReplyArray
-		var replies = DebugReplyArray.create(0)
+		let replies = DebugReplyArray.create(0)
 
 		if not targetIsRunning(self.outcome) 'nothingLeftToWatch'
 			return replies
@@ -993,7 +993,7 @@ export type DebugConversation
 	end 'reportExpiry'
 
 	export function localsOfFrame(frame DebugFrame, onTheStoppedThread bool) returns DebugReplyArray
-		var replies = DebugReplyArray.create(1, zeroed: false)
+		let replies = DebugReplyArray.create(1, zeroed: false)
 
 		if not targetIsRunning(self.outcome) 'nothingLeftToAsk'
 			replies.push(DebugReply.failed(ProgramGoneMessage, suggestion: StatedText.unstated))
@@ -1054,7 +1054,7 @@ export type DebugConversation
 	end 'breakTargetOf'
 
 	function armBodies(spelling String, file DebugFileName, line DebugLineLookup, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, identity DebugBreakIdentity, condition DebugBreakCondition) returns DebugReply
-		var attempt = DebugArmingAttempt.create(identity, condition: condition)
+		let attempt = DebugArmingAttempt.create(identity, condition: condition)
 
 		for candidates in bodies 'eachBody'
 			for entry in entriesOf(candidates) 'eachEntry'
@@ -1164,8 +1164,8 @@ export type DebugConversation
 	end 'rearmedHeldByte'
 
 	function notedRearmed(attempt DebugArmingAttempt, candidate DebugLineCandidate) returns bool
-		view held = try self.armPurposes.get(candidate.offset) otherwise panic("DebugConversation.notedRearmed: offset 0x{candidate.offset:x} carried a condition a moment ago")
-		var reconditioned = DebugArmPurposes.create(held.count(), zeroed: false)
+		let held = try self.armPurposes.get(candidate.offset) otherwise panic("DebugConversation.notedRearmed: offset 0x{candidate.offset:x} carried a condition a moment ago")
+		let reconditioned = DebugArmPurposes.create(held.count(), zeroed: false)
 
 		for purpose in held 'eachPurpose'
 			reconditioned.push(DebugArmPurpose.create(purpose.hidden, identity: purpose.identity, condition: attempt.condition))
@@ -1199,13 +1199,13 @@ export type DebugConversation
 	end 'settledBy'
 
 	function notePurpose(offset DebugAddress, purpose DebugArmPurpose)
-		var kept = self.purposesOtherThan(offset, hidden: purpose.hidden, identity: purpose.identity)
+		let kept = self.purposesOtherThan(offset, hidden: purpose.hidden, identity: purpose.identity)
 		kept.push(purpose)
 		self.armPurposes.upsert(offset, value: kept)
 	end 'notePurpose'
 
 	function purposesOtherThan(offset DebugAddress, hidden DebugTally, identity DebugBreakIdentity) returns DebugArmPurposes
-		var kept = DebugArmPurposes.create(0)
+		let kept = DebugArmPurposes.create(0)
 
 		for purpose in try self.armPurposes.get(offset) otherwise DebugArmPurposes.create(0) 'eachPurpose'
 			if not purpose.names(hidden, asked: identity) 'anotherPurpose'
@@ -1217,7 +1217,7 @@ export type DebugConversation
 	end 'purposesOtherThan'
 
 	function dropPurpose(offset DebugAddress, hidden DebugTally, identity DebugBreakIdentity) returns PurposeDrop
-		view held = try self.armPurposes.get(offset) otherwise return PurposeDrop.notArmed
+		let held = try self.armPurposes.get(offset) otherwise return PurposeDrop.notArmed
 		let kept = self.purposesOtherThan(offset, hidden: hidden, identity: identity)
 
 		if kept.count() == held.count() 'notThisPurpose'
@@ -1265,8 +1265,8 @@ export type DebugConversation
 	end 'disarmTarget'
 
 	function disarmBodies(spelling String, file DebugFileName, line DebugLineLookup, bodies DebugLineBodyArray, functionName DebugFunctionNameLookup, identity DebugBreakIdentity) returns DebugReply
-		var cleared = DebugAddressArray.create(0)
-		var refusals = DebugRefusals.create(0)
+		let cleared = DebugAddressArray.create(0)
+		let refusals = DebugRefusals.create(0)
 
 		for body in bodies 'eachBody'
 			for candidate in body 'eachCandidate'
@@ -1787,7 +1787,7 @@ export type DebugConversation
 			return ReturnPlanting.declined
 		end 'walkedAnInstructionAtATime'
 
-		var points = DebugReturnPointArray.create(indirectCalls.count() + 1, zeroed: false)
+		let points = DebugReturnPointArray.create(indirectCalls.count() + 1, zeroed: false)
 		points.push(leaving)
 
 		// Each indirect call site gets a point: its target is known only when the call is reached, and a
@@ -2183,7 +2183,7 @@ export type DebugConversation
 
 	function refuseToFinish(replies DebugReplyArray)
 		let standing = self.engine.standingBreakpointOffsets()
-		var spelled = StringArray.create(standing.count(), zeroed: false)
+		let spelled = StringArray.create(standing.count(), zeroed: false)
 
 		for offset in standing 'eachStanding'
 			spelled.push("0x{offset:x}")
@@ -2249,7 +2249,7 @@ export type DebugConversation
 	end 'reportDetachFailed'
 
 	function keepPurposesOfStandingTraps()
-		var standing = DebugArmPurposeMap.create()
+		let standing = DebugArmPurposeMap.create()
 
 		for (offset, purposes) in self.armPurposes 'eachArmedOffset'
 			if self.engine.userBreakpointAt(self.engine.imageTextBase() + offset) 'trapStillStands'
@@ -2362,7 +2362,7 @@ end 'DebugRefusal'
 typealias DebugRefusals = Array with DebugRefusal
 
 function offsetsRefusedFor(refusals DebugRefusals, reason String) returns DebugAddressArray
-	var offsets = DebugAddressArray.create(0)
+	let offsets = DebugAddressArray.create(0)
 
 	for refusal in refusals 'eachRefusal'
 		if refusal.reason == reason 'thisReason'
@@ -2391,7 +2391,7 @@ end 'breakpointAnswer'
 // A leading row that starts a call opens an entry even when a later row enters the line, so a stop
 // there precedes the call and `step` can still enter it.
 function entriesOf(candidates DebugLineCandidateArray) returns DebugLineBodyArray
-	var entries = DebugLineBodyArray.create(0)
+	let entries = DebugLineBodyArray.create(0)
 	let noRowEntersTheLine = not someCandidateEntersTheLine(candidates)
 
 	for candidate in candidates 'eachCandidate'
@@ -2403,7 +2403,7 @@ function entriesOf(candidates DebugLineCandidateArray) returns DebugLineBodyArra
 			continue
 		end 'beforeTheFirstEntry'
 
-		var entry = try entries.get(entries.count() - 1) otherwise panic("entriesOf: an entry is open once the first entering candidate is passed")
+		let entry = try entries.get(entries.count() - 1) otherwise panic("entriesOf: an entry is open once the first entering candidate is passed")
 		entry.push(candidate)
 	end 'eachCandidate'
 
@@ -2518,7 +2518,7 @@ function motionRefused(verb String, reason String, afterwards String = "") retur
 end 'motionRefused'
 
 function wordsOf(line String) returns StringArray
-	var words = StringArray.create(0)
+	let words = StringArray.create(0)
 
 	for piece in line.trim().split(WordGap) 'eachPiece'
 		if not piece.isEmpty() 'aWord'

@@ -85,7 +85,7 @@ export type DapAnswers
 	export var text as StringArray
 
 	export static function of(replies DebugReplyArray) returns DapAnswers
-		var answers = Self{movements: DapMovementArray.create(0), failures: StringArray.create(0), breakpoints: DebugBreakpointAnswerArray.create(0), frames: DapFrameListing.none, roster: DapRosterAnswer.none, trees: DebugValueTreeArray.create(0), text: StringArray.create(0)}
+		let answers = Self{movements: DapMovementArray.create(0), failures: StringArray.create(0), breakpoints: DebugBreakpointAnswerArray.create(0), frames: DapFrameListing.none, roster: DapRosterAnswer.none, trees: DebugValueTreeArray.create(0), text: StringArray.create(0)}
 
 		for reply in replies 'eachReply'
 			answers.note(reply)
@@ -133,7 +133,7 @@ function walkedThread(walk DebugThreadWalk) returns DapFrameListing
 end 'walkedThread'
 
 export function dapCapabilitiesBody(doc JsonDoc) returns JsonNodeId
-	var body = JsonObjectBuilder.create()
+	let body = JsonObjectBuilder.create()
 	body.addBool(doc, key: "supportsConfigurationDoneRequest", value: true)
 	body.addBool(doc, key: "supportsConditionalBreakpoints", value: true)
 	body.addBool(doc, key: "supportsFunctionBreakpoints", value: true)
@@ -200,7 +200,7 @@ export function dapThreadTargetOf(threadId DapNumber) returns DapThreadTarget
 end 'dapThreadTargetOf'
 
 export function dapStoppedBody(doc JsonDoc, reason String, threadId DapNumber, fault StatedText) returns JsonNodeId
-	var body = JsonObjectBuilder.create()
+	let body = JsonObjectBuilder.create()
 	body.addString(doc, key: ReasonKey, value: reason)
 
 	if let faultText = try fault.text() 'aFault'
@@ -215,7 +215,7 @@ export function dapStoppedBody(doc JsonDoc, reason String, threadId DapNumber, f
 end 'dapStoppedBody'
 
 export function dapContinuedBody(doc JsonDoc, threadId DapNumber) returns JsonNodeId
-	var body = JsonObjectBuilder.create()
+	let body = JsonObjectBuilder.create()
 	body.addNumber(doc, key: ThreadIdKey, value: threadId as JsonFloat)
 	body.addBool(doc, key: AllThreadsContinuedKey, value: true)
 
@@ -223,14 +223,14 @@ export function dapContinuedBody(doc JsonDoc, threadId DapNumber) returns JsonNo
 end 'dapContinuedBody'
 
 export function dapAllContinuedBody(doc JsonDoc) returns JsonNodeId
-	var body = JsonObjectBuilder.create()
+	let body = JsonObjectBuilder.create()
 	body.addBool(doc, key: AllThreadsContinuedKey, value: true)
 
 	return body.build(doc)
 end 'dapAllContinuedBody'
 
 export function dapExitedBody(doc JsonDoc, code DapNumber) returns JsonNodeId
-	var body = JsonObjectBuilder.create()
+	let body = JsonObjectBuilder.create()
 	body.addNumber(doc, key: ExitCodeKey, value: code as JsonFloat)
 
 	return body.build(doc)
@@ -250,7 +250,7 @@ export function dapOutputBody(doc JsonDoc, category String, lines StringArray) r
 		text.append("{line}{LineBreak}")
 	end 'eachLine'
 
-	var body = JsonObjectBuilder.create()
+	let body = JsonObjectBuilder.create()
 	body.addString(doc, key: CategoryKey, value: category)
 	body.addString(doc, key: OutputKey, value: text)
 
@@ -285,11 +285,11 @@ export function dapBreakpointOutcome(answers DapAnswers) returns DapBreakpointOu
 end 'dapBreakpointOutcome'
 
 export function dapArmedBreakpointNode(doc JsonDoc, answer DebugBreakpointAnswer, numbering DapNumbering) returns JsonNodeId
-	var node = JsonObjectBuilder.create()
+	let node = JsonObjectBuilder.create()
 	node.addBool(doc, key: VerifiedKey, value: true)
 	node.addNumber(doc, key: LineKey, value: numbering.lineToClient(answer.line) as JsonFloat)
 
-	var source = JsonObjectBuilder.create()
+	let source = JsonObjectBuilder.create()
 	source.addString(doc, key: NameKey, value: answer.file.wireName())
 	node.addNode(SourceKey, node: source.build(doc))
 
@@ -297,7 +297,7 @@ export function dapArmedBreakpointNode(doc JsonDoc, answer DebugBreakpointAnswer
 end 'dapArmedBreakpointNode'
 
 export function dapUnverifiedBreakpointNode(doc JsonDoc, message String, requested DapRequestedLine) returns JsonNodeId
-	var node = JsonObjectBuilder.create()
+	let node = JsonObjectBuilder.create()
 	node.addBool(doc, key: VerifiedKey, value: false)
 
 	match requested 'asked'
@@ -311,12 +311,12 @@ export function dapUnverifiedBreakpointNode(doc JsonDoc, message String, request
 end 'dapUnverifiedBreakpointNode'
 
 export function dapStackFrameNode(doc JsonDoc, id DapNumber, frame DebugFrame, numbering DapNumbering) returns JsonNodeId
-	var node = JsonObjectBuilder.create()
+	let node = JsonObjectBuilder.create()
 	node.addNumber(doc, key: IdKey, value: id as JsonFloat)
 	node.addString(doc, key: NameKey, value: frame.functionName)
 
 	if let path = try frame.path.filePath() 'aSourceFile'
-		var source = JsonObjectBuilder.create()
+		let source = JsonObjectBuilder.create()
 		source.addString(doc, key: NameKey, value: frame.path.fileName().wireName())
 		source.addString(doc, key: PathKey, value: path)
 		node.addNode(SourceKey, node: source.build(doc))
@@ -333,7 +333,7 @@ export function dapStackFrameNode(doc JsonDoc, id DapNumber, frame DebugFrame, n
 end 'dapStackFrameNode'
 
 export function dapStackTraceBody(doc JsonDoc, frames JsonNodeIdArray, total DapNumber) returns JsonNodeId
-	var body = JsonObjectBuilder.create()
+	let body = JsonObjectBuilder.create()
 	body.addNode(StackFramesKey, node: doc.add(JsonNode.arrayNode(frames)))
 	body.addNumber(doc, key: TotalFramesKey, value: total as JsonFloat)
 
@@ -341,22 +341,22 @@ export function dapStackTraceBody(doc JsonDoc, frames JsonNodeIdArray, total Dap
 end 'dapStackTraceBody'
 
 export function dapLocalsScopesBody(doc JsonDoc, reference DapNumber) returns JsonNodeId
-	var scope = JsonObjectBuilder.create()
+	let scope = JsonObjectBuilder.create()
 	scope.addString(doc, key: NameKey, value: LocalsScopeName)
 	scope.addNumber(doc, key: VariablesReferenceKey, value: reference as JsonFloat)
 	scope.addBool(doc, key: ExpensiveKey, value: false)
 
-	var scopes = JsonNodeIdArray.create(1, zeroed: false)
+	let scopes = JsonNodeIdArray.create(1, zeroed: false)
 	scopes.push(scope.build(doc))
 
-	var body = JsonObjectBuilder.create()
+	let body = JsonObjectBuilder.create()
 	body.addNode(ScopesKey, node: doc.add(JsonNode.arrayNode(scopes)))
 
 	return body.build(doc)
 end 'dapLocalsScopesBody'
 
 export function dapVariableNode(doc JsonDoc, value DebugValueNode, reference DapNumber) returns JsonNodeId
-	var node = JsonObjectBuilder.create()
+	let node = JsonObjectBuilder.create()
 	node.addString(doc, key: NameKey, value: value.name)
 	node.addString(doc, key: ValueKey, value: dapValueText(value))
 	node.addString(doc, key: TypeKey, value: value.typeName)
@@ -370,7 +370,7 @@ export function dapVariablesBody(doc JsonDoc, nodes JsonNodeIdArray) returns Jso
 end 'dapVariablesBody'
 
 export function dapEvaluateBody(doc JsonDoc, result String, reference DapNumber) returns JsonNodeId
-	var body = JsonObjectBuilder.create()
+	let body = JsonObjectBuilder.create()
 	body.addString(doc, key: ResultKey, value: result)
 	body.addNumber(doc, key: VariablesReferenceKey, value: reference as JsonFloat)
 
@@ -378,7 +378,7 @@ export function dapEvaluateBody(doc JsonDoc, result String, reference DapNumber)
 end 'dapEvaluateBody'
 
 export function dapThreadsBody(doc JsonDoc, rows DebugThreadRowArray) returns JsonNodeId
-	var threads = JsonNodeIdArray.create(rows.count(), zeroed: false)
+	let threads = JsonNodeIdArray.create(rows.count(), zeroed: false)
 
 	for row in rows 'eachRow'
 		threads.push(threadNode(doc, id: dapGreenThreadId(row.id), name: threadName(row)))
@@ -400,7 +400,7 @@ export function dapNoScopesBody(doc JsonDoc) returns JsonNodeId
 end 'dapNoScopesBody'
 
 function listBody(doc JsonDoc, key String, nodes JsonNodeIdArray) returns JsonNodeId
-	var body = JsonObjectBuilder.create()
+	let body = JsonObjectBuilder.create()
 	body.addNode(key, node: doc.add(JsonNode.arrayNode(nodes)))
 
 	return body.build(doc)
@@ -451,7 +451,7 @@ function positionToClient(position DapNumber, startsAtOne bool) returns DapNumbe
 end 'positionToClient'
 
 function threadNode(doc JsonDoc, id DapNumber, name String) returns JsonNodeId
-	var node = JsonObjectBuilder.create()
+	let node = JsonObjectBuilder.create()
 	node.addNumber(doc, key: IdKey, value: id as JsonFloat)
 	node.addString(doc, key: NameKey, value: name)
 

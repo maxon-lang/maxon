@@ -52,7 +52,7 @@ end 'cacheWriteFuncIndexArray'
 
 export function cacheReadFuncIndexArray(reader LibraryCacheReader) returns FuncIndexArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FuncIndexArray.create(count, zeroed: false)
+	let result = FuncIndexArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as ElementIndex
@@ -70,7 +70,7 @@ end 'cacheReadFuncIndexArray'
 // the branch/return arms throw `AbsentError.absent`.
 export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentError
 	match op 'result'
-		call(result, _, _, _, _, _, _, _) then return result
+		call(result, _, _, _, _, _, _) then return result
 		literal(result, _, _) then return result
 		ret or
 		retVoid then throw AbsentError.absent
@@ -91,7 +91,7 @@ export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentErr
 
 		// A throwing call DEFINES its primary result (its error-flag second result is compiler-synthetic
 		// and needs no source origin); the throw/propagate terminators and `panicAbort` define none.
-		tryCall(result, _, _, _, _, _, _, _, _) then return result
+		tryCall(result, _, _, _, _, _, _, _) then return result
 		throwError or
 		propagateError or
 		panicAbort then throw AbsentError.absent
@@ -102,7 +102,7 @@ export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentErr
 		indirectCall(result, _, _, _) then return result
 
 		// An async spawn DEFINES its promise handle; an await DEFINES its awaited scalar.
-		asyncCall(result, _, _, _, _, _, _, _) then return result
+		asyncCall(result, _, _, _, _, _, _) then return result
 		await (result, _) then return result
 
 		// A throwing await DEFINES its primary result (its error-flag second result is
@@ -135,7 +135,7 @@ export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentErr
 		errorFlagEncode(result, _, _) then return result
 
 		// A `spawn` DEFINES the cown pointer the parser stores into the handle box.
-		serviceSpawn(result, _, _, _, _, _, _, _, _, _, _, _) then return result
+		serviceSpawn(result, _, _, _, _, _, _, _, _, _, _) then return result
 
 		// A SEND defines a VOID result — a reply travels through its `serviceReplyCell`, so there is none
 		// for that slot to carry, and it exists for the reason a void `call`'s does: every op in this
@@ -165,15 +165,15 @@ export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentErr
 end 'maxonOpDefinedValue'
 
 // The SSA values an op READS, replacing `into`'s contents — `maxonOpDefinedValue`'s other half, and
-// exhaustive for its reason: an analysis that must not miss a use (`StorageProvenance`) asks here,
+// exhaustive for its reason: an analysis that must not miss a use asks here,
 // so a new op fails to compile until it is listed.
 export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
 	into.clear()
 
 	match op 'operands'
-		call(_, _, args, _, _, _, _, _) then appendValues(into, values: args)
-		tryCall(_, _, _, args, _, _, _, _, _) then appendValues(into, values: args)
-		asyncCall(_, _, args, _, _, _, _, _) then appendValues(into, values: args)
+		call(_, _, args, _, _, _, _) then appendValues(into, values: args)
+		tryCall(_, _, _, args, _, _, _, _) then appendValues(into, values: args)
+		asyncCall(_, _, args, _, _, _, _) then appendValues(into, values: args)
 		rawIntrinsic(_, _, args, _) then appendValues(into, values: args)
 		witnessDispatch(_, args, _, witness, _, _, _, _) then appendValuesAndOne(into, values: args, one: witness)
 		witnessTryDispatch(_, _, args, _, witness, _, _, _) then appendValuesAndOne(into, values: args, one: witness)
@@ -196,7 +196,7 @@ export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
 		switch(subject, _, _) then into.push(subject)
 		panicAbortValue(messagePtr) then into.push(messagePtr)
 		errorFlagEncode(_, errorValue, _) then into.push(errorValue)
-		serviceSpawn(_, _, _, capacity, _, args, _, _, _, _, _, _) then appendValuesAndOne(into, values: args, one: capacity)
+		serviceSpawn(_, _, _, capacity, _, args, _, _, _, _, _) then appendValuesAndOne(into, values: args, one: capacity)
 		existentialWitness(_, _, conformer) then into.push(conformer)
 		holdValue(_, held, _, args, _) then appendValuesAndOne(into, values: args, one: held)
 		holdEnd(_, held, _, args, _) then appendValuesAndOne(into, values: args, one: held)
@@ -420,7 +420,7 @@ type RowCompaction
 	var oldRows as OpIndexArray
 
 	static function of(funcIndices FuncIndexArray, reached BoolArray, newIndexOfOld FixedFuncIndexArray, table String) returns RowCompaction
-		var oldRows = OpIndexArray.create(funcIndices.count(), zeroed: false)
+		let oldRows = OpIndexArray.create(funcIndices.count(), zeroed: false)
 
 		for read in 0 upto funcIndices.count() 'each'
 			let f = try funcIndices.get(read) otherwise panic("{table}.remapFunctionIndices: funcIndices.get OOB at {read}")
@@ -932,7 +932,7 @@ function noteAppendedRange(appended AppendedRowsByFunction, funcIndex ElementInd
 		return
 	end 'alreadyListed'
 
-	var ranges = OriginRowRangeArray.create(0)
+	let ranges = OriginRowRangeArray.create(0)
 	ranges.push(range)
 	appended.upsert(funcIndex, value: ranges)
 end 'noteAppendedRange'
@@ -964,7 +964,7 @@ end 'FunctionRowCsr'
 // a prefix sum that turns the counts into starts in place, then a scatter through a SEPARATE cursor per
 // function so `rowStarts` survives intact.
 function indexRowsByFunction(funcIndices FuncIndexArray, selected FixedBoolArray, funcCount ElementIndex) returns FunctionRowCsr
-	var rowStarts = FixedOpIndexArray.create(funcCount + 1)
+	let rowStarts = FixedOpIndexArray.create(funcCount + 1)
 
 	for i in 0 upto funcIndices.count() 'countEach'
 		let f = try funcIndices.get(i) otherwise panic("indexRowsByFunction: funcIndices.get OOB at {i}")
@@ -985,8 +985,8 @@ function indexRowsByFunction(funcIndices FuncIndexArray, selected FixedBoolArray
 		try rowStarts.set(f, value: total) otherwise panic("indexRowsByFunction: rowStarts.set OOB at {f}")
 	end 'prefixSum'
 
-	var rows = FixedOpIndexArray.create(total)
-	var cursor = IndexColumn.create(funcCount)
+	let rows = FixedOpIndexArray.create(total)
+	let cursor = IndexColumn.create(funcCount)
 
 	for f in 0 upto funcCount 'seedCursor'
 		try cursor.set(f, value: try rowStarts.get(f) otherwise panic("indexRowsByFunction: rowStarts.get OOB at {f}")) otherwise panic("indexRowsByFunction: cursor.set OOB at {f}")
@@ -1066,7 +1066,7 @@ end 'cacheWriteDeferredChainCallsArray'
 
 function cacheReadDeferredChainCallsArray(reader LibraryCacheReader) returns DeferredChainCallsArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DeferredChainCallsArray.create(count, zeroed: false)
+	let result = DeferredChainCallsArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadDeferredChainCalls(reader)

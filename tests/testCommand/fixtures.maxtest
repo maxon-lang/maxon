@@ -153,7 +153,7 @@ test 'no corpus directory holds a source that is not a test'
 	// beside THIS file is compiled into the harness exactly as one beside a fixture is compiled into that
 	// case. Asking only about the corpus would have left the rule this project states about itself
 	// enforced nowhere.
-	var offenders = sourcePathsEndingWith(fixtureDir(FixturesDir), suffixes: [MaxonSourceSuffix])
+	let offenders = sourcePathsEndingWith(fixtureDir(FixturesDir), suffixes: [MaxonSourceSuffix])
 
 	for source in sourcePathsEndingWith(fixtureDir(ProjectDir), suffixes: [MaxonSourceSuffix]) 'eachHere'
 		offenders.push(source)
@@ -171,7 +171,7 @@ end 'no corpus directory holds a source that is not a test'
 
 export function runFixture(caseName String, extraArguments StringArray = StringArray.create(0)) returns CollectedOutput
 	let caseDir = fixtureDir("{FixturesDir}/{caseName}")
-	var argv = fixtureArgv(caseDir, caseName: caseName)
+	let argv = fixtureArgv(caseDir, caseName: caseName)
 
 	for extra in extraArguments 'eachExtra'
 		argv.push(extra)
@@ -193,7 +193,7 @@ export function runTestCommandWordIn(project FilePath, word String, caseName Str
 end 'runTestCommandWordIn'
 
 export function runManifestBuildIn(project FilePath, caseName String) returns CollectedOutput
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 	overrides.upsert(CacheRootVariable, value: caseRootOf(project).join(StagedCacheDirName).toString())
 
 	return spawnCompiler([BuildCommandName], staged: project, what: "the '{caseName}' case", environment: Environment.inheritUpdating(overrides))
@@ -240,7 +240,7 @@ end 'checkFixtureRun'
 // The command line ONE case is run from: the `test` command, the case directory, the two reproducibility
 // flags, then whatever the case's own `argv.txt` adds.
 function fixtureArgv(caseDir FilePath, caseName String) returns StringArray
-	var argv = testCommandArgv([subjectIn(caseDir, caseName: caseName).toString()])
+	let argv = testCommandArgv([subjectIn(caseDir, caseName: caseName).toString()])
 
 	for extra in extraArgvIn(caseDir, caseName: caseName) 'eachExtra'
 		argv.push(extra)
@@ -250,7 +250,7 @@ function fixtureArgv(caseDir FilePath, caseName String) returns StringArray
 end 'fixtureArgv'
 
 function testCommandArgv(words StringArray) returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push(TestCommandName)
 
 	for word in words 'eachWord'
@@ -298,7 +298,7 @@ end 'subjectIn'
 // `--list` into `--list\r` — an argument the command would refuse for a reason having nothing to do with
 // the case. No argument this corpus can express has meaningful leading or trailing space.
 function extraArgvIn(caseDir FilePath, caseName String) returns StringArray
-	var extras = StringArray.create(0)
+	let extras = StringArray.create(0)
 
 	let path = caseDir.join("{ExtraArgvFileName}")
 

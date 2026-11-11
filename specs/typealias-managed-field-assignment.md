@@ -51,9 +51,9 @@ function main() returns ExitCode
 	var i = 0 as Num
 
 	while i < 3000 'l'
-		var a = Blk.create()
+		let a = Blk.create()
 		a.args.push(i)
-		var b = Blk.create()
+		let b = Blk.create()
 		b.args = a.args
 		i = i + 1
 	end 'l'
@@ -91,9 +91,9 @@ function main() returns ExitCode
 	var i = 0 as Num
 
 	while i < 3000 'l'
-		var a = Blk.create()
+		let a = Blk.create()
 		a.args.push(i)
-		var b = Blk.create()
+		let b = Blk.create()
 		b.setArgs(a.args)
 		i = i + 1
 	end 'l'
@@ -127,7 +127,7 @@ type Blk
 end 'Blk'
 
 function cloneBlk(src Blk) returns Blk
-	var block = Blk.create()
+	let block = Blk.create()
 	block.args = src.args
 	return block
 end 'cloneBlk'
@@ -137,9 +137,9 @@ function main() returns ExitCode
 	var total = 0 as Num
 
 	while i < 3000 'l'
-		var a = Blk.create()
+		let a = Blk.create()
 		a.args.push(i)
-		view c = cloneBlk(a)
+		let c = cloneBlk(a)
 		total = total + (a.args.count() + c.args.count()) as Num
 		i = i + 1
 	end 'l'

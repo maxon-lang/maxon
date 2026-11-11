@@ -32,7 +32,7 @@ let QuickFixActionKind = "quickfix"
 typealias BindingUseTally = int(0 to u64.max)
 
 module function editsServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create(0)
+	let served = LspMethodArray.create(0)
 	served.push(LspMethod.linkedEditingRange)
 	served.push(LspMethod.rename)
 	served.push(LspMethod.codeAction)
@@ -96,12 +96,12 @@ end 'namedPairAt'
 // --- linkedEditingRange -----------------------------------------------------------------------
 
 function linkedEditingAnswer(source String, index LspLineIndex, block LspDocumentBlock) returns LspAnswer
-	var doc = JsonDoc.create()
-	var ranges = JsonNodeIdArray.create(0)
+	let doc = JsonDoc.create()
+	let ranges = JsonNodeIdArray.create(0)
 	ranges.push(lspSpanRangeNode(doc, source: source, index: index, span: block.nameSpan))
 	ranges.push(lspSpanRangeNode(doc, source: source, index: index, span: lspBlockEndNameSpan(block)))
 
-	var result = LspJsonObject.create(doc)
+	let result = LspJsonObject.create(doc)
 	result.putNode(RangesKey, value: doc.add(JsonNode.arrayNode(ranges)))
 	return LspAnswer.of(doc, result: result.finish())
 end 'linkedEditingAnswer'
@@ -114,8 +114,8 @@ end 'linkedEditingAnswer'
 function renameAnswer(request LspRequest, index LspLineIndex, block LspDocumentBlock) returns LspAnswer throws LspParamsError
 	let newName = try lspMemberText(request.incoming, of: request.params, key: NewNameKey)
 
-	var doc = JsonDoc.create()
-	var edits = JsonNodeIdArray.create(0)
+	let doc = JsonDoc.create()
+	let edits = JsonNodeIdArray.create(0)
 	edits.push(textEditNode(doc, source: request.text, index: index, span: block.nameSpan, newText: newName))
 	edits.push(textEditNode(doc, source: request.text, index: index, span: lspBlockEndNameSpan(block), newText: newName))
 
@@ -123,7 +123,7 @@ function renameAnswer(request LspRequest, index LspLineIndex, block LspDocumentB
 end 'renameAnswer'
 
 function textEditNode(doc JsonDoc, source String, index LspLineIndex, span LspSpan, newText String) returns JsonNodeId
-	var edit = LspJsonObject.create(doc)
+	let edit = LspJsonObject.create(doc)
 	edit.putNode(LspRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: span))
 	edit.put(LspNewTextKey, value: JsonNode.stringNode(newText))
 	return edit.finish()
@@ -133,10 +133,10 @@ end 'textEditNode'
 // this server produces is confined to the document it was asked about, so the `documentChanges` form —
 // which exists to version several files at once — would carry nothing the simpler one does not.
 function workspaceEditNode(doc JsonDoc, uri String, edits JsonNodeIdArray) returns JsonNodeId
-	var byUri = LspJsonObject.create(doc)
+	let byUri = LspJsonObject.create(doc)
 	byUri.putNode(uri, value: doc.add(JsonNode.arrayNode(edits)))
 
-	var workspaceEdit = LspJsonObject.create(doc)
+	let workspaceEdit = LspJsonObject.create(doc)
 	workspaceEdit.putNode(ChangesKey, value: byUri.finish())
 	return workspaceEdit.finish()
 end 'workspaceEditNode'
@@ -159,9 +159,9 @@ function codeActionAnswer(request LspRequest, tokens TokenArray, blocks LspDocum
 	let selectionStart = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: range, key: LspStartKey))
 	let selectionEnd = index.offsetOf(request.text, position: try lspPositionMember(request.incoming, of: range, key: LspEndKey))
 
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 	let unused = unusedLocalNamesIn(tokens, blocks: blocks, selectionStart: selectionStart, selectionEnd: selectionEnd)
-	var actions = JsonNodeIdArray.create(unused.count(), zeroed: false)
+	let actions = JsonNodeIdArray.create(unused.count(), zeroed: false)
 
 	for name in unused 'eachUnused'
 		actions.push(removeBindingActionNode(doc, uri: request.uri, name: name))
@@ -184,7 +184,7 @@ end 'UnusedLocalName'
 typealias UnusedLocalNameArray = Array with UnusedLocalName
 
 function unusedLocalNamesIn(tokens TokenArray, blocks LspDocumentBlockArray, selectionStart ByteOffset, selectionEnd ByteOffset) returns UnusedLocalNameArray
-	var found = UnusedLocalNameArray.create(0)
+	let found = UnusedLocalNameArray.create(0)
 
 	for binding in localBindingsIn(tokens, blocks: blocks) 'eachBinding'
 		// The requested range is a SELECTION, so a binding it merely touches is one the author has the
@@ -205,7 +205,7 @@ function unusedLocalNamesIn(tokens TokenArray, blocks LspDocumentBlockArray, sel
 	return found
 end 'unusedLocalNamesIn'
 
-// One `let`/`var`/`view` binding written inside a block, named by its NAME token.
+// One `let`/`var` binding written inside a block, named by its NAME token.
 type LocalBinding
 	export let tokenIndex as ElementIndex
 	export let startByte as ByteOffset
@@ -222,7 +222,7 @@ typealias LocalBindingArray = Array with LocalBinding
 // is a change to the program's interface rather than a tidy-up — and `blocks` is what tells the two
 // apart without a parse.
 function localBindingsIn(tokens TokenArray, blocks LspDocumentBlockArray) returns LocalBindingArray
-	var bindings = LocalBindingArray.create(0)
+	let bindings = LocalBindingArray.create(0)
 	let scopes = LspLineScopes.of(blocks)
 
 	for (position, token) in tokens.withIterator() 'eachToken'
@@ -277,14 +277,14 @@ end 'identifiersSpelling'
 // The fix deletes the binding's whole line — from its first column to the first column of the next one,
 // which is what takes the line break with it and leaves no blank line behind.
 function removeBindingActionNode(doc JsonDoc, uri String, name UnusedLocalName) returns JsonNodeId
-	var edit = LspJsonObject.create(doc)
+	let edit = LspJsonObject.create(doc)
 	edit.putNode(LspRangeKey, value: lspRangeNode(doc, startLine: name.line, startCharacter: 0, endLine: name.line + 1, endCharacter: 0))
 	edit.put(LspNewTextKey, value: JsonNode.stringNode(""))
 
-	var edits = JsonNodeIdArray.create(0)
+	let edits = JsonNodeIdArray.create(0)
 	edits.push(edit.finish())
 
-	var action = LspJsonObject.create(doc)
+	let action = LspJsonObject.create(doc)
 	action.put(TitleKey, value: JsonNode.stringNode("Remove unused variable '{name.text}'"))
 	action.put(LspKindKey, value: JsonNode.stringNode(QuickFixActionKind))
 	action.putNode(EditKey, value: workspaceEditNode(doc, uri: uri, edits: edits))

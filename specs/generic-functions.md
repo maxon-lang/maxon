@@ -91,7 +91,7 @@ function takesIndex(i ElementIndex) returns ElementIndex
 end 'takesIndex'
 
 function main() returns ExitCode
-	var rows = RowArray.create(0)
+	let rows = RowArray.create(0)
 	rows.push(1)
 	rows.push(2)
 	rows.push(3)

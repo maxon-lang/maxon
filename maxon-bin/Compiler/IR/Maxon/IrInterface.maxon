@@ -55,8 +55,8 @@ export typealias WitnessSlotIndex = int(0 to u16.max)
 export typealias WitnessMethodIndex = int(0 to u16.max) implements ElementIndex
 
 // ⭐ **WITNESS-TABLE BYTE LAYOUT**: a header of
-// `methodCount@0`, `destroyFunc@8`, `retainFunc@16`, `soleWalkFunc@24`, `shareWalkFunc@32`,
-// `cloneFunc@40`, then `methods[N]@48` — one 8-byte function pointer per requirement of the
+// `methodCount@0`, `destroyFunc@8`, `retainFunc@16`, `shareWalkFunc@24`,
+// `cloneFunc@32`, then `methods[N]@40` — one 8-byte function pointer per requirement of the
 // interface's TRANSITIVE list, each
 // stamped by a `funcAbs64InRdata` relocation. The fused `witnessCall` reads method `i` from
 // `[witnessAddr + WitnessTableHeaderBytes + WitnessSlotBytes*i]`, so the emitter (the blob) and every reader
@@ -65,7 +65,7 @@ export typealias WitnessMethodIndex = int(0 to u16.max) implements ElementIndex
 //
 // ⚠ **THERE IS NO PARENT-TABLE POINTER.** Parent-interface requirements are PROJECTED INTO the
 // child table by `interfaceWitnessSlots`, so there is no runtime chain to follow.
-export let WitnessTableHeaderBytes = 48 as ByteOffset
+export let WitnessTableHeaderBytes = 40 as ByteOffset
 export let WitnessSlotBytes = 8 as ByteOffset
 
 // ⭐⭐ **HOW A FAT POINTER DESTROYS ITS OWN VALUE HALF** — the conformer's
@@ -101,20 +101,18 @@ export let WitnessDestroyFuncOffset = 8 as ByteOffset
 // fresh OWNED heap record it hands back is what launders the literal.
 export let WitnessRetainFuncOffset = 16 as ByteOffset
 
-// ⭐⭐ **HOW A FAT POINTER'S VALUE HALF IS WALKED BEFORE IT CROSSES TO ANOTHER GREEN THREAD** — the conformer's
-// `__sole_<T>` (a move) and `__share_<T>` (a share), the same per-type walks a record of that type
-// takes as a field, or **0** when the conformer owns nothing a count could be stepped on.
-// `__mm_sole_existential` / `__mm_share_existential` read these words exactly as
-// `__drop_existential` reads `destroyFunc@8`, because which conformer an interface-typed value
-// holds is a run-time fact (`ProgramSignatures.existentialCascadeCallee` decides what they hold).
-export let WitnessSoleWalkFuncOffset = 24 as ByteOffset
-export let WitnessShareWalkFuncOffset = 32 as ByteOffset
+// ⭐⭐ **HOW A FAT POINTER'S VALUE HALF IS SHARED WHEN IT IS FROZEN** — the conformer's `__share_<T>`, the same
+// per-type walk a record of that type takes as a field, or **0** when the conformer owns nothing a count could
+// be stepped on. `__mm_share_existential` reads this word exactly as `__drop_existential` reads `destroyFunc@8`,
+// because which conformer an interface-typed value holds is a run-time fact
+// (`ProgramSignatures.existentialCascadeCallee` decides what it holds).
+export let WitnessShareWalkFuncOffset = 24 as ByteOffset
 
 // ⭐⭐ **HOW A FAT POINTER'S VALUE HALF IS DEEP-COPIED** — the conformer's `(box) -> newBox`, or **0** when it
 // owns nothing to copy (an `int` widened to an interface: the value half is not a pointer).
-// `__mm_clone_existential` reads it exactly as the two words above are read, and a conformer nothing can
+// `__mm_clone_existential` reads it exactly as the word above is read, and a conformer nothing can
 // copy takes the abort entry rather than 0 — see `MmRuntime.MmCloneUncloneableName`.
-export let WitnessCloneFuncOffset = 40 as ByteOffset
+export let WitnessCloneFuncOffset = 32 as ByteOffset
 
 // ⭐ **WHAT A VALUE HELD AT ITS INTERFACE TYPE OCCUPIES — TWO MACHINE WORDS.**
 // The value half and the witness half, and the second word is a `__witness_<Type>.<Iface>` address and
@@ -593,7 +591,7 @@ end 'cacheWriteValueCapabilityArray'
 
 export function cacheReadValueCapabilityArray(reader LibraryCacheReader) returns ValueCapabilityArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ValueCapabilityArray.create(count, zeroed: false)
+	let result = ValueCapabilityArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadValueCapability(reader)
@@ -618,7 +616,7 @@ end 'cacheWriteParamCapabilityArray'
 
 export function cacheReadParamCapabilityArray(reader LibraryCacheReader) returns ParamCapabilityArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ParamCapabilityArray.create(count, zeroed: false)
+	let result = ParamCapabilityArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadParamCapability(reader)
@@ -633,7 +631,7 @@ end 'cacheReadParamCapabilityArray'
 // @generated library-cache begin
 function cacheReadFrozenParamCapabilityArray(reader LibraryCacheReader) returns immutable ParamCapabilityArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ParamCapabilityArray.create(count, zeroed: false) as isolated ParamCapabilityArray
+	let result = ParamCapabilityArray.create(count, zeroed: false) as isolated ParamCapabilityArray
 
 	for _ in 0 upto count 'eachItem'
 		let item = try cacheReadParamCapability(reader)
@@ -646,7 +644,7 @@ end 'cacheReadFrozenParamCapabilityArray'
 // @generated library-cache end
 
 export function unmarkedParams(count ParamCount) returns ParamCapabilityArray
-	var out = ParamCapabilityArray.create(count as ElementIndex, zeroed: false)
+	let out = ParamCapabilityArray.create(count as ElementIndex, zeroed: false)
 	out.refill(count as ElementIndex, value: ParamCapability.unmarked)
 	return out
 end 'unmarkedParams'
@@ -879,7 +877,7 @@ end 'cacheWriteRequirementTypeArray'
 
 export function cacheReadRequirementTypeArray(reader LibraryCacheReader) returns RequirementTypeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RequirementTypeArray.create(count, zeroed: false)
+	let result = RequirementTypeArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try RequirementType.cacheRead(reader)
@@ -894,7 +892,7 @@ end 'cacheReadRequirementTypeArray'
 // @generated library-cache begin
 function cacheReadFrozenRequirementTypeArray(reader LibraryCacheReader) returns immutable RequirementTypeArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = RequirementTypeArray.create(count, zeroed: false) as isolated RequirementTypeArray
+	let result = RequirementTypeArray.create(count, zeroed: false) as isolated RequirementTypeArray
 
 	for _ in 0 upto count 'eachItem'
 		let item = try RequirementType.cacheRead(reader)
@@ -1109,7 +1107,7 @@ export type InterfaceMethodSig
 	export let paramIsBuffer as immutable BoolArray
 
 	// Parallel to `paramNames`, which names no receiver: an instance requirement's entry `k` is
-	// parameter `k + 1` of a conformer's body (`SummaryCallDispatch.requirementFirstPosition`).
+	// parameter `k + 1` of a conformer's body (`requirementFirstPosition`).
 	export let paramCapabilities as immutable ParamCapabilityArray
 	export let returnCapability as ResultCapability
 	export let selfCapability as ParamCapability
@@ -1123,7 +1121,7 @@ export type InterfaceMethodSig
 	// synthesized interfaces build one of these rather than passing an empty array, because a column that
 	// is SHORTER than `paramNames` would make "absent" and "false" two different things at every reader.
 	export static function noBufferParams(count ParamCount) returns immutable BoolArray
-		var out = BoolArray.create(0) as isolated BoolArray
+		let out = BoolArray.create(0) as isolated BoolArray
 		var filled = 0 as ParamCount
 
 		modify out 'fill'
@@ -1146,7 +1144,7 @@ export type InterfaceMethodSig
 	end 'create'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns InterfaceMethodSig
-		var renumberedTypes = RequirementTypeArray.create(self.paramTypes.count(), zeroed: false) as isolated RequirementTypeArray
+		let renumberedTypes = RequirementTypeArray.create(self.paramTypes.count(), zeroed: false) as isolated RequirementTypeArray
 
 		for requirement in self.paramTypes 'eachRequirement'
 			let renumbered = requirement.withInstancesRenumbered(remap)
@@ -1220,7 +1218,7 @@ end 'cacheWriteInterfaceMethodSigArray'
 // @generated library-cache begin
 function cacheReadFrozenInterfaceMethodSigArray(reader LibraryCacheReader) returns immutable InterfaceMethodSigArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = InterfaceMethodSigArray.create(count, zeroed: false) as isolated InterfaceMethodSigArray
+	let result = InterfaceMethodSigArray.create(count, zeroed: false) as isolated InterfaceMethodSigArray
 
 	for _ in 0 upto count 'eachItem'
 		let item = try InterfaceMethodSig.cacheRead(reader)
@@ -1351,7 +1349,7 @@ export type IrInterface
 	end 'create'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns IrInterface
-		var renumbered = InterfaceMethodSigArray.create(self.methods.count(), zeroed: false) as isolated InterfaceMethodSigArray
+		let renumbered = InterfaceMethodSigArray.create(self.methods.count(), zeroed: false) as isolated InterfaceMethodSigArray
 
 		for method in self.methods 'eachMethod'
 			let renumberedMethod = method.withInstancesRenumbered(remap)
@@ -1548,7 +1546,7 @@ end 'cacheWriteStdlibShadowRenameMap'
 
 function cacheReadStdlibShadowRenameMap(reader LibraryCacheReader) returns StdlibShadowRenameMap throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = StdlibShadowRenameMap.create()
+	let result = StdlibShadowRenameMap.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let key = try reader.bytes()
@@ -1575,7 +1573,7 @@ end 'cacheWriteIrInterfaceEntryMap'
 
 function cacheReadIrInterfaceEntryMap(reader LibraryCacheReader) returns IrInterfaceEntryMap throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = IrInterfaceEntryMap.create()
+	let result = IrInterfaceEntryMap.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let key = try reader.bytes()
@@ -1602,7 +1600,7 @@ end 'cacheWriteSynthesizedNominalMap'
 
 function cacheReadSynthesizedNominalMap(reader LibraryCacheReader) returns SynthesizedNominalMap throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = SynthesizedNominalMap.create()
+	let result = SynthesizedNominalMap.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let key = try reader.bytes()
@@ -1750,7 +1748,7 @@ end 'cacheWriteIrInterfaceArray'
 
 export function cacheReadIrInterfaceArray(reader LibraryCacheReader) returns IrInterfaceArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = IrInterfaceArray.create(count, zeroed: false)
+	let result = IrInterfaceArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try IrInterface.cacheRead(reader)
@@ -1767,7 +1765,7 @@ export function renumberedRequirements(requirements RequirementTypeArray, remap 
 		return requirements
 	end 'nothingToRenumber'
 
-	var renumbered = RequirementTypeArray.create(requirements.count(), zeroed: false)
+	let renumbered = RequirementTypeArray.create(requirements.count(), zeroed: false)
 
 	for requirement in requirements 'eachRequirement'
 		renumbered.push(requirement.withInstancesRenumbered(remap))
@@ -1840,7 +1838,7 @@ end 'cacheWriteInterfaceConformanceArray'
 
 function cacheReadInterfaceConformanceArray(reader LibraryCacheReader) returns InterfaceConformanceArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = InterfaceConformanceArray.create(count, zeroed: false)
+	let result = InterfaceConformanceArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try InterfaceConformance.cacheRead(reader)
@@ -1866,7 +1864,7 @@ export type ConformanceDecl
 	end 'create'
 
 	export function withInstancesRenumbered(remap TypeIdRemap) returns ConformanceDecl
-		var renumbered = InterfaceConformanceArray.create(self.interfaces.count(), zeroed: false)
+		let renumbered = InterfaceConformanceArray.create(self.interfaces.count(), zeroed: false)
 
 		for entry in self.interfaces 'eachEntry'
 			renumbered.push(entry.withInstancesRenumbered(remap))
@@ -1914,7 +1912,7 @@ end 'cacheWriteConformanceDeclArray'
 
 export function cacheReadConformanceDeclArray(reader LibraryCacheReader) returns ConformanceDeclArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ConformanceDeclArray.create(count, zeroed: false)
+	let result = ConformanceDeclArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try ConformanceDecl.cacheRead(reader)
@@ -1994,7 +1992,7 @@ end 'cacheWriteLiteralInitSiteArray'
 
 export function cacheReadLiteralInitSiteArray(reader LibraryCacheReader) returns LiteralInitSiteArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = LiteralInitSiteArray.create(count, zeroed: false)
+	let result = LiteralInitSiteArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try LiteralInitSite.cacheRead(reader)
@@ -2233,7 +2231,7 @@ end 'cacheWriteInterfaceNameSet'
 
 export function cacheReadInterfaceNameSet(reader LibraryCacheReader) returns InterfaceNameSet throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = InterfaceNameSet.create()
+	let result = InterfaceNameSet.create()
 
 	for _ in 0 upto count 'eachItem'
 		let item = try reader.bytes()
@@ -2298,8 +2296,8 @@ end 'witnessSlotsRequireMethod'
 // must not disagree: `visited` (which decides the diamond) and `sourceInterfaceName` (which becomes the
 // interface half of `witnessSlotImplKey`, and so which member a slot's relocation names).
 export function interfaceWitnessSlots(interfaces IrInterfaceMap, iface IrInterface) returns CollectedInterfaceMethodArray
-	var slots = CollectedInterfaceMethodArray.create(0)
-	var visited = InterfaceNameSet.create()
+	let slots = CollectedInterfaceMethodArray.create(0)
+	let visited = InterfaceNameSet.create()
 	appendInterfaceWitnessSlots(interfaces, iface: iface, slots: slots, visited: visited)
 	return slots
 end 'interfaceWitnessSlots'
@@ -2376,7 +2374,7 @@ end 'requireSameSlotNumbering'
 // a walk that allocates the same one set either way and is asked once per declared conformance of a
 // discharged `where` clause.
 export function conformanceSatisfiesInterface(interfaces IrInterfaceMap, declaredName ByteArray, wanted ByteArray) returns bool
-	var closure = InterfaceNameSet.create()
+	let closure = InterfaceNameSet.create()
 	collectInterfaceAndItsParents(interfaces, name: declaredName, into: closure)
 	return closure.contains(wanted)
 end 'conformanceSatisfiesInterface'
@@ -2413,7 +2411,7 @@ export function declaredInterfacesReach(interfaces IrInterfaceMap, declaredNames
 		return true
 	end 'declaresItDirectly'
 
-	var closure = InterfaceNameSet.create()
+	let closure = InterfaceNameSet.create()
 	collectDeclaredInterfaceClosure(interfaces, declaredNames: declaredNames, into: closure)
 	return closure.contains(wanted)
 end 'declaredInterfacesReach'
@@ -2505,7 +2503,7 @@ function unaryInterfaceMethod(name ByteArray, paramName immutable ByteArray, par
 end 'unaryInterfaceMethod'
 
 function singleName(name immutable ByteArray) returns immutable NameRoster
-	var names = NameRoster.create(0) as isolated NameRoster
+	let names = NameRoster.create(0) as isolated NameRoster
 
 	modify names 'fill'
 		names.push(name)
@@ -2515,7 +2513,7 @@ function singleName(name immutable ByteArray) returns immutable NameRoster
 end 'singleName'
 
 function singleRequirement(requirement RequirementType) returns immutable RequirementTypeArray
-	var requirements = RequirementTypeArray.create(0) as isolated RequirementTypeArray
+	let requirements = RequirementTypeArray.create(0) as isolated RequirementTypeArray
 
 	modify requirements 'fill'
 		requirements.push(requirement)
@@ -2527,7 +2525,7 @@ end 'singleRequirement'
 // An interface with exactly one method and no `extends`/`uses` — every synthesized
 // protocol interface but `Error`.
 function singleMethodInterface(name ByteArray, method InterfaceMethodSig) returns IrInterface
-	var methods = InterfaceMethodSigArray.create(0) as isolated InterfaceMethodSigArray
+	let methods = InterfaceMethodSigArray.create(0) as isolated InterfaceMethodSigArray
 	methods.push(method)
 	return IrInterface.create(name, methods: freeze methods, extendsInterfaces: freeze NameRoster.create(0), associatedTypeNames: freeze NameRoster.create(0), declFilePath: CompilerOwnedDeclFilePath)
 end 'singleMethodInterface'
@@ -2642,7 +2640,7 @@ end 'canonicalProtocolName'
 // `builtinInterfaceKind` disagreeing fails at the first `ProgramSignatures.create` rather than silently
 // giving one protocol no index.
 export function builtinInterfaceNames() returns NameRoster
-	var names = NameRoster.create(0)
+	let names = NameRoster.create(0)
 
 	for protocol in BuiltinInterfaceKind.allCases 'eachKind'
 		if protocol == BuiltinInterfaceKind.notABuiltin 'classifiesRatherThanNames'
@@ -3333,7 +3331,7 @@ export typealias BuiltinInterfaceKindArray = Array with BuiltinInterfaceKind
 // the sentence a withheld method is refused with, and this predicate's answer are one list. Written out as
 // `[Hashable, Equatable]` at those doors it would be the copy that stops matching the day the row moves.
 export function intrinsicConformanceProtocols(typeName ByteArray, discovered DiscoveredConformer) returns BuiltinInterfaceKindArray
-	var protocols = BuiltinInterfaceKindArray.create(0)
+	let protocols = BuiltinInterfaceKindArray.create(0)
 
 	for protocol in IntrinsicConformableProtocols 'eachProtocol'
 		if conformsIntrinsically(typeName, protocol: protocol, discovered: discovered) 'conforms'
@@ -3415,7 +3413,7 @@ end 'supplyingProtocol'
 // ⚠ It carries no array row for the reason `builtinConformerMethod` states in full — the walk it is derived
 // from serves the four reserved direct-dispatch conformers and nothing else.
 export function builtinConformerMethodNameList(typeName ByteArray) returns NameRoster
-	var names = NameRoster.create(0)
+	let names = NameRoster.create(0)
 
 	for protocol in intrinsicConformanceProtocols(typeName, discovered: DiscoveredConformer.none) 'eachProtocol'
 		names.push(try synthesizedProtocolMethodName(protocol) otherwise continue)
@@ -3446,7 +3444,7 @@ end 'builtinConformerMethodNameList'
 // It is a LIST rather than two appended lines so that the advertisement and the arms grow together: a third
 // lowering joins here and is named by the refusal in the same edit.
 function builtinConformerLoweredMethodNames() returns NameRoster
-	var names = NameRoster.create(0)
+	let names = NameRoster.create(0)
 	names.push(ToStringMethodName)
 	names.push(CloneMethodName)
 	return names
@@ -3457,13 +3455,13 @@ end 'builtinConformerLoweredMethodNames'
 // than walked a second time, for the reason stated there, plus the LOWERED names above, which that list
 // structurally cannot carry.
 export function builtinConformerDispatchMethodNames(typeName ByteArray) returns String
-	var names = builtinConformerMethodNameList(typeName)
+	let names = builtinConformerMethodNameList(typeName)
 
 	for loweredName in builtinConformerLoweredMethodNames() 'eachLowered'
 		names.push(loweredName)
 	end 'eachLowered'
 
-	var phrases = StringArray.create(names.count(), zeroed: false)
+	let phrases = StringArray.create(names.count(), zeroed: false)
 
 	for methodName in names 'eachMethod'
 		phrases.push("`{String.from(methodName)}`")

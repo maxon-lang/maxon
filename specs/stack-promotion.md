@@ -50,7 +50,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(1, y: 2)
+	let p = Point.create(1, y: 2)
 	p.x = 100
 	return p.x
 end 'main'
@@ -126,10 +126,10 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	let item = Item.create(7)
 	arr.push(item)
-	view got = try arr.get(0) otherwise Item.create(0)
+	let got = try arr.get(0) otherwise Item.create(0)
 	return got.value
 end 'main'
 ```

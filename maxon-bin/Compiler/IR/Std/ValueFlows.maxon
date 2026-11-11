@@ -15,7 +15,7 @@ module enum ReturnExits
 end 'ReturnExits'
 
 module function valueFlowsOf(module StdModule, func IrFunction) returns ValueFlowArray
-	var flows = ValueFlowArray.create(0)
+	let flows = ValueFlowArray.create(0)
 	let positionById = module.blockIndexById(func)
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -36,8 +36,8 @@ module function valueFlowsOf(module StdModule, func IrFunction) returns ValueFlo
 end 'valueFlowsOf'
 
 module function valuesFeeding(flows ValueFlowArray, seeds BoolArray) returns BoolArray
-	var fromCarrier = CsrColumn.create(flows.count(), zeroed: false)
-	var toFeeder = CsrColumn.create(flows.count(), zeroed: false)
+	let fromCarrier = CsrColumn.create(flows.count(), zeroed: false)
+	let toFeeder = CsrColumn.create(flows.count(), zeroed: false)
 
 	for flow in flows 'eachFlow'
 		fromCarrier.push(flow.carrier as CsrIndex)
@@ -56,10 +56,10 @@ module function markValue(column BoolArray, v ValueId)
 end 'markValue'
 
 module function returnedValuesOf(module StdModule, func IrFunction, exits ReturnExits) returns ValueIdArray
-	var returned = ValueIdArray.create(0)
+	let returned = ValueIdArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		view block = module.getBlock(blockRef)
+		let block = module.getBlock(blockRef)
 
 		if exits == ReturnExits.reachableExits and blockAborts(module, block: block) 'neverReturns'
 			continue

@@ -62,7 +62,7 @@ export function installServiceBehaviours(module MaxonModule, project Project, si
 
 	let services = servicesInDeclarationOrder(discovered, signatures: signatures, fileRanks: project.emissionRanks)
 
-	view funcNames = try FunctionNameIndex.create(module.functions, project: project)
+	let funcNames = try FunctionNameIndex.create(module.functions, project: project)
 
 	// ⭐ **ONE WALK OF THE MODULE FOR EVERY SERVICE, NOT ONE PER SERVICE.** The walk is Θ(program), so
 	// driving it from inside the roster loop would multiply the whole module by the number of service types
@@ -85,14 +85,14 @@ export function installServiceBehaviours(module MaxonModule, project Project, si
 end 'installServiceBehaviours'
 
 function servicesInDeclarationOrder(discovered NameRoster, signatures ProgramSignatures, fileRanks FileEmissionRankMap) returns NameRoster
-	var positions = DeclarationPositionArray.create(discovered.count(), zeroed: false)
+	let positions = DeclarationPositionArray.create(discovered.count(), zeroed: false)
 
 	for typeName in discovered 'eachService'
-		view layout = spawnTargetLayoutOf(signatures, typeName: typeName)
+		let layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 		positions.push(DeclarationPosition.of(fileRanks, path: layout.declFilePath, line: layout.declLine, column: layout.declColumn, kind: "the service type", name: typeName))
 	end 'eachService'
 
-	var ordered = NameRoster.create(discovered.count(), zeroed: false)
+	let ordered = NameRoster.create(discovered.count(), zeroed: false)
 
 	for slot in declarationsInPositionOrder(positions) 'eachInDeclarationOrder'
 		ordered.push(try discovered.get(slot) otherwise panic("servicesInDeclarationOrder: discovered.get OOB at {slot}"))
@@ -117,8 +117,8 @@ function buildServiceBehaviours(module MaxonModule, project Project, signatures 
 	// built from the discovery walk's raw token candidates, so a type can be on it with not one
 	// `serviceSpawn` op behind it. There is nothing to build behaviours for and nothing that could call
 	// one.
-	var mangledInstances = NameRoster.create(instances.count(), zeroed: false)
-	var instanceOrder = DeclarationOrder.create(instances.count(), zeroed: false)
+	let mangledInstances = NameRoster.create(instances.count(), zeroed: false)
+	let instanceOrder = DeclarationOrder.create(instances.count(), zeroed: false)
 
 	for gid in instances 'eachMangled'
 		instanceOrder.push(mangledInstances.count())
@@ -151,13 +151,13 @@ typealias SpawnedInstanceSet = Set with GenericInstanceId
 // by hand (`serviceTypeRoster`'s own bound) — unlike the INSTANTIATIONS, which grow with the program and are
 // therefore deduped through a set rather than a scan.
 function spawnedInstancesByService(module MaxonModule, services NameRoster) returns SpawnedInstanceBuckets
-	var buckets = SpawnedInstanceBuckets.create(services.count(), zeroed: false)
+	let buckets = SpawnedInstanceBuckets.create(services.count(), zeroed: false)
 
 	for _ in services 'eachService'
 		buckets.push(GenericInstanceIdArray.create(0))
 	end 'eachService'
 
-	var seen = SpawnedInstanceSet.create()
+	let seen = SpawnedInstanceSet.create()
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -178,7 +178,7 @@ function noteSpawnedInstance(op MaxonOp, func IrFunction, services NameRoster, b
 	end 'startsNoService'
 
 	match op 'op'
-		serviceSpawn(_, spawnedType, state, _, _, _, _, _, _, _, _, _) then bucketSpawnedInstance(func, spawnedType: spawnedType, state: state, services: services, buckets: buckets, seen: seen)
+		serviceSpawn(_, spawnedType, state, _, _, _, _, _, _, _, _) then bucketSpawnedInstance(func, spawnedType: spawnedType, state: state, services: services, buckets: buckets, seen: seen)
 		default panic("noteSpawnedInstance: `maxonOpIsServiceSpawn` answered true for an op that is not a `serviceSpawn`")
 	end 'op'
 end 'noteSpawnedInstance'
@@ -207,7 +207,7 @@ function noteDistinctInstance(gid GenericInstanceId, spawnedType ByteArray, serv
 			continue
 		end 'anotherService'
 
-		var bucket = try buckets.get(i) otherwise panic("noteDistinctInstance: buckets.get OOB at {i} — one bucket is pushed per service before the walk")
+		let bucket = try buckets.get(i) otherwise panic("noteDistinctInstance: buckets.get OOB at {i} — one bucket is pushed per service before the walk")
 		seen.insert(gid)
 		bucket.push(gid)
 		return
@@ -240,7 +240,7 @@ end 'buildServiceBehaviourPair'
 // bodies need. It is INDEX-SPACE, because the state value is MINTED (`SynthesizedFunction.mint` crosses
 // the id into the project's table).
 function serviceStateTypeOf(signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance) returns MaxonType
-	var indexNames = signatures.indexTypeNames()
+	let indexNames = signatures.indexTypeNames()
 
 	return match instance 'i'
 		monomorphic gives MaxonType.structRef(indexNames.intern(typeName))
@@ -266,15 +266,15 @@ end 'loadServiceState'
 function buildServiceBehave(module MaxonModule, project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, typeName ByteArray, instance ServiceStateInstance)
 	let stateType = serviceStateTypeOf(signatures, typeName: typeName, instance: instance)
 
-	var paramTypes = MaxonTypeArray.create(0)
+	let paramTypes = MaxonTypeArray.create(0)
 	paramTypes.push(MaxonType.integer)
 	paramTypes.push(MaxonType.integer)
-	var fn = SynthesizedFunction.open(module, project: project, name: serviceBehaveSymbolFor(signatures, typeName: typeName, instance: instance), returnType: MaxonReturnType.void, paramTypes: paramTypes)
+	let fn = SynthesizedFunction.open(module, project: project, name: serviceBehaveSymbolFor(signatures, typeName: typeName, instance: instance), returnType: MaxonReturnType.void, paramTypes: paramTypes)
 
 	let site = SynthesizedSite.compilersOwn
-	view request = requireServiceRequestLayout(signatures, typeName: typeName)
+	let request = requireServiceRequestLayout(signatures, typeName: typeName)
 
-	var entry = fn.currentBlock()
+	let entry = fn.currentBlock()
 	let state = loadServiceState(fn, stateType: stateType, site: site)
 	let tag = fn.mintOfType(MaxonType.integer)
 	fn.emit(MaxonOp.loadIndirect(tag, addr: ServiceRequestParam, offset: UnionTagOffset, valueType: MaxonType.integer), site: site)
@@ -283,9 +283,9 @@ function buildServiceBehave(module MaxonModule, project Project, signatures Prog
 	// are the switch's dense table in TAG order — `request.tagOfIndex(i)`
 	// is `i` by construction (`ServiceCompanions.addServiceRequestCase` derives each tag from the
 	// case count), so the table's index IS the case index.
-	view unknownTag = buildUnknownTagBlock(fn, site: site)
+	let unknownTag = buildUnknownTagBlock(fn, site: site)
 
-	var armIds = BlockIdArray.create(request.caseCount(), zeroed: false)
+	let armIds = BlockIdArray.create(request.caseCount(), zeroed: false)
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
 		armIds.push(buildMessageArm(fn, signatures: signatures, funcNames: funcNames, callee: qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)), instance: instance, request: request, caseIndex: caseIndex, state: state, site: site))
@@ -299,9 +299,9 @@ end 'buildServiceBehave'
 function buildServiceFinish(module MaxonModule, project Project, signatures ProgramSignatures, typeName ByteArray, instance ServiceStateInstance)
 	let stateType = serviceStateTypeOf(signatures, typeName: typeName, instance: instance)
 
-	var paramTypes = MaxonTypeArray.create(0)
+	let paramTypes = MaxonTypeArray.create(0)
 	paramTypes.push(MaxonType.integer)
-	var fn = SynthesizedFunction.open(module, project: project, name: serviceFinishSymbolFor(signatures, typeName: typeName, instance: instance), returnType: MaxonReturnType.void, paramTypes: paramTypes)
+	let fn = SynthesizedFunction.open(module, project: project, name: serviceFinishSymbolFor(signatures, typeName: typeName, instance: instance), returnType: MaxonReturnType.void, paramTypes: paramTypes)
 
 	let site = SynthesizedSite.compilersOwn
 	let state = loadServiceState(fn, stateType: stateType, site: site)
@@ -339,10 +339,10 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// ⚠ **ONLY THE DECLARED PARAMETERS ARE LOADED, AND THE `__reply` SLOT IS NOT ONE.** A message with a
 	// reply carries its cell in a trailing slot; loading it would hand the handler an argument its declaration
 	// does not have.
-	var args = ValueIdArray.create(0)
+	let args = ValueIdArray.create(0)
 	args.push(state)
-	var payloadClasses = LoadedPayloadClassArray.create(decl.paramTypes.count(), zeroed: false)
-	var payloadTypes = MaxonTypeArray.create(decl.paramTypes.count(), zeroed: false)
+	let payloadClasses = LoadedPayloadClassArray.create(decl.paramTypes.count(), zeroed: false)
+	let payloadTypes = MaxonTypeArray.create(decl.paramTypes.count(), zeroed: false)
 
 	for param in 0 upto decl.paramTypes.count() 'eachParam'
 		let slot = serviceParamPayloadSlot(payloads, paramIndex: param as ParamCount)
@@ -360,7 +360,7 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// to disagree about which register the reply's value word came back in.
 	let returned = try serviceHandlerReturnType(signatures, callee: callee, instance: instance, typeNames: signatures.indexTypeNames()) otherwise panic("buildMessageArm: '{String.from(callee)}' has a declaration (`serviceDeclarationOf` just answered) yet records no return type — both read the one declaration sweep")
 	let reply = serviceArmReply(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: ServiceRequestParam, site: site)
-	view cells = spillReassignedPayloads(fn, byReference: funcNames.byReferenceParamsOf(callee), classes: payloadClasses, types: payloadTypes, args: args, site: site)
+	let cells = spillReassignedPayloads(fn, byReference: funcNames.byReferenceParamsOf(callee), classes: payloadClasses, types: payloadTypes, args: args, site: site)
 	let outcome = emitServiceHandlerCall(fn, callee: callee, returned: returned, signatures: signatures, args: handlerArgsOf(args, cells: cells), site: site)
 	reclaimReassignedPayloads(fn, cells: cells, args: args, site: site)
 
@@ -380,7 +380,7 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// teardown word: **every read or release of shared state precedes the arrival that hands it over.**
 	dropUnconsumedPayloads(fn, signatures: signatures, callee: callee, request: request, caseIndex: caseIndex, classes: payloadClasses, args: args, site: site)
 
-	emitServiceReplyCompletion(fn, signatures: signatures, callee: callee, returned: returned, outcome: outcome, reply: reply, site: site)
+	emitServiceReplyCompletion(fn, returned: returned, outcome: outcome, reply: reply, site: site)
 
 	// ⛔⛔ **THE CURRENT BLOCK, NOT THE ARM'S ENTRY — THE TWO DIFFER FOR A THROWING HANDLER.** Its `tryCall`'s
 	// error edge is a diamond (`emitServiceReplyCompletion`), so the ops above landed in that diamond's MERGE and
@@ -410,7 +410,7 @@ typealias LoadedPayloadClassArray = Array with PayloadClass
 // `dropUnconsumedPayloads` runs: the handler may have replaced the value, and the drop must release
 // what the cell holds, not what the message carried.
 function spillReassignedPayloads(fn SynthesizedFunction, byReference ParamPositionMask, classes LoadedPayloadClassArray, types MaxonTypeArray, args ValueIdArray, site SynthesizedSite) returns ReassignedPayloadCellArray
-	var cells = ReassignedPayloadCellArray.create(0)
+	let cells = ReassignedPayloadCellArray.create(0)
 
 	if byReference == NoParamPositions 'everyParameterByValue'
 		return cells
@@ -445,7 +445,7 @@ function handlerArgsOf(args ValueIdArray, cells ReassignedPayloadCellArray) retu
 		return args
 	end 'nothingSpilled'
 
-	var handed = ValueIdArray.create(0)
+	let handed = ValueIdArray.create(0)
 	handed.append(args)
 
 	for spilled in cells 'eachCell'
@@ -560,7 +560,7 @@ function emitServiceHandlerCall(fn SynthesizedFunction, callee ByteArray, return
 
 	let result = fn.mint(resultTag, nameId: resultNameId)
 	let errorFlag = fn.mintOfType(MaxonType.integer)
-	fn.emit(MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: WriteBlameArray.create(0), defaultedArgs: NoDefaultedArgs, mint: CalleeMint.notMinted), site: site)
+	fn.emit(MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: site.range()), argImmutableNames: NameRoster.create(0), mint: CalleeMint.notMinted), site: site)
 	return ServiceHandlerOutcome.routed(result, errorFlag: errorFlag)
 end 'emitServiceHandlerCall'
 
@@ -568,29 +568,29 @@ end 'emitServiceHandlerCall'
 // `__gt_cell_complete` publishes `completed`, which is the instant the awaiter may resume on another M;
 // `buildMessageArm` states what that costs when a release comes after it, and why every one of them is
 // emitted above this call.
-function emitServiceReplyCompletion(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, outcome ServiceHandlerOutcome, reply ServiceReplyTarget, site SynthesizedSite)
+function emitServiceReplyCompletion(fn SynthesizedFunction, returned MaxonReturnType, outcome ServiceHandlerOutcome, reply ServiceReplyTarget, site SynthesizedSite)
 	match outcome 'o'
-		answered(result) then publishAnsweredReply(fn, signatures: signatures, callee: callee, returned: returned, result: result, reply: reply, site: site)
-		routed(result, errorFlag) then emitRoutedReplyCompletion(fn, signatures: signatures, callee: callee, returned: returned, result: result, errorFlag: errorFlag, reply: reply, site: site)
+		answered(result) then publishAnsweredReply(fn, returned: returned, result: result, reply: reply, site: site)
+		routed(result, errorFlag) then emitRoutedReplyCompletion(fn, returned: returned, result: result, errorFlag: errorFlag, reply: reply, site: site)
 	end 'o'
 end 'emitServiceReplyCompletion'
 
 // The THROWING handler's two edges. Split from the arm above because a `match` arm is one statement and this
 // is a diamond.
-function emitRoutedReplyCompletion(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, result ValueId, errorFlag ValueId, reply ServiceReplyTarget, site SynthesizedSite)
+function emitRoutedReplyCompletion(fn SynthesizedFunction, returned MaxonReturnType, result ValueId, errorFlag ValueId, reply ServiceReplyTarget, site SynthesizedSite)
 	let threw = fn.emitCompare(errorFlag, rhs: fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, site: site), op: MaxonCmpOp.ne, site: site)
-	var caught = fn.currentBlock()
+	let caught = fn.currentBlock()
 
-	var thrown = fn.openBlock(b"replythrew")
+	let thrown = fn.openBlock(b"replythrew")
 	completeServiceReply(fn, reply: reply, result: fn.emitTypedLiteral(0, valueType: MaxonType.integer, site: site), threw: errorFlag, site: site)
 
 	// ⚠ On the THROWN path the success register holds whatever the exit left there — the undefined slot
 	// `AsyncReleaser`'s header calls a wild free — so the VALUE word is written only on the edge that really
 	// produced one, and the thrown edge writes a 0 the releaser's null guard reads as "nothing was put here".
-	var answered = fn.openBlock(b"replyok")
-	publishAnsweredReply(fn, signatures: signatures, callee: callee, returned: returned, result: result, reply: reply, site: site)
+	let answered = fn.openBlock(b"replyok")
+	publishAnsweredReply(fn, returned: returned, result: result, reply: reply, site: site)
 
-	var handled = fn.openBlock(b"handled")
+	let handled = fn.openBlock(b"handled")
 	fn.terminateBlock(caught, op: MaxonOp.condBranch(threw, thenBlockId: thrown.id, elseBlockId: answered.id), site: site)
 	fn.terminateBlock(thrown, op: MaxonOp.branch(handled.id), site: site)
 	fn.terminateBlock(answered, op: MaxonOp.branch(handled.id), site: site)
@@ -607,62 +607,24 @@ function completeServiceReply(fn SynthesizedFunction, reply ServiceReplyTarget, 
 	end 'r'
 end 'completeServiceReply'
 
-// The edge on which the handler really produced its value: the graph walk, then the completion. A void call
-// names no value at all, so its word is a literal 0 — "there is nothing here" in a word that must always be
-// written.
-function publishAnsweredReply(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, returned MaxonReturnType, result ValueId, reply ServiceReplyTarget, site SynthesizedSite)
+// The edge on which the handler really produced its value: the completion. A void call names no value at all,
+// so its word is a literal 0 — "there is nothing here" in a word that must always be written.
+function publishAnsweredReply(fn SynthesizedFunction, returned MaxonReturnType, result ValueId, reply ServiceReplyTarget, site SynthesizedSite)
 	let threw = fn.emitTypedLiteral(NoErrorFlag, valueType: MaxonType.integer, site: site)
 
 	match returned 'r'
 		void then completeServiceReply(fn, reply: reply, result: fn.emitTypedLiteral(0, valueType: MaxonType.integer, site: site), threw: threw, site: site)
-		value(replyType) then publishReplyValue(fn, signatures: signatures, callee: callee, replyType: replyType, result: result, reply: reply, threw: threw, site: site)
+		value(replyType) then publishReplyValue(fn, replyType: replyType, result: result, reply: reply, threw: threw, site: site)
 	end 'r'
 end 'publishAnsweredReply'
 
-// ⭐⭐ **THE REPLY'S GRAPH IS WALKED HERE, BETWEEN THE LAST RELEASE AND THE PUBLISH, AND NOWHERE EARLIER.**
-// A reply is MOVED to the awaiter, so every counted record it reaches must have one owner at the hand-off —
-// and until the handler's scope drops and `dropUnconsumedPayloads` have run, a local the reply was built
-// over and a message parameter it holds are still second owners that are about to let go. Walked at the
-// handler's `return`, a reply that crosses with one owner aborts; walked here, only a reply that really
-// shares a record with something that outlives the message does.
-//
-// ⚠ **A REFUSED GRAPH HERE MEANS THE PROGRAM IS ALREADY REFUSED** — at the handler's `return`
-// (`Parser.proveReplyCrossable`) for the type the body declares, and at the `spawn` for the type an
-// instantiation substitutes (`ServiceCompanions.instantiatedReplyGraphRefusal`), both through
-// `ProgramSignatures.transferWalkOf`. The handler's refusal abandons its body, and
-// `installServiceBehaviours` builds no pair for a service with an abandoned handler body; the spawn's refusal
-// emits no `serviceSpawn` op, so no pair is built for that instance. A refused graph reaching here is a
-// compiler defect, and the `refused` arm panics on it.
-function publishReplyValue(fn SynthesizedFunction, signatures ProgramSignatures, callee ByteArray, replyType MaxonType, result ValueId, reply ServiceReplyTarget, threw ValueId, site SynthesizedSite)
-	match replyTransferWalk(signatures, replyType: replyType, declFilePath: signatures.recordedReturnDeclFileOf(callee)) 'graph'
-		closed then break
-		walkedBy(walk) then emitReplyGraphWalk(fn, walk: walk, walked: argsOf(result), site: site)
-		walkedAlone(walk) then fn.emitPositionalCallDiscarding(walk, args: argsOf(result), site: site)
-		walkedThroughWitness(entry) then emitReplyGraphWalk(fn, walk: entry, walked: twoArgs(fn.witnessOf(result), second: result), site: site)
-		refused(noun) then panic("publishReplyValue: the reply of `{String.from(callee)}` is {noun}, yet a loop is built only for a service with no abandoned handler body, whose every `return` passed `Parser.proveReplyCrossable`, and only for an instance a `serviceSpawn` op names, which `Parser.parseSpawn` emits after the roster passed at that instance")
-	end 'graph'
-
+function publishReplyValue(fn SynthesizedFunction, replyType MaxonType, result ValueId, reply ServiceReplyTarget, threw ValueId, site SynthesizedSite)
 	if maxonTypeTag(replyType) == ValueTypeTag.interfaceRef 'aFatPointer'
 		storeReplyWitness(fn, reply: reply, witness: fn.witnessOf(result), site: site)
 	end 'aFatPointer'
 
 	completeServiceReply(fn, reply: reply, result: result, threw: threw, site: site)
 end 'publishReplyValue'
-
-// `walk(walked…, NoVisitTable)` threads one visit table through the reply's graph, so a record two of its paths
-// reach is walked once, and `__mm_walk_settle` then aborts on an owner the graph does not hold and frees the table.
-// `walked` is the reply, preceded by its witness half when the walk reads one.
-function emitReplyGraphWalk(fn SynthesizedFunction, walk ByteArray, walked ValueIdArray, site SynthesizedSite)
-	var args = ValueIdArray.create(walked.count() + 1, zeroed: false)
-
-	for value in walked 'eachWalked'
-		args.push(value)
-	end 'eachWalked'
-
-	args.push(fn.emitTypedLiteral(NoVisitTable, valueType: MaxonType.integer, site: site))
-	let visits = fn.emitPositionalCall(walk, args: args, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: site)
-	fn.emitPositionalCallDiscarding(WalkSettleName, args: argsOf(visits), site: site)
-end 'emitReplyGraphWalk'
 
 // ⭐ **A REPLY HELD AT AN INTERFACE TYPE CARRIES ITS WITNESS HALF IN A THIRD WORD OF THE CELL**
 // (`GtRuntime.GtOffReplyWitness`), written before `__gt_cell_complete` publishes the other two because the
@@ -685,7 +647,7 @@ end 'storeReplyWitness'
 // a direct `Self{f: p}` store in an instance method is co-ownership rather than a move
 // (`Parser.scanBodyFacts`, `detectFieldStores: false`); a type-parameter feed needs a payload typed
 // at one, and a promise reclaim needs a `Promise` payload — and `untransferableParameterNoun`
-// refuses BOTH at the `spawn` (E3135), reading the handler's declared slot type: a send cannot know
+// refuses BOTH at the `spawn` (E3217), reading the handler's declared slot type: a send cannot know
 // an opaque `T`'s layout, and a promise owns a green thread its awaiter holds. Asking the ONE door
 // rather than hard-coding that costs a map lookup per payload at compile time and is what keeps
 // this correct the day a fourth door opens; hard-coding it would be a double free that day.

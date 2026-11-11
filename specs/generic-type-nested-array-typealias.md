@@ -46,7 +46,7 @@ end 'Container'
 typealias IntContainer = Container with SmallInt
 
 function main() returns ExitCode
-	var ic = IntContainer.create("numbers")
+	let ic = IntContainer.create("numbers")
 	ic.push(10)
 	ic.push(20)
 	let c = ic.count()
@@ -90,7 +90,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("hello")
 	sc.push("world")
 	let c = sc.count()
@@ -133,7 +133,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.add("alpha")
 	sc.add("beta")
 	return 0
@@ -176,7 +176,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.a("alpha")
 	return 0
 end 'main'
@@ -220,7 +220,7 @@ end 'Container'
 typealias IntContainer = Container with SmallInt
 
 function main() returns ExitCode
-	var ic = IntContainer.create()
+	let ic = IntContainer.create()
 	ic.add(10)
 	ic.add(20)
 	let c = ic.count()
@@ -304,7 +304,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.pushIf("hello", flag: false)
 	return 0
 end 'main'
@@ -341,7 +341,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.pushIf("hello", flag: true)
 	return 0
 end 'main'
@@ -381,7 +381,7 @@ end 'Container'
 typealias IntContainer = Container with SmallInt
 
 function main() returns ExitCode
-	var ic = IntContainer.create()
+	let ic = IntContainer.create()
 	ic.pushIf(10, flag: false)
 	return 0
 end 'main'
@@ -425,7 +425,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("hello string long enough to force a heap allocation")
 	sc.push("world string long enough to force a heap allocation")
 	sc.drainOne()
@@ -467,7 +467,7 @@ type Container uses Element
 	end 'push'
 
 	function drainViaLocal()
-		var arr = self.items
+		let arr = self.items
 		_ = try arr.pop() otherwise return
 	end 'drainViaLocal'
 end 'Container'
@@ -475,7 +475,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("hello string long enough to force a heap allocation")
 	sc.push("world string long enough to force a heap allocation")
 	sc.drainViaLocal()
@@ -526,7 +526,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("a string long enough to force a heap allocation")
 	let c = sc.peekCount()
 	if c == 1 'stillThere'
@@ -577,7 +577,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("only element long enough to force a heap allocation")
 	let seen = try sc.peekEnds() otherwise return 1
 	return 0 if seen.byteLength() > 0 else 2
@@ -628,12 +628,12 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var pair = StringContainer.create()
+	let pair = StringContainer.create()
 	pair.push("front element, long enough to force a heap allocation")
 	pair.push("back element, also long enough to force a heap allocation")
 	let fromBorrowedArm = try pair.peekEnds() otherwise return 1
 
-	var trio = StringContainer.create()
+	let trio = StringContainer.create()
 	trio.push("front element, long enough to force a heap allocation")
 	trio.push("middle element, long enough to force a heap allocation")
 	trio.push("back element, also long enough to force a heap allocation")
@@ -685,7 +685,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("first string long enough to force a heap allocation")
 	sc.push("second string long enough to force a heap allocation")
 	sc.dropAt()
@@ -738,7 +738,7 @@ end 'Container'
 typealias PairContainer = Container with Pair
 
 function main() returns ExitCode
-	var pc = PairContainer.create()
+	let pc = PairContainer.create()
 	pc.push(Pair.create("first pair string long enough for heap", value: 1))
 	pc.push(Pair.create("second pair string long enough for heap", value: 2))
 	pc.drainOne()
@@ -830,7 +830,7 @@ end 'Container'
 typealias IntContainer = Container with SmallInt
 
 function main() returns ExitCode
-	var ic = IntContainer.create()
+	let ic = IntContainer.create()
 	ic.push(7)
 	ic.push(9)
 	ic.drainOne()
@@ -923,7 +923,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("alpha string long enough to force a heap allocation")
 	let taken = sc.takeOne()
 	print("{taken}")
@@ -979,14 +979,14 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function makeDuplicate() returns StringContainer
-	var a = StringContainer.create()
+	let a = StringContainer.create()
 	a.push("alpha string long enough to force a heap allocation")
 	a.push("beta string long enough to force a heap allocation")
 	return a.duplicate()
 end 'makeDuplicate'
 
 function main() returns ExitCode
-	var b = makeDuplicate()
+	let b = makeDuplicate()
 	let c = b.count()
 	if c == 2 'ok'
 		return 0
@@ -1035,10 +1035,10 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var a = StringContainer.create()
+	let a = StringContainer.create()
 	a.push("alpha string long enough to force a heap allocation")
 	a.push("beta string long enough to force a heap allocation")
-	var b = a.duplicate()
+	let b = a.duplicate()
 	let ca = a.count()
 	let cb = b.count()
 	if ca == 2 'aok'
@@ -1091,14 +1091,14 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function buildSliced() returns StringContainer
-	var a = StringContainer.create()
+	let a = StringContainer.create()
 	a.push("slice one long enough to force a heap allocation")
 	a.push("slice two long enough to force a heap allocation")
 	return a.sliceFirst()
 end 'buildSliced'
 
 function main() returns ExitCode
-	var sliced = buildSliced()
+	let sliced = buildSliced()
 	let c = sliced.count()
 	if c == 1 'ok'
 		return 0
@@ -1153,7 +1153,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function buildAppended() returns StringContainer
-	var dest = StringContainer.create()
+	let dest = StringContainer.create()
 	dest.pushItem("dest string long enough to force a heap allocation")
 	dest.pushExtra("extra one long enough to force a heap allocation")
 	dest.pushExtra("extra two long enough to force a heap allocation")
@@ -1162,7 +1162,7 @@ function buildAppended() returns StringContainer
 end 'buildAppended'
 
 function main() returns ExitCode
-	var appended = buildAppended()
+	let appended = buildAppended()
 	let c = appended.count()
 	if c == 3 'ok'
 		return 0
@@ -1219,14 +1219,14 @@ end 'Container'
 typealias ItemContainer = Container with Item
 
 function makeDuplicate() returns ItemContainer
-	var a = ItemContainer.create()
+	let a = ItemContainer.create()
 	a.push(Item.create("first item name long enough to force a heap allocation"))
 	a.push(Item.create("second item name long enough to force a heap allocation"))
 	return a.duplicate()
 end 'makeDuplicate'
 
 function main() returns ExitCode
-	var b = makeDuplicate()
+	let b = makeDuplicate()
 	let c = b.count()
 	if c == 2 'ok'
 		return 0
@@ -1276,14 +1276,14 @@ end 'Container'
 typealias IntContainer = Container with SmallInt
 
 function makeDuplicate() returns IntContainer
-	var a = IntContainer.create()
+	let a = IntContainer.create()
 	a.push(10)
 	a.push(20)
 	return a.duplicate()
 end 'makeDuplicate'
 
 function main() returns ExitCode
-	var b = makeDuplicate()
+	let b = makeDuplicate()
 	let c = b.count()
 	if c == 2 'ok'
 		return 0
@@ -1342,10 +1342,10 @@ end 'Container'
 typealias NestedContainer = Container with StringArray
 
 function makeDuplicate() returns NestedContainer
-	var sa = StringArray.create(0)
+	let sa = StringArray.create(0)
 	sa.push("a string long enough to force a heap allocation")
 	sa.push("a second string, also long enough to allocate")
-	var nc = NestedContainer.create()
+	let nc = NestedContainer.create()
 	nc.push(sa)
 	return nc.duplicate()
 	// nc, its inner array and both String records are freed when this function returns
@@ -1476,7 +1476,7 @@ end 'Container'
 typealias ItemContainer = Container with Item
 
 function main() returns ExitCode
-	var c = ItemContainer.create()
+	let c = ItemContainer.create()
 	c.push(Item.create())
 	return 0
 end 'main'
@@ -1520,7 +1520,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("hello")
 	sc.push("world")
 	let c = sc.count()
@@ -1567,7 +1567,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	for i in 0 upto 3 'fill'
 		sc.push("element number {i} of a heap-allocated string")
 	end 'fill'
@@ -1602,7 +1602,7 @@ type Holder uses Element
 	export var items as ElementArray
 
 	static function of(first Element) returns Self
-		var xs = ElementArray.create(0)
+		let xs = ElementArray.create(0)
 		xs.push(first)
 		return Self{ items: xs }
 	end 'of'
@@ -1643,7 +1643,7 @@ type Holder uses Element
 	export var items as ElementArray
 
 	static function of(first Element) returns Self
-		var xs = ElementArray.create(0)
+		let xs = ElementArray.create(0)
 		xs.push(first)
 		return Self{ items: xs }
 	end 'of'
@@ -1707,7 +1707,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("a string long enough to force a heap allocation")
 	sc.rotate()
 	let c = sc.count()
@@ -1767,7 +1767,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("a string long enough to force a heap allocation")
 	sc.duplicateFirst()
 	let copy = try sc.at(1) otherwise return 1
@@ -1820,7 +1820,7 @@ typealias StringContainer = Container with String
 function main() returns ExitCode
 	var kept = 0 as Count
 	for i in 0 upto 200 'loop'
-		var sc = StringContainer.create()
+		let sc = StringContainer.create()
 		sc.addMaybe("a heap-allocated element numbered {i}", flag: false)
 		kept = kept + sc.count()
 	end 'loop'
@@ -1851,7 +1851,7 @@ type Holder uses Element
 	export var items as ElementArray
 
 	static function ofMaybe(first Element, flag bool) returns Self
-		var xs = ElementArray.create(0)
+		let xs = ElementArray.create(0)
 		if flag 'maybe'
 			xs.push(first)
 		end 'maybe'
@@ -1932,10 +1932,10 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("a string long enough to force a heap allocation")
 	sc.push("a second string, also long enough to force a heap allocation")
-	var dst = StringContainer.create()
+	let dst = StringContainer.create()
 	sc.copyInto(dst.items)
 	let copied = try dst.at(1) otherwise return 1
 	let original = try sc.at(1) otherwise return 1
@@ -2008,7 +2008,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	var i = 0 as ExitCode
 	while i < 100 'addMany'
 		sc.add("a string number {i} long enough to force a heap allocation")
@@ -2074,7 +2074,7 @@ function main() returns ExitCode
 		seed = seed + 1
 	end 'grow'
 
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	let owned = "heap-built element number {seed} long enough to escape any small-string envelope"
 	sc.stash(owned)
 	let second = "heap-built element number {seed + 1} long enough to escape any small-string envelope"
@@ -2116,7 +2116,7 @@ type Holder uses Element
 	end 'fill'
 
 	static function of(first Element, single Element) returns Self
-		var xs = ElementArray.create(0)
+		let xs = ElementArray.create(0)
 		fill(xs, first: first)
 		return Self{ items: xs, single: single }
 	end 'of'
@@ -2163,7 +2163,7 @@ type Holder uses Element
 	export var single as Element
 
 	static function of(first Element, single Element) returns Self
-		var xs = ElementArray.create(0)
+		let xs = ElementArray.create(0)
 		xs.push(first)
 		return Self{ items: xs, single: single }
 	end 'of'
@@ -2621,7 +2621,7 @@ end 'Bag'
 typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
-	var a = IntBag.create()
+	let a = IntBag.create()
 	a.absorbTwice(1, b: 2)
 	if a.opsCount() == 0 'ok'
 		return 0
@@ -2680,7 +2680,7 @@ function main() returns ExitCode
 		seed = seed + 1
 	end 'grow'
 
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.stashIf("heap-built element number {seed} long enough to escape any small-string envelope", keep: true)
 	sc.stashIf("heap-built element number {seed + 1} long enough to escape any small-string envelope", keep: false)
 	if sc.count() == 1 'check'
@@ -2738,7 +2738,7 @@ function main() returns ExitCode
 		seed = seed + 1
 	end 'grow'
 
-	var sv = StringVault.create()
+	let sv = StringVault.create()
 	sv.stashIf("heap-built element number {seed} long enough to escape any small-string envelope", keep: true)
 	sv.stashIf("heap-built element number {seed + 1} long enough to escape any small-string envelope", keep: false)
 	if sv.count() == 1 'check'
@@ -2893,7 +2893,7 @@ end 'GHolder'
 typealias StringHolder = GHolder with String
 
 function main() returns ExitCode
-	var h = StringHolder.create()
+	let h = StringHolder.create()
 	h.seed("a value long enough to force a heap allocation")
 	var n = 0 as Idx
 	while n < 100 'relayMany'
@@ -2948,7 +2948,7 @@ function main() returns ExitCode
 		seed = seed + 1
 	end 'grow'
 
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	let owned = "heap-built element number {seed} long enough to escape any small-string envelope"
 	sc.add(owned)
 	let second = "heap-built element number {seed + 1} long enough to escape any small-string envelope"
@@ -3006,7 +3006,7 @@ end 'Outer'
 typealias StrOuter = Outer with String
 
 function main() returns ExitCode
-	var o = StrOuter.create()
+	let o = StrOuter.create()
 	let s = "closure payload number one is long enough to live on the heap"
 	let n = o.run(s)
 
@@ -3033,7 +3033,7 @@ type Box uses T
 	end 'create'
 
 	static function widths() returns Widths
-		var out = Widths.create(0)
+		let out = Widths.create(0)
 		out.push(sizeof(T))
 		return out
 	end 'widths'
@@ -3083,7 +3083,7 @@ end 'Twin'
 typealias StrTwin = Twin with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -3205,7 +3205,7 @@ type Box uses T
 	end 'size'
 
 	function viaClosure() returns Count
-		var items = Items.create(0)
+		let items = Items.create(0)
 		items.push(1)
 		let f = function() gives self.size(items)
 		return f()
@@ -4335,9 +4335,9 @@ typealias Words = Array with String
 typealias Nums = Array with Count
 
 function main() returns ExitCode
-	var words = Words.create(0)
+	let words = Words.create(0)
 	words.push("ab")
-	var nums = Nums.create(0)
+	let nums = Nums.create(0)
 	nums.push(4)
 	let shouted = words.map(function(w) gives "{w}!")
 	let doubled = nums.map(function(n) gives n * 2)
@@ -4420,7 +4420,7 @@ type Box uses T
 	end 'create'
 
 	static function peers(v T) returns Peers
-		var out = Peers.create(0)
+		let out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4458,7 +4458,7 @@ type Box uses T
 	end 'create'
 
 	static function peers(v T) returns Peers
-		var out = Peers.create(0)
+		let out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4497,7 +4497,7 @@ type Box uses T
 	typealias Peers = Array with Self
 
 	static function peers(v T) returns Peers
-		var out = Peers.create(0)
+		let out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4527,7 +4527,7 @@ type Box uses T
 	typealias Peers = Array with Box
 
 	static function peers(v T) returns Peers
-		var out = Peers.create(0)
+		let out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4557,7 +4557,7 @@ type Box uses T
 	typealias Peers = Array with Self
 
 	static function peers(v T) returns Peers
-		var out = Peers.create(0)
+		let out = Peers.create(0)
 		out.push(Self{v: v})
 		out.push(Self{v: v})
 		return out
@@ -4599,7 +4599,7 @@ type Box
 	typealias Peers = Array with Self
 
 	static function peers(v Integer) returns Peers
-		var out = Peers.create(0)
+		let out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4662,7 +4662,7 @@ type Holder uses E
 	var items as Items
 
 	static function of(e E) returns Self
-		var items = Items.create(0)
+		let items = Items.create(0)
 		items.push(e)
 		return Self{items: items}
 	end 'of'
@@ -4682,7 +4682,7 @@ type Box uses T
 	typealias Slot = Holder with Self
 
 	static function replaced(v T, w T) returns T
-		var s = Slot.of(Self{v: v})
+		let s = Slot.of(Self{v: v})
 		s.put(Self{v: w})
 		let b = s.take()
 		return b.v
@@ -4726,7 +4726,7 @@ type Box uses T
 	typealias Index = Map with String, Self
 
 	static function index(k String, v T) returns Index
-		var m = Index.create()
+		let m = Index.create()
 		m.upsert(k, value: Self{v: v})
 		return m
 	end 'index'
@@ -4784,7 +4784,7 @@ end 'Node'
 typealias TextNode = Node with String
 
 function main() returns ExitCode
-	var root = TextNode.leaf("r")
+	let root = TextNode.leaf("r")
 	root.add(TextNode.leaf("a"))
 	root.add(TextNode.leaf("b"))
 	print("{root.size()}\n")
@@ -4810,9 +4810,9 @@ type Box uses T
 	typealias Grid = Array with (Array with Self)
 
 	static function grid(v T) returns Grid
-		var row = Row.create(0)
+		let row = Row.create(0)
 		row.push(Self{v: v})
-		var out = Grid.create(0)
+		let out = Grid.create(0)
 		out.push(row)
 		return out
 	end 'grid'
@@ -4852,7 +4852,7 @@ extension Box
 	typealias Peers = Array with Self
 
 	static function peers(v T) returns Peers
-		var out = Peers.create(0)
+		let out = Peers.create(0)
 		out.push(Self{v: v})
 		return out
 	end 'peers'
@@ -4925,7 +4925,7 @@ type Pair uses K, V
 	typealias Peers = Array with Self
 
 	static function peers(k K, v V) returns Peers
-		var out = Peers.create(0)
+		let out = Peers.create(0)
 		out.push(Self{k: k, v: v})
 		return out
 	end 'peers'

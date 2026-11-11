@@ -41,12 +41,12 @@ function register(b Box, registry mutable Boxes)
 end 'register'
 
 function clobber(registry mutable Boxes)
-	var w = try registry.get(0) otherwise return
+	let w = try registry.get(0) otherwise return
 	w.n = 99
 end 'clobber'
 
 function main() returns ExitCode
-	var registry = Boxes.create(0)
+	let registry = Boxes.create(0)
 	let a = Box.create(2)
 	register(a, registry: registry)
 	clobber(registry)
@@ -90,13 +90,13 @@ end 'register'
 
 function retag(tags mutable Tags)
 	tags.push(Tag.create(1))
-	var w = try tags.get(0) otherwise return
+	let w = try tags.get(0) otherwise return
 	w.t = 9
 end 'retag'
 
 function main() returns ExitCode
-	var registry = Boxes.create(0)
-	var tags = Tags.create(0)
+	let registry = Boxes.create(0)
+	let tags = Tags.create(0)
 	let a = Box.create(2)
 	register(a, registry: registry)
 	retag(tags)
@@ -144,7 +144,7 @@ function resetRight(p Pair)
 end 'resetRight'
 
 function main() returns ExitCode
-	var p = Pair.create()
+	let p = Pair.create()
 	let a = Box.create(2)
 	stashLeft(p, b: a)
 	resetRight(p)
@@ -191,7 +191,7 @@ type Cursor
 end 'Cursor'
 
 function main() returns ExitCode
-	var c = Cursor.create(Box.create(1))
+	let c = Cursor.create(Box.create(1))
 	let a = Box.create(2)
 	c.attach(a)
 	c.wipe()
@@ -228,7 +228,7 @@ type Reg
 end 'Reg'
 
 function build() returns Reg
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let a = Box.create(2)
 	reg.items.push(a)
 	return reg
@@ -275,8 +275,8 @@ function zeroBox(w Box)
 end 'zeroBox'
 
 function build() returns Reg
-	var reg = Reg.create()
-	var a = Box.create(2)
+	let reg = Reg.create()
+	let a = Box.create(2)
 	zeroBox(a)
 	reg.items.push(a)
 	return reg
@@ -398,7 +398,7 @@ end 'WideHold'
 function main() returns ExitCode
 	let w = Wide.create()
 	let a = Box.create(2)
-	var h = WideHold.create(w, box: a)
+	let h = WideHold.create(w, box: a)
 	h.wide.f69 = 3
 	print("{a.n}\n")
 	return 0
@@ -436,7 +436,7 @@ function quiet() returns Count
 end 'quiet'
 
 function main() returns ExitCode
-	var registry = Boxes.create(0)
+	let registry = Boxes.create(0)
 	let a = Box.create(2)
 	let handle = async quiet()
 	register(a, registry: registry)
@@ -482,12 +482,12 @@ type Reg
 end 'Reg'
 
 function touch(reg Reg)
-	var w = try reg.items.get(0) otherwise return
+	let w = try reg.items.get(0) otherwise return
 	w.n = 1
 end 'touch'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let b = reg.add(7)
 	print("{b.n}\n")
 	touch(reg)
@@ -501,8 +501,8 @@ end 'main'
 0
 ```
 
-<!-- test: let-escape.error.a-module-lets-record-pushed-into-a-global-container-is-refused -->
-A module `let` is `immutable` image data, and an element of a plain `Array with Box` is a place something may write, so pushing the `let`'s record into one is refused; declare the element `immutable Box`, or push a `clone()`.
+<!-- test: let-escape.error.a-static-lets-record-pushed-into-a-global-container-is-refused -->
+A `static let` is `immutable` image data, and an element of a plain `Array with Box` is a place something may write, so pushing the `let`'s record into one is refused; declare the element `immutable Box`, or push a `clone()`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -511,14 +511,15 @@ typealias Boxes = Array with Box
 type Box
 	export var n as Count
 
+	static let shared = Self{n: 7}
+
 	static function create(n Count) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Box'
 
-let shared = Box.create(7)
 function register(registry mutable Boxes)
-	registry.push(shared)
+	registry.push(Box.shared)
 end 'register'
 
 function clobber(registry mutable Boxes)
@@ -530,16 +531,16 @@ function main() returns ExitCode
 	var registry = Boxes.create(0)
 	register(registry)
 	clobber(registry)
-	print("{shared.n}\n")
+	print("{Box.shared.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:15:16: cannot store an immutable 'Box' into 'an element of the container push writes', which holds a mutable 'Box'; declare the element `immutable Box`
+error E3196: <fragment>:16:16: cannot store an immutable 'Box' into 'an element of the container push writes', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
-<!-- test: let-escape.error.a-module-lets-record-handed-to-a-callee-that-keeps-it-is-refused -->
-`stash` keeps its parameter in a container and in a field, so handing it a module `let` is refused; pass a `clone()`.
+<!-- test: let-escape.error.a-static-lets-record-handed-to-a-callee-that-keeps-it-is-refused -->
+`stash` keeps its parameter in a container and in a field, so handing it a `static let` is refused; pass a `clone()`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -547,6 +548,8 @@ typealias Boxes = Array with Box
 
 type Box
 	export var n as Count
+
+	static let shared = Self{n: 7}
 
 	static function create(n Count) returns Self
 		return Self{n: n}
@@ -561,7 +564,6 @@ type Holder
 	end 'create'
 end 'Holder'
 
-let shared = Box.create(7)
 function stash(b Box, registry mutable Boxes, holder mutable Holder)
 	registry.push(b)
 	holder.box = b
@@ -576,24 +578,26 @@ end 'clobber'
 function main() returns ExitCode
 	var registry = Boxes.create(0)
 	var holder = Holder.create(Box.create(0))
-	stash(shared, registry: registry, holder: holder)
+	stash(Box.shared, registry: registry, holder: holder)
 	clobber(registry, holder: holder)
-	print("{shared.n} {holder.box.n}\n")
+	print("{Box.shared.n} {holder.box.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:36:8: 'stash' writes 'b' (line 23: `registry.push(b)`); 'shared' is immutable
+error E3207: <fragment>:37:8: 'stash' writes 'b' (line 24: `registry.push(b)`); 'Box' is immutable
 ```
 
-<!-- test: let-escape.error.a-module-lets-record-handed-to-a-factory-that-keeps-it-in-a-field-is-refused -->
-`Holder.create` keeps its parameter in a `var` field, so handing it a module `let` is refused; pass a `clone()`.
+<!-- test: let-escape.error.a-static-lets-record-handed-to-a-factory-that-keeps-it-in-a-field-is-refused -->
+`Holder.create` keeps its parameter in a `var` field, so handing it a `static let` is refused; pass a `clone()`.
 
 ```maxon
 typealias Count = int(0 to 1000)
 
 type Box
 	export var n as Count
+
+	static let shared = Self{n: 7}
 
 	static function create(n Count) returns Self
 		return Self{n: n}
@@ -608,21 +612,20 @@ type Holder
 	end 'create'
 end 'Holder'
 
-let shared = Box.create(7)
 
 function main() returns ExitCode
-	var h = Holder.create(shared)
+	var h = Holder.create(Box.shared)
 	h.box.n = 99
-	print("{shared.n} {h.box.n}\n")
+	print("{Box.shared.n} {h.box.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:24:2: cannot write 'n' through 'h.box', which is read-only
+error E3197: <fragment>:25:2: cannot write 'n' through 'h.box', which is read-only
 ```
 
-<!-- test: let-escape.error.a-module-lets-record-pushed-into-a-local-array-is-refused -->
-A local array's element is a mutable place, so pushing a module `let`'s record into it is refused.
+<!-- test: let-escape.error.a-static-lets-record-pushed-into-a-local-array-is-refused -->
+A local array's element is a mutable place, so pushing a `static let`'s record into it is refused.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -631,28 +634,29 @@ typealias Boxes = Array with Box
 type Box
 	export var n as Count
 
+	static let shared = Self{n: 7}
+
 	static function create(n Count) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Box'
 
-let shared = Box.create(7)
 
 function main() returns ExitCode
 	var local = Boxes.create(0)
-	local.push(shared)
+	local.push(Box.shared)
 	var w = try local.get(0) otherwise return 1
 	w.n = 99
-	print("{shared.n} {w.n}\n")
+	print("{Box.shared.n} {w.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:17:13: cannot store an immutable 'Box' into 'an element of the container push writes', which holds a mutable 'Box'; declare the element `immutable Box`
+error E3196: <fragment>:18:13: cannot store an immutable 'Box' into 'an element of the container push writes', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
-<!-- test: let-escape.error.a-module-lets-record-in-a-literal-a-map-and-a-global-field-is-refused -->
-An array literal's element and a field of a `var` holder are each a mutable place, so storing a module `let`'s record into either is refused.
+<!-- test: let-escape.error.a-static-lets-record-in-a-literal-a-map-and-a-global-field-is-refused -->
+An array literal's element and a field of a `var` holder are each a mutable place, so storing a `static let`'s record into either is refused.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -660,6 +664,8 @@ typealias BoxMap = Map with (Count, Box)
 
 type Box
 	export var n as Count
+
+	static let shared = Self{n: 7}
 
 	static function create(n Count) returns Self
 		return Self{n: n}
@@ -674,9 +680,8 @@ type Holder
 	end 'create'
 end 'Holder'
 
-let shared = Box.create(7)
 function remember(registry mutable Holder)
-	registry.box = shared
+	registry.box = Box.shared
 end 'remember'
 
 function bump(registry mutable Holder)
@@ -685,28 +690,28 @@ end 'bump'
 
 function main() returns ExitCode
 	var registry = Holder.create(Box.create(0))
-	var lit = [shared]
+	var lit = [Box.shared]
 	var w = try lit.get(0) otherwise return 1
 	w.n = 11
 
 	var m = BoxMap.create()
-	m.upsert(1, value: shared)
+	m.upsert(1, value: Box.shared)
 	var mv = try m.get(1) otherwise return 2
 	mv.n = 22
 
 	remember(registry)
 	bump(registry)
-	print("{shared.n} {w.n} {mv.n} {registry.box.n}\n")
+	print("{Box.shared.n} {w.n} {mv.n} {registry.box.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:23:17: cannot store an immutable 'Box' into 'box', which holds a mutable 'Box'; declare the field `immutable Box`
-error E3196: <fragment>:32:13: cannot store an immutable 'Box' into 'an element of the array literal', which holds a mutable 'Box'; declare the element `immutable Box`
+error E3196: <fragment>:24:17: cannot store an immutable 'Box' into 'box', which holds a mutable 'Box'; declare the field `immutable Box`
+error E3196: <fragment>:33:13: cannot store an immutable 'Box' into 'an element of the array literal', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
-<!-- test: let-escape.error.a-module-lets-record-in-a-literal-and-a-map-value-is-refused -->
-An array literal's element is a mutable place, so storing a module `let`'s record into it is refused.
+<!-- test: let-escape.error.a-static-lets-record-in-a-literal-and-a-map-value-is-refused -->
+An array literal's element is a mutable place, so storing a `static let`'s record into it is refused.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -715,33 +720,34 @@ typealias BoxMap = Map with (Count, Box)
 type Box
 	export var n as Count
 
+	static let shared = Self{n: 7}
+
 	static function create(n Count) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Box'
 
-let shared = Box.create(7)
 
 function main() returns ExitCode
-	var lit = [shared]
+	var lit = [Box.shared]
 	var w = try lit.get(0) otherwise return 1
 	w.n = 11
 
 	var m = BoxMap.create()
-	m.upsert(1, value: shared)
+	m.upsert(1, value: Box.shared)
 	var mv = try m.get(1) otherwise return 2
 	mv.n = 22
 
-	print("{shared.n} {w.n} {mv.n}\n")
+	print("{Box.shared.n} {w.n} {mv.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:16:13: cannot store an immutable 'Box' into 'an element of the array literal', which holds a mutable 'Box'; declare the element `immutable Box`
+error E3196: <fragment>:17:13: cannot store an immutable 'Box' into 'an element of the array literal', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
-<!-- test: let-escape.error.a-module-lets-record-in-a-map-value-is-refused -->
-A value handed to `upsert` is stored in a mutable place, so storing a module `let`'s record into a map value is refused.
+<!-- test: let-escape.error.a-static-lets-record-in-a-map-value-is-refused -->
+A value handed to `upsert` is stored in a mutable place, so storing a `static let`'s record into a map value is refused.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -750,24 +756,25 @@ typealias BoxMap = Map with (Count, Box)
 type Box
 	export var n as Count
 
+	static let shared = Self{n: 7}
+
 	static function create(n Count) returns Self
 		return Self{n: n}
 	end 'create'
 end 'Box'
 
-let shared = Box.create(7)
 
 function main() returns ExitCode
 	var m = BoxMap.create()
-	m.upsert(1, value: shared)
+	m.upsert(1, value: Box.shared)
 	var mv = try m.get(1) otherwise return 1
 	mv.n = 22
-	print("{shared.n} {mv.n}\n")
+	print("{Box.shared.n} {mv.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:17:21: cannot store an immutable 'Box' into 'Map.upsert.value', which holds a mutable 'Box'; declare the element `immutable Box`
+error E3196: <fragment>:18:21: cannot store an immutable 'Box' into 'Map.upsert.value', which holds a mutable 'Box'; declare the element `immutable Box`
 ```
 
 <!-- test: let-escape.a-captured-let-pushed-into-a-holder-is-accepted-though-nothing-writes-its-type -->
@@ -802,7 +809,7 @@ function install(reg Reg)
 end 'install'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	install(reg)
 	let w = try reg.items.get(0) otherwise return 1
 	let f = reg.show
@@ -841,7 +848,7 @@ end 'runtimeText'
 
 function main() returns ExitCode
 	let s = "a{runtimeText(7)}"
-	var h = H.create("")
+	let h = H.create("")
 	h.s = s.clone()
 	grow(h)
 	print("{s}\n")
@@ -884,14 +891,14 @@ function register(b Box, registry mutable Boxes)
 end 'register'
 
 function wipeFirst(others mutable OtherBoxes) returns Count
-	var w = try others.get(0) otherwise return 1
+	let w = try others.get(0) otherwise return 1
 	w.m = 0
 	return 0
 end 'wipeFirst'
 
 function main() returns ExitCode
-	var others = OtherBoxes.create(0)
-	var registry = Boxes.create(0)
+	let others = OtherBoxes.create(0)
+	let registry = Boxes.create(0)
 	others.push(Other.create(1))
 	let task = async wipeFirst(others)
 	let b = Box.create(2)
@@ -909,14 +916,16 @@ end 'main'
 0
 ```
 
-<!-- test: let-escape.a-module-lets-record-a-call-hands-back-is-stored-as-a-clone -->
-`pick` returns a module `let`, which is `immutable`, so its result is declared `immutable`. Storing `pick().clone()` stores an independent record, so the write through the field leaves the `let` as it was.
+<!-- test: let-escape.a-static-lets-record-a-call-hands-back-is-stored-as-a-clone -->
+`pick` returns a `static let`, which is `immutable`, so its result is declared `immutable`. Storing `pick().clone()` stores an independent record, so the write through the field leaves the `let` as it was.
 
 ```maxon
 typealias Count = int(0 to 1000)
 
 type Box
 	export var n as Count
+
+	static let shared = Self{n: 7}
 
 	static function create(n Count) returns Self
 		return Self{n: n}
@@ -931,10 +940,9 @@ type Holder
 	end 'create'
 end 'Holder'
 
-let shared = Box.create(7)
 
 function pick() returns immutable Box
-	return shared
+	return Box.shared
 end 'pick'
 
 function adopt(h Holder)
@@ -946,10 +954,10 @@ function bump(h Holder)
 end 'bump'
 
 function main() returns ExitCode
-	var h = Holder.create(Box.create(0))
+	let h = Holder.create(Box.create(0))
 	adopt(h)
 	bump(h)
-	print("{shared.n} {h.box.n}\n")
+	print("{Box.shared.n} {h.box.n}\n")
 	return 0
 end 'main'
 ```
@@ -999,7 +1007,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	holder.add(Layout.create())
 	let layout = holder.first()
 	holder.note(7)
@@ -1053,7 +1061,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	holder.add(Layout.create())
 	let layout = holder.first()
 	holder.note(7)
@@ -1099,7 +1107,7 @@ function note(holder mutable Holder, id Count)
 end 'note'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let layout = Layout.create()
 	holder.items.push(layout)
 	note(holder, id: 7)
@@ -1145,7 +1153,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let box = holder.grab()
 	holder.grow()
 	print("{box.n}\n")
@@ -1183,7 +1191,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let names = holder.grab()
 	holder.grow(7)
 	print("{names.count()}\n")
@@ -1222,7 +1230,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let names = holder.grab()
 	holder.grow()
 	print("{names.count()}\n")
@@ -1271,8 +1279,8 @@ end 'Holder'
 
 function main() returns ExitCode
 	let layout = Layout.create()
-	var other = Layout.create()
-	var holder = Holder.create(other)
+	let other = Layout.create()
+	let holder = Holder.create(other)
 	holder.add(layout)
 	holder.touch(7)
 	print("{layout.names.count()}\n")
@@ -1315,7 +1323,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let layout = Layout.create()
-	var holder = Holder.create(layout)
+	let holder = Holder.create(layout)
 	holder.touch(7)
 	print("{layout.names.count()}\n")
 	return 0
@@ -1366,8 +1374,8 @@ end 'Holder'
 
 function main() returns ExitCode
 	let layout = Layout.create()
-	var spare = Layout.create()
-	var holder = Holder.create(layout, spare: spare)
+	let spare = Layout.create()
+	let holder = Holder.create(layout, spare: spare)
 	holder.touch(7)
 	print("{layout.names.count()}\n")
 	return 0
@@ -1430,7 +1438,7 @@ type World
 	end 'create'
 
 	function open() returns Block
-		var block = Block.create()
+		let block = Block.create()
 		self.book.blocks.push(block)
 		return block
 	end 'open'
@@ -1450,15 +1458,15 @@ end 'wire'
 
 function run(world World) returns Count
 	let carried = Args.create(0)
-	var block = world.open()
+	let block = world.open()
 	world.scribble()
 	attach(block, args: carried)
 	return carried.count()
 end 'run'
 
 function main() returns ExitCode
-	var world = World.create()
-	var other = world.open()
+	let world = World.create()
+	let other = world.open()
 	wire(world, block: other)
 	print("{run(world)}\n")
 	return 0
@@ -1491,12 +1499,12 @@ function register(b Box, registry mutable Boxes)
 end 'register'
 
 function clobber(registry mutable Boxes)
-	var w = try registry.get(0) otherwise return
+	let w = try registry.get(0) otherwise return
 	w.n = 99
 end 'clobber'
 
 function main() returns ExitCode
-	var registry = Boxes.create(0)
+	let registry = Boxes.create(0)
 	var i = 0 as Count
 
 	while i < 2 'trips'
@@ -1558,7 +1566,7 @@ function bumpIt(reg Reg, b Box)
 end 'bumpIt'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let a = Box.create(2)
 	stash(reg, b: a)
 	bumpIt(reg, b: a)
@@ -1624,7 +1632,7 @@ function fill(world World)
 end 'fill'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let sigs = sigsOf(world)
 	fill(world)
 	print("{sigs.names.count()}\n")
@@ -1721,7 +1729,7 @@ function mark(world World)
 end 'mark'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let sigs = sigsOf(world)
 	mark(world)
 	print("{sigs.flags.count()}\n")
@@ -1771,7 +1779,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create(0)
+		let made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -1803,10 +1811,10 @@ type World
 end 'World'
 
 function sigsOf(world World) returns Sigs
-	var made = Sigs.create()
+	let made = Sigs.create()
 
 	for layout in world.artifact.layouts 'each'
-		var copy = Layout.create()
+		let copy = Layout.create()
 		copy.detail.size = layout.detail.size
 		made.decls.push(Decl.create(copy))
 	end 'each'
@@ -1816,12 +1824,12 @@ function sigsOf(world World) returns Sigs
 end 'sigsOf'
 
 function measure(world World)
-	var layout = try world.artifact.layouts.get(0) otherwise return
+	let layout = try world.artifact.layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let sigs = sigsOf(world)
 	measure(world)
 	print("{sigs.decls.count()}\n")
@@ -1905,7 +1913,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create(0)
+		let made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -1937,16 +1945,16 @@ type World
 end 'World'
 
 function measure(world World)
-	var layout = try world.artifact.layouts.get(0) otherwise return
+	let layout = try world.artifact.layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
-	var world = World.create()
-	var made = Sigs.create()
+	let world = World.create()
+	let made = Sigs.create()
 
 	for layout in world.artifact.layouts 'each'
-		var copy = Layout.create()
+		let copy = Layout.create()
 		copy.detail.size = layout.detail.size
 		made.decls.push(Decl.create(copy))
 	end 'each'
@@ -1985,12 +1993,12 @@ function register(b Box, registry mutable Boxes)
 end 'register'
 
 function clobber(registry mutable Boxes)
-	var w = try registry.get(0) otherwise return
+	let w = try registry.get(0) otherwise return
 	w.n = 99
 end 'clobber'
 
 function main() returns ExitCode
-	var registry = Boxes.create(0)
+	let registry = Boxes.create(0)
 	let a = Box.create(2)
 	register(a, registry: registry)
 	clobber(registry)
@@ -2033,12 +2041,12 @@ function stash(reg Reg, b Box)
 end 'stash'
 
 function zeroFirst(reg Reg)
-	var w = try reg.items.get(0) otherwise return
+	let w = try reg.items.get(0) otherwise return
 	w.n = 0
 end 'zeroFirst'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let a = Box.create(2)
 	stash(reg, b: a)
 	zeroFirst(reg)
@@ -2089,12 +2097,12 @@ function stash(o Outer, b Box)
 end 'stash'
 
 function zeroFirst(o Outer)
-	var w = try o.inner.items.get(0) otherwise return
+	let w = try o.inner.items.get(0) otherwise return
 	w.n = 0
 end 'zeroFirst'
 
 function main() returns ExitCode
-	var o = Outer.create()
+	let o = Outer.create()
 	let a = Box.create(2)
 	stash(o, b: a)
 	zeroFirst(o)
@@ -2149,17 +2157,17 @@ type Top
 end 'Top'
 
 function stash(t Top, b Box)
-	var o = t.outer
+	let o = t.outer
 	o.inner.items.push(b)
 end 'stash'
 
 function zeroFirst(t Top)
-	var w = try t.outer.inner.items.get(0) otherwise return
+	let w = try t.outer.inner.items.get(0) otherwise return
 	w.n = 0
 end 'zeroFirst'
 
 function main() returns ExitCode
-	var t = Top.create()
+	let t = Top.create()
 	let a = Box.create(2)
 	stash(t, b: a)
 	zeroFirst(t)
@@ -2206,12 +2214,12 @@ function stash(reg Reg, b Box)
 end 'stash'
 
 function zeroFirst(reg Reg)
-	var w = try reg.items.get(0) otherwise return
+	let w = try reg.items.get(0) otherwise return
 	w.n = 0
 end 'zeroFirst'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let a = Box.create(2)
 	stash(reg, b: a)
 	zeroFirst(reg)
@@ -2411,7 +2419,7 @@ type Cursor
 end 'Cursor'
 
 function main() returns ExitCode
-	var c = Cursor.create(Box.create(1))
+	let c = Cursor.create(Box.create(1))
 	let a = Box.create(2)
 	c.attach(a)
 	c.wipe()
@@ -2456,12 +2464,12 @@ type Reg
 end 'Reg'
 
 function touch(reg Reg)
-	var w = try reg.items.get(0) otherwise return
+	let w = try reg.items.get(0) otherwise return
 	w.n = 1
 end 'touch'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let b = reg.add(7)
 	touch(reg)
 	print("{b.n}\n")
@@ -2498,19 +2506,19 @@ type Reg
 	end 'create'
 
 	function add(n Count) returns Box
-		var made = Box.create(n)
+		let made = Box.create(n)
 		items.push(made)
 		return made
 	end 'add'
 end 'Reg'
 
 function touch(reg Reg)
-	var w = try reg.items.get(0) otherwise return
+	let w = try reg.items.get(0) otherwise return
 	w.n = 1
 end 'touch'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let b = reg.add(7)
 	touch(reg)
 	print("{b.n}\n")
@@ -2557,7 +2565,7 @@ type Cursor
 end 'Cursor'
 
 function main() returns ExitCode
-	var c = Cursor.create(Box.create(0))
+	let c = Cursor.create(Box.create(0))
 	let b = c.open(5)
 	c.touch()
 	print("{b.n}\n")
@@ -2587,10 +2595,10 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var m = BoxMap.create()
+	let m = BoxMap.create()
 	let a = Box.create(2)
 	m.upsert(1, value: a)
-	var w = try m.get(1) otherwise return 1
+	let w = try m.get(1) otherwise return 1
 	w.n = 9
 	print("{a.n}\n")
 	return 0
@@ -2620,19 +2628,19 @@ type Box
 end 'Box'
 
 function fill(rows Rows, b Box)
-	var inner = Boxes.create(0)
+	let inner = Boxes.create(0)
 	inner.push(b)
 	rows.push(inner)
 end 'fill'
 
 function wipe(rows Rows)
-	var r = try rows.get(0) otherwise return
-	var w = try r.get(0) otherwise return
+	let r = try rows.get(0) otherwise return
+	let w = try r.get(0) otherwise return
 	w.n = 0
 end 'wipe'
 
 function main() returns ExitCode
-	var rows = Rows.create(0)
+	let rows = Rows.create(0)
 	let a = Box.create(2)
 	fill(rows, b: a)
 	wipe(rows)
@@ -2672,19 +2680,19 @@ type Table
 end 'Table'
 
 function fill(t Table, b Box)
-	var inner = Boxes.create(0)
+	let inner = Boxes.create(0)
 	inner.push(b)
 	t.rows.upsert(7, value: inner)
 end 'fill'
 
 function wipe(t Table)
-	var r = try t.rows.get(7) otherwise return
-	var w = try r.get(0) otherwise return
+	let r = try t.rows.get(7) otherwise return
+	let w = try r.get(0) otherwise return
 	w.n = 0
 end 'wipe'
 
 function main() returns ExitCode
-	var t = Table.create()
+	let t = Table.create()
 	let a = Box.create(2)
 	fill(t, b: a)
 	wipe(t)
@@ -2725,22 +2733,22 @@ type Board
 end 'Board'
 
 function place(board Board, b Box)
-	var inner = Boxes.create(0)
+	let inner = Boxes.create(0)
 	inner.push(b)
-	var rows = Rows.create(0)
+	let rows = Rows.create(0)
 	rows.push(inner)
 	board.grid.push(rows)
 end 'place'
 
 function wipe(board Board)
-	var rows = try board.grid.get(0) otherwise return
-	var inner = try rows.get(0) otherwise return
-	var w = try inner.get(0) otherwise return
+	let rows = try board.grid.get(0) otherwise return
+	let inner = try rows.get(0) otherwise return
+	let w = try inner.get(0) otherwise return
 	w.n = 0
 end 'wipe'
 
 function main() returns ExitCode
-	var board = Board.create()
+	let board = Board.create()
 	let a = Box.create(2)
 	place(board, b: a)
 	wipe(board)
@@ -2808,7 +2816,7 @@ function nudge(p Holder)
 end 'nudge'
 
 function main() returns ExitCode
-	var p = Holder.create(Outer.create(function() gives 0, mid: Mid.create(Point.create(0))))
+	let p = Holder.create(Outer.create(function() gives 0, mid: Mid.create(Point.create(0))))
 	let s = Outer.create(function() gives 1, mid: Mid.create(Point.create(1)))
 	stash(p, s: s)
 	nudge(p)
@@ -2855,9 +2863,9 @@ function install(reg Reg)
 end 'install'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	install(reg)
-	var w = try reg.items.get(0) otherwise return 1
+	let w = try reg.items.get(0) otherwise return 1
 	w.n = 5
 	let f = reg.show
 	print("{f()}\n")
@@ -2907,12 +2915,12 @@ function stash(o Outer, b Box)
 end 'stash'
 
 function wipeFirst(r Reg)
-	var w = try r.items.get(0) otherwise return
+	let w = try r.items.get(0) otherwise return
 	w.n = 0
 end 'wipeFirst'
 
 function main() returns ExitCode
-	var o = Outer.create()
+	let o = Outer.create()
 	let a = Box.create(2)
 	stash(o, b: a)
 	wipeFirst(o.inner)
@@ -2951,7 +2959,7 @@ end 'runtimeText'
 
 function main() returns ExitCode
 	let s = "a{runtimeText(7)}"
-	var h = H.create("")
+	let h = H.create("")
 	h.s = s
 	grow(h)
 	print("{s}\n")
@@ -2965,14 +2973,16 @@ a7
 0
 ```
 
-<!-- test: let-escape.error.a-module-lets-record-a-call-hands-back-cannot-be-stored-where-it-is-written -->
-`pick` returns a module `let`, which is `immutable`, so its result is declared `immutable`; storing the call's result into a `var` field is refused and asks for a `clone()`.
+<!-- test: let-escape.error.a-static-lets-record-a-call-hands-back-cannot-be-stored-where-it-is-written -->
+`pick` returns a `static let`, which is `immutable`, so its result is declared `immutable`; storing the call's result into a `var` field is refused and asks for a `clone()`.
 
 ```maxon
 typealias Count = int(0 to 1000)
 
 type Box
 	export var n as Count
+
+	static let shared = Self{n: 7}
 
 	static function create(n Count) returns Self
 		return Self{n: n}
@@ -2987,10 +2997,9 @@ type Holder
 	end 'create'
 end 'Holder'
 
-let shared = Box.create(7)
 
 function pick() returns immutable Box
-	return shared
+	return Box.shared
 end 'pick'
 
 function adopt(h Holder)
@@ -3005,12 +3014,12 @@ function main() returns ExitCode
 	var h = Holder.create(Box.create(0))
 	adopt(h)
 	bump(h)
-	print("{shared.n} {h.box.n}\n")
+	print("{Box.shared.n} {h.box.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3196: <fragment>:27:10: cannot store an immutable 'Box' into 'box', which holds a mutable 'Box'; declare the field `immutable Box`
+error E3196: <fragment>:28:10: cannot store an immutable 'Box' into 'box', which holds a mutable 'Box'; declare the field `immutable Box`
 ```
 
 <!-- test: let-escape.a-callee-two-calls-down-writes-the-module-holder -->
@@ -3037,7 +3046,7 @@ type Holder
 end 'Holder'
 
 function g(holder mutable Holder)
-	var w = try holder.items.get(0) otherwise return
+	let w = try holder.items.get(0) otherwise return
 	w.n = 5
 end 'g'
 
@@ -3046,7 +3055,7 @@ function f(holder mutable Holder)
 end 'f'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let b = Box.create(1)
 	holder.items.push(b)
 	f(holder)
@@ -3092,12 +3101,12 @@ function keep(b ViaAlias) returns ViaAlias
 end 'keep'
 
 function clobber(holder mutable Holder)
-	var w = try holder.get(0) otherwise return
+	let w = try holder.get(0) otherwise return
 	w.item.item.n = 5
 end 'clobber'
 
 function main() returns ExitCode
-	var holder = Holder.create(0)
+	let holder = Holder.create(0)
 	let b = Box.create(Box.create(S0.create(1)))
 	let k = keep(b)
 	holder.push(k)
@@ -3140,12 +3149,12 @@ typealias ViaAlias = Box with N0
 typealias Holder = Array with ViaAlias
 
 function clobber(holder mutable Holder)
-	var w = try holder.get(0) otherwise return
+	let w = try holder.get(0) otherwise return
 	w.item.item.n = 5
 end 'clobber'
 
 function main() returns ExitCode
-	var holder = Holder.create(0)
+	let holder = Holder.create(0)
 	let b = Box.create(Box.create(S0.create(1)))
 	let k = b as ViaAlias
 	holder.push(k)
@@ -3199,13 +3208,13 @@ type Holder
 	end 'note'
 
 	function grow(id Count)
-		var target = try self.items.get(0) otherwise return
+		let target = try self.items.get(0) otherwise return
 		target.names.insert(id)
 	end 'grow'
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	holder.add(Layout.create())
 	let layout = holder.first()
 	holder.grow(7)
@@ -3258,7 +3267,7 @@ type Holder
 	end 'note'
 
 	function grow(id Count)
-		var target = try self.items.get(0) otherwise return
+		let target = try self.items.get(0) otherwise return
 		target.names.insert(id)
 	end 'grow'
 end 'Holder'
@@ -3284,7 +3293,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var holder = Outer.create()
+	let holder = Outer.create()
 	holder.add(Layout.create())
 	let layout = holder.first()
 	holder.grow(7)
@@ -3333,13 +3342,13 @@ type Holder
 	end 'first'
 
 	function grow(id Count)
-		var target = try self.items.get(0) otherwise return
+		let target = try self.items.get(0) otherwise return
 		target.names.insert(id)
 	end 'grow'
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	holder.add(Layout.create())
 	let layout = holder.first()
 	holder.grow(7)
@@ -3381,12 +3390,12 @@ type Holder
 end 'Holder'
 
 function grow(holder mutable Holder, id Count)
-	var target = try holder.items.get(0) otherwise return
+	let target = try holder.items.get(0) otherwise return
 	target.names.insert(id)
 end 'grow'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let layout = Layout.create()
 	holder.items.push(layout)
 	grow(holder, id: 7)
@@ -3432,7 +3441,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let box = holder.grab()
 	holder.grow()
 	print("{box.n}\n")
@@ -3470,7 +3479,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let names = holder.grab()
 	holder.grow()
 	print("{names.count()}\n")
@@ -3510,7 +3519,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let names = holder.grabNames()
 	holder.grow(7)
 	print("{names.count()}\n")
@@ -3563,9 +3572,9 @@ end 'share'
 
 function main() returns ExitCode
 	let layout = Layout.create()
-	var other = Layout.create()
+	let other = Layout.create()
 	share(layout, target: other)
-	var holder = Holder.create(other)
+	let holder = Holder.create(other)
 	holder.add(layout)
 	holder.touch(7)
 	print("{layout.names.count()}\n")
@@ -3608,7 +3617,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let layout = Layout.create()
-	var holder = Holder.create(layout)
+	let holder = Holder.create(layout)
 	holder.touch(7)
 	print("{layout.names.count()}\n")
 	return 0
@@ -3658,7 +3667,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let layout = Layout.create()
-	var holder = Holder.create(layout)
+	let holder = Holder.create(layout)
 	holder.touch(7)
 	print("{layout.names.count()}\n")
 	return 0
@@ -3705,9 +3714,9 @@ end 'share'
 
 function main() returns ExitCode
 	let layout = Layout.create()
-	var other = Layout.create()
+	let other = Layout.create()
 	share(layout, target: other)
-	var holder = Holder.create(layout, second: other)
+	let holder = Holder.create(layout, second: other)
 	holder.touch(7)
 	print("{layout.names.count()}\n")
 	return 0
@@ -3770,7 +3779,7 @@ type World
 	end 'create'
 
 	function open() returns Block
-		var block = Block.create()
+		let block = Block.create()
 		self.book.blocks.push(block)
 		return block
 	end 'open'
@@ -3790,15 +3799,15 @@ end 'wire'
 
 function run(world World) returns Count
 	let carried = Args.create(0)
-	var block = world.open()
+	let block = world.open()
 	attach(block, args: carried)
 	world.scribble()
 	return carried.count()
 end 'run'
 
 function main() returns ExitCode
-	var world = World.create()
-	var other = world.open()
+	let world = World.create()
+	let other = world.open()
 	wire(world, block: other)
 	print("{run(world)}\n")
 	return 0
@@ -3877,13 +3886,13 @@ end 'register'
 
 function clobberAll(registry mutable Boxes)
 	for i in 0 upto registry.count() 'each'
-		var w = try registry.get(i) otherwise return
+		let w = try registry.get(i) otherwise return
 		w.n = 99
 	end 'each'
 end 'clobberAll'
 
 function main() returns ExitCode
-	var registry = Boxes.create(0)
+	let registry = Boxes.create(0)
 	let a = Box.create(1)
 	let b = Box.create(2)
 	register(a, registry: registry)
@@ -3924,13 +3933,13 @@ function same(b Box) returns Box
 end 'same'
 
 function clobber(registry mutable Boxes)
-	var w = try registry.get(0) otherwise return
+	let w = try registry.get(0) otherwise return
 	w.n = 99
 end 'clobber'
 
 function main() returns ExitCode
-	var registry = Boxes.create(0)
-	var outer = Box.create(2)
+	let registry = Boxes.create(0)
+	let outer = Box.create(2)
 	var i = 0 as Count
 
 	while i < 2 'trips'
@@ -3984,13 +3993,13 @@ function stash(reg Reg, b Box)
 end 'stash'
 
 function touchBoth(reg Reg, b Box)
-	var w = try reg.items.get(0) otherwise return
+	let w = try reg.items.get(0) otherwise return
 	w.n = 5
 	b.bump()
 end 'touchBoth'
 
 function main() returns ExitCode
-	var reg = Reg.create()
+	let reg = Reg.create()
 	let a = Box.create(2)
 	stash(reg, b: a)
 	touchBoth(reg, b: a)
@@ -4056,7 +4065,7 @@ function fill(world World)
 end 'fill'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let sigs = sigsOf(world)
 	fill(world)
 	print("{sigs.names.count()}\n")
@@ -4106,7 +4115,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create(0)
+		let made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -4138,10 +4147,10 @@ type World
 end 'World'
 
 function sigsOf(world World) returns Sigs
-	var made = Sigs.create()
+	let made = Sigs.create()
 
 	for layout in world.artifact.layouts 'each'
-		var decl = Decl.create()
+		let decl = Decl.create()
 		decl.layout = layout
 		made.decls.push(decl)
 	end 'each'
@@ -4151,12 +4160,12 @@ function sigsOf(world World) returns Sigs
 end 'sigsOf'
 
 function measure(world World)
-	var layout = try world.artifact.layouts.get(0) otherwise return
+	let layout = try world.artifact.layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let sigs = sigsOf(world)
 	measure(world)
 	print("{sigs.decls.count()}\n")
@@ -4206,7 +4215,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create(0)
+		let made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -4238,7 +4247,7 @@ type World
 end 'World'
 
 function sigsOf(world World) returns Sigs
-	var made = Sigs.create()
+	let made = Sigs.create()
 
 	for layout in world.artifact.layouts 'each'
 		made.decls.push(Decl.create(layout))
@@ -4249,12 +4258,12 @@ function sigsOf(world World) returns Sigs
 end 'sigsOf'
 
 function measure(world World)
-	var layout = try world.artifact.layouts.get(0) otherwise return
+	let layout = try world.artifact.layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let sigs = sigsOf(world)
 	measure(world)
 	print("{sigs.decls.count()}\n")
@@ -4304,7 +4313,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create(0)
+		let made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -4384,7 +4393,7 @@ type World
 end 'World'
 
 function sigsOf(world World) returns Sigs
-	var made = Sigs.create()
+	let made = Sigs.create()
 
 	for layout in world.deep.next.next.next.next.next.next.layouts 'each'
 		made.decls.push(Decl.create(layout))
@@ -4395,12 +4404,12 @@ function sigsOf(world World) returns Sigs
 end 'sigsOf'
 
 function measure(world World)
-	var layout = try world.deep.next.next.next.next.next.next.layouts.get(0) otherwise return
+	let layout = try world.deep.next.next.next.next.next.next.layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let sigs = sigsOf(world)
 	measure(world)
 	print("{sigs.decls.count()}\n")
@@ -4463,7 +4472,7 @@ type Memo
 end 'Memo'
 
 function sigsOf(memo Memo, layouts Layouts) returns Sigs
-	var made = Sigs.create()
+	let made = Sigs.create()
 
 	for layout in layouts 'each'
 		made.decls.push(Decl.create(layout))
@@ -4474,14 +4483,14 @@ function sigsOf(memo Memo, layouts Layouts) returns Sigs
 end 'sigsOf'
 
 function measure(layouts mutable Layouts)
-	var layout = try layouts.get(0) otherwise return
+	let layout = try layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
-	var layouts = Layouts.create(0)
+	let layouts = Layouts.create(0)
 	layouts.push(Layout.create())
-	var memo = Memo.create()
+	let memo = Memo.create()
 	let sigs = sigsOf(memo, layouts: layouts)
 	measure(layouts)
 	print("{sigs.decls.count()}\n")
@@ -4544,10 +4553,10 @@ type Memo
 end 'Memo'
 
 function sigsOf(memo Memo, layouts Layouts) returns Sigs
-	var made = Sigs.create()
+	let made = Sigs.create()
 
 	for layout in layouts 'each'
-		var decl = Decl.create(Layout.create())
+		let decl = Decl.create(Layout.create())
 		decl.layout = layout
 		made.decls.push(decl)
 	end 'each'
@@ -4557,14 +4566,14 @@ function sigsOf(memo Memo, layouts Layouts) returns Sigs
 end 'sigsOf'
 
 function measure(layouts mutable Layouts)
-	var layout = try layouts.get(0) otherwise return
+	let layout = try layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
-	var layouts = Layouts.create(0)
+	let layouts = Layouts.create(0)
 	layouts.push(Layout.create())
-	var memo = Memo.create()
+	let memo = Memo.create()
 	let sigs = sigsOf(memo, layouts: layouts)
 	measure(layouts)
 	print("{sigs.decls.count()}\n")
@@ -4614,7 +4623,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create(0)
+		let made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -4646,12 +4655,12 @@ type World
 end 'World'
 
 function measure(world World)
-	var layout = try world.artifact.layouts.get(0) otherwise return
+	let layout = try world.artifact.layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let made = Sigs.create()
 
 	for layout in world.artifact.layouts 'each'
@@ -4737,7 +4746,7 @@ function measure(world World)
 end 'measure'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let sized = sizedOf(world)
 	measure(world)
 	print("{sized.size()}\n")
@@ -4817,7 +4826,7 @@ function measure(world World)
 end 'measure'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let sized = sizedOf(world)
 	measure(world)
 	print("{sized.size()}\n")
@@ -4867,7 +4876,7 @@ type Artifact
 	export var layouts as Layouts
 
 	static function create() returns Self
-		var made = Layouts.create(0)
+		let made = Layouts.create(0)
 		made.push(Layout.create())
 		return Self{layouts: made}
 	end 'create'
@@ -4907,7 +4916,7 @@ type World
 end 'World'
 
 function sigsOf(world World) returns Counted
-	var made = Sigs.create()
+	let made = Sigs.create()
 
 	for layout in world.artifact.layouts 'each'
 		made.decls.push(Decl.create(layout))
@@ -4918,12 +4927,12 @@ function sigsOf(world World) returns Counted
 end 'sigsOf'
 
 function measure(world World)
-	var layout = try world.artifact.layouts.get(0) otherwise return
+	let layout = try world.artifact.layouts.get(0) otherwise return
 	layout.detail.size = 8
 end 'measure'
 
 function main() returns ExitCode
-	var world = World.create()
+	let world = World.create()
 	let sigs = sigsOf(world)
 	measure(world)
 	print("{sigs.count()}\n")
@@ -4993,8 +5002,8 @@ end 'Keeper'
 typealias LayoutKeeper = Keeper with Layout
 
 function main() returns ExitCode
-	var world = World.create()
-	var keeper = LayoutKeeper.create()
+	let world = World.create()
+	let keeper = LayoutKeeper.create()
 	let layout = world.artifact.layout
 	keeper.keep(layout, world: world)
 	print("{layout.detail.size}\n")
@@ -5042,7 +5051,7 @@ end 'Stack'
 typealias CountStack = Stack with Count
 
 function main() returns ExitCode
-	var s = CountStack.create()
+	let s = CountStack.create()
 	s.push(7)
 	s.push(9)
 	let a = s.popThenPush(3)
@@ -5091,7 +5100,7 @@ end 'Stack'
 typealias StringStack = Stack with String
 
 function main() returns ExitCode
-	var s = StringStack.create()
+	let s = StringStack.create()
 	s.push("first string long enough to force a heap allocation")
 	s.push("second string long enough to force a heap allocation")
 	let a = s.popThenPush("third string long enough to force a heap allocation")
@@ -5145,7 +5154,7 @@ end 'Stack'
 typealias BoxStack = Stack with Box
 
 function main() returns ExitCode
-	var s = BoxStack.create()
+	let s = BoxStack.create()
 	s.push(Box.create(7))
 	let a = s.popThenPush(Box.create(9))
 	print("{a.n}\n")
@@ -5200,7 +5209,7 @@ type Stack
 end 'Stack'
 
 function main() returns ExitCode
-	var s = Stack.create()
+	let s = Stack.create()
 	s.push(Box.create(7))
 	s.push(Box.create(8))
 	let a = s.popThenPush(Box.create(9))
@@ -5245,7 +5254,7 @@ end 'Stack'
 typealias CountStack = Stack with Count
 
 function main() returns ExitCode
-	var s = CountStack.create()
+	let s = CountStack.create()
 	s.push(7)
 	let a = s.peekThenPush(9)
 	print("{a}\n")
@@ -5295,7 +5304,7 @@ type Stack
 end 'Stack'
 
 function main() returns ExitCode
-	var s = Stack.create()
+	let s = Stack.create()
 	s.push(Box.create(7))
 	let a = s.peekThenPush(Box.create(9))
 	print("{a.n}\n")

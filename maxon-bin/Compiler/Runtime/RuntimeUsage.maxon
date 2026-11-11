@@ -57,13 +57,9 @@ export typealias DestructorSet = Set with ByteArray
 // cycle-breaker over struct/union names), since both are membership sets of `ByteArray` names.
 export typealias ClonerSet = Set with ByteArray
 
-// The same set seen from the SOLENESS side — `RuntimeUsage.neededSoleWalks`, whose members are
-// `__sole_<T>` symbols. Named for its own family for `ClonerSet`'s reason: the three cascade closures
-// share an engine, not a set. `CascadeSymbolSet` is what a reader holding EITHER takes it as.
-export typealias SoleWalkSet = Set with ByteArray
-
 // The same set seen from the SHARE side — `RuntimeUsage.neededShareWalks`, whose members are `__share_<T>`
-// symbols.
+// symbols. Named for its own family for `ClonerSet`'s reason: the cascade closures share an engine, not a set.
+// `CascadeSymbolSet` is what a reader holding EITHER takes it as.
 export typealias ShareWalkSet = Set with ByteArray
 
 // The set of `__enum_from_raw_<Enum>` symbols a module references — the `DestructorSet` shape a third time,
@@ -180,6 +176,7 @@ export type RuntimeUsage
 	// __mm_incref` this scan DOES see. Drives `installMmRuntime` to build `__mm_incref`; a program that never
 	// increfs (the common one) keeps it out. Set alongside `usesHeap` (an incref is on a `__mm_alloc`'d box).
 	export var usesIncref as bool
+	export var usesIncrefSticky as bool
 
 	// ⭐ **`__mm_is_null` — the `__ManagedMemory` NULL predicate** (`__Builtins.managedIsNull`). Its own bit,
 	// for `usesRetain`'s reason one family over: the one call site in the corpus is
@@ -209,6 +206,7 @@ export type RuntimeUsage
 	// build `__mm_retain`; a program that never co-owns a borrowed aggregate keeps it out. Set alongside
 	// `usesHeap` (a retain is on a `__mm_alloc`'d box).
 	export var usesRetain as bool
+	export var usesRetainSticky as bool
 
 	// ⭐⭐ Does the program hand a plain box to a DURABLE SINK (`Parser.coOwnConcreteRecordForSink`)? — the
 	// bit behind `__mm_own`, and its OWN rather than `usesRetain`'s for that bit's stated reason: the two
@@ -297,24 +295,16 @@ export type RuntimeUsage
 	// (the box it allocates).
 	export var neededCloners as ClonerSet
 
-	// ⭐ The `__sole_<T>` symbols this module references — the third twin of `neededDestructors` and
-	// `neededCloners`, collected from the walk calls the transfer doors emit and closed over nesting by
+	// ⭐ The `__share_<T>` symbols this module references — the third twin of `neededDestructors` and
+	// `neededCloners`, collected from the walk calls the freeze door emits and closed over nesting by
 	// `noteCascadeUsage`, so `installStructCascades`/`installUnionCascades`/`installGenericInstanceCascades`
 	// synthesize only the referenced walks.
-	export var neededSoleWalks as SoleWalkSet
-
-	// ⭐ The program proves a moved graph SOLE at run time — any `__sole_<T>` walk, `__managed_sole`,
-	// `__list_sole` or a bare handle box. It gates the container walks, `__mm_sole_box` (the handle's leaf) and,
-	// with `usesShareWalk`, the visit table (`WalkVisitTable`). DECOUPLED from `usesHeap`, which every one of
-	// them also implies: these are entries a program that crosses nothing to a green thread must not carry.
-	export var usesSoleWalk as bool
-
-	// ⭐ The `__share_<T>` symbols this module references — `neededSoleWalks`' twin for the walk a LEND
-	// emits, closed over nesting by the same `noteCascadeUsage`.
 	export var neededShareWalks as ShareWalkSet
 
-	// ⭐ The program LENDS a graph at run time — `usesSoleWalk`'s twin, gating `__managed_share`,
-	// `__list_share` and `__mm_share_box`.
+	// ⭐ The program shares a graph at run time — any `__share_<T>` walk, `__managed_share`, `__list_share` or a
+	// bare handle box. It gates the container walks and `__mm_share_box` (the handle's leaf). DECOUPLED from
+	// `usesHeap`, which every one of them also implies: these are entries a program that shares nothing with a
+	// green thread must not carry.
 	export var usesShareWalk as bool
 
 	// The `__enum_from_raw_<Enum>` symbols this module CALLS — the `neededDestructors` shape with no closure
@@ -573,7 +563,7 @@ export type RuntimeUsage
 	export var neededInterfaceConversions = InterfaceConversionNameSet.create()
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesReleaseTypeParam: false, usesReclaimTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesEnvironment: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesProcessDescendants: false, callsEndDescendants: false, usesTerminalDetection: false, usesCpuCount: false, usesCpuFeatures: false, usesHardwareAes: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesReleaseTypeParam: false, usesReclaimTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesIncrefSticky: false, usesMmIsNull: false, usesRetain: false, usesRetainSticky: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesSchedulerlessNowNs: false, usesSchedulerlessSleep: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesEnvironment: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesTrustStore: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesProcessDescendants: false, callsEndDescendants: false, usesTerminalDetection: false, usesCpuCount: false, usesCpuFeatures: false, usesHardwareAes: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesMachTaskPorts: false, usesRawOsLock: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -587,7 +577,7 @@ end 'RuntimeUsage'
 // The set never contains a USER function — an unreached user body still speaks for the program — so the
 // answer for every library-free program is unchanged.
 export function scanRuntimeUsage(module MaxonModule, libraryFacts LibraryFacts, funcSignatures FuncSignatureMap, parksOnIo bool) returns RuntimeUsage
-	var usage = RuntimeUsage.create()
+	let usage = RuntimeUsage.create()
 	usage.parksOnIo = parksOnIo
 
 	for func in module.functions 'eachFunc'
@@ -616,7 +606,7 @@ end 'recordRawIntrinsicUsage'
 
 function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures FuncSignatureMap)
 	match op 'op'
-		call(_, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
+		call(_, callee, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
 
 		// None of these names a runtime callee or pulls in a runtime floor: each lowers to plain
 		// instructions, a `.rdata` read or a direct exit, and the impls a witness dispatch or table
@@ -652,7 +642,7 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		holdValue or
 		holdEnd then break
 
-		tryCall(_, _, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
+		tryCall(_, _, callee, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
 		rawIntrinsic(_, intrinsic, _, _) then recordRawIntrinsicUsage(intrinsic, usage: usage)
 
 		// A `functionRef` naming a user function is a bare `lea`, but one naming a compiler-emitted
@@ -1131,6 +1121,16 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 	end 'retain'
 
+	if callee.equals(MmIncrefStickyName) 'increfSticky'
+		usage.usesIncrefSticky = true
+		usage.usesHeap = true
+	end 'increfSticky'
+
+	if callee.equals(MmRetainStickyName) 'retainSticky'
+		usage.usesRetainSticky = true
+		usage.usesHeap = true
+	end 'retainSticky'
+
 	// A `__mm_own` the PARSER emitted (a plain box co-owned into storage that outlives the statement). Its
 	// COPY arm `__mm_alloc`s and blits, neither of which this Maxon-module scan can see inside a synthesized
 	// Std body — so both are DECLARED here, exactly as `__str_decref`'s heap use is.
@@ -1284,7 +1284,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesStrRetain = true
 		usage.usesStrClone = true
 		usage.usesStrCopy = true
-		usage.usesIncref = true
+		usage.usesIncrefSticky = true
 		usage.usesHeap = true
 	end 'strretain'
 
@@ -1336,44 +1336,28 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.neededCloners.insert(callee)
 	end 'structcloner'
 
-	// A per-type SOLENESS WALK (`__sole_<T>`) — the third twin of the two arms above, referenced by a
-	// transfer door's emitted call or by a `funcAddr(__sole_<E>)` element stamp. The only memory a walk touches
-	// is its visit table, and every `__mm_walk_settle` call — a transfer door's or `__module_init`'s — declares
-	// `usesHeap` for it. Its transitive nested-walk needs close through `noteCascadeUsage`.
-	if bytesStartWith(callee, prefix: SoleWalkPrefix) 'soleWalk'
-		usage.usesSoleWalk = true
-		usage.neededSoleWalks.insert(callee)
-	end 'soleWalk'
-
-	// The fixed soleness entries. `isManagedMemoryRuntimeCallee`/`isRuntimeCallee` above have already taken
-	// the managed-memory and heap bits the `__managed_`/`__mm_` prefixes carry.
-	if isSoleWalkRuntimeCallee(callee) 'soleWalkEntry'
-		usage.usesSoleWalk = true
-	end 'soleWalkEntry'
-
-	// A per-type SHARE walk (`__share_<T>`), the share's twin of the soleness arm above.
+	// A per-type SHARE walk (`__share_<T>`) — the third twin of the two arms above, referenced by the freeze
+	// door's emitted call or by a `funcAddr(__share_<E>)` element stamp. A walk touches no memory but the records it
+	// marks, so it declares no heap of its own. Its transitive nested-walk needs close through `noteCascadeUsage`.
 	if bytesStartWith(callee, prefix: ShareWalkPrefix) 'shareWalk'
 		usage.usesShareWalk = true
 		usage.neededShareWalks.insert(callee)
 	end 'shareWalk'
 
+	// The fixed share entries. `isManagedMemoryRuntimeCallee`/`isRuntimeCallee` above have already taken the
+	// managed-memory and heap bits the `__managed_`/`__mm_` prefixes carry.
 	if isShareWalkRuntimeCallee(callee) 'shareWalkEntry'
 		usage.usesShareWalk = true
 	end 'shareWalkEntry'
 end 'recordCallUsage'
 
-// ⭐ **THE FIXED SOLENESS ENTRIES — every callee of a walk that is not itself a per-type walk.**
-// `__sole_<T>` is decided by prefix above; these are what a walk bottoms out in: the handle's box leaf, the
-// existential's witness-read walk and its unwalkable-conformer abort, the three container-record walks and the
-// two chain walks. Named as one roster because they turn on ONE bit and a caller of any of them reaches all it
-// needs through that bit.
-function isSoleWalkRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(MmSoleBoxName) or callee.equals(MmSoleExistentialName) or callee.equals(MmWalkUnwalkableName) or callee.equals(ManagedSoleName) or callee.equals(ManagedSoleManagedName) or callee.equals(ManagedSoleAloneName) or callee.equals(ListSoleName) or callee.equals(ListSoleManagedName)
-end 'isSoleWalkRuntimeCallee'
-
-// The fixed SHARE entries — `isSoleWalkRuntimeCallee`'s roster for the share walk.
+// ⭐ **THE FIXED SHARE ENTRIES — every callee of a walk that is not itself a per-type walk.** `__share_<T>` is
+// decided by prefix above; these are what a walk bottoms out in: the handle's box leaf, the existential's
+// witness-read walk and its unwalkable-conformer abort, the two container-record walks and the two chain
+// walks. Named as one roster because they turn on ONE bit and a caller of any of them reaches all it needs
+// through that bit.
 function isShareWalkRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(MmShareBoxName) or callee.equals(MmShareExistentialName) or callee.equals(MmWalkUnwalkableName) or callee.equals(ManagedShareName) or callee.equals(ManagedShareManagedName) or callee.equals(ManagedShareAloneName) or callee.equals(ListShareName) or callee.equals(ListShareManagedName)
+	return callee.equals(MmShareBoxName) or callee.equals(MmShareExistentialName) or callee.equals(MmWalkUnwalkableName) or callee.equals(ManagedShareName) or callee.equals(ManagedShareManagedName) or callee.equals(ListShareName) or callee.equals(ListShareManagedName)
 end 'isShareWalkRuntimeCallee'
 
 // ⚠⚠ **EVERY SYNTHESIZED FAMILY OWES A RECORD/CLOSE PAIR**, invisible from the corpus: a closure

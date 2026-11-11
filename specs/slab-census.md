@@ -171,7 +171,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(96)
 	for i in 0 upto 96 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -238,7 +238,7 @@ typealias Seed = int(0 to 65536)
 let Population = 16000
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(96)
 	for i in 0 upto 96 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -318,7 +318,7 @@ let SmallPayload = 96
 let LargePayload = 500
 
 function build(seed Seed, n Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -347,7 +347,7 @@ function main() returns ExitCode
 		return 1
 	end 'nothingCommitted'
 
-	var large = Bufs.create(0)
+	let large = Bufs.create(0)
 	for k in 0 upto 600 'allocLarge'
 		large.push(build(k as Seed, n: LargePayload as Seed))
 	end 'allocLarge'
@@ -358,7 +358,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 600 'check'
-		view b = try large.get(k) otherwise return 3
+		let b = try large.get(k) otherwise return 3
 		if b.count() != LargePayload 'length'
 			bad = bad + 1
 		end 'length'
@@ -387,7 +387,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(96)
 	for i in 0 upto 96 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -408,7 +408,7 @@ function liveBytes() returns HeapBytes
 end 'liveBytes'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 
 	if committedBytes() <= 0 'nothingCommittedAtStart'
 		return 1
@@ -495,7 +495,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(96)
 	for i in 0 upto 96 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -516,7 +516,7 @@ function liveBytes() returns HeapBytes
 end 'liveBytes'
 
 function main() returns ExitCode
-	var kept = Bufs.create(0)
+	let kept = Bufs.create(0)
 	for k in 0 upto 200 'keep'
 		kept.push(build(k as Seed))
 	end 'keep'
@@ -577,7 +577,7 @@ let Population = 60000
 let PayloadBytes = 96
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(PayloadBytes)
 	for i in 0 upto PayloadBytes 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -590,7 +590,7 @@ function liveBytes() returns HeapBytes
 end 'liveBytes'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	for k in 0 upto Population 'alloc'
 		bufs.push(build((k mod 65536) as Seed))
 	end 'alloc'
@@ -638,7 +638,7 @@ let PayloadBytes = 96
 let BucketCount = 2048
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(PayloadBytes)
 	for i in 0 upto PayloadBytes 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -651,7 +651,7 @@ function liveBytes() returns HeapBytes
 end 'liveBytes'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	for k in 0 upto Population 'alloc'
 		bufs.push(build((k mod 65536) as Seed))
 	end 'alloc'
@@ -713,7 +713,7 @@ let PayloadBytes = 96
 let BucketCount = 2048
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(PayloadBytes)
 	for i in 0 upto PayloadBytes 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -740,12 +740,12 @@ function liveBytes() returns HeapBytes
 end 'liveBytes'
 
 function main() returns ExitCode
-	var spawned = PromiseArray.create(0)
+	let spawned = PromiseArray.create(0)
 	for i in 0 upto Workers 'spawn'
 		spawned.push(async churn(i))
 	end 'spawn'
 
-	var kept = Bufs.create(0)
+	let kept = Bufs.create(0)
 	for p in spawned 'awaitAll'
 		kept.push(await p)
 	end 'awaitAll'
@@ -833,10 +833,10 @@ function snapshotCounts(into TallyArray, mode HeapCensusMode) returns bool
 end 'snapshotCounts'
 
 function main() returns ExitCode
-	var holder = Widgets.create(0)
+	let holder = Widgets.create(0)
 	holder.reserve(Population)
 
-	var before = TallyArray.create(0)
+	let before = TallyArray.create(0)
 	before.reserve(BucketCount)
 	for _ in 0 upto BucketCount 'sizeTheSnapshot'
 		before.push(0)
@@ -1315,10 +1315,10 @@ function snapshotCounts(into TallyArray, mode HeapCensusMode) returns bool
 end 'snapshotCounts'
 
 function main() returns ExitCode
-	var holder = Widgets.create(0)
+	let holder = Widgets.create(0)
 	holder.reserve(Population)
 
-	var before = TallyArray.create(0)
+	let before = TallyArray.create(0)
 	before.reserve(BucketCount)
 	for _ in 0 upto BucketCount 'sizeTheSnapshot'
 		before.push(0)
@@ -1427,7 +1427,7 @@ function main() returns ExitCode
 	var holder = Widgets.create(0)
 	holder.reserve(Population)
 
-	var before = TallyArray.create(0)
+	let before = TallyArray.create(0)
 	before.reserve(BucketCount)
 	for _ in 0 upto BucketCount 'sizeTheSnapshot'
 		before.push(0)
@@ -1492,7 +1492,7 @@ let Population = 2000
 let PayloadBytes = 96
 
 function build(seed Byte) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(PayloadBytes)
 	for _ in 0 upto PayloadBytes 'fill'
 		b.push(seed)
@@ -1501,7 +1501,7 @@ function build(seed Byte) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	for k in 0 upto Population 'alloc'
 		bufs.push(build((k mod 251) as Byte))
 	end 'alloc'
@@ -1554,7 +1554,7 @@ end 'Widget'
 typealias Widgets = Array with Widget
 
 function main() returns ExitCode
-	var holder = Widgets.create(0)
+	let holder = Widgets.create(0)
 	holder.reserve(Population)
 
 	let before = HeapStats.rawAllocationsLive() as Delta

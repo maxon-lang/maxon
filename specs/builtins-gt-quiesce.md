@@ -55,7 +55,7 @@ type Greeter
 end 'Greeter'
 
 function main() returns ExitCode
-	var greeter = spawn Greeter.create()
+	let greeter = spawn Greeter.create()
 	try greeter.greet(2) otherwise panic("an open mailbox with room takes the send")
 	greeter.shutdown()
 
@@ -110,7 +110,7 @@ type Greeter
 end 'Greeter'
 
 function main() returns ExitCode
-	var greeter = spawn Greeter.create()
+	let greeter = spawn Greeter.create()
 	try greeter.greet(1) otherwise panic("an open mailbox with room takes the send")
 
 	let stranded = __Builtins.gtQuiesce()
@@ -148,7 +148,7 @@ type Waiter
 end 'Waiter'
 
 function main() returns ExitCode
-	var waiter = spawn Waiter.create()
+	let waiter = spawn Waiter.create()
 	try waiter.wait() otherwise panic("an open mailbox with room takes the send")
 
 	let outstanding = __Builtins.gtQuiesce()
@@ -233,10 +233,10 @@ function main() returns ExitCode
 	var sum = 0 as Integer
 
 	for r in 0 upto rounds 'eachRound'
-		var replies = ReplyPromiseArray.create(0)
+		let replies = ReplyPromiseArray.create(0)
 
 		for _ in 0 upto workersPerRound 'spawnEach'
-			var worker = spawn Worker.create()
+			let worker = spawn Worker.create()
 			replies.push(try worker.work(r) otherwise panic("an open mailbox with room takes the send"))
 			try worker.linger(r) otherwise panic("an open mailbox with room takes the send")
 			worker.shutdown()
@@ -315,10 +315,10 @@ function main() returns ExitCode
 	var sum = 0 as Integer
 
 	for r in 0 upto rounds 'eachRound'
-		var replies = ReplyPromiseArray.create(0)
+		let replies = ReplyPromiseArray.create(0)
 
 		for _ in 0 upto workersPerRound 'spawnEach'
-			var worker = spawn Worker.create()
+			let worker = spawn Worker.create()
 			replies.push(try worker.work(r) otherwise panic("an open mailbox with room takes the send"))
 			try worker.linger(r) otherwise panic("an open mailbox with room takes the send")
 			worker.shutdown()
@@ -450,7 +450,7 @@ function main() returns ExitCode
 		return 1
 	end 'refused'
 
-	var greeter = spawn Greeter.create()
+	let greeter = spawn Greeter.create()
 	try greeter.greet(1) otherwise panic("an open mailbox with room takes the send")
 
 	let stranded = Scheduler.quiesce()

@@ -1157,7 +1157,7 @@ end 'Box'
 typealias PusherBox = Box with Pusher
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	let b = PusherBox.create(Pusher.create(1))
 	b.run(a)
 	return try a.get(0) otherwise 55
@@ -1331,7 +1331,7 @@ type Builder implements Maker
 		return Self{ seed: seed }
 	end 'create'
 	function make() returns IntArray
-		var xs = IntArray.create(0)
+		let xs = IntArray.create(0)
 		xs.push(self.seed)
 		return xs
 	end 'make'
@@ -1436,7 +1436,7 @@ type Doubler implements Transform
 			throw ProbeError.refused
 		end 'big'
 
-		var out = ByteArray.create(0)
+		let out = ByteArray.create(0)
 
 		for b in data 'each'
 			out.push(b)
@@ -1459,7 +1459,7 @@ type Reverser implements Transform
 			throw ProbeError.refused
 		end 'big'
 
-		var out = ByteArray.create(0)
+		let out = ByteArray.create(0)
 
 		for b in data 'each'
 			out.insert(0, value: b)
@@ -1550,7 +1550,7 @@ end 'Box'
 typealias AdderBox = Box with Adder
 
 function main() returns ExitCode
-	var xs = IntArray.create(0)
+	let xs = IntArray.create(0)
 	xs.push(10)
 	xs.push(30)
 	let b = AdderBox.create(Adder.create(2))
@@ -2467,7 +2467,7 @@ end 'MyKey'
 typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
-		var m = MyKeyMap.create()
+		let m = MyKeyMap.create()
 		try m.insert(freeze MyKey.create(1), value: 42) otherwise ignore
 		return m.count()
 end 'main'
@@ -2710,7 +2710,7 @@ type Holder uses T where T is Hashable and Equatable
 	var v as T
 
 	static function of(v T) returns Self
-		var built = Self{v: v}
+		let built = Self{v: v}
 		if built.matches(v) 'sameValue'
 			return built
 		end 'sameValue'
@@ -2823,7 +2823,7 @@ typealias H = Holder with Val
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	var items = ValArray.create(0)
+	let items = ValArray.create(0)
 	items.push(41)
 	print("{H.digestAll(items) == items.hash()}\n")
 	return 0
@@ -3085,7 +3085,7 @@ type Outer uses E where E is Hashable and Equatable
 	end 'create'
 
 	function tally() returns HashValue
-		var items = Items.create(0)
+		let items = Items.create(0)
 		items.push(e)
 		if items.count() == 1 'one'
 			return e.hash() + 1
@@ -3108,7 +3108,7 @@ typealias R = Runner with Val
 typealias ValOuter = Outer with Val
 
 function main() returns ExitCode
-	var o = ValOuter.create(41)
+	let o = ValOuter.create(41)
 	print("{R.run(o) == o.tally()}\n")
 	return 0
 end 'main'
@@ -3134,7 +3134,7 @@ type Outer uses E where E is Hashable and Equatable
 	end 'create'
 
 	function tally() returns HashValue
-		var items = Items.create(0)
+		let items = Items.create(0)
 		items.push(e)
 		if items.count() == 1 'one'
 			return e.hash() + 1
@@ -3157,7 +3157,7 @@ typealias R = Runner with String
 typealias StrOuter = Outer with String
 
 function main() returns ExitCode
-	var o = StrOuter.create("outer {40 + 2} value long enough for a heap record")
+	let o = StrOuter.create("outer {40 + 2} value long enough for a heap record")
 	print("{R.run(o) == o.tally()} {R.run(o) == "outer 42 value long enough for a heap record".hash() + 1}\n")
 	return 0
 end 'main'
@@ -3199,7 +3199,7 @@ type Outer uses E where E is Hashable and Equatable
 	end 'create'
 
 	function tally() returns HashValue
-		var items = Items.create(0)
+		let items = Items.create(0)
 		items.push(e)
 		if items.count() == 1 'one'
 			return e.hash() + 1
@@ -3222,7 +3222,7 @@ typealias KeyRunner = Runner with Key
 typealias KeyOuter = Outer with Key
 
 function main() returns ExitCode
-	var o = KeyOuter.create(Key.create("record {40 + 2} value long enough for a heap record"))
+	let o = KeyOuter.create(Key.create("record {40 + 2} value long enough for a heap record"))
 	print("{KeyRunner.run(o) == o.tally()} {KeyRunner.run(o) == "record 42 value long enough for a heap record".hash() + 1}\n")
 	return 0
 end 'main'
@@ -3607,10 +3607,10 @@ typealias IntArray = Array with Integer
 typealias RevArray = Array with Rev
 
 function main() returns ExitCode
-	var rising = IntArray.create(0)
+	let rising = IntArray.create(0)
 	rising.push(1)
 	rising.push(2)
-	var reversed = RevArray.create(0)
+	let reversed = RevArray.create(0)
 	reversed.push(Rev.create(1))
 	reversed.push(Rev.create(2))
 	print("{IntHolder.firstBelowSecond(rising)} {RevHolder.firstBelowSecond(reversed)}\n")
@@ -3717,7 +3717,7 @@ typealias ValBox = Box with Val
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	var items = ValArray.create(0)
+	let items = ValArray.create(0)
 	items.push(4)
 	print("{ValBox.countOf(ValBox.create(items))}\n")
 	return 0
@@ -3764,7 +3764,7 @@ typealias ValBox = Box with Val
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	var items = ValArray.create(0)
+	let items = ValArray.create(0)
 	items.push(4)
 	print("{ValBox.countOf(ValBox.create(items))}\n")
 	return 0
@@ -3861,11 +3861,11 @@ typealias IntArray = Array with Integer
 typealias IntTicks = Ticks with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(5)
 	a.push(6)
 	a.push(7)
-	var t = try IntTicks.create(a) otherwise panic("non-empty")
+	let t = try IntTicks.create(a) otherwise panic("non-empty")
 	try t.skip(2) otherwise panic("three elements")
 	return t.current()
 end 'main'
@@ -3937,7 +3937,7 @@ type Box uses T where T is Hashable and Equatable
 	end 'create'
 
 	static function probe() returns bool
-		var xs = Integers.create(0)
+		let xs = Integers.create(0)
 		xs.push(1)
 		xs.push(2)
 		return xs.contains(2)
@@ -4059,7 +4059,7 @@ typealias SignalMap = Map with (Signal, Count)
 
 function wordLookup(n Count) returns Count
 	sleep(1)
-	var map = WordMap.create()
+	let map = WordMap.create()
 	map.upsert(7, value: 3)
 	map.upsert(9, value: 4)
 	let found = try map.get(9) otherwise return 0
@@ -4069,7 +4069,7 @@ end 'wordLookup'
 
 function signalLookup(n Count) returns Count
 	sleep(1)
-	var map = SignalMap.create()
+	let map = SignalMap.create()
 	map.upsert(Signal.minus, value: 3)
 	map.upsert(Signal.plus, value: 4)
 	let found = try map.get(Signal.minus) otherwise return 0

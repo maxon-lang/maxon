@@ -42,7 +42,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create(0)
+		let a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -60,7 +60,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
@@ -82,7 +82,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create(0)
+		let a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -100,7 +100,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
@@ -122,7 +122,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create(0)
+		let a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -140,7 +140,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
@@ -162,7 +162,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create(0)
+		let a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -180,7 +180,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
@@ -203,7 +203,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create(0)
+		let a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -221,7 +221,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
@@ -242,7 +242,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create(0)
+		let a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -260,7 +260,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
@@ -281,7 +281,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create(0)
+		let a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -299,7 +299,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
@@ -320,7 +320,7 @@ type Bag
 	export var items as Labels
 
 	static function create() returns Self
-		var a = Labels.create(0)
+		let a = Labels.create(0)
 		a.push("first heap element {40 + 2}")
 		a.push("second heap element {40 + 5}")
 		return Self{items: a}
@@ -338,7 +338,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
@@ -360,7 +360,7 @@ type Bag
 	export var seen as Int
 
 	static function create() returns Self
-		var a = IntArray.create(0)
+		let a = IntArray.create(0)
 		a.push(5)
 		a.push(7)
 		return Self{items: a, seen: 0}
@@ -377,7 +377,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.sum() as ExitCode
 end 'main'
 ```
@@ -396,7 +396,7 @@ type Bag
 	export var items as IntArray
 
 	static function create() returns Self
-		var a = IntArray.create(0)
+		let a = IntArray.create(0)
 		a.push(5)
 		a.push(7)
 		return Self{items: a}
@@ -413,7 +413,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.sumThenClear() as ExitCode
 end 'main'
 ```

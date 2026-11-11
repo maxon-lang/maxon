@@ -500,11 +500,11 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-		var items = ItemArray.create(0)
+		let items = ItemArray.create(0)
 		items.push(Item.value(10))
 		items.push(Item.value(20))
 		items.push(Item.empty)
-		view first = try items.get(0) otherwise Item.empty
+		let first = try items.get(0) otherwise Item.empty
 		match first 'check'
 				empty then return 0
 				value(n) then return n
@@ -528,7 +528,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-		var items = ItemArray.create(0)
+		let items = ItemArray.create(0)
 		items.push(Item.value(10))
 		items.push(Item.value(20))
 		items.push(Item.value(12))
@@ -559,7 +559,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-		var slots = SlotArray.create(0)
+		let slots = SlotArray.create(0)
 		slots.push(Slot.val(5))
 		slots.push(Slot.none)
 		slots.push(Slot.val(3))
@@ -590,7 +590,7 @@ end 'Box'
 typealias BoxArray = Array with Box
 
 function main() returns ExitCode
-		var boxes = BoxArray.create(0)
+		let boxes = BoxArray.create(0)
 		boxes.push(Box.full(42))
 		var result = 0 as Integer
 		for b in boxes 'loop'

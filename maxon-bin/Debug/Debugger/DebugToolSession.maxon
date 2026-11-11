@@ -28,9 +28,7 @@ export type DebugSessionSlot
 	end 'create'
 
 	export function reap(ending DebugSessionEnding) returns CollectedLines
-		var holding = self.hold
-
-		let finalOutput = match holding 'which'
+		let finalOutput = match self.hold 'which'
 			empty gives CollectedLines.create()
 			held(session) gives session.closed(ending)
 		end 'which'
@@ -57,7 +55,6 @@ let NeverStoppedReason = "the program ended before the debugger could stop it"
 
 export type DebugToolSession
 	export var conversation as DebugConversation
-	export var engine as DebugEngine
 	var image as DebugImage
 
 	export static function launch(image DebugImage, arguments StringArray, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, workingDirectory FilePath = inheritedWorkingDirectory(), delivery DebugStopDelivery = DebugStopDelivery.awaited) returns DebugToolLaunch
@@ -72,7 +69,7 @@ export type DebugToolSession
 	end 'launch'
 
 	static function over(engine DebugEngine, symbols DebugSymbols, delivery DebugStopDelivery, image DebugImage) returns DebugToolSession
-		return Self{conversation: DebugConversation.create(engine, symbols: symbols, delivery: delivery), engine: engine, image: image}
+		return Self{conversation: DebugConversation.create(engine, symbols: symbols, delivery: delivery), image: image}
 	end 'over'
 
 	export function currentState() returns DebugToolState
@@ -97,16 +94,16 @@ export type DebugToolSession
 	// of stale debug builds. The attachable copy the debuggee ran from goes either way, with the engine.
 	function terminated() returns CollectedLines
 		_ = self.conversation.close()
-		let finalOutput = self.engine.collectedOutput()
+		let finalOutput = self.conversation.engine.collectedOutput()
 		self.image.discardBuild()
 
 		return finalOutput
 	end 'terminated'
 
 	function released() returns CollectedLines
-		_ = self.engine.closeLeavingItRunning()
+		_ = self.conversation.engine.closeLeavingItRunning()
 
-		return self.engine.collectedOutput()
+		return self.conversation.engine.collectedOutput()
 	end 'released'
 end 'DebugToolSession'
 
@@ -122,7 +119,7 @@ end 'launchedToolSession'
 function startedToolSession(image DebugImage, code ByteArray, reader MxdbgReader, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, delivery DebugStopDelivery) returns DebugToolLaunch
 	let program = image.program()
 	let symbols = DebugSymbols.create(reader, code: code, executable: program)
-	var routing = ChildOutputRouting.collect(OutputSink.create())
+	let routing = ChildOutputRouting.collect(OutputSink.create())
 
 	match DebugEngine.start(program, reader: reader, textBytes: code.count() as DebugAddress, arguments: arguments, workingDirectory: workingDirectory, targetEnv: targetEnv, routing: routing, stopTimeoutMs: stopTimeoutMs, traced: traced) 'started'
 		refused(reason) then return DebugToolLaunch.refused(reason)

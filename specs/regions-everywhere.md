@@ -104,8 +104,8 @@ function apply(stasher Stasher, shelf mutable Shelf, thing mutable Thing)
 end 'apply'
 
 function main() returns ExitCode
-	var shelf = Shelf.create()
-	var thing = Thing.create(1)
+	let shelf = Shelf.create()
+	let thing = Thing.create(1)
 	apply(stash, shelf: shelf, thing: thing)
 	return shelf.count() as ExitCode
 end 'main'
@@ -366,7 +366,7 @@ function poke(source Cursors)
 end 'poke'
 
 function main() returns ExitCode
-	var bag = Bag.create()
+	let bag = Bag.create()
 	poke(bag)
 	return bag.size() as ExitCode
 end 'main'
@@ -514,7 +514,7 @@ function first(source Cursors) returns Cursor
 end 'first'
 
 function main() returns ExitCode
-	var bag = Bag.create()
+	let bag = Bag.create()
 	let c = first(bag)
 	c.grow()
 	return c.size() as ExitCode
@@ -564,7 +564,7 @@ function first(source Cursors) returns Cursor
 end 'first'
 
 function main() returns ExitCode
-	var bag = Bag.create()
+	let bag = Bag.create()
 	return first(bag).size() as ExitCode
 end 'main'
 ```
@@ -827,7 +827,7 @@ function build(m Maker, d mutable IntArray) returns Shelf
 end 'build'
 
 function main() returns ExitCode
-	var v = IntArray.create(0)
+	let v = IntArray.create(0)
 	v.push(1)
 	let shelf = build(shelve, d: v)
 	v.push(2)
@@ -873,7 +873,7 @@ function total(d IntArray) returns Count
 end 'total'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(1)
 	a.push(2)
 	return total(a) as ExitCode
@@ -901,7 +901,7 @@ type Row
 end 'Row'
 
 function main() returns ExitCode
-	var cells = IntArray.create(0) as isolated IntArray
+	let cells = IntArray.create(0) as isolated IntArray
 
 	modify cells 'fill'
 		cells.push(7)

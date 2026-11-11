@@ -538,7 +538,7 @@ public type LspClient
 	// ⛔ Everything that would stop the session happening at all PANICS rather than throwing: neither a
 	// missing binary nor a refused spawn is the server answering wrongly.
 	public static function start(binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit, extraArguments StringArray = StringArray.create(0)) returns LspClient
-		var argv = StringArray.create(0)
+		let argv = StringArray.create(0)
 		argv.push(LspServerCommandName)
 
 		for extra in extraArguments 'eachExtra'
@@ -572,10 +572,10 @@ public type LspClient
 	// ----------------------------------------------------------------------------------------
 
 	public function initialize() returns InitializeResult throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodInitialize)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodInitialize)
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putNull(ProcessIdKey)
 		params.putNull(RootUriKey)
 		params.putNode(CapabilitiesKey, value: clientCapabilities(doc, declaresWorkspaceFolders: false))
@@ -616,10 +616,10 @@ public type LspClient
 	end 'grantWorkspaceTrust'
 
 	function notifyWorkspaceTrust(trusted bool) throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodWorkspaceTrust)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodWorkspaceTrust)
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putBool(TrustedKey, value: trusted)
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
@@ -627,10 +627,10 @@ public type LspClient
 	end 'notifyWorkspaceTrust'
 
 	function initializeRooted(folderUris StringArray, rootUri InitializeRootUri, declaresWorkspaceFolders bool, trust WorkspaceTrustOption) returns InitializeResult throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodInitialize)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodInitialize)
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putNull(ProcessIdKey)
 
 		match trust 'trustOption'
@@ -656,14 +656,14 @@ public type LspClient
 	end 'initializeRooted'
 
 	public function changeWorkspaceFolders(added WorkspaceFolderRootArray, removed WorkspaceFolderRootArray) throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodDidChangeWorkspaceFolders)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodDidChangeWorkspaceFolders)
 
-		var event = JsonObjectBuilder.create(doc)
+		let event = JsonObjectBuilder.create(doc)
 		event.putNode(AddedKey, value: doc.add(JsonNode.arrayNode(workspaceFolderNodes(doc, uris: folderUrisOf(added)))))
 		event.putNode(RemovedKey, value: doc.add(JsonNode.arrayNode(workspaceFolderNodes(doc, uris: folderUrisOf(removed)))))
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putNode(EventKey, value: event.finish())
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
@@ -671,22 +671,22 @@ public type LspClient
 	end 'changeWorkspaceFolders'
 
 	public function initialized() throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodInitialized)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodInitialized)
 		message.putNode(JsonRpcParamsKey, value: JsonObjectBuilder.create(doc).finish())
 		try self.sendNotification(doc, message: message)
 	end 'initialized'
 
 	public function shutdown() throws LspClientError
-		var doc = JsonDoc.create()
+		let doc = JsonDoc.create()
 
 		// LSP defines `shutdown` as taking no params, and an absent member is not an empty object.
-		var message = beginMessage(doc, method: MethodShutdown)
+		let message = beginMessage(doc, method: MethodShutdown)
 		let (_, _) = try self.sendRequest(doc, message: message)
 	end 'shutdown'
 
 	public function exit() throws LspClientError
-		var doc = JsonDoc.create()
+		let doc = JsonDoc.create()
 		try self.sendNotification(doc, message: beginMessage(doc, method: MethodExit))
 	end 'exit'
 
@@ -703,16 +703,16 @@ public type LspClient
 	// ----------------------------------------------------------------------------------------
 
 	public function openDocument(uri String, content String) throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodDidOpen)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodDidOpen)
 
-		var item = JsonObjectBuilder.create(doc)
+		let item = JsonObjectBuilder.create(doc)
 		item.putString(UriKey, value: uri)
 		item.putString(LanguageIdKey, value: MaxonLanguageId)
 		item.putInt(VersionKey, value: InitialDocumentVersion as JsonInteger)
 		item.putString(TextKey, value: content)
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putNode(TextDocumentKey, value: item.finish())
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
@@ -720,20 +720,20 @@ public type LspClient
 	end 'openDocument'
 
 	public function changeDocument(uri String, content String, version DocumentVersion) throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodDidChange)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodDidChange)
 
-		var identifier = JsonObjectBuilder.create(doc)
+		let identifier = JsonObjectBuilder.create(doc)
 		identifier.putString(UriKey, value: uri)
 		identifier.putInt(VersionKey, value: version as JsonInteger)
 
-		var change = JsonObjectBuilder.create(doc)
+		let change = JsonObjectBuilder.create(doc)
 		change.putString(TextKey, value: content)
 
-		var changes = JsonNodeIdArray.create(0)
+		let changes = JsonNodeIdArray.create(0)
 		changes.push(change.finish())
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putNode(TextDocumentKey, value: identifier.finish())
 		params.putNode(ContentChangesKey, value: doc.add(JsonNode.arrayNode(changes)))
 		message.putNode(JsonRpcParamsKey, value: params.finish())
@@ -742,10 +742,10 @@ public type LspClient
 	end 'changeDocument'
 
 	public function closeDocument(uri String) throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodDidClose)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodDidClose)
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
@@ -853,7 +853,7 @@ public type LspClient
 	// to the request that caused it, and a held project sends none, so a read off the wire would wait
 	// for nothing.
 	public function takeProjectLoadingNotices() returns ProjectLoadingNoticeArray throws LspClientError
-		var notices = ProjectLoadingNoticeArray.create(0)
+		let notices = ProjectLoadingNoticeArray.create(0)
 
 		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isNotificationOf(candidate, method: MethodProjectLoading), take: StashTake.every) 'eachNotice'
 			notices.push(try readProjectLoadingNotice(doc))
@@ -863,7 +863,7 @@ public type LspClient
 	end 'takeProjectLoadingNotices'
 
 	public function takeLogMessages(needle String) returns StringArray throws LspClientError
-		var messages = StringArray.create(0)
+		let messages = StringArray.create(0)
 
 		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isLogMessageContaining(candidate, needle: needle), take: StashTake.every) 'eachLog'
 			messages.push(try stringMember(doc, of: try memberNode(doc, of: doc.root, key: JsonRpcParamsKey), key: MessageKey))
@@ -967,7 +967,7 @@ public type LspClient
 		let started = Clock.nowMs()
 		let prefix = projectCheckReportPrefix(uri)
 		let last = "{through}"
-		var reports = ProjectCheckReportArray.create(0)
+		let reports = ProjectCheckReportArray.create(0)
 
 		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilReported'
 			_ = try self.documentSymbols(uri)
@@ -989,7 +989,7 @@ public type LspClient
 	end 'awaitProjectCheckReports'
 
 	function takeProjectCheckReports(prefix String) returns ProjectCheckReportArray throws LspClientError
-		var reports = ProjectCheckReportArray.create(0)
+		let reports = ProjectCheckReportArray.create(0)
 
 		for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives isProjectCheckReport(candidate, prefix: prefix), take: StashTake.every) 'eachReport'
 			reports.push(try readProjectCheckReport(doc, prefix: prefix))
@@ -999,8 +999,8 @@ public type LspClient
 	end 'takeProjectCheckReports'
 
 	function takeStashedWhere(wanted StashedNotificationTest, take StashTake) returns StashedNotificationArray throws LspClientError
-		var kept = StringArray.create(0)
-		var taken = StashedNotificationArray.create(0)
+		let kept = StringArray.create(0)
+		let taken = StashedNotificationArray.create(0)
 
 		for body in self.notifications 'eachStashed'
 			let doc = try Json.parse(body) otherwise 'notJson'
@@ -1080,14 +1080,14 @@ public type LspClient
 	// Completion as an editor raises it from a typed character rather than from an explicit invocation.
 	// The trigger kind is what tells the server which of the two happened.
 	public function completionWithTrigger(uri String, line LspCoordinate, character LspCoordinate, triggerCharacter String) returns CompletionResult throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodCompletion)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodCompletion)
 
-		var context = JsonObjectBuilder.create(doc)
+		let context = JsonObjectBuilder.create(doc)
 		context.putInt(TriggerKindKey, value: TriggerCharacterKind)
 		context.putString(TriggerCharacterKey, value: triggerCharacter)
 
-		var params = positionParams(doc, uri: uri, line: line, character: character)
+		let params = positionParams(doc, uri: uri, line: line, character: character)
 		params.putNode(ContextKey, value: context.finish())
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
@@ -1096,14 +1096,14 @@ public type LspClient
 	end 'completionWithTrigger'
 
 	public function formatting(uri String, tabSize TabWidth, insertSpaces bool) returns FormattingResult throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodFormatting)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodFormatting)
 
-		var options = JsonObjectBuilder.create(doc)
+		let options = JsonObjectBuilder.create(doc)
 		options.putInt(TabSizeKey, value: tabSize as JsonInteger)
 		options.putBool(InsertSpacesKey, value: insertSpaces)
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
 		params.putNode(OptionsKey, value: options.finish())
 		message.putNode(JsonRpcParamsKey, value: params.finish())
@@ -1114,7 +1114,7 @@ public type LspClient
 
 	public function documentSymbols(uri String) returns DocumentSymbolsResult throws LspClientError
 		let (doc, result) = try self.documentRequest(MethodDocumentSymbol, uri: uri)
-		var symbols = DocumentSymbolArray.create(0)
+		let symbols = DocumentSymbolArray.create(0)
 
 		for element in try optionalElements(doc, id: result) 'eachSymbol'
 			symbols.push(DocumentSymbol.create(try stringMember(doc, of: element, key: NameKey), kind: optionalKind(doc, of: element) as SymbolKindCode))
@@ -1125,7 +1125,7 @@ public type LspClient
 
 	public function foldingRange(uri String) returns FoldingRangesResult throws LspClientError
 		let (doc, result) = try self.documentRequest(MethodFoldingRange, uri: uri)
-		var ranges = FoldingRangeArray.create(0)
+		let ranges = FoldingRangeArray.create(0)
 
 		for element in try optionalElements(doc, id: result) 'eachRange'
 			let startLine = try coordinateMember(doc, of: element, key: StartLineKey)
@@ -1137,7 +1137,7 @@ public type LspClient
 
 	public function linkedEditingRange(uri String, line LspCoordinate, character LspCoordinate) returns LinkedEditingRangesResult throws LspClientError
 		let (doc, result) = try self.positionRequest(MethodLinkedEditingRange, uri: uri, line: line, character: character)
-		var ranges = LspRangeArray.create(0)
+		let ranges = LspRangeArray.create(0)
 
 		if isNull(doc, id: result) 'nothingHere'
 			return LinkedEditingRangesResult.of(ranges)
@@ -1151,10 +1151,10 @@ public type LspClient
 	end 'linkedEditingRange'
 
 	public function rename(uri String, line LspCoordinate, character LspCoordinate, newName String) returns RenameResult throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodRename)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodRename)
 
-		var params = positionParams(doc, uri: uri, line: line, character: character)
+		let params = positionParams(doc, uri: uri, line: line, character: character)
 		params.putString(NewNameKey, value: newName)
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
@@ -1163,21 +1163,21 @@ public type LspClient
 	end 'rename'
 
 	public function codeAction(uri String, startLine LspCoordinate, startCharacter LspCoordinate, endLine LspCoordinate, endCharacter LspCoordinate) returns CodeActionResult throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodCodeAction)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodCodeAction)
 
 		// The context is required by LSP even when the client knows of no diagnostics at the range.
-		var context = JsonObjectBuilder.create(doc)
+		let context = JsonObjectBuilder.create(doc)
 		context.putNode(DiagnosticsKey, value: doc.add(JsonNode.arrayNode(JsonNodeIdArray.create(0))))
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
 		params.putNode(RangeKey, value: rangeNode(doc, startLine: startLine, startCharacter: startCharacter, endLine: endLine, endCharacter: endCharacter))
 		params.putNode(ContextKey, value: context.finish())
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
-		var actions = CodeActionItemArray.create(0)
+		let actions = CodeActionItemArray.create(0)
 
 		for element in try optionalElements(replyDoc, id: result) 'eachAction'
 			actions.push(CodeActionItem.create(try stringMember(replyDoc, of: element, key: TitleKey)))
@@ -1188,7 +1188,7 @@ public type LspClient
 
 	public function semanticTokensFull(uri String) returns SemanticTokensResult throws LspClientError
 		let (doc, result) = try self.documentRequest(MethodSemanticTokensFull, uri: uri)
-		var data = SemanticTokenValueArray.create(0)
+		let data = SemanticTokenValueArray.create(0)
 
 		if isNull(doc, id: result) 'noTokens'
 			return SemanticTokensResult.of(data)
@@ -1204,16 +1204,16 @@ public type LspClient
 	// The Compiler Explorer's own request: a source text rather than an open document, so nothing about it
 	// is a `textDocument/*` shape.
 	public function generateIr(source String, filename String) returns GenerateIrResult throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodGenerateIr)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodGenerateIr)
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putString(SourceKey, value: source)
 		params.putString(FilenameKey, value: filename)
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
-		var errors = GenerateIrErrorArray.create(0)
+		let errors = GenerateIrErrorArray.create(0)
 
 		for element in try elementsOf(replyDoc, id: try memberNode(replyDoc, of: result, key: ErrorsKey)) 'eachError'
 			let line = try integerMember(replyDoc, of: element, key: LineKey)
@@ -1226,12 +1226,12 @@ public type LspClient
 
 	// The VS Code status bar's request: the projects the server holds, with no parameters of its own.
 	public function listProjects() returns ListProjectsResult throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: MethodListProjects)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodListProjects)
 		message.putNode(JsonRpcParamsKey, value: JsonObjectBuilder.create(doc).finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
-		var projects = ProjectEntryArray.create(0)
+		let projects = ProjectEntryArray.create(0)
 
 		for element in try elementsOf(replyDoc, id: try memberNode(replyDoc, of: result, key: ProjectsKey)) 'eachProject'
 			let rootPath = try stringMember(replyDoc, of: element, key: RootPathKey)
@@ -1248,18 +1248,18 @@ public type LspClient
 
 	// The shape every `textDocument/*` request that names a cursor shares.
 	function positionRequest(method String, uri String, line LspCoordinate, character LspCoordinate) returns (JsonDoc, JsonNodeId) throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: method)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: method)
 		message.putNode(JsonRpcParamsKey, value: positionParams(doc, uri: uri, line: line, character: character).finish())
 		return try self.sendRequest(doc, message: message)
 	end 'positionRequest'
 
 	// The shape every request that names only a document shares.
 	function documentRequest(method String, uri String) returns (JsonDoc, JsonNodeId) throws LspClientError
-		var doc = JsonDoc.create()
-		var message = beginMessage(doc, method: method)
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: method)
 
-		var params = JsonObjectBuilder.create(doc)
+		let params = JsonObjectBuilder.create(doc)
 		params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
@@ -1460,14 +1460,14 @@ end 'JsonObjectBuilder'
 
 // The envelope every message shares. The id belongs to requests only, so it is added by the sender.
 function beginMessage(doc JsonDoc, method String) returns JsonObjectBuilder
-	var message = JsonObjectBuilder.create(doc)
+	let message = JsonObjectBuilder.create(doc)
 	message.putString(JsonRpcVersionKey, value: JsonRpcVersion)
 	message.putString(JsonRpcMethodKey, value: method)
 	return message
 end 'beginMessage'
 
 function textDocumentIdentifier(doc JsonDoc, uri String) returns JsonNodeId
-	var identifier = JsonObjectBuilder.create(doc)
+	let identifier = JsonObjectBuilder.create(doc)
 	identifier.putString(UriKey, value: uri)
 	return identifier.finish()
 end 'textDocumentIdentifier'
@@ -1483,16 +1483,16 @@ union WorkspaceTrustOption
 end 'WorkspaceTrustOption'
 
 function trustOptionsNode(doc JsonDoc, trusted bool) returns JsonNodeId
-	var options = JsonObjectBuilder.create(doc)
+	let options = JsonObjectBuilder.create(doc)
 	options.putBool(TrustedWorkspaceKey, value: trusted)
 	return options.finish()
 end 'trustOptionsNode'
 
 function workspaceFolderNodes(doc JsonDoc, uris StringArray) returns JsonNodeIdArray
-	var folders = JsonNodeIdArray.create(0)
+	let folders = JsonNodeIdArray.create(0)
 
 	for uri in uris 'eachFolder'
-		var folder = JsonObjectBuilder.create(doc)
+		let folder = JsonObjectBuilder.create(doc)
 		folder.putString(UriKey, value: uri)
 		folder.putString(NameKey, value: lastUriSegment(uri))
 		folders.push(folder.finish())
@@ -1502,7 +1502,7 @@ function workspaceFolderNodes(doc JsonDoc, uris StringArray) returns JsonNodeIdA
 end 'workspaceFolderNodes'
 
 function folderUrisOf(roots WorkspaceFolderRootArray) returns StringArray
-	var uris = StringArray.create(0)
+	let uris = StringArray.create(0)
 
 	for root in roots 'eachRoot'
 		uris.push(fileUriOf(root))
@@ -1512,14 +1512,14 @@ function folderUrisOf(roots WorkspaceFolderRootArray) returns StringArray
 end 'folderUrisOf'
 
 function positionNode(doc JsonDoc, line LspCoordinate, character LspCoordinate) returns JsonNodeId
-	var position = JsonObjectBuilder.create(doc)
+	let position = JsonObjectBuilder.create(doc)
 	position.putInt(LineKey, value: line as JsonInteger)
 	position.putInt(CharacterKey, value: character as JsonInteger)
 	return position.finish()
 end 'positionNode'
 
 function rangeNode(doc JsonDoc, startLine LspCoordinate, startCharacter LspCoordinate, endLine LspCoordinate, endCharacter LspCoordinate) returns JsonNodeId
-	var range = JsonObjectBuilder.create(doc)
+	let range = JsonObjectBuilder.create(doc)
 	range.putNode(StartKey, value: positionNode(doc, line: startLine, character: startCharacter))
 	range.putNode(EndKey, value: positionNode(doc, line: endLine, character: endCharacter))
 	return range.finish()
@@ -1528,7 +1528,7 @@ end 'rangeNode'
 // The params of a `textDocument/*` request that names a cursor, left OPEN so that a caller carrying more
 // members — a completion context, a new name — adds them to the same object.
 function positionParams(doc JsonDoc, uri String, line LspCoordinate, character LspCoordinate) returns JsonObjectBuilder
-	var params = JsonObjectBuilder.create(doc)
+	let params = JsonObjectBuilder.create(doc)
 	params.putNode(TextDocumentKey, value: textDocumentIdentifier(doc, uri: uri))
 	params.putNode(PositionKey, value: positionNode(doc, line: line, character: character))
 	return params
@@ -1539,18 +1539,18 @@ end 'positionParams'
 // (`LspServer.respondInitialize` owns that rule), so `declaresWorkspaceFolders` changes what the client
 // claims and never what the server answers.
 function clientCapabilities(doc JsonDoc, declaresWorkspaceFolders bool) returns JsonNodeId
-	var textDocument = JsonObjectBuilder.create(doc)
+	let textDocument = JsonObjectBuilder.create(doc)
 
 	for feature in declaredTextDocumentFeatures() 'eachFeature'
-		var declaration = JsonObjectBuilder.create(doc)
+		let declaration = JsonObjectBuilder.create(doc)
 		declaration.putBool(DynamicRegistrationKey, value: false)
 		textDocument.putNode(feature, value: declaration.finish())
 	end 'eachFeature'
 
-	var workspace = JsonObjectBuilder.create(doc)
+	let workspace = JsonObjectBuilder.create(doc)
 	workspace.putBool(WorkspaceFoldersKey, value: declaresWorkspaceFolders)
 
-	var capabilities = JsonObjectBuilder.create(doc)
+	let capabilities = JsonObjectBuilder.create(doc)
 	capabilities.putNode(TextDocumentKey, value: textDocument.finish())
 	capabilities.putNode(WorkspaceKey, value: workspace.finish())
 	return capabilities.finish()
@@ -1626,7 +1626,7 @@ end 'advertises'
 function readAdvertised(replyDoc JsonDoc, result JsonNodeId) returns InitializeResult throws LspClientError
 	let capabilities = try memberNode(replyDoc, of: result, key: CapabilitiesKey)
 
-	var advertised = InitializeResult.create()
+	let advertised = InitializeResult.create()
 
 	if hasMember(replyDoc, of: result, key: ServerInfoKey) 'namesItself'
 		let info = try memberNode(replyDoc, of: result, key: ServerInfoKey)
@@ -1722,7 +1722,7 @@ function elementsOf(doc JsonDoc, id JsonNodeId) returns JsonNodeIdArray throws L
 		throw LspClientError.malformedResponse("a member this reply must answer with an array is not one")
 	end 'notAnArray'
 
-	var elements = JsonNodeIdArray.create(0)
+	let elements = JsonNodeIdArray.create(0)
 
 	for index in 0 upto count 'eachElement'
 		elements.push(try doc.arrayAt(id, index: index) otherwise panic("LspClient.elementsOf: index below the length just measured"))
@@ -1813,7 +1813,7 @@ end 'readProjectLoadingNotice'
 
 function readPublishedDiagnostics(doc JsonDoc, uri String) returns PublishedDiagnostics throws LspClientError
 	let params = try memberNode(doc, of: doc.root, key: JsonRpcParamsKey)
-	var items = PublishedDiagnosticArray.create(0)
+	let items = PublishedDiagnosticArray.create(0)
 
 	for element in try elementsOf(doc, id: try memberNode(doc, of: params, key: DiagnosticsKey)) 'eachDiagnostic'
 		let range = try readRange(doc, id: try memberNode(doc, of: element, key: RangeKey))
@@ -1836,7 +1836,7 @@ function readDiagnosticCode(doc JsonDoc, of JsonNodeId) returns PublishedDiagnos
 end 'readDiagnosticCode'
 
 function readTextEdits(doc JsonDoc, id JsonNodeId) returns TextEditArray throws LspClientError
-	var edits = TextEditArray.create(0)
+	let edits = TextEditArray.create(0)
 
 	for element in try optionalElements(doc, id: id) 'eachEdit'
 		let range = try readRange(doc, id: try memberNode(doc, of: element, key: RangeKey))
@@ -1900,7 +1900,7 @@ end 'readDefinition'
 
 // A completion answer as either a bare list of items or a `CompletionList` wrapping one.
 function readCompletion(doc JsonDoc, id JsonNodeId) returns CompletionResult throws LspClientError
-	var items = CompletionItemArray.create(0)
+	let items = CompletionItemArray.create(0)
 
 	if isNull(doc, id: id) 'nothingHere'
 		return CompletionResult.of(items)
@@ -1932,7 +1932,7 @@ function readWorkspaceEdit(doc JsonDoc, id JsonNodeId, uri String) returns TextE
 		return try readTextEdits(doc, id: try memberNode(doc, of: changes, key: uri))
 	end 'byUri'
 
-	var edits = TextEditArray.create(0)
+	let edits = TextEditArray.create(0)
 
 	for element in try optionalElements(doc, id: try memberNode(doc, of: id, key: DocumentChangesKey)) 'eachDocument'
 		let identifier = try memberNode(doc, of: element, key: TextDocumentKey)
@@ -2170,7 +2170,7 @@ export function recordedManifestDiagnostics(client LspClient, project FilePath) 
 end 'recordedManifestDiagnostics'
 
 export function expectBreakingChangeNotices(items PublishedDiagnosticArray) throws TestFailure
-	var notices = StringArray.create(0)
+	let notices = StringArray.create(0)
 
 	for item in items 'eachItem'
 		try Expect.notEqual(item.severity, expected: PublishedErrorSeverity, message: "a record of an older release is not an error: {item.message}")
@@ -2181,7 +2181,7 @@ export function expectBreakingChangeNotices(items PublishedDiagnosticArray) thro
 	end 'eachItem'
 
 	let lastBuilt = "{LastBuiltWording} {OlderRelease}."
-	var expected = StringArray.create(0)
+	let expected = StringArray.create(0)
 
 	for change in try expectedBreakingChangesSince(OlderRelease) 'eachChange'
 		expected.push("{lastBuilt} {change.headline()} {change.fixLine()}")

@@ -224,7 +224,7 @@ export type MxdbgWriter
 				self.stringPool.push(b)
 			end 'eachByte'
 
-			var slice = MxdbgPoolSlice.create(offset, length: self.stringPool.count() as MxdbgIndex - offset)
+			let slice = MxdbgPoolSlice.create(offset, length: self.stringPool.count() as MxdbgIndex - offset)
 			self.interned.upsert(text, value: slice)
 
 			return slice
@@ -248,7 +248,7 @@ export type MxdbgWriter
 		end 'noFunctionYet'
 
 		self.locals.push(MxdbgLocalRecord.create(self.intern(name), locKind: locKind, locValue: locValue, typeId: typeId, scopeStart: scopeStart, scopeEnd: scopeEnd, flags: flags, site: site))
-		var func = try self.funcs.get(self.funcs.count() - 1) otherwise panic("MxdbgWriter.addLocal: funcs.get OOB at the last of {self.funcs.count()}")
+		let func = try self.funcs.get(self.funcs.count() - 1) otherwise panic("MxdbgWriter.addLocal: funcs.get OOB at the last of {self.funcs.count()}")
 		func.localCount = func.localCount + 1
 	end 'addLocal'
 
@@ -264,7 +264,7 @@ export type MxdbgWriter
 		end 'noTypeYet'
 
 		self.fields.push(MxdbgFieldRecord.create(self.intern(name), offset: offset, typeId: typeId))
-		var entry = try self.types.get(self.types.count() - 1) otherwise panic("MxdbgWriter.addField: types.get OOB at the last of {self.types.count()}")
+		let entry = try self.types.get(self.types.count() - 1) otherwise panic("MxdbgWriter.addField: types.get OOB at the last of {self.types.count()}")
 		entry.fieldCount = entry.fieldCount + 1
 	end 'addField'
 
@@ -325,8 +325,8 @@ export type MxdbgWriter
 		self.requireAscendingTables()
 		let windows = self.lineWindows()
 		self.requireEveryRowInAWindow(windows)
-		view triple = self.intern(targetTriple)
-		view root = self.intern(sourceRoot)
+		let triple = self.intern(targetTriple)
+		let root = self.intern(sourceRoot)
 
 		// Each offset is the previous section's plus its stride times its count, so this chain must list
 		// the sections in the order the loops below append them — not the header slot order (see
@@ -345,7 +345,7 @@ export type MxdbgWriter
 		let layoutTableOff = globalTableOff + (self.globals.count() * MxdbgGlobalEntrySize) as ByteOffset
 		let stringPoolOff = layoutTableOff + (self.layoutFigures.count() * MxdbgLayoutEntrySize) as ByteOffset
 
-		var buf = ByteArray.create(stringPoolOff + (self.stringPool.count() as ByteOffset), zeroed: false)
+		let buf = ByteArray.create(stringPoolOff + (self.stringPool.count() as ByteOffset), zeroed: false)
 		writeMxdbgMagic(buf)
 		writeZeros(buf, n: (MxdbgHeaderSize - buf.count()) as BytePos)
 		patchDword(buf, offset: MxdbgOffVersion, value: MxdbgFormatVersion as MachineWord)
@@ -390,7 +390,7 @@ export type MxdbgWriter
 		end 'eachFile'
 
 		for i in 0 upto self.funcs.count() 'eachFunc'
-			view f = try self.funcs.get(i) otherwise panic("MxdbgWriter.build: funcs.get OOB at {i} despite the upto bound")
+			let f = try self.funcs.get(i) otherwise panic("MxdbgWriter.build: funcs.get OOB at {i} despite the upto bound")
 			let window = try windows.get(i) otherwise panic("MxdbgWriter.build: windows.get OOB at {i} — one window is computed per function, in this very order")
 			let rec = appendedRecord(buf, stride: MxdbgFuncEntrySize)
 			patchDword(buf, offset: rec + MxdbgFuncNameOff, value: f.name.offset as MachineWord)
@@ -518,7 +518,7 @@ export type MxdbgWriter
 	// MEASURED on this compiler compiling itself: that shape spent 23.4 G CPU ticks in the sidecar
 	// phase, against 28.0 G for the WHOLE register allocator.
 	function lineWindows() returns MxdbgLineWindowArray
-		var windows = MxdbgLineWindowArray.create(self.funcs.count(), zeroed: false)
+		let windows = MxdbgLineWindowArray.create(self.funcs.count(), zeroed: false)
 
 		var at = 0 as ElementIndex
 
@@ -569,7 +569,7 @@ export type MxdbgWriter
 	end 'requireAggregateWindowFits'
 
 	function poolBytes(slice MxdbgPoolSlice) returns ByteArray
-		var bytes = ByteArray.create(slice.length, zeroed: false)
+		let bytes = ByteArray.create(slice.length, zeroed: false)
 
 		for i in slice.offset upto slice.offset + slice.length 'eachByte'
 			bytes.push(try self.stringPool.get(i as ElementIndex) otherwise panic("MxdbgWriter.poolBytes: byte {i} of a slice this writer interned is past the {self.stringPool.count()}-byte pool it interned it into"))

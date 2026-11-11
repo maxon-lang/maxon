@@ -103,7 +103,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(0)
+	let c = Counter.create(0)
 	c.increment()
 	return c.get()
 end 'main'
@@ -134,7 +134,7 @@ type Adder
 end 'Adder'
 
 function main() returns ExitCode
-	var a = Adder.create(0)
+	let a = Adder.create(0)
 	a.add(10)
 	a.add(32)
 	return a.getTotal()
@@ -200,7 +200,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(10)
+	let c = Counter.create(10)
 	c.increment()
 	c.increment()
 	c.decrement()
@@ -233,7 +233,7 @@ type Value
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value.create(0)
+	let v = Value.create(0)
 	v.add(10)
 	v.add(20)
 	v.add(12)

@@ -36,7 +36,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function makeClone() returns ItemArray
-		var src = ItemArray.create(0)
+		let src = ItemArray.create(0)
 		src.push(Item.create("first clone item long enough for heap", value: 10))
 		src.push(Item.create("second clone item long enough for heap", value: 20))
 		return src.clone()
@@ -97,7 +97,7 @@ end 'Outer'
 typealias OuterArray = Array with Outer
 
 function makeClone() returns OuterArray
-		var src = OuterArray.create(0)
+		let src = OuterArray.create(0)
 		src.push(Outer.create(Mid.create(Leaf.create("a nested label long enough to reach the heap", value: 7))))
 		return src.clone()
 		// src and its whole three-level element graph are freed when this function returns
@@ -175,7 +175,7 @@ type Holder
 end 'Holder'
 typealias Holders = Array with Holder
 function main() returns ExitCode
-	var a = Holders.create(0)
+	let a = Holders.create(0)
 	print("{a.count()}\n")
 	a.push(Holder.create(try __ManagedFile.openRead(b"no-such-file.bin".managed) otherwise return 3))
 
@@ -210,12 +210,12 @@ typealias IntList = List with Integer
 typealias ListArray = Array with IntList
 
 function makeClone() returns ListArray
-	var src = ListArray.create(0)
-	var a = IntList.create()
+	let src = ListArray.create(0)
+	let a = IntList.create()
 	a.append(10)
 	a.append(20)
 	src.push(a)
-	var b = IntList.create()
+	let b = IntList.create()
 	b.append(30)
 	src.push(b)
 	return src.clone()
@@ -267,8 +267,8 @@ end 'Holder'
 typealias Holders = Array with Holder
 
 function makeClone() returns Holders
-	var src = Holders.create(0)
-	var w = StrList.create()
+	let src = Holders.create(0)
+	let w = StrList.create()
 	w.append("first list element, long enough to need a heap record")
 	w.append("second list element, long enough to need a heap record")
 	src.push(Holder.create(w))
@@ -317,8 +317,8 @@ function firstOf(candidates StringArrayArray) returns String
 end 'firstOf'
 
 function main() returns ExitCode
-	var outer = StringArrayArray.create(0)
-	var inner = StringArray.create(0)
+	let outer = StringArrayArray.create(0)
+	let inner = StringArray.create(0)
 	inner.push("a hit long enough to reach the heap")
 	outer.push(inner)
 	print("{firstOf(outer)}\n")
@@ -344,8 +344,8 @@ is a read of freed memory rather than a wrong number.
 typealias StringArrayArray = Array with StringArray
 
 function makeClone() returns StringArrayArray
-	var src = StringArrayArray.create(0)
-	var inner = StringArray.create(0)
+	let src = StringArrayArray.create(0)
+	let inner = StringArray.create(0)
 	inner.push("first inner string, long enough to need a heap record")
 	inner.push("second inner string, long enough to need a heap record")
 	src.push(inner)
@@ -394,8 +394,8 @@ typealias RecArray = Array with Rec
 typealias RecBuckets = Array with RecArray
 
 function makeClone() returns RecBuckets
-	var src = RecBuckets.create(0)
-	var bucket = RecArray.create(0)
+	let src = RecBuckets.create(0)
+	let bucket = RecArray.create(0)
 	bucket.push(Rec.create("a bucketed record name long enough to reach the heap", value: 41))
 	src.push(bucket)
 	return src.clone()
@@ -428,10 +428,10 @@ lets the source be dropped while the slice is still read.
 typealias StringArrayArray = Array with StringArray
 
 function makeSlice() returns StringArrayArray
-	var src = StringArrayArray.create(0)
-	var first = StringArray.create(0)
+	let src = StringArrayArray.create(0)
+	let first = StringArray.create(0)
 	first.push("dropped inner string, long enough to need a heap record")
-	var second = StringArray.create(0)
+	let second = StringArray.create(0)
 	second.push("kept inner string, long enough to need a heap record")
 	src.push(first)
 	src.push(second)
@@ -466,9 +466,9 @@ typealias StringArrayArray = Array with StringArray
 typealias StringArrayArrayArray = Array with StringArrayArray
 
 function makeClone() returns StringArrayArrayArray
-	var src = StringArrayArrayArray.create(0)
-	var mid = StringArrayArray.create(0)
-	var leaf = StringArray.create(0)
+	let src = StringArrayArrayArray.create(0)
+	let mid = StringArrayArray.create(0)
+	let leaf = StringArray.create(0)
 	leaf.push("the deepest string, long enough to need a heap record")
 	mid.push(leaf)
 	src.push(mid)
@@ -510,8 +510,8 @@ typealias StrList = List with String
 typealias StrListArray = Array with StrList
 
 function makeClone() returns StrListArray
-	var src = StrListArray.create(0)
-	var words = StrList.create()
+	let src = StrListArray.create(0)
+	let words = StrList.create()
 	words.append("first list element, long enough to need a heap record")
 	words.append("second list element, long enough to need a heap record")
 	src.push(words)
@@ -549,19 +549,19 @@ inner array — and every String inside it — twice.
 typealias StringArrayArray = Array with StringArray
 
 function main() returns ExitCode
-	var dest = StringArrayArray.create(0)
-	var first = StringArray.create(0)
+	let dest = StringArrayArray.create(0)
+	let first = StringArray.create(0)
 	first.push("destination inner string, long enough to allocate")
 	dest.push(first)
 
-	var src = StringArrayArray.create(0)
-	var second = StringArray.create(0)
+	let src = StringArrayArray.create(0)
+	let second = StringArray.create(0)
 	second.push("appended inner string, long enough to allocate")
 	src.push(second)
 
 	dest.append(src)
 
-	view appended = try dest.get(1) otherwise return 91
+	let appended = try dest.get(1) otherwise return 91
 	let s = try appended.get(0) otherwise return 92
 
 	print("{dest.count()} {src.count()}\n{s}\n")
@@ -595,7 +595,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 export function runA()
-	var src = ItemArray.create(0)
+	let src = ItemArray.create(0)
 	src.push(Item.create("first item long enough to heap allocate", value: 10))
 	let copy = src.clone()
 	print("a {copy.count()}\n")
@@ -613,7 +613,7 @@ end 'Holder'
 typealias Holders = Array with Holder
 
 export function runB()
-	var a = Holders.create(0)
+	let a = Holders.create(0)
 	print("b {a.count()}\n")
 end 'runB'
 
@@ -649,13 +649,13 @@ end 'Box'
 typealias Boxes = Array with Box
 
 function main() returns ExitCode
-	var a = Boxes.create(0)
+	let a = Boxes.create(0)
 	a.push(Box.create(1))
-	var b = a.clone()
-	var e = try b.get(0) otherwise return 91
+	let b = a.clone()
+	let e = try b.get(0) otherwise return 91
 	e.n = 9
-	view first = try a.get(0) otherwise return 92
-	view second = try b.get(0) otherwise return 93
+	let first = try a.get(0) otherwise return 92
+	let second = try b.get(0) otherwise return 93
 	print("{first.n} {second.n}\n")
 	return 0
 end 'main'
@@ -684,12 +684,12 @@ end 'Box'
 typealias BoxList = List with Box
 
 function main() returns ExitCode
-	var src = BoxList.create()
+	let src = BoxList.create()
 	src.append(Box.create(1))
-	var c = src.clone()
-	var e = try c.get(0) otherwise return 91
+	let c = src.clone()
+	let e = try c.get(0) otherwise return 91
 	e.n = 9
-	view s = try src.get(0) otherwise return 92
+	let s = try src.get(0) otherwise return 92
 	print("{s.n}\n")
 	return 0
 end 'main'
@@ -718,12 +718,12 @@ end 'Box'
 typealias BoxMap = Map with (Count, Box)
 
 function main() returns ExitCode
-	var src = BoxMap.create()
+	let src = BoxMap.create()
 	src.upsert(1, value: Box.create(1))
-	var c = src.clone()
-	var e = try c.get(1) otherwise return 91
+	let c = src.clone()
+	let e = try c.get(1) otherwise return 91
 	e.n = 9
-	view s = try src.get(1) otherwise return 92
+	let s = try src.get(1) otherwise return 92
 	print("{s.n}\n")
 	return 0
 end 'main'

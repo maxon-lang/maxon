@@ -35,7 +35,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = IntPromiseArray.create(0)
+	let held = IntPromiseArray.create(0)
 	held.push(async work(1))
 	held.clear()
 	return 0
@@ -66,7 +66,7 @@ function work(n Integer) returns Integer throws WorkError
 end 'work'
 
 function main() returns ExitCode
-	var held = CheckedPromiseArray.create(0)
+	let held = CheckedPromiseArray.create(0)
 	held.push(async work(1))
 	held.clear()
 	return 0
@@ -97,7 +97,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = JobArray.create(0)
+	let held = JobArray.create(0)
 	held.push(Job.start(async work(1)))
 	held.clear()
 	return 0
@@ -129,7 +129,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = PromiseBoxArray.create(0)
+	let held = PromiseBoxArray.create(0)
 	held.push(PromiseBox.wrap(async work(1)))
 	held.clear()
 	return 0
@@ -157,7 +157,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = SlotArray.create(0)
+	let held = SlotArray.create(0)
 	held.push(Slot.running(async work(1)))
 	held.clear()
 	return 0
@@ -180,7 +180,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var held = EntryArray.create(0)
+	let held = EntryArray.create(0)
 	held.push((1, async work(1)))
 	held.clear()
 	return 0
@@ -203,7 +203,7 @@ end 'Label'
 typealias LabelArray = Array with Label
 
 function main() returns ExitCode
-	var held = LabelArray.create(0)
+	let held = LabelArray.create(0)
 	held.push(Label.named("held {1 + 1}"))
 	return 0
 end 'main'
@@ -232,7 +232,7 @@ end 'Cell'
 typealias CellArray = Array with Cell
 
 function main() returns ExitCode
-	var held = CellArray.create(0)
+	let held = CellArray.create(0)
 	held.push(Cell.of(3, high: 4))
 
 	let cell = try held.get(0) otherwise panic("one was pushed")

@@ -379,7 +379,7 @@ enum JsonByte
 end 'JsonByte'
 
 function main() returns ExitCode
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	out.push(JsonByte.lBracket)                     // pushes 0x5B
 	out.push(JsonByte.space)
 	let first = try out.get(0) otherwise 0
@@ -658,7 +658,7 @@ end 'kindOf'
 
 function main() returns ExitCode
 	let s = Shape.square(3)
-	print("{kindOf(s.rawValue)}\n")    // square
+	print("{kindOf(s.rawValue as Amount)}\n")    // square
 	return 0
 end 'main'
 ```

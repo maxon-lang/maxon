@@ -365,7 +365,7 @@ export function checkTypeReferenceCycles(project Project, signatures ProgramSign
 		return
 	end 'theUniverseIsUnreadable'
 
-	view graph = buildTypeReferenceGraph(project, signatures: signatures)
+	let graph = buildTypeReferenceGraph(project, signatures: signatures)
 
 	match blameForTypeCycles(project, graph: graph) 'blame'
 		none then return
@@ -461,7 +461,7 @@ end 'typeDeclEarlier'
 // A fourth source is not a declaration at all and so is a pass of its own below — the CONFORMERS of every
 // interface those three named.
 function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) returns TypeCycleGraph
-	var graph = TypeCycleGraph.create(signatures.genericInstanceCount())
+	let graph = TypeCycleGraph.create(signatures.genericInstanceCount())
 
 	for (name, _) in project.structTypes 'eachStructName'
 		graph.declareAggregate(name)
@@ -476,7 +476,7 @@ function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) 
 
 		for index in 0 upto layout.fieldTypes.count() 'eachField'
 			let fieldType = try layout.fieldTypes.get(index) otherwise panic("buildTypeReferenceGraph: fieldTypes.get OOB at {index} below count {layout.fieldTypes.count()}")
-			view fieldName = try layout.fieldNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.fieldTypes.count()} field types against {layout.fieldNames.count()} names — `StructLayout.addField` is the one writer of both")
+			let fieldName = try layout.fieldNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.fieldTypes.count()} field types against {layout.fieldNames.count()} names — `StructLayout.addField` is the one writer of both")
 			graph.addEdge(owner, target: typeCycleTargetOf(fieldType, typeNames: project.typeNames), label: TypeCycleEdgeLabel.field(fieldName))
 		end 'eachField'
 	end 'eachStruct'
@@ -485,8 +485,8 @@ function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) 
 		let owner = graph.nodeOfDeclaredAggregate(name)
 
 		for index in 0 upto layout.casePayloads.count() 'eachCase'
-			view caseName = try layout.caseNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.casePayloads.count()} payload lists against {layout.caseNames.count()} case names — `EnumLayout.addCase` is the one writer of both")
-			view payloads = try layout.casePayloads.get(index) otherwise panic("buildTypeReferenceGraph: casePayloads.get OOB at {index} below count {layout.casePayloads.count()}")
+			let caseName = try layout.caseNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.casePayloads.count()} payload lists against {layout.caseNames.count()} case names — `EnumLayout.addCase` is the one writer of both")
+			let payloads = try layout.casePayloads.get(index) otherwise panic("buildTypeReferenceGraph: casePayloads.get OOB at {index} below count {layout.casePayloads.count()}")
 
 			for payload in payloads 'eachPayload'
 				graph.addEdge(owner, target: typeCycleTargetOf(payload.declaredType, typeNames: project.typeNames), label: TypeCycleEdgeLabel.casePayload(caseName, member: payload.name))
@@ -539,7 +539,7 @@ function addConformerEdges(project Project, signatures ProgramSignatures, graph 
 		return
 	end 'noReferenceNamedAnInterface'
 
-	var names = NameRoster.create(project.structTypes.count() + project.enumTypes.count(), zeroed: false)
+	let names = NameRoster.create(project.structTypes.count() + project.enumTypes.count(), zeroed: false)
 
 	for (name, _) in project.structTypes 'eachDeclaredStruct'
 		names.push(name)
@@ -574,7 +574,7 @@ end 'addConformerEdges'
 // `name` is the CONFORMER name, which for a generic instance is its base's — see `addInstanceConformerEdges`,
 // which supplies the instance's node against that name.
 function addConformerEdgesOf(project Project, signatures ProgramSignatures, graph TypeCycleGraph, name ByteArray, conformer CsrIndex)
-	var reached = InterfaceNameSet.create()
+	let reached = InterfaceNameSet.create()
 
 	if let declaredNames = try declaredConformanceIndex(project).get(name) 'declaresAConformance'
 		collectDeclaredInterfaceClosure(project.interfaces, declaredNames: declaredNames, into: reached)

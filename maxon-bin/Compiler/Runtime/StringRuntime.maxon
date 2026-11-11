@@ -489,7 +489,7 @@ end 'bytesAreSingleByteGraphemes'
 // `GlobalDataTable.RdataPayloadAlignment`, applied by `appendRdataPayload` to every payload of every
 // kind — the one writer of a slot's offset, which is the only place that can promise it.
 function stringBlobBytes(bytes ByteArray) returns immutable ByteArray
-	var blob = ByteArray.create(0) as isolated ByteArray
+	let blob = ByteArray.create(0) as isolated ByteArray
 
 	modify blob 'fill'
 		blob.append(bytes)
@@ -512,7 +512,7 @@ end 'stringBlobBytes'
 // and the door every other file comes through; an `export` here advertised a second way to assemble the
 // record that would skip the blob registration the offset seed depends on.
 function buildStringRecordBytes(blobOffset ByteOffset, byteLength BytePos, singleByteGraphemes bool) returns ByteArray
-	var record = immortalRecordBytes(blobOffset, length: byteLength as FullRangeInt, elementSize: ByteStringElementSize, elementDestroy: TrivialElementDestroy)
+	let record = immortalRecordBytes(blobOffset, length: byteLength as FullRangeInt, elementSize: ByteStringElementSize, elementDestroy: TrivialElementDestroy)
 	appendRecordSlot(record, expectedOffset: StringSingleByteGraphemesOffset, value: singleByteGraphemesFlagValue(singleByteGraphemes))
 
 	if record.count() != StringRecordBytes 'sizeDrift'
@@ -665,10 +665,10 @@ end 'installStringRuntime'
 // `buffer@0`/`length@8`, which is all this reads. The bytes are BORROWED: this reads through them and
 // never frees, so a literal argument needs no decref.
 function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStream)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
@@ -677,12 +677,12 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 	let length = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(length, addrId: record, offset: StringLengthOffset, valueType: StdType.i64))
 
-	var header = module.addBlock(func, label: b"wrhdr", heat: BlockHeat.normal)
-	var lap = module.addBlock(func, label: b"wrlap", heat: BlockHeat.normal)
-	var reissue = module.addBlock(func, label: b"wrretry", heat: BlockHeat.cold)
-	var answered = module.addBlock(func, label: b"wranswer", heat: BlockHeat.normal)
-	var advance = module.addBlock(func, label: b"wradv", heat: BlockHeat.normal)
-	var finished = module.addBlock(func, label: b"wrdone", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"wrhdr", heat: BlockHeat.normal)
+	let lap = module.addBlock(func, label: b"wrlap", heat: BlockHeat.normal)
+	let reissue = module.addBlock(func, label: b"wrretry", heat: BlockHeat.cold)
+	let answered = module.addBlock(func, label: b"wranswer", heat: BlockHeat.normal)
+	let advance = module.addBlock(func, label: b"wradv", heat: BlockHeat.normal)
+	let finished = module.addBlock(func, label: b"wrdone", heat: BlockHeat.normal)
 
 	let nothingWritten = emitConst(module, block: entry, value: 0, ids: ids)
 	emitBranchCarrying(module, from: entry, to: header, values: argsOf(nothingWritten))
@@ -738,13 +738,13 @@ end 'buildStreamWrite'
 // the operator path already types its result `boolean` at the call site (`Parser.emitStrEqCall`),
 // so this is the type it was always claiming to return.
 export function buildStrEq(module StdModule, name ByteArray)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofTag(ValueTypeTag.boolean))), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofTag(ValueTypeTag.boolean))), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var notEqual = module.addBlock(func, label: b"notEqual", heat: BlockHeat.normal)
-	var lenMatch = module.addBlock(func, label: b"lenMatch", heat: BlockHeat.normal)
-	var allMatch = module.addBlock(func, label: b"allMatch", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let notEqual = module.addBlock(func, label: b"notEqual", heat: BlockHeat.normal)
+	let lenMatch = module.addBlock(func, label: b"lenMatch", heat: BlockHeat.normal)
+	let allMatch = module.addBlock(func, label: b"allMatch", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let a = 0
@@ -785,8 +785,8 @@ end 'buildStrEq'
 // explicitly because `retypeBlockArgs` runs in `lowerMaxonToStd`, which these post-pipeline functions never
 // pass through.
 export function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur IrBlock, aBuf ValueId, bBuf ValueId, len ValueId, allMatch IrBlock, notEqual IrBlock, ids ValueMinter)
-	var header = module.addBlock(func, label: b"cmphdr", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"cmpbody", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"cmphdr", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"cmpbody", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 
@@ -846,21 +846,21 @@ end 'RenderedSign'
 // blocks those dominate; only the loop-variant `digits`/`v`/`pos` ride block-args. `len` is computed once
 // in `writeSetup`, which dominates `done`.
 function buildIntegerToString(module StdModule, signedness IntegerSignedness)
-	var func = IrFunction.createFromStd(integerToStringName(signedness), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(integerToStringName(signedness), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var zeroCase = module.addBlock(func, label: b"zeroCase", heat: BlockHeat.normal)
-	var setup = module.addBlock(func, label: b"setup", heat: BlockHeat.normal)
-	var countLoop = module.addBlock(func, label: b"countLoop", heat: BlockHeat.normal)
-	var writeSetup = module.addBlock(func, label: b"writeSetup", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let zeroCase = module.addBlock(func, label: b"zeroCase", heat: BlockHeat.normal)
+	let setup = module.addBlock(func, label: b"setup", heat: BlockHeat.normal)
+	let countLoop = module.addBlock(func, label: b"countLoop", heat: BlockHeat.normal)
+	let writeSetup = module.addBlock(func, label: b"writeSetup", heat: BlockHeat.normal)
 
 	// The write loop is HEADER-GUARDED (test at the top), following `buildStrEq`/`buildStrCopy`'s shape so
 	// the three string builders read the same way. It is a STYLE choice, not a correctness one: a
 	// bottom-tested loop would compile too.
-	var writeHeader = module.addBlock(func, label: b"writeHeader", heat: BlockHeat.normal)
-	var writeBody = module.addBlock(func, label: b"writeBody", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let writeHeader = module.addBlock(func, label: b"writeHeader", heat: BlockHeat.normal)
+	let writeBody = module.addBlock(func, label: b"writeBody", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let value = 0 as ValueId
@@ -1028,12 +1028,12 @@ end 'emitI64BinOp'
 // 0 or 1, so a single branch picks the rendering; each branch writes its bytes with fixed offsets and
 // returns its length.
 function buildBoolToString(module StdModule)
-	var func = IrFunction.createFromStd(BoolToStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(BoolToStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var trueCase = module.addBlock(func, label: b"trueCase", heat: BlockHeat.normal)
-	var falseCase = module.addBlock(func, label: b"falseCase", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let trueCase = module.addBlock(func, label: b"trueCase", heat: BlockHeat.normal)
+	let falseCase = module.addBlock(func, label: b"falseCase", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let value = 0 as ValueId
@@ -1099,16 +1099,16 @@ end 'buildBoolToString'
 // than calling `__mm_decref` at runtime, because it must read `parent`/`buffer` out of the record on
 // the last-owner path BEFORE that record is freed — the generic decref would reclaim the box first.
 function buildStrDecref(module StdModule)
-	var func = IrFunction.createFromStd(StrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(StrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
-	var countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
-	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
-	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
-	var baseJoin = module.addBlock(func, label: b"baseJoin", heat: BlockHeat.normal)
-	var freeRec = module.addBlock(func, label: b"freeRec", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
+	let countable = module.addBlock(func, label: b"countable", heat: BlockHeat.normal)
+	let lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
+	let release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
+	let baseJoin = module.addBlock(func, label: b"baseJoin", heat: BlockHeat.normal)
+	let freeRec = module.addBlock(func, label: b"freeRec", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0
@@ -1132,7 +1132,7 @@ function buildStrDecref(module StdModule)
 	// answer rather than a case. It is the SAME pair `__managed_decref` uses, so a String and an Array cannot
 	// disagree about what a record owns.
 	let base = emitOwedAllocationBase(module, func: func, cur: release, join: baseJoin, record: record, ids: ids)
-	var afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
+	let afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(freeRec.id))
 
 	// freeRec: release the record itself, its external bytes (if it had any) already released.
@@ -1210,10 +1210,10 @@ end 'emitInlineStringBuffer'
 // identical path: its bytes are COPIED into the new inline box, so the clone frees its own copy and never the
 // immortal blob. `singleByteGraphemes@48` is carried over from the source, an accurate copy at no extra cost.
 function buildStrClone(module StdModule)
-	var func = IrFunction.createFromStd(StrCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(StrCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let src = 0
 
@@ -1237,13 +1237,13 @@ end 'buildStrClone'
 // exists for. Asking the wider question would clone every owned String reaching a merge, which is a lost
 // write, not merely a cost. This is the one provenance test that wants a specific value rather than a sign.
 function buildStrRetain(module StdModule)
-	var func = IrFunction.createFromStd(StrRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(StrRetainName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var copyImmortal = module.addBlock(func, label: b"copy", heat: BlockHeat.normal)
-	var coOwn = module.addBlock(func, label: b"coown", heat: BlockHeat.normal)
-	var join = module.addBlock(func, label: b"owned", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let copyImmortal = module.addBlock(func, label: b"copy", heat: BlockHeat.normal)
+	let coOwn = module.addBlock(func, label: b"coown", heat: BlockHeat.normal)
+	let join = module.addBlock(func, label: b"owned", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0
@@ -1261,7 +1261,7 @@ function buildStrRetain(module StdModule)
 	emitBranchCarrying(module, from: copyImmortal, to: join, values: argsOf(copied))
 
 	let increfed = ids.mint()
-	module.appendOp(coOwn, op: StdOp.call(increfed, callee: MmIncrefName, args: argsOf(record)))
+	module.appendOp(coOwn, op: StdOp.call(increfed, callee: MmIncrefStickyName, args: argsOf(record)))
 	emitBranchCarrying(module, from: coOwn, to: join, values: argsOf(record))
 
 	module.setTerminator(join, op: StdOp.ret(owned))
@@ -1270,13 +1270,13 @@ function buildStrRetain(module StdModule)
 end 'buildStrRetain'
 
 function buildStrUnshare(module StdModule)
-	var func = IrFunction.createFromStd(StrUnshareName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(StrUnshareName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var copyShared = module.addBlock(func, label: b"copy", heat: BlockHeat.normal)
-	var keepSole = module.addBlock(func, label: b"sole", heat: BlockHeat.normal)
-	var join = module.addBlock(func, label: b"owned", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let copyShared = module.addBlock(func, label: b"copy", heat: BlockHeat.normal)
+	let keepSole = module.addBlock(func, label: b"sole", heat: BlockHeat.normal)
+	let join = module.addBlock(func, label: b"owned", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0
@@ -1315,16 +1315,16 @@ end 'buildStrUnshare'
 // AND A Δ0 FROM IT IS NOT EVIDENCE**: the generated scale corpus emits neither call, so every
 // column reads flat — the CORPUS blind spot, which the CPU column does not cure.
 function buildStrFromBytes(module StdModule)
-	var func = IrFunction.createFromStd(StrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(StrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var scan = module.addBlock(func, label: b"scan", heat: BlockHeat.normal)
-	var scanBody = module.addBlock(func, label: b"scanBody", heat: BlockHeat.normal)
-	var notHigh = module.addBlock(func, label: b"notHigh", heat: BlockHeat.normal)
-	var stillSingleByte = module.addBlock(func, label: b"stillSingleByte", heat: BlockHeat.normal)
-	var sawMultiByteGrapheme = module.addBlock(func, label: b"sawMultiByteGrapheme", heat: BlockHeat.normal)
-	var build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let scan = module.addBlock(func, label: b"scan", heat: BlockHeat.normal)
+	let scanBody = module.addBlock(func, label: b"scanBody", heat: BlockHeat.normal)
+	let notHigh = module.addBlock(func, label: b"notHigh", heat: BlockHeat.normal)
+	let stillSingleByte = module.addBlock(func, label: b"stillSingleByte", heat: BlockHeat.normal)
+	let sawMultiByteGrapheme = module.addBlock(func, label: b"sawMultiByteGrapheme", heat: BlockHeat.normal)
+	let build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0
@@ -1381,10 +1381,10 @@ end 'buildStrFromBytes'
 // says in so many words that *"the two sets coincide today and nothing here relies on that"* — so reading a
 // buffer through the buffer record's own constants is what keeps that true.
 function buildStrOfBuffer(module StdModule)
-	var func = IrFunction.createFromStd(StrOfBufferName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(StrOfBufferName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let src = 0
 	let singleByteGraphemes = 1
@@ -1419,13 +1419,13 @@ end 'buildStrOfBuffer'
 // stated rather than assumed: a String LITERAL never reaches the write below because its blob is
 // NUL-terminated by construction.
 function buildMmToCString(module StdModule)
-	var func = IrFunction.createFromStd(MmToCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(MmToCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var probe = module.addBlock(func, label: b"nulprobe", heat: BlockHeat.normal)
-	var alreadyTerminated = module.addBlock(func, label: b"nulok", heat: BlockHeat.normal)
-	var terminateInPlace = module.addBlock(func, label: b"nulwrite", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let probe = module.addBlock(func, label: b"nulprobe", heat: BlockHeat.normal)
+	let alreadyTerminated = module.addBlock(func, label: b"nulok", heat: BlockHeat.normal)
+	let terminateInPlace = module.addBlock(func, label: b"nulwrite", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let src = 0
@@ -1467,15 +1467,15 @@ end 'buildMmToCString'
 // must copy. One block of its own: the strlen walk and the copy add their own, and `emitCStringToManaged`
 // hands back the block execution continues in.
 function buildMmFromCString(module StdModule)
-	var func = IrFunction.createFromStd(MmFromCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(MmFromCStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let cstr = 0
 
 	let record = ids.mint()
-	var built = emitCStringToManaged(module, func: func, cur: entry, cstr: cstr, record: record, ids: ids)
+	let built = emitCStringToManaged(module, func: func, cur: entry, cstr: cstr, record: record, ids: ids)
 	module.setTerminator(built, op: StdOp.ret(record))
 
 	module.functions.push(func)
@@ -1519,12 +1519,12 @@ end 'buildMmFromCString'
 // buffer either (`__str_decref` reaches that release only as the last owner). That is one more guarantee
 // than a bare `return managed` gives, which relies on the caller keeping the String alive.
 function buildStrBytesView(module StdModule)
-	var func = IrFunction.createFromStd(StrBytesViewName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(StrBytesViewName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var coOwn = module.addBlock(func, label: b"bvcoown", heat: BlockHeat.normal)
-	var ret = module.addBlock(func, label: b"bvret", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let coOwn = module.addBlock(func, label: b"bvcoown", heat: BlockHeat.normal)
+	let ret = module.addBlock(func, label: b"bvret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
@@ -1533,7 +1533,7 @@ function buildStrBytesView(module StdModule)
 	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: ret.id, elseBlockId: coOwn.id))
 
 	let increfed = ids.mint()
-	module.appendOp(coOwn, op: StdOp.call(increfed, callee: MmIncrefName, args: argsOf(record)))
+	module.appendOp(coOwn, op: StdOp.call(increfed, callee: MmIncrefStickyName, args: argsOf(record)))
 	module.setTerminator(coOwn, op: StdOp.branch(ret.id))
 
 	module.setTerminator(ret, op: StdOp.ret(record))

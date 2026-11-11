@@ -88,12 +88,14 @@ type TraceCaptureControl
 	function stop() returns TraceKeyArray
 		self.capturing.publish(false)
 
-		return try await self.recorder.finish(sendTimeout: ForeverMs) otherwise (e) 'refused'
+		let finished = try await self.recorder.finish(sendTimeout: ForeverMs) otherwise (e) 'refused'
 			match e 'why'
 				mailboxFull then return TraceKeyArray.create(0)
 				serviceStopped then panic("TraceCapture.stopCapture: the recorder service is gone")
 			end 'why'
 		end 'refused'
+
+		return merge finished
 	end 'stop'
 end 'TraceCaptureControl'
 

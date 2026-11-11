@@ -11,14 +11,10 @@ category: concurrency
 
 ⚖ **A SERVICE MESSAGE RUNS ON A GREEN THREAD THE SCHEDULER MAY PUT ON ANY OS THREAD, SO THE ONLY MODULE-LEVEL
 STATE IT CAN REACH IS A `let`.** A module-level `var` and a `static var` do not exist
-(`specs/module-var-removed.md`), and a module-level `let` and a `static let` are the shared words: a record
-`__module_init` builds is marked shared before `main`, so the counts every handler steps on it are atomic, and a
-word written once before any green thread exists has no second writer to race.
-
-**The rule asks what a message can run, not whether the program spawns.** A `let` whose graph no share walk can
-mark (an OS handle) is refused when the message itself, a function it reaches by name, a closure call in the
-message could land on, or a witness dispatch could land on reads it (E3163); the same `let` read only by
-functions no message reaches stays unmarked, because only `main` counts it.
+(`specs/module-var-removed.md`), and a module-level `let` and a `static let` are the shared words: each is
+immutable image data, one copy every thread reads, and a word written once before any green thread exists has no
+second writer to race. An initializer calls nothing (E3220), so a global can neither build a record at run time nor
+start a service.
 
 ### What makes a type a service
 
@@ -34,10 +30,8 @@ functions no message reaches stays unmarked, because only `main` counts it.
 | shape | verdict |
 |---|---|
 | a handler writes `self.<field>` | **legal** — a service's fields are reached by one green thread |
-| a handler reads a module-level `let` | **legal** — a `let` record `__module_init` builds is marked shared before `main`, so the counts every handler steps on it are atomic |
-| a handler — or a function one reaches — reads a `let` whose graph no share walk can mark (an OS handle) | **refused** (E3163) — nothing could make the counts the handlers step on it atomic |
-| the same `let`, read only by functions no handler reaches | **legal** — only `main` counts it, so it stays unmarked |
-| a global initializer reaches a `spawn` | **refused** (E3164) — the `let`s are marked only once the last initializer returns, so no other green thread may exist before then |
+| a handler reads a module-level `let` | **legal** — a `let` is immutable image data, so no handler steps a count on it |
+| a global initializer calls a function, `spawn` included | **refused** (E3220) — an initializer calls nothing, so no service starts before `main` |
 
 ⇒ **Mutable state a service shares with its callers is a field of the service, reached through a reply, an
 argument, or a `SharedValue`.** A reply is a `Promise` the awaiter owns, so the answer does not depend on how
@@ -184,29 +178,12 @@ scaled=42
 42
 ```
 
-<!-- test: every-handler-may-co-own-a-global-built-at-run-time -->
-**A `let` WHOSE RECORD `__module_init` BUILDS IS READ BY EVERY THREAD TOO, AND ITS COUNT IS ONE WORD THEY ALL
-STEP.** A `let` no image can hold — here a factory with a loop in it — is a counted record, and a handler that
-puts it somewhere that outlives a statement takes an owner on it and gives the owner back. Eight handlers
-doing that at once on different OS threads step one refcount, so the record is marked shared once it is built,
-exactly as a published value is, and every count on it from then on is atomic. Unmarked, a lost increment frees the
-roster under a reader and a lost decrement leaks it.
+<!-- test: every-handler-may-co-own-a-module-let -->
+**A MODULE `let` ARRAY IS READ BY EVERY THREAD, AND NO HANDLER STEPS A COUNT ON IT.** A handler that puts it
+somewhere that outlives a statement keeps a reference to image data and gives it back. Eight handlers doing that at
+once on different OS threads read one array, so the program ends with every round counted and nothing leaked.
 ```maxon
-type Roster
-	export var names as NameArray
-
-	static function create(count Integer) returns Self
-		var names = NameArray.create(0)
-
-		for i in 0 upto count 'fill'
-			names.push("member {i}")
-		end 'fill'
-
-		return Self{names: names}
-	end 'create'
-end 'Roster'
-
-let roster = Roster.create(4)
+let roster = NameArray from ["member 0", "member 1", "member 2", "member 3"]
 
 type Churner
 	var served as Integer
@@ -219,8 +196,8 @@ type Churner
 		var held = 0 as Count
 
 		for _ in 0 upto rounds 'eachRound'
-			var kept = HeldNamesArray.create(0)
-			kept.push(roster.names)
+			let kept = HeldNamesArray.create(0)
+			kept.push(roster)
 			held = held + kept.count()
 		end 'eachRound'
 
@@ -229,7 +206,7 @@ type Churner
 end 'Churner'
 
 function main() returns ExitCode
-	var replies = ChurnReplyArray.create(0)
+	let replies = ChurnReplyArray.create(0)
 
 	for _ in 0 upto ChurnerCount 'eachChurner'
 		let h = spawn Churner.create()
@@ -242,7 +219,7 @@ function main() returns ExitCode
 		held = held + (await r)
 	end 'eachReply'
 
-	print("held={held} names={roster.names.count()}\n")
+	print("held={held} names={roster.count()}\n")
 	return 0
 end 'main'
 
@@ -251,7 +228,7 @@ let RoundsPerChurner = 200000
 
 typealias Integer = int(i64.min to i64.max)
 typealias NameArray = Array with String
-typealias HeldNamesArray = Array with readonly NameArray
+typealias HeldNamesArray = Array with immutable NameArray
 typealias ChurnReplyArray = Array with Promise with Integer
 ```
 ```stdout
@@ -261,126 +238,12 @@ held=1600000 names=4
 0
 ```
 
-<!-- test: error.a-message-may-not-read-a-let-no-share-walk-can-mark -->
-**AND A `let` THE MARK CANNOT REACH IS REFUSED WHERE A MESSAGE READS IT.** An OS handle has a destructor and no
-walk, so nothing can make the counts on a record holding one atomic. The refusal sits at the read the message
-reaches, and the note is the declaration.
+<!-- test: lets-reaching-one-array-are-read-through-one-table -->
+**ONE ARRAY BEHIND SEVERAL `let`s.** `table` holds `names` twice and `names`'s own slot holds it too, so the
+array is reached through three `let`s, and the handler reads it through each of them.
 ```maxon
-type Listening
-	export var listener as TcpListener
-
-	static function open() returns Self
-		let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("bind")
-		return Self{listener: listener}
-	end 'open'
-end 'Listening'
-
-let listening = Listening.open()
-
-type Porter
-	var asked as Integer
-
-	static function create() returns Self
-		return Self{asked: 0}
-	end 'create'
-
-	export function port() returns Integer
-		self.asked = self.asked + 1
-		return listening.listener.port()
-	end 'port'
-end 'Porter'
-
-function main() returns ExitCode
-	let h = spawn Porter.create()
-	let p = try await h.port() otherwise 0
-	return (0 if p > 0 else 1) as ExitCode
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E3163: <fragment>:22:10: the message `Porter.port` reads the module-level `listening`, and it holds a `Listening` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance. A message runs on a green thread the scheduler may put on any OS thread, so the counts every message steps on `listening` must be atomic, and no share walk can mark it so. Keep it in a field of the service that reads it
-note: <fragment>:11:5: `listening` is declared here
-```
-
-<!-- test: a-let-no-message-reads-may-hold-an-os-handle-beside-a-service -->
-**THE SAME `let`, READ ONLY BY `main`, IS LEGAL.** No message reaches `listening`, so nothing but `main`'s green
-thread counts it and it needs no mark.
-```maxon
-type Listening
-	export var listener as TcpListener
-
-	static function open() returns Self
-		let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise panic("bind")
-		return Self{listener: listener}
-	end 'open'
-end 'Listening'
-
-let listening = Listening.open()
-
-type Doubler
-	var asked as Integer
-
-	static function create() returns Self
-		return Self{asked: 0}
-	end 'create'
-
-	export function double(n Integer) returns Integer
-		self.asked = self.asked + 1
-		return n * 2
-	end 'double'
-end 'Doubler'
-
-function main() returns ExitCode
-	let h = spawn Doubler.create()
-	let d = try await h.double(21) otherwise 0
-	let open = listening.listener.port() > 0
-	print("d={d} open={open}\n")
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```stdout
-d=42 open=true
-```
-```exitcode
-0
-```
-
-<!-- test: lets-reaching-one-record-are-marked-through-one-visit-table -->
-**ONE VISIT TABLE SERVES EVERY `let`.** `pair` holds `bag` twice and `bag`'s own slot holds it too, so the
-record has three owners, all of them `let`s. Marked `let` by `let`, the second and third meetings would read
-as owners no walk met; one table across every `let` counts all three and the program starts.
-```maxon
-type Bag
-	export var n as Integer
-	export var names as NameArray
-
-	static function create() returns Self
-		var names = NameArray.create(0)
-
-		for i in 0 upto 3 'fill'
-			names.push("name {i}")
-		end 'fill'
-
-		return Self{n: 7, names: names}
-	end 'create'
-end 'Bag'
-
-type Pair
-	export let left as immutable Bag
-	export let right as immutable Bag
-
-	static function around(bag immutable Bag) returns Self
-		return Self{left: bag, right: bag}
-	end 'around'
-end 'Pair'
-
-let bag = Bag.create()
-let pair = aroundBag()
-
-function aroundBag() returns Pair
-	return Pair.around(bag)
-end 'aroundBag'
+let names = NameArray from ["name 0", "name 1", "name 2"]
+let table = NameTable from [names, names]
 
 type Reader
 	var asked as Integer
@@ -391,7 +254,8 @@ type Reader
 
 	export function read() returns Integer
 		self.asked = self.asked + 1
-		return pair.right.n + (bag.names.count() as Integer)
+		let last = try table.get(1) otherwise names
+		return (last.count() + names.count() + table.count()) as Integer
 	end 'read'
 end 'Reader'
 
@@ -403,33 +267,20 @@ function main() returns ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 typealias NameArray = Array with String
+typealias NameTable = Array with immutable NameArray
 ```
 ```stdout
-n=10
+n=8
 ```
 ```exitcode
 0
 ```
 
-<!-- test: error.a-spawn-a-global-initializer-reaches-is-refused -->
-**A GLOBAL INITIALIZER MAY NOT START A SERVICE.** `Box.start` spawns `Reader` while `box` is being built, before
-`roster` is marked shared, so `Reader.read` could step `roster`'s plain count from another OS thread.
+<!-- test: error.a-global-initializer-may-not-start-a-service -->
+**A GLOBAL INITIALIZER MAY NOT START A SERVICE.** `Box.start` spawns `Reader`, and a spawn is a call: no initializer
+makes one, so a service starts in `main`, or in a function `main` calls.
 ```maxon
-type Roster
-	export var names as NameArray
-
-	static function create(count Integer) returns Self
-		var names = NameArray.create(0)
-
-		for i in 0 upto count 'fill'
-			names.push("member {i}")
-		end 'fill'
-
-		return Self{names: names}
-	end 'create'
-end 'Roster'
-
-let roster = Roster.create(4)
+let roster = NameArray from ["member 0", "member 1", "member 2", "member 3"]
 
 type Reader
 	var asked as Integer
@@ -440,7 +291,7 @@ type Reader
 
 	export function read() returns Integer
 		self.asked = self.asked + 1
-		return roster.names.count()
+		return roster.count()
 	end 'read'
 end 'Reader'
 
@@ -465,8 +316,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias NameArray = Array with String
 ```
 ```maxoncstderr
-error E3164: <fragment>:35:11: `Box.start` spawns `Reader`, and a module-level global's initializer reaches it — initializers run before `main`, and the `let`s every message may read are marked shared only once the last one returns, so a service started here could step a plain count on one concurrently with the mark or read a global not yet built. Start the service in `main`, or in a function `main` calls
-note: <fragment>:41:5: the initializer of `box`, which reaches it
+error E3220: <fragment>:27:11: the initializer of 'box' calls 'Box.start': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: a-service-program-may-use-the-stdlibs-trace-capture -->
@@ -530,19 +380,10 @@ n=10 keys=0
 <!-- test: a-handler-reads-a-module-let-during-the-exit-drain -->
 **THE EXIT DRAIN RUNS HANDLERS, SO EVERY MODULE `let` A HANDLER READS MUST OUTLIVE IT.** `main` sends three
 messages and returns without awaiting any; the drain that runs them comes after `main`, and each handler reads
-a `let` whose record `__module_init` built at run time. The globals are released only once the drain has
-finished.
+module `let`s. The globals are released only once the drain has finished.
 ```maxon
-type Label
-	export let text as String
-	export let weight as Integer
-
-	static function create(weight Integer) returns Self
-		return Self{text: "a label built at run time, weight {weight}", weight: weight}
-	end 'create'
-end 'Label'
-
-let label = Label.create(40)
+let labels = NameArray from ["a label held as image data"]
+let weight = 40
 
 type Printer
 	var printed as Integer
@@ -552,8 +393,10 @@ type Printer
 	end 'create'
 
 	export function show(n Integer)
+		let label = try labels.get(0) otherwise "none"
+
 		self.printed = self.printed + 1
-		print("{n}: {label.text} ({label.weight + n})\n")
+		print("{n}: {label} ({weight + n})\n")
 	end 'show'
 end 'Printer'
 
@@ -565,11 +408,12 @@ function main() returns ExitCode
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias NameArray = Array with String
 ```
 ```stdout
-1: a label built at run time, weight 40 (41)
-2: a label built at run time, weight 40 (42)
-3: a label built at run time, weight 40 (43)
+1: a label held as image data (41)
+2: a label held as image data (42)
+3: a label held as image data (43)
 ```
 ```exitcode
 0
@@ -583,11 +427,7 @@ type Label
 	export let text as String
 	export let weight as Integer
 
-	static let standard = Label.create(40)
-
-	static function create(weight Integer) returns Self
-		return Self{text: "a label built at run time, weight {weight}", weight: weight}
-	end 'create'
+	static let standard = Label{text: "a label held as image data", weight: 40}
 end 'Label'
 
 type Printer
@@ -613,9 +453,9 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
-1: a label built at run time, weight 40 (41)
-2: a label built at run time, weight 40 (42)
-3: a label built at run time, weight 40 (43)
+1: a label held as image data (41)
+2: a label held as image data (42)
+3: a label held as image data (43)
 ```
 ```exitcode
 0

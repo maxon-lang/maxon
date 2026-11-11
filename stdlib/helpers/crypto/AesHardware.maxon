@@ -13,7 +13,7 @@
 	// the decryption keys of a 16-, 24- or 32-byte `key`.
 	export function aesHardwareSchedule(key ByteArray) returns AesSchedule
 		let rounds = (key.count() shr aesHardwareKeyWordShift) + aesRoundsOverKeyWords
-		var schedule = AesSchedule.create((rounds + 1) * aesHardwareScheduleRoundBytes)
+		let schedule = AesSchedule.create((rounds + 1) * aesHardwareScheduleRoundBytes)
 		__Builtins.aesExpandKey(schedule, key)
 
 		return schedule
@@ -61,7 +61,7 @@
 			throw AesKeyStreamError.counterOverflow
 		end 'overflow'
 
-		var block = ByteArray.create(aesBlockBytes, zeroed: false)
+		let block = ByteArray.create(aesBlockBytes, zeroed: false)
 		block.append(nonce)
 		let counterWord = first as AesWord
 		__Builtins.appendBigEndian(block, counterWord as OrderedWord, aesHardwareCounterBytes)
@@ -102,7 +102,7 @@
 	end 'aesHardwareXorKeyStreamAppend'
 
 	module function aesHardwareXorKeyStream(schedule AesSchedule, nonce ByteArray, counter AesCounter, data ByteArray) returns ByteArray throws AesKeyStreamError
-		var output = ByteArray.create(0)
+		let output = ByteArray.create(0)
 		try aesHardwareXorKeyStreamAppend(output, schedule: schedule, nonce: nonce, counter: counter, data: data)
 
 		return output
@@ -111,7 +111,7 @@
 	module function aesHardwareXorKeyStreamPastFirstBlock(schedule AesSchedule, nonce ByteArray, counter AesCounter, data ByteArray, output ByteArray) returns AesPair throws AesKeyStreamError
 		let blocks = (data.count() + aesBlockBytes - 1) shr aesBlockShift
 		let counterBlock = try aesHardwareCounterBlock(nonce, firstCounter: counter, streamBlocks: blocks + aesHardwareMaskLead)
-		var mask = ByteArray.create(aesBlockBytes)
+		let mask = ByteArray.create(aesBlockBytes)
 		aesHardwareCtrWalk(mask, at: 0, schedule: schedule, counterBlock: counterBlock, firstBlock: 0, blocks: aesHardwareMaskLead)
 
 		aesHardwareXorAppend(output, schedule: schedule, counterBlock: counterBlock, firstBlock: aesHardwareMaskLead, data: data, blocks: blocks)

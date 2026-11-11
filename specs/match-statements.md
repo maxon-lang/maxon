@@ -2068,7 +2068,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	h.assertUsable()
 	h.slot = Slot.filled(7)
 	h.assertUsable()

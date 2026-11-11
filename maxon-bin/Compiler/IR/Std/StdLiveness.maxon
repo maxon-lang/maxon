@@ -103,7 +103,7 @@ module type StdLiveness
 	var stack as BlockPositionColumn
 
 	module static function create() returns StdLiveness
-		var empty = CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0))
+		let empty = CsrGraph.create(CsrColumn.create(0), list: CsrColumn.create(0))
 		return Self{blockCount: 0, nodeCount: 0, blockSucc: empty, succ: empty, pred: empty, definedIn: BlockPositionColumn.create(0), useValue: CsrColumn.create(0), useBlock: CsrColumn.create(0), useGraph: empty, noCuts: BlockPositionColumn.create(0), reach: QueriedReach.create(), queried: BoolArray.create(0), counts: RegCountColumn.create(0), liveNodes: BlockPositionColumn.create(0), liveNodeCount: 0, reads: StdValueUseSet.createRecordingIds(), def: StdDefinedValues.create(), marked: WalkStampColumn.create(0), stamp: 0, stack: BlockPositionColumn.create(0)}
 	end 'create'
 
@@ -157,7 +157,7 @@ module type StdLiveness
 		end 'onlyHeadersAreAsked'
 
 		self.counts.refill(self.blockCount, value: 0)
-		var counter = PeakCounter.create(heldParams, queried: self.queried, counts: self.counts, cap: cap)
+		let counter = PeakCounter.create(heldParams, queried: self.queried, counts: self.counts, cap: cap)
 		self.walkLiveRanges(valueBound, visitor: counter)
 
 		return counter.capped()
@@ -192,7 +192,7 @@ module type StdLiveness
 	end 'askAboutContinuations'
 
 	module function continuationsByDescendingRank() returns BlockPositionColumn
-		var cuts = BlockPositionColumn.create(0)
+		let cuts = BlockPositionColumn.create(0)
 		let cutCount = self.nodeCount - self.blockCount
 
 		if not self.reach.isEnabled() 'ranksAreUnknown'
@@ -203,8 +203,8 @@ module type StdLiveness
 			return cuts
 		end 'ranksAreUnknown'
 
-		var rankColumn = CsrColumn.create(cutCount, zeroed: false)
-		var cutColumn = CsrColumn.create(cutCount, zeroed: false)
+		let rankColumn = CsrColumn.create(cutCount, zeroed: false)
+		let cutColumn = CsrColumn.create(cutCount, zeroed: false)
 
 		for cut in 0 upto cutCount 'eachCutRank'
 			rankColumn.push(self.reach.rankOfNode(self.blockCount + cut))
@@ -234,14 +234,14 @@ module type StdLiveness
 	end 'nodeAt'
 
 	function segmentedSuccessors(cutBlock BlockPositionColumn) returns CsrGraph
-		var tail = IndexColumn.create(self.blockCount)
+		let tail = IndexColumn.create(self.blockCount)
 
 		for block in 0 upto self.blockCount 'eachBlock'
 			try tail.set(block, value: block) otherwise panic("StdLiveness.segmentedSuccessors: tail.set OOB at {block}")
 		end 'eachBlock'
 
-		var edgeFrom = CsrColumn.create(cutBlock.count() + self.blockSucc.list.count(), zeroed: false)
-		var edgeTo = CsrColumn.create(cutBlock.count() + self.blockSucc.list.count(), zeroed: false)
+		let edgeFrom = CsrColumn.create(cutBlock.count() + self.blockSucc.list.count(), zeroed: false)
+		let edgeTo = CsrColumn.create(cutBlock.count() + self.blockSucc.list.count(), zeroed: false)
 
 		for cut in 0 upto cutBlock.count() 'eachCut'
 			let block = try cutBlock.get(cut) otherwise panic("StdLiveness.segmentedSuccessors: cutBlock.get OOB at {cut}")
@@ -411,8 +411,8 @@ end 'StdLiveness'
 
 // The predecessor relation of `succ`: the same edges, read the other way round.
 module function reversedGraph(succ CsrGraph) returns CsrGraph
-	var edgeFrom = CsrColumn.create(succ.list.count(), zeroed: false)
-	var edgeTo = CsrColumn.create(succ.list.count(), zeroed: false)
+	let edgeFrom = CsrColumn.create(succ.list.count(), zeroed: false)
+	let edgeTo = CsrColumn.create(succ.list.count(), zeroed: false)
 
 	for node in 0 upto succ.nodeCount() 'eachNode'
 		for k in 0 upto succ.degree(node) 'eachSuccessor'

@@ -51,7 +51,7 @@ end 'Holder'
 typealias FHolder = Holder with UnaryOp
 
 function main() returns ExitCode
-	var h = FHolder.create()
+	let h = FHolder.create()
 	h.add(double)
 	let f = try h.first() otherwise panic("Holder.first: one element was added")
 	return f(21)

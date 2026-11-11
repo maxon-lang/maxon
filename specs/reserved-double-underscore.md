@@ -278,11 +278,8 @@ compiler EMITS into this program …`.
 
 ⚠ **WHAT CREATES THE PAIR DEPENDS ON THE RUNTIME, so "just don't call it" is not the rule it looks like.**
 For a USAGE-GATED symbol the CALL is what installs the compiler's own copy, so the declaration alone is
-clean (`stdlib-overlay-write-stdout-alone-is-legal`, below). But `__module_init` / `__maxon_global_cleanup` are
-installed on `globals.count() != 0` alone, so declaring one of THOSE collides with **no call anywhere** —
-the same E4015, from a `Builtins.maxon` carrying one managed global and an uncalled
-`export function __module_init()`, pinned by
-`error.stdlib-overlay-module-init-collides-with-the-compilers-own`. ⇒ **Do NOT cure this by gating the call or steering it to the surviving definition** — that trades
+clean (`stdlib-overlay-write-stdout-alone-is-legal`, below). A program whose globals are all image data installs no `__module_init` / `__maxon_global_cleanup`, so a
+declaration of either is the rooted-name door the next paragraph pins. ⇒ **Do NOT cure this by gating the call or steering it to the surviving definition** — that trades
 a loud refusal for a silent miscompile, since `print("x")` would then bind to the author's declaration
 instead of the runtime's, which is the one that knows the String record's layout. The refusal is at the
 DUPLICATE, and it is total (no binary is written either way). ⇒ **And the panic stays, behind a
@@ -312,8 +309,8 @@ owns …`, positioned at the declaration.
 
 ⚠ **REFUSED WHETHER OR NOT THE COMPILER EMITS ITS OWN COPY HERE, AND THAT IS THE RULING RATHER THAN AN
 IMPLEMENTATION ACCIDENT.** Simply not rooting a parsed hit would COMPILE — the declaration is dead code and
-would be pruned — but then `__module_init` would be legal in a program with no managed global and E4015 in
-one with a managed global: the legality of a NAME decided by which runtime floor some other program happens
+would be pruned — but then `__module_init` would be legal in a program that installs no runtime under that name and E4015 in
+one that does: the legality of a NAME decided by which runtime floor some other program happens
 to carry. ⇒ **The rule is about the name.** Both detections raise the one code (E4015,
 `IrDeclarationTakesCompilerOwnedName`), because a second number for one rule is the same disease one level
 up. ⇒ **And `main` carries the OPPOSITE premise at the same root set** — it must be the author's — so the two
@@ -701,40 +698,6 @@ end 'main'
 ```
 ```exitcode
 42
-```
-
-<!-- test: error.stdlib-overlay-module-init-collides-with-the-compilers-own -->
-
-⭐⭐ **THE MAXON-TIER `FunctionNameIndex` DOOR, AND IT NEEDS NO CALL ANYWHERE.** `__module_init` is
-installed on `globals.count() != 0` alone, so a program with ONE managed global holds the
-compiler's copy and this declaration both — a pair with MIXED provenance, which is the one shape
-`refuseDuplicateFunctionName` reports rather than panics. The index that meets it first is a Maxon-tier
-one (`StdlibSource.reachableMaxonFunctionNames` / `IR/PassPipeline.run`), upstream of every runtime
-installer. The global is a `let` whose value a function builds at run time, so it has a slot and `__module_init` builds it. Drop it
-and the program has no managed global, no `__module_init` is installed, and the
-next case's door — not this one — is what answers.
-```maxon
-// --- stdlib-overlay: Builtins.maxon
-export function __module_init()
-end '__module_init'
-// --- file: main.maxon
-typealias Integer = int(i64.min to i64.max)
-typealias IntArray = Array with Integer
-
-function grown() returns IntArray
-	var items = IntArray.create(0)
-	items.push(1)
-	return items
-end 'grown'
-
-let items = grown()
-
-function main() returns ExitCode
-	return items.count() as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E4015: <fragment>:3:17: declaration of '__module_init' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it
 ```
 
 <!-- test: error.stdlib-overlay-write-stdout-collides-at-the-std-tier -->

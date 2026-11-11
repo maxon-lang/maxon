@@ -593,7 +593,7 @@ export type CompileTimings
 
 	export static function create() returns CompileTimings
 		let phaseCount = CompilePhase.allCases.count()
-		var rowKinds = PhaseRowKindArray.create(phaseCount, zeroed: false)
+		let rowKinds = PhaseRowKindArray.create(phaseCount, zeroed: false)
 
 		for _ in CompilePhase.allCases 'eachPhase'
 			rowKinds.push(PhaseRowKind.bracketedOnTheMainThread)
@@ -663,7 +663,7 @@ export type CompileTimings
 	// The pool rows as the mask the memory table selects by (`PhaseMemoryColumns.totalDeltaWhere`): every
 	// one, or those breaking `driver` down.
 	export function poolRowMask() returns BoolArray
-		var mask = BoolArray.create(CompilePhase.allCases.count(), zeroed: false)
+		let mask = BoolArray.create(CompilePhase.allCases.count(), zeroed: false)
 
 		for phase in CompilePhase.allCases 'eachPhase'
 			mask.push(self.isMeasuredOnAPool(phase))
@@ -673,7 +673,7 @@ export type CompileTimings
 	end 'poolRowMask'
 
 	export function poolRowsUnder(driver CompilePhase) returns BoolArray
-		var mask = BoolArray.create(CompilePhase.allCases.count(), zeroed: false)
+		let mask = BoolArray.create(CompilePhase.allCases.count(), zeroed: false)
 
 		for phase in CompilePhase.allCases 'eachPhase'
 			mask.push(self.isPoolBreakdownOf(phase, driver: driver))
@@ -816,7 +816,7 @@ end 'poolRemainderRow'
 export function compileTimingsReport(timings CompileTimings) returns String
 	let total = timings.total
 
-	var msg = StringBuilder.create()
+	let msg = StringBuilder.create()
 	msg.append("compile timings — total {millisText(total.nanos)} ms wall, {total.cpuTicks} CPU ticks\n")
 
 	// The header's label carries the same indent every row's does, so it pads to the
@@ -850,7 +850,7 @@ end 'compileTimingsReport'
 // can compare "liveness" directly against "parse" — the question the table exists to
 // answer is where the compile's time goes, not where the allocator's does.
 function regAllocSubPhaseRows(timings CompileTimings, total PhaseCost) returns String
-	var msg = StringBuilder.create()
+	let msg = StringBuilder.create()
 
 	for sub in RegAllocPhase.allCases 'eachSub'
 		msg.append(poolTimingRow("{SubPhaseIndent}{sub.name}", cost: timings.regAlloc.costOf(sub), total: total))
@@ -970,7 +970,7 @@ end 'padCount'
 // replaced — append one space, `width` times — reallocated and recopied the whole run PER SPACE, and
 // every cell of every table paid it.
 function repeated(unit String, count ColumnWidth) returns String
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 	out.reserve(unit.byteLength() * (count as BytePos))
 
 	for _ in 0 upto count 'each'

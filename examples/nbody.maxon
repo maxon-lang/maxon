@@ -78,7 +78,7 @@ function offsetMomentum(bodies PlanetArray, n Count)
 	var pz = 0.0 as FullRangeFloat
 
 	for i in 0 upto n 'momentum_loop'
-		view body = try bodies.get(i) otherwise panic("offsetMomentum: i < n and the array is sized n")
+		let body = try bodies.get(i) otherwise panic("offsetMomentum: i < n and the array is sized n")
 		px = px + body.vx * body.mass
 		py = py + body.vy * body.mass
 		pz = pz + body.vz * body.mass
@@ -86,7 +86,7 @@ function offsetMomentum(bodies PlanetArray, n Count)
 
 	// `get` hands back the element itself, not a copy of it, so assigning a field
 	// updates the body in the array; there is no write-back to make.
-	var sun = try bodies.get(0) otherwise panic("offsetMomentum: the array is sized n >= 1")
+	let sun = try bodies.get(0) otherwise panic("offsetMomentum: the array is sized n >= 1")
 	let sunMassDivisor = solarMass as PositiveDivisor
 	sun.vx = -px / sunMassDivisor
 	sun.vy = -py / sunMassDivisor
@@ -125,11 +125,11 @@ end 'energy'
 // below updates the body in the array and no write-back is needed.
 function advance(bodies PlanetArray, n Count, dt FullRangeFloat)
 	for i in 0 upto n 'outer_advance'
-		var bi = try bodies.get(i) otherwise panic("advance: i < n and the array is sized n")
+		let bi = try bodies.get(i) otherwise panic("advance: i < n and the array is sized n")
 		var j = i + 1
 
 		while j < n 'inner_advance'
-			var bj = try bodies.get(j) otherwise panic("advance: j < n and the array is sized n")
+			let bj = try bodies.get(j) otherwise panic("advance: j < n and the array is sized n")
 			let dx = bi.x - bj.x
 			let dy = bi.y - bj.y
 			let dz = bi.z - bj.z
@@ -155,7 +155,7 @@ function advance(bodies PlanetArray, n Count, dt FullRangeFloat)
 
 	// Update positions
 	for k in 0 upto n 'update_positions'
-		var body = try bodies.get(k) otherwise panic("advance: k < n and the array is sized n")
+		let body = try bodies.get(k) otherwise panic("advance: k < n and the array is sized n")
 		body.x = body.x + dt * body.vx
 		body.y = body.y + dt * body.vy
 		body.z = body.z + dt * body.vz
@@ -170,7 +170,7 @@ function main() returns ExitCode
 
 	let timeStep = 0.01
 
-	var bodies = PlanetArray.create(0)
+	let bodies = PlanetArray.create(0)
 
 	// initBodies pushes all bodyCount bodies; the array starts empty.
 

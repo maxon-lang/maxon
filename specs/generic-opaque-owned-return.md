@@ -144,7 +144,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("alpha string long enough to force a heap allocation")
 	sc.push("beta string long enough to force a heap allocation")
 	let taken = sc.takeOne()
@@ -354,7 +354,7 @@ route the retirement of the synthesized `Array` will eventually send them down.
 typealias Strings = Array with String
 
 function main() returns ExitCode
-	var xs = Strings.create(0)
+	let xs = Strings.create(0)
 	xs.push("alpha string long enough to force a heap allocation")
 	xs.push("beta string long enough to force a heap allocation")
 	let ys = xs.map(function(s) gives s)

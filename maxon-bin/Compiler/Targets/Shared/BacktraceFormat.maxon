@@ -254,7 +254,7 @@ export type InlineRangeBuilder
 
 	function extendOrOpen(index ElementIndex, codeStart CodeOffset, codeEnd CodeOffset)
 		if self.ranges.count() != 0 'mayExtend'
-			var last = try self.ranges.get(self.ranges.count() - 1) otherwise panic("InlineRangeBuilder.extendOrOpen: ranges.get OOB at the last of {self.ranges.count()}")
+			let last = try self.ranges.get(self.ranges.count() - 1) otherwise panic("InlineRangeBuilder.extendOrOpen: ranges.get OOB at the last of {self.ranges.count()}")
 
 			if last.site == index and last.codeEnd == codeStart 'adjacentSameSite'
 				last.codeEnd = codeEnd
@@ -326,8 +326,8 @@ end 'InlineFrameTables'
 // order, so the order is a fact of the layout — asserted rather than re-established by a sort.
 export function buildInlineFrameTableBytes(tables InlineFrameTables, roster ShadowSpellingRoster) returns ByteArray
 	assertInlineTableStrides()
-	var table = ByteArray.create(0)
-	var names = ByteArray.create(0)
+	let table = ByteArray.create(0)
+	let names = ByteArray.create(0)
 	let namesStart = (InlineTableOffSites as FullRangeInt) + InlineSiteEntryBytes * tables.sites.count() as FullRangeInt + InlineRangeEntryBytes * tables.ranges.count() as FullRangeInt
 	writeDword(table, value: tables.sites.count() as MachineWord)
 	writeDword(table, value: tables.ranges.count() as MachineWord)
@@ -418,7 +418,7 @@ export type AsyncUnsafeTable
 
 	function extendOrOpen(codeStart CodeOffset, codeEnd CodeOffset)
 		if self.ranges.count() != 0 'mayExtend'
-			var last = try self.ranges.get(self.ranges.count() - 1) otherwise panic("AsyncUnsafeTable.extendOrOpen: ranges.get OOB at the last of {self.ranges.count()}")
+			let last = try self.ranges.get(self.ranges.count() - 1) otherwise panic("AsyncUnsafeTable.extendOrOpen: ranges.get OOB at the last of {self.ranges.count()}")
 
 			if codeStart <= last.codeEnd and codeStart >= last.codeStart 'touchesTheLast'
 				if codeEnd > last.codeEnd 'extends'
@@ -435,7 +435,7 @@ end 'AsyncUnsafeTable'
 
 export function buildAsyncUnsafeTableBytes(table AsyncUnsafeTable) returns ByteArray
 	assertAsyncUnsafeStride()
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	writeDword(bytes, value: table.ranges.count() as MachineWord)
 	var prevEnd = 0 as CodeOffset
 
@@ -528,7 +528,7 @@ end 'faultPanicLinePrefix'
 
 // A fresh buffer: `faultWords` answers an immortal literal, which is never appended to in place.
 export function faultLineOf(kind HardwareFaultKind, tail ByteArray) returns immutable ByteArray
-	var line = ByteArray.create(0) as isolated ByteArray
+	let line = ByteArray.create(0) as isolated ByteArray
 
 	modify line 'fill'
 		line.append(FaultPanicPrefix)
@@ -624,7 +624,7 @@ export function recordChunkSymbol(symbols DebugSymbolArray, chunk FunctionCodeCh
 		panic("recordChunkSymbol: '{String.from(MainThreadEntryName)}' is laid out after {symbols.count()} symbols — it must directly follow '{String.from(EntryPointName)}', whose name its frames are reported under")
 	end 'notSecond'
 
-	view preceding = try symbols.get(0) otherwise panic("recordChunkSymbol: the one symbol counted above is at index 0")
+	let preceding = try symbols.get(0) otherwise panic("recordChunkSymbol: the one symbol counted above is at index 0")
 
 	if not preceding.name.equals(EntryPointName) 'notTheStubsTail'
 		panic("recordChunkSymbol: '{String.from(MainThreadEntryName)}' follows '{String.from(preceding.name)}' — it must directly follow '{String.from(EntryPointName)}', whose name its frames are reported under")
@@ -646,9 +646,9 @@ end 'symbolFlagsByte'
 // sort, because a sort would silently paper over a layout that had stopped ascending.
 export function buildSymbolTableBytes(symbols DebugSymbolArray, roster ShadowSpellingRoster) returns ByteArray
 	let headerSize = SymbolTableHeaderBytes + SymbolTableEntryBytes * symbols.count()
-	var names = ByteArray.create(0)
-	var flags = ByteArray.create(0)
-	var table = ByteArray.create(headerSize, zeroed: false)
+	let names = ByteArray.create(0)
+	let flags = ByteArray.create(0)
+	let table = ByteArray.create(headerSize, zeroed: false)
 	writeDword(table, value: symbols.count() as MachineWord)
 
 	// The flags run starts where the names end, and the names are built below — so the column is written

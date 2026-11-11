@@ -39,8 +39,8 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 	Expect.greaterThan(windowLimit, than: windowStart, message: "the call statement's bytes run from {hexSpelling(windowStart)} up to the next line's first row, and that row is not after it")
 	Expect.atMost((windowLimit - windowStart), than: WidestSearchedWindow, message: "this case arms every byte of the call statement one at a time, and {windowLimit - windowStart} bytes is more than a call through a value can be")
 
-	var probed = SidecarNumberArray.create(0)
-	var probeCommands = StringArray.create(0)
+	let probed = SidecarNumberArray.create(0)
+	let probeCommands = StringArray.create(0)
 
 	for offset in windowStart upto windowLimit 'eachByteOfTheStatement'
 		probed.push(offset)
@@ -54,8 +54,8 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 
 	Expect.equal(answers.count(), expected: probed.count(), message: "{probed.count()} arming requests are {probed.count()} answers, one per request. It printed: {listedLines(eventKinds(probeEvents))}. {probeSaid}")
 
-	var starts = SidecarNumberArray.create(0)
-	var refusedForItsClass = StringArray.create(0)
+	let starts = SidecarNumberArray.create(0)
+	let refusedForItsClass = StringArray.create(0)
 
 	for (iter, offset) in probed.withIterator() 'eachAnswer'
 		let answer = eventAt(answers, index: iter.index() as EventIndex)
@@ -74,7 +74,7 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 
 	let callOffset = try starts.get(CallInstructionRow) otherwise panic("{IndirectCallCaseLabel}: the instruction count was asserted on the line above")
 
-	var armings = StringArray.create(0)
+	let armings = StringArray.create(0)
 	armings.push("{BreakCommand} {exactOffsetTarget(callOffset)}")
 	armings.push("{BreakCommand} {lineTarget(anchorLine(staged.join(StagedProgramFileName), anchor: FirstCalleeAnchor))}")
 	armings.push("{BreakCommand} {lineTarget(anchorLine(staged.join(StagedProgramFileName), anchor: SecondCalleeAnchor))}")
@@ -95,13 +95,13 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 	Expect.equal(textOf(armed, node: armed.root, key: FunctionKey), expected: CallingFunctionName, message: "the armed offset is inside the function that makes the call. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	var walked = StringArray.create(0)
+	let walked = StringArray.create(0)
 
 	for stop in stops 'eachStop'
 		walked.push("{textOf(stop, node: stop.root, key: FunctionKey)} {textOf(stop, node: stop.root, key: OffsetKey)}")
 	end 'eachStop'
 
-	var wanted = StringArray.create(0)
+	let wanted = StringArray.create(0)
 	wanted.push("{CallingFunctionName} {hexSpelling(callOffset)}")
 	wanted.push(FirstCalleeName)
 	wanted.push("{CallingFunctionName} {hexSpelling(callOffset)}")
@@ -111,7 +111,7 @@ test 'a breakpoint at an indirect call is armed rather than refused, and the one
 
 	Expect.equal(stops.count(), expected: StopsAtTheCallAndItsCallees, message: "⛔ ONE ARMED BYTE, THREE HITS, AND TWO DIFFERENT FUNCTIONS REACHED FROM IT. The loop runs three rounds, so the armed call is hit three times, and each hit is followed by a stop in whichever function the value named that round. A hit that is missed, or a resume that does not arrive at the callee, is a breakpoint at an indirect call that the driver plants and cannot get past. The session stopped: {listedLines(walked)}. It printed: {listedLines(eventKinds(events))}. {said}")
 
-	var wrong = StringArray.create(0)
+	let wrong = StringArray.create(0)
 
 	for (iter, stop) in stops.withIterator() 'eachOrderedStop'
 		let expected = try wanted.get(iter.index()) otherwise panic("{IndirectCallCaseLabel}: the stop count was asserted on the line above")

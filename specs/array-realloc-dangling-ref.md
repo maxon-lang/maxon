@@ -17,7 +17,7 @@ When an array grows, its backing buffer may be reallocated to a new address. A v
 Get a string from an array, push enough elements to reallocate the buffer several times, then clear the array. The string read first is still intact.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
+	let arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.get(0) otherwise ""
 
 	// Push enough elements to force multiple growths (capacity: 4 -> 8 -> 16 -> 32)
@@ -65,10 +65,10 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	arr.push(Item.create("first item {40 + 2} with a long name for heap allocation", value: 42))
 
-	view item = try arr.get(0) otherwise Item.create("", value: 0)
+	let item = try arr.get(0) otherwise Item.create("", value: 0)
 
 	// Force many growths
 	var i = 0 as Integer
@@ -102,7 +102,7 @@ first item 42 with a long name for heap allocation 42
 Get several elements, grow the array, then clear it. Every value read first is still intact.
 ```maxon
 function main() returns ExitCode
-	var arr = ["alpha {40 + 2} string that is long enough for heap allocation purposes",
+	let arr = ["alpha {40 + 2} string that is long enough for heap allocation purposes",
 						 "beta {40 + 2} string that is long enough for heap allocation purposes",
 						 "gamma {40 + 2} string that is long enough for heap allocation purposes"]
 

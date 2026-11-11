@@ -154,8 +154,8 @@ export function filterConditionalTokens(tokens TokenArray, facts ConditionFacts)
 		return tokens
 	end 'noDirectives'
 
-	var out = TokenArray.create(0)
-	var frames = DirectiveFrameArray.create(0)
+	let out = TokenArray.create(0)
+	let frames = DirectiveFrameArray.create(0)
 	var scan = 0 as ElementIndex
 
 	while scan < tokens.count() 'walk'
@@ -173,7 +173,7 @@ export function filterConditionalTokens(tokens TokenArray, facts ConditionFacts)
 			// dead region's condition tokens simply fall through the `not live` drop below, which is
 			// the same answer reached by the rule that was already there.
 			if regionLive 'liveParent'
-				var cursor = ConditionCursor.create(scan + 1)
+				let cursor = ConditionCursor.create(scan + 1)
 				let taken = try evaluateCondition(tokens, cursor: cursor, facts: facts)
 				try expectConditionEnd(tokens, cursor: cursor)
 				frames.push(DirectiveFrame.create(taken, takenAlready: taken, line: tok.line, column: tok.column))
@@ -201,7 +201,7 @@ export function filterConditionalTokens(tokens TokenArray, facts ConditionFacts)
 			// `branchLive` describes the arm that just ended and says nothing about whether the `#if`
 			// was reachable at all. Without it, an `#else` inside a dead outer branch goes live.
 			let enclosingLive = enclosingRegionIsLive(frames)
-			var frame = innermostFrame(frames)
+			let frame = innermostFrame(frames)
 			frame.branchLive = enclosingLive and not frame.takenAlready
 			frame.takenAlready = frame.takenAlready or frame.branchLive
 			scan = scan + 1
@@ -242,7 +242,7 @@ export function filterConditionalTokens(tokens TokenArray, facts ConditionFacts)
 	// The INNERMOST open region is the one named: its `#endif` is the missing one however many `#if`s
 	// enclose it.
 	if not frames.isEmpty() 'unterminated'
-		view open = innermostFrame(frames)
+		let open = innermostFrame(frames)
 		throw DirectiveError.unterminatedIf(open.line, column: open.column)
 	end 'unterminated'
 

@@ -167,11 +167,11 @@ was made, and the failed read is kept: every later connection that trusts the sy
 
 ```maxon
 function main() returns ExitCode
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 
 	try options.setApplicationProtocols(["h2", "http/1.1"]) otherwise return 1
 
-	var stream = try TlsClient.connect("example.com", port: 443, options: options) otherwise return 2
+	let stream = try TlsClient.connect("example.com", port: 443, options: options) otherwise return 2
 
 	_ = try stream.send("GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n") otherwise return 3
 
@@ -220,7 +220,7 @@ With client certificates asked for, the CertificateRequest names the subjects of
 
 ```maxon
 function serve(listener TlsListener) returns ExitCode
-	var stream = try listener.accept() otherwise return 1
+	let stream = try listener.accept() otherwise return 1
 	let request = try stream.recv(4096) otherwise return 2
 
 	_ = try stream.send("echo:{request}") otherwise return 3
@@ -233,7 +233,7 @@ function main() returns ExitCode
 	let chain = "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n"
 	let key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 	let identity = try TlsIdentity.fromPem(chain, key: key) otherwise return 1
-	var listener = try TlsListener.bind("127.0.0.1", port: 8443, options: TlsServerOptions.create(identity)) otherwise return 2
+	let listener = try TlsListener.bind("127.0.0.1", port: 8443, options: TlsServerOptions.create(identity)) otherwise return 2
 
 	return serve(listener)
 end 'main'
@@ -283,7 +283,7 @@ or found by this side, ends the stream: the error is thrown once and every later
 
 ```maxon
 function main() returns ExitCode
-	var stream = try TlsClient.connect("example.com", port: 443) otherwise return 1
+	let stream = try TlsClient.connect("example.com", port: 443) otherwise return 1
 	let negotiated = try stream.cipherSuite() otherwise return 2
 	let protocol = try stream.protocol() otherwise return 3
 	let suite = match negotiated 'suite'
@@ -462,7 +462,7 @@ With a root of your own and a client certificate:
 
 ```maxon
 function fetch(url String, root ByteArray, identity TlsIdentity) returns String
-	var tls = TlsClientOptions.create()
+	let tls = TlsClientOptions.create()
 
 	try tls.setTrustedRoots(RootCertificates from [root]) otherwise return "no usable root"
 	tls.setIdentity(identity)
@@ -596,11 +596,8 @@ connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are o
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
 | `accept()` | `HttpExchange` | `HttpServerError` | Take the next connection and the one request on it. An `OPTIONS *` is answered here, and the next connection taken. |
-| `serve(handler immutable HttpHandler)` | `HttpServeEnd` | — | Accept and answer until `close()`, a listener failure or the accept deadline, serving each connection in a service of its own. |
-| `close()` | — | — | Stop listening: a parked or later `accept()` throws `listenerClosed`, which ends `serve`. |
-
-`close()` writes the server, so the server it is called on is held in a `var`; through a `let` it is
-[E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord).
+| `serve(handler immutable HttpHandler)` | `HttpServeEnd` | — | Accept and answer until a listener failure, the accept deadline, or `.cancel()` on the promise of the `async` call that runs it, serving each connection in a service of its own. On a server already closed it returns `closed` at once. |
+| `close()` | — | — | Stop listening and release the port: a later `accept()` throws `listenerClosed`, and a later `serve` returns `closed`. A server running in an `async` call is lent to that coroutine, so it is cancelled first and closed after (see [Starting a Coroutine](/docs/language/async/#starting-a-coroutine)). |
 
 `serve` moves each accepted connection, a `TcpClient` or a `TlsStream`, to a service of its own, which reads its
 request and runs its handler. A client that stalls delays only its own connection, and a handler that computes
@@ -611,13 +608,11 @@ connection it took has finished.
 
 The handler is one frozen value every connection reads at once: `serve` takes it `immutable`, so the caller
 passes `freeze Handler.create(…)` or an `immutable` handler it received. A handler whose methods write one
-of its fields fails to conform to `HttpHandler` ([E3210](/docs/cli/error-codes/#e3210--semanticcapabilityconversionrefused)),
-and is refused again where `serve` sends the handler to the connection's thread (in `HttpServer.maxon`,
-[E3138](/docs/cli/error-codes/#e3138--semanticserviceargumentnotunique)). State the connections share, or the caller
+of its fields fails to conform to `HttpHandler` ([E3210](/docs/cli/error-codes/#e3210--semanticcapabilityconversionrefused)).
+State the connections share, or the caller
 reads when `serve` returns, lives in a [service](/docs/language/async/#services--spawn) the handler holds a handle
 to, as in the example below; give the handler a `handle.clone()` for each handle it keeps. A handler that
-holds an OS handle, a function value or a promise stops the program with exit code 96 at the first
-connection.
+holds an OS handle, a function value or a promise cannot be frozen for `serve`.
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -675,7 +670,7 @@ to the next connection. When the OS refuses one connection (`acceptInterrupted`)
 
 | Case | Meaning |
 |------|---------|
-| `closed` | `close()` was called |
+| `closed` | `serve` was called on a server already closed with `close()` |
 | `listenerFailed` | The listener failed (`acceptFailed`) |
 | `acceptDeadlinePassed` | The accept deadline passed (`acceptTimedOut`) |
 
@@ -763,9 +758,8 @@ lines ahead of the request line are skipped. Header lines follow [Header parsing
 | `respond(response HttpResponse)` | — | `HttpServerError` | Write the response and close the connection. Throws `alreadyResponded` on a second answer, `invalidResponse` for a response the rules below refuse, and `sendFailed` when the write fails or outlasts `writeDeadlineMs`. |
 | `respondWith(code StatusCode, body String, contentType String)` | — | `HttpServerError` | Answer a status, a body and its content type, as `respond` does. |
 
-`respond` and `respondWith` record that the exchange is answered, so an exchange from `accept()` is held in
-a `var` to answer it; through a `let` it is [E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord).
-A handler answers the `exchange` parameter `serve` hands it directly.
+`respond` and `respondWith` record that the exchange is answered, whether it came from `accept()` or is the
+`exchange` parameter `serve` hands a handler.
 
 Every response carries `Connection: close`, and a `Content-Length` computed from its body whenever its
 status allows a body: every status but 204 and 304, which end at their headers. The server writes both

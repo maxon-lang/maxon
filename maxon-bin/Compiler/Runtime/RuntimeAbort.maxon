@@ -31,8 +31,8 @@
 // `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")`: ordinary Maxon
 // reaching `osPanic` with a real line and a real message. Only a SYNTHESIZED runtime function, which has no
 // source line and no message to bake, needs a number instead.
-// ⇒ **THE NUMBERED ABORTS ARE CLOSED: 71 TO 126 ARE TAKEN BUT FOR 76, 80, 94 AND 108, WHICH ARE VACANT
-// AND STAY SO.** Reserving a vacated number would be this space defending against a claimant that
+// ⇒ **THE NUMBERED ABORTS ARE CLOSED: 71 TO 126 ARE TAKEN BUT FOR 76, 80, 94, 107, 108 AND 110, WHICH ARE
+// VACANT AND STAY SO.** Reserving a vacated number would be this space defending against a claimant that
 // no longer exists — the very thing the paragraph above rejects. A new runtime invariant check is a
 // `RuntimeFatal` case instead: every one exits `runtimeFatal` (70) and is told apart by its
 // `fatal error: <reason>` line on stderr. 127 and above are not ours either: 127 is the shell's
@@ -262,22 +262,11 @@ export enum RuntimeAbort
 	//
 	schedulerIdledAProcessorHoldingWork = 95
 
-	// ⭐⭐ **`WalkVisitTable.__mm_walk_settle`: a COUNTED record about to CROSS to another green thread has an
-	// owner outside the graph that crosses.** A send, a `spawn`'s state and a service reply MOVE their value
-	// whole, and a published registry value is SHARED; a counted record belongs to one green thread,
-	// which is what lets its count step plain. The static rules prove the ROOT sole; soleness is not
-	// transitive, so the graph below it is walked at run time (`__sole_<T>`, `__share_<T>`), counting
-	// the references to each record the graph holds. A record reached twice by two owners inside the
-	// graph crosses with both; a reachable counted record with more owners than the walk meets has one
-	// left behind on this thread — stepping a count the service now steps too, or free to write what a
-	// share froze — and there is no diagnostic road left: the sender's frame is already past every
-	// compile-time gate. Aborting on the sender's own green thread, before anything is enqueued, is
-	// the only answer that cannot corrupt the heap.
-	//
-	// ⚠ It reports a NUMBER and not the type's name for this enum's founding reason: the walk is a
-	// SYNTHESIZED Std function, and the abort road (`emitRuntimeAbort`) is `osExit`, not `osPanic` —
-	// `mrt_panic` prints a message but exits `PanicExitCode`, which is not this code.
-	transferredRecordNotSole = 96
+	// `__mm_walk_unwalkable`: a share walk reached the walk word of a conformer no walk can be built for — a generic
+	// conformer whose shared table names no instance, a record reaching an OS handle, or a promise. A value held at an
+	// interface type is walked through whichever conformer it holds, so the compile-time refusal the concrete doors make
+	// cannot be made about it; aborting before anything is published is that refusal's run-time form.
+	existentialNotWalkable = 96
 
 	// ⛔ `__sched_startm`: a machine was about to be created past `SchedRuntime.SchedMaxMachines` — Go's
 	// `checkmcount` and its `throw("thread exhaustion")` (`proc.go:976`), at Go's limit. A machine is an OS
@@ -347,12 +336,6 @@ export enum RuntimeAbort
 	// scheduler without it can starve `main` at one processor rather than fail.
 	schedulerMonitorUnstarted = 106
 
-	// `__np_pd_wait`: two green threads waited on ONE direction of one socket. A wait holds its direction word
-	// from its mark until its own thread resumes — published, or ended and not yet resumed — and a second mark
-	// in that span would take the word from it and lose one of the two threads, so this names the shape at the
-	// instruction that produced it rather than losing a thread silently.
-	netpollDoubleWait = 107
-
 	// `__np_pd_wait` / `__np_pd_wait_any`: a direction word still named THIS thread when its wait had already
 	// ended. Every road out of a wait takes the thread off each word it is published on and pays `__np_waiters`
 	// back for it; a word still naming the resuming thread means one of those roads did not, and clearing it
@@ -360,12 +343,6 @@ export enum RuntimeAbort
 	// shape — `emitGtStoresPending` never goes false again, so `__sched_checkdead` is disarmed for the life of
 	// the process and the idle tail polls for ever.
 	netpollUnhookMissed = 109
-
-	// `__np_pd_deadline`: a per-direction deadline was set on a descriptor a MULTI-SOURCE wait is parked on.
-	// A group's deadline is the group's own word and rides one timer entry under the group's tag; a member's
-	// `pd.rd` is 0, so the re-arm would find nothing to disarm and add a SECOND entry under a `(gt, tag)` that
-	// `__gt_timer_check` admits exactly one of. No caller does this today, and this is what keeps it that way.
-	netpollGroupMemberDeadline = 110
 
 	// `__gt_subp_yield_read`, and the collect a cancelled socket transfer makes: a wait on a MINTED source ended
 	// without the completion packet that is the only proof the kernel has finished with the thread's buffer and
@@ -398,8 +375,8 @@ export enum RuntimeAbort
 
 	// `__np_pd_wait` / `__np_pd_wait_any`: a resumed wait found its direction word, in the life of the record it
 	// marked, holding neither verdict its endings leave nor its own thread. The word is held for the waiting
-	// thread until it resumes and a second wait is refused meanwhile (`netpollDoubleWait`), so another party
-	// wrote a word only this thread may settle — and whatever it stood for would be lost if the resume cleared it.
+	// thread until it resumes and no second wait begins meanwhile, so another party wrote a word only this
+	// thread may settle — and whatever it stood for would be lost if the resume cleared it.
 	netpollHoldLost = 115
 
 	// `__gt_run_main`, resolving `MAXON_PREEMPT` for the monitor it is about to start: the value is neither
@@ -413,8 +390,7 @@ export enum RuntimeAbort
 	// (`GtRuntime.SubpSlotCollector`): a release under a collect still holding the slot, a second collect on a
 	// slot one already holds, or a collect on a slot a release has taken — and a collect whose group wait found a
 	// member's poll record outside the life the pass began in. A collect over a slot that holds no child, or
-	// two collects marking one pipe word, has no answer, so it stops here, as two readers on one socket stop at
-	// `netpollDoubleWait`.
+	// two collects marking one pipe word, has no answer, so it stops here.
 	subpCollectSlotReleased = 117
 
 	// `__managed_vacate` and `__gt_promise_field_vacate`: a promise read out of a container slot or a struct
@@ -473,13 +449,13 @@ export enum RuntimeAbort
 	// behaviour record reaches it.
 	serviceUnknownMessageTag = 90
 
-	// ⚠ **108 IS VACANT, NOT REUSABLE.** The fault it would name — `__np_pd_open` / `__np_pd_release` finding
-	// a green thread still PUBLISHED on a direction word of the record they are about to reset — is not a
-	// fault: it rests on the false claim that no two green threads can name one socket box, where a co-owning
-	// `async` argument gives a parked coroutine and a running owner one socket, and `client.close()` under a
-	// parked `recv` reaches exactly that. The release READIES such a waiter instead (`NetpollRuntime`'s
-	// `emitNetpollPdClear`), so nothing emits the code and a live registry may not claim the number.
-	// It is left VACANT for this registry's founding reason: an exit code is read by a debugger against
+	// ⚠ **107, 108 AND 110 ARE VACANT, NOT REUSABLE.** An OS handle is `unique`, so one green thread owns a
+	// socket box and no program parks two on it. The faults they would name need a second one: a second wait
+	// on a direction word (107, `__np_pd_wait`), a green thread still PUBLISHED on a record `__np_pd_open` /
+	// `__np_pd_release` are about to reset (108), and a per-direction deadline set on a descriptor a
+	// multi-source wait is parked on (110, `__np_pd_deadline`). Nothing emits them and a live registry may not
+	// claim the numbers.
+	// They are left VACANT for this registry's founding reason: an exit code is read by a debugger against
 	// whatever the tree said at the time, and a recycled number makes two different faults indistinguishable
 	// in an old log.
 end 'RuntimeAbort'
@@ -500,7 +476,7 @@ end 'isLeakDetectedExit'
 // newline are this file's, and no caller restates them. `mrt_panic` prints the result verbatim, then
 // `Stack trace:` and its frames, then exits `PanicExitCode`.
 export function panicMessageLine(filePath FilePath, line LineNumber, text String) returns immutable ByteArray
-	var baked = ByteArray.create(0, zeroed: false) as isolated ByteArray
+	let baked = ByteArray.create(0, zeroed: false) as isolated ByteArray
 
 	modify baked 'fill'
 		baked.append(panicMessageLinePrefix(filePath, line: line))
@@ -594,10 +570,10 @@ end 'emitAbortDoorCall'
 export let RuntimeAbortName = b"__rt_abort"
 
 function buildRuntimeAbortDoor(module StdModule)
-	var func = IrFunction.createFromStd(RuntimeAbortName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(RuntimeAbortName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	module.appendOp(entry, op: StdOp.osWriteStderr(ids.mint(), bufId: 0, lenId: 1))
@@ -691,10 +667,10 @@ export function ensureTierAbortDoor(module StdModule, abort RuntimeAbort) return
 
 	module.tierAbortDoors.insert(name)
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
 	func.keepsItsOwnFrame = true
-	var ids = ValueMinter.create(0)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.cold)
+	let ids = ValueMinter.create(0)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.cold)
 	emitRuntimeAbort(module, func: func, block: entry, abort: abort, ids: ids)
 	module.functions.push(func)
 
@@ -745,7 +721,7 @@ function runtimeFatalReason(fatal RuntimeFatal) returns String
 end 'runtimeFatalReason'
 
 function allRuntimeAbortReasons() returns RuntimeAbortReasonArray
-	var reasons = RuntimeAbortReasonArray.create(RuntimeAbort.allCases.count() + RuntimeFatal.allCases.count(), zeroed: false)
+	let reasons = RuntimeAbortReasonArray.create(RuntimeAbort.allCases.count() + RuntimeFatal.allCases.count(), zeroed: false)
 
 	for abort in RuntimeAbort.allCases 'eachAbort'
 		reasons.push(RuntimeAbortReason.abort(abort))
@@ -763,7 +739,7 @@ end 'allRuntimeAbortReasons'
 // deterministic.
 export function registerReachedRuntimeAbortMessages(module StdModule, globalData GlobalDataTable, survivors FunctionNameIndex)
 	let reasons = allRuntimeAbortReasons()
-	var reached = FlagColumn.create(reasons.count())
+	let reached = FlagColumn.create(reasons.count())
 
 	for site in module.runtimeAbortSites 'eachSite'
 		if survivors.byName.contains(site.funcName) 'survived'

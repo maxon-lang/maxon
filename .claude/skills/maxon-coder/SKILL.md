@@ -93,7 +93,7 @@ After each edit:
   E3167 — so a one-file program marks nothing `export`, and files sharing one directory use `module`.
 - **An unused parameter is E3012**, like an unused variable.
 - **Never add `.clone()` "just in case": it allocates and copies.** Reassigning a `var` to a freshly
-  produced value needs none. Add one only where the compiler refuses without it (E3078, E3188) or the
+  produced value needs none. Add one only where the compiler refuses a write without it (E3197, E3207) or the
   code must diverge from a shared reference.
   ⛔ **In `maxon-bin/`, `stdlib/` and `runtime/`, a `.clone()` added to satisfy a read-only diagnostic is a
   HALT:** report the site, do not add the copy. First make the checker precise, then move, make the source

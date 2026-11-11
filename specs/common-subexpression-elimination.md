@@ -213,7 +213,7 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	var c = Cell.create(1)
+	let c = Cell.create(1)
 	let before = c.slot
 	c.slot = 2
 	let after = c.slot

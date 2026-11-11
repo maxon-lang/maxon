@@ -386,7 +386,7 @@ function hasContent(s String) returns bool
 end 'hasContent'
 
 function main() returns ExitCode
-	var k = "key{1}"
+	let k = "key{1}"
 	let s = k if hasContent(k) else "fallback"
 	print(s)
 	return 0
@@ -490,7 +490,7 @@ function splice(lst IdxList, anchor Idx, after bool)
 end 'splice'
 
 function main() returns ExitCode
-	var a = IdxList.create()
+	let a = IdxList.create()
 	a.append(10)
 	a.append(20)
 	a.append(30)
@@ -1046,7 +1046,7 @@ end 'record'
 
 function main() returns ExitCode
 	let e = Entry.create(Kind.value(3))
-	var out = KindArray.create(0)
+	let out = KindArray.create(0)
 	let identity = true
 	out.push(e.kind if identity else remapKind(e.kind))
 	print("{record(try out.get(0) otherwise Kind.none)}")

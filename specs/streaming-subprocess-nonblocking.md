@@ -68,7 +68,7 @@ function describePoll(poll ExitPoll) returns String
 end 'describePoll'
 
 function gatedChildArguments() returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("set")
 	argv.push("/p")
@@ -80,7 +80,7 @@ function gatedChildArguments() returns StringArray
 end 'gatedChildArguments'
 
 function main() returns ExitCode
-	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: gatedChildArguments()) otherwise return 3
+	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: gatedChildArguments()) otherwise return 3
 	let before = describePoll(child.pollExit())
 
 	try child.writeStdinLine("go") otherwise return 5
@@ -119,7 +119,7 @@ typealias PollTally = int(0 to 1000)
 typealias SeenCode = int(-1 to i64.max)
 
 function gatedChildArguments() returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("set")
 	argv.push("/p")
@@ -131,7 +131,7 @@ function gatedChildArguments() returns StringArray
 end 'gatedChildArguments'
 
 function main() returns ExitCode
-	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: gatedChildArguments()) otherwise return 3
+	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: gatedChildArguments()) otherwise return 3
 
 	var runningSeen = 0 as PollTally
 	var exitedSeen = -1 as SeenCode
@@ -175,7 +175,7 @@ could exhaust.
 typealias SpinTally = int(0 to 100000)
 
 function gatedChildArguments() returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("set")
 	argv.push("/p")
@@ -186,7 +186,7 @@ function gatedChildArguments() returns StringArray
 end 'gatedChildArguments'
 
 function main() returns ExitCode
-	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: gatedChildArguments()) otherwise return 3
+	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: gatedChildArguments()) otherwise return 3
 
 	var nones = 0 as SpinTally
 	var seen = ""
@@ -241,7 +241,7 @@ function describePoll(poll LinePoll) returns String
 end 'describePoll'
 
 function partialThenRestArguments() returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("set")
 	argv.push("/p=abc<nul&")
@@ -256,7 +256,7 @@ function partialThenRestArguments() returns StringArray
 end 'partialThenRestArguments'
 
 function main() returns ExitCode
-	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: partialThenRestArguments()) otherwise return 3
+	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: partialThenRestArguments()) otherwise return 3
 
 	_ = try child.readStderrLine() otherwise return 5
 
@@ -309,7 +309,7 @@ function describePoll(poll LinePoll) returns String
 end 'describePoll'
 
 function bothStreamsArguments() returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("errline>&2&")
@@ -331,7 +331,7 @@ function spinForLine(child StreamingSubprocess, fromStderr bool) returns String
 end 'spinForLine'
 
 function main() returns ExitCode
-	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: bothStreamsArguments()) otherwise return 3
+	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: bothStreamsArguments()) otherwise return 3
 
 	let outLine = spinForLine(child, fromStderr: false)
 	let errLine = spinForLine(child, fromStderr: true)
@@ -378,7 +378,7 @@ function describeLine(poll LinePoll) returns String
 end 'describeLine'
 
 function echoChildArguments() returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("hello")
@@ -386,7 +386,7 @@ function echoChildArguments() returns StringArray
 end 'echoChildArguments'
 
 function main() returns ExitCode
-	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: echoChildArguments()) otherwise return 3
+	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: echoChildArguments()) otherwise return 3
 	let line = try child.readStdoutLine() otherwise return 4
 	let code = try child.wait() otherwise return 5
 	child.release()
@@ -432,7 +432,7 @@ function hasExited(poll ExitPoll) returns bool
 end 'hasExited'
 
 function blankBetweenArguments() returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("first&")
@@ -460,7 +460,7 @@ function nextLine(child StreamingSubprocess) returns String
 end 'nextLine'
 
 function main() returns ExitCode
-	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: blankBetweenArguments()) otherwise return 3
+	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: blankBetweenArguments()) otherwise return 3
 
 	let first = nextLine(child)
 	let blank = nextLine(child)
@@ -493,7 +493,7 @@ and the loop ends on its own. A pipe the poll could not see the end of would lea
 case is reported TIMED OUT.
 ```maxon
 function linesArguments() returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("/c")
 	argv.push("echo")
 	argv.push("first&")
@@ -509,7 +509,7 @@ function bothEnded(child StreamingSubprocess) returns bool
 end 'bothEnded'
 
 function main() returns ExitCode
-	var child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: linesArguments()) otherwise return 3
+	let child = try StreamingSubprocess.spawn(Executable.name("cmd"), arguments: linesArguments()) otherwise return 3
 	let openAtStart = not bothEnded(child)
 	var seen = ""
 

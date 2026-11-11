@@ -145,7 +145,7 @@ let DetailLoggingName = "detail logging"
 // A re-emitter passes the resolved directory, never a default the far side would re-derive from its
 // own working directory. Each flag is emitted only when set.
 module function specSelectionArgv(specDir String, filterPatterns FilterPatternArray, mode SpecRunMode, includeNetwork bool) returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push(specDir)
 
 	for pattern in filterPatterns 'eachPattern'
@@ -304,7 +304,7 @@ function main() returns ExitCode
 	// `tests/parallelCompile` pins.
 	installCompilerLogHandler()
 
-	var args = MaxonArgs.parse()
+	let args = MaxonArgs.parse()
 
 	if refusedAnOptionOfAnotherCommand(args) 'anotherCommandsOption'
 		return refusedCommandLineExit(args.command)
@@ -315,7 +315,7 @@ function main() returns ExitCode
 	// reader looks at first. `fmt` and `mcp-server` are exempt because each refuses what it does not
 	// take itself, and `mcp-server` must be: the parser records its own flags as unknown.
 	if not args.refusedOptions.isEmpty() and args.command != MaxonCommand.fmt and args.command != MaxonCommand.mcpServer 'badOption'
-		view refusal = try args.refusedOptions.get(0) otherwise panic("main: refusedOptions is not empty and has no first entry")
+		let refusal = try args.refusedOptions.get(0) otherwise panic("main: refusedOptions is not empty and has no first entry")
 
 		match refusal 'why'
 			unknown(spelling) then reportUnknownOption(spelling)
@@ -420,7 +420,7 @@ let SecondStageValue = "1"
 let NotRepeatedPrefix = "Not repeating this build with the program it wrote:"
 
 function runProjectBuild(args MaxonArgs) returns ExitCode
-	var voice = buildVoice(args)
+	let voice = buildVoice(args)
 
 	match projectRosterIn(Directory.currentPath(), voice: voice) 'roster'
 		noProjectFile then return withoutAProjectFile()
@@ -445,7 +445,7 @@ function buildSoleTarget(projectFile FilePath, declared TaskNameArray, args Maxo
 end 'buildSoleTarget'
 
 function runWordBuild(args MaxonArgs, word String) returns ExitCode
-	var voice = buildVoice(args)
+	let voice = buildVoice(args)
 
 	match readingOfWord(Directory.currentPath(), word: word, voice: voice) 'reading'
 		aTarget(projectFile, name) then return buildThroughProject(projectFile, target: name, args: args, base: ManifestBase.workingDirectory, depth: 0)
@@ -455,7 +455,7 @@ function runWordBuild(args MaxonArgs, word String) returns ExitCode
 end 'runWordBuild'
 
 function buildThroughProject(projectFile FilePath, target String, args MaxonArgs, base ManifestBase, depth DelegationDepth) returns ExitCode
-	var voice = buildVoice(args)
+	let voice = buildVoice(args)
 
 	return buildResolved(describedThroughProject(projectFile, target: target, base: base, depth: depth, voice: voice), args: args, voice: voice)
 end 'buildThroughProject'
@@ -491,7 +491,7 @@ end 'statedOrDefaultOutput'
 // A field the description states and this cannot use is an error, never a default: a guess is how a
 // build compiles the wrong thing while reporting success.
 module function buildFromManifestOutput(described String, args MaxonArgs, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
-	var voice = buildVoice(args)
+	let voice = buildVoice(args)
 
 	return buildResolved(resolveDescription(described, manifest: manifest, base: base, depth: depth, voice: voice), args: args, voice: voice)
 end 'buildFromManifestOutput'
@@ -509,13 +509,13 @@ function buildDescribed(described DescribedBuild, args MaxonArgs, voice Manifest
 		return reportMalformedManifestField(ManifestDebugInfoKey, error: e, manifest: described.manifest, voice: voice)
 	end 'badDebugInfo'
 
-	var productVersion = try manifestVersion(described.doc, build: described.node, target: target) otherwise (e) 'badVersion'
+	let productVersion = try manifestVersion(described.doc, build: described.node, target: target) otherwise (e) 'badVersion'
 		return reportMalformedManifestField(ManifestVersionKey, error: e, manifest: described.manifest, voice: voice)
 	end 'badVersion'
 
 	// The manifest's defines come first, so a command-line `--define` overrides one it computed: a
 	// later stamp replaces an earlier one, so order expresses the precedence.
-	var defines = try manifestDefines(described.doc, build: described.node) otherwise (e) 'badDefines'
+	let defines = try manifestDefines(described.doc, build: described.node) otherwise (e) 'badDefines'
 		return reportMalformedManifestField(ManifestDefinesKey, error: e, manifest: described.manifest, voice: voice)
 	end 'badDefines'
 
@@ -572,7 +572,7 @@ function repeatedWithOutput(written FilePath, target Target) returns ExitCode
 	let program = written.resolve(Directory.currentPath())
 	print("Repeating this build with the program it just wrote, {program.toString()}\n")
 
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 	overrides.upsert(SecondStageVariable, value: SecondStageValue)
 
 	return spawnForwarding(Executable.path(program), arguments: invocationArguments(), environment: Environment.inheritUpdating(overrides), standardInput: InputSource.inherit, workingDirectory: inheritedWorkingDirectory(), speaker: BuildSubcommandName)
@@ -625,7 +625,7 @@ end 'runBuild'
 // Every positional is compiled as one program, in the order given: `Compiler.loadSourceFiles`
 // registers them in that order and roots the project at their common ancestor.
 function runBuildPaths(args MaxonArgs) returns ExitCode
-	var inputPaths = MaxonSourcePathArray.create(args.paths.count(), zeroed: false)
+	let inputPaths = MaxonSourcePathArray.create(args.paths.count(), zeroed: false)
 
 	for spelling in args.paths 'eachPositional'
 		let path = try FilePath.from(spelling) otherwise 'badPath'
@@ -639,7 +639,7 @@ function runBuildPaths(args MaxonArgs) returns ExitCode
 	let target = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
 
 	let outputOverride = args.outputOverride
-	var defines = args.defines
+	let defines = args.defines
 
 	return match buildAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: args.debugInfo, productVersion: VersionComponentArray.create(0), defines: defines) 'outcome'
 		built gives SucceededExit
@@ -654,14 +654,14 @@ function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args Max
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'refusedOptions'
 
-	var session = CompileSession.printing()
+	let session = CompileSession.printing()
 	let lockExit = acquireBuildTreeLock(inputPaths, outputOverride: args.outputOverride, into: session.treeLock)
 
 	if not exitSucceeded(lockExit) 'busyTree'
 		return BuildOutcome.failed(lockExit)
 	end 'busyTree'
 
-	var job = BuildJob.create(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines)
+	let job = BuildJob.create(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: debugInfo, productVersion: productVersion, defines: defines)
 	let outcome = buildUnlessUpToDate(job, session: session)
 	session.treeLock.release()
 	return outcome
@@ -1161,7 +1161,7 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// Two suites share `<specDir>/.spec-tmp`, so one would delete what the other is compiling, and a
 	// build running alongside replaces the binary this run draws verdicts from. Asked after every free
 	// check, so a refusal is instant and precedes any worker.
-	var treeLock = LockHold.none()
+	let treeLock = LockHold.none()
 	let lockExit = acquireTreeLock(specDir, into: treeLock)
 
 	if not exitSucceeded(lockExit) 'busyTree'
@@ -1227,7 +1227,7 @@ function fmtSelection(spelling String) returns FmtSelection
 	end 'aDirectory'
 
 	if File.exists(target) 'aFile'
-		var only = FilePathArray.create(1, zeroed: false)
+		let only = FilePathArray.create(1, zeroed: false)
 		only.push(target)
 		return FmtSelection.files(only)
 	end 'aFile'
@@ -1292,7 +1292,7 @@ let FinalListSeparator = " and "
 
 // A free function because the library carries no `String.join`.
 module function joinedWith(values StringArray, separator String) returns String
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 	var first = true
 
 	for value in values 'eachValue'
@@ -1308,7 +1308,7 @@ module function joinedWith(values StringArray, separator String) returns String
 end 'joinedWith'
 
 module function backQuoted(words StringArray) returns StringArray
-	var quoted = StringArray.create(words.count(), zeroed: false)
+	let quoted = StringArray.create(words.count(), zeroed: false)
 
 	for word in words 'eachWord'
 		quoted.push("`{word}`")
@@ -1421,7 +1421,7 @@ function filterSuffix(unmatchedPatterns FilterPatternArray) returns String
 		return ""
 	end 'noFilter'
 
-	var flags = StringArray.create(unmatchedPatterns.count(), zeroed: false)
+	let flags = StringArray.create(unmatchedPatterns.count(), zeroed: false)
 
 	for pattern in unmatchedPatterns 'eachPattern'
 		flags.push("{FilterFlagPrefix}{pattern}")
@@ -1495,7 +1495,7 @@ typealias SignalNumber = int(0 to u32.max)
 //
 // `timeoutMs = 0`: a deadline would kill a long-running child the caller launched deliberately.
 module function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, workingDirectory FilePath, speaker String) returns ExitCode
-	var config = Configuration.create(executable)
+	let config = Configuration.create(executable)
 	config.arguments = arguments
 	config.environment = environment
 	config.standardInput = standardInput
@@ -1622,7 +1622,7 @@ function refusedAnOptionOfAnotherCommand(args MaxonArgs) returns bool
 end 'refusedAnOptionOfAnotherCommand'
 
 function commandsTaking(spelling String, args MaxonArgs) returns MaxonCommandArray
-	var takers = MaxonCommandArray.create(0)
+	let takers = MaxonCommandArray.create(0)
 	var admitted = false
 
 	for option in HelpOption.allCases 'eachOption'
@@ -1650,7 +1650,7 @@ function commandsTaking(spelling String, args MaxonArgs) returns MaxonCommandArr
 end 'commandsTaking'
 
 function commandWordsOf(commands MaxonCommandArray) returns String
-	var words = StringArray.create(commands.count(), zeroed: false)
+	let words = StringArray.create(commands.count(), zeroed: false)
 
 	for command in commands 'eachCommand'
 		words.push((try commandReference(command) otherwise panic("commandWordsOf: an option reference names `unknown`, which is no command")).word)
@@ -1790,7 +1790,7 @@ function runMcpServerCommand(args MaxonArgs) returns ExitCode
 		return refusedCommandLineExit(MaxonCommand.mcpServer)
 	end 'unexpectedArgument'
 
-	var options = McpHttpOptions.create()
+	let options = McpHttpOptions.create()
 	var overHttp = false
 	var httpOnlyOption = McpHttpOnlyOption.none
 
@@ -2154,7 +2154,7 @@ end 'optionReference'
 
 // Every roster walk comes through here, so `unknown` is skipped in one place.
 function namedCommands() returns MaxonCommandArray
-	var named = MaxonCommandArray.create(MaxonCommand.allCases.count(), zeroed: false)
+	let named = MaxonCommandArray.create(MaxonCommand.allCases.count(), zeroed: false)
 
 	for command in MaxonCommand.allCases 'eachCase'
 		if command != MaxonCommand.unknown 'itNamesACommand'
@@ -2166,7 +2166,7 @@ function namedCommands() returns MaxonCommandArray
 end 'namedCommands'
 
 function namedCommandsExcept(excluded MaxonCommandArray) returns MaxonCommandArray
-	var kept = MaxonCommandArray.create(0)
+	let kept = MaxonCommandArray.create(0)
 
 	for command in namedCommands() 'eachCommand'
 		if not excluded.contains(command) 'notExcluded'
@@ -2179,7 +2179,7 @@ end 'namedCommandsExcept'
 
 // Declaration order is alphabetical, so a filtered run needs no sort.
 function commandsFor(audience CommandAudience) returns MaxonCommandArray
-	var selected = MaxonCommandArray.create(0)
+	let selected = MaxonCommandArray.create(0)
 
 	for command in namedCommands() 'eachCommand'
 		let reference = try commandReference(command) otherwise panic("commandsFor: `namedCommands` leaves `unknown` out, so every command reaching here has a reference")
@@ -2638,9 +2638,9 @@ export type MaxonArgs
 		// slowdown. A field store keeps the loop carrying one value, so adding a flag means adding a
 		// field, never a local. arm64's larger register pool hides this; `ir-specs/register-pressure.md`'s
 		// `assigned-only-loop-carried-vars-overflow` pins the x64 shape.
-		var parsed = Self.create()
+		let parsed = Self.create()
 
-		var args = CommandLine.args()
+		let args = CommandLine.args()
 		var i = 1 as ElementIndex
 
 		while i < args.count() 'each'
@@ -2924,7 +2924,7 @@ end 'MaxonArgs'
 // No arm of the parser consumes the child's command line and nothing rewrites it. A function rather
 // than a loop in `parse`, whose loop is register-bound (see its note).
 function monitorTail(args StringArray, from ElementIndex) returns SourcePathSpellingArray
-	var tail = SourcePathSpellingArray.create(args.count() - from, zeroed: false)
+	let tail = SourcePathSpellingArray.create(args.count() - from, zeroed: false)
 
 	for position in from upto args.count() 'eachTailArgument'
 		tail.push(try args.get(position) otherwise panic("monitorTail: index {position} is past args.count() despite the upto bound"))
@@ -2934,7 +2934,7 @@ function monitorTail(args StringArray, from ElementIndex) returns SourcePathSpel
 end 'monitorTail'
 
 function splitRuntimeNames(value String) returns RuntimeFunctionNameArray
-	var names = RuntimeFunctionNameArray.create(0)
+	let names = RuntimeFunctionNameArray.create(0)
 
 	for part in value.split(RuntimeNameSeparator) 'eachName'
 		let trimmed = part.trim()

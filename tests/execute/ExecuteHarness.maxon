@@ -57,7 +57,7 @@ export let BrokenFixtureName = "broken"
 export let ProjectFixtureName = "project"
 
 export function fixtureNames() returns StringArray
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 	names.push(HelloFixtureName)
 	names.push(ExitCodeFixtureName)
 	names.push(ArgvFixtureName)
@@ -251,7 +251,7 @@ end 'rewriteStagedMain'
 
 // `maxon run <program>` — the ordinary command line, with the program made absolute.
 export function runArguments(program FilePath) returns StringArray
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push(ExecuteCommandName)
 	arguments.push(program.toString())
 
@@ -283,7 +283,7 @@ end 'spawnDriverWithHome'
 function environmentWithHome(home FilePath) returns Environment
 	let inherited = try Process.currentEnvironmentEntries() otherwise panic("run tests: the gate could not run — this process's environment could not be read, and a case about the DEFAULT cache root is about exactly what the driver finds in its own.")
 
-	var vars = EnvMap.create()
+	let vars = EnvMap.create()
 
 	for entry in inherited 'eachEntry'
 		let name = Process.envEntryName(entry)
@@ -342,10 +342,10 @@ export function spawnConcurrentRuns(staged StagedCase, program FilePath, howMany
 	let arguments = runArguments(program)
 	let environment = Environment.inheritUpdating([CacheRootVariable: staged.cache.toString()])
 
-	var children = StreamingChildArray.create(0)
+	let children = StreamingChildArray.create(0)
 
 	for _ in 1 to howMany 'eachChild'
-		var child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(binary), arguments: arguments, workingDirectory: staged.sources, environment: environment) otherwise (e) 'spawnFailed'
+		let child = try StreamingSubprocess.spawnWithEnvironment(Executable.path(binary), arguments: arguments, workingDirectory: staged.sources, environment: environment) otherwise (e) 'spawnFailed'
 			panic("run tests: the gate could not run — could not spawn a concurrent driver ({e.displayReason()}). This case pins what several simultaneous runs do, and a run nothing observed is a claim.")
 		end 'spawnFailed'
 
@@ -354,7 +354,7 @@ export function spawnConcurrentRuns(staged StagedCase, program FilePath, howMany
 		children.push(child)
 	end 'eachChild'
 
-	var reported = ConcurrentRunArray.create(0)
+	let reported = ConcurrentRunArray.create(0)
 
 	for child in children 'eachChild'
 		let stdout = drainStream(child, stderr: false)
@@ -457,7 +457,7 @@ function slotDirs(staged StagedCase) returns FilePathArray
 		panic("run tests: the gate could not run — the driver cached nothing under {root.toString()}. Every run in this corpus is pointed at a private cache through {CacheRootVariable}.")
 	end 'nothingCached'
 
-	var occupied = FilePathArray.create(0)
+	let occupied = FilePathArray.create(0)
 	collectOccupiedDirs(root, into: occupied)
 	return occupied
 end 'slotDirs'
@@ -499,7 +499,7 @@ end 'soleSlotDir'
 // ⭐ **A PENDING NAME IS EXCLUDED HERE AND MUST BE**, because it is excluded from the driver's hit test
 // too: counting one would make a run that CRASHED mid-build read exactly like a cached one.
 export function slotExecutables(staged StagedCase) returns FilePathArray
-	var found = FilePathArray.create(0)
+	let found = FilePathArray.create(0)
 
 	for dir in slotDirs(staged) 'eachSlot'
 		for entry in listing(dir) 'eachEntry'
@@ -530,7 +530,7 @@ end 'pendingBuildSuffix'
 
 // The entries a slot holds whose names end in `suffix`.
 function slotEntriesEndingIn(staged StagedCase, suffix String) returns FilePathArray
-	var found = FilePathArray.create(0)
+	let found = FilePathArray.create(0)
 
 	for entry in listing(soleSlotDir(staged)) 'eachEntry'
 		if entry.filename().endsWith(suffix) 'thisOne'

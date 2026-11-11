@@ -122,7 +122,7 @@ end 'main'
 <!-- test: index-assignment -->
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [10, 20, 30]
+	let arr = FullRangeIntArray from [10, 20, 30]
 	try arr.set(0, value: 100) otherwise panic("test invariant: set OOB")
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -134,7 +134,7 @@ end 'main'
 <!-- test: assignment-middle -->
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [1, 2, 3]
+	let arr = FullRangeIntArray from [1, 2, 3]
 	try arr.set(1, value: 42) otherwise panic("test invariant: set OOB")
 	return try arr.get(1) otherwise 0
 end 'main'
@@ -146,7 +146,7 @@ end 'main'
 <!-- test: assignment-last -->
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [1, 2, 3, 4, 5]
+	let arr = FullRangeIntArray from [1, 2, 3, 4, 5]
 	try arr.set(4, value: 99) otherwise panic("test invariant: set OOB")
 	return try arr.get(4) otherwise 0
 end 'main'
@@ -171,7 +171,7 @@ end 'main'
 <!-- test: assignment-preserves-others -->
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [10, 20, 30]
+	let arr = FullRangeIntArray from [10, 20, 30]
 	try arr.set(0, value: 100) otherwise panic("test invariant: set OOB")
 	return try arr.get(1) otherwise 0
 end 'main'
@@ -183,7 +183,7 @@ end 'main'
 <!-- test: multiple-assignments -->
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [0, 0, 0]
+	let arr = FullRangeIntArray from [0, 0, 0]
 	try arr.set(0, value: 1) otherwise panic("test invariant: set OOB")
 	try arr.set(1, value: 2) otherwise panic("test invariant: set OOB")
 	try arr.set(2, value: 3) otherwise panic("test invariant: set OOB")
@@ -250,7 +250,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.reserve(5)
 	arr.push(42)
 	return try arr.get(0) otherwise 0
@@ -267,7 +267,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-		var arr = IntArray.create(0)
+		let arr = IntArray.create(0)
 		arr.resize(5)
 		try arr.set(0, value: 99) otherwise panic("test invariant: set OOB")
 		return try arr.get(0) otherwise 0
@@ -284,7 +284,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-		var arr = IntArray.create(0)
+		let arr = IntArray.create(0)
 		var i = 0 as Integer
 		while i < 100 'loop'
 				arr.push(i)
@@ -307,7 +307,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10 as Byte)
 	arr.push(20 as Byte)
 	arr.push(30 as Byte)
@@ -333,7 +333,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	arr.push(3 as Byte)
@@ -359,7 +359,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10 as Byte)
 	arr.push(20 as Byte)
 	arr.push(30 as Byte)
@@ -384,7 +384,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(255 as Byte)
 	arr.push(0 as Byte)
 	arr.push(128 as Byte)
@@ -420,7 +420,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	arr.push(3 as Byte)
@@ -890,7 +890,7 @@ function launder(n Signed) returns Signed
 end 'launder'
 
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [10, 20, 30]
+	let arr = FullRangeIntArray from [10, 20, 30]
 	try arr.set(launder(-1) as ElementIndex, value: 5) otherwise return 99
 	return 0
 end 'main'
@@ -914,7 +914,7 @@ function launder(n Signed) returns Signed
 end 'launder'
 
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [10, 20, 30]
+	let arr = FullRangeIntArray from [10, 20, 30]
 	arr.insert(launder(-1) as ElementIndex, value: 99)
 	print("inserted, count is now {arr.count()}\n")
 	return 0
@@ -935,7 +935,7 @@ Stack trace:
 <!-- test: append-basic -->
 ```maxon
 function main() returns ExitCode
-	var a = FullRangeIntArray from [1, 2, 3]
+	let a = FullRangeIntArray from [1, 2, 3]
 	let b = [4, 5, 6]
 	a.append(b)
 	var sum = 0 as FullRangeInt
@@ -957,8 +957,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray from [1, 2, 3]
-	var b = IntArray.create(0)
+	let a = IntArray from [1, 2, 3]
+	let b = IntArray.create(0)
 	a.append(b)
 	return a.count()
 end 'main'
@@ -973,7 +973,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	let b = [10, 20]
 	a.append(b)
 	let first = try a.get(0) otherwise 0
@@ -988,7 +988,7 @@ end 'main'
 <!-- test: append-preserves-originals -->
 ```maxon
 function main() returns ExitCode
-	var a = FullRangeIntArray from [1, 2]
+	let a = FullRangeIntArray from [1, 2]
 	let b = [3, 4]
 	a.append(b)
 	// b should still have its original elements
@@ -1024,9 +1024,9 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var a = ByteArray.create(0)
+	let a = ByteArray.create(0)
 	a.push(7)
-	var piece = try __ManagedMemory.create(4, 1) otherwise return 9
+	let piece = try __ManagedMemory.create(4, 1) otherwise return 9
 	try piece.set(0, 20) otherwise return 8
 	try piece.set(1, 30) otherwise return 8
 	try piece.setLength(2) otherwise return 8
@@ -1051,7 +1051,7 @@ The receiver gains the source's elements, and the source is only read and copied
 `append`'s is: the exit code is the receiver's sum (10) times ten plus the source's two elements (7).
 ```maxon
 function main() returns ExitCode
-	var a = FullRangeIntArray from [1, 2]
+	let a = FullRangeIntArray from [1, 2]
 	let b = [3, 4]
 	a.appendMemory(b.managed)
 	var sum = 0 as FullRangeInt
@@ -1115,7 +1115,7 @@ error E3207: <fragment>:5:4: 'appendMemory' needs a writable receiver; 'a' is im
 `first` counts the element it hands back, so the receiver may be written while `s` is still in use.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
+	let arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.first() otherwise ""
 	let other = ["a second long string that also lives on the heap here"]
 	arr.appendMemory(other.managed)
@@ -1166,7 +1166,7 @@ error E3207: <fragment>:4:2: 'insert' writes its receiver (line 275: `self.resiz
 <!-- test: insert-keeps-an-element-read-before-it -->
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
+	let arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.first() otherwise ""
 	arr.insert(0, value: "a second long string that also lives on the heap")
 	let head = try arr.first() otherwise ""
@@ -1205,7 +1205,7 @@ error E3207: <fragment>:4:10: 'set' needs a writable receiver; 'arr' is immutabl
 `set` releases the slot's occupant, and `s` still holds its own reference to it.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
+	let arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.first() otherwise ""
 	try arr.set(0, value: "a second long string that also lives on the heap") otherwise 'oob'
 		return 9
@@ -1242,7 +1242,7 @@ error E3207: <fragment>:4:2: 'reserve' writes its receiver (line 328: `try manag
 buffer.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
+	let arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.first() otherwise ""
 	arr.reserve(64)
 	print("[{s}]\n")
@@ -1280,7 +1280,7 @@ error E3207: <fragment>:4:2: 'clear' writes its receiver (line 316: `managed.cle
 `clear` releases every element; the one `s` read keeps its own reference and outlives the clear.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world {40 + 2} this is a long string for heap allocation"]
+	let arr = ["hello world {40 + 2} this is a long string for heap allocation"]
 	let s = try arr.first() otherwise ""
 	arr.clear()
 	print("[{s}]\n")
@@ -1310,7 +1310,7 @@ which is exactly the range the element-destroy walk covers, so nothing ever rele
 <!-- test: set-past-the-live-length-is-refused -->
 ```maxon
 function main() returns ExitCode
-	var arr = ["one long heap allocated string value here"]
+	let arr = ["one long heap allocated string value here"]
 	arr.reserve(8)
 	try arr.set(2, value: "two long heap allocated string value here") otherwise 'pastLength'
 		return 42
@@ -1348,7 +1348,7 @@ Modifying a slice must not affect the original array.
 ```maxon
 function main() returns ExitCode
 	let arr = FullRangeIntArray from [10, 20, 30, 40, 50]
-	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	let sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	try sub.set(0, value: 99) otherwise panic("test invariant: set OOB")
 	// Original should be unchanged
 	let original = try arr.get(1) otherwise 0
@@ -1369,7 +1369,7 @@ end 'main'
 Modifying the original array must not affect an existing slice.
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [10, 20, 30, 40, 50]
+	let arr = FullRangeIntArray from [10, 20, 30, 40, 50]
 	let sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	try arr.set(1, value: 99) otherwise panic("test invariant: set OOB")
 	// Slice should be unchanged
@@ -1401,7 +1401,7 @@ no buffer was allocated: an eager copy would report a grown positive capacity fr
 ```maxon
 function main() returns ExitCode
 	let arr = FullRangeIntArray from [10, 20, 30, 40, 50]
-	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	let sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	let notMine = -1
 	let asView = sub.capacity()
 	try sub.set(0, value: 99) otherwise panic("index 0 is in bounds")
@@ -1423,7 +1423,7 @@ the copy reports the capacity of a buffer it owns, the larger of its length and 
 where the slice of an ordinary array reports -1.
 ```maxon
 function main() returns ExitCode
-	var memory = try __ManagedMemory.create(8, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(8, 1) otherwise return 1
 	try memory.setLength(8) otherwise return 2
 
 	let source = ByteArray.init(memory)
@@ -1453,7 +1453,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeParent() returns IntArray
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(10)
 	a.push(20)
 	a.push(30)
@@ -1498,7 +1498,7 @@ Slicing a slice windows within the window, and writing to the inner one leaves t
 function main() returns ExitCode
 	let arr = FullRangeIntArray from [10, 20, 30, 40, 50, 60]
 	let s1 = try arr.slice(1, endIndex: 5) otherwise return 1
-	var s2 = try s1.slice(1, endIndex: 3) otherwise return 2
+	let s2 = try s1.slice(1, endIndex: 3) otherwise return 2
 	let a = try s2.get(0) otherwise 0
 	let b = try s2.get(1) otherwise 0
 	try s2.set(0, value: 7) otherwise panic("index 0 is in bounds")
@@ -1528,7 +1528,7 @@ of the two for which 1 is right.
 ```maxon
 function main() returns ExitCode
 	let arr = FullRangeIntArray from [10, 20, 30, 40, 50]
-	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	let sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	try sub.set(0, value: 99) otherwise panic("index 0 is in bounds")
 	let a = try sub.get(0) otherwise 0
 	let b = try sub.get(1) otherwise 0
@@ -1553,7 +1553,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function build() returns IntArray
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	var i = 0 as Integer
 	while i < 10 'fill'
 		a.push(i * 10)
@@ -1585,10 +1585,10 @@ count has to walk all the way down and reclaim exactly once — every arm of the
 viewer, viewer-of-a-viewer) runs, and each side keeps the bytes it had when it copied out.
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [1, 2, 3, 4, 5, 6]
-	var a = try arr.slice(0, endIndex: 3) otherwise return 1
-	var b = try arr.slice(3, endIndex: 6) otherwise return 2
-	var c = try a.slice(0, endIndex: 2) otherwise return 3
+	let arr = FullRangeIntArray from [1, 2, 3, 4, 5, 6]
+	let a = try arr.slice(0, endIndex: 3) otherwise return 1
+	let b = try arr.slice(3, endIndex: 6) otherwise return 2
+	let c = try a.slice(0, endIndex: 2) otherwise return 3
 	try arr.set(0, value: 100) otherwise panic("index 0 is in bounds")
 	try b.set(0, value: 200) otherwise panic("index 0 is in bounds")
 	try c.set(0, value: 300) otherwise panic("index 0 is in bounds")
@@ -1606,7 +1606,7 @@ Two live slices of one array, then writes at both ends of the parent. The parent
 slices keep reading the original bytes.
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [10, 20, 30, 40]
+	let arr = FullRangeIntArray from [10, 20, 30, 40]
 	let v1 = try arr.slice(0, endIndex: 2) otherwise return 1
 	let v2 = try arr.slice(2, endIndex: 4) otherwise return 2
 	try arr.set(0, value: 99) otherwise panic("index 0 is in bounds")
@@ -1629,7 +1629,7 @@ end 'main'
 Pushing onto the parent reallocates its buffer. The slice keeps the old one.
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [10, 20, 30]
+	let arr = FullRangeIntArray from [10, 20, 30]
 	let sub = try arr.slice(0, endIndex: 3) otherwise return 1
 	arr.push(40)
 	arr.push(50)
@@ -1651,7 +1651,7 @@ end 'main'
 array is coherent: the destination copies out first and the slice still names the original bytes.
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [1, 2, 3]
+	let arr = FullRangeIntArray from [1, 2, 3]
 	let sub = try arr.slice(0, endIndex: 2) otherwise return 1
 	arr.append(sub)
 	var sum = 0 as FullRangeInt
@@ -1679,7 +1679,7 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	let empty = IntArray.create(0)
-	var e = try empty.slice(0, endIndex: 0) otherwise return 1
+	let e = try empty.slice(0, endIndex: 0) otherwise return 1
 	e.push(5)
 	let v = try e.get(0) otherwise 0
 	if v == 5 and e.count() == 1 and empty.count() == 0 'ok'
@@ -1704,7 +1704,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function emptyViewOfAnArrayThatGrew() returns IntArray
-	var src = IntArray.create(0)
+	let src = IntArray.create(0)
 	let view = try src.slice(0, endIndex: 0) otherwise panic("an empty slice of an empty array is in bounds")
 	src.push(1)
 	src.push(2)
@@ -1730,7 +1730,7 @@ writing to it copies the window out first.
 ```maxon
 function main() returns ExitCode
 	let lit = b"hello"
-	var mid = try lit.slice(1, endIndex: 4) otherwise return 1
+	let mid = try lit.slice(1, endIndex: 4) otherwise return 1
 	try mid.set(0, value: 88) otherwise panic("index 0 is in bounds")
 	let m0 = try mid.get(0) otherwise 0
 	let m1 = try mid.get(1) otherwise 0
@@ -1759,8 +1759,8 @@ is a rule `__managed_cow_detach` keeps on its OWN rather than one this case gate
 recycling, poisoning allocator is an OPEN QUESTION.**
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [10, 20, 30, 40, 50]
-	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	let arr = FullRangeIntArray from [10, 20, 30, 40, 50]
+	let sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	try arr.set(1, value: 91) otherwise panic("index 1 is in bounds")
 	try sub.set(0, value: 92) otherwise panic("index 0 is in bounds")
 	let s0 = try sub.get(0) otherwise 0
@@ -1780,8 +1780,8 @@ end 'main'
 The same pair in the other order.
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [10, 20, 30, 40, 50]
-	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	let arr = FullRangeIntArray from [10, 20, 30, 40, 50]
+	let sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	try sub.set(0, value: 92) otherwise panic("index 0 is in bounds")
 	try arr.set(1, value: 91) otherwise panic("index 1 is in bounds")
 	let s0 = try sub.get(0) otherwise 0
@@ -1806,7 +1806,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	var i = 0 as Integer
 	while i < 8 'fill'
 		a.push(i)
@@ -1818,22 +1818,22 @@ end 'make'
 function main() returns ExitCode
 	let src = make()
 
-	var vClear = try src.slice(1, endIndex: 5) otherwise return 1
+	let vClear = try src.slice(1, endIndex: 5) otherwise return 1
 	vClear.clear()
 
-	var vPop = try src.slice(1, endIndex: 5) otherwise return 2
+	let vPop = try src.slice(1, endIndex: 5) otherwise return 2
 	let popped = try vPop.pop() otherwise -1
 
-	var vRemove = try src.slice(2, endIndex: 6) otherwise return 3
+	let vRemove = try src.slice(2, endIndex: 6) otherwise return 3
 	let removed = try vRemove.remove(0) otherwise -1
 
-	var vInsert = try src.slice(0, endIndex: 3) otherwise return 4
+	let vInsert = try src.slice(0, endIndex: 3) otherwise return 4
 	vInsert.insert(1, value: 99)
 
-	var vResize = try src.slice(0, endIndex: 4) otherwise return 5
+	let vResize = try src.slice(0, endIndex: 4) otherwise return 5
 	vResize.resize(2)
 
-	var vGrow = try src.slice(0, endIndex: 2) otherwise return 6
+	let vGrow = try src.slice(0, endIndex: 2) otherwise return 6
 	vGrow.reserve(64)
 	vGrow.push(1000)
 
@@ -1858,7 +1858,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let lit = b"abc"
-	var copy = lit.clone()
+	let copy = lit.clone()
 	try copy.set(0, value: 90) otherwise panic("index 0 is in bounds")
 	let c0 = try copy.get(0) otherwise 0
 	let l0 = try lit.get(0) otherwise 0
@@ -1878,7 +1878,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeNumbers() returns IntArray
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -1903,7 +1903,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeNumbers(a Integer, b Integer) returns IntArray
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(a)
 	arr.push(b)
 	arr.push(a + b)
@@ -2113,7 +2113,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -2128,7 +2128,7 @@ end 'main'
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("hi")
 	let s = try arr.get(0) otherwise ""
 	if s == "hi" 'match'
@@ -2157,9 +2157,9 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	arr.push(Item.create(9))
-	view first = try arr.get(0) otherwise Item.create(0)
+	let first = try arr.get(0) otherwise Item.create(0)
 	return first.value
 end 'main'
 ```
@@ -2174,7 +2174,7 @@ typealias Byte = int(0 to 255)
 typealias ByteSlots = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteSlots.create(0)
+	let arr = ByteSlots.create(0)
 	arr.push(65)
 	arr.insert(0, value: 12)
 	try arr.set(1, value: 77) otherwise panic("test invariant: set OOB")
@@ -2614,9 +2614,9 @@ typealias Byte = int(0 to 100)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var a = Bytes.create(0)
+	let a = Bytes.create(0)
 	a.push(7)
-	var b = Bytes.create(0)
+	let b = Bytes.create(0)
 	b.push(9)
 	a.append(b)
 	let first = try a.get(0) otherwise 0
@@ -2686,9 +2686,9 @@ typealias As = Array with A
 typealias Bs = Array with A
 
 function main() returns ExitCode
-	var a = As.create(0)
+	let a = As.create(0)
 	a.push(7)
-	var b = Bs.create(0)
+	let b = Bs.create(0)
 	b.push(9)
 	a.append(b as As)
 	return ((try a.get(0) otherwise 0) + (try a.get(1) otherwise 0)) as ExitCode
@@ -2723,7 +2723,7 @@ end 'main'
 typealias Reals = Array with FullRangeFloat
 
 function main() returns ExitCode
-	var a = Reals from [1.5, 2.5]
+	let a = Reals from [1.5, 2.5]
 	try a.set(1, value: 4.75) otherwise panic("test invariant: set OOB")
 	return trunc(try a.get(1) otherwise 0.0)
 end 'main'
@@ -2738,7 +2738,7 @@ end 'main'
 typealias Reals = Array with FullRangeFloat
 
 function main() returns ExitCode
-	var a = Reals from [1.5, 2.5]
+	let a = Reals from [1.5, 2.5]
 	try a.set(0, value: 3.5) otherwise panic("test invariant: set OOB")
 	var sum = 0.0 as FullRangeFloat
 	for x in a 'each'
@@ -2783,7 +2783,7 @@ that says so for the LITERAL element.
 typealias Reals = Array with FullRangeFloat
 
 function main() returns ExitCode
-	var a = Reals from [0.1, 2.5]
+	let a = Reals from [0.1, 2.5]
 	try a.set(1, value: -0.0) otherwise panic("test invariant: set OOB")
 	a.push(1.7976931348623157e308)
 	for x in a 'each'
@@ -2829,7 +2829,7 @@ end 'main'
 typealias Reals = Array with FullRangeFloat
 
 function main() returns ExitCode
-	var a = Reals from [1.5, 2.5]
+	let a = Reals from [1.5, 2.5]
 	a.push(3.5)
 	let c = a.clone()
 	return trunc((try c.get(2) otherwise 0.0) + (try c.get(0) otherwise 0.0))
@@ -2851,7 +2851,7 @@ typealias Real = float(f64.min to f64.max)
 typealias Reals = Array with Real
 
 function main() returns ExitCode
-	var a = Reals.create(0)
+	let a = Reals.create(0)
 	a.push(1.5)
 	a.push(2.5)
 	return trunc((try a.get(0) otherwise 0.0) + (try a.get(1) otherwise 0.0))
@@ -2874,7 +2874,7 @@ type Samples
 	export var values as Reals
 
 	static function create() returns Self
-		var v = Reals.create(0)
+		let v = Reals.create(0)
 		v.push(2.5)
 		return Self{values: v}
 	end 'create'
@@ -2992,7 +2992,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items = [5, 6]
 	return try b.items.get(1) otherwise 0
 end 'main'
@@ -3138,9 +3138,9 @@ typealias Items = Array with Measure
 typealias Grid = Array with Items
 
 function main() returns ExitCode
-	var g = Grid.create(0)
+	let g = Grid.create(0)
 	g.push([23, 24])
-	view row = try g.get(0) otherwise Items.create(0)
+	let row = try g.get(0) otherwise Items.create(0)
 	return try row.get(1) otherwise 0
 end 'main'
 ```
@@ -3189,7 +3189,7 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var ps = IntPromiseArray.create(0)
+	let ps = IntPromiseArray.create(0)
 	ps.push(async plain(4))
 	ps.push(async plain(5))
 	let first = try ps.get(0) otherwise panic("two were pushed")
@@ -3229,7 +3229,7 @@ function at(n Integer) returns ElementIndex
 end 'at'
 
 function main() returns ExitCode
-	var ps = IntPromiseArray.create(0)
+	let ps = IntPromiseArray.create(0)
 	ps.push(async plain(4))
 	ps.push(async plain(5))
 	let first = try ps.get(0) otherwise panic("two were pushed")
@@ -3258,12 +3258,12 @@ function plain(n Integer) returns Integer
 end 'plain'
 
 function main() returns ExitCode
-	var ps = IntPromiseArray.create(0)
+	let ps = IntPromiseArray.create(0)
 	ps.push(async plain(4))
 	ps.push(async plain(5))
 	let first = try ps.get(0) otherwise panic("two were pushed")
 	var sum = await first
-	view cursor = try ps.cursor() otherwise panic("two were pushed")
+	let cursor = try ps.cursor() otherwise panic("two were pushed")
 	let again = cursor.current()
 	sum = sum + await again
 	return sum as ExitCode
@@ -3555,7 +3555,7 @@ error E3005: <fragment>:12:12: Value 400 is outside the range of 'Small' (int(0 
 A reservation no allocation can satisfy is an error, never a no-op: `reserve(u64.max)` reaches the growth door and its capacity overflow, exactly as `reserve(1 shl 62)` does.
 ```maxon
 function main() returns ExitCode
-	var arr = [1 as Count]
+	let arr = [1 as Count].clone()
 	arr.reserve(u64.max)
 	return arr.count() as ExitCode
 end 'main'
@@ -3575,7 +3575,7 @@ Stack trace:
 The refusal is on the capacity times the element's BITS, so a one-byte element wraps at `1 shl 60` (eight bits each, `2^63` in all) long before the byte count itself would overflow. That is the first count the signed bit total cannot hold, and it is refused the way `reserve(1 shl 62)` of a word-sized element is.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.reserve(1 shl 60)
 	return bytes.count() as ExitCode
 end 'main'
@@ -3595,7 +3595,7 @@ Stack trace:
 A word-sized element is 64 bits, so `1 shl 62` of them is `2^68` bits: the wrapped total is refused, and the array keeps the buffer it had.
 ```maxon
 function main() returns ExitCode
-	var words = [1 as Count]
+	let words = [1 as Count].clone()
 	words.reserve(1 shl 62)
 	return words.count() as ExitCode
 end 'main'
@@ -3615,8 +3615,8 @@ Stack trace:
 Growth below the wrap bound takes the allocation road with no overflow refusal: a byte array and a word array pushed through many reallocations keep every element and agree on their counts.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create(0)
-	var words = [0 as Count]
+	let bytes = ByteArray.create(0)
+	let words = [0 as Count].clone()
 	var wrong = 0 as Count
 
 	for i in 0 upto 5000 'push'
@@ -3881,7 +3881,7 @@ typealias Percent = int(1 to 100)
 typealias PercentArray = Array with Percent
 
 function main() returns ExitCode
-	var xs = PercentArray.create(0)
+	let xs = PercentArray.create(0)
 	xs.growFilled(3, value: 7)
 	return (try xs.get(2) otherwise 1) as ExitCode
 end 'main'
@@ -3948,7 +3948,7 @@ error E3197: <fragment>:12:29: cannot write 'v' through the closure that capture
 ```
 
 <!-- test: a-closure-capturing-a-var-array-may-hand-it-to-a-function-value -->
-A `var` array is writable, so the same closure is accepted.
+An array that is a clone of the literal is writable, so the same closure is accepted.
 ```maxon
 typealias CountArray = Array with Count
 
@@ -3958,7 +3958,7 @@ function grow(a CountArray) returns Count
 end 'grow'
 
 function main() returns ExitCode
-	var a = [1 as Count]
+	let a = [1 as Count].clone()
 	let f = grow
 	let g = function() gives f(a)
 	return g() as ExitCode
@@ -4218,7 +4218,7 @@ error E2004: <fragment>:4:10: A var cannot start from a bare number: write 'var 
 `create(n)` builds an array of `n` elements, every one zero, in one call: the length is `n` and no element needs writing first.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create(16)
+	let bytes = ByteArray.create(16)
 
 	try bytes.set(3, value: 9) otherwise return 1
 
@@ -4253,7 +4253,7 @@ typealias Wide = int(0 to u64.max)
 typealias WideArray = Array with Wide
 
 function main() returns ExitCode
-	var words = WideArray.create(5)
+	let words = WideArray.create(5)
 
 	try words.set(4, value: 7) otherwise return 1
 
@@ -4275,7 +4275,7 @@ end 'main'
 `create(n, zeroed: false)` is an empty array with room for `n` elements: the length is 0 and `n` pushes need no growth.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create(16, zeroed: false)
+	let bytes = ByteArray.create(16, zeroed: false)
 	let before = bytes.count()
 
 	for i in 0 upto 16 'eachByte'
@@ -4309,7 +4309,7 @@ A `String` has no zero value, so only the not-zeroed form builds an array of the
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var words = Words.create(2, zeroed: false)
+	let words = Words.create(2, zeroed: false)
 
 	words.push("ab")
 	words.push("cde")
@@ -4540,14 +4540,14 @@ end 'Worker'
 typealias Handles = Array with Worker.handle
 
 function main() returns ExitCode
-	var handles = Handles.create(2, zeroed: false)
+	let handles = Handles.create(2, zeroed: false)
 	let first = spawn Worker.create()
 	let second = spawn Worker.create()
 
 	handles.push(first)
 	handles.push(second)
 
-	view picked = try handles.get(1) otherwise panic("two were pushed")
+	let picked = try handles.get(1) otherwise panic("two were pushed")
 	let reply = try await picked.ping() otherwise 9
 
 	return 0 if reply == 3 and handles.count() == 2 else 1
@@ -4662,7 +4662,7 @@ function three() returns Digit
 end 'three'
 
 function main() returns ExitCode
-	var promises = DigitPromises.create(2, zeroed: false)
+	let promises = DigitPromises.create(2, zeroed: false)
 
 	promises.push(async three())
 	promises.push(async three())
@@ -4768,7 +4768,7 @@ typealias MimeArray = Array with Mime
 function main() returns ExitCode
 	let plain = PlainArray.create(2)
 	let gauges = GaugeArray.create(2, zeroed: true)
-	var mimes = MimeArray.create(0)
+	let mimes = MimeArray.create(0)
 	mimes.resize(2)
 
 	let first = try plain.get(1) otherwise Plain.second
@@ -4799,9 +4799,9 @@ typealias LevelArray = Array with Level
 
 function main() returns ExitCode
 	let none = LevelArray.create(0)
-	var roomy = LevelArray.create(4, zeroed: false)
+	let roomy = LevelArray.create(4, zeroed: false)
 	roomy.push(Level.high)
-	var filled = LevelArray.create(0)
+	let filled = LevelArray.create(0)
 	filled.growFilled(3, value: Level.low)
 
 	let tail = try filled.get(2) otherwise Level.high
@@ -4972,7 +4972,7 @@ end 'Level'
 typealias LevelMap = Map with (Level, Integer)
 
 function main() returns ExitCode
-	var m = LevelMap.create()
+	let m = LevelMap.create()
 	m.upsert(Level.high, value: 7)
 	m.upsert(Level.low, value: 3)
 
@@ -5260,8 +5260,8 @@ typealias CountPool = Pool with Count
 typealias GaugePool = Pool with Gauge
 
 function main() returns ExitCode
-	var counts = CountPool.create()
-	var gauges = GaugePool.create()
+	let counts = CountPool.create()
+	let gauges = GaugePool.create()
 	counts.grow()
 	gauges.grow()
 
@@ -5311,7 +5311,7 @@ end 'Pool'
 typealias LevelPool = Pool with Level
 
 function main() returns ExitCode
-	var pool = LevelPool.create()
+	let pool = LevelPool.create()
 	pool.fill(Level.high, tail: Level.low)
 
 	print("{pool.size()} {pool.last().rawValue}\n")
@@ -5476,7 +5476,7 @@ mm_free ArrayRecord #1
 The not-zeroed form is one `__mm_alloc` too, and 16 pushes after it allocate nothing more.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create(16, zeroed: false)
+	let bytes = ByteArray.create(16, zeroed: false)
 
 	for i in 0 upto 16 'eachByte'
 		bytes.push(i as Byte)
@@ -5501,7 +5501,7 @@ mm_free ArrayRecord #1
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var words = Words.create(0)
+	let words = Words.create(0)
 
 	words.push("abc")
 
@@ -5513,7 +5513,7 @@ end 'main'
 ```
 
 <!-- test: a-field-default-calling-another-types-create-of-zero-is-not-an-empty-container -->
-`Tally.create(0)` is the program's own factory, not an empty array: a module-scope `let` that builds a `Holder` still runs it, so the field holds the five the factory makes of its zero.
+`Tally.create(0)` is the program's own factory, not an empty array: a `Holder` built in `main` still runs it, so the field holds the five the factory makes of its zero.
 ```maxon
 type Tally
 	var total as Count
@@ -5539,10 +5539,9 @@ type Holder
 	end 'total'
 end 'Holder'
 
-let Shared = Holder.create()
-
 function main() returns ExitCode
-	return Shared.total() as ExitCode
+	let shared = Holder.create()
+	return shared.total() as ExitCode
 end 'main'
 ```
 ```exitcode

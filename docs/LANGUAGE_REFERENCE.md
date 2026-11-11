@@ -211,8 +211,6 @@ else:
 | `test` | at the top level, followed by a quoted name (see [Testing](#testing)) |
 | `spawn` | followed by a type's static factory call, optionally after `(capacity: n)` (see [Services](#services--spawn)) |
 | `bits` | followed by `(` on the right-hand side of a typealias |
-| `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=`; another spelling of `let` (see [Views](#views-view)) |
-| `readonly` | before an element or value type argument of a container (see [Read-Only Values](#read-only-values)); before any other type it is refused with **E2075** |
 | `mutable` | before a parameter's type, or a function-type parameter's, and as `mutable self` (see [Parameter Passing](#parameter-passing)) |
 | `isolated`, `immutable` | before a type, and before `self` as a receiver capability; `isolated` also after `is` in a `where` constraint (see [Regions and Capabilities](#regions-and-capabilities)) |
 | `modify` | at the start of a statement, followed by a name or `self` and ending its line with a label (see [`modify` Blocks](#modify-blocks)) |
@@ -221,7 +219,7 @@ else:
 | `sendable` | after `is` in a `where` constraint of a generic type (see [Region Bounds](#region-bounds)) |
 | `mutates`, `captures` | the clause `mutates captures` ending a function type (see [Capabilities at Function Types and Requirements](#capabilities-at-function-types-and-requirements)) |
 
-`readonly`, `mutable`, `isolated` and `immutable` are qualifiers exactly where the grammar expects a type, and
+`mutable`, `isolated` and `immutable` are qualifiers exactly where the grammar expects a type, and
 ordinary names or operands everywhere else (see [Regions and Capabilities](#regions-and-capabilities)).
 
 `__line__` and `__file__` are valid only as parameter defaults (see
@@ -387,8 +385,8 @@ typealias AgeArray = Array with Age
 
 let primes = [2, 3, 5, 7]              // a constant Array
 let ages = ["ada": 36, "alan": 41]     // a constant Map
-var known = ["ada": 36 as Age]         // a Map with (String, Age) that can grow
-var seen = AgeArray from [36, 41]      // an AgeArray that can grow
+let known = ["ada": 36 as Age].clone() // a Map with (String, Age) that can grow
+let seen = AgeArray from [36, 41]      // an AgeArray that can grow
 ```
 
 The element type comes from the first element (or pair), and every later element is converted to it the
@@ -841,7 +839,7 @@ function takesBlock(b BlockId) returns BlockId
 end 'takesBlock'
 
 function main() returns ExitCode
-	var rows = RowArray.create(0)
+	let rows = RowArray.create(0)
 	rows.push(4)
 	rows.push(9)
 	let head = 1 as LoopHead
@@ -1356,23 +1354,20 @@ belongs in a local `var` passed to a `mutable` parameter, in a field of a value 
 
 - A static field needs an initializer. Assigning to a `static let` is **E2013**; naming a static the type
   does not declare is **E2073**.
-- An initializer is any expression a function body accepts, read as though written inside the type's body:
-  a literal, a factory call (`static let shared = Cache.create()`), an array literal, or a struct literal of
-  the enclosing type. A struct literal of *another* type is **E3076** — call its factory. A scalar static is
-  a compile-time constant, so a call that makes its value unknown is **E2045**.
-- **Initializers run before `main`, exactly once**, whether or not the field is ever read, in dependency
-  order rather than declaration order: one that reads another static, directly or through a function it
-  calls, runs after it. Initializers that depend on each other in a cycle, or one that reads its own field,
-  are **E2012**.
-- A `static let` whose value is decided entirely at compile time — a scalar or byte-string literal, an array
-  literal of integers, an empty container, a payload-free union case, or a record whose every field is one of
-  these — is **image data**: its bytes are laid down in read-only memory and nothing creates it at run time, and
-  it is `immutable` (see [Constant Data](#constant-data)). Any other `static let` is built before `main`.
+- An initializer is a value known before the program runs, read as though written inside the type's body: a
+  literal, an array or map literal, `Type from [...]`, another constant, or a struct literal of the enclosing
+  type. It **calls nothing**: `static let shared = Cache.create()` is **E3220**, and a call in the initializer
+  of a scalar static is **E2045**. A struct literal of *another* type is **E3076**.
+- **A `static let` is image data, laid down before `main`.** Nothing runs to build it, whether or not the field is
+  ever read, and an initializer that reads another static follows it in dependency order, whatever the
+  declaration order. Initializers that depend on each other in a cycle, or one that reads its own field, are **E2012**. Its
+  bytes sit in read-only memory as one copy that every function and thread reads, and it is `immutable` (see
+  [Constant Data](#constant-data)); `.clone()` gives a mutable copy.
 - A static declared in `stdlib/` is kept only when reachable code reads it; one nothing reads is not emitted,
   and neither is its initializer.
 - A static field is a top-level binding whose name carries the type as a qualifier, so what its initializer
-  may reach follows the [Top-Level Bindings](#top-level-bindings) rules: a `spawn` reachable from any
-  global initializer is **E3164** — a [`default` declaration](#program-wide-defaults--default) starts a
+  may reach follows the [Top-Level Bindings](#top-level-bindings) rules: a `spawn` in a global initializer is
+  **E3220** like any call — a [`default` declaration](#program-wide-defaults--default) starts a
   program-wide service before `main`.
 - A `let` without `static` in a type body is an ordinary field with a default.
 
@@ -1556,7 +1551,7 @@ end 'Cell'
 typealias CellNames = Map with (Cell, String)
 
 function main() returns ExitCode
-	var names = CellNames.create()
+	let names = CellNames.create()
 	names.upsert(Cell.create(1, col: 2), value: "b1")
 	let found = try names.get(Cell.create(1, col: 2)) otherwise "missing"
 	print("{found}\n")     // b1
@@ -1572,7 +1567,7 @@ returns a `HashDigest` (`bits(64)`):
 
 ```maxon
 function main() returns ExitCode
-	var hasher = Hasher.create()
+	let hasher = Hasher.create()
 	hasher.combineBytes("abc".toByteArray())
 	print("{hasher.finalize():016x}\n")     // e71fa2190541574b
 	return 0
@@ -1897,7 +1892,7 @@ typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
 	function current() returns Element
-	function advance() throws IterationError
+	function advance(mutable self) throws IterationError
 end 'Seq'
 
 type Upto implements Seq with Integer
@@ -2538,7 +2533,7 @@ enum JsonByte
 end 'JsonByte'
 
 function main() returns ExitCode
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	out.push(JsonByte.lBracket)                     // pushes 0x5B
 	out.push(JsonByte.space)
 	let first = try out.get(0) otherwise 0
@@ -2819,7 +2814,7 @@ end 'kindOf'
 
 function main() returns ExitCode
 	let s = Shape.square(3)
-	print("{kindOf(s.rawValue)}\n")    // square
+	print("{kindOf(s.rawValue as Amount)}\n")    // square
 	return 0
 end 'main'
 ```
@@ -2834,7 +2829,7 @@ tags; treat a persisted union as append-only.
 A `let` is a name that is never reassigned; a `var` is a name that may be. The keyword says nothing about the
 data behind the name: a field store, a `push` and a callee that writes its parameter reach through a `let`
 to the record it names. A number, `bool`, enum or `String` has no record behind its name, so changing one is
-reassigning it, and it needs a `var`. `view` is another spelling of `let`.
+reassigning it, and it needs a `var`.
 
 ### Mutable Variables (`var`)
 
@@ -2921,7 +2916,7 @@ What a `let` refuses is reassignment:
 - A number, `bool`, enum or `String` held by a `let` cannot change at all, since changing one is reassigning
   it. Declare it `var` when it must.
 
-A `var` bound from a `let` names the same record, so a write through either name is seen through the other. A
+A name bound from a `let` names the same record, so a write through either name is seen through the other. A
 `let` bound from state that something else writes sees the writes:
 
 ```maxon
@@ -2945,9 +2940,9 @@ end 'Holder'
 
 function main() returns ExitCode
 	let r = Box.create(5)
-	var c = r
+	let c = r
 	c.n = 7                   // r names the same record
-	var h = Holder.create()
+	let h = Holder.create()
 	let b = h.box
 	h.box.n = 8               // b sees it
 	print("{r.n} {b.n}\n")    // 7 8
@@ -2958,43 +2953,6 @@ end 'main'
 Data that nothing may write is a separate notion from the keyword: constant data, frozen data, a stored `Map`
 key and a `SharedValue` read stay read-only wherever they are bound (see [Read-Only Values](#read-only-values)
 and [Constant Data](#constant-data)).
-
-### Views (`view`)
-
-`view x = e` is another spelling of `let x = e`, with the same meaning wherever a `let` is accepted as a local
-binding:
-
-```maxon
-typealias Count = int(0 to 1000)
-
-type Box
-	export var n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-type Holder
-	export var box as Box
-
-	static function create() returns Self
-		return Self{box: Box.create(1)}
-	end 'create'
-end 'Holder'
-
-function main() returns ExitCode
-	var h = Holder.create()
-	view v = h.box
-	v.n = 9                   // written through, like a `let`
-	print("{h.box.n}\n")      // 9
-	// v = Box.create(2)      // E2013: 'v' is a let and cannot be reassigned
-	return 0
-end 'main'
-```
-
-`view` is a [contextual keyword](#keywords). It declares a local binding only: a `view` field, a module-level
-`view`, a `view` in an extension body or an `@heap view` is **E2077**.
 
 ### Rules
 
@@ -3008,10 +2966,13 @@ end 'main'
   and a later store of a `Ys` is **E3005** (`cannot assign a value of type 'Ys' to variable 'a', which
   holds 'Xs'`). The first store in source order decides. See [Generic-Instance and Function-Type Aliases Are Brands](#generic-instance-and-function-type-aliases-are-brands).
 - Variables are block-scoped.
-- **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
-  instead of 'var'`). A `var` counts as used for mutation when it is reassigned, written through (a field
-  store, a method that writes its receiver), passed to a parameter the callee writes, or moved out. A `var`
-  bound from state something else writes (`var node = h.box`) and never touched itself is E3077.
+- **A `var` that is never reassigned is E3077** (`variable 'x' is never reassigned; use 'let' instead of
+  'var'`), whatever else is done with it. Reassigning the name is what keeps a `var`: an assignment, passing
+  it to a `mutable` parameter, or calling a method declared `mutable self` on a value of a value type
+  (`text.append("!")` over a `String`). A field store, a `push`, a call whose callee writes the parameter and
+  moving it into another binding leave the name unreassigned, so each is written with `let`. A `var` bound to
+  an array, map or tuple literal that is written through is written `let items = [..].clone()`: a plain `let`
+  of a literal is constant data, and writing through it is **E3207**.
 - **Every variable must be used (E3012).** This covers `let`/`var`, parameters, loop variables, pattern
   bindings and closure parameters. The name `_` discards: it creates no binding and may appear several
   times in one pattern (`for (_, _) in pairs`). A parameter named `_` takes its argument unnamed, so
@@ -3019,11 +2980,11 @@ end 'main'
   discards its element: `let (a, _) = t` declares `a` alone, and `(let _, let b) = t` declares `b`
   alone. Names such as `_x` are ordinary variables. A method that
   implements an interface requirement is exempt for its parameters, since the interface dictates them.
-- **Records are shared, not copied.** `var b = a` for a record-typed `a` hands `b` the same record; use
+- **Records are shared, not copied.** `let b = a` for a record-typed `a` hands `b` the same record; use
   `a.clone()` for an independent copy (see
   [Reference-by-Default Assignment](#reference-by-default-assignment)).
   Numbers, `bool` and other scalar values are always independent copies.
-- **`var b = a` and `let b = a` move `a` when `a` is a `var`.** When `a` is a `let`, `b` names the same record
+- **`let b = a` moves `a` when `a` is a `var`.** When `a` is a `let`, `b` names the same record
   and `a` stays usable. `a.clone()` is the independent copy (see [Moves and Sharing](#moves-and-sharing)):
 
   ```maxon
@@ -3039,17 +3000,17 @@ end 'main'
 
   function main() returns ExitCode
   	var a = Point.create(1)
-  	a.x = 2
-  	var b = a                 // a MOVES into b; reading a afterwards is E3102
+  	let b = a                 // a MOVES into b; reading a afterwards is E3102
   	b.x = 10
+  	a = Point.create(2)       // assigning a makes it usable again
 
   	let c = Point.create(3)
   	let d = c                 // d names c's record
-  	var e = c                 // so does e, and c stays usable
+  	let e = c                 // so does e, and c stays usable
   	e.x = 30
-  	var f = c.clone()         // an independent record
+  	let f = c.clone()         // an independent record
   	f.x = 40
-  	print("{b.x} {c.x} {d.x} {f.x}\n")   // 10 30 30 40
+  	print("{a.x} {b.x} {c.x} {d.x} {f.x}\n")   // 2 10 30 30 40
   	return 0
   end 'main'
   ```
@@ -3079,31 +3040,29 @@ end 'main'
 - A binding shares its directory's one namespace with every other top-level name (see
   [Bare Names and Ambiguity](#bare-names-and-ambiguity)), and another directory's binding is read through
   its directory: `alpha.LIMIT`.
-- An initializer is any expression a function body accepts, with the same meaning, the same types and the
-  same diagnostics: literals, arithmetic, casts, enum and union cases, array, map and tuple literals,
-  `Type from "literal"`, `ArrayAlias from [...]`, factory and function calls (`let shared = Cache.create()`,
-  `let shared = makeCache()`, `lib.Cache.create()`), a function name (`let step = countdown`), and another
-  top-level `let`, declared before or after it, in this file or one it can see (`let B = A`).
-- An initializer is outside every function, so a `return` in it is **E2080**, naming the binding. A handler
-  block in an initializer ends in `panic(…)`; to fall back to a value, write `try f() otherwise <expr>`.
+- An initializer is a value the compiler knows before the program runs, and it **calls nothing**: literals,
+  arithmetic, casts, enum and union cases, array, map and tuple literals, `Type from "literal"`,
+  `ArrayAlias from [...]`, a function name (`let step = countdown`), and another top-level `let`, declared
+  before or after it, in this file or one it can see (`let B = A`). A call is **E3220** (`the initializer of
+  'shared' calls 'Cache.create': a module-level or static `let` initializer calls nothing, so write a literal,
+  or build the value where it is used`), and a call in the initializer of a number, `bool` or enum binding is
+  **E2045** (`Function calls are not allowed in global variable initializers`).
+- An initializer is outside every function, so a `return` in it is **E2080**, naming the binding.
 - A binding that holds a scalar — a number, a `bool` or an enum case — is a compile-time
   constant, inlined at every use. Its initializer must have a value known at compile time, as a body knows
-  `2 * WIDTH` or `sqrt(4.0)`; a call that makes it unknown is **E2045** (`Function calls are not allowed in
-  global variable initializers`, naming the call). A derived constant keeps its operands' typealias, as in a
+  `2 * WIDTH` or `sqrt(4.0)`. A derived constant keeps its operands' typealias, as in a
   body: with `let a = 5 as Small`, `let s = a + a` is a `Small`.
-- A call in an initializer names its function as a call in a function body does: a name nothing declares is
+- A name in an initializer resolves as it does in a function body: a name nothing declares is
   **E3004**, one the file cannot see is **E3008** (**E3088** for a `module` one), and one several directories
   declare is **E3095**. That one diagnostic covers every read and assignment of the binding. A tuple
   assignment naming a module-level binding is **E2015**; assign the element to a local and store that.
-- Every initializer runs **before `main`**, once, in dependency order, whether or not anything reads the
-  binding. Initializers that depend on each other in a cycle are **E2012**. A `let` whose value is decided at
-  compile time — a scalar, a string or byte-string literal, a constant array literal, an empty container, a
-  payload-free union case, or a record built from constants — is image data, laid down in read-only memory
-  with nothing to run, and it is `immutable` (see [Constant Data](#constant-data)); any other record is built by
-  the program's `__module_init` before `main`. A static field follows the same rules (see
-  [Static Fields](#static-fields)).
-- A struct literal at file scope is **E3076**; call a factory instead, or declare a static field inside the
-  type.
+- Nothing runs before `main` on behalf of a top-level `let`. Initializers that depend on each other in a
+  cycle are **E2012**, and their order in the source does not matter. A `let`'s value is image data, laid down
+  in read-only memory as one copy that every function and thread reads, and it is `immutable` (see
+  [Constant Data](#constant-data)); `.clone()` gives a mutable copy where one is needed. A static field
+  follows the same rules (see [Static Fields](#static-fields)).
+- A struct literal at file scope is **E3076**; declare a `static let` holding the literal inside the type
+  (`static let origin = Self{x: 0, y: 0}`), or build the record where it is used.
 - An initializer whose value has an interface type is **E2015**: an interface value is two words, a value
   and its witness, and a global holds one. Return a concrete type from the initializer, or hold the interface
   in a function's local.
@@ -3114,19 +3073,11 @@ end 'main'
   (`static let origin = Holder{step: (7, 9)}`), a factory parameter, a union payload, or an element of another
   tuple — gives each element that slot's type. A tuple literal inside extra parentheses is the same tuple, and a
   `var` born from a tuple of bare numbers is refused as it is in a body.
-- A module-level `let` whose value is decided at compile time is `immutable` image data (see
-  [Constant Data](#constant-data)): a write through it is **E3207**, and storing it where something may write it
-  is **E3196**.
-- Any other module-level `let` is [read-only](#read-only-values) through everything it reaches, for the
-  program's whole life. A write through it, or through a record a call handed back out of it, is **E3159**;
-  binding it, a field of it (`var m = H.index`) or such a call result, an element accessor's included
-  (`var p = Origins.get(0)`), to a `var` is **E3078**. Read it through a `let`, or bind a `clone()`. Storing its
-  record anywhere something may write it — pushing it into a container, storing it into a `var` field, putting
-  it in an array literal or a map value, or handing it to a function that keeps its parameter — is **E3078**
-  too; store a `clone()`.
-- A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
+- A module-level `let` is `immutable` image data (see [Constant Data](#constant-data)): a write through it is
+  **E3207**, and storing it where something may write it is **E3196**.
+- A `spawn` in a global initializer is **E3220**, like any call; start services in `main`, or declare a
   program-wide one with [`default`](#program-wide-defaults--default). A `Key.current()` or `Key.register()`
-  reachable from a global initializer is [E3173](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3173): the
+  in a global initializer is [E3173](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3173): the
   defaults are built after every global initializer has run.
 - A top-level declaration is private to its file unless marked `export`, `module` or `public`.
 
@@ -3348,9 +3299,9 @@ end 'main'
   the call site would be accepted.
 - Passing a `let` to a `mutable` parameter is **E2013** (``'y' is a let and cannot be passed to the `mutable`
   parameter 'n'; bind it to a `var` ``): the callee reassigns the caller's variable, and a `let` has none to
-  give. A `let` field is refused for the same reason the equivalent assignment is. Other
-  [read-only](#read-only-values) data at a `mutable` position, such as a stored `Map` key, is **E3159**. A literal or
-  another expression is no storage for the write to reach, so it is **E3159** too (``cannot pass a literal to
+  give. A `let` field is refused for the same reason the equivalent assignment is, and so are a module-level
+  `let`, a stored `Map` key and a name a closure captured. A literal or
+  another expression is no storage for the write to reach, so it is **E2013** too (``cannot pass a literal to
   a function that writes parameter 'n'; pass a `var` ``). A callee that writes a field of its record parameter
   or receiver reaches through a `let` argument: `let acc = Accumulator.create()` followed by `acc.add(10)`,
   where `add` writes a field of `acc`, is legal.
@@ -3362,7 +3313,7 @@ end 'main'
   [Capabilities at Function Types and Requirements](#capabilities-at-function-types-and-requirements)). A
   call through a function value or an
   interface passes the argument's storage at each `mutable` position, and a `let` handed to such
-  a position is **E2013**, as at a direct call; a literal or another expression is **E3159**. Through
+  a position is **E2013**, as at a direct call; so is a literal or another expression. Through
   a function value or an interface requirement the message names the position (`to a function that writes
   argument 1`).
 - A variable passed by reference is a flow in both directions: the callee reads the variable and may write
@@ -3458,12 +3409,13 @@ Clone a local before the closure when the function still needs it (`let mine = w
 captured inside a loop is moved on the first trip, so the second is **E3102**. A capture moves its local
 before the call it is an argument of runs, so that call may not also consume the local, take it by
 reference or write it as its receiver (**E3102**); a call that only reads it may. Inside a closure, a captured name is the closure's own
-copy, so passing it to a parameter the callee writes is **E3159**.
+copy, so passing it to a parameter the callee writes is **E2013**; pass a `clone()`.
 
-A closure that escapes — stored anywhere or returned — keeps every record it captures, so handing a read-only
-value to a function whose parameter such a closure captures is **E3078**. A closure that stays local — it is
-only called, where it is made or by a parameter that only calls it — writes what it writes of a parameter it
-captures, so handing that function a read-only value is **E3159**.
+A closure that stays local — it is only called, where it is made or by a parameter that only calls it — writes
+what it writes of a parameter it captures, so handing that function frozen data is **E3207**. A closure that
+returns constant or module-level `let` data returns `immutable` data: writing through its result is **E3207**,
+and it converts only to a function type that declares `returns immutable` (**E3210**); take a `.clone()` or
+declare the result.
 
 A call through a closure held in a local `let` is judged against that one closure: `reader(box)` takes a
 frozen `box` when `reader` only reads its parameter, though a closure of the same shape beside it writes
@@ -3473,9 +3425,8 @@ so a call through it is judged against all of them.
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
 and the captures, so a closure may be returned, stored in a field, a container or
 a union payload, and passed to `async`. A plain function is a record that
-lives for the whole program. Copies share: `var g = f`, `g = f` and `f.clone()` hold the same closure, and a
-function value is exempt from **E3078**. A module-level `let` may hold a function value, including a closure
-a factory call returns.
+lives for the whole program. Copies share: `var g = f`, `g = f` and `f.clone()` hold the same closure.
+A module-level `let` may hold a function value: a function name or a closure that captures nothing.
 
 **A closure may not be stored into what it captures.** The record would hold the closure and the closure the
 record, and neither would ever be released, so storing a closure — directly, or inside a value holding it —
@@ -3789,7 +3740,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var values = TallyArray.create(0)
+	let values = TallyArray.create(0)
 	values.push(10)
 	values.push(20)
 
@@ -3818,7 +3769,7 @@ range excludes 0 (`int(1 to 100)`), or of an enum or union whose raw values (tag
 typealias Names = Array with String
 
 function main() returns ExitCode
-	var names = Names.create(0)
+	let names = Names.create(0)
 	names.growFilled(3, value: "")    // three empty strings
 	names.push("ada")
 	names.truncate(2)
@@ -3865,7 +3816,7 @@ function read(v Vec4, at Slot) returns Int
 end 'read'
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 
 	for i in 0 upto countof(Vec4) 'fill'
 		v.set(i, value: (i * 10) as Int)          // proven by the loop bounds
@@ -3924,7 +3875,7 @@ function total(values Buf) returns Int
 end 'total'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(1, value: 7)
 
 	let literal = Buf from [10, 20, 30]
@@ -5237,10 +5188,16 @@ not 80.
   awaited or cancelled`), a sibling field of a lent local too, and naming it in the statement that starts the
   coroutine is **E3186**. A `var`, or a field of a local, may be lent; any other storage at a
   by-reference position is **E2015** (`an `async` call takes only a local variable by reference`), a literal
-  is **E3159**, and the variable's declared type must be the parameter's type (**E3005**, see
+  is **E2013**, and the variable's declared type must be the parameter's type (**E3005**, see
   [Parameter Passing](#parameter-passing)). A coroutine that writes a parameter is refused a
-  [read-only](#read-only-values) argument (**E3159**), as an ordinary call is. `specs/regions-async-lend.md`
+  [read-only](#read-only-values) argument (**E3207**), as an ordinary call is. `specs/regions-async-lend.md`
   pins each case; `the-coroutine-writes-the-callers-variable-and-the-await-shows-it` runs one.
+- **A [unique](#unique-types) value is lent to the coroutine the same way.** A local or a parameter handed to
+  an `async` call, a socket or an `HttpServer` included, is the coroutine's until the promise is awaited or
+  cancelled: a read, `close()`, pass or move of it before then is **E3102**, and after the await or the cancel
+  it is the caller's again. A server that runs in a coroutine is stopped with `.cancel()` on its promise, then
+  `close()`d; `close()` while the promise is pending is **E3102**. The cases are in
+  `specs/regions-async-lend.md`.
 - A call passes an `isolated` value to `async` only in an `isolated` parameter, which moves it (**E3207**).
 - A closure that captured a binding owns it, so handing that binding to `async` afterwards is **E3102**.
 - The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, send a service message with a
@@ -5316,7 +5273,7 @@ A `mutable` promise parameter the callee reassigns (`q = async work()`) writes i
 callee drops the thread the variable held, the variable takes the new one, and the caller awaits it as any
 other promise name. The same holds through a function that only hands the parameter on, and at a position a
 function type passes by reference. The argument is a `var` the caller owns: a `let` or a `let` field is
-**E2013**, and a name a closure captured, or a promise an array still holds, is **E3159**. Inside a loop, `await x` after such a call
+**E2013**, and so is a name a closure captured or a promise an array still holds. Inside a loop, `await x` after such a call
 spends `x`, so the call on the next iteration is **E3102**.
 
 ```maxon
@@ -5330,7 +5287,7 @@ function nap(delay Milliseconds, tag Tag) returns Tag
 end 'nap'
 
 function main() returns ExitCode
-	var naps = TagPromiseArray.create(0)
+	let naps = TagPromiseArray.create(0)
 	naps.push(async nap(200, tag: 1))
 	naps.push(async nap(20, tag: 2))
 	naps.push(async nap(100, tag: 3))
@@ -5593,56 +5550,41 @@ either side could write, because the two green threads may run at the same time 
   reply is judged at its declaration, so a generic message that `returns T` is not refused here. A word is
   needed on none of these: numbers, `bool`, `ExitCode`, `String`, `Character`, enums, unions whose cases carry
   nothing, service and interface handles, `SharedValue` cells, a tuple none of whose elements owns heap, and a
-  type that holds a `unique` value or an OS handle (`TcpClient`, `TcpListener`, …). A promise, a function value
-  or an opaque type parameter is **E3135**, a reply the cell cannot carry is **E3140**, and a state field that
-  can hold a promise is **E3216**; those are reported before E3217.
+  `unique` type, which moves (the OS handles `TcpClient`, `TcpListener`, `TlsStream`, `TlsListener` and the
+  types that hold them are `unique`).
+- **Four kinds of value cannot cross at all, and are E3217 too:** a promise or any type that can hold one (a
+  record with a promise in a field, a union with a case carrying one, an array or list of promises, empty or
+  not), because a coroutine belongs to the strand that started it and a promise that crossed would be dropped,
+  awaited or cancelled by a strand that does not own it; a function value, a closure record that owns what it
+  captures; an opaque type parameter, whose layout is not known at the send; and an OS handle bound to a
+  thread, such as a `MachinePin`, also when it is held at an interface type. `await` the promise and send or
+  return the result, or send the scalar the value is derived from. A reply the cell cannot carry is
+  **E3140**, and a state field that can hold a promise is **E3216**; those are reported before E3217.
 - A local `let` or `var`, a temporary or a literal argument the sender owns is **moved** into the service;
   reading the sender's variable afterwards is **E3102**. Replies are moved too, and so is every argument a
   `spawn` hands its factory, whether or not the factory keeps it. The handler owns what it was moved, so it may
   keep it or write it.
-- A [read-only](#read-only-values) value the sender does not own — a module-level `let`, `immutable` data, a
-  `SharedValue` or registry read, or a parameter nothing in the sending function writes — is **shared**: its graph is marked shared, so every
-  count on it steps atomically, and neither side may write it. Sending a parameter the sending function
-  writes, or any shared value the handler writes or keeps, is **E3138**. A borrowed `String` is copied at the
-  send.
+- An `isolated` argument must be a value no other name reaches: a fresh call result or an `isolated` local. A
+  value read out of a field or an element of a `var`, the source of an enclosing `for` loop, or an element a
+  member hands back out of a field's container (`return self.queue.pop()`) is still held by its container, so
+  it is not `isolated` (**E3200**); send a `.clone()`.
+- An `immutable` argument must be frozen data: `freeze x.clone()`, a constant, a module-level `let`, or a
+  `SharedValue` or registry read. It is **shared**: its graph is marked shared, so every count on it steps
+  atomically, and neither side may write it. A mutable argument at an `immutable` parameter is **E3207**.
+  A `String` is a value; its buffer count becomes atomic when it is sent.
 - A tuple none of whose elements owns heap — `(Amount, Amount)`, say — is a value. When the sender is not its
   one owner, it is copied wherever it crosses: a send, a factory argument,
   `SharedValue.publish` or `Key.register`. The service gets the copy and the sender keeps its own.
-- A value with an owner besides the sender that is not read-only — held in a container, read out of a field
-  or an element of a `var`, or the source of an enclosing `for` loop — is **E3138**; send a `.clone()`. So is
-  an element a member hands back out of a field's container (`return self.queue.pop()`): it has left the
-  container, and another owner may still hold it. A
-  borrowed factory argument is **E3138** too, a generic factory's argument at a type
-  parameter included; one the sender owns but also shares is caught by the run-time check below (exit code
-  **96**). A field read off a temporary built inside the factory call's own argument list crosses, because the
-  `spawn` releases that temporary.
-- A parameter, a reply or a factory argument whose type cannot cross at all — a promise, a function value, an
-  opaque type parameter — is **E3135**. So is one whose type can hold a promise in any slot: a record with a
-  promise in a field, a union with a case carrying one, an array or list of promises, empty or not. A coroutine
-  belongs to the strand that started it, so a promise that crossed would be dropped, awaited or cancelled by a
-  strand that does not own it; `await` the promise and send or return the result. A reply that is part of the service's own state is **E3137**; return a copy. For a generic
-  service the reply is judged at the `spawn` that fixes `T`, and a `returns T` message that hands back the
-  state is **E3137** there whenever `T` resolves to a managed type; a scalar `T` crosses.
 - A value held at an interface type crosses as a message argument, in a service's state and as a reply,
-  moved like any other value. A conformer sent at its own type whose graph the runtime cannot walk
-  (an OS handle other than a socket, such as a machine pin) is **E3138**; once it is held at the interface type
-  it is checked through its witness at the send, and such a conformer aborts with exit code **96**.
-- **A socket crosses like any other record, because its box counts its owners.** A `TcpClient`, a
-  `TcpListener` or a `TlsStream` that the sender holds alone is moved into a service, sent in a message or
-  handed back in a reply; the receiving green thread reads and writes it, and the network poller wakes it
-  wherever it runs. One with a second owner — a copy in a container, a second `TcpClient` over the same
-  socket — is stopped by the walk below with exit code **96**. A module `let`,
-  a `SharedValue` or a registry value that reaches one is **E3163** or **E3171**.
-- Before a send, the runtime also checks the value's whole object graph. The graph may reach one record
-  several times — two fields, two slots of an array — when every owner of that record is one of those
-  references, and the record is walked once however many paths reach it. If some nested record has an owner
-  outside the graph, the program prints `fatal error: runtime abort 96 (transferredRecordNotSole)` to
-  stderr and exits with code **96** before anything is sent. A reply is checked
-  after the handler's locals and the message's arguments are released, so a reply built from them crosses. A
-  generic service's reply is checked at the type its `spawn` fixes: a `returns T` message that hands back a
-  container or a reference-holding record from the service's own state is **E3137** at the `spawn`, and a
-  reply whose graph holds a type the runtime cannot walk (an OS handle other than a socket) is **E3138** there. A generic service
-  cannot be spawned over a value held at an interface type (**E2015**).
+  moved like any other value; a conformer whose graph cannot cross is refused at the send, as it is at its own type.
+- **An OS handle crosses by move.** A `TcpClient`, a `TcpListener` or a `TlsStream` is `unique`: bound with
+  `let`, pushed into a container or handed to a `spawn`, it moves, and reading the sender's name afterwards is
+  **E3102**; the receiving green thread reads and writes it, and the network poller wakes it wherever it runs.
+  `clone()` of one is [E3214](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3214). A `SharedValue` or a
+  registry value that reaches one is **E3171**.
+- Freezing or publishing a graph walks it to mark every record shared. A value held at an interface type is
+  walked through the conformer it holds, and one no walk can be built for stops the program with exit code
+  **96** before anything is published.
 
 **A service's state holds no promise.** A field of a service type that is a `Promise`, an array of promises, or a
 record or union that holds one is [E3216](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3216), reported at the
@@ -5651,13 +5593,10 @@ so a promise kept in the state could be awaited or dropped by a strand that does
 factory `await`s or `.cancel()`s the coroutines it starts before it returns, and keeps their result in the field.
 
 **Module-level state.** A service keeps its state in its own fields and hands results back through replies. A
-module-level `let` is readable from a handler or factory. In a program that spawns a service, every `let` record built before
-`main` is marked shared once the last global initializer has returned, so every count a handler steps on it
-is atomic; a record two `let`s reach counts both as its owners. A `let` whose graph no walk can mark — one
-holding an OS handle, a value held at an interface type, or a generic instance with no base layout — is
-**E3163** where a message or a factory can read it, and legal where only `main` does. A `spawn` a global initializer can
-reach is **E3164** (a [`default`](#program-wide-defaults--default) starts a program-wide service before
-`main`; see [Top-Level Bindings](#top-level-bindings)).
+module-level `let` is `immutable` image data, so a handler or factory reads the one copy every thread shares,
+and it can hold no OS handle, function value or promise. A `spawn` in a global initializer is **E3220**, like any
+call (a [`default`](#program-wide-defaults--default) starts a program-wide service before `main`; see
+[Top-Level Bindings](#top-level-bindings)).
 
 **Output order.** Text printed by `main` and by a service handler or factory may interleave in any order; sequence it
 through awaited replies when order matters.
@@ -5696,8 +5635,8 @@ send: the handler receives the message's own arguments alone.
 - A message that declares a parameter named `sendTimeout`, and an argument after `sendTimeout:`, are
   **[E3192](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3192)**.
 
-The arguments come back owned by the caller, so they can be sent again, to this service or another. A
-read-only value the send shared (see above) comes back as a copy. One whose type has no deep copy comes back
+The arguments come back owned by the caller, so they can be sent again, to this service or another. An
+`immutable` value the send shared (see above) comes back as a copy. One whose type has no deep copy comes back
 as the shared value itself, which the caller may read and keeps for itself. A message with no parameters
 has payload-free cases. Through an
 [interface handle](#interface-handles) the error is `<Interface>.<message>.sendError`.
@@ -5746,9 +5685,7 @@ end 'main'
   to each other and the service waits for it forever. Give the send a `sendTimeout:`, which parks the
   coroutine until there is room.
 - **A send error is propagated** by a bare `try` in a function that `throws <Service>.<message>.sendError`,
-  or rethrown with `throw e` from the binding that caught it. Throwing one the function does not solely
-  own — a parameter, say — is **E3191**, because its catcher takes the arguments out of it as their only
-  owner.
+  or rethrown with `throw e` from the binding that caught it.
 - `otherwise ignore` drops a failed send and releases its arguments.
 
 ### Interface Handles
@@ -5762,7 +5699,7 @@ service the handle holds, by the same rules as the service's own handle. Its sen
 typealias Count = int(0 to 1000000)
 
 interface Tally
-	function add(by Count)
+	function add(mutable self, by Count)
 	function total() returns Count
 end 'Tally'
 
@@ -5796,7 +5733,7 @@ end 'main'
 
 - A `T.handle` converts to `I.handle` wherever an `I.handle` is expected: a binding, an argument, a return, a field, an array element, a message argument, a
   `Key.register` and a call through a function value or a closure. `as I.handle` converts explicitly.
-- Every requirement must be sendable: its parameters must cross a message (**E3135**) and its reply must be
+- Every requirement must be sendable: its parameters must cross a message (**E3217**) and its reply must be
   carriable (**E3140**). One send serves every implementer, so the services a program sends to through
   `I.handle` declare each requirement with the same parameter, return and `throws` types
   ([E3177](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3177)); send through each service's own handle
@@ -5819,13 +5756,14 @@ A top-level `default Key = expression` declares the program-wide default for `Ke
   or promise ([E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) otherwise). Its fields may be `var`,
   and may hold containers. The expression builds one, and may spawn services for its fields.
   `Key.current()` returns the published record, [read-only](#read-only-values) all the way down: a write
-  through it is **E3159**, binding it to a `var` is **E3078**, and `clone()` makes a mutable copy.
+  through it is **E3197** (**E3207** where it is handed to a parameter the callee writes), and `clone()` makes
+  a mutable copy.
 
 ```maxon
 typealias Count = int(i64.min to i64.max)
 
 interface Greeter
-	function greet() returns Count
+	function greet(mutable self) returns Count
 end 'Greeter'
 
 type Polite implements Greeter
@@ -5985,7 +5923,7 @@ Each of these aborts writes `fatal error: runtime abort N (name)` to stderr, the
 | 75 | a green thread was neither awaited nor dropped when the program ended |
 | 90 | a service's message loop received a message its type does not declare — reachable only if a send the compiler built names no message of the service |
 | 92 | deadlock: `main` is unfinished and every green thread waits for good (for example `awaitAny` on an empty array, or a `sendTimeout: ForeverMs` send to a mailbox that stays full) |
-| 96 | a service send found a value with a second owner |
+| 96 | a share walk (`freeze`, `SharedValue.publish`, `Key.register`) reached a value held at an interface type whose conformer no walk can be built for |
 | 98 | a service send waiting for room broke the protocol between the sender and the party that wakes it — reachable only through a send the compiler built wrongly |
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
 | 120 | a deep copy reached an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled |
@@ -6108,7 +6046,7 @@ describes **one** build; describing a second in the same run is an error.
 
 ```maxon
 export function build() returns ExitCode
-	var sources = StringArray.create(0)
+	let sources = StringArray.create(0)
 	sources.push("src")
 	sources.push("vendor/thirdparty")
 
@@ -6180,7 +6118,7 @@ Two further kinds of data sit outside the current region:
   its life. A `freeze` walk marks every object in the region it freezes as shared, so the result is read with
   atomic counts from any thread.
 
-A capability is a prefix word on a type, read like an adjective. The words are contextual: `readonly`,
+A capability is a prefix word on a type, read like an adjective. The words are contextual:
 `mutable`, `isolated` and `immutable` are qualifiers exactly where the grammar expects a type, and a name or an
 operand everywhere else. A local named `mutates` or `captures` keeps its meaning, and `swap(1, right: 2)`, with the
 parenthesis against the name, calls a function named `swap`, where `freeze (Box.create(7))` with a space is the
@@ -6191,9 +6129,8 @@ operator over a parenthesized operand (`specs/regions-syntax.md`).
 | `function pick(pair (immutable Box, Box))` | `immutable` qualifies the first tuple element |
 | `function bump(immutable self)` | `immutable` is the receiver's capability |
 | `type Cell uses T where T is isolated` | `isolated` is the bound |
-| `typealias Visit = function(readonly Box)` | `readonly` names a parameter of type `Box` |
+| `typealias Visit = function(mutable Box)` | `mutable` qualifies the parameter of type `Box` |
 | `swap slot with mutable(seed)` | `mutable(seed)` is a call to a function named `mutable` |
-| `var x as readonly Box` | `readonly` qualifies a type outside a container argument: **E2075** |
 | `typealias A = immutable int` | `immutable` qualifies a type that belongs to no region: **E2010** |
 | `typealias B = immutable (X, Y)` | `immutable` qualifies a tuple, which is not a record type: refused |
 
@@ -6255,14 +6192,17 @@ A generic type argument carries a capability. `List with Box` holds mutable `Box
 region and `List with immutable Box` holds frozen ones; a value that flows into either position is compared
 against it as a store into a slot, so a frozen value into the mutable position and a mutable one into the
 `immutable` position are both refused (**E3196** at a store, **E3207** at a call argument that the callee
-stores). `Array with immutable Box` and `Array with readonly Box` are
-different types (`specs/regions-generic-flows.md`).
+stores). `Array with immutable Box` and `Array with Box` are
+different types (`specs/regions-generic-flows.md`). An element read out of an `immutable` slot is read-only, so a
+`for` loop variable over `Array with immutable Box`, and what an `extension` member returns out of such an
+instance, is written through only as **E3197**; a `clone()` is the mutable copy.
 
 ### Constant Data
 
 A `let` whose initializer is a compile-time constant names **image data**: a literal, a `b"…"` byte string, a
 constant record, array or tuple literal, or another constant `let`. The `let` may be a module-level binding, a
-`static let`, a `let` field or a local, and the data is `immutable`. So is every inline `b"…"` literal, bound
+`static let`, a `let` field or a local, and the data is `immutable`; every module-level `let` and `static let` is
+image data, because its initializer calls nothing (**E3220**). So is every inline `b"…"` literal, bound
 or not. Image data allocates nothing at run time and is read with plain counts from any thread.
 
 Immutable data goes where it is only read, or where it is held as `immutable`:
@@ -6279,6 +6219,9 @@ Immutable data goes where it is only read, or where it is held as `immutable`:
   **E3207** (``'push' needs a writable receiver; 'Name' is immutable``; ``'grow' writes 'name' (line 5:
   `name.push(100)`); 'Name' is immutable``). A mutable copy comes from `.clone()`, or from building the value
   (`ByteArray.create` and `push`, or `"text".toByteArray()`).
+- A field default that names it (`var names = sharedNames`) stores it into a mutable field, so it is **E3196**;
+  build the value in the default, or declare the field `immutable`. A closure that returns it returns `immutable`
+  data (see [Closures](#closures)).
 
 ```maxon
 let Name = b"abc"
@@ -6340,7 +6283,7 @@ function stamp(table Table)
 end 'stamp'
 
 function main() returns ExitCode
-	var live = Table.create()
+	let live = Table.create()
 	let frozen = freeze Table.create()
 	print("{describe(live)} {describe(frozen)}\n")    // describe takes either
 	stamp(live)                                        // stamp takes the mutable one
@@ -6393,7 +6336,7 @@ a generic method are judged as if they build a record from each unmarked argumen
 A field, parameter, result or local is declared `isolated`. A local takes the word after its initializer:
 
 ```maxon
-var builder = IndexBuilder.create() as isolated IndexBuilder
+let builder = IndexBuilder.create() as isolated IndexBuilder
 ```
 
 An expression whose inputs are all values, `immutable` data or moved `isolated` data is a fresh region where
@@ -6418,7 +6361,7 @@ the block and outer `var`s that hold values:
 
 ```maxon
 function buildIndex(declarations DeclarationArray) returns SettledIndex
-	var builder = IndexBuilder.create() as isolated IndexBuilder
+	let builder = IndexBuilder.create() as isolated IndexBuilder
 
 	modify builder 'fill'
 		for declaration in declarations 'eachDeclaration'
@@ -6500,9 +6443,14 @@ end 'Ticket'
 A type with a unique field is unique too, with no declaration and no generated `clone()` (**E3214**:
 ``'Wallet' is unique (its field 'ticket' holds a unique 'Ticket') and cannot be cloned``); so is a type that
 holds an array of unique values. A unique value cannot be frozen, and reading one out of a field or an element
-to bind, return or store it is **E3214**: move it out with `pop` or `remove`, or `swap` it out of an `isolated`
+to bind, return or store it is **E3214**, and so is a `for` loop variable or a tuple destructure of one handed
+to a parameter that keeps it: move it out with `pop` or `remove`, or `swap` it out of an `isolated`
 field. Handing a unique value to a parameter the callee only reads leaves it
-readable. The standard library's `Promise` is unique. The cases are in `specs/regions-unique.md`.
+readable. The standard library's `Promise` is unique, and so are the OS handle types (`TcpClient`,
+`TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`) and every type
+that holds one: binding a handle with `let`, pushing it into a container or handing it to a `spawn` moves it, a
+later read of the name is **E3102**, and a handle is never cloned. One owner holds a handle and lends it to calls.
+The cases are in `specs/regions-unique.md`.
 
 ### Region Bounds
 
@@ -6639,7 +6587,7 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3214](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3214) | a unique value cloned, aliased, frozen or moved out of a slot it was only read from |
 | [E3215](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3215) | a type argument that breaks a `where T is sendable` or `where T is isolated` bound |
 | [E3216](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3216) | a service type whose state can hold a promise |
-| [E3217](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3217) | a service message or factory parameter, or a message reply, that holds data of its region and names neither `isolated` nor `immutable` |
+| [E3217](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3217) | a service message or factory parameter, or a message reply, that holds data of its region and names neither `isolated` nor `immutable`, or whose type cannot cross at all (a promise holder, a function value, an opaque type parameter, a thread-bound handle) |
 
 ## Memory Model
 
@@ -6677,7 +6625,7 @@ Three mechanisms carry this:
 | Forged values | No integer-to-enum or integer-to-union cast, and no interface-to-interface cast (**E3009**) |
 | Null | There is no null: every variable, field and element holds a value |
 | Uninitialized fields | Every field must be definitely assigned before its struct literal (**E3086**) |
-| Writing through read-only data | Compile error (**E3159**, **E3078**, **E3207**) |
+| Writing through read-only data | Compile error (**E3197**, **E3207**) |
 | Use after move | Compile error (**E3102**) |
 | Data races | Mutable state is owned by one thread, and only read-only values are shared |
 | Stack overflow | Checked function prologues; **E5004** for the unchecked runtime chains; guard pages on OS stacks |
@@ -6718,7 +6666,7 @@ typealias PointArray = Array with Point
 
 function main() returns ExitCode
 	var a = Point.create(1, y: 2)
-	var points = PointArray.create(0)
+	let points = PointArray.create(0)
 	points.push(a)                                        // the array shares a's record
 	var b = try points.get(0) otherwise panic("pushed")
 	b.x = 99
@@ -6750,8 +6698,11 @@ counts are needed. A mistake in that analysis can only add a count, so it costs 
   write to that collection inside the loop cannot free the elements being visited.
 - **Moves.** A move hands the reference over without changing the count, and consumes the source binding.
   Reading the source afterwards is **E3102**. Assigning the binding a new value makes it usable again.
-- **Plain and atomic counts.** Counts are plain within one thread, and atomic only on values shared between
-  threads (see [Threads and Shared Data](#threads-and-shared-data)).
+- **Three kinds of count.** A record in the current region has a plain count, stepped without synchronization
+  by the one thread that owns the region. `immutable` data that threads share, such as a `freeze` result, has an
+  atomic count. Constant data, which includes every module-level `let`, is immortal: it sits in read-only memory
+  and no count is stepped. A `String` buffer and the box of an OS handle start with a plain count and turn atomic
+  at the first alias, at a `freeze`, or at a send (see [Threads and Shared Data](#threads-and-shared-data)).
 
 ### Read-Only Values
 
@@ -6760,31 +6711,27 @@ number of holders and threads without copying, which is what makes sharing by re
 
 | Read-only data | Read-only through |
 |----------------|-------------------|
-| [constant data](#constant-data): a constant `let`, a `b"…"` literal | itself, for the program's whole life |
+| [constant data](#constant-data): a constant `let`, every module-level `let` and `static let`, a `b"…"` literal | itself, for the program's whole life |
 | [`immutable` data](#frozen-data-freeze-and-immutable): a `freeze` result, a read of an `immutable` slot | everything it reaches |
-| a module-level `let` built by a call | everything it reaches, for the program's whole life |
 | a value read from a `SharedValue` or a registry | everything it reaches |
 | a stored Map key or Set element | itself, while stored |
-| an element of a `readonly` element type | itself, while stored |
+| an element of an `immutable` element slot (`Array with immutable T`) | itself, while stored |
 | a `for` variable, `if let` binding or `match` binding | the same as its source: read-only from a read-only source, writable from a writable one |
 
 The rules:
 
-- **No write through read-only data.** A field store, a method that writes its receiver, or an argument the
-  callee writes is **E3159** (**E3207** for constant and `immutable` data, whose message names the use that
-  needs it writable). The diagnostic names the read-only root. A `for` over a read-only `List` (frozen, or a
-  module `let`) hands out read-only elements, so writing one is **E3197**; iterate a `.clone()`.
-- **No mutable alias of read-only data.** Binding read-only data to a `var` is **E3078**. A module-level
-  `let`'s record reaching a `var` through a ternary, a `match … gives` or a `try … otherwise` is the same
-  **E3078**. Storing read-only data into a `var` field, a mutable container element, or passing it to a
-  parameter that keeps it where something may write it, is **E3078** too. Constant and `immutable` data is
-  refused by the capability checker instead: storing it into a plain field, element or payload is **E3196**,
-  and passing it to a parameter the callee writes or stores into a plain place is **E3207**.
+- **No write through read-only data.** A field store or a method that writes its receiver is **E3197** (**E3207**
+  for constant and `immutable` data, whose message names the use that needs it writable); handing it to a
+  parameter the callee writes is **E3207**. The diagnostic names the read-only root. A `for` over a read-only
+  `List` (frozen, or a module `let`), or over a collection with `immutable` elements, hands out read-only
+  elements, so writing one is **E3197**; iterate a `.clone()`. The element an iterator hands out of a frozen
+  collection parameter is read-only too, and handing it to a callee that writes it is **E3207**.
+- **No mutable place takes read-only data.** Storing it into a plain field, a mutable container element or a
+  union payload is **E3196**, and passing it to a parameter the callee stores into a plain place is **E3207**.
+  Binding it to a `var` or a `let` is allowed: the name sees the same data and is refused the writes.
   [`clone()`](#explicit-cloning) makes an independent mutable copy.
 - **A tuple carries the mark of what it holds.** A tuple literal may hold read-only data, and the tuple is
-  read-only wherever it goes, one a call returns included. Binding the tuple, or one of its read-only
-  elements, to a `var`, assigning it to existing `var` names, or storing it into a `var` field or a container
-  is **E3078**, and passing it to a function that writes it is **E3159**.
+  read-only wherever it goes, one a call returns included; the rules above apply to its elements.
 - **A `let` names writable data.** A `let` binding, a `let` field and a union payload hold records that stay
   writable through every name, so a write through a `let` field reaches the record it holds. An `immutable`
   field takes `immutable` data only.
@@ -6793,14 +6740,11 @@ The rules:
 - **Keys are read-only.** A stored Map key or Set element cannot be written through its container, and a key
   read back out is read-only. Both are `immutable` slots: a key is immutable data or is frozen where it is
   inserted. Map values and Array elements follow their container.
-- **Read-only element types.** `Array with readonly T` and `Map with K, readonly V` hold read-only values
+- **Immutable element types.** `Array with immutable T` and `Map with K, immutable V` hold frozen values
   without copying:
-  - a read-only value can be stored directly;
+  - a frozen value can be stored directly, and a mutable one is **E3196** until it is frozen;
   - an element read out is read-only;
   - the container itself stays mutable: elements can still be pushed, replaced and removed.
-
-  As a type argument, `readonly` appears only on a container's element or value type; bindings and fields use
-  `let`.
 - **Value types are exempt.** Scalars, `String`, `Character` and records that are immutable aggregates cannot
   give a stored value a second writer, so none of these rules apply to them. A record is an immutable aggregate
   when every field is a `let` and every field's type is a value type or an immutable aggregate; a record with
@@ -6823,12 +6767,12 @@ typealias PointArray = Array with Point
 function main() returns ExitCode
 	let frozen = freeze Point.create(2)  // frozen data
 	// frozen.x = 3                      // E3197: a write through frozen data
-	var b = frozen.clone()               // an independent, mutable record
+	let b = frozen.clone()               // an independent, mutable record
 	b.x = 5
 
-	var points = PointArray.create(0)
+	let points = PointArray.create(0)
 	points.push(b)                       // the array shares b's record
-	var first = try points.get(0) otherwise panic("pushed")
+	let first = try points.get(0) otherwise panic("pushed")
 	first.x = 9                          // an element follows its container
 	print("{frozen.x} {b.x} {first.x}\n")   // 2 9 9
 	return 0
@@ -6839,20 +6783,19 @@ end 'main'
 
 | Where a value goes | What happens |
 |--------------------|--------------|
-| `var b = a`, `a` a `var` | `a` moves into `b` |
-| `let b = a`, `a` a `var` | `a` moves into `b` |
+| `let b = a` or `var b = a`, `a` a `var` | `a` moves into `b` |
 | `let b = a` or `var b = a`, `a` a `let` | `b` names the same record, and `a` stays usable |
 | `let b = e`, `e` state something may still write | `b` names it, and the writes are seen through `b` |
-| `var b = a`, `a` read-only data (a stored key, a `SharedValue` read) | **E3078**; `a.clone()` is the mutable copy |
-| `var b = a`, `a` constant or `immutable` data | `b` can be reassigned but not written: a write through it is **E3207**; `a.clone()` is the mutable copy |
+| `let b = a`, `a` read-only data (a stored key, a `SharedValue` read, constant or `immutable` data) | `b` names the same data and is refused writes: a write through it is **E3197** or **E3207**; `a.clone()` is the mutable copy |
+| a `unique` value (a promise, an OS handle) bound with `let`, pushed into a container or handed to a `spawn` | moves; reading the name afterwards is **E3102**, and `clone()` is **E3214** |
 | an ordinary call argument | shared with the callee for the call, counted where needed; a `mutable` parameter is the caller's own storage, so the callee's writes reach it |
-| an argument the callee keeps where something may write it | the holder shares the record; read-only data is **E3078**, and constant or `immutable` data is **E3207** |
+| an argument the callee keeps where something may write it | the holder shares the record; constant or `immutable` data is refused (**E3196** into a plain field, element or payload, **E3207** at a parameter the callee stores into a plain place) |
 | an argument the callee keeps in an `immutable` field | must be `immutable` data (**E3207** otherwise) |
 | an argument to an [`isolated`](#separate-regions-isolated) parameter | moves: a fresh region, or an `isolated` local; reading it afterwards is **E3102** |
 | an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread, and its promise is [tied](#tied-and-must-use-promises) when the argument is the caller's mutable data; a variable at a `mutable` parameter is lent to the coroutine until its promise is awaited or cancelled; a promise moves to the coroutine |
 | a [closure](#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
-| a [service](#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied |
-| a `spawn` factory argument | moves into the service; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
+| a [service](#services--spawn) message | an `isolated` value moves to the service; an `immutable` value is shared; a tuple of heap-free elements the sender does not solely own is copied |
+| a `spawn` factory argument | moves into the service, on a message argument's terms: `isolated` or `immutable` (**E3217** without a word), and a value still held elsewhere is not `isolated` (**E3200**) |
 | `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**) or a tuple of heap-free elements, which is copied; every reader sees it read-only |
 
 ### Aliasing Between Arguments
@@ -6922,7 +6865,7 @@ end 'Point'
 
 function main() returns ExitCode
 	let a = Point.create(1)
-	var b = a.clone()
+	let b = a.clone()
 	b.x = 99
 	print("{a.x} {b.x} {a is b}\n")    // 1 99 false
 	return 0
@@ -6962,13 +6905,16 @@ decorator of that shape reaches the clone check.
 - **There is no module-level mutable state.** `var` is a local, a field of a `type`, or a parameter's target; a
   file-scope or `static` `var` is a syntax error. State more than one thread uses is a service's fields or a
   [`SharedValue`](#sharedvalue--a-live-value-made-at-run-time).
-- **Read-only values are shared.** A module `let` reachable from another thread, a value published through
-  `SharedValue` or a registry `default`, and a read-only parameter sent in a message are marked shared before a
-  second thread can see them. A shared value uses atomic counts, and nothing can write it, because it is read-only.
+- **Read-only values are shared.** A module `let` is image data that every thread reads. A `freeze` result, a
+  value published through `SharedValue` or a registry `default`, and an `immutable` argument sent in a message
+  are marked shared before a second thread can see them. A shared value uses atomic counts, and nothing can
+  write it, because it is read-only.
 - **A shared graph must be walkable.** A `SharedValue` or registry value that holds an OS handle, a function value
-  or a promise is **E3171**. A module `let` read by a message or a factory that the share walk cannot mark is **E3163**.
-- **The send check.** At run time, a mutable value moved to another thread must be solely owned; a value that is
-  not stops the program with exit code **96**.
+  or a promise is **E3171**. A module `let` can hold none of them.
+- **A moved value has one owner.** A mutable value that crosses to another thread is `isolated`, so the sender
+  holds no other name for it (**E3200**, **E3102**); the compiler decides this, and a send checks nothing at run
+  time. The share walk a `freeze` or a publish runs stops the program with exit code **96** only at a value held
+  at an interface type whose conformer no walk can be built for.
 
 ### Raw Memory and the Library Tier
 
@@ -7037,7 +6983,7 @@ end 'Token'
 typealias TokenList = List with Token
 
 function countTokens() returns TokenId
-	var list = TokenList.create()
+	let list = TokenList.create()
 	list.append(Token.create(1))
 	list.append(Token.create(2))
 	return list.count()             // list, then both tokens, are freed on return
@@ -7125,19 +7071,17 @@ awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
 | Code | Meaning |
 |------|---------|
 | [E3009](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3009) | a cast that could forge a value: integer to an enum or a union, or interface to interface |
-| [E3078](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3078) | read-only data bound or stored where it could be written |
 | [E3086](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3086) | a field not definitely assigned before its struct literal |
 | [E3102](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3102) | use of a moved value |
 | [E3152](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3152) | `__Raw` used outside `runtime/` |
-| [E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159) | a write through a read-only value |
-| [E3163](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3163) | a module `let` read by a message or a factory that the share walk cannot mark |
 | [E3171](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3171) | a shared value whose graph holds an OS handle, a function value or a promise |
 | [E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174) | a published value that is not solely owned |
 | [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) | raw memory or a raw handle used outside the library tier |
 | [E3186](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3186) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |
 | [E3196](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3196)–[E3217](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3217) | the capability, window, tied-promise, unique and service-state checks (see [Capability Errors](#capability-errors)) |
 | [E5004](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e5004) | a chain of unchecked runtime functions that can exceed the stack margin |
-| exit 96 | a mutable value sent to another thread while not solely owned |
+| [E3220](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3220) | a call in the initializer of a module-level `let` or a `static let` |
+| exit 96 | a share walk reached a value held at an interface type whose conformer no walk can be built for |
 | exit 101 | memory still allocated when `main` returns |
 
 ---
@@ -7259,7 +7203,7 @@ typealias Age = int(0 to 150)
 typealias Ages = Map with (String, Age)
 
 function main() returns ExitCode
-	var ages = Ages.create()
+	let ages = Ages.create()
 	ages.upsert("ada", value: 36)
 	let known = try ages.get("ada") otherwise 0
 	let unknown = try ages.get("bob") otherwise 0
@@ -7396,7 +7340,7 @@ name.push(1)                  // E3207: 'push' needs a writable receiver; 'name'
 
 ```maxon
 var a = Point.create(1)
-var b = a
+let b = a
 b.x = 2
 print("{a.x}\n")              // E3102: use of moved value 'a'
 ```
@@ -7539,8 +7483,8 @@ These rules cover the mistakes code generators make most often when writing Maxo
 4. **Construct records through a static factory.** `Point{x: 1}` is legal only inside `Point`'s own body;
    elsewhere call `Point.create(1)`.
 
-5. **Prefer `let`.** A `var` that is never reassigned or mutated is an error. Every declared name must be
-   used; write `_` for one you do not need.
+5. **Prefer `let`.** A `var` that is never reassigned is an error, even when it is written through (`push`, a
+   field store). Every declared name must be used; write `_` for one you do not need.
 
 6. **Handle every throwing call.** Write `try call() otherwise <fallback>`, `otherwise panic("why")` when
    failure is impossible, or a bare `try` inside a function that `throws` the same error type.

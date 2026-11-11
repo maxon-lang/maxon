@@ -199,8 +199,8 @@ end 'readPeSectionData'
 // `u16`/`u32` serve `enum-narrow-storage`'s ladder (`u16[] 100, 1000, 10000`); `f64` is the gate on the
 // eight bytes `3.14` actually lays down (`data-section-f64-*`).
 export function parseTypedSectionValues(block String) returns SectionPinExpectation throws TypedValueError
-	var out = ByteArray.create(0)
-	var payloads = ByteBlobArray.create(0)
+	let out = ByteArray.create(0)
+	let payloads = ByteBlobArray.create(0)
 
 	// Tracked rather than inferred from `out.count()`: an array line with no elements contributes zero
 	// bytes, and "a scalar line was written" is the question the mixed-form refusal asks.
@@ -359,7 +359,7 @@ let ShortestQuotedValue = 2 as BytePos
 // are REFUSED BY NAME rather than half-implemented: no canonical pin writes one (`\0` is the only escape
 // in the corpus, and only `specs/codegen-internals.md`'s six string cases use the spelling at all), and a
 // named refusal is what this file already does with every other thing it cannot express.
-function utf8PinBytes(valueText String) returns ByteArray throws TypedValueError
+function utf8PinBytes(valueText String) returns immutable ByteArray throws TypedValueError
 	if valueText.count() < ShortestQuotedValue or not valueText.startsWith(QuoteMark) or not valueText.endsWith(QuoteMark) 'notQuoted'
 		throw TypedValueError.unquotedText(Utf8TypeName, text: valueText)
 	end 'notQuoted'
@@ -374,28 +374,30 @@ function utf8PinBytes(valueText String) returns ByteArray throws TypedValueError
 
 	let raw = valueText.toByteArray()
 	let bodyEnd = raw.count() - 1
-	var out = ByteArray.create(bodyEnd, zeroed: false)
+	let out = ByteArray.create(bodyEnd, zeroed: false) as isolated ByteArray
 	var i = 1 as ByteOffset
 
-	while i < bodyEnd as ByteOffset 'eachByte'
-		let ch = try raw.get(i) otherwise panic("utf8PinBytes: i < bodyEnd just held but get({i}) failed")
+	modify out 'fill'
+		while i < bodyEnd as ByteOffset 'eachByte'
+			let ch = try raw.get(i) otherwise panic("utf8PinBytes: i < bodyEnd just held but get({i}) failed")
 
-		if ch != PinBackslash 'aPlainByte'
-			out.push(ch)
-			i = i + 1
-			continue
-		end 'aPlainByte'
+			if ch != PinBackslash 'aPlainByte'
+				out.push(ch)
+				i = i + 1
+				continue
+			end 'aPlainByte'
 
-		if i + 1 >= bodyEnd as ByteOffset 'danglingBackslash'
-			throw TypedValueError.unknownEscape(pinEscapeText(PinBackslash))
-		end 'danglingBackslash'
+			if i + 1 >= bodyEnd as ByteOffset 'danglingBackslash'
+				throw TypedValueError.unknownEscape(pinEscapeText(PinBackslash))
+			end 'danglingBackslash'
 
-		let marker = try raw.get((i + 1) as ElementIndex) otherwise panic("utf8PinBytes: i + 1 < bodyEnd just held but get({i + 1}) failed")
-		out.push(try pinEscapeByte(marker))
-		i = i + 2
-	end 'eachByte'
+			let marker = try raw.get((i + 1) as ElementIndex) otherwise panic("utf8PinBytes: i + 1 < bodyEnd just held but get({i + 1}) failed")
+			out.push(try pinEscapeByte(marker))
+			i = i + 2
+		end 'eachByte'
+	end 'fill'
 
-	return out
+	return freeze out
 end 'utf8PinBytes'
 
 // The escapes a `utf8` pin accepts, in `Parser.escapeByte`'s order and shape: the named control bytes, then
@@ -431,7 +433,7 @@ end 'pinEscapeByte'
 
 // How an escape reads back in a diagnostic — the backslash plus what followed it.
 function pinEscapeText(marker Byte) returns String
-	var text = ByteArray.create(2, zeroed: false)
+	let text = ByteArray.create(2, zeroed: false)
 	text.push(PinBackslash)
 	text.push(marker)
 	return String.from(text)
@@ -519,7 +521,7 @@ typealias TypedValueTypeArray = Array with TypedValueType
 
 // The roster itself, in the order the message lists it: narrowest first, signed before unsigned.
 function typedValueTypes() returns TypedValueTypeArray
-	var rows = TypedValueTypeArray.create(0)
+	let rows = TypedValueTypeArray.create(0)
 	rows.push(TypedValueType.create("i8", byteCount: 1))
 	rows.push(TypedValueType.create("u8", byteCount: 1))
 	rows.push(TypedValueType.create("i16", byteCount: 2))
@@ -536,7 +538,7 @@ end 'typedValueTypes'
 // reason the table exists at all.
 function typedValueTypeRoster() returns String
 	let rows = typedValueTypes()
-	var names = StringArray.create(rows.count(), zeroed: false)
+	let names = StringArray.create(rows.count(), zeroed: false)
 
 	for row in rows 'eachRow'
 		names.push(row.name)
@@ -577,7 +579,7 @@ end 'appendLittleEndian'
 // call out here, so the one spelling sits on the lower side.
 
 export function formatHexBytes(bytes ByteArray) returns String
-	var hexes = StringArray.create(bytes.count(), zeroed: false)
+	let hexes = StringArray.create(bytes.count(), zeroed: false)
 
 	for b in bytes 'each'
 		hexes.push(hexByte(b as MachineWord))

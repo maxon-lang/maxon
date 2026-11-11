@@ -223,7 +223,7 @@ function checkStructLayout(project Project, signatures ProgramSignatures, decl T
 end 'checkStructLayout'
 
 function checkEveryField(project Project, signatures ProgramSignatures, decl TypeNameDecl, layout StructLayout)
-	var fieldTypeNames = signatures.indexTypeNames()
+	let fieldTypeNames = signatures.indexTypeNames()
 
 	for position in 0 upto layout.fieldCount() 'eachField'
 		let tier = narrowerTier(layout.fieldTier(position), other: layout.visibility)
@@ -235,7 +235,7 @@ function checkEveryField(project Project, signatures ProgramSignatures, decl Typ
 		let fieldName = try layout.fieldNames.get(position) otherwise panic("checkEveryField: fieldNames.get OOB at {position} inside its own `upto` bound")
 		let declared = try layout.fieldTypes.get(position) otherwise panic("checkEveryField: `type {String.from(layout.name)}` names {layout.fieldNames.count()} field(s) and carries {layout.fieldTypes.count()} field type(s) — `StructLayout.addField` writes the columns in lockstep")
 		let subject = memberSubject(decl, tier: tier, memberName: fieldName, site: layout.fieldTypeSites.siteAt(position), kind: SignatureSubjectKind.instanceField).scopedToTypeParameters(layout.typeParamNames)
-		var seen = ReportedTypeNameSet.create()
+		let seen = ReportedTypeNameSet.create()
 		walkSignatureType(project, signatures: signatures, subject: subject, where: SignaturePosition.declaredType, declared: declared, typeNames: fieldTypeNames, seen: seen)
 		walkSpelledBrand(project, signatures: signatures, subject: subject, where: SignaturePosition.declaredType, brand: layout.fieldDeclaredBrand(position), seen: seen)
 	end 'eachField'
@@ -269,14 +269,14 @@ function checkBackingRecord(project Project, signatures ProgramSignatures, subje
 end 'checkBackingRecord'
 
 function checkEveryPayload(project Project, signatures ProgramSignatures, decl TypeNameDecl, layout EnumLayout)
-	var payloadTypeNames = signatures.indexTypeNames()
+	let payloadTypeNames = signatures.indexTypeNames()
 
 	for index in 0 upto layout.caseCount() 'eachCase'
 		let caseName = try layout.caseNames.get(index) otherwise panic("checkEveryPayload: caseNames.get OOB at {index} inside its own `upto` bound")
 
 		for payload in layout.payloadsAt(index) 'eachPayload'
 			let subject = memberSubject(decl, tier: layout.visibility, memberName: caseName, site: payload.typeSite, kind: SignatureSubjectKind.unionCase)
-			var seen = ReportedTypeNameSet.create()
+			let seen = ReportedTypeNameSet.create()
 			walkSignatureType(project, signatures: signatures, subject: subject, where: SignaturePosition.payload(payload.name), declared: payload.declaredType, typeNames: payloadTypeNames, seen: seen)
 			walkSpelledBrand(project, signatures: signatures, subject: subject, where: SignaturePosition.payload(payload.name), brand: payload.declaredBrand, seen: seen)
 		end 'eachPayload'
@@ -288,7 +288,7 @@ function checkInterfaceExtends(project Project, signatures ProgramSignatures, de
 		return
 	end 'noTypeCanBeNarrowerThanAFilePrivateInterface'
 
-	view interfaces = signatures.interfaceMap()
+	let interfaces = signatures.interfaceMap()
 
 	match lookupInterface(interfaces, name: decl.name) 'declared'
 		notFound then return
@@ -297,7 +297,7 @@ function checkInterfaceExtends(project Project, signatures ProgramSignatures, de
 end 'checkInterfaceExtends'
 
 function walkExtendedInterfaces(project Project, signatures ProgramSignatures, subject SignatureSubject, extended NameRoster)
-	var seen = ReportedTypeNameSet.create()
+	let seen = ReportedTypeNameSet.create()
 
 	for name in extended 'eachExtended'
 		walkSignatureTypeName(project, signatures: signatures, subject: subject, where: SignaturePosition.extendsClause, name: name, seen: seen)
@@ -310,7 +310,7 @@ function checkAliasTarget(project Project, signatures ProgramSignatures, decl Ty
 	end 'noTypeCanBeNarrowerThanAFilePrivateAlias'
 
 	let subject = declarationSubject(decl, tier: decl.claim.visibility)
-	var seen = ReportedTypeNameSet.create()
+	let seen = ReportedTypeNameSet.create()
 
 	match declarationDenotedBy(signatures, subject: subject, name: decl.name) 'aDeclaration'
 		undeclared then return
@@ -337,7 +337,7 @@ function checkConformingType(project Project, signatures ProgramSignatures, conf
 	end 'noTypeAnAuthorMadeAndOthersCanName'
 
 	let subject = SignatureSubject.create(SignatureSpelling.inDeclaringFile, tier: visibility, readerFilePath: conformance.filePath, nameLine: conformance.nameLine, nameColumn: conformance.nameColumn, enclosing: enclosingTypeOf(conformance.typeName), declaredName: conformance.typeName, kind: declarationSubjectKind(kind)).scopedToTypeParameters(typeParametersOf(signatures, typeName: conformance.typeName, readerFilePath: conformance.filePath))
-	var seen = ReportedTypeNameSet.create()
+	let seen = ReportedTypeNameSet.create()
 
 	for entry in conformance.interfaces 'eachInterface'
 		walkSignatureTypeName(project, signatures: signatures, subject: subject, where: SignaturePosition.implementsClause, name: entry.interfaceName, seen: seen)
@@ -367,7 +367,7 @@ function checkGenericTemplates(project Project, signatures ProgramSignatures)
 end 'checkGenericTemplates'
 
 function checkConstraints(project Project, signatures ProgramSignatures, subject SignatureSubject, constraints WhereConstraintArray)
-	var seen = ReportedTypeNameSet.create()
+	let seen = ReportedTypeNameSet.create()
 
 	for constraint in constraints 'eachConstraint'
 		walkSignatureTypeName(project, signatures: signatures, subject: subject, where: SignaturePosition.whereClause, name: constraint.interfaceName, seen: seen)
@@ -398,10 +398,10 @@ function walkSpelledBrand(project Project, signatures ProgramSignatures, subject
 end 'walkSpelledBrand'
 
 function checkDeclaredBindings(project Project, signatures ProgramSignatures)
-	var bindingTypeNames = signatures.indexTypeNames()
+	let bindingTypeNames = signatures.indexTypeNames()
 
 	for index in 0 upto signatures.topLevelDeclCount() 'eachBinding'
-		view decl = signatures.declAt(index)
+		let decl = signatures.declAt(index)
 
 		if decl.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateBinding'
 			continue
@@ -413,7 +413,7 @@ function checkDeclaredBindings(project Project, signatures ProgramSignatures)
 
 		let claim = try signatures.bindingTypeClaimAt(index, into: bindingTypeNames) otherwise continue
 		let subject = SignatureSubject.create(SignatureSpelling.inDeclaringFile, tier: decl.visibility, readerFilePath: decl.declFilePath, nameLine: decl.nameLine, nameColumn: decl.nameColumn, enclosing: enclosingTypeOf(decl.name), declaredName: decl.name, kind: SignatureSubjectKind.constantBinding)
-		var seen = ReportedTypeNameSet.create()
+		let seen = ReportedTypeNameSet.create()
 		walkSignatureType(project, signatures: signatures, subject: subject, where: SignaturePosition.declaredType, declared: claim.valueType, typeNames: bindingTypeNames, seen: seen)
 		walkSpelledBrand(project, signatures: signatures, subject: subject, where: SignaturePosition.declaredType, brand: claim.brand, seen: seen)
 	end 'eachBinding'
@@ -423,7 +423,7 @@ end 'checkDeclaredBindings'
 // over `module.functions` cannot reach one. It is reached through the declaration site instead, at the tier the interface
 // itself was written with.
 function checkInterfaceRequirements(project Project, signatures ProgramSignatures)
-	view interfaces = signatures.interfaceMap()
+	let interfaces = signatures.interfaceMap()
 
 	for site in signatures.interfaceDeclarationSites() 'eachInterface'
 		if site.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateInterface'
@@ -450,11 +450,11 @@ function checkOneRequirement(project Project, signatures ProgramSignatures, site
 
 	for position in 0 upto method.paramNames.count() 'eachParam'
 		let paramName = try method.paramNames.get(position) otherwise panic("checkOneRequirement: paramNames.get OOB at {position} inside its own `upto` bound")
-		var seenInParam = ReportedTypeNameSet.create()
+		let seenInParam = ReportedTypeNameSet.create()
 		walkWrittenTypeNames(project, signatures: signatures, subject: subject, where: SignaturePosition.parameter(paramName), written: method.written, position: position, seen: seenInParam)
 	end 'eachParam'
 
-	var seenInReturn = ReportedTypeNameSet.create()
+	let seenInReturn = ReportedTypeNameSet.create()
 	walkWrittenTypeNames(project, signatures: signatures, subject: subject, where: SignaturePosition.returnType, written: method.written, position: method.paramNames.count(), seen: seenInReturn)
 
 	checkThrowsType(project, signatures: signatures, subject: subject, clause: method.throwsClause)
@@ -498,7 +498,7 @@ function checkDeclaredSignature(project Project, signatures ProgramSignatures, f
 		return
 	end 'noDeclaredSignatureToWalk'
 
-	view sig = try project.funcSignatures.get(func.name) otherwise panic("checkSignatureVisibility: contains({String.from(func.name)}) is true on the line above but get failed")
+	let sig = try project.funcSignatures.get(func.name) otherwise panic("checkSignatureVisibility: contains({String.from(func.name)}) is true on the line above but get failed")
 	let subject = SignatureSubject.create(SignatureSpelling.callee, tier: tier, readerFilePath: func.sourceFilePath, nameLine: func.nameLine, nameColumn: func.nameColumn, enclosing: enclosingTypeOf(func.name), declaredName: func.name, kind: SignatureSubjectKind.declaredFunction)
 
 	checkParameterTypes(project, signatures: signatures, subject: subject, sig: sig)
@@ -516,14 +516,14 @@ function checkParameterTypes(project Project, signatures ProgramSignatures, subj
 		end 'theImplicitReceiverIsNotAWrittenSignatureType'
 
 		let declared = try sig.paramTypes.get(position) otherwise panic("checkParameterTypes: '{String.from(subject.declaredName)}' names {sig.paramNames.count()} parameter(s) and carries {sig.paramTypes.count()} parameter type(s) — `FuncSignature` holds the two columns in parallel")
-		var seen = ReportedTypeNameSet.create()
+		let seen = ReportedTypeNameSet.create()
 		walkSignatureType(project, signatures: signatures, subject: subject, where: SignaturePosition.parameter(name), declared: declared, typeNames: project.typeNames, seen: seen)
 		walkWrittenTypeNames(project, signatures: signatures, subject: subject, where: SignaturePosition.parameter(name), written: sig.writtenTypeNames, position: position, seen: seen)
 	end 'eachParam'
 end 'checkParameterTypes'
 
 function checkReturnType(project Project, signatures ProgramSignatures, subject SignatureSubject, returned MaxonReturnType, sig FuncSignature)
-	var seen = ReportedTypeNameSet.create()
+	let seen = ReportedTypeNameSet.create()
 
 	match returned 'ret'
 		void then return
@@ -544,7 +544,7 @@ function walkWrittenNameRange(project Project, signatures ProgramSignatures, sub
 end 'walkWrittenNameRange'
 
 function checkThrowsType(project Project, signatures ProgramSignatures, subject SignatureSubject, clause ThrowsClause)
-	var seen = ReportedTypeNameSet.create()
+	let seen = ReportedTypeNameSet.create()
 
 	match clause 'clause'
 		none then return
@@ -715,7 +715,7 @@ function walkTupleElements(project Project, signatures ProgramSignatures, subjec
 end 'walkTupleElements'
 
 function walkEveryElement(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, layout StructLayout, seen ReportedTypeNameSet)
-	var elementTypeNames = signatures.indexTypeNames()
+	let elementTypeNames = signatures.indexTypeNames()
 
 	for position in 0 upto layout.fieldCount() 'eachElement'
 		let element = try layout.fieldTypes.get(position) otherwise panic("walkEveryElement: fieldTypes.get OOB at {position} inside its own `upto` bound")
@@ -725,7 +725,7 @@ function walkEveryElement(project Project, signatures ProgramSignatures, subject
 end 'walkEveryElement'
 
 function walkInstanceArguments(project Project, signatures ProgramSignatures, subject SignatureSubject, where SignaturePosition, id GenericInstanceId, seen ReportedTypeNameSet)
-	var argumentTypeNames = signatures.indexTypeNames()
+	let argumentTypeNames = signatures.indexTypeNames()
 	walkInstanceBase(project, signatures: signatures, subject: subject, where: where, base: signatures.genericInstanceBaseName(id), seen: seen)
 
 	for position in 0 upto signatures.genericInstanceArgCount(id) 'eachArgument'

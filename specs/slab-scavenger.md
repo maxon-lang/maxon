@@ -131,7 +131,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(96)
 	for i in 0 upto 96 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -203,7 +203,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(96)
 	for i in 0 upto 96 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -212,7 +212,7 @@ function build(seed Seed) returns ByteArray
 end 'build'
 
 function main() returns ExitCode
-	var bufs = Bufs.create(0)
+	let bufs = Bufs.create(0)
 	for k in 0 upto 16000 'alloc'
 		bufs.push(build(k as Seed))
 	end 'alloc'
@@ -222,7 +222,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 16000 'check'
-		view b = try bufs.get(k) otherwise return 1
+		let b = try bufs.get(k) otherwise return 1
 		if b.count() != 96 'length'
 			bad = bad + 1
 		end 'length'
@@ -263,7 +263,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(96)
 	for i in 0 upto 96 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -295,7 +295,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 16000 'check'
-		view b = try second.get(k) otherwise return 2
+		let b = try second.get(k) otherwise return 2
 		for i in 0 upto 96 'bytes'
 			let got = try b.get(i) otherwise return 3
 			if got != ((k + 7 + i) mod 251) 'value'
@@ -335,7 +335,7 @@ typealias Bufs = Array with ByteArray
 typealias Seed = int(0 to 65536)
 
 function build(seed Seed, n Seed) returns ByteArray
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	b.reserve(n as ElementIndex)
 	for i in 0 upto n 'fill'
 		b.push(((seed + i) mod 251) as Byte)
@@ -355,14 +355,14 @@ function main() returns ExitCode
 		return 1
 	end 'nothingReleased'
 
-	var large = Bufs.create(0)
+	let large = Bufs.create(0)
 	for k in 0 upto 3000 'allocLarge'
 		large.push(build(k as Seed, n: 500))
 	end 'allocLarge'
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 3000 'check'
-		view b = try large.get(k) otherwise return 2
+		let b = try large.get(k) otherwise return 2
 		if b.count() != 500 'length'
 			bad = bad + 1
 		end 'length'

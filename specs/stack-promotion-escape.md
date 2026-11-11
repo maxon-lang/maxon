@@ -263,12 +263,12 @@ type Keeper
 end 'Keeper'
 
 function stash(keeper Keeper)
-	var p = Point.create(11, y: 22)
+	let p = Point.create(11, y: 22)
 	keeper.point = p
 end 'stash'
 
 function main() returns ExitCode
-	var keeper = Keeper.create()
+	let keeper = Keeper.create()
 	stash(keeper)
 	let noise = churn(1000)
 	return keeper.point.x if noise > 0 else 1
@@ -321,10 +321,10 @@ function fill(arr ItemArray)
 end 'fill'
 
 function main() returns ExitCode
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	fill(arr)
 	let noise = churn(1000)
-	view got = try arr.get(0) otherwise Item.create(0)
+	let got = try arr.get(0) otherwise Item.create(0)
 	return got.value if noise > 0 else 1
 end 'main'
 ```

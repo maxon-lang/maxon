@@ -58,9 +58,9 @@ let FunctionCodeOffset = FunctionRecordCodeOffset as DebugAddress
 let UnionTagBytes = 8
 
 export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, registers DebugRegisterAccess) returns DebugValueTree
-	var tree = DebugValueTree.create()
-	var named = DebugNameSet.create()
-	var locals = symbols.localsAt(offset, site: site)
+	let tree = DebugValueTree.create()
+	let named = DebugNameSet.create()
+	let locals = symbols.localsAt(offset, site: site)
 
 	for local in locals 'eachLocal'
 		if named.contains(local.name) 'alreadyListed'
@@ -78,7 +78,7 @@ export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset
 	let pieces = path.trim().split(MemberSeparator)
 	let head = try pieces.get(0) otherwise return DebugValueAnswer.unknownName(path)
 
-	var locals = symbols.localsAt(offset, site: site)
+	let locals = symbols.localsAt(offset, site: site)
 
 	match symbols.localCoveringIn(locals, offset: offset, name: head) 'known'
 		undeclared then return DebugValueAnswer.unknownName(path)
@@ -86,7 +86,7 @@ export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset
 		live then break
 	end 'known'
 
-	var tree = DebugValueTree.create()
+	let tree = DebugValueTree.create()
 	var current = renderNamedLocal(tree, memory: memory, symbols: symbols, locals: locals, offset: offset, framePointer: framePointer, name: head, registers: registers)
 
 	for (iter, member) in pieces.withIterator() 'eachMember'
@@ -100,7 +100,7 @@ export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset
 		end 'found'
 	end 'eachMember'
 
-	var held = tree.nodeAt(current)
+	let held = tree.nodeAt(current)
 	tree.roots.push(tree.add(DebugValueNode.create(path, typeName: held.typeName, kind: held.kind, display: held.display, availability: held.availability.clone(), children: held.children)) as DebugValueIndex)
 
 	return DebugValueAnswer.rendered(tree)
@@ -308,7 +308,7 @@ function renderSequence(tree DebugValueTree, memory DebugMemory, symbols DebugSy
 	end 'noElementLayout'
 
 	let shown = length if length < MaxRenderedChildren else MaxRenderedChildren
-	var children = DebugValueIndexArray.create(shown as ElementIndex, zeroed: false)
+	let children = DebugValueIndexArray.create(shown as ElementIndex, zeroed: false)
 
 	for i in 0 upto shown 'eachElement'
 		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: "[{i}]", typeId: record.elementTypeId, source: DebugValueSource.address(buffer + (i as DebugAddress) * (stride as DebugAddress))) as DebugValueIndex)
@@ -335,7 +335,7 @@ function renderStruct(tree DebugValueTree, memory DebugMemory, symbols DebugSymb
 end 'renderStruct'
 
 function fieldsAt(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, record MxdbgTypeInfo, base DebugAddress) returns DebugValueIndexArray
-	var children = DebugValueIndexArray.create(record.fieldCount, zeroed: false)
+	let children = DebugValueIndexArray.create(record.fieldCount, zeroed: false)
 
 	for k in record.fieldFirst upto record.fieldFirst + record.fieldCount 'eachField'
 		let field = symbols.fieldRecordOf(k as MxdbgIndex)
@@ -397,7 +397,7 @@ function renderFoldedStruct(tree DebugValueTree, memory DebugMemory, symbols Deb
 		return tree.add(DebugValueNode.missing(name, typeName: typeName, kind: kind, reason: DebugLayoutNotDescribedReason))
 	end 'theWindowDoesNotHoldTheFields'
 
-	var children = DebugValueIndexArray.create(words.count(), zeroed: false)
+	let children = DebugValueIndexArray.create(words.count(), zeroed: false)
 
 	for (iter, word) in words.withIterator() 'eachWord'
 		let field = symbols.fieldRecordOf(record.fieldFirst + (iter.index() as MxdbgIndex))
@@ -466,7 +466,7 @@ function caseOf(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, n
 end 'caseOf'
 
 function payloadOf(tree DebugValueTree, memory DebugMemory, symbols DebugSymbols, caseRecord MxdbgFieldInfo, payload DebugValueSource) returns DebugValueIndexArray
-	var children = DebugValueIndexArray.create(0)
+	let children = DebugValueIndexArray.create(0)
 
 	if symbols.typeIsDescribed(caseRecord.typeId) and symbols.typeNameOf(caseRecord.typeId) != VoidPayloadName 'aPayload'
 		children.push(renderTyped(tree, memory: memory, symbols: symbols, name: caseRecord.name, typeId: caseRecord.typeId, source: payload) as DebugValueIndex)

@@ -87,14 +87,14 @@ export function dependencyOrderedGlobals(module MaxonModule, project Project, si
 		return globals
 	end 'nothingRunsProgramCode'
 
-	var nodes = InitOrderNodeArray.create(globals.count(), zeroed: false)
+	let nodes = InitOrderNodeArray.create(globals.count(), zeroed: false)
 
 	for global in globals 'eachGlobal'
 		nodes.push(InitOrderNode.create(global.label, initCallees: global.initCallees))
 	end 'eachGlobal'
 
 	let order = try dependencyOrder(module, project: project, signatures: signatures, nodes: nodes, refusal: InitCycleRefusal.globals(globals))
-	var ordered = ManagedGlobalArray.create(order.count(), zeroed: false)
+	let ordered = ManagedGlobalArray.create(order.count(), zeroed: false)
 
 	for position in order 'eachPosition'
 		ordered.push(globalAt(globals, index: position))
@@ -111,16 +111,16 @@ export function dependencyOrderedDefaults(module MaxonModule, project Project, s
 		return defaults
 	end 'nothingToOrder'
 
-	var nodes = InitOrderNodeArray.create(defaults.count(), zeroed: false)
+	let nodes = InitOrderNodeArray.create(defaults.count(), zeroed: false)
 
 	for slot in defaults 'eachDefault'
-		var roots = NameRoster.create(0)
+		let roots = NameRoster.create(0)
 		roots.push(defaultInitializerName(slot.declaration.key))
 		nodes.push(InitOrderNode.create(slot.label, initCallees: roots))
 	end 'eachDefault'
 
 	let order = try dependencyOrder(module, project: project, signatures: signatures, nodes: nodes, refusal: InitCycleRefusal.defaults(defaults))
-	var ordered = DefaultSlotArray.create(order.count(), zeroed: false)
+	let ordered = DefaultSlotArray.create(order.count(), zeroed: false)
 
 	for position in order 'eachPosition'
 		ordered.push(try defaults.get(position) otherwise panic("dependencyOrderedDefaults: defaults.get OOB at {position}, a position this walk minted over the same list"))
@@ -161,7 +161,7 @@ end 'dependencyOrder'
 // Does any global's initializer run program code at all? The walk's whole apparatus — a function-name index,
 // two per-root reachability scans — is skipped when none does, which is the answer for a program whose
 // globals are all literals.
-module function anyInitializerCalls(globals ManagedGlobalArray) returns bool
+function anyInitializerCalls(globals ManagedGlobalArray) returns bool
 	for global in globals 'eachGlobal'
 		if global.initCallees.count() > 0 'runsProgramCode'
 			return true
@@ -181,7 +181,7 @@ end 'anyInitializerCalls'
 // have forced is lost and that global reads a zero. The alternative is refusing every program whose witness
 // impls happen to cross-reference, and which impl a dispatch runs is a fact about its receiver.
 function buildEffectiveDeps(nodeCount ElementIndex, named GlobalInitDependencies, possible GlobalInitDependencies, refusal InitCycleRefusal, project Project) returns GlobalInitDependencies throws CompileError
-	var effective = GlobalInitDependencies.create(nodeCount, zeroed: false)
+	let effective = GlobalInitDependencies.create(nodeCount, zeroed: false)
 
 	for _ in 0 upto nodeCount 'eachGlobal'
 		effective.push(GlobalInitIndexArray.create(0))
@@ -221,7 +221,7 @@ function addDependencyEdge(effective GlobalInitDependencies, from ElementIndex, 
 		end 'closesACycle'
 	end 'mightCloseACycle'
 
-	var row = rowOf(effective, index: from)
+	let row = rowOf(effective, index: from)
 	row.push(to)
 end 'addDependencyEdge'
 
@@ -240,10 +240,10 @@ end 'reachesBack'
 // Iterative, with a parent column, for `orderedByDependency`'s reason: nothing here may recurse to the depth
 // of a user's dependency chain.
 function pathBetween(deps GlobalInitDependencies, from ElementIndex, to ElementIndex) returns GlobalInitIndexArray
-	var seen = GlobalInitSeenFlags.create(deps.count())
-	var parent = FixedGlobalInitIndexArray.create(deps.count())
+	let seen = GlobalInitSeenFlags.create(deps.count())
+	let parent = FixedGlobalInitIndexArray.create(deps.count())
 
-	var stack = GlobalInitIndexArray.create(0)
+	let stack = GlobalInitIndexArray.create(0)
 	stack.push(from)
 	try seen.set(from, value: true) otherwise panic("pathBetween: seen.set OOB at {from}, outside the graph its own rows describe")
 
@@ -273,7 +273,7 @@ end 'pathBetween'
 // The walked path, source first. `from`'s own parent entry is never read, which is what lets the climb
 // terminate on it rather than on a sentinel.
 function pathBackFrom(node ElementIndex, from ElementIndex, parent FixedGlobalInitIndexArray) returns GlobalInitIndexArray
-	var reversed = GlobalInitIndexArray.create(0)
+	let reversed = GlobalInitIndexArray.create(0)
 	var walker = node
 	reversed.push(walker)
 
@@ -282,7 +282,7 @@ function pathBackFrom(node ElementIndex, from ElementIndex, parent FixedGlobalIn
 		reversed.push(walker)
 	end 'climb'
 
-	var path = GlobalInitIndexArray.create(reversed.count(), zeroed: false)
+	let path = GlobalInitIndexArray.create(reversed.count(), zeroed: false)
 
 	for i in 0 upto reversed.count() 'eachStep'
 		path.push(try reversed.get(reversed.count() - 1 - i) otherwise panic("pathBackFrom: reversed.get OOB inside a loop bounded by its own count"))
@@ -312,16 +312,16 @@ end 'rowContains'
 // The `reached` array is allocated ONCE and cleared between roots rather than reallocated: the walks are
 // independent, but the array is a function of the module and not of the root.
 function initDependencies(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, nodes InitOrderNodeArray, edges EdgeConfidence) returns GlobalInitDependencies
-	var slotOf = GlobalInitIndexByLabel.create()
+	let slotOf = GlobalInitIndexByLabel.create()
 
 	for i in 0 upto nodes.count() 'eachGlobal'
 		slotOf.upsert(nodeAt(nodes, index: i).label, value: i)
 	end 'eachGlobal'
 
-	var reached = FixedBoolArray.create(module.funcCount())
-	var names = FunctionNameSet.create()
+	let reached = FixedBoolArray.create(module.funcCount())
+	let names = FunctionNameSet.create()
 
-	var deps = GlobalInitDependencies.create(nodes.count(), zeroed: false)
+	let deps = GlobalInitDependencies.create(nodes.count(), zeroed: false)
 
 	for j in 0 upto nodes.count() 'eachRoot'
 		let node = nodeAt(nodes, index: j)
@@ -351,9 +351,9 @@ end 'clearReached'
 // Every global slot named by any function reachable from `roots` at this confidence — the initializer's own
 // call tree, walked to a fixpoint.
 function slotsReadFrom(module MaxonModule, project Project, signatures ProgramSignatures, index FunctionNameIndex, roots NameRoster, slotOf GlobalInitIndexByLabel, reached FixedBoolArray, names FunctionNameSet, edges EdgeConfidence) returns GlobalInitIndexArray
-	var found = GlobalInitIndexArray.create(0)
-	var claimed = GlobalInitIndexSet.create()
-	var worklist = FuncIndexArray.create(0)
+	let found = GlobalInitIndexArray.create(0)
+	let claimed = GlobalInitIndexSet.create()
+	let worklist = FuncIndexArray.create(0)
 
 	for root in roots 'eachRoot'
 		markCalleeEdge(root, edges: edges, byName: index.byName, reached: reached, worklist: worklist, names: names)
@@ -455,15 +455,15 @@ end 'noteSlotNamed'
 // compiler's own stack with no diagnostic and no binary (`STATUS_STACK_OVERFLOW`), while the same program
 // with the chain broken compiled. The frames are heap arrays here, so depth costs memory and nothing else.
 function orderedByDependency(nodeCount ElementIndex, deps GlobalInitDependencies) returns GlobalInitIndexArray
-	var state = GlobalInitVisitArray.create(nodeCount, zeroed: false)
+	let state = GlobalInitVisitArray.create(nodeCount, zeroed: false)
 
 	for _ in 0 upto nodeCount 'eachGlobal'
 		state.push(GlobalInitVisit.unvisited)
 	end 'eachGlobal'
 
-	var ordered = GlobalInitIndexArray.create(nodeCount, zeroed: false)
-	var frames = GlobalInitIndexArray.create(0)
-	var cursors = GlobalInitCursorArray.create(0)
+	let ordered = GlobalInitIndexArray.create(nodeCount, zeroed: false)
+	let frames = GlobalInitIndexArray.create(0)
+	let cursors = GlobalInitCursorArray.create(0)
 
 	for root in 0 upto nodeCount 'eachRoot'
 		match visitOf(state, index: root) 'root'
@@ -537,14 +537,14 @@ function refuseInitializationCycle(arc GlobalInitIndexArray, refusal InitCycleRe
 end 'refuseInitializationCycle'
 
 function refuseDefaultCycle(arc GlobalInitIndexArray, defaults DefaultSlotArray, project Project)
-	var members = GlobalInitIndexArray.create(arc.count(), zeroed: false)
+	let members = GlobalInitIndexArray.create(arc.count(), zeroed: false)
 
 	for member in arc 'eachMember'
 		members.push(member)
 	end 'eachMember'
 
 	members.sort()
-	var keys = NameRoster.create(members.count(), zeroed: false)
+	let keys = NameRoster.create(members.count(), zeroed: false)
 
 	for member in members 'eachDeclared'
 		keys.push((try defaults.get(member) otherwise panic("refuseDefaultCycle: defaults.get OOB at {member}, a position this walk minted")).declaration.key)

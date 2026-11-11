@@ -86,7 +86,7 @@ module type Tls12ClientFlow implements TlsMessageHandler
 			end 'renegotiation'
 		end 'eachExtension'
 
-		var parameters = Tls12Parameters.create(read.suite, clientRandom: clientRandom, serverRandom: random, extendedMasterSecret: read.scan.types.contains(TlsExtensionKind.extendedMasterSecret.code()))
+		let parameters = Tls12Parameters.create(read.suite, clientRandom: clientRandom, serverRandom: random, extendedMasterSecret: read.scan.types.contains(TlsExtensionKind.extendedMasterSecret.code()))
 
 		session.negotiation = TlsNegotiation.accepted12(read.suite)
 		session.input.version = TlsInboundVersion.tls12
@@ -147,7 +147,7 @@ module type Tls12ClientFlow implements TlsMessageHandler
 		end 'unoffered'
 
 		let named = try TlsNamedGroup.fromRawValue(group) otherwise throw TlsHandshakeError.illegalParameter
-		var secret = try entropy.secret(group) otherwise throw TlsHandshakeError.illegalParameter
+		let secret = try entropy.secret(group) otherwise throw TlsHandshakeError.illegalParameter
 		let scheme = try tlsRequireOfferedScheme(exchange.signatureScheme, offered: offer.scan.signatureSchemes, algorithm: key.algorithm, protocol: TlsProtocol.tls12)
 
 		try peer.verifySignature(scheme, key: key, message: try parameters.signedParameters(group, publicKey: exchange.publicKey()), signature: exchange.signature)
@@ -189,13 +189,13 @@ module type Tls12ClientFlow implements TlsMessageHandler
 		session.transcript.append(raw)
 		try session.input.requireKeyBoundary()
 
-		var credentials = credentialsFor(request)
-		var flight = ByteArray.create(0)
+		let credentials = credentialsFor(request)
+		let flight = ByteArray.create(0)
 
 		try appendCertificate(flight, credentials: credentials)
 		try session.emit(flight, message: TlsHandshakeMessage.clientKeyExchange(exchange.publicKey))
 
-		var secrets = try Tls12Secrets.derive(parameters, preMasterSecret: exchange.preMasterSecret, sessionHash: session.transcript.hash(parameters.suite.hashAlgorithm()))
+		let secrets = try Tls12Secrets.derive(parameters, preMasterSecret: exchange.preMasterSecret, sessionHash: session.transcript.hash(parameters.suite.hashAlgorithm()))
 
 		try appendCertificateVerify(flight, credentials: credentials)
 		try session.writer.writeHandshake(flight)

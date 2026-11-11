@@ -634,7 +634,7 @@ clone is `__str_clone`, and while the identical literal into a struct FIELD is a
 typealias CharArray = Array with Character
 
 function build(s String) returns Integer
-	var a = CharArray.create(0)
+	let a = CharArray.create(0)
 	a.push('é')
 	for c in s 'each'
 		a.push(c)
@@ -674,7 +674,7 @@ typealias Count = int(0 to 1000)
 typealias CharArray = Array with Character
 
 function build() returns Count
-	var a = CharArray.create(0)
+	let a = CharArray.create(0)
 	a.push('e')
 	a.insert(0, value: 'z')
 	try a.set(1, value: 'q') otherwise panic("test invariant: set OOB")

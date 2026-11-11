@@ -188,7 +188,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var b = StrArray.create(0)
+	let b = StrArray.create(0)
 	b.push("a stored string long enough to force a heap allocation")
 	if not b.contains("a stored string long enough to force a heap allocation") 'missing'
 		return 1

@@ -60,7 +60,7 @@ end 'Bag'
 typealias StringBag = Bag with String
 
 function main() returns ExitCode
-	var b = StringBag.create()
+	let b = StringBag.create()
 	b.add("alpha")
 	b.add("beta")
 	b.add("gamma")
@@ -98,7 +98,7 @@ end 'Bag'
 typealias SmallBag = Bag with Small
 
 function main() returns ExitCode
-	var b = SmallBag.create()
+	let b = SmallBag.create()
 	b.add(7)
 	b.add(9)
 	return b.size() as ExitCode
@@ -138,11 +138,11 @@ typealias StringBag = Bag with String
 typealias SmallBag = Bag with Small
 
 function main() returns ExitCode
-	var s = StringBag.create()
+	let s = StringBag.create()
 	s.add("alpha")
 	s.add("beta")
 
-	var n = SmallBag.create()
+	let n = SmallBag.create()
 	n.add(1)
 	n.add(2)
 	n.add(3)
@@ -185,7 +185,7 @@ end 'Bag'
 typealias StringBag = Bag with String
 
 function main() returns ExitCode
-	var b = StringBag.create()
+	let b = StringBag.create()
 	b.add("alpha")
 	b.add("beta")
 	b.drop()
@@ -232,7 +232,7 @@ end 'Twin'
 typealias SmallThenString = Twin with Small, String
 
 function main() returns ExitCode
-	var t = SmallThenString.create()
+	let t = SmallThenString.create()
 	t.addLeft(1)
 	t.addLeft(2)
 	t.addRight("alpha")
@@ -279,7 +279,7 @@ end 'Bag'
 typealias StringBag = Bag with String
 
 function main() returns ExitCode
-	var b = StringBag.create()
+	let b = StringBag.create()
 	b.add("alpha")
 	b.add("beta")
 	try b.drainOne() otherwise panic("drain")
@@ -316,7 +316,7 @@ type Bag uses Element
 	end 'add'
 
 	function shift() throws ArrayError
-		view moved = try self.chain.removeFirst()
+		let moved = try self.chain.removeFirst()
 		self.spare.append(moved)
 	end 'shift'
 
@@ -328,7 +328,7 @@ end 'Bag'
 typealias StringBag = Bag with String
 
 function main() returns ExitCode
-	var b = StringBag.create()
+	let b = StringBag.create()
 	b.add("alpha")
 	b.add("beta")
 	try b.shift() otherwise panic("shift")

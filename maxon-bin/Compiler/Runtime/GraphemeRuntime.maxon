@@ -149,7 +149,7 @@ export function verifyCharacterErrorOrdinals(project Project)
 end 'verifyCharacterErrorOrdinals'
 
 function claimCharacterErrorOrdinals(project Project, declaration EnumLayout)
-	var characterErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: CharacterErrorOrdinalInstaller)
+	let characterErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: CharacterErrorOrdinalInstaller)
 	characterErrors.claim(CharacterNotAsciiCaseName, ordinal: CharacterNotAsciiOrdinal)
 
 	// ONE case, and `verifyDivisionByZeroOrdinals`' argument applies verbatim: a walk that is already total
@@ -209,10 +209,10 @@ end 'installGraphemeRuntime'
 // not, a one-byte ASCII cluster is marked non-ASCII, which only ever costs a fast path, never an answer.
 // Deriving it exactly would be a load, a compare and a phi per iteration for that.
 function buildCharAt(module StdModule)
-	var func = IrFunction.createFromStd(CharAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(CharAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let record = 0
 	let startPos = 1
@@ -248,18 +248,18 @@ end 'buildCharAt'
 // well-formed UTF-8, or one a character range counted, which steps over U+D800 to U+DFFF. A surrogate
 // reaching here would encode to bytes that are not UTF-8; `fromCodepoint` is the guarded door.
 function buildCharFromCodepoint(module StdModule)
-	var func = IrFunction.createFromStd(CharFromCodepointName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CharFromCodepointName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var wide = module.addBlock(func, label: b"wide", heat: BlockHeat.normal)
-	var three = module.addBlock(func, label: b"three", heat: BlockHeat.normal)
-	var oneByte = module.addBlock(func, label: b"one", heat: BlockHeat.normal)
-	var oneByteCr = module.addBlock(func, label: b"oneCr", heat: BlockHeat.normal)
-	var oneByteOther = module.addBlock(func, label: b"oneOther", heat: BlockHeat.normal)
-	var twoByte = module.addBlock(func, label: b"two", heat: BlockHeat.normal)
-	var threeByte = module.addBlock(func, label: b"three3", heat: BlockHeat.normal)
-	var fourByte = module.addBlock(func, label: b"four", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let wide = module.addBlock(func, label: b"wide", heat: BlockHeat.normal)
+	let three = module.addBlock(func, label: b"three", heat: BlockHeat.normal)
+	let oneByte = module.addBlock(func, label: b"one", heat: BlockHeat.normal)
+	let oneByteCr = module.addBlock(func, label: b"oneCr", heat: BlockHeat.normal)
+	let oneByteOther = module.addBlock(func, label: b"oneOther", heat: BlockHeat.normal)
+	let twoByte = module.addBlock(func, label: b"two", heat: BlockHeat.normal)
+	let threeByte = module.addBlock(func, label: b"three3", heat: BlockHeat.normal)
+	let fourByte = module.addBlock(func, label: b"four", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let cp = 0
@@ -389,13 +389,13 @@ end 'emitUtf8ContinuationByte'
 // is explicit that its 128 IS the ASCII boundary. A third and fourth spelling of them here is precisely the
 // drift that header records paying for once already.
 function buildCharAscii(module StdModule)
-	var func = IrFunction.createFromStd(CharAsciiValueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: characterThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CharAsciiValueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: characterThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var checkAscii = module.addBlock(func, label: b"chkascii", heat: BlockHeat.normal)
-	var ok = module.addBlock(func, label: b"ok", heat: BlockHeat.normal)
-	var notAscii = module.addBlock(func, label: b"notascii", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let checkAscii = module.addBlock(func, label: b"chkascii", heat: BlockHeat.normal)
+	let ok = module.addBlock(func, label: b"ok", heat: BlockHeat.normal)
+	let notAscii = module.addBlock(func, label: b"notascii", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0
@@ -430,13 +430,13 @@ end 'buildCharAscii'
 // ⇒ The day a second counted byte walk is synthesized, extract it again: over three subjects the shared
 // skeleton measured 27 sabotage reds and was worth its keep.
 function buildStrToBytes(module StdModule)
-	var func = IrFunction.createFromStd(StrToBytesName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(StrToBytesName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let header = module.addBlock(func, label: b"header", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"body", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let record = 0

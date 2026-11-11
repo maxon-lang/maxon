@@ -10,8 +10,8 @@
 // span column is parallel to them. `ValueId`s and `BlockId`s are function-local and cross unchanged.
 //
 // ⛔⛔ **EVERY RECORD REACHABLE FROM A UNIT IS BUILT FRESH, AND THAT IS A RUN-TIME CONTRACT WITH A LOUD
-// FAILURE.** A message MOVES: the send walks the whole graph and a record with a second owner aborts the
-// process with exit 96 (`RuntimeAbort.transferredRecordNotSole`). So the function record comes through
+// FAILURE.** A message MOVES: in a seed-built runtime the send walks the whole graph and a record with a
+// second owner aborts the process with exit 96. So the function record comes through
 // `IrFunction.createFromStd` (whose six placeholders are fresh, not the parser's singletons), every block
 // and every op is a DEEP CLONE of the real module's (`IrBlock.clone`, `StdOp.clone` — a union value copied
 // out of an array is a shared box; a callee name or a label shared with the source op is one too), and the
@@ -80,10 +80,10 @@ export type StdUnit
 	end 'takeAnswer'
 
 	module static function extract(module StdModule, func IrFunction, funcIndex ElementIndex) returns isolated StdUnit
-		var unit = Self.empty(funcIndex) as isolated StdUnit
+		let unit = Self.empty(funcIndex) as isolated StdUnit
 
 		modify unit 'fill'
-			var body = StdUnitBody.blank()
+			let body = StdUnitBody.blank()
 			fillUnitModule(module, func: func, unitModule: body.unitModule)
 			unit.holder.push(body)
 		end 'fill'
@@ -96,7 +96,7 @@ end 'StdUnit'
 // and ops deep-cloned, its arrays reserved to their final counts, and its function carrying exactly the
 // columns this file's header lists. The one extractor both pools use.
 export function extractUnitModule(module StdModule, func IrFunction) returns StdModule
-	var unitModule = StdModule.create()
+	let unitModule = StdModule.create()
 	fillUnitModule(module, func: func, unitModule: unitModule)
 	return unitModule
 end 'extractUnitModule'
@@ -108,7 +108,7 @@ function fillUnitModule(module StdModule, func IrFunction, unitModule StdModule)
 
 	// The return type is a union box and the parameter list an array: both are copied, since the real
 	// function keeps its own and the unit must own everything it reaches.
-	var unitFunc = IrFunction.createFromStd(func.name, returnType: func.returnType.clone(), paramCount: func.paramCount, paramTypes: func.paramTypes.clone())
+	let unitFunc = IrFunction.createFromStd(func.name, returnType: func.returnType.clone(), paramCount: func.paramCount, paramTypes: func.paramTypes.clone())
 	unitFunc.stackSize = func.stackSize
 	unitFunc.returnsByIndirectJump = func.returnsByIndirectJump
 	unitFunc.nextBlockId = func.nextBlockId
@@ -134,9 +134,9 @@ end 'fillUnitModule'
 function copiedBlock(module StdModule, blockRef ElementIndex, into StdModule) returns IrBlock
 	let block = module.getBlock(blockRef)
 	requireNoCondBranchOp(block)
-	var copy = block.clone()
+	let copy = block.clone()
 
-	var ops = copy.bodyOps()
+	let ops = copy.bodyOps()
 
 	for pos in 0 upto ops.count() 'eachOp'
 		let opIdx = try ops.get(pos) otherwise panic("copiedBlock: ops.get OOB at {pos}")
@@ -178,7 +178,7 @@ end 'copiedOp'
 // set into the module's array, so the phi model the passes rebuilt on them comes across without a copy.
 // The function's `blockRefs` is refilled in place, and `scratch` is the drain's (`IrModule.prepareSplice`).
 module function spliceStdUnit(module StdModule, func IrFunction, unitModule StdModule, scratch SpliceScratch)
-	view unitFunc = unitModule.getFunc(UnitFunctionIndex)
+	let unitFunc = unitModule.getFunc(UnitFunctionIndex)
 
 	// Asked here because this is where the unit stops being appended to: every pass that mints an op
 	// goes through the three recording doors, and a column short by one would misattribute every later
@@ -189,10 +189,10 @@ module function spliceStdUnit(module StdModule, func IrFunction, unitModule StdM
 	func.blockRefs.clear()
 
 	for unitRef in unitFunc.blockRefs 'eachBlock'
-		var block = unitModule.getBlock(unitRef)
+		let block = unitModule.getBlock(unitRef)
 		requireNoCondBranchOp(block)
 
-		var ops = block.bodyOps()
+		let ops = block.bodyOps()
 
 		for pos in 0 upto ops.count() 'eachOp'
 			let unitIdx = try ops.get(pos) otherwise panic("spliceStdUnit: ops.get OOB at {pos}")

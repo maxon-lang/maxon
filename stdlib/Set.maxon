@@ -47,15 +47,15 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'calc_cap'
 
 		// Allocate internal arrays with preallocated capacity
-		var elems = ElementArray{}
+		let elems = ElementArray{}
 		elems.resize(cap)
-		var sts = StateArray{}
+		let sts = StateArray{}
 		sts.resize(cap)
-		var hs = HashSlotArray{}
+		let hs = HashSlotArray{}
 		hs.resize(cap)
 
 		// Create the set with preallocated capacity (count defaults to 0)
-		var result = Self{elements: elems, states: sts, hashes: hs, capacity: cap}
+		let result = Self{elements: elems, states: sts, hashes: hs, capacity: cap}
 
 		// Insert each element from the array
 
@@ -91,11 +91,11 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 	public function insert(element immutable Element)
 		// Initialize if empty struct was created with zero capacity
 		if capacity == 0 'init_empty'
-			var newElements = ElementArray{}
+			let newElements = ElementArray{}
 			newElements.resize(16)
-			var newStates = StateArray{}
+			let newStates = StateArray{}
 			newStates.resize(16)
-			var newHashes = HashSlotArray{}
+			let newHashes = HashSlotArray{}
 			newHashes.resize(16)
 			elements = newElements
 			states = newStates
@@ -163,7 +163,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				let slotHash = try hashes.get(index as ElementIndex) otherwise panic("Set.insert: hashes.get OOB — the hash column is parallel to the states")
 
 				if slotHash == hash 'hash_match'
-					view existing = try elements.get(index as ElementIndex) otherwise panic("Set.insert: an occupied slot holds an element")
+					let existing = try elements.get(index as ElementIndex) otherwise panic("Set.insert: an occupied slot holds an element")
 
 					if existing == element 'exists'
 						// Element already exists - no-op for sets
@@ -234,7 +234,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				let slotHash = try hashes.get(index as ElementIndex) otherwise panic("Set.contains: hashes.get OOB — the hash column is parallel to the states")
 
 				if slotHash == hash 'hash_match'
-					view existing = try elements.get(index as ElementIndex) otherwise panic("Set.contains: an occupied slot holds an element")
+					let existing = try elements.get(index as ElementIndex) otherwise panic("Set.contains: an occupied slot holds an element")
 
 					if existing == element 'found'
 						return true
@@ -289,7 +289,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				let slotHash = try hashes.get(index as ElementIndex) otherwise panic("Set.remove: hashes.get OOB — the hash column is parallel to the states")
 
 				if slotHash == hash 'hash_match'
-					view existing = try elements.get(index as ElementIndex) otherwise panic("Set.remove: an occupied slot holds an element")
+					let existing = try elements.get(index as ElementIndex) otherwise panic("Set.remove: an occupied slot holds an element")
 
 					if existing == element 'found'
 						// A tombstone owns nothing, for `Map.remove`'s reason. The cached hash stays,
@@ -337,17 +337,17 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		end 'handle_zero'
 
 		// Allocate new arrays with preallocated capacity
-		var newElements = ElementArray{}
+		let newElements = ElementArray{}
 		newElements.resize(newCapacity)
-		var newStates = StateArray{}
+		let newStates = StateArray{}
 		newStates.resize(newCapacity)
-		var newHashes = HashSlotArray{}
+		let newHashes = HashSlotArray{}
 		newHashes.resize(newCapacity)
 
 		// Save old arrays for rehashing, then replace with new ones
-		var oldElements = elements
-		var oldStates = states
-		var oldHashes = hashes
+		let oldElements = elements
+		let oldStates = states
+		let oldHashes = hashes
 		elements = newElements
 		states = newStates
 		hashes = newHashes
@@ -371,7 +371,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 			end 'so1'
 
 			if isOccupied 'occupied'
-				var element = try oldElements.get(i) otherwise panic("Set.rehash: an occupied slot holds an element")
+				let element = try oldElements.get(i) otherwise panic("Set.rehash: an occupied slot holds an element")
 				let hash = try oldHashes.get(i) otherwise panic("Set.rehash: oldHashes.get OOB — the hash column is parallel to the states")
 				var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
@@ -415,7 +415,7 @@ public type SetIterator uses Element implements Iterator with Element where Elem
 	var capacity as TableCapacity
 
 	public static function create(elements IterElementArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
-		var stateCursor = try states.managed.createCursor() otherwise throw IterationError.exhausted
+		let stateCursor = try states.managed.createCursor() otherwise throw IterationError.exhausted
 		let first = try findNextOccupied(stateCursor, capacity: capacity, from: 0)
 		let elementCursor = ElementSlots.over(elements.managed, at: first)
 		return Self{elements: elementCursor, states: stateCursor, capacity: capacity}

@@ -716,7 +716,7 @@ end 'main'
 <!-- test: shr-in-method-call-arg -->
 ```maxon
 function main() returns ExitCode
-	var buf = [0 as FullRangeInt, 0]
+	let buf = [0 as FullRangeInt, 0].clone()
 	buf.push(42)
 	let x = 0xABCD
 	buf.push(x shr 9)
@@ -730,7 +730,7 @@ end 'main'
 <!-- test: shr-consecutive-method-calls -->
 ```maxon
 function main() returns ExitCode
-	var buf = [0 as FullRangeInt]
+	let buf = [0 as FullRangeInt].clone()
 	let value = 0xAABBCCDD
 	buf.push(value and 0xFF)
 	buf.push((value shr 8) and 0xFF)

@@ -54,7 +54,7 @@ function stamp(table Table)
 end 'stamp'
 
 function main() returns ExitCode
-	var live = Table.create()
+	let live = Table.create()
 	live.add(1)
 	let frozen = freeze Table.create()
 	print("{describe(live)} {describe(frozen)}\n")
@@ -1383,7 +1383,7 @@ function total(pinned immutable Box, rounds Tally) returns Tally
 end 'total'
 
 function main() returns ExitCode
-	var pinned = freeze Box.create(1)
+	let pinned = freeze Box.create(1)
 	print("{total(pinned, rounds: 3)}\n")
 	return 0
 end 'main'
@@ -1706,7 +1706,7 @@ function bumped(box isolated Box) returns Tally
 end 'bumped'
 
 function feed(take Take, n Tally) returns Tally
-	var a = Box.create(n) as isolated Box
+	let a = Box.create(n) as isolated Box
 	return take(a) + take(Box.create(n + 1))
 end 'feed'
 
@@ -2323,7 +2323,7 @@ end 'pass'
 
 function main() returns ExitCode
 	let a = Box.create(1) as isolated Box
-	var plain = pass(a)
+	let plain = pass(a)
 	plain.n = 4
 	print("{plain.n}\n")
 	return 0
@@ -2439,21 +2439,21 @@ type Feeder
 	end 'create'
 
 	function feed()
-		var a = Box.create(3) as isolated Box
+		let a = Box.create(3) as isolated Box
 		self.sink.take(a)
 		self.sink.take(Box.create(4))
 	end 'feed'
 end 'Feeder'
 
 function feedDirect(sink Sink)
-	var a = Box.create(30) as isolated Box
+	let a = Box.create(30) as isolated Box
 	sink.take(a)
 	sink.take(Box.create(40))
 end 'feedDirect'
 
 function main() returns ExitCode
-	var counter = Counter.create()
-	var feeder = Feeder.create(counter)
+	let counter = Counter.create()
+	let feeder = Feeder.create(counter)
 	feeder.feed()
 	feedDirect(counter)
 	print("{counter.size()}\n")
@@ -2690,7 +2690,7 @@ function feed(sink Sink) returns Tally
 end 'feed'
 
 function main() returns ExitCode
-	var counter = Counter.create()
+	let counter = Counter.create()
 	print("{feed(counter)} {counter.size()}\n")
 	return 0
 end 'main'
@@ -3104,8 +3104,8 @@ type Shelf
 end 'Shelf'
 
 function main() returns ExitCode
-	var pinned = freeze Box.create(1)
-	var s = Shelf.build(pinned)
+	let pinned = freeze Box.create(1)
+	let s = Shelf.build(pinned)
 	s.put(pinned)
 	print("{s.held.n}\n")
 	return 0
@@ -3149,10 +3149,10 @@ function relay(thing Box) returns Holder
 end 'relay'
 
 function main() returns ExitCode
-	var loose = Box.create(1)
-	var other = Box.create(2)
+	let loose = Box.create(1)
+	let other = Box.create(2)
 	let frozen = freeze Box.create(3)
-	var h = relay(loose)
+	let h = relay(loose)
 	h.adopt(other)
 	h.held.n = 7
 	other.n = other.n + 1
@@ -3860,7 +3860,7 @@ type Box
 end 'Box'
 
 function pick(p Box) returns Box
-	var spare = Boxes.create(0)
+	let spare = Boxes.create(0)
 	return try spare.first() otherwise p
 end 'pick'
 
@@ -3897,8 +3897,8 @@ function pick(p Box, flag bool) returns Box
 end 'pick'
 
 function main() returns ExitCode
-	var mine = Box.create(1)
-	var r = pick(mine, flag: true)
+	let mine = Box.create(1)
+	let r = pick(mine, flag: true)
 	r.n = 5
 	print("{mine.n}\n")
 	return 0
@@ -4138,9 +4138,9 @@ function pick(a Box, b Box, flag bool) returns Box
 end 'pick'
 
 function main() returns ExitCode
-	var first = Box.create(1)
-	var second = Box.create(2)
-	var r = pick(first, b: second, flag: true)
+	let first = Box.create(1)
+	let second = Box.create(2)
+	let r = pick(first, b: second, flag: true)
 	r.n = 5
 	print("{first.n} {second.n}\n")
 	return 0

@@ -145,7 +145,7 @@ export function compileToProduct(inputPaths MaxonSourcePathArray, target Target,
 	// agree on which compile they are.
 	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
 	attributeCompilerLog(unit)
-	var spans = TraceNameArray.create(0)
+	let spans = TraceNameArray.create(0)
 
 	// ⭐⭐ **WHERE A FAILED BUILD CLOSES WHAT IT LEFT OPEN.** Four stages inside phase brackets can throw —
 	// `load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001 and `link`'s chunk-label refusal —
@@ -176,7 +176,7 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
-	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream, session: session, defines: defines, productVersion: productVersion, tallied: allocationsByTag, tallyPhases: allocationsPhase, openPhaseSpans: spans)
+	let project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream, session: session, defines: defines, productVersion: productVersion, tallied: allocationsByTag, tallyPhases: allocationsPhase, openPhaseSpans: spans)
 	project.asyncTrace = asyncTrace
 	project.poisonFreed = poisonFreed
 	project.debugInfo = debugInfo
@@ -285,7 +285,7 @@ type StagedBuild
 end 'StagedBuild'
 
 function buildStagedImage(project Project, tools ExecutableWriterTools, staged FilePath, outputPath FilePath, emitIr bool, debugInfo bool) returns StagedBuild throws CompileError
-	var codeResult = try compileToCodeResult(project)
+	let codeResult = try compileToCodeResult(project)
 
 	// ⭐ **THE BRACKET KEEPS THE RENDER, WHICH IS THE COST — the WRITE is the command line's and is
 	// not in it** (see `compile` and `writeTargetIr`). `printTargetModule` walks the whole Target
@@ -909,7 +909,7 @@ end 'checkWithoutWriting'
 // nothing about it, and `verify-warm-rebuild` reports one as that error rather than as a program
 // that does not compile.
 module function checkRefusingOnlyAProgram(project Project) returns CheckedCompile throws CompileError
-	view codeResult = try compileToCodeResult(project) otherwise (failure) 'failed'
+	let codeResult = try compileToCodeResult(project) otherwise (failure) 'failed'
 		project.retiredWorkers.release()
 
 		match failure.failure() 'failure'
@@ -967,7 +967,7 @@ export function stdlibCheckOf(target Target, session CompileSession) returns Lib
 end 'stdlibCheckOf'
 
 function libraryCheckOf(program FilePath, target Target, stdlibDir FilePath, scriptlib ScriptlibLoad, stdlibBodies LibraryBodies, session CompileSession) returns LibraryCheck throws CompileError
-	var project = try createProject(program, target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirBeside(stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: false, session: session, stdlibBodies: stdlibBodies)
+	let project = try createProject(program, target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirBeside(stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: false, session: session, stdlibBodies: stdlibBodies)
 	fileChanged(project, path: program, content: LibraryCheckProgramSource)
 	try loadLibrarySources(project)
 
@@ -1032,7 +1032,7 @@ end 'writeTargetIr'
 // carry no diagnostics and propagate straight to the caller, which prints a specific message.
 export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), tallied bool = false, tallyPhases TagCensusPhases = TagCensusPhases.everyPhase, openPhaseSpans TraceNameArray = TraceNameArray.create(0)) returns Project throws CompileError
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
-	var project = try createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion, openPhaseSpans: openPhaseSpans)
+	let project = try createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion, openPhaseSpans: openPhaseSpans)
 
 	if tallied 'tallied'
 		armAllocTally(project, phases: tallyPhases)
@@ -1086,7 +1086,7 @@ export enum LibraryLoad
 end 'LibraryLoad'
 
 export function claimsOfSources(inputPaths MaxonSourcePathArray, target Target, session CompileSession, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), defines DefineArray = DefineArray.create(0)) returns SourceClaims throws CompileError
-	var project = try userFilesProjectOf(inputPaths, target: target, session: session, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, compilerWrittenSources: compilerWrittenSources, defines: defines)
+	let project = try userFilesProjectOf(inputPaths, target: target, session: session, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, compilerWrittenSources: compilerWrittenSources, defines: defines)
 	return try claimsOfUserFiles(project)
 end 'claimsOfSources'
 
@@ -1214,7 +1214,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 
 	// ⚠ `var`, not `let`: `installManagedGlobalInit` below APPENDS to this module, and
 	// `resolveTypes` rewrites its signatures in place.
-	var module = try queryAllModule(project, directories: NamespaceDirectoryCheck.refuseUnnameable)
+	let module = try queryAllModule(project, directories: NamespaceDirectoryCheck.refuseUnnameable)
 
 	// ⭐⭐ **AND BECAUSE THIS COMPILE IS ABOUT TO MUTATE THAT MODULE, THE MEMO MAY NOT SERVE IT AGAIN.**
 	// The bytes have not moved, so the content hash still matches and the memo would answer VALID with a
@@ -1254,7 +1254,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// into, so no file can have been parsed without it. What needs it here is the conformance check: a method
 	// typed by a generic INSTANCE has no identity outside this index (`canonicalInstanceName`), and rendering
 	// one without it spelled `Array with Integer` and `Array with String` as the same word.
-	var signatures = try queryProgramSignatures(project)
+	let signatures = try queryProgramSignatures(project)
 	dropExplainedParseConsequences(project, signatures: signatures, stage: ConsequenceDropStage.beforeTypeResolution)
 
 	// The second of `checkDeclarations`' two brackets — see the first, above `checkValueMergeSignatures`.
@@ -1429,17 +1429,16 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// `GlobalInitOrder`). That walk must sit between `liveGlobalLabels` and the synthesis for the reason
 	// `liveGlobalLabels`' own position has: `__module_init` opens every global with a `globalAddr` of its own
 	// slot, so a dependency walk run after it would find every global depending on itself.
-	var orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals, fileRanks: project.emissionRanks)) otherwise (failure) 'initOrderRefused'
+	let orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals, fileRanks: project.emissionRanks)) otherwise (failure) 'initOrderRefused'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'initOrderRefused'
 
-	// A `let` no share walk can mark and a `spawn` an initializer reaches are refused by `semanticCheck`.
 	let orderedDefaults = try dependencyOrderedDefaults(module, project: project, signatures: signatures, defaults: signatures.defaultSlots(project.emissionRanks)) otherwise (failure) 'defaultOrderRefused'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'defaultOrderRefused'
 
 	project.managedGlobals = orderedGlobals
-	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: orderedGlobals, sharedLets: letShareWalksOf(orderedGlobals, spawnsAService: serviceTypeRoster(signatures).count() > 0).marked, defaults: orderedDefaults)
+	let usesManagedGlobals = installManagedGlobalInit(module, project: project, globals: orderedGlobals, sharedLets: sharedLetsOf(orderedGlobals, spawnsAService: serviceTypeRoster(signatures).count() > 0), defaults: orderedDefaults)
 
 	// ⭐⭐ **SYNTHESIZE `<T>.__behave` AND `<T>.__finish` FOR EVERY SERVICE — HERE, AND FOR
 	// `installManagedGlobalInit`'s REASON ONE LINE UP (see `Runtime/ServiceBehaviour`).** They are Maxon-tier
@@ -1463,7 +1462,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// that give a byte record handed to a writing parameter one the write may land in. The runtime-needs
 	// scan below then walks the FINAL Maxon module, and the lowering stage runs after it. Both neighbours
 	// are forced — see `buildMaxonTierPasses`.
-	var pipeline = try PassPipeline.create(project, maxonModule: module, signatures: signatures) otherwise (failure) 'duplicateFunctionName'
+	let pipeline = try PassPipeline.create(project, maxonModule: module, signatures: signatures) otherwise (failure) 'duplicateFunctionName'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'duplicateFunctionName'
 
@@ -1501,7 +1500,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// `IrModule.parksOnIo` (which decides whether the park is emitted) cannot answer it differently. Both
 	// fields carry what a disagreement produces.
 	let parksOnIo = targetParksOnIo(project.target)
-	var usage = scanRuntimeUsage(module, libraryFacts: project.libraryFacts, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
+	let usage = scanRuntimeUsage(module, libraryFacts: project.libraryFacts, funcSignatures: project.funcSignatures, parksOnIo: parksOnIo)
 
 	// The managed-memory runtime's empty-slot panic renders the cursor's position through `__int_to_string`
 	// from a synthesized body, which the scan cannot see.
@@ -1576,11 +1575,9 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// `noteDestructorUsage` does for the drop cascades.
 	noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.clone)
 
-	// The SOLENESS and SHARE walks are the third and fourth cascades over that same node space and close in the
-	// same window for the same reason: a `__sole_<T>` calls `__managed_sole`/`__list_sole`/nested `__sole_<T>`
-	// inside a synthesized body (a `__share_<T>` their share twins), and the installers read the bits those
-	// callees turn on.
-	noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.soleWalk)
+	// The SHARE walk is the third cascade over that same node space and closes in the same window for the same
+	// reason: a `__share_<T>` calls `__managed_share`/`__list_share`/nested `__share_<T>` inside a synthesized
+	// body, and the installers read the bits those callees turn on.
 	noteCascadeUsage(usage, project: project, signatures: signatures, action: CascadeAction.shareWalk)
 
 	// A `<Enum>.fromName(name)` helper calls `__str_eq` per case tested and, for a boxed union, `__mm_alloc`s
@@ -1719,13 +1716,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 end 'compileToCodeResult'
 
 function codeResultOf(project Project) returns CodeResult throws CompileError
-	var lowered = try lowerTheProgram(project, passes: buildLoweringPasses())
-	var pipeline = lowered.pipeline
-	var usage = lowered.usage
-	var signatures = lowered.signatures
-	view asyncSpawnTargets = lowered.asyncSpawnTargets
-	view serviceReplyTargets = lowered.serviceReplyTargets
-	view userGlobals = lowered.userGlobals
+	let lowered = try lowerTheProgram(project, passes: buildLoweringPasses())
+	let pipeline = lowered.pipeline
+	let usage = lowered.usage
+	let signatures = lowered.signatures
+	let asyncSpawnTargets = lowered.asyncSpawnTargets
+	let serviceReplyTargets = lowered.serviceReplyTargets
+	let userGlobals = lowered.userGlobals
 	let parksOnIo = lowered.parksOnIo
 
 	// ⚠ After the WHOLE lowering list and not after `lowerMaxonToStd`: `ValueTupleReturn` is the last pass
@@ -1748,13 +1745,13 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// program declaring `implements Iterable` — which expands `stdlib/Interfaces.maxon`'s `extension
 	// Iterable` onto the conformer and so can fail inside that file — would die with this panic INSTEAD of
 	// the diagnostic naming the real fault. Below the gate, that compile has already refused and said why.
-	view orderingEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: OrderingTypeName, reader: "the `Comparable` compare impls")
+	let orderingEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: OrderingTypeName, reader: "the `Comparable` compare impls")
 
 	// ⭐ **`__SubprocessStreamState`'s DECLARATION, FOR THE SAME REASON AND AT THE SAME POINT.** A streaming
 	// child's per-stream state word IS this enum's ordinal column, so reading the declaration keeps that wire
 	// value and the `match` arms the stdlib writes over it ONE fact — leaving no transcription for a drift
 	// check to hold.
-	view subprocessStreamStateEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: SubprocessStreamStateTypeName, reader: "the streaming subprocess runtime's per-stream state word")
+	let subprocessStreamStateEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: SubprocessStreamStateTypeName, reader: "the streaming subprocess runtime's per-stream state word")
 
 	// ⭐ **THE `.rdata` SLOTS ARE FILLED NOW, AND WHAT THEY NAME MUST BE INSTALLED.**
 	// Lowering is what decides which witness tables and layout descriptors a program gets, so the
@@ -2135,14 +2132,13 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// `Entry`, a `typealias Pair = (K, V)`). Only the REFERENCED ones are built, exactly as above.
 	installStructDictionaryDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
 
-	// The per-struct, per-union and per-instance DEEP-CLONER, SOLENESS and SHARE cascades — the non-drop twins of
+	// The per-struct, per-union and per-instance DEEP-CLONER and SHARE cascades — the non-drop twins of
 	// the destructor installers, appended already-lowered after the pipeline for the same reason and over the
 	// same node space. Only the entries the module references (a `funcAddr` element stamp, a transfer door's
 	// emitted call, or a nested cascade `noteCascadeUsage` closed the set over) are built. A cloner takes
 	// `project` for one fact the instance registry cannot answer: the MM tag index a fresh box is allocated
 	// under lives in `project.globalData`.
 	installCascades(pipeline.stdModule, project: project, signatures: signatures, usage: usage, action: CascadeAction.clone)
-	installCascades(pipeline.stdModule, project: project, signatures: signatures, usage: usage, action: CascadeAction.soleWalk)
 	installCascades(pipeline.stdModule, project: project, signatures: signatures, usage: usage, action: CascadeAction.shareWalk)
 
 	// The `__fnref_` thunks for plain functions used as first-class values — collected before the pipeline
@@ -2188,7 +2184,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 		end 'runtimeLockMisuse'
 	end 'runtimeLocks'
 
-	var dataSection = dataSectionRoster(userGlobals.clone(), usage: usage, target: project.target)
+	let dataSection = dataSectionRoster(userGlobals.clone(), usage: usage, target: project.target)
 	assertPublishedWordAccessIsOrdered(pipeline.stdModule, entries: dataSection, firstFuncIndex: firstEmittedFuncIndex)
 
 	recordPhase(project, phase: CompilePhase.synthesizeBodies, probe: synthesizeProbe)
@@ -2285,7 +2281,7 @@ export function inSourceOrder(paths MaxonSourcePathArray, order SourceOrder) ret
 		return paths
 	end 'asTheWalkFoundThem'
 
-	var reversed = MaxonSourcePathArray.create(paths.count(), zeroed: false)
+	let reversed = MaxonSourcePathArray.create(paths.count(), zeroed: false)
 
 	for position in 0 upto paths.count() 'eachPosition'
 		reversed.push(try paths.get(paths.count() - 1 - position) otherwise panic("inSourceOrder: position {position} is outside the {paths.count()} paths being reversed"))
@@ -2300,8 +2296,8 @@ end 'inSourceOrder'
 // there", the form the spec runner uses to state a case's file order while rooting the project at
 // the case's own directory.
 export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, nestedProjects NestedProjectRule = NestedProjectRule.refused) returns MaxonSourcePathArray throws CompileError
-	var files = MaxonSourcePathArray.create(0)
-	var ledger = PhysicalEntryLedger.create()
+	let files = MaxonSourcePathArray.create(0)
+	let ledger = PhysicalEntryLedger.create()
 
 	for path in paths 'eachNamed'
 		if File.exists(path) 'isFile'
@@ -2430,7 +2426,7 @@ end 'commonAncestorOf'
 // (see `printLibraryWalkCensus`). The count comes from the recursion rather than a second
 // traversal, which would be free to disagree the moment this one grows an exclusion.
 export function collectMaxonSources(dir FilePath, into MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, nestedProjects NestedProjectRule = NestedProjectRule.refused) returns DirectoryWalkCount throws CompileError
-	var ledger = PhysicalEntryLedger.create()
+	let ledger = PhysicalEntryLedger.create()
 
 	return try collectIfFirst(dir, into: into, selection: selection, nestedProjects: nestedProjects, ledger: ledger)
 end 'collectMaxonSources'
@@ -2872,7 +2868,7 @@ export type StagedOriginIndex
 	end 'empty'
 
 	export static function of(origins StagedSourceOriginArray) returns StagedOriginIndex
-		var reportedPaths = ReportedPathMap.create()
+		let reportedPaths = ReportedPathMap.create()
 
 		for origin in origins 'eachOrigin'
 			reportedPaths.upsert(origin.stagedPath, value: origin.reportedPath)
@@ -2902,7 +2898,7 @@ export type CompilerWrittenIndex
 	end 'empty'
 
 	export static function of(written CompilerWrittenSourceArray) returns CompilerWrittenIndex
-		var mintedNames = MintedNamesByPath.create()
+		let mintedNames = MintedNamesByPath.create()
 
 		for source in written 'eachWritten'
 			mintedNames.upsert(source.path, value: source.mintedNames)

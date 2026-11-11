@@ -106,7 +106,7 @@ export type OperandOrder
 		self.events.push(OperandEvent.create(binding, at: at, kind: plainOperandRead))
 
 		for index in self.lendBase upto self.lends.count() 'eachLend'
-			view lend = try self.lends.get(index) otherwise panic("noteRead: lends.get OOB at {index}")
+			let lend = try self.lends.get(index) otherwise panic("noteRead: lends.get OOB at {index}")
 
 			if lend.heldUntilStatementEnd and lend.binding is binding 'aHeldCellIsRead'
 				self.found.push(OverlapCandidate.create(index, operandAt: at, operand: ConflictingOperand.plainRead, write: lend.write, companion: noCompanionLend))
@@ -126,7 +126,7 @@ export type OperandOrder
 
 		while position > self.eventBase 'walkBack'
 			position = position - 1
-			view event = try self.events.get(position) otherwise panic("lendCell: events.get OOB at {position}")
+			let event = try self.events.get(position) otherwise panic("lendCell: events.get OOB at {position}")
 
 			if event.at < argumentStart 'beforeTheArgument'
 				break
@@ -142,7 +142,7 @@ export type OperandOrder
 		let call = try self.openCalls.pop() otherwise panic("settleLends: the call being settled was never begun")
 
 		for index in firstLend upto self.lends.count() 'eachOwnLend'
-			var lend = try self.lends.get(index) otherwise panic("settleLends: lends.get OOB at {index}")
+			let lend = try self.lends.get(index) otherwise panic("settleLends: lends.get OOB at {index}")
 
 			if lend.settled 'alreadySettled'
 				continue
@@ -162,11 +162,11 @@ export type OperandOrder
 	// write the receiver makes is refused when an argument read the root it writes.
 	module function receiverWrittenAfterArguments(receiverStart ElementIndex, argumentsStart ElementIndex)
 		for position in receiverStart upto argumentsStart 'eachReceiverEvent'
-			view written = try self.events.get(position) otherwise panic("receiverWrittenAfterArguments: events.get OOB at {position}")
+			let written = try self.events.get(position) otherwise panic("receiverWrittenAfterArguments: events.get OOB at {position}")
 			let lend = try written.kind.writtenLend() otherwise continue
 
 			for later in argumentsStart upto self.events.count() 'eachArgumentEvent'
-				view event = try self.events.get(later) otherwise panic("receiverWrittenAfterArguments: events.get OOB at {later}")
+				let event = try self.events.get(later) otherwise panic("receiverWrittenAfterArguments: events.get OOB at {later}")
 
 				if event.binding is written.binding and event.kind.readsStorage() 'theArgumentReadsTheWrittenRoot'
 					self.found.push(OverlapCandidate.create(lend, operandAt: event.at, operand: event.kind.conflictingOperand(), write: self.writeOf(lend), companion: noCompanionLend))
@@ -176,7 +176,7 @@ export type OperandOrder
 	end 'receiverWrittenAfterArguments'
 
 	module function stashSince(mark ElementIndex)
-		var tail = OperandEventArray.create(self.events.count() - mark, zeroed: false)
+		let tail = OperandEventArray.create(self.events.count() - mark, zeroed: false)
 		copyEventsInto(tail, source: self.events, first: mark)
 		self.events.truncate(mark)
 		self.stashed.push(tail)
@@ -192,7 +192,7 @@ export type OperandOrder
 
 	function collectOverlapsFrom(first ElementIndex, selection LendSelection)
 		for index in first upto self.lends.count() 'eachLend'
-			view lend = try self.lends.get(index) otherwise panic("collectOverlapsFrom: lends.get OOB at {index}")
+			let lend = try self.lends.get(index) otherwise panic("collectOverlapsFrom: lends.get OOB at {index}")
 
 			if self.selects(selection, lend: lend, index: index) 'selected'
 				self.collectOverlapsOf(index)
@@ -209,7 +209,7 @@ export type OperandOrder
 
 	function writePositionFrom(lend ElementIndex, first ElementIndex) returns ElementIndex throws AbsentError
 		for position in first upto self.events.count() 'eachEvent'
-			view event = try self.events.get(position) otherwise panic("writePositionFrom: events.get OOB at {position}")
+			let event = try self.events.get(position) otherwise panic("writePositionFrom: events.get OOB at {position}")
 			let owner = try event.kind.writtenLend() otherwise continue
 
 			if owner == lend 'itsWrite'
@@ -221,10 +221,10 @@ export type OperandOrder
 	end 'writePositionFrom'
 
 	function lendsWrittenIn(first ElementIndex, limit ElementIndex) returns LendNumberArray
-		var written = LendNumberArray.create(0)
+		let written = LendNumberArray.create(0)
 
 		for position in first upto limit 'eachEvent'
-			view event = try self.events.get(position) otherwise panic("lendsWrittenIn: events.get OOB at {position}")
+			let event = try self.events.get(position) otherwise panic("lendsWrittenIn: events.get OOB at {position}")
 			written.push(try event.kind.writtenLend() otherwise continue)
 		end 'eachEvent'
 
@@ -232,7 +232,7 @@ export type OperandOrder
 	end 'lendsWrittenIn'
 
 	function collectOverlapsOf(index ElementIndex)
-		view lend = try self.lends.get(index) otherwise panic("collectOverlapsOf: lends.get OOB at {index}")
+		let lend = try self.lends.get(index) otherwise panic("collectOverlapsOf: lends.get OOB at {index}")
 		var limit = self.eventCount()
 
 		if not lend.heldUntilStatementEnd 'theCallRunsNow'
@@ -242,7 +242,7 @@ export type OperandOrder
 		let writtenBefore = self.lendsWrittenIn(self.eventBase, limit: limit)
 
 		for position in self.eventBase upto limit 'eachEvent'
-			view event = try self.events.get(position) otherwise panic("collectOverlapsOf: events.get OOB at {position}")
+			let event = try self.events.get(position) otherwise panic("collectOverlapsOf: events.get OOB at {position}")
 
 			if event.binding is lend.binding 'theLendsRoot'
 				self.collectOverlapOf(event, lend: index, writtenBefore: writtenBefore)
@@ -277,7 +277,7 @@ export type OperandOrder
 	end 'writeOf'
 
 	function operandAtStartOf(lend ElementIndex) returns ElementIndex
-		view writing = try self.lends.get(lend) otherwise panic("operandAtStartOf: lends.get OOB at {lend}")
+		let writing = try self.lends.get(lend) otherwise panic("operandAtStartOf: lends.get OOB at {lend}")
 		return writing.argumentStart + 1
 	end 'operandAtStartOf'
 end 'OperandOrder'

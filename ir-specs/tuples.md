@@ -5350,7 +5350,7 @@ function xorKeyStream(output ByteArray, data ByteArray, keystream ByteArray, off
 end 'xorKeyStream'
 
 function main() returns ExitCode
-	var output = ByteArray.create(0)
+	let output = ByteArray.create(0)
 	let data = [1 as Byte, 2, 3, 4]
 	let keystream = [9 as Byte, 8, 7, 6, 5]
 
@@ -7462,7 +7462,7 @@ function sumWithPositions(values ByteArray) returns ByteSum
 end 'sumWithPositions'
 
 function main() returns ExitCode
-	var output = ByteArray.create(0)
+	let output = ByteArray.create(0)
 	let data = [1 as Byte, 2, 3, 4]
 	let keystream = [9 as Byte, 8, 7, 6, 5]
 
@@ -7932,7 +7932,7 @@ func @WithIterIterator.current {
     x64.callDirect __retain_type_param
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callMem [r12 + 48]
+    x64.callMem [r12 + 40]
     x64.movRegReg rax, r8
     x64.movRegReg r8, r13
     x64.movRegReg r10, rax
@@ -8394,7 +8394,7 @@ func @WithIterIterator.current {
     x64.callDirect __retain_type_param
     x64.movRegReg r13, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callMem [r12 + 48]
+    x64.callMem [r12 + 40]
     x64.movRegReg rax, r8
     x64.movRegReg r8, r13
     x64.movRegReg r10, rax
@@ -8851,7 +8851,7 @@ func @WithIterIterator.current {
     arm64.bl __retain_type_param
     arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
     arm64.blr x16
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x21
@@ -9311,7 +9311,7 @@ func @WithIterIterator.current {
     arm64.bl __retain_type_param
     arm64.movRegReg x21, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x16, [x20 + 48]
+    arm64.loadRegBaseDisp.word64 x16, [x20 + 40]
     arm64.blr x16
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x21

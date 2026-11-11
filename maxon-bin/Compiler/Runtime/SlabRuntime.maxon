@@ -834,7 +834,7 @@ end 'buildSlabFreeDoor'
 // process's first allocation, which precedes any scheduler, so it is sealed before a worker M can
 // exist.
 export function slabRuntimeGlobals() returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create(0)
+	let out = DataSectionEntryArray.create(0)
 	pushRuntimeGlobal(out, label: SlabStateLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	return out
 end 'slabRuntimeGlobals'
@@ -927,7 +927,7 @@ function requireMarkTableCoversTheWidestSpan(widestSpanChunks FullRangeInt)
 end 'requireMarkTableCoversTheWidestSpan'
 
 function slabTierPins() returns TierGeometryPinArray
-	var out = TierGeometryPinArray.create(0)
+	let out = TierGeometryPinArray.create(0)
 
 	out.push(TierGeometryPin.create("the chunk granularity", here: SlabChunkBytes, named: "SlabPageBytes"))
 	out.push(TierGeometryPin.create("an OS-direct mapping's prefix", here: OsDirectPrefixBytes, named: "OsDirectPrefixBytes"))
@@ -997,7 +997,7 @@ end 'slabTierPins'
 export let HeapStatsStdlibFileName = "HeapStats.maxon"
 
 export function checkHeapStatsBuckets(signatures ProgramSignatures, stdlibPath FilePath)
-	var pins = TierGeometryPinArray.create(0)
+	let pins = TierGeometryPinArray.create(0)
 	pins.push(TierGeometryPin.create("the census tag-bucket count", here: SlabCensusTagBuckets, named: "HeapBucketCount"))
 	requireTierGeometryAgrees(pins, signatures: signatures, tierPath: stdlibPath, emitterFile: "Compiler/Runtime/SlabRuntime.maxon", layer: "checkHeapStatsBuckets")
 end 'checkHeapStatsBuckets'
@@ -1210,7 +1210,7 @@ end 'SlabBailEdge'
 // pointer, and a zero slot is a real thread with no machine. Only for a `multiMachine` target — a
 // `singleMachine` caller never reaches a TLS op and branches to its bail directly.
 export function emitSlabMachineOrBail(module StdModule, func IrFunction, cur IrBlock, schedulerWord ValueId, haveMachine IrBlock, noScheduler SlabBailEdge, noMachine SlabBailEdge, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns ValueId
-	var haveScheduler = module.addBlock(func, label: label, heat: heat)
+	let haveScheduler = module.addBlock(func, label: label, heat: heat)
 
 	// Not `emitSlabSchedulerExists` with its arms swapped: that form lowers to a `setcc` rather than
 	// a `jcc`, and moves the `allocator-shape-is-one-in-a-program-with-no-scheduler` pin in
@@ -1332,8 +1332,8 @@ type SlabShardArms
 	export var serial as SlabShardSite
 
 	static function create(module StdModule, func IrFunction, state ValueId, schedulerWord ValueId, need SlabShardNeed, ids ValueMinter, label ByteArray, heat BlockHeat) returns Self
-		var soleWriter = module.addBlock(func, label: label, heat: heat)
-		var serialised = module.addBlock(func, label: label, heat: heat)
+		let soleWriter = module.addBlock(func, label: label, heat: heat)
+		let serialised = module.addBlock(func, label: label, heat: heat)
 
 		let soleTrafficRow = ids.mint()
 		soleWriter.blockArgs.push(IrBlockArg.create(soleTrafficRow, argType: StdType.i64))
@@ -1342,8 +1342,8 @@ type SlabShardArms
 		let serialRouting = pushSerialRouting(module, block: serialised, state: state, need: need, ids: ids)
 		let serialTrafficRow = emitSlabTrafficRowAt(module, block: serialised, state: state, row: SlabRawShardRow, ids: ids)
 
-		var sole = SlabShardSite.create(soleWriter, trafficRow: soleTrafficRow, routing: soleRouting)
-		var serial = SlabShardSite.create(serialised, trafficRow: serialTrafficRow, routing: serialRouting)
+		let sole = SlabShardSite.create(soleWriter, trafficRow: soleTrafficRow, routing: soleRouting)
+		let serial = SlabShardSite.create(serialised, trafficRow: serialTrafficRow, routing: serialRouting)
 
 		return Self{schedulerWord: schedulerWord, sole: sole, serial: serial}
 	end 'create'
@@ -1462,12 +1462,12 @@ end 'ownSoleEdgeArgs'
 // block cannot skip. That lengthening sits between a door's entry and the arm every allocation in an
 // unscheduled program lands in, which is I-cache the hot path pays for on every call.
 function emitSlabResolveShard(module StdModule, func IrFunction, cur IrBlock, state ValueId, model MachineModel, need SlabShardNeed, traffic ThreadTraffic, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns SlabShardArms
-	var decision = emitSlabRowDecision(module, func: func, cur: cur, state: state, model: model, traffic: traffic, ids: ids, label: label, heat: heat)
-	var arms = SlabShardArms.create(module, func: func, state: state, schedulerWord: decision.schedulerWord, need: need, ids: ids, label: label, heat: heat)
+	let decision = emitSlabRowDecision(module, func: func, cur: cur, state: state, model: model, traffic: traffic, ids: ids, label: label, heat: heat)
+	let arms = SlabShardArms.create(module, func: func, state: state, schedulerWord: decision.schedulerWord, need: need, ids: ids, label: label, heat: heat)
 
 	let noProc = emitConst(module, block: decision.unscheduled, value: SlabNoProcessor, ids: ids)
 	let rawTrafficRow = emitSlabTrafficRowAt(module, block: decision.unscheduled, state: state, row: SlabRawShardRow, ids: ids)
-	var rawSoleArgs = rawSoleEdgeArgs(module, block: decision.unscheduled, state: state, trafficRow: rawTrafficRow, noProc: noProc, need: need, ids: ids)
+	let rawSoleArgs = rawSoleEdgeArgs(module, block: decision.unscheduled, state: state, trafficRow: rawTrafficRow, noProc: noProc, need: need, ids: ids)
 	emitBranchCarrying(module, from: decision.unscheduled, to: arms.sole.block, values: rawSoleArgs)
 
 	emitSlabSerialRoutes(module, serial: decision.serial, arms: arms, state: state, need: need, ids: ids)
@@ -1560,7 +1560,7 @@ end 'SlabRowDecision'
 // disagree about a row's sole writer. The P is carried in the own-row arm so `M.currentP` is read once.
 function emitSlabRowDecision(module StdModule, func IrFunction, cur IrBlock, state ValueId, model MachineModel, traffic ThreadTraffic, ids ValueMinter, label ByteArray, heat BlockHeat) returns SlabRowDecision
 	let schedulerWord = emitSlabSchedulerWord(module, block: cur, state: state, model: model, ids: ids)
-	var unscheduled = module.addBlock(func, label: label, heat: heat)
+	let unscheduled = module.addBlock(func, label: label, heat: heat)
 
 	if model == MachineModel.singleMachine 'oneThread'
 		module.setTerminator(cur, op: StdOp.branch(unscheduled.id))
@@ -1568,18 +1568,18 @@ function emitSlabRowDecision(module StdModule, func IrFunction, cur IrBlock, sta
 		return SlabRowDecision.create(schedulerWord, unscheduled: unscheduled, own: SlabOwnArm.absent, serial: SlabSerialArm.absent)
 	end 'oneThread'
 
-	var haveMachine = module.addBlock(func, label: label, heat: heat)
-	var noMachine = module.addBlock(func, label: label, heat: heat)
-	var noProc = module.addBlock(func, label: label, heat: heat)
-	var haveProc = module.addBlock(func, label: label, heat: heat)
-	var clamped = module.addBlock(func, label: label, heat: heat)
-	var ownRow = module.addBlock(func, label: label, heat: heat)
+	let haveMachine = module.addBlock(func, label: label, heat: heat)
+	let noMachine = module.addBlock(func, label: label, heat: heat)
+	let noProc = module.addBlock(func, label: label, heat: heat)
+	let haveProc = module.addBlock(func, label: label, heat: heat)
+	let clamped = module.addBlock(func, label: label, heat: heat)
+	let ownRow = module.addBlock(func, label: label, heat: heat)
 
-	var rawRowUnlocked = SlabBailEdge.create(unscheduled, args: ValueIdArray.create(0))
-	var rawRowSerialised = SlabBailEdge.create(noMachine, args: ValueIdArray.create(0))
+	let rawRowUnlocked = SlabBailEdge.create(unscheduled, args: ValueIdArray.create(0))
+	let rawRowSerialised = SlabBailEdge.create(noMachine, args: ValueIdArray.create(0))
 	let m = emitSlabMachineOrBail(module, func: func, cur: cur, schedulerWord: schedulerWord, haveMachine: haveMachine, noScheduler: rawRowUnlocked, noMachine: rawRowSerialised, ids: ids, label: label, heat: heat)
 
-	var procTest = emitThreadTrafficStep(module, func: func, cur: haveMachine, m: m, traffic: traffic, ids: ids, label: label, heat: heat)
+	let procTest = emitThreadTrafficStep(module, func: func, cur: haveMachine, m: m, traffic: traffic, ids: ids, label: label, heat: heat)
 	let p = emitLoadField(module, block: procTest, record: m, offset: MOffCurrentP, ids: ids)
 	emitBranchOnCompare(module, block: procTest, value: p, pred: StdCmpPred.eq, against: SlabNoProcessor, whenTrue: noProc, whenFalse: haveProc, ids: ids)
 
@@ -1599,8 +1599,8 @@ function emitThreadTrafficStep(module StdModule, func IrFunction, cur IrBlock, m
 		free then break
 	end 'traffic'
 
-	var haveThread = module.addBlock(func, label: label, heat: heat)
-	var done = module.addBlock(func, label: label, heat: heat)
+	let haveThread = module.addBlock(func, label: label, heat: heat)
+	let done = module.addBlock(func, label: label, heat: heat)
 
 	let owner = emitSlabOwnerThreadOrBail(module, cur: cur, m: m, haveOwner: haveThread, noThread: SlabBailEdge.create(done, args: ValueIdArray.create(0)), ids: ids)
 
@@ -1645,7 +1645,7 @@ end 'emitSlabRowClamp'
 // serialised arms).
 // Terminates `cur` and answers in `addrId`, the merge block's single argument.
 function emitSlabLockDepthAddr(module StdModule, func IrFunction, cur IrBlock, state ValueId, model MachineModel, addrId ValueId, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns IrBlock
-	var merge = module.addBlock(func, label: label, heat: heat)
+	let merge = module.addBlock(func, label: label, heat: heat)
 	merge.blockArgs.push(IrBlockArg.create(addrId, argType: StdType.i64))
 
 	let sink = emitFieldAddr(module, block: cur, record: state, offset: SlabStateLockDepthSinkOffset, ids: ids)
@@ -1657,9 +1657,9 @@ function emitSlabLockDepthAddr(module StdModule, func IrFunction, cur IrBlock, s
 		return merge
 	end 'oneThread'
 
-	var haveMachine = module.addBlock(func, label: label, heat: heat)
+	let haveMachine = module.addBlock(func, label: label, heat: heat)
 
-	var toSink = SlabBailEdge.create(merge, args: argsOf(sink))
+	let toSink = SlabBailEdge.create(merge, args: argsOf(sink))
 	let m = emitSlabMachineOrBail(module, func: func, cur: cur, schedulerWord: schedulerWord, haveMachine: haveMachine, noScheduler: toSink, noMachine: toSink, ids: ids, label: label, heat: heat)
 
 	let mine = emitFieldAddr(module, block: haveMachine, record: m, offset: MOffLocks, ids: ids)
@@ -1794,10 +1794,10 @@ end 'SlabTrafficFigure'
 //
 // Terminates `cur` and answers in `answerId`, the merge block's single argument.
 export function emitSlabTrafficRead(module StdModule, func IrFunction, cur IrBlock, figure SlabTrafficFigure, answerId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var walk = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var loopHdr = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var loopBody = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let walk = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let loopHdr = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let loopBody = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	done.blockArgs.push(IrBlockArg.create(answerId, argType: StdType.i64))
 
 	let state = emitSlabStateCommitted(module, block: cur, ids: ids)
@@ -1885,10 +1885,10 @@ end 'emitSlabRowSum'
 // `retry`, because a contended push runs the loop body several times for one free and a credit in
 // there would count CAS attempts.
 function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, span ValueId, slot ValueId, owner ValueId, myP ValueId, ids ValueMinter) returns IrBlock
-	var retry = module.addBlock(func, label: b"rpush", heat: BlockHeat.normal)
-	var cacherAsked = module.addBlock(func, label: b"rcacher", heat: BlockHeat.normal)
-	var credited = module.addBlock(func, label: b"rcredit", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"rpushed", heat: BlockHeat.normal)
+	let retry = module.addBlock(func, label: b"rpush", heat: BlockHeat.normal)
+	let cacherAsked = module.addBlock(func, label: b"rcacher", heat: BlockHeat.normal)
+	let credited = module.addBlock(func, label: b"rcredit", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"rpushed", heat: BlockHeat.normal)
 
 	// Stepped before the head moves, so a reader holding `__slab_lock` that sees the chain also sees a count
 	// that covers it. The other order leaves a window where the chain is longer than the count.
@@ -1936,7 +1936,7 @@ end 'emitSlabRemotePush'
 // `miss` is `leaves` for a leaf, which jumps to its bail instead of calling the commit so the hit path
 // holds no call.
 function emitSlabStateBase(module StdModule, func IrFunction, cur IrBlock, stateId ValueId, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal, miss SlabStateMiss = SlabStateMiss.commits) returns IrBlock
-	var merge = module.addBlock(func, label: label, heat: heat)
+	let merge = module.addBlock(func, label: label, heat: heat)
 	merge.blockArgs.push(IrBlockArg.create(stateId, argType: StdType.i64))
 
 	let stateAddr = ids.mint()
@@ -1964,7 +1964,7 @@ function emitSlabStateMissRoad(module StdModule, func IrFunction, miss SlabState
 end 'emitSlabStateMissRoad'
 
 function emitSlabStateCommitRoad(module StdModule, func IrFunction, merge IrBlock, label ByteArray, ids ValueMinter) returns BlockId
-	var commit = module.addBlock(func, label: label, heat: BlockHeat.cold)
+	let commit = module.addBlock(func, label: label, heat: BlockHeat.cold)
 
 	let committed = ids.mint()
 	module.appendOp(commit, op: StdOp.call(committed, callee: SlabStateName, args: ValueIdArray.create(0)))
@@ -2013,9 +2013,9 @@ end 'emitSlabStateCommitted'
 // A request of 0 reaches class 0, the ladder's sentinel, whose span holds no objects; `__slab_refill`'s
 // guard is where that is caught, on the COLD path, so the hot path pays nothing for a case no caller has.
 function emitSlabClassIndex(module StdModule, func IrFunction, cur IrBlock, size ValueId, classId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var smallTable = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var largeTable = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var merge = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let smallTable = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let largeTable = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let merge = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	merge.blockArgs.push(IrBlockArg.create(classId, argType: StdType.i64))
 
 	emitBranchOnCompare(module, block: cur, value: size, pred: StdCmpPred.gt, against: SlabSmallTableMaxSize, whenTrue: largeTable, whenFalse: smallTable, ids: ids)
@@ -2061,12 +2061,12 @@ end 'emitReverseTableLookup'
 // nothing emitted, and the reason it is here rather than absent is the shared emitters above — they are what
 // makes the sizing answer and the allocator's routing one fact rather than two that must be kept in step.
 function buildSlabRoundedSize(module StdModule)
-	var func = IrFunction.createFromStd(SlabRoundedSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SlabRoundedSizeName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.normal)
-	var small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.normal)
+	let small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let size = 0
@@ -2082,7 +2082,7 @@ function buildSlabRoundedSize(module StdModule)
 	module.setTerminator(osDirect, op: StdOp.ret(usable))
 
 	let class = ids.mint()
-	var classReady = emitSlabClassIndex(module, func: func, cur: small, size: size, classId: class, ids: ids, label: b"cls")
+	let classReady = emitSlabClassIndex(module, func: func, cur: small, size: size, classId: class, ids: ids, label: b"cls")
 	let geom = emitClassGeometry(module, block: classReady, classIdx: class, ids: ids)
 	module.setTerminator(classReady, op: StdOp.ret(emitGeomSlotSize(module, block: classReady, geom: geom, ids: ids)))
 
@@ -2125,17 +2125,17 @@ end 'emitStoreSpanOwnerState'
 // disagreed the span would be stamped for one P and installed in another's row, which is precisely the
 // corruption the ownership gate exists to catch. One derivation, in `__slab_alloc`, passed down.
 function buildSlabRefill(module StdModule, model MachineModel)
-	var func = IrFunction.createFromStd(SlabRefillName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(SlabRefillName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var popPartial = module.addBlock(func, label: b"poppartial", heat: BlockHeat.normal)
-	var takePartial = module.addBlock(func, label: b"partial", heat: BlockHeat.normal)
-	var unlock = module.addBlock(func, label: b"unlock", heat: BlockHeat.normal)
-	var grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
-	var emptyClass = module.addBlock(func, label: b"emptyclass", heat: BlockHeat.normal)
-	var cut = module.addBlock(func, label: b"cut", heat: BlockHeat.normal)
-	var install = module.addBlock(func, label: b"install", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let popPartial = module.addBlock(func, label: b"poppartial", heat: BlockHeat.normal)
+	let takePartial = module.addBlock(func, label: b"partial", heat: BlockHeat.normal)
+	let unlock = module.addBlock(func, label: b"unlock", heat: BlockHeat.normal)
+	let grow = module.addBlock(func, label: b"grow", heat: BlockHeat.normal)
+	let emptyClass = module.addBlock(func, label: b"emptyclass", heat: BlockHeat.normal)
+	let cut = module.addBlock(func, label: b"cut", heat: BlockHeat.normal)
+	let install = module.addBlock(func, label: b"install", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let classIdx = 0
@@ -2145,7 +2145,7 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	let state = ids.mint()
 	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create(0)))
 	let depthAddr = ids.mint()
-	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
+	let locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
 	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
 	let mcentralSlot = emitStateSlotAddr(module, block: locked, state: state, arrayOffset: SlabStateMcentralOffset as FullRangeInt, index: classIdx, ids: ids)
 	let mcacheSlot = emitMcacheSlotAddr(module, block: locked, mcacheRow: mcacheRow, classIdx: classIdx, ids: ids)
@@ -2233,8 +2233,8 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 	// `__slab_refill` in a NORMAL block has to sit in a callee-saved register, so every hit pays the push
 	// and the pop for a call it never makes; in a cold block the bracket saves it to a slot instead
 	// (`RegisterAllocator`'s cold-run rule) and the hit path is free to use the whole pool.
-	var refill = module.addBlock(func, label: label, heat: BlockHeat.cold)
-	var ready = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let refill = module.addBlock(func, label: label, heat: BlockHeat.cold)
+	let ready = module.addBlock(func, label: label, heat: BlockHeat.normal)
 
 	let span = ids.mint()
 	ready.blockArgs.push(IrBlockArg.create(span, argType: StdType.i64))
@@ -2298,13 +2298,13 @@ end 'SlabEvictRoute'
 // into the entry doors that differ by exactly that bit, so no program carries the arm it never takes and no
 // allocation tests for it.
 function emitSlabPop(module StdModule, func IrFunction, ready IrBlock, span ValueId, classIdx ValueId, evict SlabEvictSlot, zeroed bool, abortRoad SlabAbortRoad, slotId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var recycled = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var virgin = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var handOut = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var exhausted = module.addBlock(func, label: label, heat: BlockHeat.cold)
-	var consumed = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var unlink = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let recycled = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let virgin = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let handOut = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let exhausted = module.addBlock(func, label: label, heat: BlockHeat.cold)
+	let consumed = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let unlink = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	done.blockArgs.push(IrBlockArg.create(slotId, argType: StdType.i64))
 
 	let slotSize = emitClassGeometryHalf(module, block: ready, classIdx: classIdx, offset: SlabClassGeomSlotSizeOffset, ids: ids)
@@ -2377,11 +2377,11 @@ function emitSlabEvictRoute(module StdModule, func IrFunction, how SlabEvictSlot
 end 'emitSlabEvictRoute'
 
 function emitSlabEvictOwnerRoute(module StdModule, func IrFunction, abortRoad SlabAbortRoad, unlink IrBlock, span ValueId, ids ValueMinter, label ByteArray) returns SlabEvictRoute
-	var lookup = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var holder = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var rawRow = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var procRow = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var unowned = module.addBlock(func, label: label, heat: BlockHeat.cold)
+	let lookup = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let holder = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let rawRow = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let procRow = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let unowned = module.addBlock(func, label: label, heat: BlockHeat.cold)
 
 	let slot = ids.mint()
 	unlink.blockArgs.push(IrBlockArg.create(slot, argType: StdType.i64))
@@ -2407,10 +2407,10 @@ end 'emitSlabEvictOwnerRoute'
 // An abort in its own function, reached by tail jump: an inline abort is a call, and a call in a door's hit
 // path stops it being a leaf.
 function buildSlabAbortDoor(module StdModule, name ByteArray, abort RuntimeAbort)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	emitRuntimeAbort(module, func: func, block: entry, abort: abort, ids: ids)
@@ -2456,8 +2456,8 @@ end 'emitClassGeometryHalf'
 // `miss` is the refill in the full body and the bail in a leaf. The third question compares the owner
 // word with the carried P, or with `SlabNoProcessor` for the lone thread of a program with no scheduler.
 function emitSlabProbe(module StdModule, func IrFunction, cur IrBlock, span ValueId, owner SlabProbeOwner, hit IrBlock, hitArgs ValueIdArray, miss IrBlock, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal)
-	var depleted = module.addBlock(func, label: label, heat: heat)
-	var owned = module.addBlock(func, label: label, heat: heat)
+	let depleted = module.addBlock(func, label: label, heat: heat)
+	let owned = module.addBlock(func, label: label, heat: heat)
 
 	emitBranchOnCompare(module, block: cur, value: span, pred: StdCmpPred.eq, against: 0, whenTrue: miss, whenFalse: depleted, ids: ids)
 
@@ -2524,26 +2524,26 @@ end 'emitSlabProbe'
 // for both halves of the question. That is the honest form of it: *"did I take it"* and *"whose depth word"*
 // are one fact about this call, and a flag beside the address would be two values across the pop for it.
 function buildSlabAllocEntry(module StdModule, name ByteArray, zeroed bool, counting SlabCounting, model MachineModel)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let size = 0 as ValueId
 
 	let class = ids.mint()
-	var classReady = emitSlabClassIndex(module, func: func, cur: small, size: size, classId: class, ids: ids, label: b"cls")
+	let classReady = emitSlabClassIndex(module, func: func, cur: small, size: size, classId: class, ids: ids, label: b"cls")
 
 	let state = ids.mint()
-	var stateReady = emitSlabStateBase(module, func: func, cur: classReady, stateId: state, ids: ids, label: b"state")
+	let stateReady = emitSlabStateBase(module, func: func, cur: classReady, stateId: state, ids: ids, label: b"state")
 
-	var arms = emitSlabResolveShard(module, func: func, cur: stateReady, state: state, model: model, need: SlabShardNeed.routed, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.alloc(size)), ids: ids, label: b"shard")
+	let arms = emitSlabResolveShard(module, func: func, cur: stateReady, state: state, model: model, need: SlabShardNeed.routed, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.alloc(size)), ids: ids, label: b"shard")
 	let soleRoute = slabShardRoute(arms.sole)
 	let serialRoute = slabShardRoute(arms.serial)
 
-	var routed = module.addBlock(func, label: b"routed", heat: BlockHeat.normal)
+	let routed = module.addBlock(func, label: b"routed", heat: BlockHeat.normal)
 	let myP = ids.mint()
 	let mcacheRow = ids.mint()
 	let heldDepth = ids.mint()
@@ -2559,10 +2559,10 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, zeroed bool, coun
 	emitBranchCarrying(module, from: arms.serial.block, to: routed, values: threeArgs(serialRoute.p, second: serialRoute.mcacheRow, third: serialRoute.depthAddr))
 
 	let slot = ids.mint()
-	var served = emitSlabAllocClass(module, func: func, cur: routed, classIdx: class, myP: myP, mcacheRow: mcacheRow, zeroed: zeroed, slotId: slot, ids: ids, label: b"pop")
+	let served = emitSlabAllocClass(module, func: func, cur: routed, classIdx: class, myP: myP, mcacheRow: mcacheRow, zeroed: zeroed, slotId: slot, ids: ids, label: b"pop")
 
-	var release = module.addBlock(func, label: b"release", heat: BlockHeat.cold)
-	var handBack = module.addBlock(func, label: b"handback", heat: BlockHeat.normal)
+	let release = module.addBlock(func, label: b"release", heat: BlockHeat.cold)
+	let handBack = module.addBlock(func, label: b"handback", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: served, value: heldDepth, pred: StdCmpPred.ne, against: SlabNoLockDepth, whenTrue: release, whenFalse: handBack, ids: ids)
 
@@ -2577,7 +2577,7 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, zeroed bool, coun
 
 	// ⭐ **THE OS-DIRECT ROAD IS BUILT LAST AND THE SIZE TEST IS SPELLED AFTER IT, SO ITS BLOCKS LAND PAST
 	// THE HIT PATH** rather than between the entry and the class lookup every small request runs through.
-	var osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.cold)
+	let osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.cold)
 	let oversized = ids.mint()
 	module.appendOp(osDirect, op: StdOp.call(oversized, callee: SlabDoors.of(counting).allocOversize, args: argsOf(size)))
 	module.setTerminator(osDirect, op: StdOp.ret(oversized))
@@ -2603,7 +2603,7 @@ function slabRawMcacheRowDisp() returns ByteOffset
 end 'slabRawMcacheRowDisp'
 
 function emitSlabFastWalk(module StdModule, func IrFunction, cur IrBlock, state ValueId, model MachineModel, bail IrBlock, ids ValueMinter, label ByteArray) returns SlabRowDecision
-	var decision = emitSlabRowDecision(module, func: func, cur: cur, state: state, model: model, traffic: ThreadTraffic.none, ids: ids, label: label, heat: BlockHeat.normal)
+	let decision = emitSlabRowDecision(module, func: func, cur: cur, state: state, model: model, traffic: ThreadTraffic.none, ids: ids, label: label, heat: BlockHeat.normal)
 	emitSlabSerialBails(module, serial: decision.serial, bail: bail)
 
 	return decision
@@ -2630,7 +2630,7 @@ function emitSlabOwnerGate(module StdModule, block IrBlock, ownerWord ValueId, h
 end 'emitSlabOwnerGate'
 
 function emitSlabFastProbe(module StdModule, func IrFunction, cur IrBlock, rowBase ValueId, rowDisp ByteOffset, classIdx ValueId, owner SlabProbeOwner, bail IrBlock, spanId ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var hit = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let hit = module.addBlock(func, label: label, heat: BlockHeat.normal)
 
 	let slotAddr = emitWordSlotAddr(module, block: cur, base: rowBase, index: classIdx, ids: ids)
 	module.appendOp(cur, op: StdOp.loadIndirect(spanId, addrId: slotAddr, offset: rowDisp, valueType: StdType.i64))
@@ -2641,7 +2641,7 @@ end 'emitSlabFastProbe'
 
 function emitSlabFastAllocUnscheduled(module StdModule, func IrFunction, block IrBlock, state ValueId, classIdx ValueId, size ValueId, counting SlabCounting, bail IrBlock, pop IrBlock, ids ValueMinter)
 	let span = ids.mint()
-	var probed = emitSlabFastProbe(module, func: func, cur: block, rowBase: state, rowDisp: slabRawMcacheRowDisp(), classIdx: classIdx, owner: SlabProbeOwner.loneThread, bail: bail, spanId: span, ids: ids, label: b"probe")
+	let probed = emitSlabFastProbe(module, func: func, cur: block, rowBase: state, rowDisp: slabRawMcacheRowDisp(), classIdx: classIdx, owner: SlabProbeOwner.loneThread, bail: bail, spanId: span, ids: ids, label: b"probe")
 
 	let trafficRow = emitSlabTrafficRowAt(module, block: probed, state: state, row: SlabRawShardRow, ids: ids)
 	emitSlabCountingCredit(module, block: probed, rowBase: trafficRow, event: SlabTrafficEvent.alloc(size), atomic: false, counting: counting, ids: ids)
@@ -2651,8 +2651,8 @@ end 'emitSlabFastAllocUnscheduled'
 function emitSlabFastAllocOwn(module StdModule, func IrFunction, row SlabOwnRow, state ValueId, classIdx ValueId, size ValueId, counting SlabCounting, bail IrBlock, pop IrBlock, ids ValueMinter)
 	let rowBase = emitMcacheRowBase(module, block: row.block, state: state, row: row.id, ids: ids)
 	let span = ids.mint()
-	var probed = emitSlabFastProbe(module, func: func, cur: row.block, rowBase: rowBase, rowDisp: slabStateMcacheOffset() as ByteOffset, classIdx: classIdx, owner: SlabProbeOwner.holder(row.p), bail: bail, spanId: span, ids: ids, label: b"ownprobe")
-	var stepped = emitThreadTrafficStep(module, func: func, cur: probed, m: row.machine, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.alloc(size)), ids: ids, label: b"ownthread", heat: BlockHeat.normal)
+	let probed = emitSlabFastProbe(module, func: func, cur: row.block, rowBase: rowBase, rowDisp: slabStateMcacheOffset() as ByteOffset, classIdx: classIdx, owner: SlabProbeOwner.holder(row.p), bail: bail, spanId: span, ids: ids, label: b"ownprobe")
+	let stepped = emitThreadTrafficStep(module, func: func, cur: probed, m: row.machine, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.alloc(size)), ids: ids, label: b"ownthread", heat: BlockHeat.normal)
 
 	let trafficRow = emitSlabTrafficRowBase(module, block: stepped, state: state, row: row.id, ids: ids)
 	emitSlabCountingCredit(module, block: stepped, rowBase: trafficRow, event: SlabTrafficEvent.alloc(size), atomic: false, counting: counting, ids: ids)
@@ -2669,18 +2669,18 @@ end 'emitSlabFastAllocOwnArm'
 // The hit path as a leaf. Only loads precede the probe's verdict and the row is credited after it, so a
 // bail has stored nothing and the full body that takes over credits the request once.
 module function emitSlabFastAlloc(module StdModule, func IrFunction, cur IrBlock, size ValueId, zeroed bool, counting SlabCounting, model MachineModel, abortRoad SlabAbortRoad, bail IrBlock, slotId ValueId, ids ValueMinter) returns IrBlock
-	var small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
+	let small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
 
 	emitSlabSizeRouting(module, block: cur, size: size, osDirect: bail, small: small, ids: ids)
 
 	let class = ids.mint()
-	var classReady = emitSlabClassIndex(module, func: func, cur: small, size: size, classId: class, ids: ids, label: b"cls")
+	let classReady = emitSlabClassIndex(module, func: func, cur: small, size: size, classId: class, ids: ids, label: b"cls")
 
 	let state = ids.mint()
-	var stateReady = emitSlabStateBase(module, func: func, cur: classReady, stateId: state, ids: ids, label: b"state", miss: SlabStateMiss.leaves(bail.id))
-	var walk = emitSlabFastWalk(module, func: func, cur: stateReady, state: state, model: model, bail: bail, ids: ids, label: b"walk")
+	let stateReady = emitSlabStateBase(module, func: func, cur: classReady, stateId: state, ids: ids, label: b"state", miss: SlabStateMiss.leaves(bail.id))
+	let walk = emitSlabFastWalk(module, func: func, cur: stateReady, state: state, model: model, bail: bail, ids: ids, label: b"walk")
 
-	var pop = module.addBlock(func, label: b"pop", heat: BlockHeat.normal)
+	let pop = module.addBlock(func, label: b"pop", heat: BlockHeat.normal)
 	let span = ids.mint()
 	pop.blockArgs.push(IrBlockArg.create(span, argType: StdType.i64))
 
@@ -2691,17 +2691,17 @@ module function emitSlabFastAlloc(module StdModule, func IrFunction, cur IrBlock
 end 'emitSlabFastAlloc'
 
 function buildSlabAllocFast(module StdModule, name ByteArray, zeroed bool, counting SlabCounting, model MachineModel)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var bail = module.addBlock(func, label: b"slow", heat: BlockHeat.cold)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let bail = module.addBlock(func, label: b"slow", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: 1)
 	let size = 0
 
 	let slot = ids.mint()
-	var served = emitSlabFastAlloc(module, func: func, cur: entry, size: size, zeroed: zeroed, counting: counting, model: model, abortRoad: SlabAbortRoad.returnsTheDoor, bail: bail, slotId: slot, ids: ids)
+	let served = emitSlabFastAlloc(module, func: func, cur: entry, size: size, zeroed: zeroed, counting: counting, model: model, abortRoad: SlabAbortRoad.returnsTheDoor, bail: bail, slotId: slot, ids: ids)
 	module.setTerminator(served, op: StdOp.ret(slot))
 
 	emitCallAndReturn(module, block: bail, callee: slabSlowDoorName(name), args: argsOf(size), ids: ids)
@@ -2730,10 +2730,10 @@ end 'guardSlabStateBase'
 // at all: one `osAllocPages`, two stores into pages nobody else can name yet. So the walk here resolves the
 // shard only as far as the row it must credit.
 function buildSlabAllocOversize(module StdModule, counting SlabCounting, model MachineModel)
-	var func = IrFunction.createFromStd(SlabDoors.of(counting).allocOversize, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SlabDoors.of(counting).allocOversize, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	buildSlabOsDirectArm(module, func: func, cur: entry, size: 0, counting: counting, model: model, ids: ids)
@@ -2743,11 +2743,11 @@ end 'buildSlabAllocOversize'
 
 function buildSlabOsDirectArm(module StdModule, func IrFunction, cur IrBlock, size ValueId, counting SlabCounting, model MachineModel, ids ValueMinter)
 	let state = ids.mint()
-	var stateReady = emitSlabStateBase(module, func: func, cur: cur, stateId: state, ids: ids, label: b"state", heat: BlockHeat.cold)
+	let stateReady = emitSlabStateBase(module, func: func, cur: cur, stateId: state, ids: ids, label: b"state", heat: BlockHeat.cold)
 
-	var arms = emitSlabResolveShard(module, func: func, cur: stateReady, state: state, model: model, need: SlabShardNeed.creditsOnly, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.alloc(size)), ids: ids, label: b"shard", heat: BlockHeat.cold)
+	let arms = emitSlabResolveShard(module, func: func, cur: stateReady, state: state, model: model, need: SlabShardNeed.creditsOnly, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.alloc(size)), ids: ids, label: b"shard", heat: BlockHeat.cold)
 
-	var osCall = module.addBlock(func, label: b"oscall", heat: BlockHeat.cold)
+	let osCall = module.addBlock(func, label: b"oscall", heat: BlockHeat.cold)
 	emitSlabCountingCreditBothArms(module, arms: arms, event: SlabTrafficEvent.alloc(size), counting: counting, next: osCall, ids: ids)
 
 	let mapped = ids.mint()
@@ -2764,9 +2764,9 @@ end 'buildSlabOsDirectArm'
 // processor, popped dry and evicted again. A plain re-read would leave the free-list words under it free to
 // be satisfied from before those pops, and this slot would go back onto a list a live slot is already on.
 function emitSlabLockedDoorEntry(module StdModule, func IrFunction, entry IrBlock, handled IrBlock, ownerExpected SpanOwnerState, ids ValueMinter)
-	var elsewhere = module.addBlock(func, label: b"notowner", heat: BlockHeat.cold)
-	var doubleFree = module.addBlock(func, label: b"doublefree", heat: BlockHeat.cold)
-	var moved = module.addBlock(func, label: b"moved", heat: BlockHeat.cold)
+	let elsewhere = module.addBlock(func, label: b"notowner", heat: BlockHeat.cold)
+	let doubleFree = module.addBlock(func, label: b"doublefree", heat: BlockHeat.cold)
+	let moved = module.addBlock(func, label: b"moved", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: 2)
 	let span = 1
@@ -2795,11 +2795,11 @@ end 'emitSlabLockedDoorEntry'
 // a free of a span at the moment it is taken apart. Keeping the destroy off this path is what lets every
 // other free stay lock-free.
 function buildSlabFreeToFull(module StdModule)
-	var func = IrFunction.createFromStd(SlabFreeToFullName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(SlabFreeToFullName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var exhausted = module.addBlock(func, label: b"exhausted", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let exhausted = module.addBlock(func, label: b"exhausted", heat: BlockHeat.normal)
 
 	emitSlabLockedDoorEntry(module, func: func, entry: entry, handled: exhausted, ownerExpected: SpanOwnerState.full, ids: ids)
 
@@ -2832,11 +2832,11 @@ end 'buildSlabFreeToFull'
 // scavenge walk reaches — a span leaked for the life of the process once that slot is the last one
 // outstanding.
 function buildSlabFreeToRaw(module StdModule)
-	var func = IrFunction.createFromStd(SlabFreeToRawName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(SlabFreeToRawName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var onRawRow = module.addBlock(func, label: b"onrawrow", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let onRawRow = module.addBlock(func, label: b"onrawrow", heat: BlockHeat.normal)
 
 	emitSlabLockedDoorEntry(module, func: func, entry: entry, handled: onRawRow, ownerExpected: SpanOwnerState.none, ids: ids)
 
@@ -2866,10 +2866,10 @@ end 'buildSlabFreeToRaw'
 // `slabOsDirectPointerNotOurs`: a named abort instead of silent heap corruption. `__slab_arena_map_set` with
 // `ArenaMapNoSpan` is the clear, because "no span owns this page" is exactly what a fresh slot says.
 function buildSlabSpanDestroy(module StdModule)
-	var func = IrFunction.createFromStd(SlabSpanDestroyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SlabSpanDestroyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let span = 0
@@ -2937,23 +2937,23 @@ end 'buildSlabSpanDestroy'
 // written by every claim and every chunk release, each of which already runs inside this lock, so an
 // unlocked walk would read a granule mid-transition and decommit one a claim had just taken.
 function buildSlabScavenge(module StdModule, model MachineModel)
-	var func = IrFunction.createFromStd(SlabScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(SlabScavengeName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var classLoop = module.addBlock(func, label: b"classloop", heat: BlockHeat.normal)
-	var arenas = module.addBlock(func, label: b"arenas", heat: BlockHeat.normal)
-	var classStart = module.addBlock(func, label: b"classstart", heat: BlockHeat.normal)
-	var spanLoop = module.addBlock(func, label: b"spanloop", heat: BlockHeat.normal)
-	var spanBody = module.addBlock(func, label: b"spanbody", heat: BlockHeat.normal)
-	var keepSpan = module.addBlock(func, label: b"keepspan", heat: BlockHeat.normal)
-	var destroy = module.addBlock(func, label: b"destroy", heat: BlockHeat.normal)
-	var classDone = module.addBlock(func, label: b"classdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let classLoop = module.addBlock(func, label: b"classloop", heat: BlockHeat.normal)
+	let arenas = module.addBlock(func, label: b"arenas", heat: BlockHeat.normal)
+	let classStart = module.addBlock(func, label: b"classstart", heat: BlockHeat.normal)
+	let spanLoop = module.addBlock(func, label: b"spanloop", heat: BlockHeat.normal)
+	let spanBody = module.addBlock(func, label: b"spanbody", heat: BlockHeat.normal)
+	let keepSpan = module.addBlock(func, label: b"keepspan", heat: BlockHeat.normal)
+	let destroy = module.addBlock(func, label: b"destroy", heat: BlockHeat.normal)
+	let classDone = module.addBlock(func, label: b"classdone", heat: BlockHeat.normal)
 
 	let state = ids.mint()
 	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create(0)))
 	let depthAddr = ids.mint()
-	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
+	let locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
 	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
 	let firstClass = emitConst(module, block: locked, value: 0, ids: ids)
 	emitBranchCarrying(module, from: locked, to: classLoop, values: argsOf(firstClass))
@@ -3046,17 +3046,17 @@ function buildSlabCensusEntry(module StdModule, name ByteArray, callee ByteArray
 		forwarded gives oneI64Param()
 	end 'paramTypes'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(paramCount)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(paramCount)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: paramCount)
 
 	let state = ids.mint()
 	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create(0)))
 
 	let depthAddr = ids.mint()
-	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
+	let locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
 	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
 
 	let calleeArg = match argument 'argument'
@@ -3092,7 +3092,7 @@ end 'buildSlabCensusEntry'
 // `owning_p` against its own P; its raw arm and `__slab_free_to_full` hold `__slab_lock`; the collect runs
 // either on the owner or inside the lock, which is the same rule its own callers carry.
 function emitSlabFreeToSpan(module StdModule, func IrFunction, cur IrBlock, slot ValueId, span ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var done = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: label, heat: BlockHeat.normal)
 
 	let head = emitLoadField(module, block: cur, record: span, offset: MspanFreeListOffset, ids: ids)
 	emitStoreField(module, block: cur, record: slot, offset: 0, value: head)
@@ -3112,16 +3112,16 @@ end 'emitSlabFreeToSpan'
 // so the frame costs them nothing they would notice and saves the push being written into the emitted image
 // three more times.
 function buildSlabFreeToSpan(module StdModule)
-	var func = IrFunction.createFromStd(SlabFreeToSpanName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(SlabFreeToSpanName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let slot = 0
 	let span = 1
 
-	var done = emitSlabFreeToSpan(module, func: func, cur: entry, slot: slot, span: span, ids: ids, label: b"push")
+	let done = emitSlabFreeToSpan(module, func: func, cur: entry, slot: slot, span: span, ids: ids, label: b"push")
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -3149,17 +3149,17 @@ end 'buildSlabFreeToSpan'
 // The emptiness test precedes the CAS: on a program with no cross-processor traffic the queue is empty
 // every time, and a CAS of zero for zero would put an uncontended atomic on every refill.
 function buildSlabCollectRemote(module StdModule)
-	var func = IrFunction.createFromStd(SlabCollectRemoteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SlabCollectRemoteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var swap = module.addBlock(func, label: b"swap", heat: BlockHeat.normal)
-	var tally = module.addBlock(func, label: b"tally", heat: BlockHeat.normal)
-	var tallyStep = module.addBlock(func, label: b"tallystep", heat: BlockHeat.normal)
-	var uncount = module.addBlock(func, label: b"uncount", heat: BlockHeat.normal)
-	var walk = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
-	var replay = module.addBlock(func, label: b"replay", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let swap = module.addBlock(func, label: b"swap", heat: BlockHeat.normal)
+	let tally = module.addBlock(func, label: b"tally", heat: BlockHeat.normal)
+	let tallyStep = module.addBlock(func, label: b"tallystep", heat: BlockHeat.normal)
+	let uncount = module.addBlock(func, label: b"uncount", heat: BlockHeat.normal)
+	let walk = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
+	let replay = module.addBlock(func, label: b"replay", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let span = 0
@@ -3171,7 +3171,7 @@ function buildSlabCollectRemote(module StdModule)
 	let emptyQueue = emitConst(module, block: swap, value: 0, ids: ids)
 	let nothingQueued = emitCompareWithConstant(module, block: swap, value: head, pred: StdCmpPred.eq, against: 0, ids: ids)
 
-	var detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
+	let detach = module.addBlock(func, label: b"detach", heat: BlockHeat.normal)
 	module.setTerminator(swap, op: StdOp.condBranch(nothingQueued, thenBlockId: done.id, elseBlockId: detach.id))
 
 	let won = ids.mint()
@@ -3266,19 +3266,19 @@ end 'buildSlabCollectRemote'
 // (`__mm_free` passes the box HEADER base, which is that pointer).
 function buildSlabFree(module StdModule, door SlabFreeDoor, name ByteArray, model MachineModel)
 	let counting = door.counting()
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0
 
 	let span = ids.mint()
-	var mapped = emitSlabArenaMapGet(module, func: func, cur: entry, ptr: ptr, spanId: span, ids: ids, label: b"map")
+	let mapped = emitSlabArenaMapGet(module, func: func, cur: entry, ptr: ptr, spanId: span, ids: ids, label: b"map")
 	let unmapped = emitCompareWithConstant(module, block: mapped, value: span, pred: StdCmpPred.eq, against: ArenaMapNoSpan, ids: ids)
 
-	var toSpan = module.addBlock(func, label: b"tospan", heat: BlockHeat.normal)
+	let toSpan = module.addBlock(func, label: b"tospan", heat: BlockHeat.normal)
 	var afterMap = toSpan.id
 
 	if door.poisons() 'poisonsTheSlot'
@@ -3286,9 +3286,9 @@ function buildSlabFree(module StdModule, door SlabFreeDoor, name ByteArray, mode
 	end 'poisonsTheSlot'
 
 	let state = emitSlabStateCommitted(module, block: toSpan, ids: ids)
-	var arms = emitSlabResolveShard(module, func: func, cur: toSpan, state: state, model: model, need: SlabShardNeed.holdsProc, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.free), ids: ids, label: b"shard")
+	let arms = emitSlabResolveShard(module, func: func, cur: toSpan, state: state, model: model, need: SlabShardNeed.holdsProc, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.free), ids: ids, label: b"shard")
 
-	var routed = module.addBlock(func, label: b"routed", heat: BlockHeat.normal)
+	let routed = module.addBlock(func, label: b"routed", heat: BlockHeat.normal)
 	let myP = ids.mint()
 	routed.blockArgs.push(IrBlockArg.create(myP, argType: StdType.i64))
 
@@ -3298,15 +3298,15 @@ function buildSlabFree(module StdModule, door SlabFreeDoor, name ByteArray, mode
 	emitSlabCountingCredit(module, block: arms.serial.block, rowBase: arms.serial.trafficRow, event: SlabTrafficEvent.free, atomic: true, counting: counting, ids: ids)
 	emitBranchCarrying(module, from: arms.serial.block, to: routed, values: argsOf(slabShardProc(arms.serial)))
 
-	var rawOwned = module.addBlock(func, label: b"rawowned", heat: BlockHeat.normal)
-	var rawSerialised = module.addBlock(func, label: b"rawlocked", heat: BlockHeat.cold)
-	var notRaw = module.addBlock(func, label: b"notraw", heat: BlockHeat.normal)
-	var uncached = module.addBlock(func, label: b"uncached", heat: BlockHeat.cold)
-	var mine = module.addBlock(func, label: b"mine", heat: BlockHeat.normal)
-	var notDead = module.addBlock(func, label: b"notdead", heat: BlockHeat.normal)
-	var parked = module.addBlock(func, label: b"parked", heat: BlockHeat.cold)
-	var local = module.addBlock(func, label: b"local", heat: BlockHeat.normal)
-	var remote = module.addBlock(func, label: b"remote", heat: BlockHeat.normal)
+	let rawOwned = module.addBlock(func, label: b"rawowned", heat: BlockHeat.normal)
+	let rawSerialised = module.addBlock(func, label: b"rawlocked", heat: BlockHeat.cold)
+	let notRaw = module.addBlock(func, label: b"notraw", heat: BlockHeat.normal)
+	let uncached = module.addBlock(func, label: b"uncached", heat: BlockHeat.cold)
+	let mine = module.addBlock(func, label: b"mine", heat: BlockHeat.normal)
+	let notDead = module.addBlock(func, label: b"notdead", heat: BlockHeat.normal)
+	let parked = module.addBlock(func, label: b"parked", heat: BlockHeat.cold)
+	let local = module.addBlock(func, label: b"local", heat: BlockHeat.normal)
+	let remote = module.addBlock(func, label: b"remote", heat: BlockHeat.normal)
 
 	let owner = ids.mint()
 	module.appendOp(routed, op: StdOp.loadAcquire(owner, addrId: span, offset: MspanOwningPOffset, valueType: StdType.i64))
@@ -3319,13 +3319,13 @@ function buildSlabFree(module StdModule, door SlabFreeDoor, name ByteArray, mode
 	// The word is non-zero by construction: the allocation that answered `ptr` committed it.
 	let lockState = emitSlabStateCommitted(module, block: rawSerialised, ids: ids)
 	let depthAddr = ids.mint()
-	var locked = emitSlabLockDepthAddr(module, func: func, cur: rawSerialised, state: lockState, model: model, addrId: depthAddr, ids: ids, label: b"rawlocked", heat: BlockHeat.cold)
+	let locked = emitSlabLockDepthAddr(module, func: func, cur: rawSerialised, state: lockState, model: model, addrId: depthAddr, ids: ids, label: b"rawlocked", heat: BlockHeat.cold)
 	emitSlabLockEnter(module, block: locked, state: lockState, depthAddr: depthAddr, ids: ids)
 	let rawAnswer = ids.mint()
 	module.appendOp(locked, op: StdOp.call(rawAnswer, callee: SlabFreeToRawName, args: twoArgs(ptr, second: span)))
 	emitSlabLockLeave(module, block: locked, state: lockState, depthAddr: depthAddr, ids: ids)
 
-	var rawReturned = module.addBlock(func, label: b"rawdone", heat: BlockHeat.cold)
+	let rawReturned = module.addBlock(func, label: b"rawdone", heat: BlockHeat.cold)
 	emitBranchOnCompare(module, block: locked, value: rawAnswer, pred: StdCmpPred.eq, against: SlabDoorOwnerMoved, whenTrue: routed, whenFalse: rawReturned, ids: ids)
 	pushBranchEdge(locked, to: routed, values: argsOf(myP))
 
@@ -3352,9 +3352,9 @@ function buildSlabFree(module StdModule, door SlabFreeDoor, name ByteArray, mode
 	// ⚠ **THE LOCK IS THE RAW ARM'S BARGAIN, NOT A SECOND ONE.** Before a scheduler exists the lone main
 	// thread is the only writer of anything, so the two arms are one call with and without the bracket
 	// around it.
-	var relistLocked = module.addBlock(func, label: b"relistlock", heat: BlockHeat.cold)
-	var relistPlain = module.addBlock(func, label: b"relistplain", heat: BlockHeat.cold)
-	var relistDone = module.addBlock(func, label: b"relistdone", heat: BlockHeat.cold)
+	let relistLocked = module.addBlock(func, label: b"relistlock", heat: BlockHeat.cold)
+	let relistPlain = module.addBlock(func, label: b"relistplain", heat: BlockHeat.cold)
+	let relistDone = module.addBlock(func, label: b"relistdone", heat: BlockHeat.cold)
 
 	let othersPossible = emitSlabSchedulerExists(module, block: uncached, schedulerWord: arms.schedulerWord, ids: ids)
 	module.setTerminator(uncached, op: StdOp.condBranch(othersPossible, thenBlockId: relistLocked.id, elseBlockId: relistPlain.id))
@@ -3365,14 +3365,14 @@ function buildSlabFree(module StdModule, door SlabFreeDoor, name ByteArray, mode
 
 	let relistState = emitSlabStateCommitted(module, block: relistLocked, ids: ids)
 	let relistDepth = ids.mint()
-	var relistReady = emitSlabLockDepthAddr(module, func: func, cur: relistLocked, state: relistState, model: model, addrId: relistDepth, ids: ids, label: b"relist", heat: BlockHeat.cold)
+	let relistReady = emitSlabLockDepthAddr(module, func: func, cur: relistLocked, state: relistState, model: model, addrId: relistDepth, ids: ids, label: b"relist", heat: BlockHeat.cold)
 	emitSlabLockEnter(module, block: relistReady, state: relistState, depthAddr: relistDepth, ids: ids)
 	let lockedAnswer = ids.mint()
 	module.appendOp(relistReady, op: StdOp.call(lockedAnswer, callee: SlabFreeToFullName, args: twoArgs(ptr, second: span)))
 	emitSlabLockLeave(module, block: relistReady, state: relistState, depthAddr: relistDepth, ids: ids)
 	emitBranchCarrying(module, from: relistReady, to: relistDone, values: argsOf(lockedAnswer))
 
-	var relistReturned = module.addBlock(func, label: b"relistret", heat: BlockHeat.cold)
+	let relistReturned = module.addBlock(func, label: b"relistret", heat: BlockHeat.cold)
 	let tookIt = ids.mint()
 	relistDone.blockArgs.push(IrBlockArg.create(tookIt, argType: StdType.i64))
 	emitBranchOnCompare(module, block: relistDone, value: tookIt, pred: StdCmpPred.eq, against: SlabDoorOwnerMoved, whenTrue: routed, whenFalse: relistReturned, ids: ids)
@@ -3380,16 +3380,16 @@ function buildSlabFree(module StdModule, door SlabFreeDoor, name ByteArray, mode
 
 	module.setTerminator(relistReturned, op: StdOp.retVoid)
 
-	var locallyPushed = emitSlabFreeToSpan(module, func: func, cur: local, slot: ptr, span: span, ids: ids, label: b"push")
+	let locallyPushed = emitSlabFreeToSpan(module, func: func, cur: local, slot: ptr, span: span, ids: ids, label: b"push")
 	module.setTerminator(locallyPushed, op: StdOp.retVoid)
 
-	var pushed = emitSlabRemotePush(module, func: func, cur: remote, span: span, slot: ptr, owner: owner, myP: myP, ids: ids)
+	let pushed = emitSlabRemotePush(module, func: func, cur: remote, span: span, slot: ptr, owner: owner, myP: myP, ids: ids)
 	module.setTerminator(pushed, op: StdOp.retVoid)
 
 	// ⚠ **NO LOCK** — see `buildSlabOsDirectArm`: the OS-direct tier keeps its length in the mapping's own
 	// prefix and shares no state with any other thread. Built last, so its own credit walk lands past the
 	// road every slot free takes.
-	var osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.cold)
+	let osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.cold)
 
 	module.appendOp(osDirect, op: StdOp.call(ids.mint(), callee: SlabDoors.of(counting).freeOversize, args: argsOf(ptr)))
 	module.setTerminator(osDirect, op: StdOp.retVoid)
@@ -3402,7 +3402,7 @@ end 'buildSlabFree'
 // Admits `partial` and another P, the owner words a leaf pushes remotely; every other word bails. See
 // `buildSlabFree` for what each of the rest needs.
 function emitSlabRemoteGate(module StdModule, func IrFunction, cur IrBlock, ownerWord ValueId, bail IrBlock, ok IrBlock, ids ValueMinter)
-	var positive = module.addBlock(func, label: b"remotepos", heat: BlockHeat.normal)
+	let positive = module.addBlock(func, label: b"remotepos", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: cur, value: ownerWord, pred: StdCmpPred.eq, against: SpanOwnerState.partial.rawValue, whenTrue: ok, whenFalse: positive, ids: ids)
 	emitBranchOnCompare(module, block: positive, value: ownerWord, pred: StdCmpPred.gt, against: 0, whenTrue: ok, whenFalse: bail, ids: ids)
@@ -3414,7 +3414,7 @@ function emitSlabFastFreeRawCredit(module StdModule, block IrBlock, state ValueI
 end 'emitSlabFastFreeRawCredit'
 
 function emitSlabFastFreeOwnCredit(module StdModule, func IrFunction, cur IrBlock, row SlabOwnRow, state ValueId, counting SlabCounting, ids ValueMinter) returns IrBlock
-	var stepped = emitThreadTrafficStep(module, func: func, cur: cur, m: row.machine, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.free), ids: ids, label: b"ownthread", heat: BlockHeat.normal)
+	let stepped = emitThreadTrafficStep(module, func: func, cur: cur, m: row.machine, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.free), ids: ids, label: b"ownthread", heat: BlockHeat.normal)
 
 	let trafficRow = emitSlabTrafficRowBase(module, block: stepped, state: state, row: row.id, ids: ids)
 	emitSlabCountingCredit(module, block: stepped, rowBase: trafficRow, event: SlabTrafficEvent.free, atomic: false, counting: counting, ids: ids)
@@ -3423,9 +3423,9 @@ function emitSlabFastFreeOwnCredit(module StdModule, func IrFunction, cur IrBloc
 end 'emitSlabFastFreeOwnCredit'
 
 function emitSlabFastFreeUnscheduled(module StdModule, func IrFunction, block IrBlock, state ValueId, ptr ValueId, span ValueId, counting SlabCounting, bail IrBlock, link IrBlock, ids ValueMinter)
-	var local = module.addBlock(func, label: b"rawowned", heat: BlockHeat.normal)
-	var other = module.addBlock(func, label: b"rawother", heat: BlockHeat.normal)
-	var gated = module.addBlock(func, label: b"rawgated", heat: BlockHeat.normal)
+	let local = module.addBlock(func, label: b"rawowned", heat: BlockHeat.normal)
+	let other = module.addBlock(func, label: b"rawother", heat: BlockHeat.normal)
+	let gated = module.addBlock(func, label: b"rawgated", heat: BlockHeat.normal)
 
 	let ownerWord = emitLoadAcquireField(module, block: block, record: span, offset: MspanOwningPOffset, ids: ids)
 	emitBranchOnCompare(module, block: block, value: ownerWord, pred: StdCmpPred.eq, against: SlabNoProcessor, whenTrue: local, whenFalse: other, ids: ids)
@@ -3437,25 +3437,25 @@ function emitSlabFastFreeUnscheduled(module StdModule, func IrFunction, block Ir
 	emitSlabFastFreeRawCredit(module, block: gated, state: state, counting: counting, ids: ids)
 
 	let noProc = emitConst(module, block: gated, value: SlabNoProcessor, ids: ids)
-	var pushed = emitSlabRemotePush(module, func: func, cur: gated, span: span, slot: ptr, owner: ownerWord, myP: noProc, ids: ids)
+	let pushed = emitSlabRemotePush(module, func: func, cur: gated, span: span, slot: ptr, owner: ownerWord, myP: noProc, ids: ids)
 	module.setTerminator(pushed, op: StdOp.retVoid)
 end 'emitSlabFastFreeUnscheduled'
 
 function emitSlabFastFreeOwn(module StdModule, func IrFunction, row SlabOwnRow, state ValueId, ptr ValueId, span ValueId, counting SlabCounting, bail IrBlock, link IrBlock, ids ValueMinter)
-	var local = module.addBlock(func, label: b"ownowned", heat: BlockHeat.normal)
-	var other = module.addBlock(func, label: b"ownother", heat: BlockHeat.normal)
-	var gated = module.addBlock(func, label: b"owngated", heat: BlockHeat.normal)
+	let local = module.addBlock(func, label: b"ownowned", heat: BlockHeat.normal)
+	let other = module.addBlock(func, label: b"ownother", heat: BlockHeat.normal)
+	let gated = module.addBlock(func, label: b"owngated", heat: BlockHeat.normal)
 
 	let ownerWord = emitLoadAcquireField(module, block: row.block, record: span, offset: MspanOwningPOffset, ids: ids)
 	emitBranchOnCompareValues(module, block: row.block, a: ownerWord, pred: StdCmpPred.eq, b: row.p, whenTrue: local, whenFalse: other, ids: ids)
 
-	var counted = emitSlabFastFreeOwnCredit(module, func: func, cur: local, row: row, state: state, counting: counting, ids: ids)
+	let counted = emitSlabFastFreeOwnCredit(module, func: func, cur: local, row: row, state: state, counting: counting, ids: ids)
 	module.setTerminator(counted, op: StdOp.branch(link.id))
 
 	emitSlabRemoteGate(module, func: func, cur: other, ownerWord: ownerWord, bail: bail, ok: gated, ids: ids)
-	var remoteCounted = emitSlabFastFreeOwnCredit(module, func: func, cur: gated, row: row, state: state, counting: counting, ids: ids)
+	let remoteCounted = emitSlabFastFreeOwnCredit(module, func: func, cur: gated, row: row, state: state, counting: counting, ids: ids)
 
-	var pushed = emitSlabRemotePush(module, func: func, cur: remoteCounted, span: span, slot: ptr, owner: ownerWord, myP: row.p, ids: ids)
+	let pushed = emitSlabRemotePush(module, func: func, cur: remoteCounted, span: span, slot: ptr, owner: ownerWord, myP: row.p, ids: ids)
 	module.setTerminator(pushed, op: StdOp.retVoid)
 end 'emitSlabFastFreeOwn'
 
@@ -3467,11 +3467,11 @@ function emitSlabFastFreeOwnArm(module StdModule, func IrFunction, arm SlabOwnAr
 end 'emitSlabFastFreeOwnArm'
 
 function buildSlabFreeFast(module StdModule, door SlabFreeDoor, model MachineModel)
-	var func = IrFunction.createFromStd(door.name(), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(door.name(), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var bail = module.addBlock(func, label: b"slow", heat: BlockHeat.cold)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let bail = module.addBlock(func, label: b"slow", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0
@@ -3490,9 +3490,9 @@ module function emitSlabFastFree(module StdModule, func IrFunction, cur IrBlock,
 	let counting = door.counting()
 
 	let span = ids.mint()
-	var mapped = emitSlabArenaMapGet(module, func: func, cur: cur, ptr: ptr, spanId: span, ids: ids, label: b"map")
+	let mapped = emitSlabArenaMapGet(module, func: func, cur: cur, ptr: ptr, spanId: span, ids: ids, label: b"map")
 
-	var toSpan = module.addBlock(func, label: b"tospan", heat: BlockHeat.normal)
+	let toSpan = module.addBlock(func, label: b"tospan", heat: BlockHeat.normal)
 	var entered = toSpan.id
 
 	if door.poisons() 'poisonsTheSlot'
@@ -3503,14 +3503,14 @@ module function emitSlabFastFree(module StdModule, func IrFunction, cur IrBlock,
 	module.setTerminator(mapped, op: StdOp.condBranch(unmapped, thenBlockId: bail.id, elseBlockId: entered))
 
 	let state = emitSlabStateCommitted(module, block: toSpan, ids: ids)
-	var walk = emitSlabFastWalk(module, func: func, cur: toSpan, state: state, model: model, bail: bail, ids: ids, label: b"walk")
+	let walk = emitSlabFastWalk(module, func: func, cur: toSpan, state: state, model: model, bail: bail, ids: ids, label: b"walk")
 
-	var push = module.addBlock(func, label: b"push", heat: BlockHeat.normal)
+	let push = module.addBlock(func, label: b"push", heat: BlockHeat.normal)
 
 	emitSlabFastFreeUnscheduled(module, func: func, block: walk.unscheduled, state: state, ptr: ptr, span: span, counting: counting, bail: bail, link: push, ids: ids)
 	emitSlabFastFreeOwnArm(module, func: func, arm: walk.own, state: state, ptr: ptr, span: span, counting: counting, bail: bail, link: push, ids: ids)
 
-	var pushed = emitSlabFreeToSpan(module, func: func, cur: push, slot: ptr, span: span, ids: ids, label: b"link")
+	let pushed = emitSlabFreeToSpan(module, func: func, cur: push, slot: ptr, span: span, ids: ids, label: b"link")
 	module.setTerminator(pushed, op: StdOp.retVoid)
 end 'emitSlabFastFree'
 
@@ -3518,8 +3518,8 @@ end 'emitSlabFastFree'
 // payload, so the prefix (whose first word the free list threads through) is untouched, and it runs to
 // the end of the slot, so its cost grows with the class. A class with no room past the prefix is skipped.
 function buildSlabFreedBoxPoison(module StdModule, func IrFunction, span ValueId, ptr ValueId, next IrBlock, ids ValueMinter) returns BlockId
-	var sized = module.addBlock(func, label: b"poisonsized", heat: BlockHeat.normal)
-	var filled = module.addBlock(func, label: b"poisonfilled", heat: BlockHeat.normal)
+	let sized = module.addBlock(func, label: b"poisonsized", heat: BlockHeat.normal)
+	let filled = module.addBlock(func, label: b"poisonfilled", heat: BlockHeat.normal)
 	let skip = boxPrefixBytes(module.debugStream)
 
 	let slotSize = emitGeomSlotSize(module, block: sized, geom: emitSpanGeometry(module, block: sized, span: span, ids: ids), ids: ids)
@@ -3534,18 +3534,18 @@ function buildSlabFreedBoxPoison(module StdModule, func IrFunction, span ValueId
 end 'buildSlabFreedBoxPoison'
 
 function buildSlabFreeOversize(module StdModule, counting SlabCounting, model MachineModel)
-	var func = IrFunction.createFromStd(SlabDoors.of(counting).freeOversize, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(SlabDoors.of(counting).freeOversize, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0
 
 	let osState = emitSlabStateCommitted(module, block: entry, ids: ids)
-	var osArms = emitSlabResolveShard(module, func: func, cur: entry, state: osState, model: model, need: SlabShardNeed.creditsOnly, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.free), ids: ids, label: b"shard", heat: BlockHeat.cold)
+	let osArms = emitSlabResolveShard(module, func: func, cur: entry, state: osState, model: model, need: SlabShardNeed.creditsOnly, traffic: slabThreadTrafficOf(counting, traffic: ThreadTraffic.free), ids: ids, label: b"shard", heat: BlockHeat.cold)
 
-	var osCall = module.addBlock(func, label: b"oscall", heat: BlockHeat.cold)
+	let osCall = module.addBlock(func, label: b"oscall", heat: BlockHeat.cold)
 	emitSlabCountingCreditBothArms(module, arms: osArms, event: SlabTrafficEvent.free, counting: counting, next: osCall, ids: ids)
 
 	module.appendOp(osCall, op: StdOp.call(ids.mint(), callee: SlabOsDirectFreeName, args: argsOf(ptr)))
@@ -3627,9 +3627,9 @@ end 'SpanOwnerAccessCensus'
 // bodies lowered from `runtime/SlabRuntime.maxon` are installed before `firstFuncIndex` and are outside the
 // walk — `__slab_meta_free`'s `Freed` stamp and the census walk's read of the word among them.
 function assertSpanOwnerAccessIsOrdered(module StdModule, firstFuncIndex ElementIndex)
-	var census = SpanOwnerAccessCensus.create()
-	var opIndices = OpIndexArray.create(0)
-	var access = StdAccessOperands.create()
+	let census = SpanOwnerAccessCensus.create()
+	let opIndices = OpIndexArray.create(0)
+	let access = StdAccessOperands.create()
 
 	for index in 0 upto firstFuncIndex 'eachEarlierFunc'
 		let name = module.getFunc(index).name

@@ -85,7 +85,7 @@ export function cleanUpFunctionBranches(module TargetModule, func IrFunction)
 	let hasALoop = NaturalLoops.find(topo.succ, nodeCount: topo.numBlocks as CsrIndex).headers.count() > 0
 
 	let tails = returnTailsOf(module, func: func)
-	var returnOf = noReturnTails(topo)
+	let returnOf = noReturnTails(topo)
 	var resolved = resolveJumpChains(module, topo: topo, returnOf: returnOf)
 
 	if keepExitsAsReturns(module, topo: topo, resolved: resolved, tails: tails, returnOf: returnOf) 'anExitKeepsItsReturn'
@@ -142,8 +142,8 @@ function resolveJumpChains(module TargetModule, topo FuncTopology, returnOf Fixe
 	let blockCount = topo.numBlocks
 
 	// Classified in ONE pass over the blocks, so the chain walk below dereferences no block at all.
-	var forwards = FlagColumn.create(blockCount)
-	var forwardTargetOf = IndexColumn.create(blockCount)
+	let forwards = FlagColumn.create(blockCount)
+	let forwardTargetOf = IndexColumn.create(blockCount)
 
 	// ⭐ LOCAL 0 — THE ENTRY — IS NEVER FORWARDED THROUGH, whatever its ops. It is the block the frame
 	// pass puts the prologue in, so a predecessor re-pointed PAST it would enter the function without a
@@ -161,10 +161,10 @@ function resolveJumpChains(module TargetModule, topo FuncTopology, returnOf Fixe
 	end 'eachBlock'
 
 	let unresolved = noSuchLocal(topo)
-	var resolved = FixedCfgIndexArray.create(blockCount)
+	let resolved = FixedCfgIndexArray.create(blockCount)
 	resolved.refill(unresolved)
-	var onPath = FlagColumn.create(blockCount)
-	var path = CfgIndexArray.create(0)
+	let onPath = FlagColumn.create(blockCount)
+	let path = CfgIndexArray.create(0)
 
 	for start in 0 upto blockCount 'eachStart'
 		if (try resolved.get(start) otherwise panic("resolveJumpChains: resolved.get OOB at {start}")) != unresolved 'alreadyAnswered'
@@ -239,9 +239,9 @@ end 'emptyJumpTargetOf'
 // COLLECT FIRST, THEN WRITE, `splitCriticalEdgesInFunc`'s discipline: the reads classify against
 // ONE consistent CFG, and each redirect is independent of the others.
 function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved FixedCfgIndexArray)
-	var predRefs = BlockRefArray.create(0)
-	var oldTargets = BlockIdArray.create(0)
-	var newTargets = BlockIdArray.create(0)
+	let predRefs = BlockRefArray.create(0)
+	let oldTargets = BlockIdArray.create(0)
+	let newTargets = BlockIdArray.create(0)
 
 	// ⚠ A SUCCESSOR MAY APPEAR TWICE IN ONE BLOCK'S LIST. `collectBlockSuccessorIds` pushes the
 	// conditional branch's then-target and the terminator's else-target without deduping, so a two-way
@@ -249,7 +249,7 @@ function threadResolvedEdges(module TargetModule, topo FuncTopology, resolved Fi
 	// left to move and hit `retargetControlOp`'s no-match panic. Marked and cleared per block rather
 	// than scanned: a dense jump table's successor list is long, and a membership scan over it would
 	// make this quadratic in the arm count.
-	var seen = FlagColumn.create(topo.numBlocks)
+	let seen = FlagColumn.create(topo.numBlocks)
 
 	for localIndex in 0 upto topo.numBlocks 'eachPred'
 		let local = localIndex as CsrIndex
@@ -303,7 +303,7 @@ end 'ReturnTail'
 typealias ReturnTailsByBlock = Map with (BlockId, ReturnTail)
 
 function returnTailsOf(module TargetModule, func IrFunction) returns ReturnTailsByBlock
-	var tails = ReturnTailsByBlock.create()
+	let tails = ReturnTailsByBlock.create()
 
 	for position in 1 upto func.blockRefs.count() 'eachBlockButTheEntry'
 		let block = try module.blocks.get(try func.blockRefs.get(position) otherwise panic("returnTailsOf: blockRefs.get OOB at {position}")) otherwise panic("returnTailsOf: a block ref of '{String.from(func.name)}' is not in module.blocks")
@@ -319,7 +319,7 @@ function returnTailsOf(module TargetModule, func IrFunction) returns ReturnTails
 end 'returnTailsOf'
 
 function noReturnTails(topo FuncTopology) returns FixedCfgIndexArray
-	var returnOf = FixedCfgIndexArray.create(topo.numBlocks)
+	let returnOf = FixedCfgIndexArray.create(topo.numBlocks)
 	returnOf.refill(noSuchLocal(topo))
 	return returnOf
 end 'noReturnTails'
@@ -373,13 +373,13 @@ function replaceJumpsWithReturnTails(module TargetModule, topo FuncTopology, ret
 		end 'staysAJumpOrIsGone'
 
 		let tail = try tails.get(blockAt(module, topo: topo, local: target).id) otherwise panic("replaceJumpsWithReturnTails: local {target} was marked a return tail but holds none")
-		var block = blockAt(module, topo: topo, local: local)
+		let block = blockAt(module, topo: topo, local: local)
 		let exitSpan = module.spans.at(block.terminatorIndex())
 		let savedSpan = module.spans.current
 		module.spans.current = exitSpan
 
 		// Copies, never the tail's own ops: this runs on a pool worker, and two live ops sharing a
-		// managed payload give the reply a record with two owners, which aborts its send (exit 96).
+		// managed payload give the reply a record with two owners, which aborts its send in a seed-built binary (exit 96).
 		for opIdx in tail.bodyOps 'eachBodyOp'
 			module.appendOp(block, op: (try module.ops.get(opIdx) otherwise panic("replaceJumpsWithReturnTails: opIdx {opIdx} not in module.ops")).clone())
 		end 'eachBodyOp'
@@ -404,8 +404,8 @@ end 'replaceJumpsWithReturnTails'
 // physical edge, and it is added WITHOUT going through `resolved`: a fall-through is not a branch,
 // threading never moved it, and the block it names must survive verbatim.
 function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTopology, resolved FixedCfgIndexArray, returnOf FixedCfgIndexArray) returns FixedBoolArray
-	var reachable = FixedBoolArray.create(topo.numBlocks)
-	var stack = CfgIndexArray.create(0)
+	let reachable = FixedBoolArray.create(topo.numBlocks)
+	let stack = CfgIndexArray.create(0)
 
 	// The entry is local 0 and is reachable by definition — it is also the block that must stay first
 	// (the prologue goes in it), which the ascending rebuild below preserves.
@@ -429,7 +429,7 @@ function dropUnreachableBlocks(module TargetModule, func IrFunction, topo FuncTo
 		end 'fallsThroughPhysically'
 	end 'walk'
 
-	var kept = BlockRefArray.create(0)
+	let kept = BlockRefArray.create(0)
 
 	for local in 0 upto topo.numBlocks 'eachBlock'
 		let survives = try reachable.get(local) otherwise panic("dropUnreachableBlocks: reachable.get OOB at {local}")
@@ -469,8 +469,8 @@ end 'markLocalReachable'
 // and its physical successor move as ONE UNIT, cold only when every block in it is. The entry's unit
 // stays first: the prologue goes there.
 function sinkColdBlocks(module TargetModule, func IrFunction)
-	var hot = BlockRefArray.create(0)
-	var cold = BlockRefArray.create(0)
+	let hot = BlockRefArray.create(0)
+	let cold = BlockRefArray.create(0)
 	let blockCount = func.blockRefs.count()
 	var unitStart = 0 as ElementIndex
 	var unitIsCold = true
@@ -555,8 +555,8 @@ function rotateLoops(module TargetModule, func IrFunction)
 	// and the sinking reordered it. Locals are again layout positions.
 	let topo = buildFuncTopology(module, func: func)
 	let loops = NaturalLoops.find(topo.succ, nodeCount: topo.numBlocks as CsrIndex)
-	var plan = RotationPlan.create(topo)
-	var member = LoopMembership.create()
+	let plan = RotationPlan.create(topo)
+	let member = LoopMembership.create()
 
 	for h in loops.headers 'eachLoop'
 		planLoopRotation(module, topo: topo, loops: loops, member: member, plan: plan, header: h)
@@ -751,11 +751,11 @@ type RotationPlan
 
 	static function create(topo FuncTopology) returns RotationPlan
 		let noChain = noSuchLocal(topo)
-		var chainStartAfter = FixedCfgIndexArray.create(topo.numBlocks)
+		let chainStartAfter = FixedCfgIndexArray.create(topo.numBlocks)
 		chainStartAfter.refill(noChain)
-		var chainEndAfter = FixedCfgIndexArray.create(topo.numBlocks)
+		let chainEndAfter = FixedCfgIndexArray.create(topo.numBlocks)
 		chainEndAfter.refill(noChain)
-		var claimed = FixedBoolArray.create(topo.numBlocks)
+		let claimed = FixedBoolArray.create(topo.numBlocks)
 		return Self{chainStartAfter: chainStartAfter, chainEndAfter: chainEndAfter, claimed: claimed, noChain: noChain}
 	end 'create'
 
@@ -787,9 +787,9 @@ type RotationPlan
 	// header whose exit edge is the outer back edge — so the chains pending behind the current block
 	// form a stack of ranges rather than one range.
 	function layout(topo FuncTopology) returns BlockRefArray
-		var laid = BlockRefArray.create(0)
-		var pendingNext = CfgIndexArray.create(0)
-		var pendingEnd = CfgIndexArray.create(0)
+		let laid = BlockRefArray.create(0)
+		let pendingNext = CfgIndexArray.create(0)
+		let pendingEnd = CfgIndexArray.create(0)
 
 		for local in 0 upto topo.numBlocks 'eachBlock'
 			if self.isClaimed(local) 'laidAfterItsLatch'
@@ -856,7 +856,7 @@ end 'elideFallthroughBranches'
 // A terminator that is not the ISA's unconditional branch — a `ret`, a multiway jump table, an
 // op-less `dead` slot — carries nothing to elide.
 function elideBranchInto(module TargetModule, blockRef ElementIndex, nextId BlockId)
-	view block = try module.blocks.get(blockRef) otherwise panic("elideBranchInto: blockRef {blockRef} not in module.blocks")
+	let block = try module.blocks.get(blockRef) otherwise panic("elideBranchInto: blockRef {blockRef} not in module.blocks")
 
 	match terminatorExitOf(module, block: block) 'terminator'
 		none or
@@ -919,7 +919,7 @@ end 'invertBranchAndElide'
 // THE ONE PLACE THE CONDITIONAL BRANCH IS REWRITTEN. False when it names anything but the physically
 // next block, which is the case where there is no fall-through to trade the terminator for.
 function invertCondBranchOntoElse(module TargetModule, blockRef ElementIndex, condOpIndex ElementIndex, nextId BlockId, elseTarget BlockId) returns bool
-	var op = try module.ops.get(condOpIndex) otherwise panic("invertCondBranchOntoElse: conditional branch op {condOpIndex} not in module.ops")
+	let op = try module.ops.get(condOpIndex) otherwise panic("invertCondBranchOntoElse: conditional branch op {condOpIndex} not in module.ops")
 	let thenTarget = condBranchTargetOf(op, block: try module.blocks.get(blockRef) otherwise panic("invertCondBranchOntoElse: blockRef {blockRef} not in module.blocks"))
 
 	if thenTarget != nextId 'thenIsNotNext'
@@ -958,6 +958,6 @@ end 'invertedCondBranchOnto'
 // terminator OP. The branch itself is left where it lies in `module.ops`: nothing walks that array
 // linearly, and rewriting every later op index to close the hole would cost far more than the word.
 function elideTerminatorIn(module TargetModule, blockRef ElementIndex)
-	var block = try module.blocks.get(blockRef) otherwise panic("elideTerminatorIn: blockRef {blockRef} not in module.blocks")
+	let block = try module.blocks.get(blockRef) otherwise panic("elideTerminatorIn: blockRef {blockRef} not in module.blocks")
 	block.terminator = Terminator.fallthrough
 end 'elideTerminatorIn'

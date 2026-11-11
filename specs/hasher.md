@@ -82,7 +82,7 @@ perfectly stable — every one of these still agrees with itself — so a case t
 determinism would pass over the exact defect this pins.
 ```maxon
 function digestOf(text String) returns HashDigest
-	var hasher = Hasher.create()
+	let hasher = Hasher.create()
 	hasher.combineBytes(text.toByteArray())
 	return hasher.finalize()
 end 'digestOf'
@@ -111,10 +111,10 @@ the digest of the one-byte sequence `0x2A`. That is what lets a caller mix a tag
 digest into the same running state as the bytes.
 ```maxon
 function main() returns ExitCode
-	var byValue = Hasher.create()
+	let byValue = Hasher.create()
 	byValue.combine(42)
 
-	var byByte = Hasher.create()
+	let byByte = Hasher.create()
 	byByte.combineBytes(b"\x2A")
 
 	print("value={byValue.finalize():016x}\n")
@@ -138,7 +138,7 @@ this case, which is the point of writing it down.
 typealias PartArray = Array with String
 
 function foldParts(parts PartArray) returns HashDigest
-	var hasher = Hasher.create()
+	let hasher = Hasher.create()
 	for part in parts 'each'
 		hasher.combineBytes(part.toByteArray())
 	end 'each'
@@ -172,7 +172,7 @@ typealias PartArray = Array with String
 
 function taggedFold(state HashDigest, text String) returns HashDigest
 	let bytes = text.toByteArray()
-	var hasher = Hasher.resume(state)
+	let hasher = Hasher.resume(state)
 	hasher.combineBytes(bytes)
 	hasher.combine(bytes.count() as HashDigest)
 	return hasher.finalize()
@@ -215,11 +215,11 @@ threads the running value through its own structures would need a second copy of
 the duplication this file exists to end.
 ```maxon
 function main() returns ExitCode
-	var first = Hasher.create()
+	let first = Hasher.create()
 	first.combineBytes("hel".toByteArray())
 	let carried = first.finalize()
 
-	var second = Hasher.resume(carried)
+	let second = Hasher.resume(carried)
 	second.combineBytes("lo".toByteArray())
 
 	print("carried={carried:016x}\n")
@@ -242,7 +242,7 @@ copies of an FNV step agree with themselves forever and only disagree with each 
 the pin has to be the CROSS-face comparison and not a determinism check.
 ```maxon
 function main() returns ExitCode
-	var byObject = Hasher.create()
+	let byObject = Hasher.create()
 	byObject.combineBytes("hello".toByteArray())
 	byObject.combine(42)
 

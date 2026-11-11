@@ -1424,7 +1424,7 @@ end 'SumWorker'
 
 // Level 3: leaf function that uses the interface and creates temporaries
 function processOne(w Worker, value Integer) returns Integer
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(value)
 	return w.process(arr)
 end 'processOne'
@@ -1712,7 +1712,7 @@ type Allocator
 end 'Allocator'
 
 function allocateFor(query Query) returns bool
-	var allocator = Allocator.create(query)
+	let allocator = Allocator.create(query)
 	return allocator.run()
 end 'allocateFor'
 
@@ -1876,7 +1876,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create(Marker.create(3))
+	let h = Holder.create(Marker.create(3))
 	return h.replace(Marker.create(9))
 end 'main'
 ```
@@ -2078,7 +2078,7 @@ end 'Pair'
 
 function main() returns ExitCode
 	let m = Marker.create(3)
-	var p = Pair.create(m)
+	let p = Pair.create(m)
 	return p.total()
 end 'main'
 ```
@@ -3745,7 +3745,7 @@ type Doubler implements Transform
 			throw ProbeError.refused
 		end 'big'
 
-		var out = ByteArray.create(0)
+		let out = ByteArray.create(0)
 
 		for b in data 'each'
 			out.push(b)
@@ -3768,7 +3768,7 @@ type Reverser implements Transform
 			throw ProbeError.refused
 		end 'big'
 
-		var out = ByteArray.create(0)
+		let out = ByteArray.create(0)
 
 		for b in data 'each'
 			out.insert(0, value: b)
@@ -3845,7 +3845,7 @@ type Counting implements Source
 	end 'create'
 
 	function nums(n Integer) returns Numbers
-		var out = Numbers.create(0)
+		let out = Numbers.create(0)
 
 		for i in 0 upto n 'each'
 			out.push(self.start + i)
@@ -3863,7 +3863,7 @@ type Squares implements Source
 	end 'create'
 
 	function nums(n Integer) returns Numbers
-		var out = Numbers.create(0)
+		let out = Numbers.create(0)
 
 		for i in 0 upto n 'each'
 			out.push(i * i * self.scale)
@@ -3924,7 +3924,7 @@ type Small implements Survey
 	end 'packed'
 
 	function tally() returns Tally
-		var t = Tally.create()
+		let t = Tally.create()
 		t.upsert("x", value: self.base * 10)
 		return t
 	end 'tally'
@@ -3938,7 +3938,7 @@ type Large implements Survey
 	end 'create'
 
 	function packed() returns ByteArray
-		var out = ByteArray.create(0)
+		let out = ByteArray.create(0)
 
 		for i in 0 upto 4 'each'
 			out.push((200 + i) as Byte)
@@ -3948,7 +3948,7 @@ type Large implements Survey
 	end 'packed'
 
 	function tally() returns Tally
-		var t = Tally.create()
+		let t = Tally.create()
 		t.upsert("x", value: self.base)
 		t.upsert("y", value: self.base + 5)
 		return t

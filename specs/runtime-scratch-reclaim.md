@@ -177,7 +177,7 @@ function shell() returns Executable
 end 'shell'
 
 function exitZero() returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	#if os(Windows)
 	argv.push("/c")
 	#else
@@ -203,10 +203,10 @@ function workingDirectoryMissing() returns bool
 end 'workingDirectoryMissing'
 
 function streamingWithEnvironment() returns bool
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 	overrides.upsert("MAXON_SPEC_SCRATCH", value: "1")
 	let inheritCwd = try FilePath.from("") otherwise return false
-	var child = try StreamingSubprocess.spawnWithEnvironment(shell(), arguments: exitZero(), workingDirectory: inheritCwd, environment: Environment.inheritUpdating(overrides)) otherwise return false
+	let child = try StreamingSubprocess.spawnWithEnvironment(shell(), arguments: exitZero(), workingDirectory: inheritCwd, environment: Environment.inheritUpdating(overrides)) otherwise return false
 	let code = try child.wait() otherwise 1
 	child.release()
 	return code == 0

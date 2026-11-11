@@ -72,13 +72,13 @@ end 'Holder'
 typealias CellHolder = Holder with Cell
 
 function main() returns ExitCode
-	var h = CellHolder.create()
+	let h = CellHolder.create()
 	h.add(Cell.create(40))
 
-	var e = h.entryAt(0)
+	let e = h.entryAt(0)
 	e.0.bump(2)
 
-	view again = h.entryAt(0)
+	let again = h.entryAt(0)
 	return again.0.n
 end 'main'
 ```
@@ -128,13 +128,13 @@ end 'Held'
 typealias HeldBoxes = Held with Box
 
 function main() returns ExitCode
-	var held = HeldBoxes.create()
+	let held = HeldBoxes.create()
 	held.hold("a", value: Box.create(1))
 	for _ in 0 upto 3 'eachRound'
-		var b = try held.get("a") otherwise panic("absent")
+		let b = try held.get("a") otherwise panic("absent")
 		b.bump()
 	end 'eachRound'
-	view c = try held.get("a") otherwise panic("absent")
+	let c = try held.get("a") otherwise panic("absent")
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -193,13 +193,13 @@ end 'Held'
 typealias HeldBoxes = Held with Box
 
 function main() returns ExitCode
-	var held = HeldBoxes.create()
+	let held = HeldBoxes.create()
 	held.hold("a", value: Box.create(1))
 	for _ in 0 upto 3 'eachRound'
-		var b = try held.get("a") otherwise panic("absent")
+		let b = try held.get("a") otherwise panic("absent")
 		b.bump()
 	end 'eachRound'
-	view c = try held.get("a") otherwise panic("absent")
+	let c = try held.get("a") otherwise panic("absent")
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -251,13 +251,13 @@ end 'Held'
 typealias HeldBoxes = Held with Box
 
 function main() returns ExitCode
-	var held = HeldBoxes.create()
+	let held = HeldBoxes.create()
 	let first = Box.create(1)
 	held.hold("a", value: first)
 	held.hold("a", value: Box.create(7))
-	var b = try held.get("a") otherwise panic("absent")
+	let b = try held.get("a") otherwise panic("absent")
 	b.bump()
-	view c = try held.get("a") otherwise panic("absent")
+	let c = try held.get("a") otherwise panic("absent")
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -326,13 +326,13 @@ end 'Registry'
 typealias BoxRegistry = Registry with Box
 
 function main() returns ExitCode
-	var registry = BoxRegistry.create()
+	let registry = BoxRegistry.create()
 	registry.put("a", item: Box.create(1))
 	for _ in 0 upto 3 'eachRound'
-		var b = try registry.get("a") otherwise panic("absent")
+		let b = try registry.get("a") otherwise panic("absent")
 		b.bump()
 	end 'eachRound'
-	view c = try registry.get("a") otherwise panic("absent")
+	let c = try registry.get("a") otherwise panic("absent")
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -414,15 +414,15 @@ typealias BoxHolder = Holder with Box
 typealias BoxColumns = Columns with (String, Box)
 
 function main() returns ExitCode
-	var concrete = BoxColumns.create()
+	let concrete = BoxColumns.create()
 	concrete.add("k", y: Box.create(1))
-	var concreteCopy = concrete.snapshot().yAt(0)
+	let concreteCopy = concrete.snapshot().yAt(0)
 	concreteCopy.bump()
 	print("concrete {concrete.yAt(0).n}\n")
 
-	var h = BoxHolder.create()
+	let h = BoxHolder.create()
 	h.put(Box.create(1))
-	var c = h.copied()
+	let c = h.copied()
 	c.bump()
 	print("generic {h.original().n}\n")
 	return 0
@@ -600,14 +600,14 @@ end 'Registry'
 typealias BoxRegistry = Registry with Box
 
 function main() returns ExitCode
-	var registry = BoxRegistry.create()
+	let registry = BoxRegistry.create()
 	registry.put("a", item: Box.create(1))
 	registry.copyLater("a", target: "b")
 	for _ in 0 upto 3 'eachRound'
-		var b = try registry.get("b") otherwise panic("absent")
+		let b = try registry.get("b") otherwise panic("absent")
 		b.bump()
 	end 'eachRound'
-	view c = try registry.get("a") otherwise panic("absent")
+	let c = try registry.get("a") otherwise panic("absent")
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -663,12 +663,12 @@ end 'Cell'
 typealias BoxCell = Cell with Box
 
 function main() returns ExitCode
-	var cell = BoxCell.create(Box.create(5))
+	let cell = BoxCell.create(Box.create(5))
 	for _ in 0 upto 3 'eachRound'
-		var b = cell.later()
+		let b = cell.later()
 		b.bump()
 	end 'eachRound'
-	view c = cell.get()
+	let c = cell.get()
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -731,7 +731,7 @@ end 'Box'
 typealias BoxMap = Map with (String, Box)
 
 function main() returns ExitCode
-	var m = BoxMap.create()
+	let m = BoxMap.create()
 	m.upsert("a", value: Box.create(1))
 	m.upsert("bb", value: Box.create(2))
 	var total = 0 as Count
@@ -743,8 +743,8 @@ function main() returns ExitCode
 			total = total + pair.1.n + (pair.1.names.count() as Count)
 		end 'sum'
 	end 'eachRound'
-	view a = try m.get("a") otherwise panic("absent")
-	view bb = try m.get("bb") otherwise panic("absent")
+	let a = try m.get("a") otherwise panic("absent")
+	let bb = try m.get("bb") otherwise panic("absent")
 	print("{total} {a.n} {a.names.count()} {bb.n} {bb.names.count()}\n")
 	return 0
 end 'main'
@@ -792,13 +792,13 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function heap(n Integer) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("a heap string long enough to allocate {n}")
 	return sb.build()
 end 'heap'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.add(heap(1), tag: 4)
 	let c = b.copy()
 	b.add(heap(2), tag: 5)
@@ -854,13 +854,13 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function heap(n Integer) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("a heap string long enough to allocate {n}")
 	return sb.build()
 end 'heap'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.add(heap(1), tag: 7)
 	b.add(heap(2), tag: 8)
 	let f = b.first()
@@ -915,19 +915,19 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function heap(n Integer) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("a heap string long enough to allocate {n}")
 	return sb.build()
 end 'heap'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.add(heap(1), tag: 4)
-	var c = b.copy()
-	var one = try c.get(0) otherwise return 90
+	let c = b.copy()
+	let one = try c.get(0) otherwise return 90
 	b.addBox(one)
 	b.add(heap(2), tag: 5)
-	view e = try c.get(0) otherwise return 92
+	let e = try c.get(0) otherwise return 92
 	print("{e.v} {c.count()}\n")
 	return 0
 end 'main'
@@ -976,7 +976,7 @@ type Bag uses Element
 	end 'viaStash'
 
 	static function stash(b EBox, into EBoxArray) returns Integer
-		var target = into
+		let target = into
 		target.push(b)
 		return target.count()
 	end 'stash'
@@ -985,20 +985,20 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function heap(n Integer) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("a heap string long enough to allocate {n}")
 	return sb.build()
 end 'heap'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.add(heap(1), tag: 4)
-	var c = b.copy()
-	var one = try c.get(0) otherwise return 90
+	let c = b.copy()
+	let one = try c.get(0) otherwise return 90
 	let n = b.viaStash(one)
 	print("{n}\n")
 	b.add(heap(2), tag: 5)
-	view e = try c.get(0) otherwise return 92
+	let e = try c.get(0) otherwise return 92
 	print("{e.v} {c.count()}\n")
 	return 0
 end 'main'
@@ -1044,7 +1044,7 @@ type Bag uses Element
 	end 'copy'
 
 	function wrap(b EBox) returns EBoxArray
-		var xs = EBoxArray.create(0)
+		let xs = EBoxArray.create(0)
 		xs.push(b)
 		return xs
 	end 'wrap'
@@ -1053,13 +1053,13 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function heap(n Integer) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("a heap string long enough to allocate {n}")
 	return sb.build()
 end 'heap'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.add(heap(1), tag: 4)
 	let c = b.copy()
 	let one = try c.get(0) otherwise return 90
@@ -1121,7 +1121,7 @@ end 'Holder'
 typealias BoxHolder = Holder with Box
 
 function main() returns ExitCode
-	var h = BoxHolder.create()
+	let h = BoxHolder.create()
 	h.put("x", value: Box.create(5))
 	h.put("y", value: Box.create(6))
 	let snap = h.snapshot()
@@ -1184,10 +1184,10 @@ end 'Holder'
 typealias BoxHolder = Holder with Box
 
 function main() returns ExitCode
-	var h = BoxHolder.create()
+	let h = BoxHolder.create()
 	h.put("x", value: Box.create(5))
 	h.put("y", value: Box.create(6))
-	view snap = h.snapshot()
+	let snap = h.snapshot()
 	h.put("z", value: Box.create(7))
 	var total = 0 as Count
 
@@ -1247,10 +1247,10 @@ end 'Holder'
 typealias BoxHolder = Holder with Box
 
 function main() returns ExitCode
-	var h = BoxHolder.create()
+	let h = BoxHolder.create()
 	h.put("x", value: Box.create(5))
 	h.put("y", value: Box.create(6))
-	view snap = h.snapshot()
+	let snap = h.snapshot()
 	h.put("z", value: Box.create(7))
 	var total = 0 as Count
 
@@ -1309,13 +1309,13 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function heap(n Integer) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("a heap string long enough to allocate {n}")
 	return sb.build()
 end 'heap'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.add(heap(1), tag: 4)
 	let c = b.copy()
 	let one = try c.get(0) otherwise return 90
@@ -1460,7 +1460,7 @@ type Cell uses T
 		return self.v
 	end 'fetch'
 
-	static function poke(into Self, donor Self)
+	static function poke(into mutable Self, donor Self)
 		donor.v = into.fetch()
 	end 'poke'
 end 'Cell'
@@ -1468,7 +1468,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function main() returns ExitCode
-	var src = StrCell.make("source {40 + 2} value long enough for a heap record")
+	let src = StrCell.make("source {40 + 2} value long enough for a heap record")
 	let dst = StrCell.make("target {40 + 2} value long enough for a heap record")
 	StrCell.poke(dst, donor: src)
 	print("{src.v} {dst.v}\n")
@@ -1690,10 +1690,10 @@ end 'Holder'
 typealias BoxHolder = Holder with Box
 
 function main() returns ExitCode
-	var h = BoxHolder.create()
+	let h = BoxHolder.create()
 	h.put("x", value: Box.create(5))
 	h.put("y", value: Box.create(6))
-	var snap = h.snapshot()
+	let snap = h.snapshot()
 	let k = BoxHolder.countOf(snap)
 	h.put("z", value: Box.create(7))
 	var total = 0 as Count
@@ -1732,14 +1732,14 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var b = StrBag.make()
+	let b = StrBag.make()
 	b.add(heapString("first payload ", b: "long enough to allocate"))
 	print("{b.items.count()}\n")
 	return 0
@@ -1770,7 +1770,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -1814,16 +1814,16 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var b = StrBag.make()
+	let b = StrBag.make()
 	b.add(heapString("first payload ", b: "long enough to allocate"))
-	var c = b.fresh()
+	let c = b.fresh()
 	c.add(heapString("second payload ", b: "long enough to allocate"))
 	c.add(heapString("third payload ", b: "long enough to allocate"))
 	print("{b.items.count()} {c.items.count()}\n")
@@ -1853,7 +1853,7 @@ type Bag uses T
 	end 'add'
 
 	function withOne(y T) returns Self
-		var x = Bag{items: TArray.create(0)}
+		let x = Bag{items: TArray.create(0)}
 		x.items.push(y)
 		return x
 	end 'withOne'
@@ -1862,14 +1862,14 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var b = StrBag.make()
+	let b = StrBag.make()
 	let c = b.withOne(heapString("second payload ", b: "long enough to allocate"))
 	print("{c.items.count()} {b.items.count()}\n")
 	return 0
@@ -1907,16 +1907,16 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var a = StrBag.make()
+	let a = StrBag.make()
 	a.add(heapString("first payload ", b: "long enough to allocate"))
-	var b = StrBag.make()
+	let b = StrBag.make()
 	b.add(heapString("second payload ", b: "long enough to allocate"))
 	a.merge(b)
 	print("{a.items.count()} {b.items.count()}\n")
@@ -1948,14 +1948,14 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	let a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
 	let b = StrCell.create(heapString("second payload ", b: "long enough to allocate"))
 	a.takeFrom(b)
 	print("{a.v}\n")
@@ -1985,17 +1985,17 @@ typealias StrCell = Cell with String
 typealias Strings = Array with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var xs = Strings.create(0)
+	let xs = Strings.create(0)
 	xs.push(heapString("first payload ", b: "long enough to allocate"))
 	xs.push(heapString("second payload ", b: "long enough to allocate"))
-	view c = StrCell.firstOf(xs)
+	let c = StrCell.firstOf(xs)
 	print("{c.v}\n")
 	return 0
 end 'main'
@@ -2026,17 +2026,17 @@ typealias StrCell = Cell with String
 typealias Strings = Array with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var xs = Strings.create(0)
+	let xs = Strings.create(0)
 	xs.push(heapString("first payload ", b: "long enough to allocate"))
 	xs.push(heapString("second payload ", b: "long enough to allocate"))
-	view c = StrCell.firstOf(xs)
+	let c = StrCell.firstOf(xs)
 	print("{c.v}\n")
 	return 0
 end 'main'
@@ -2065,17 +2065,17 @@ typealias StrCell = Cell with String
 typealias Strings = Array with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var xs = Strings.create(0)
+	let xs = Strings.create(0)
 	xs.push(heapString("first payload ", b: "long enough to allocate"))
 	xs.push(heapString("second payload ", b: "long enough to allocate"))
-	view c = StrCell.firstOf(xs)
+	let c = StrCell.firstOf(xs)
 	print("{c.v}\n")
 	return 0
 end 'main'
@@ -2105,7 +2105,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -2139,7 +2139,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -2178,7 +2178,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -2238,7 +2238,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -2454,7 +2454,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -2501,7 +2501,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -2553,7 +2553,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -2733,7 +2733,7 @@ end 'Holder'
 typealias StringHolder = Holder with String
 
 function pluck() returns (String, Integer)
-	var h = StringHolder.create()
+	let h = StringHolder.create()
 	h.add("the source is gone")
 	return h.entryAt(0)
 end 'pluck'
@@ -2781,7 +2781,7 @@ end 'Holder'
 typealias SmallHolder = Holder with SmallInt
 
 function main() returns ExitCode
-	var h = SmallHolder.create()
+	let h = SmallHolder.create()
 	h.add(40)
 	h.add(2)
 
@@ -2822,7 +2822,7 @@ end 'Pack'
 typealias StrPack = Pack with String
 
 function main() returns ExitCode
-	var p = StrPack.create()
+	let p = StrPack.create()
 	let s = "hello"
 	return p.tag(s) + p.tag("literal")
 end 'main'
@@ -3696,7 +3696,7 @@ extension Pair
 	typealias FirstArray = Array with First
 
 	function firsts() returns Count
-		var xs = FirstArray{}
+		let xs = FirstArray{}
 		return xs.count()
 	end 'firsts'
 end 'Pair'
@@ -3754,7 +3754,7 @@ extension Source
 	typealias ItemArray = Array with Item
 
 	function collected() returns Count
-		var xs = ItemArray{}
+		let xs = ItemArray{}
 		return xs.count()
 	end 'collected'
 end 'Source'
@@ -4228,7 +4228,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function fill(b StrBag)
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("hello ")
 	sb.append("heap world")
 	let s = sb.build()
@@ -4236,7 +4236,7 @@ function fill(b StrBag)
 end 'fill'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
 		return 9
@@ -4299,7 +4299,7 @@ type Bag
 end 'Bag'
 
 function fill(b Bag)
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("hello ")
 	sb.append("heap world")
 	let s = sb.build()
@@ -4307,7 +4307,7 @@ function fill(b Bag)
 end 'fill'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
 		return 9
@@ -4383,7 +4383,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function fill(b StrBag)
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("hello ")
 	sb.append("heap world")
 	let s = sb.build()
@@ -4391,7 +4391,7 @@ function fill(b StrBag)
 end 'fill'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
 		return 9
@@ -4471,7 +4471,7 @@ function fill(b SmallBag)
 end 'fill'
 
 function main() returns ExitCode
-	var b = SmallBag.create()
+	let b = SmallBag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
 		return 9
@@ -4524,14 +4524,14 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function load(b StrBag)
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("a repeated borrowed string long enough to force a heap allocation")
 	let s = sb.build()
 	b.fill(s, times: 100)
 end 'load'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	load(b)
 	let middle = try b.at(50) otherwise return 1
 	print("{middle}\n")
@@ -4599,7 +4599,7 @@ function fill(b IntBag)
 end 'fill'
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	fill(b)
 	let got = try b.first() otherwise 'e'
 		return 9
@@ -4656,14 +4656,14 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function fill(b StrBag)
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("hello ")
 	sb.append("heap world")
 	b.add(sb.build(), tag: 7)
 end 'fill'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	fill(b)
 	print("{b.first()}\n")
 	return 0
@@ -4722,7 +4722,7 @@ end 'Bag'
 typealias SmallBag = Bag with Small
 
 function main() returns ExitCode
-	var b = SmallBag.create()
+	let b = SmallBag.create()
 	b.add(41, tag: 7)
 	return b.first()
 end 'main'
@@ -4780,7 +4780,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function fill() returns StrBag
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("hello ")
 	sb.append("heap world")
 	let s = sb.build()
@@ -4847,8 +4847,8 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
-	var sb = StringBuilder.create()
+	let b = StrBag.create()
+	let sb = StringBuilder.create()
 	sb.append("a heap payload the record only borrows")
 	b.add(sb.build())
 	return b.tagOfFirst() as ExitCode
@@ -4910,14 +4910,14 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function fill(b StrBag)
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("hello ")
 	sb.append("heap world")
 	b.add(sb.build(), tag: 7)
 end 'fill'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	fill(b)
 	let got = try b.first() otherwise return 9
 	print("{got}\n")
@@ -4983,7 +4983,7 @@ typealias StrBag = Bag with String
 typealias StrBox = Box with String
 
 function makeOne(b StrBag) returns StrBox
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append("a heap payload ")
 	sb.append("long enough to allocate")
 	let s = sb.build()
@@ -4991,7 +4991,7 @@ function makeOne(b StrBag) returns StrBox
 end 'makeOne'
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	let boxed = makeOne(b)
 	print("{boxed.value()}\n")
 	return 0
@@ -5051,11 +5051,11 @@ typealias StrBox = Box with String
 typealias BoxArray = Array with StrBox
 
 function main() returns ExitCode
-	var b = StrBag.create()
-	var kept = BoxArray.create(0)
+	let b = StrBag.create()
+	let kept = BoxArray.create(0)
 	var i = 0 as Count
 	while i < 100 'fill'
-		var sb = StringBuilder.create()
+		let sb = StringBuilder.create()
 		sb.append("payload number ")
 		sb.append("{i} long enough to be a heap record")
 		kept.push(b.wrap(sb.build()))
@@ -5120,14 +5120,14 @@ end 'Outer'
 typealias O = Outer with (String, String)
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var o = O.create()
+	let o = O.create()
 	let s1 = heapString("first payload ", b: "long enough to allocate")
 	let s2 = heapString("second payload ", b: "long enough to allocate")
 	print("{o.build(s1, u: s2)}\n")
@@ -5197,14 +5197,14 @@ typealias O = Outer with (String, String)
 typealias MS = Mid with (String, String)
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var o = O.create()
+	let o = O.create()
 	let s1 = heapString("first payload ", b: "long enough to allocate")
 	let s2 = heapString("second payload ", b: "long enough to allocate")
 	print("{o.build(s1, u: s2)}\n")
@@ -5267,14 +5267,14 @@ typealias O = Outer with (String, String)
 typealias MS = Mid with (String, String)
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var o = O.create()
+	let o = O.create()
 	let s1 = heapString("first payload ", b: "long enough to allocate")
 	let s2 = heapString("second payload ", b: "long enough to allocate")
 	print("{o.build(s1, u: s2)}\n")
@@ -5427,7 +5427,7 @@ end 'Outer'
 typealias StrOuter = Outer with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -5436,7 +5436,7 @@ end 'heapString'
 function main() returns ExitCode
 	let s1 = heapString("first payload ", b: "long enough to allocate")
 	let s2 = heapString("second payload ", b: "long enough to allocate")
-	var o = StrOuter.create(s1)
+	let o = StrOuter.create(s1)
 	o.reset(s2)
 	print("{o.first()}\n")
 	return 0
@@ -5482,7 +5482,7 @@ end 'Outer'
 typealias StrOuter = Outer with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -5491,7 +5491,7 @@ end 'heapString'
 function main() returns ExitCode
 	let s1 = heapString("first payload ", b: "long enough to allocate")
 	let s2 = heapString("second payload ", b: "long enough to allocate")
-	var o = StrOuter.create(s1)
+	let o = StrOuter.create(s1)
 	o.reset(s2)
 	print("{o.first()}\n")
 	return 0
@@ -5539,7 +5539,7 @@ typealias StrBag = Bag with String
 typealias StrBox = Box with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -5548,7 +5548,7 @@ end 'heapString'
 function main() returns ExitCode
 	let s1 = heapString("first payload ", b: "long enough to allocate")
 	let s2 = heapString("second payload ", b: "long enough to allocate")
-	var b = StrBag.create(s1)
+	let b = StrBag.create(s1)
 	b.swap((StrBox.create(s2), 2))
 	print("{b.first()} {b.pair.1}\n")
 	return 0
@@ -5606,7 +5606,7 @@ end 'Holder'
 typealias StrHolder = Holder with String, Small
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -5659,7 +5659,7 @@ typealias StrHolder = Holder with String, Small
 typealias SmallHolder = Holder with Small, Small
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -5707,7 +5707,7 @@ end 'Holder'
 typealias StrHolder = Holder with String, Small
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -5750,7 +5750,7 @@ end 'envSize'
 function main() returns ExitCode
 	let m = ["a": 1, "b": 2, "c": 3]
 	let mapped = m.map(function(p) gives p)
-	var e = EnvMap.create()
+	let e = EnvMap.create()
 	try e.insert("k", value: "v") otherwise return 9
 	print("mapped {mapped.count()}\n")
 	return ((mapped.count() as Cnt) + envSize(e)) as ExitCode
@@ -5927,7 +5927,7 @@ end 'Registry'
 typealias StringRegistry = Registry with String
 
 function main() returns ExitCode
-	var registry = StringRegistry.create()
+	let registry = StringRegistry.create()
 	registry.put("a", item: "hello {1 + 1}")
 	registry.put("b", item: "world {2 + 2}")
 	registry.put("a", item: "again {3 + 3}")
@@ -5981,7 +5981,7 @@ typealias StrCell = Cell with String
 typealias StrWrapper = Wrapper with String
 
 function main() returns ExitCode
-	var w = StrWrapper.create(StrCell.make("first string long enough to force a heap allocation"))
+	let w = StrWrapper.create(StrCell.make("first string long enough to force a heap allocation"))
 	w.put(StrCell.make("second string, longer still, and also heap allocated"))
 	return 0
 end 'main'
@@ -6008,14 +6008,14 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	let a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
 	let s = heapString("second payload ", b: "long enough to allocate")
 	a.takeFrom(s)
 	print("{a.v} {s}\n")
@@ -6047,14 +6047,14 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	let a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
 	let b = StrCell.create(heapString("second payload ", b: "long enough to allocate"))
 	a.takeFrom(b)
 	print("{a.v}\n")
@@ -6099,14 +6099,14 @@ end 'Wrapper'
 typealias StrWrapper = Wrapper with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var w = StrWrapper.create(heapString("first payload ", b: "long enough to allocate"))
+	let w = StrWrapper.create(heapString("first payload ", b: "long enough to allocate"))
 	let s = heapString("second payload ", b: "long enough to allocate")
 	w.put(s)
 	print("{w.show()} {s}\n")
@@ -6138,15 +6138,15 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
-	var b = StrCell.create(heapString("second payload ", b: "long enough to allocate"))
+	let a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	let b = StrCell.create(heapString("second payload ", b: "long enough to allocate"))
 	let s = heapString("third payload ", b: "long enough to allocate")
 	a.overwrite(b, item: s)
 	print("{b.v} {s}\n")
@@ -6191,15 +6191,15 @@ end 'Wrapper'
 typealias StrWrapper = Wrapper with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var w = StrWrapper.create(heapString("first payload ", b: "long enough to allocate"))
-	var o = StrWrapper.create(heapString("second payload ", b: "long enough to allocate"))
+	let w = StrWrapper.create(heapString("first payload ", b: "long enough to allocate"))
+	let o = StrWrapper.create(heapString("second payload ", b: "long enough to allocate"))
 	let s = heapString("third payload ", b: "long enough to allocate")
 	w.putInto(o, item: s)
 	print("{o.show()} {s}\n")
@@ -6251,15 +6251,15 @@ end 'Wrapper'
 typealias SmallStrWrapper = Wrapper with (Small, String)
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var w = SmallStrWrapper.create(3, u: heapString("first payload ", b: "long enough to allocate"))
-	var o = SmallStrWrapper.create(4, u: heapString("other payload ", b: "long enough to allocate"))
+	let w = SmallStrWrapper.create(3, u: heapString("first payload ", b: "long enough to allocate"))
+	let o = SmallStrWrapper.create(4, u: heapString("other payload ", b: "long enough to allocate"))
 	let s = heapString("second payload ", b: "long enough to allocate")
 	let t = heapString("third payload ", b: "long enough to allocate")
 	w.put(s)
@@ -6315,14 +6315,14 @@ end 'Outer'
 typealias StrOuter = Outer with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var o = StrOuter.create(heapString("first payload ", b: "long enough to allocate"))
+	let o = StrOuter.create(heapString("first payload ", b: "long enough to allocate"))
 	let s = heapString("second payload ", b: "long enough to allocate")
 	o.put(s)
 	print("{o.show()} {s}\n")
@@ -6372,7 +6372,7 @@ typealias StrCell = Cell with String
 typealias StrWrapper = Wrapper with String
 
 function main() returns ExitCode
-	var w = StrWrapper.create(StrCell.make("first string long enough to force a heap allocation"))
+	let w = StrWrapper.create(StrCell.make("first string long enough to force a heap allocation"))
 	StrWrapper.put(w, next: StrCell.make("second string, longer still, and also heap allocated"))
 	return 0
 end 'main'
@@ -6399,14 +6399,14 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
+	let a = StrCell.create(heapString("first payload ", b: "long enough to allocate"))
 	let s = heapString("second payload ", b: "long enough to allocate")
 	StrCell.overwrite(a, item: s)
 	print("{a.v} {s}\n")
@@ -6432,7 +6432,7 @@ type Inner uses T
 	end 'create'
 
 	function stash() returns Count
-		var items = Items.create(0)
+		let items = Items.create(0)
 		items.push(self.v)
 		return items.count()
 	end 'stash'
@@ -6458,7 +6458,7 @@ end 'Outer'
 typealias StrOuter = Outer with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
@@ -6497,14 +6497,14 @@ typealias StrPile = Pile with String
 typealias StrItems = Array with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()
 end 'heapString'
 
 function main() returns ExitCode
-	var items = StrItems.create(0)
+	let items = StrItems.create(0)
 	let s = heapString("pushed payload ", b: "long enough to allocate")
 	StrPile.stash(items, item: s)
 	StrPile.stash(items, item: s)
@@ -6532,7 +6532,7 @@ type Pile uses T
 	end 'create'
 
 	static function tally(owner Self) returns Count
-		var items = Items.create(0)
+		let items = Items.create(0)
 		items.push(owner.top)
 		items.push(owner.top)
 		return items.count()
@@ -6542,7 +6542,7 @@ end 'Pile'
 typealias StrPile = Pile with String
 
 function heapString(a String, b String) returns String
-	var sb = StringBuilder.create()
+	let sb = StringBuilder.create()
 	sb.append(a)
 	sb.append(b)
 	return sb.build()

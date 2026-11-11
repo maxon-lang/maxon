@@ -65,8 +65,8 @@ type Options
 	export var columns = ColumnArray.create(0)
 
 	static function parse(args StringArray) returns Options throws UsageError
-		var options = Self{}
-		var chosen = FlagArray.create(0)
+		let options = Self{}
+		let chosen = FlagArray.create(0)
 
 		for (argument, text) in args.withIterator() 'eachArgument'
 			if argument.index() == programPathArgument 'programPath'
@@ -110,7 +110,7 @@ type Counts
 	end 'zero'
 
 	static function of(content ByteArray) returns Self
-		var counts = Self{bytes: content.count() as Tally}
+		let counts = Self{bytes: content.count() as Tally}
 		var inWord = false
 
 		for b in content 'eachByte'
@@ -170,7 +170,7 @@ type Report
 	end 'addFailure'
 
 	function printRow(counts Counts, label String)
-		var row = StringBuilder.create()
+		let row = StringBuilder.create()
 
 		for column in self.columns 'eachColumn'
 			row.append("{column(counts):8}")
@@ -201,24 +201,24 @@ end 'submitCount'
 
 function countFiles(paths PathArray, report Report)
 	let workerCount = workersFor(paths)
-	var counters = CounterArray.create(0)
+	let counters = CounterArray.create(0)
 
 	for _ in 1 to workerCount 'spawnWorkers'
 		counters.push(spawn Counter.create())
 	end 'spawnWorkers'
 
-	var replies = CountPromiseArray.create(0)
+	let replies = CountPromiseArray.create(0)
 	var nextWorker = 0 as ElementIndex
 
 	for path in paths 'sendFiles'
-		var counter = try counters.get(nextWorker) otherwise panic("countFiles: nextWorker stays below the worker count")
+		let counter = try counters.get(nextWorker) otherwise panic("countFiles: nextWorker stays below the worker count")
 		submitCount(replies, counter: counter, path: path)
 		nextWorker = (nextWorker + 1) mod workerCount
 	end 'sendFiles'
 
 	for (file, reply) in replies.withIterator() 'receiveCounts'
 		let path = try paths.get(file.index()) otherwise panic("countFiles: one reply per file")
-		var counts = try await reply otherwise 'unreadable'
+		let counts = try await reply otherwise 'unreadable'
 			report.addFailure("{path}")
 			continue
 		end 'unreadable'
@@ -247,7 +247,7 @@ function main() returns ExitCode
 		return Outcome.troubled
 	end 'badUsage'
 
-	var report = Report.create(options.columns)
+	let report = Report.create(options.columns)
 	countFiles(options.paths, report: report)
 
 	if options.paths.count() > 1 'severalFiles'

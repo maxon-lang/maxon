@@ -106,7 +106,7 @@ error E3214: <fragment>:26:13: 'Wallet' is unique (its field 'ticket' holds a un
 
 
 <!-- test: a-unique-union-kept-by-a-call-while-its-match-binding-is-read-is-refused -->
-`keep` stores its `slot` argument, so the call moves `slot`; the `filled` arm then reads `token`, a view of the moved union's payload, in the same call.
+The `filled` arm binds `token`, which moves the payload out of `slot`, so handing `slot` to `keep`, which keeps it, makes the later read of `token` in the same call a use of a moved value.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -127,14 +127,14 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function keep(slot Slot, k Tally) returns Tally
-	var kept = SlotArray.create(0)
+	let kept = SlotArray.create(0)
 	kept.push(slot)
 
 	return k
 end 'keep'
 
 function main() returns ExitCode
-	var slot = Slot.filled(Token.create(1), n: 2)
+	let slot = Slot.filled(Token.create(1), n: 2)
 
 	match slot 'which'
 		empty then print("empty\n")
@@ -149,7 +149,7 @@ error E3102: <fragment>:31:47: use of moved value 'slot': its ownership moved to
 ```
 
 <!-- test: a-match-binding-read-after-its-subject-is-moved-is-refused -->
-The call moves `slot`, so the `token` binding of its payload is dead for the rest of the arm.
+The `filled` arm moves the payload of `slot` into `token`, so handing `slot` to `keep`, which keeps it, makes the later read of the payload binding `n` a use of a moved value.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -170,14 +170,14 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function keep(slot Slot) returns Tally
-	var kept = SlotArray.create(0)
+	let kept = SlotArray.create(0)
 	kept.push(slot)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var slot = Slot.filled(Token.create(1), n: 2)
+	let slot = Slot.filled(Token.create(1), n: 2)
 
 	match slot 'which'
 		empty then print("empty\n")
@@ -188,7 +188,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:31:50: use of moved value 'slot': its ownership moved to the parameter 'slot' of 'keep', which keeps it
+error E3102: <fragment>:31:46: use of moved value 'slot': its ownership moved to the parameter 'slot' of 'keep', which keeps it
 ```
 
 <!-- test: a-unique-local-kept-by-a-call-is-refused-when-read-afterwards -->
@@ -208,14 +208,14 @@ end 'Token'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var ticket = Token.create(1)
+	let ticket = Token.create(1)
 	let moved = keep(ticket)
 	print("{moved} {ticket.n}\n")
 
@@ -243,7 +243,7 @@ end 'Token'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
@@ -256,7 +256,7 @@ function forward(token Token) returns Tally
 end 'forward'
 
 function main() returns ExitCode
-	var ticket = Token.create(1)
+	let ticket = Token.create(1)
 	print("{forward(ticket)}\n")
 
 	return 0
@@ -283,14 +283,14 @@ end 'Token'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var ticket = Token.create(1)
+	let ticket = Token.create(1)
 	var lap = 0 as Tally
 
 	while lap < 2 'laps'
@@ -306,8 +306,8 @@ end 'main'
 error E3102: <fragment>:26:20: use of moved value 'ticket': it was moved in an earlier iteration of this loop
 ```
 
-<!-- test: a-let-unique-handed-to-a-keeping-parameter-is-refused -->
-A keeping parameter takes the caller's mutable data, and a `let` is not.
+<!-- test: a-let-unique-handed-to-a-keeping-parameter-moves -->
+A `let` unique handed to a keeping parameter moves into the call, and nothing reads it afterwards.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -323,7 +323,7 @@ end 'Token'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
@@ -337,8 +337,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3078: <fragment>:23:14: cannot pass 'ticket' to parameter 'token' of 'keep': it keeps a unique value, which moves out of the caller's mutable data, and 'ticket' is not a `var`
+```stdout
+1
+```
+```exitcode
+0
 ```
 
 <!-- test: a-unique-local-lent-to-a-reading-parameter-stays-readable -->
@@ -360,7 +363,7 @@ function peek(token Token) returns Tally
 end 'peek'
 
 function main() returns ExitCode
-	var ticket = Token.create(1)
+	let ticket = Token.create(1)
 	let seen = peek(ticket)
 	print("{seen} {ticket.n}\n")
 
@@ -391,7 +394,7 @@ end 'Token'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
@@ -440,7 +443,7 @@ function peek(slot Slot, k Tally) returns Tally
 end 'peek'
 
 function main() returns ExitCode
-	var slot = Slot.filled(Token.create(1), n: 2)
+	let slot = Slot.filled(Token.create(1), n: 2)
 
 	match slot 'which'
 		empty then print("empty\n")
@@ -479,14 +482,14 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function keep(slot Slot) returns Tally
-	var kept = SlotArray.create(0)
+	let kept = SlotArray.create(0)
 	kept.push(slot)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var slot = Slot.filled(Token.create(1), n: 2)
+	let slot = Slot.filled(Token.create(1), n: 2)
 	let moved = keep(slot)
 
 	match slot 'which'
@@ -526,14 +529,14 @@ end 'Holder'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var holder = Holder.create(1)
+	let holder = Holder.create(1)
 	holder.token.n = 2
 	let moved = keep(holder.token)
 	print("{moved}\n")
@@ -562,14 +565,14 @@ end 'Token'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var tokens = TokenArray.create(0)
+	let tokens = TokenArray.create(0)
 	tokens.push(Token.create(1))
 	let moved = keep(try tokens.get(0) otherwise panic("one element"))
 	print("{moved}\n")
@@ -598,14 +601,14 @@ end 'Token'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var tokens = TokenArray.create(0)
+	let tokens = TokenArray.create(0)
 	tokens.push(Token.create(1))
 	let moved = keep(try tokens.pop() otherwise panic("one element"))
 	print("{moved} {tokens.count()}\n")
@@ -678,14 +681,14 @@ typealias TokenArray = Array with Token
 typealias TokenArrays = Array with TokenArray
 
 function keep(tokens TokenArray) returns Tally
-	var kept = TokenArrays.create(0)
+	let kept = TokenArrays.create(0)
 	kept.push(tokens)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var tokens = TokenArray.create(0)
+	let tokens = TokenArray.create(0)
 	tokens.push(Token.create(1))
 	let moved = keep(tokens)
 	print("{moved} {tokens.count()}\n")
@@ -718,7 +721,7 @@ function empty(tokens TokenArray) returns bool
 end 'empty'
 
 function main() returns ExitCode
-	var tokens = TokenArray.create(0)
+	let tokens = TokenArray.create(0)
 	tokens.push(Token.create(1))
 	print("{empty(tokens)} {tokens.count()}\n")
 
@@ -750,14 +753,14 @@ typealias Pair = (Token, Tally)
 typealias Pairs = Array with Pair
 
 function keep(pair Pair) returns Tally
-	var kept = Pairs.create(0)
+	let kept = Pairs.create(0)
 	kept.push(pair)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var pair = (Token.create(1), 2 as Tally)
+	let pair = (Token.create(1), 2 as Tally)
 	let moved = keep(pair)
 	print("{moved} {pair.1}\n")
 
@@ -769,7 +772,7 @@ error E3102: <fragment>:25:18: use of moved value 'pair': its ownership moved to
 ```
 
 <!-- test: error.a-unique-payload-of-a-var-union-kept-by-a-call -->
-`keep` stores the `token` payload, which would move it out of the `var` union `slot`; a payload binding is a `let`, so it cannot carry the unique value away.
+The `filled` arm moves the payload of `slot` into `token`, so handing `slot` to `tally` after `keep(token)` in the same arm is a use of a moved value.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -790,7 +793,7 @@ end 'Slot'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
@@ -804,7 +807,7 @@ function tally(slot Slot) returns Tally
 end 'tally'
 
 function main() returns ExitCode
-	var slot = Slot.filled(Token.create(1), n: 2)
+	let slot = Slot.filled(Token.create(1), n: 2)
 
 	match slot 'which'
 		empty then print("empty\n")
@@ -815,11 +818,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:38:33: cannot pass 'token' to parameter 'token' of 'keep': it keeps a unique value, which moves out of the caller's mutable data, and 'token' is not a `var`
+error E3102: <fragment>:38:57: use of moved value 'token': its ownership moved to the parameter 'token' of 'keep', which keeps it
 ```
 
 <!-- test: a-payload-binding-read-after-its-subject-is-handed-to-a-consuming-call-is-refused -->
-`Box.wrap` stores the whole union in a field, which moves `slot`, so the `token` binding of its payload is dead for the rest of the statement.
+The `filled` arm moves the payload of `slot` into `token`, so handing the whole union to `Box.wrap` makes the later read of `token` in the same statement a use of a moved value.
 
 ```maxon
 typealias Tally = int(0 to 1024)
@@ -850,7 +853,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var slot = Slot.filled(Token.create(1), n: 2)
+	let slot = Slot.filled(Token.create(1), n: 2)
 
 	match slot 'which'
 		empty then print("empty\n")
@@ -861,7 +864,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3102: <fragment>:34:61: use of moved value 'slot': its ownership moved to the parameter 'slot' of 'Box.wrap', which keeps it
+error E3102: <fragment>:34:61: use of moved value 'token': its ownership moved to the parameter 'slot' of 'Box.wrap', which keeps it
 ```
 
 <!-- test: a-var-bound-to-a-unique-field-read-is-refused -->
@@ -1018,7 +1021,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create(4)
+	let holder = Holder.create(4)
 	holder.token.n = 6
 	let seen = holder.token.n
 	print("{seen} {holder.token.n}\n")
@@ -1057,14 +1060,14 @@ end 'Holder'
 
 function main() returns ExitCode
 	var holder = Holder.create(4)
-	view lent = holder.token
+	let lent = holder.token
 	print("{lent.n}\n")
 
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3214: <fragment>:22:7: cannot bind 'lent' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
+error E3214: <fragment>:22:6: cannot bind 'lent' to a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`
 ```
 
 <!-- test: a-for-binding-over-uniques-handed-to-a-keeping-parameter-is-refused -->
@@ -1084,14 +1087,14 @@ end 'Token'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var tokens = TokenArray.create(0)
+	let tokens = TokenArray.create(0)
 	tokens.push(Token.create(1))
 
 	for token in tokens 'each'
@@ -1126,7 +1129,7 @@ function peek(token Token) returns Tally
 end 'peek'
 
 function main() returns ExitCode
-	var tokens = TokenArray.create(0)
+	let tokens = TokenArray.create(0)
 	tokens.push(Token.create(3))
 
 	for token in tokens 'each'
@@ -1160,14 +1163,14 @@ end 'Token'
 typealias TokenArray = Array with Token
 
 function keep(token Token) returns Tally
-	var kept = TokenArray.create(0)
+	let kept = TokenArray.create(0)
 	kept.push(token)
 
 	return 1
 end 'keep'
 
 function main() returns ExitCode
-	var pair = (Token.create(1), 2 as Tally)
+	let pair = (Token.create(1), 2 as Tally)
 	let (token, n) = pair
 	print("{keep(token)} {n}\n")
 
@@ -1489,7 +1492,7 @@ end 'Ticket'
 typealias TicketArray = Array with Ticket
 
 function main() returns ExitCode
-	var tickets = TicketArray.create(0)
+	let tickets = TicketArray.create(0)
 	tickets.push(Ticket.create(1))
 	let first = tickets.count()
 	let second = tickets.count()

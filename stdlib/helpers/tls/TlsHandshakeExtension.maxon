@@ -189,8 +189,8 @@ module function tlsReadExtensions(reader TlsReader, context TlsExtensionContext)
 end 'tlsReadExtensions'
 
 module function tlsReadRawExtensions(reader TlsReader) returns TlsRawExtensionArray throws TlsCodecError
-	var block = try reader.readVector(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
-	var raws = TlsRawExtensionArray.create(0)
+	let block = try reader.readVector(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
+	let raws = TlsRawExtensionArray.create(0)
 
 	while not block.isAtEnd() 'eachExtension'
 		let extensionType = (try block.readUnsigned(TlsWireWidth.uint16)) as TlsExtensionType
@@ -202,8 +202,8 @@ module function tlsReadRawExtensions(reader TlsReader) returns TlsRawExtensionAr
 end 'tlsReadRawExtensions'
 
 module function tlsDecodeExtensions(raws TlsRawExtensionArray, context TlsExtensionContext) returns TlsExtensionArray throws TlsCodecError
-	var seen = TlsExtensionTypeSet.create()
-	var decoded = TlsExtensionArray.create(0)
+	let seen = TlsExtensionTypeSet.create()
+	let decoded = TlsExtensionArray.create(0)
 
 	for raw in raws 'eachExtension'
 		if seen.contains(raw.extensionType) 'duplicate'
@@ -228,7 +228,7 @@ function decodeExtension(raw TlsRawExtension, context TlsExtensionContext) retur
 		return TlsExtension.opaque(raw.extensionType, data: raw.data())
 	end 'undecoded'
 
-	var data = TlsReader.over(raw.data())
+	let data = TlsReader.over(raw.data())
 
 	return match kind 'kind'
 		serverName gives try decodeServerName(data, context: context)
@@ -267,7 +267,7 @@ function decodeServerName(data TlsReader, context TlsExtensionContext) returns T
 		return TlsExtension.serverNameAcknowledgement
 	end 'acknowledgement'
 
-	var list = try data.readVector(TlsLengthPrefix.uint16, minimum: tlsNonEmpty)
+	let list = try data.readVector(TlsLengthPrefix.uint16, minimum: tlsNonEmpty)
 	try data.finish()
 
 	if (try list.readUnsigned(TlsWireWidth.uint8)) != tlsNameTypeHostName 'nameType'
@@ -291,10 +291,10 @@ function decodeServerName(data TlsReader, context TlsExtensionContext) returns T
 end 'decodeServerName'
 
 function decodeSupportedGroups(data TlsReader) returns TlsExtension throws TlsCodecError
-	var list = try data.readCodePointList(TlsLengthPrefix.uint16, minimum: tlsNonEmpty, maximum: tlsMaxCodePointCount)
+	let list = try data.readCodePointList(TlsLengthPrefix.uint16, minimum: tlsNonEmpty, maximum: tlsMaxCodePointCount)
 	try data.finish()
 
-	var groups = TlsGroupCodeArray.create(0)
+	let groups = TlsGroupCodeArray.create(0)
 
 	while not list.isAtEnd() 'eachGroup'
 		groups.push((try list.readUnsigned(TlsWireWidth.uint16)) as TlsGroupCode)
@@ -311,17 +311,17 @@ function decodeEcPointFormats(data TlsReader) returns TlsExtension throws TlsCod
 end 'decodeEcPointFormats'
 
 function decodeSignatureAlgorithms(data TlsReader) returns TlsExtension throws TlsCodecError
-	var list = try data.readCodePointList(TlsLengthPrefix.uint16, minimum: tlsNonEmpty, maximum: tlsMaxCodePointCount)
+	let list = try data.readCodePointList(TlsLengthPrefix.uint16, minimum: tlsNonEmpty, maximum: tlsMaxCodePointCount)
 	try data.finish()
 
 	return TlsExtension.signatureAlgorithms(try tlsReadSignatureSchemes(list))
 end 'decodeSignatureAlgorithms'
 
 function decodeApplicationProtocols(data TlsReader, context TlsExtensionContext) returns TlsExtension throws TlsCodecError
-	var list = try data.readVector(TlsLengthPrefix.uint16, minimum: tlsMinProtocolListBytes)
+	let list = try data.readVector(TlsLengthPrefix.uint16, minimum: tlsMinProtocolListBytes)
 	try data.finish()
 
-	var protocols = TlsProtocolNameArray.create(0)
+	let protocols = TlsProtocolNameArray.create(0)
 
 	while not list.isAtEnd() 'eachName'
 		protocols.push(try list.readVectorBytes(TlsLengthPrefix.uint8, minimum: tlsNonEmpty))
@@ -348,10 +348,10 @@ function decodeSupportedVersions(data TlsReader, context TlsExtensionContext) re
 		return TlsExtension.selectedVersion(selected)
 	end 'selection'
 
-	var list = try data.readCodePointList(TlsLengthPrefix.uint8, minimum: tlsNonEmpty, maximum: tlsMaxVersionCount)
+	let list = try data.readCodePointList(TlsLengthPrefix.uint8, minimum: tlsNonEmpty, maximum: tlsMaxVersionCount)
 	try data.finish()
 
-	var versions = TlsVersionCodeArray.create(0)
+	let versions = TlsVersionCodeArray.create(0)
 
 	while not list.isAtEnd() 'eachVersion'
 		versions.push((try list.readUnsigned(TlsWireWidth.uint16)) as TlsVersionCode)
@@ -384,11 +384,11 @@ function decodeSelectedGroup(data TlsReader) returns TlsExtension throws TlsCode
 end 'decodeSelectedGroup'
 
 function decodeClientKeyShares(data TlsReader) returns TlsExtension throws TlsCodecError
-	var list = try data.readVector(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
+	let list = try data.readVector(TlsLengthPrefix.uint16, minimum: tlsAnyLength)
 	try data.finish()
 
-	var shares = TlsKeyShareArray.create(0)
-	var seen = TlsGroupCodeSet.create()
+	let shares = TlsKeyShareArray.create(0)
+	let seen = TlsGroupCodeSet.create()
 
 	while not list.isAtEnd() 'eachShare'
 		let share = try readKeyShare(list)
@@ -426,7 +426,7 @@ function decodeRenegotiationInfo(data TlsReader) returns TlsExtension throws Tls
 end 'decodeRenegotiationInfo'
 
 module function tlsReadSignatureSchemes(list TlsReader) returns TlsSignatureSchemeCodeArray throws TlsCodecError
-	var schemes = TlsSignatureSchemeCodeArray.create(0)
+	let schemes = TlsSignatureSchemeCodeArray.create(0)
 
 	while not list.isAtEnd() 'eachScheme'
 		schemes.push((try list.readUnsigned(TlsWireWidth.uint16)) as TlsSignatureSchemeCode)
@@ -489,10 +489,10 @@ module function tlsAppendExtensionBlock(output ByteArray, block TlsExtensionBloc
 end 'tlsAppendExtensionBlock'
 
 module function tlsAppendExtensions(output ByteArray, extensions TlsExtensionArray) throws TlsEncodeError
-	var list = ByteArray.create(0)
+	let list = ByteArray.create(0)
 
 	for item in extensions 'eachExtension'
-		var data = ByteArray.create(0)
+		let data = ByteArray.create(0)
 		try appendExtensionData(data, item: item)
 		appendUnsigned(list, value: item.extensionType(), width: TlsWireWidth.uint16)
 		try appendVector(list, prefix: TlsLengthPrefix.uint16, contents: data)
@@ -522,7 +522,7 @@ function appendExtensionData(output ByteArray, item TlsExtension) throws TlsEnco
 end 'appendExtensionData'
 
 function appendGroups(output ByteArray, groups TlsGroupCodeArray) throws TlsEncodeError
-	var list = ByteArray.create(0)
+	let list = ByteArray.create(0)
 
 	for group in groups 'eachGroup'
 		appendUnsigned(list, value: group, width: TlsWireWidth.uint16)
@@ -532,7 +532,7 @@ function appendGroups(output ByteArray, groups TlsGroupCodeArray) throws TlsEnco
 end 'appendGroups'
 
 function appendVersions(output ByteArray, versions TlsVersionCodeArray) throws TlsEncodeError
-	var list = ByteArray.create(0)
+	let list = ByteArray.create(0)
 
 	for version in versions 'eachVersion'
 		appendUnsigned(list, value: version, width: TlsWireWidth.uint16)
@@ -542,7 +542,7 @@ function appendVersions(output ByteArray, versions TlsVersionCodeArray) throws T
 end 'appendVersions'
 
 module function tlsAppendSignatureSchemes(output ByteArray, schemes TlsSignatureSchemeCodeArray) throws TlsEncodeError
-	var list = ByteArray.create(0)
+	let list = ByteArray.create(0)
 
 	for scheme in schemes 'eachScheme'
 		appendUnsigned(list, value: scheme, width: TlsWireWidth.uint16)
@@ -552,14 +552,14 @@ module function tlsAppendSignatureSchemes(output ByteArray, schemes TlsSignature
 end 'tlsAppendSignatureSchemes'
 
 function appendServerName(output ByteArray, hostName String) throws TlsEncodeError
-	var entry = ByteArray.create(0)
+	let entry = ByteArray.create(0)
 	appendUnsigned(entry, value: tlsNameTypeHostName, width: TlsWireWidth.uint8)
 	try appendVector(entry, prefix: TlsLengthPrefix.uint16, contents: hostName.toByteArray())
 	try appendVector(output, prefix: TlsLengthPrefix.uint16, contents: entry)
 end 'appendServerName'
 
 function appendProtocolNames(output ByteArray, protocols TlsProtocolNameArray) throws TlsEncodeError
-	var list = ByteArray.create(0)
+	let list = ByteArray.create(0)
 
 	for name in protocols 'eachName'
 		try appendVector(list, prefix: TlsLengthPrefix.uint8, contents: name)
@@ -569,7 +569,7 @@ function appendProtocolNames(output ByteArray, protocols TlsProtocolNameArray) t
 end 'appendProtocolNames'
 
 function appendClientKeyShares(output ByteArray, shares TlsKeyShareArray) throws TlsEncodeError
-	var list = ByteArray.create(0)
+	let list = ByteArray.create(0)
 
 	for share in shares 'eachShare'
 		try appendKeyShare(list, share: share)

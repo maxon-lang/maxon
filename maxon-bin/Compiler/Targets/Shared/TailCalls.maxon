@@ -18,7 +18,7 @@ export type TailCalls
 	end 'none'
 
 	export static function forFunction(module StdModule, func IrFunction, permitted bool) returns Self
-		var tailCalls = Self.none()
+		let tailCalls = Self.none()
 		tailCalls.safe = permitted and functionKeepsNoFrameAddressLive(module, func: func)
 		return tailCalls
 	end 'forFunction'
@@ -77,7 +77,7 @@ export type TailCalls
 			return
 		end 'notADirectCall'
 
-		var returned = ValueIdArray.create(0)
+		let returned = ValueIdArray.create(0)
 		noteReturnedOperand(terminator, into: returned)
 
 		if returned.count() == 0 and not stdReturnTypeIsVoid(srcFunc.returnType) 'aVoidReturnFromAValueFunction'
@@ -100,7 +100,7 @@ end 'TailCalls'
 // (`stackRecordAddr`, one of the `isUnsupportedInInlineBody` ops) never tail-jumps.
 function functionKeepsNoFrameAddressLive(module StdModule, func IrFunction) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
-		view block = module.getBlock(blockRef)
+		let block = module.getBlock(blockRef)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			if module.getOp(opIdx).rawValue.isUnsupportedInInlineBody 'mayHoldAFrameAddress'

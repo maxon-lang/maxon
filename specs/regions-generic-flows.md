@@ -1,7 +1,7 @@
 ---
 feature: regions-generic-flows
 status: experimental
-keywords: [immutable, generic, container, capability, store, type argument, List, Map, Array, readonly]
+keywords: [immutable, generic, container, capability, store, type argument, List, Map, Array]
 category: semantics
 ---
 
@@ -19,8 +19,8 @@ A parameter that is stored into an `immutable` position, or into a mutable one, 
 instantiation, and every caller of it is held to it.
 
 `immutable` qualifies the element type of an `Array` or `List`, the value type of a `Map` and an argument of a
-declared generic `type`. It is a different type from `readonly`: `Array with immutable Box` and `Array with
-readonly Box` are not interchangeable, and only the first accepts nothing but frozen elements.
+declared generic `type`. `Array with immutable Box` and `Array with Box` are not interchangeable, and only the first
+accepts nothing but frozen elements.
 
 ## Tests
 
@@ -174,8 +174,8 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var list = FrozenBoxList.create()
-	var pinned = freeze Box.create(7)
+	let list = FrozenBoxList.create()
+	let pinned = freeze Box.create(7)
 	list.append(pinned)
 	let first = try list.first() otherwise panic("empty")
 	print("{list.count()} {first.n}\n")
@@ -225,10 +225,10 @@ typealias JobStack = Stack with Job
 typealias FrozenJobStack = Stack with immutable Job
 
 function main() returns ExitCode
-	var mine = JobStack.create()
+	let mine = JobStack.create()
 	mine.push(Job.create(1))
-	var shared = FrozenJobStack.create()
-	var pinned = freeze Job.create(2)
+	let shared = FrozenJobStack.create()
+	let pinned = freeze Job.create(2)
 	shared.push(pinned)
 	print("{mine.size()} {shared.size()}\n")
 	return 0
@@ -481,38 +481,6 @@ end 'main'
 error E3196: <fragment>:14:32: cannot store a mutable 'Box' into 'an element of the array literal', which holds an immutable 'Box'; freeze it
 ```
 
-<!-- test: readonly-and-immutable-element-arrays-are-different-types -->
-The two qualifiers are two types: a frozen array is not a `readonly` view.
-
-```maxon
-typealias Tally = int(0 to u64.max)
-typealias FrozenBoxes = Array with immutable Box
-typealias ReadOnlyBoxes = Array with readonly Box
-
-type Box
-	export var n as Tally
-
-	static function create(n Tally) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-function count(items ReadOnlyBoxes) returns Tally
-	return items.count()
-end 'count'
-
-function main() returns ExitCode
-	var items = FrozenBoxes.create(0)
-	var pinned = freeze Box.create(1)
-	items.push(pinned)
-	print("{count(items)}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: <fragment>:22:10: argument type mismatch for 'items': expected 'ReadOnlyBoxes', got 'FrozenBoxes'
-```
-
 <!-- test: a-static-factory-of-an-immutable-instance-refuses-a-mutable-argument -->
 `FrozenHolder.wrap` has no receiver, and the alias fixes `T` to a frozen `Job`.
 
@@ -542,8 +510,8 @@ end 'Holder'
 typealias FrozenHolder = Holder with immutable Job
 
 function main() returns ExitCode
-	var loose = Job.create(2)
-	var holder = FrozenHolder.wrap(loose)
+	let loose = Job.create(2)
+	let holder = FrozenHolder.wrap(loose)
 	print("{holder.number()}\n")
 	return 0
 end 'main'
@@ -581,8 +549,8 @@ end 'Holder'
 typealias PlainHolder = Holder with Job
 
 function main() returns ExitCode
-	var pinned = freeze Job.create(2)
-	var holder = PlainHolder.wrap(pinned)
+	let pinned = freeze Job.create(2)
+	let holder = PlainHolder.wrap(pinned)
 	print("{holder.number()}\n")
 	return 0
 end 'main'
@@ -714,7 +682,7 @@ error E3207: <fragment>:19:15: 'stash' needs 'item' frozen (line 14: `items.push
 ```
 
 <!-- test: a-mutable-local-read-again-reaching-an-immutable-element-through-a-parameter-is-reported-once -->
-The refusal names the call and `immutable`; the read-again local gets no second, `readonly` sentence.
+The refusal names the call and `immutable`; the read-again local gets no second sentence.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -814,8 +782,8 @@ function load(crate Crate, into FrozenBoxList)
 end 'load'
 
 function main() returns ExitCode
-	var list = FrozenBoxList.create()
-	var live = freeze Crate.create(Box.create(1))
+	let list = FrozenBoxList.create()
+	let live = freeze Crate.create(Box.create(1))
 	load(live, into: list)
 	print("{list.count()}\n")
 	return 0
@@ -896,8 +864,8 @@ type Holder uses T
 end 'Holder'
 
 function main() returns ExitCode
-	var pinned = freeze Job.create(2)
-	var holder = Holder.wrap(pinned)
+	let pinned = freeze Job.create(2)
+	let holder = Holder.wrap(pinned)
 	print("{holder.number()}\n")
 	return 0
 end 'main'
@@ -933,8 +901,8 @@ type Holder uses T
 end 'Holder'
 
 function main() returns ExitCode
-	var loose = Job.create(2)
-	var holder = Holder.wrap(loose)
+	let loose = Job.create(2)
+	let holder = Holder.wrap(loose)
 	print("{holder.number()}\n")
 	return 0
 end 'main'
@@ -994,8 +962,8 @@ function weigh(pair (immutable Box, Box)) returns Tally
 end 'weigh'
 
 function main() returns ExitCode
-	var a = freeze Box.create(1)
-	var b = Box.create(2)
+	let a = freeze Box.create(1)
+	let b = Box.create(2)
 	print("{weigh((a, b))} {b.n}\n")
 	return 0
 end 'main'
@@ -1080,8 +1048,8 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var a = freeze Box.create(1)
-	var b = Box.create(2)
+	let a = freeze Box.create(1)
+	let b = Box.create(2)
 	let (x, y) = (a, b)
 	y.n = x.n + 8
 	print("{x.n} {y.n} {b.n}\n")
@@ -1112,11 +1080,11 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var a = freeze Box.create(1)
-	var b = Box.create(2)
-	var mixed = MixedList.create()
+	let a = freeze Box.create(1)
+	let b = Box.create(2)
+	let mixed = MixedList.create()
 	mixed.append((a, b))
-	var found = try mixed.get(0) otherwise panic("empty")
+	let found = try mixed.get(0) otherwise panic("empty")
 	found.1.n = 5
 	print("{found.0.n} {b.n} {mixed.count()}\n")
 	return 0
@@ -1245,8 +1213,8 @@ function pairOf(first immutable Box, second Box) returns (immutable Box, Box)
 end 'pairOf'
 
 function main() returns ExitCode
-	var a = freeze Box.create(1)
-	var b = Box.create(2)
+	let a = freeze Box.create(1)
+	let b = Box.create(2)
 	let both = pairOf(a, second: b)
 	print("{weigh(both)}\n")
 	return 0
@@ -1431,9 +1399,9 @@ end 'Bag'
 typealias FrozenBag = Bag with immutable Box
 
 function main() returns ExitCode
-	var bag = FrozenBag.create()
-	var a = freeze Box.create(1)
-	var b = freeze Box.create(2)
+	let bag = FrozenBag.create()
+	let a = freeze Box.create(1)
+	let b = freeze Box.create(2)
 	bag.absorb((a, b))
 	print("{bag.size()}\n")
 	return 0
@@ -1500,12 +1468,12 @@ end 'main'
 error E3196: <fragment>:14:16: cannot store an isolated 'Box' into 'a value of the map literal', which holds a mutable 'Box'; `merge` it first
 ```
 
-<!-- test: a-read-only-element-in-a-tuple-literal-refused -->
-`held` is read out of a `readonly` element, and the tuple keeps it where the write through `pair.0` is refused.
+<!-- test: an-immutable-element-in-a-tuple-literal-refused -->
+`held` is read out of an `immutable` element, and the tuple keeps it where the write through `pair.0` is refused.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
-typealias ReadOnlyBoxes = Array with readonly Box
+typealias ReadOnlyBoxes = Array with immutable Box
 
 type Box
 	export var n as Tally
@@ -1517,7 +1485,7 @@ end 'Box'
 
 function main() returns ExitCode
 	var items = ReadOnlyBoxes.create(0)
-	items.push(Box.create(1))
+	items.push(freeze Box.create(1))
 	let held = try items.get(0) otherwise panic("empty")
 	var b = Box.create(2)
 	var pair = (held, b)
@@ -1527,15 +1495,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:2: cannot write through 'pair.0', which may be a record read out of a `readonly` element that a call or a merge handed back; nothing reachable through a `readonly` element may be written; use clone()
+error E3197: <fragment>:19:2: cannot write 'n' through 'pair.0', which is immutable
 ```
 
-<!-- test: a-read-only-element-in-a-map-literal-refused -->
-`held` is read out of a `readonly` element, and the map would keep it where something may write it.
+<!-- test: an-immutable-element-in-a-map-literal-refused -->
+`held` is read out of an `immutable` element, and the map would keep it where something may write it.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
-typealias ReadOnlyBoxes = Array with readonly Box
+typealias ReadOnlyBoxes = Array with immutable Box
 
 type Box
 	export var n as Tally
@@ -1547,7 +1515,7 @@ end 'Box'
 
 function main() returns ExitCode
 	var items = ReadOnlyBoxes.create(0)
-	items.push(Box.create(1))
+	items.push(freeze Box.create(1))
 	let held = try items.get(0) otherwise panic("empty")
 	var m = ["k": held]
 	var found = try m.get("k") otherwise panic("missing")
@@ -1557,7 +1525,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:11: cannot pass a value read out of a `readonly` element, which is read-only, to parameter 'value' of 'Map.upsert', which keeps it where something may write it; pass a clone()
+error E3196: <fragment>:17:16: cannot store an immutable 'Box' into 'a value of the map literal', which holds a mutable 'Box'; declare the value `immutable Box`
 ```
 
 <!-- test: a-set-literal-of-frozen-elements-runs -->
@@ -1585,7 +1553,7 @@ end 'Key'
 
 function main() returns ExitCode
 	let a = freeze Key.create(1)
-	var keys = Keys from [a]
+	let keys = Keys from [a]
 	print("{keys.count()}\n")
 	return 0
 end 'main'
@@ -1656,7 +1624,7 @@ error E3196: <fragment>:14:16: cannot store an immutable 'Box' into 'a value of 
 ```
 
 <!-- test: a-loop-variable-over-an-immutable-array-is-blamed-as-immutable -->
-The elements are frozen by the array's type, and the refusal says `immutable`, not `readonly`.
+The elements are frozen by the array's type, and the refusal says `immutable`.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -1683,11 +1651,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:19:3: cannot write through 'item': 'item' is read-only (a `for` element of a read-only source) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3197: <fragment>:19:3: cannot write 'n' through 'item', which is immutable
 ```
 
-<!-- test: a-value-read-out-of-an-immutable-list-bound-to-a-var-is-blamed-as-immutable -->
-`first` is read out of a list whose elements are frozen, so it cannot be a `var`.
+<!-- test: a-write-through-a-value-read-out-of-an-immutable-list-is-blamed-as-immutable -->
+`first` is read out of a list whose elements are frozen, so a write through it is refused.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -1702,16 +1670,17 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var list = FrozenBoxList.create()
-	var pinned = freeze Box.create(7)
+	let list = FrozenBoxList.create()
+	let pinned = freeze Box.create(7)
 	list.append(pinned)
-	var first = try list.first() otherwise panic("empty")
+	let first = try list.first() otherwise panic("empty")
+	first.n = 9
 	print("{first.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:6: cannot assign a value, which may share storage with an `immutable` element, to mutable binding 'first'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:18:2: cannot write 'n' through 'first', which is immutable
 ```
 
 <!-- test: an-element-handed-back-by-a-call-over-an-immutable-array-is-blamed-as-immutable -->
@@ -1745,38 +1714,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3197: <fragment>:22:2: cannot write 'n' through 'held', which is immutable
-```
-
-<!-- test: an-element-handed-back-by-a-call-over-a-readonly-array-is-blamed-as-readonly -->
-The same shape over `Array with readonly Box` is blamed as a `readonly` element.
-
-```maxon
-typealias Tally = int(0 to u64.max)
-typealias ReadOnlyBoxes = Array with readonly Box
-
-type Box
-	export var n as Tally
-
-	static function create(n Tally) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-function pick(items ReadOnlyBoxes) returns Box
-	return try items.get(0) otherwise panic("empty")
-end 'pick'
-
-function main() returns ExitCode
-	var items = ReadOnlyBoxes.create(0)
-	items.push(Box.create(1))
-	var held = pick(items)
-	held.n = 5
-	print("{held.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:20:6: cannot assign a value, which may share storage with a `readonly` element, to mutable binding 'held'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: a-declared-generic-over-a-tuple-of-its-parameter-takes-frozen-and-mutable-arguments-and-runs -->
@@ -1816,13 +1753,13 @@ typealias FrozenPairs = Pairs with immutable Box
 typealias BoxPairs = Pairs with Box
 
 function main() returns ExitCode
-	var a = freeze Box.create(1)
-	var b = freeze Box.create(2)
-	var frozen = FrozenPairs.create()
+	let a = freeze Box.create(1)
+	let b = freeze Box.create(2)
+	let frozen = FrozenPairs.create()
 	frozen.add(a, second: b)
-	var c = Box.create(3)
-	var d = Box.create(4)
-	var plain = BoxPairs.create()
+	let c = Box.create(3)
+	let d = Box.create(4)
+	let plain = BoxPairs.create()
 	plain.add(c, second: d)
 	print("{frozen.size()} {plain.size()}\n")
 	return 0
@@ -1871,9 +1808,9 @@ end 'Pairs'
 typealias BoxPairs = Pairs with Box
 
 function main() returns ExitCode
-	var a = freeze Box.create(1)
-	var d = Box.create(4)
-	var plain = BoxPairs.create()
+	let a = freeze Box.create(1)
+	let d = Box.create(4)
+	let plain = BoxPairs.create()
 	plain.add(a, second: d)
 	print("{plain.size()}\n")
 	return 0
@@ -2145,8 +2082,8 @@ end 'Visitor'
 typealias FrozenVisitor = Visitor with immutable Box
 
 function main() returns ExitCode
-	var visitor = FrozenVisitor.create()
-	var pinned = freeze Box.create(1)
+	let visitor = FrozenVisitor.create()
+	let pinned = freeze Box.create(1)
 	visitor.visit(pinned, step: function(b Box) gives b.n)
 	print("{visitor.sum()}\n")
 	return 0
@@ -2387,13 +2324,13 @@ typealias FrozenHolder = Holder with immutable Job
 typealias PlainHolder = Holder with Job
 
 function main() returns ExitCode
-	var pinned = freeze Job.create(1)
-	var other = freeze Job.create(3)
-	var holder = FrozenHolder.wrap(pinned)
+	let pinned = freeze Job.create(1)
+	let other = freeze Job.create(3)
+	let holder = FrozenHolder.wrap(pinned)
 	holder.held = other
-	var loose = Job.create(2)
-	var plain = PlainHolder.wrap(loose)
-	var next = Job.create(4)
+	let loose = Job.create(2)
+	let plain = PlainHolder.wrap(loose)
+	let next = Job.create(4)
 	plain.held = next
 	print("{holder.held.number} {plain.held.number}\n")
 	return 0
@@ -2418,7 +2355,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:5:19: 'setLimits' writes 'caps' (line 273: `self.limits = caps`); 'limits' is immutable
+error E3207: <fragment>:5:19: 'setLimits' writes 'caps' (line 270: `self.limits = caps`); 'limits' is immutable
 ```
 
 <!-- test: a-factory-of-the-library-that-stores-its-record-parameter-refuses-frozen-data -->
@@ -2509,4 +2446,119 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-merged-isolated-parameter-bound-to-a-local-is-released-once-by-a-factory -->
+`create` merges its `isolated T` parameter into a local `m` and stores `m`, so the record lives in the box once and is released once when `b` ends: `seen` is 1 and no allocation is left over.
+
+```maxon
+typealias Count = int(0 to 255)
+
+type Item
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Item'
+
+type Box uses T
+	export var slot as T
+	export var seen as Count
+
+	static function create(first isolated T) returns Self
+		let m = merge first
+		return Self{seen: 1, slot: m}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(Item.create("a label long enough to be a heap string"))
+	return b.seen as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: a-merged-isolated-parameter-bound-to-a-local-is-released-once-by-a-replacing-method -->
+`replace` merges its `isolated T` parameter into a local and assigns it over the slot, so the old record is released by the assignment and the new one by the end of `b`: `seen` is 2 and no allocation is left over.
+
+```maxon
+typealias Count = int(0 to 255)
+
+type Item
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Item'
+
+type Box uses T
+	export var slot as T
+	export var seen as Count
+
+	static function create(first isolated T) returns Self
+		return Self{seen: 1, slot: merge first}
+	end 'create'
+
+	export function replace(next isolated T)
+		let m = merge next
+		self.slot = m
+		self.seen = self.seen + 1
+	end 'replace'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create(Item.create("a label long enough to be a heap string"))
+	b.replace(Item.create("another label long enough to be a heap string"))
+	return b.seen as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: a-merged-isolated-parameter-bound-to-a-local-is-released-once-by-an-appending-method -->
+`add` merges its `isolated T` parameter into a local and appends it to the list, so each record lives in the list once and is released once when `b` ends: `seen` is 2 and no allocation is left over.
+
+```maxon
+typealias Count = int(0 to 255)
+
+type Item
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Item'
+
+type Box uses T
+	export typealias Items = List with T
+	export var items as Items
+	export var seen as Count
+
+	static function create() returns Self
+		return Self{items: Items.create(), seen: 0}
+	end 'create'
+
+	export function add(item isolated T)
+		let m = merge item
+		self.items.append(m)
+		self.seen = self.seen + 1
+	end 'add'
+end 'Box'
+
+typealias ItemBox = Box with Item
+
+function main() returns ExitCode
+	let b = ItemBox.create()
+	b.add(Item.create("a label long enough to be a heap string"))
+	b.add(Item.create("another label long enough to be a heap string"))
+	return b.seen as ExitCode
+end 'main'
+```
+```exitcode
+2
 ```

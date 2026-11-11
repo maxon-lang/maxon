@@ -167,7 +167,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	print("{arr.count()}\n")
 	return 0
 end 'main'
@@ -207,7 +207,7 @@ end 'main'
 <!-- test: set-basic -->
 ```maxon
 function main() returns ExitCode
-	var arr = FullRangeIntArray from [1, 2, 3]
+	let arr = FullRangeIntArray from [1, 2, 3]
 	try arr.set(0, value: 100) otherwise panic("test invariant: set OOB")
 	try arr.set(2, value: 300) otherwise panic("test invariant: set OOB")
 	let val0 = try arr.get(0) otherwise 0
@@ -403,7 +403,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(1)
 	a.push(2)
 	let t = a.map(function(x Integer) gives x + 1)
@@ -430,7 +430,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntSet = Set with Integer
 
 function main() returns ExitCode
-	var s = IntSet.create()
+	let s = IntSet.create()
 	s.insert(1)
 	s.insert(2)
 	let t = s.map(function(a Integer) gives a + 1)
@@ -491,10 +491,10 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function main() returns ExitCode
-	var a = PointArray.create(0)
+	let a = PointArray.create(0)
 	a.push(Point.create(7))
-	view out = a.map(function(p Point) gives p)
-	view first = try out.get(0) otherwise Point.create(0)
+	let out = a.map(function(p Point) gives p)
+	let first = try out.get(0) otherwise Point.create(0)
 	print("x={first.x}\n")
 	return 0
 end 'main'
@@ -532,7 +532,7 @@ function good(c Color) returns Color
 end 'good'
 
 function main() returns ExitCode
-	var a = ColorArray.create(0)
+	let a = ColorArray.create(0)
 	a.push(Color.blue)
 	let b = a.map(good)
 	print("n={b.count()}\n")

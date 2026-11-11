@@ -44,7 +44,7 @@ The reproduction. Without the reject-destroy this prints `rejected` and exits
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	try list.insert(5, value: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") otherwise 'oob'
 		print("rejected\n")
@@ -72,7 +72,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	list.append(10)
 	try list.insert(5, value: 20) otherwise 'oob'
 		print("rejected\n")
@@ -99,7 +99,7 @@ path's transfer is pinned by the same program.
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.create()
+	let list = StringList.create()
 	list.append("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	let held = "cccccccccccccccccccccccccccccc"
 	try list.insert(9, value: held) otherwise 'oob'

@@ -183,7 +183,7 @@ end 'main'
 <!-- test: insert.new -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
+	let m = [1 as Count: 10 as Count, 2 as Count: 20 as Count].clone()
 	try m.insert(3, value: 30) otherwise ignore
 	return m.count()
 end 'main'
@@ -195,7 +195,7 @@ end 'main'
 <!-- test: upsert.update -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
+	let m = [1 as Count: 10 as Count, 2 as Count: 20 as Count].clone()
 	m.upsert(1, value: 100)
 	let result = try m.get(1) otherwise 0
 	return result
@@ -208,7 +208,7 @@ end 'main'
 <!-- test: insert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var m = [10 as Count: 1 as Count]
+	let m = [10 as Count: 1 as Count].clone()
 	try m.insert(20, value: 2) otherwise ignore
 	if m.contains(20) 'check'
 		return 1
@@ -223,7 +223,7 @@ end 'main'
 <!-- test: remove.existing -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count, 3 as Count: 30 as Count]
+	let m = [1 as Count: 10 as Count, 2 as Count: 20 as Count, 3 as Count: 30 as Count].clone()
 	let removed = m.remove(2)
 	if removed 'check'
 		return m.count()
@@ -238,7 +238,7 @@ end 'main'
 <!-- test: remove.nonexistent -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
+	let m = [1 as Count: 10 as Count, 2 as Count: 20 as Count].clone()
 	let removed = m.remove(99)
 	if removed 'check'
 		return 1
@@ -253,7 +253,7 @@ end 'main'
 <!-- test: remove.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count, 3 as Count: 30 as Count]
+	let m = [1 as Count: 10 as Count, 2 as Count: 20 as Count, 3 as Count: 30 as Count].clone()
 	_ = m.remove(2)
 	if m.contains(2) 'check'
 		return 1
@@ -268,7 +268,7 @@ end 'main'
 <!-- test: empty-map.from-syntax -->
 ```maxon
 function main() returns ExitCode
-	var m = [0 as Count: 0 as Count]
+	let m = [0 as Count: 0 as Count].clone()
 	_ = m.remove(0)
 	try m.insert(1, value: 100) otherwise ignore
 	let result = try m.get(1) otherwise 0
@@ -306,7 +306,7 @@ end 'main'
 <!-- test: remove-reinsert -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count, 3 as Count: 30 as Count]
+	let m = [1 as Count: 10 as Count, 2 as Count: 20 as Count, 3 as Count: 30 as Count].clone()
 	_ = m.remove(2)
 	try m.insert(2, value: 99) otherwise ignore
 	let result = try m.get(2) otherwise 0
@@ -330,7 +330,7 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-	var m = StrMap.create()
+	let m = StrMap.create()
 	try m.insert("key", value: "val") otherwise ignore
 	let c = Container.create(m)
 	let result = try c.data.get("key") otherwise ""
@@ -385,7 +385,7 @@ end 'main'
 <!-- test: string-keys-upsert-update -->
 ```maxon
 function main() returns ExitCode
-	var m = ["x": 10 as Count]
+	let m = ["x": 10 as Count].clone()
 	m.upsert("x", value: 99)
 	let result = try m.get("x") otherwise 0
 	return result
@@ -398,7 +398,7 @@ end 'main'
 <!-- test: string-keys-remove -->
 ```maxon
 function main() returns ExitCode
-	var m = ["alpha": 1 as Count, "beta": 2 as Count, "gamma": 3 as Count]
+	let m = ["alpha": 1 as Count, "beta": 2 as Count, "gamma": 3 as Count].clone()
 	_ = m.remove("beta")
 	if m.contains("beta") 'check'
 		return 1
@@ -460,7 +460,7 @@ end 'main'
 <!-- test: insert.duplicate-throws -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
+	let m = [1 as Count: 10 as Count, 2 as Count: 20 as Count].clone()
 	try m.insert(1, value: 99) otherwise 'err'
 		return 42
 	end 'err'
@@ -474,7 +474,7 @@ end 'main'
 <!-- test: insert.duplicate-error-binding -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count]
+	let m = [1 as Count: 10 as Count].clone()
 	try m.insert(1, value: 99) otherwise (e) 'err'
 		match e 'check'
 			keyAlreadyExists then return 1
@@ -491,7 +491,7 @@ end 'main'
 <!-- test: insert.duplicate-does-not-update -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count]
+	let m = [1 as Count: 10 as Count].clone()
 	try m.insert(1, value: 99) otherwise ignore
 	let result = try m.get(1) otherwise 0
 	return result
@@ -504,7 +504,7 @@ end 'main'
 <!-- test: upsert.new-key -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count]
+	let m = [1 as Count: 10 as Count].clone()
 	m.upsert(2, value: 20)
 	return m.count()
 end 'main'
@@ -516,7 +516,7 @@ end 'main'
 <!-- test: upsert.existing-key -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
+	let m = [1 as Count: 10 as Count, 2 as Count: 20 as Count].clone()
 	m.upsert(1, value: 100)
 	let result = try m.get(1) otherwise 0
 	return result
@@ -529,7 +529,7 @@ end 'main'
 <!-- test: upsert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var m = [10 as Count: 1 as Count]
+	let m = [10 as Count: 1 as Count].clone()
 	m.upsert(20, value: 2)
 	if m.contains(20) 'check'
 		return 1
@@ -544,7 +544,7 @@ end 'main'
 <!-- test: upsert.preserves-count -->
 ```maxon
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
+	let m = [1 as Count: 10 as Count, 2 as Count: 20 as Count].clone()
 	m.upsert(1, value: 100)
 	return m.count()
 end 'main'
@@ -570,7 +570,7 @@ function triple(x Integer) returns Integer
 end 'triple'
 
 function main() returns ExitCode
-	var m = HandlerMap.create()
+	let m = HandlerMap.create()
 	m.upsert("d", value: double)
 	m.upsert("t", value: triple)
 	let f = try m.get("d") otherwise panic("missing 'd'")
@@ -659,7 +659,7 @@ end 'Point'
 typealias PointMap = Map with (Point, Val)
 
 function main() returns ExitCode
-	var m = PointMap.create()
+	let m = PointMap.create()
 	for i in 1 upto 4 'fill'
 		m.upsert(freeze Point.create(i, y: i * 2), value: i * 7)
 	end 'fill'
@@ -711,7 +711,7 @@ end 'Point'
 typealias PointMap = Map with (Point, Val)
 
 function build(n Val) returns Val
-	var m = PointMap.create()
+	let m = PointMap.create()
 	for i in 0 upto n 'fill'
 		m.upsert(freeze Point.create(i, y: i * 3), value: i)
 	end 'fill'
@@ -770,7 +770,7 @@ end 'Point'
 typealias PointStrMap = Map with (Point, String)
 
 function main() returns ExitCode
-	var m = PointStrMap.create()
+	let m = PointStrMap.create()
 	for i in 0 upto 40 'fill'
 		m.upsert(freeze Point.create(i, y: i * 3), value: "value number {i}, long enough to escape any small-string envelope")
 	end 'fill'
@@ -809,7 +809,7 @@ typealias Count = int(i64.min to i64.max)
 typealias StrMap = Map with (String, Count)
 
 function build(n Count) returns Count
-	var m = StrMap.create()
+	let m = StrMap.create()
 	for i in 0 upto n 'fill'
 		m.upsert("key number {i}, long enough to escape any small-string envelope", value: i)
 	end 'fill'
@@ -864,13 +864,13 @@ end 'Tagged'
 typealias TaggedMap = Map with (Count, Tagged)
 
 function build(n Count) returns Count
-	var m = TaggedMap.create()
+	let m = TaggedMap.create()
 	for i in 0 upto n 'fill'
 		m.upsert(i, value: Tagged.create("tag {i}", n: i))
 	end 'fill'
 	var total = 0 as Count
 	for i in 0 upto n 'read'
-		view t = try m.get(i) otherwise panic("Map lost an entry across its rehash")
+		let t = try m.get(i) otherwise panic("Map lost an entry across its rehash")
 		total = total + t.score()
 	end 'read'
 	return total
@@ -1121,7 +1121,7 @@ typealias Val = int(i64.min to i64.max)
 typealias ValMap = Map with (Val, Val)
 
 function main() returns ExitCode
-	var m = ValMap.create()
+	let m = ValMap.create()
 	let empty = m.getCapacity()
 	m.upsert(1, value: 1)
 	let one = m.getCapacity()
@@ -1152,12 +1152,12 @@ typealias Val = int(i64.min to i64.max)
 typealias ValMap = Map with (Val, Val)
 
 function main() returns ExitCode
-	var m = ValMap.create()
+	let m = ValMap.create()
 	m.upsert(1, value: 10)
 	m.upsert(2, value: 20)
 	m.upsert(3, value: 30)
 
-	var it = try m.createIterator() otherwise panic("a three-entry map has an occupied first slot")
+	let it = try m.createIterator() otherwise panic("a three-entry map has an occupied first slot")
 	var total = 0 as Val
 	var more = true
 	while more 'walk'
@@ -1211,7 +1211,7 @@ function main() returns ExitCode
 		trips = trips + 1 + v
 	end 'neverPopulated'
 
-	var emptied = ValMap.create()
+	let emptied = ValMap.create()
 	emptied.upsert(1, value: 10)
 	emptied.upsert(2, value: 20)
 	_ = emptied.remove(1)
@@ -1251,7 +1251,7 @@ so a released key or value is a wrong answer here rather than a lucky one.
 let m = [b"alpha": "one", b"beta": "two"]
 
 function main() returns ExitCode
-	var churn = ByteArray.create(0)
+	let churn = ByteArray.create(0)
 	var i = 0 as Count
 	while i < 64 'allocate'
 		churn.push(65)
@@ -1266,36 +1266,6 @@ end 'main'
 ```
 ```stdout
 one/two count 2 churn 64
-```
-```exitcode
-0
-```
-
-<!-- test: top-level-literal.struct-value-column -->
-A value built by a static FACTORY: the record is a call made before `main`, and the `String` it holds is
-released once, by the map's teardown.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Info
-	export var help as String
-	export var n as Integer
-
-	static function create(help String, n Integer) returns Info
-		return Self{help: help, n: n}
-	end 'create'
-end 'Info'
-
-let table = [b"if": Info.create("conditional", n: 1), b"else": Info.create("alternative", n: 2)]
-
-function main() returns ExitCode
-	view e = try table.get(b"else") otherwise panic("the file-scope literal lost a key")
-	print("{e.help} {e.n} count {table.count()}")
-	return 0
-end 'main'
-```
-```stdout
-alternative 2 count 2
 ```
 ```exitcode
 0
@@ -1359,7 +1329,7 @@ end 'Kind'
 let m = [b"a": Kind.one, b"b": Kind.two]
 
 function main() returns ExitCode
-	var grown = m.clone()
+	let grown = m.clone()
 	grown.upsert(b"c", value: Kind.one)
 	let k = try m.get(b"b") otherwise Kind.one
 	print("{k.name}\n")
@@ -1396,7 +1366,7 @@ let Live = 2000 as Tally
 let Rounds = 2000 as Tally
 
 function main() returns ExitCode
-	var m = TallyMap.create()
+	let m = TallyMap.create()
 
 	for i in 0 upto Live 'seed'
 		m.upsert(i, value: i)
@@ -1427,11 +1397,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias Stock = Map with (String, Integer)
 
 function main() returns ExitCode
-	var original = Stock.create()
+	let original = Stock.create()
 	original.upsert("apples", value: 3)
 	original.upsert("pears", value: 5)
 
-	var copy = original.clone()
+	let copy = original.clone()
 	copy.upsert("apples", value: 30)
 	copy.upsert("plums", value: 7)
 	_ = copy.remove("pears")
@@ -1486,7 +1456,7 @@ let KeyCount = 4096 as Tally
 let HighShift = 40
 
 function main() returns ExitCode
-	var hashes = TallySet.create()
+	let hashes = TallySet.create()
 
 	for k in 0 upto KeyCount 'eachKey'
 		let key = k shl HighShift
@@ -1658,7 +1628,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3207: <fragment>:5:2: 'upsert' writes its receiver (line 174: `try values.set(slotIndex as ElementIndex, value: value)`); 'TABLE' is immutable
-error E3159: <fragment>:5:8: cannot pass 'TABLE', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
 <!-- test: error.a-let-map-passed-to-a-mutating-parameter-is-refused -->
@@ -1890,7 +1859,7 @@ function grow(m CountMap) returns Count
 end 'grow'
 
 function main() returns ExitCode
-	var m = [1 as Count: 10 as Count]
+	let m = [1 as Count: 10 as Count].clone()
 	let f = grow
 	let g = function() gives f(m)
 	return g() as ExitCode

@@ -20,10 +20,12 @@ be parsed after its caller and recursion needs a least fixpoint.
 | `Compiler/CapabilityRules.maxon` | The contextual words (`IsolatedCapabilityWord`, `ModifyBlockWord`, `UniqueDeclarationWord`, `SendableBoundWord`, `MutatesClauseWord`, …), the store verdict (`storeVerdict`, `assignmentVerdict`), the join and adapt rules, and the shared refusal wording |
 | `Compiler/RegionWindows.maxon` | `RegionFactTable`, the per-body facts the parser writes: the window stack (`OpenWindow`, `WindowKind.modify` and `oneStatement`), field origins, carried derivations and stores, lent locals, and the deferred refusal. Also `regionOperatorAt`, the token-level rule for the region operators |
 | `Compiler/Lexer.maxon` | `markContextualHeads` retags a statement-start `modify` that opens a block |
-| `Compiler/TypeQualifierPositions.maxon` | `TypeQualifierPositions`, the one token-stream classifier that decides whether each `readonly`, `isolated`, `immutable` and `mutable` qualifies a type or is a name. The parser, the formatter and the LSP all read its verdicts, and the parser reads a receiver as `( word self` followed by `,` or `)` (`receiverHeadAt`) |
+| `Compiler/TypeQualifierPositions.maxon` | `TypeQualifierPositions`, the one token-stream classifier that decides whether each `isolated`, `immutable` and `mutable` qualifies a type or is a name. The parser, the formatter and the LSP all read its verdicts, and the parser reads a receiver as `( word self` followed by `,` or `)` (`receiverHeadAt`) |
 | `Compiler/CapabilityInference.maxon` | `inferCapabilities`: the per-function facts over the call graph (`CapabilityFacts`) |
 | `Compiler/CapabilityCallCheck.maxon` | `checkCapabilityCalls`: the call-site, conversion, tied-promise and must-use checks, run after inference |
-| `Compiler/ServiceCompanions.maxon` | `classifyServiceRoster`, run at a `spawn`: after the roster's E3135, E3137, E3138, E3140 and E3216 verdicts, `capabilityVerdict` judges the message parameters, the replies and the named factory's parameters for E3217 (`typeNeedsACapabilityWord`) |
+| `Compiler/ServiceCompanions.maxon` | `classifyServiceRoster`, run at a `spawn`: after the roster's E3140 and E3216 verdicts, `capabilityVerdict` judges the message parameters, the replies and the named factory's parameters for E3217: a type that needs a capability word (`typeNeedsACapabilityWord`), and one that cannot cross at all (a promise holder, a function value, an opaque type parameter, a thread-bound OS handle; `messageParameterIsNotTransferable`) |
+| `Compiler/CallResolution.maxon` | The call walk the closure-cycle check and the capability checks share: a named call reaches its callee's summary, and a witness dispatch or a call through a function value reaches every body it may land on |
+| `Compiler/ParamSources.maxon` | Per-value parameter source masks. A write through a local that may be a parameter's record (`let a = p`, then `a.push(9)`) makes the parameter mutable-only, and `inferCapabilities` and the by-reference summary both read it |
 | `Compiler/OperandEvent.maxon`, `Compiler/OperandOrder.maxon`, `Compiler/ByRefOverlapCheck.maxon` | The E3186 evaluation-order check |
 
 `SemanticCheck.maxon` runs `checkByReferenceOverlaps` and then `inferCapabilities` and `checkCapabilityCalls`,
@@ -98,11 +100,18 @@ target reads its receiver after the right-hand side. The if-condition frame rest
 
 ## `let` and constant data
 
-A `let` binding, a `let` field and a union payload are write-through names. `readOnlyBlameOfBinding` answers
-`WriteBlame.rebindOnly` for them: a write through the name is recorded exactly as a write through a `var` is
-(it feeds the mutation summary, `provenanceWrites`, hold resolution and the capability seeds), and the only
-callee that refuses the name is one that reassigns a `mutable` by-reference parameter (E2013), because a `let`
-has no cell to give. `view` is parsed as `let`.
+A `let` binding, a `let` field and a union payload are write-through names. The checker reads no keyword: a
+write through a `let` local is recorded exactly as a write through a `var` is (it feeds the mutation summary,
+hold resolution and the capability seeds, and isolated recovery treats both alike), and the only callee that
+refuses a `let` is one that reassigns a `mutable` by-reference parameter (E2013), because a `let` has no cell
+to give. The by-reference refusals (a literal, an expression, a captured name, a module `let`) are E2013 too.
+
+`Parser.reportVarShouldBeLet` decides E3077 alone: a `var` is kept only by an assignment, a `mutable`
+by-reference argument or a value-type `mutable self` receiver, so a field store, a container write, a
+call whose callee writes the parameter and a move out leave it a candidate.
+
+`requireInitializerCallsNothing` refuses a call in a module-level `let` or `static let` initializer that is not
+a literal construct (E3220), so every one is image data and a module `let` is never rebuilt per use.
 
 Constant data is the one place a name carries a capability. `recordModuleLetRoot` settles a read of a module
 or `static` constant `immutable`; a local `let` bound to a constant and an inline `b"…"` literal take the same

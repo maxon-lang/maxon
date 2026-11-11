@@ -154,21 +154,21 @@ end 'emitLiveListenerOrThrow'
 // collide; `__ml_port` is how the caller learns the port. Every scratch is freed on every exit, the
 // throwing ones included.
 function buildManagedListenerBind(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedListenerBindName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedListenerThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(ManagedListenerBindName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedListenerThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var init = module.addBlock(func, label: b"mlinit", heat: BlockHeat.normal)
-	var noWinsock = module.addBlock(func, label: b"mlnowsa", heat: BlockHeat.normal)
-	var resolve = module.addBlock(func, label: b"mlresolve", heat: BlockHeat.normal)
-	var resolveFailed = module.addBlock(func, label: b"mldnsfail", heat: BlockHeat.normal)
-	var resolved = module.addBlock(func, label: b"mladdr", heat: BlockHeat.normal)
-	var noSocket = module.addBlock(func, label: b"mlnosock", heat: BlockHeat.normal)
-	var doBind = module.addBlock(func, label: b"mlbind", heat: BlockHeat.normal)
-	var bindAddressed = module.addBlock(func, label: b"mlbindaddr", heat: BlockHeat.normal)
-	var doListen = module.addBlock(func, label: b"mllisten", heat: BlockHeat.normal)
-	var closeAndFail = module.addBlock(func, label: b"mlbindfail", heat: BlockHeat.normal)
-	var bound = module.addBlock(func, label: b"mlbound", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let init = module.addBlock(func, label: b"mlinit", heat: BlockHeat.normal)
+	let noWinsock = module.addBlock(func, label: b"mlnowsa", heat: BlockHeat.normal)
+	let resolve = module.addBlock(func, label: b"mlresolve", heat: BlockHeat.normal)
+	let resolveFailed = module.addBlock(func, label: b"mldnsfail", heat: BlockHeat.normal)
+	let resolved = module.addBlock(func, label: b"mladdr", heat: BlockHeat.normal)
+	let noSocket = module.addBlock(func, label: b"mlnosock", heat: BlockHeat.normal)
+	let doBind = module.addBlock(func, label: b"mlbind", heat: BlockHeat.normal)
+	let bindAddressed = module.addBlock(func, label: b"mlbindaddr", heat: BlockHeat.normal)
+	let doListen = module.addBlock(func, label: b"mllisten", heat: BlockHeat.normal)
+	let closeAndFail = module.addBlock(func, label: b"mlbindfail", heat: BlockHeat.normal)
+	let bound = module.addBlock(func, label: b"mlbound", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let hostRec = 0
@@ -220,7 +220,7 @@ function buildManagedListenerBind(module StdModule, target Target)
 	// would have to release. Both accept shapes park on this record, and `__ms_close` releases it
 	// unconditionally on every lane.
 	emitSocketPollerOpen(module, block: bound, pollKey: emitNetpollDescriptorIndex(module, block: bound, target: target, fd: socket, ids: ids), socket: socket, ids: ids)
-	let box = emitRawAlloc(module, block: bound, byteCount: emitConst(module, block: bound, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
+	let box = emitHandleBoxAlloc(module, block: bound, byteCount: emitConst(module, block: bound, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
 	emitStoreHandleSlot(module, block: bound, record: box, handleOffset: ManagedSocketHandleOffset, handle: socket, ids: ids)
 	emitOkReturn(module, block: bound, value: box, ids: ids)
 
@@ -231,13 +231,13 @@ end 'buildManagedListenerBind'
 // no other way to learn. It makes no park because it makes no wait: `getsockname` answers out of
 // the socket object the kernel already holds.
 function buildManagedListenerPort(module StdModule)
-	var func = IrFunction.createFromStd(ManagedListenerPortName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedListenerThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedListenerPortName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedListenerThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var ask = module.addBlock(func, label: b"mlask", heat: BlockHeat.normal)
-	var refused = module.addBlock(func, label: b"mlnoname", heat: BlockHeat.normal)
-	var answered = module.addBlock(func, label: b"mlname", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let ask = module.addBlock(func, label: b"mlask", heat: BlockHeat.normal)
+	let refused = module.addBlock(func, label: b"mlnoname", heat: BlockHeat.normal)
+	let answered = module.addBlock(func, label: b"mlname", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
@@ -275,25 +275,24 @@ end 'buildManagedListenerPort'
 // the listener's box is untouched. The wait costs no machine on either shape, which
 // `specs/netpoll-socket.md`'s `a-parked-accept-is-on-the-poller` reads off `schedNetpollBlockCount`.
 function buildManagedListenerAccept(module StdModule, target Target)
-	var func = IrFunction.createFromStd(ManagedListenerAcceptName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedListenerThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ManagedListenerAcceptName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedListenerThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var ready = module.addBlock(func, label: b"mlready", heat: BlockHeat.normal)
-	var accepting = module.addBlock(func, label: b"mlacceptgo", heat: BlockHeat.normal)
-	var attempt = module.addBlock(func, label: b"mlattempt", heat: BlockHeat.normal)
-	var accepted = module.addBlock(func, label: b"mlaccepted", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"mlacceptfail", heat: BlockHeat.normal)
-	var retriable = module.addBlock(func, label: b"mlacceptretry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let ready = module.addBlock(func, label: b"mlready", heat: BlockHeat.normal)
+	let accepting = module.addBlock(func, label: b"mlacceptgo", heat: BlockHeat.normal)
+	let attempt = module.addBlock(func, label: b"mlattempt", heat: BlockHeat.normal)
+	let accepted = module.addBlock(func, label: b"mlaccepted", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"mlacceptfail", heat: BlockHeat.normal)
+	let retriable = module.addBlock(func, label: b"mlacceptretry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let box = 0
 	let listener = emitLiveListenerOrThrow(module, func: func, entry: entry, join: ready, box: box, ids: ids)
 
-	// Both shapes wait on the listener's own poll record, which makes two acceptors one waiter too
-	// many on every lane: a direction word holds one waiter, so `__np_pd_wait` refuses a second
-	// publication (`RuntimeAbort.netpollDoubleWait`, the stop two readers of one socket get). A
-	// source minted per accept would name a different word each time and strand the first acceptor.
+	// Both shapes wait on the listener's own poll record, and a direction word holds one waiter, which
+	// a `unique` listener's single acceptor satisfies on every lane. A source minted per accept would
+	// name a different word each time and strand the first acceptor.
 	//
 	// The accept begins on the record here, ahead of the retry ring: the generation its waits carry
 	// is the listener's life at this point, so a listener closed and reopened under a parked accept
@@ -318,7 +317,7 @@ function buildManagedListenerAccept(module StdModule, target Target)
 	let conn = ids.mint()
 	accepted.blockArgs.push(IrBlockArg.create(conn, argType: StdType.i64))
 	emitSocketPollerOpen(module, block: accepted, pollKey: emitNetpollDescriptorIndex(module, block: accepted, target: target, fd: conn, ids: ids), socket: conn, ids: ids)
-	let connBox = emitRawAlloc(module, block: accepted, byteCount: emitConst(module, block: accepted, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
+	let connBox = emitHandleBoxAlloc(module, block: accepted, byteCount: emitConst(module, block: accepted, value: ManagedSocketBoxBytes, ids: ids), ids: ids)
 	emitStoreHandleSlot(module, block: accepted, record: connBox, handleOffset: ManagedSocketHandleOffset, handle: conn, ids: ids)
 	emitOkReturn(module, block: accepted, value: connBox, ids: ids)
 
@@ -330,12 +329,12 @@ end 'buildManagedListenerAccept'
 // comes back here. The accept deadline is the listener's read deadline, and ends the wait through
 // `emitSocketLateExit`.
 function emitListenerPolledAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, gen ValueId, accepted IrBlock, failed IrBlock, retriable IrBlock, target Target)
-	var refused = module.addBlock(func, label: b"mlrefused", heat: BlockHeat.normal)
+	let refused = module.addBlock(func, label: b"mlrefused", heat: BlockHeat.normal)
 
 	let answer = ids.mint()
 	let unused = emitConst(module, block: attempt, value: 0, ids: ids)
 	module.appendOp(attempt, op: StdOp.osSocketServe(answer, verb: SocketServeVerb.accept, a0Id: listener, a1Id: unused, a2Id: unused))
-	view late = emitSocketLateExit(module, func: func, pollKey: pollKey, gen: gen, failureFlag: ManagedListenerAcceptFailedFlag, ids: ids)
+	let late = emitSocketLateExit(module, func: func, pollKey: pollKey, gen: gen, failureFlag: ManagedListenerAcceptFailedFlag, ids: ids)
 	emitSocketAttempt(module, func: func, attempt: attempt, answer: answer, pollKey: pollKey, gen: gen, mode: NetpollModeRead, ok: accepted, failed: refused, stale: failed, timedOut: late, target: target, ids: ids)
 
 	let fatal = emitCodeIsOneOf(module, block: refused, code: emitErrnoOfAnswer(module, block: refused, answer: answer, ids: ids), codes: acceptFatalCodes(target.os), ids: ids)
@@ -375,25 +374,24 @@ end 'socketErrnoNotASocket'
 //
 // The park is on the listener's own poll record, not on a source minted per accept: the event's
 // signal is posted under the listener's key, so this accept publishes itself in the direction word
-// a POSIX accept does. That gives both lanes one rule for a second acceptor
-// (`RuntimeAbort.netpollDoubleWait`) and lets a close under a parked accept end that accept.
+// a POSIX accept does.
 function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, listener ValueId, pollKey ValueId, gen ValueId, accepted IrBlock, failed IrBlock, retriable IrBlock)
-	var noEvent = module.addBlock(func, label: b"mlnoevent", heat: BlockHeat.normal)
-	var armWatch = module.addBlock(func, label: b"mlwatch", heat: BlockHeat.normal)
-	var watchRefused = module.addBlock(func, label: b"mlwatchno", heat: BlockHeat.normal)
-	var issue = module.addBlock(func, label: b"mlissue", heat: BlockHeat.normal)
-	var pending = module.addBlock(func, label: b"mlpending", heat: BlockHeat.normal)
-	var armSignal = module.addBlock(func, label: b"mlarmsig", heat: BlockHeat.normal)
-	var watching = module.addBlock(func, label: b"mlwatching", heat: BlockHeat.normal)
-	var awaited = module.addBlock(func, label: b"mlawaited", heat: BlockHeat.normal)
-	var notSignalled = module.addBlock(func, label: b"mlnosignal", heat: BlockHeat.normal)
-	var staleRecord = module.addBlock(func, label: b"mlstale", heat: BlockHeat.normal)
-	var notStale = module.addBlock(func, label: b"mlnotstale", heat: BlockHeat.normal)
-	var lateDrop = module.addBlock(func, label: b"mllatedrop", heat: BlockHeat.normal)
-	var giveBack = module.addBlock(func, label: b"mlgiveback", heat: BlockHeat.normal)
-	var dropEvent = module.addBlock(func, label: b"mldropevent", heat: BlockHeat.normal)
-	var refused = module.addBlock(func, label: b"mlrefused", heat: BlockHeat.normal)
-	var dropForARetry = module.addBlock(func, label: b"mldropretry", heat: BlockHeat.normal)
+	let noEvent = module.addBlock(func, label: b"mlnoevent", heat: BlockHeat.normal)
+	let armWatch = module.addBlock(func, label: b"mlwatch", heat: BlockHeat.normal)
+	let watchRefused = module.addBlock(func, label: b"mlwatchno", heat: BlockHeat.normal)
+	let issue = module.addBlock(func, label: b"mlissue", heat: BlockHeat.normal)
+	let pending = module.addBlock(func, label: b"mlpending", heat: BlockHeat.normal)
+	let armSignal = module.addBlock(func, label: b"mlarmsig", heat: BlockHeat.normal)
+	let watching = module.addBlock(func, label: b"mlwatching", heat: BlockHeat.normal)
+	let awaited = module.addBlock(func, label: b"mlawaited", heat: BlockHeat.normal)
+	let notSignalled = module.addBlock(func, label: b"mlnosignal", heat: BlockHeat.normal)
+	let staleRecord = module.addBlock(func, label: b"mlstale", heat: BlockHeat.normal)
+	let notStale = module.addBlock(func, label: b"mlnotstale", heat: BlockHeat.normal)
+	let lateDrop = module.addBlock(func, label: b"mllatedrop", heat: BlockHeat.normal)
+	let giveBack = module.addBlock(func, label: b"mlgiveback", heat: BlockHeat.normal)
+	let dropEvent = module.addBlock(func, label: b"mldropevent", heat: BlockHeat.normal)
+	let refused = module.addBlock(func, label: b"mlrefused", heat: BlockHeat.normal)
+	let dropForARetry = module.addBlock(func, label: b"mldropretry", heat: BlockHeat.normal)
 
 	let event = ids.mint()
 	module.appendOp(attempt, op: StdOp.osEventCreate(event))
@@ -490,7 +488,7 @@ end 'verifyManagedListenerOrdinals'
 // must be one the released seed's `BuiltinErrorOrdinalCheck.requireTotal` accepts, or every CI lane
 // goes red.
 function claimManagedListenerOrdinals(project Project, declaration EnumLayout)
-	var listenerErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedListenerOrdinalInstaller)
+	let listenerErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedListenerOrdinalInstaller)
 	listenerErrors.claim(ManagedListenerResolveFailedCaseName, ordinal: ManagedListenerResolveFailedOrdinal)
 	listenerErrors.claim(ManagedListenerBindFailedCaseName, ordinal: ManagedListenerBindFailedOrdinal)
 	listenerErrors.claim(ManagedListenerAcceptFailedCaseName, ordinal: ManagedListenerAcceptFailedOrdinal)

@@ -122,10 +122,10 @@ type TlsRecordState
 	end 'tls12Nonce'
 
 	function xorNonce(sequenceNumber TlsSequenceNumber) returns ByteArray
-		var mask = ByteArray.create(iv.count() - tlsSequenceBytes)
+		let mask = ByteArray.create(iv.count() - tlsSequenceBytes)
 		appendOrderedWord(mask, word: sequenceNumber as OrderedWord, width: tlsSequenceBytes, order: ByteOrder.bigEndian)
 
-		var nonce = ByteArray.create(iv.count(), zeroed: false)
+		let nonce = ByteArray.create(iv.count(), zeroed: false)
 
 		for (iter, byte) in iv.withIterator() 'eachByte'
 			nonce.push(byte xor (try mask.get(iter.index()) otherwise panic("TlsRecordState: the nonce mask is as long as the IV")))
@@ -172,12 +172,12 @@ public type Tls13RecordProtection implements TlsRecordOpener
 
 		try tlsRequireContent(contentType, plaintext: plaintext)
 
-		var inner = plaintext.clone()
+		let inner = plaintext.clone()
 		inner.push(contentType.rawValue as Byte)
 		inner.resize(inner.count() + paddingLength)
 
 		let header = tlsRecordHeader(TlsContentType.applicationData, version: tlsRecordVersion, bodyBytes: inner.count() + tlsTagBytes)
-		var record = header.clone()
+		let record = header.clone()
 		record.append(state.seal(state.xorNonce(sequenceNumber), plaintext: inner, additionalData: header))
 
 		state.advance()
@@ -251,11 +251,11 @@ public type Tls12RecordProtection implements TlsRecordOpener
 
 		let additionalData = tls12AdditionalData(sequenceNumber, contentType: contentType, plaintextBytes: plaintext.count())
 
-		var body = tls12ExplicitNonce(sequenceNumber, bytes: state.tls12ExplicitBytes())
+		let body = tls12ExplicitNonce(sequenceNumber, bytes: state.tls12ExplicitBytes())
 		let nonce = state.tls12Nonce(sequenceNumber, explicit: body)
 		body.append(state.seal(nonce, plaintext: plaintext, additionalData: additionalData))
 
-		var record = tlsRecordHeader(contentType, version: tlsRecordVersion, bodyBytes: body.count())
+		let record = tlsRecordHeader(contentType, version: tlsRecordVersion, bodyBytes: body.count())
 		record.append(body)
 
 		state.advance()
@@ -349,7 +349,7 @@ module function tlsRequireFraming(record ByteArray) throws TlsRecordError
 end 'tlsRequireFraming'
 
 module function tlsRecordHeader(contentType TlsContentType, version TlsRecordVersion, bodyBytes Count) returns ByteArray
-	var header = ByteArray.create(0)
+	let header = ByteArray.create(0)
 	header.push(contentType.rawValue as Byte)
 	appendOrderedWord(header, word: version as OrderedWord, width: tlsRecordFieldBytes, order: ByteOrder.bigEndian)
 	appendOrderedWord(header, word: bodyBytes as OrderedWord, width: tlsRecordFieldBytes, order: ByteOrder.bigEndian)
@@ -366,7 +366,7 @@ public function tlsRecordPart(bytes ByteArray, start ElementIndex, endIndex Elem
 end 'tlsRecordPart'
 
 function tls12ExplicitNonce(sequenceNumber TlsSequenceNumber, bytes Count) returns ByteArray
-	var explicit = ByteArray.create(0)
+	let explicit = ByteArray.create(0)
 
 	if bytes != 0 'present'
 		appendOrderedWord(explicit, word: sequenceNumber as OrderedWord, width: bytes as ByteWordWidth, order: ByteOrder.bigEndian)
@@ -376,7 +376,7 @@ function tls12ExplicitNonce(sequenceNumber TlsSequenceNumber, bytes Count) retur
 end 'tls12ExplicitNonce'
 
 function tls12AdditionalData(sequenceNumber TlsSequenceNumber, contentType TlsContentType, plaintextBytes Count) returns ByteArray
-	var additionalData = ByteArray.create(0)
+	let additionalData = ByteArray.create(0)
 	appendOrderedWord(additionalData, word: sequenceNumber as OrderedWord, width: tlsSequenceBytes, order: ByteOrder.bigEndian)
 	additionalData.append(tlsRecordHeader(contentType, version: tlsRecordVersion, bodyBytes: plaintextBytes))
 
@@ -384,7 +384,7 @@ function tls12AdditionalData(sequenceNumber TlsSequenceNumber, contentType TlsCo
 end 'tls12AdditionalData'
 
 function tlsConcatenated(head ByteArray, tail ByteArray) returns ByteArray
-	var joined = head.clone()
+	let joined = head.clone()
 	joined.append(tail)
 
 	return joined

@@ -260,7 +260,9 @@ export type GdbRemoteBackend
 			return Self.listeningOn(stub, listener: GdbListenerHold.none, port: 0, unmasks: unmasks)
 		end 'noListener'
 
-		return Self.listeningOn(stub, listener: GdbListenerHold.held(listener), port: listener.port(), unmasks: unmasks)
+		let port = listener.port()
+
+		return Self.listeningOn(stub, listener: GdbListenerHold.held(listener), port: port, unmasks: unmasks)
 	end 'create'
 
 	static function listeningOn(stub FilePath, listener GdbListenerHold, port NetworkPort, unmasks bool) returns GdbRemoteBackend
@@ -287,9 +289,7 @@ export type GdbRemoteBackend
 	function stubReaped(ending GdbStubEnding)
 		self.stubOutputDrained()
 
-		var heldStub = self.stubProcess
-
-		match heldStub 'stub'
+		match self.stubProcess 'stub'
 			none then return
 			running(child) then gdbStubEnded(child, ending: ending)
 		end 'stub'
@@ -322,7 +322,7 @@ export type GdbRemoteBackend
 	// The driver spawns the program suspended and the stub attaches to it, so the program is the driver's
 	// child here as on every lane, and a program left running after a detach reports its own exit code.
 	function attachedThrough(door TcpListener, program Pid) returns BackendAdoption
-		var argv = StringArray.create(4, zeroed: false)
+		let argv = StringArray.create(4, zeroed: false)
 		argv.push(GdbReverseConnectOption)
 		argv.push("{GdbListenHost}:{self.port}")
 		argv.push("{GdbAttachOption}{program}")
@@ -331,7 +331,7 @@ export type GdbRemoteBackend
 			argv.push(GdbUnmaskSignalsOption)
 		end 'theProgramMayHaveItsOwnFaults'
 
-		var launched = try StreamingSubprocess.spawn(Executable.path(self.stub), arguments: argv) otherwise (e) 'noStub'
+		let launched = try StreamingSubprocess.spawn(Executable.path(self.stub), arguments: argv) otherwise (e) 'noStub'
 			return BackendAdoption.refused("the debugger could not start the debug stub '{self.stub.toString()}' ({e.displayReason()})")
 		end 'noStub'
 
@@ -449,7 +449,7 @@ export type GdbRemoteBackend
 			return BackendAdoption.refused("the debug stub answered '{payload}' where the program's first stop was asked for")
 		end 'notAStopAtAll'
 
-		var stopRead = gdbStopReportOf(payload)
+		let stopRead = gdbStopReportOf(payload)
 
 		match stopRead 'read'
 			malformed then return BackendAdoption.refused("the debug stub's first stop reply, '{payload}', names no thread")
@@ -483,7 +483,7 @@ export type GdbRemoteBackend
 	// --- the stop loop ---
 
 	export function listThreads() returns BackendThreadIdArray
-		var ids = BackendThreadIdArray.create(self.threads.count(), zeroed: false)
+		let ids = BackendThreadIdArray.create(self.threads.count(), zeroed: false)
 
 		for spelled in self.threads 'eachThread'
 			match gdbHexValueOf(spelled) 'read'
@@ -560,7 +560,7 @@ export type GdbRemoteBackend
 			return BackendEventClass.bookkeeping
 		end 'notAStopReply'
 
-		var stopRead = gdbStopReportOf(payload)
+		let stopRead = gdbStopReportOf(payload)
 
 		match stopRead 'read'
 			malformed then return BackendEventClass.bookkeeping
@@ -681,7 +681,7 @@ export type GdbRemoteBackend
 			return
 		end 'theStubDoesNotAnswerIt'
 
-		var asked = StringArray.create(self.threads.count(), zeroed: false)
+		let asked = StringArray.create(self.threads.count(), zeroed: false)
 
 		for spelled in self.threads 'eachThread'
 			if spelled != self.reporter 'anotherThread'
@@ -754,7 +754,7 @@ export type GdbRemoteBackend
 		end 'nothingIsQueued'
 
 		var taken = GdbWithheldStopLookup.none
-		var kept = GdbWithheldStopArray.create(self.withheld.count(), zeroed: false)
+		let kept = GdbWithheldStopArray.create(self.withheld.count(), zeroed: false)
 
 		for stop in self.withheld 'eachWithheld'
 			match taken 'already'
@@ -805,7 +805,7 @@ export type GdbRemoteBackend
 	end 'holdEndedWithItsStepper'
 
 	function threadsWithout(departed BackendThreadId) returns StringArray
-		var kept = StringArray.create(self.threads.count(), zeroed: false)
+		let kept = StringArray.create(self.threads.count(), zeroed: false)
 
 		for known in self.threads 'eachKnown'
 			if self.threadIdOf(known) != departed 'anotherThread'
@@ -1071,7 +1071,7 @@ export type GdbRemoteBackend
 	end 'beginDetach'
 
 	export function awaitDetach(sliceMs BackendWaitBudgetMs) returns BackendDetach
-		var connection = try self.link.connection() otherwise return BackendDetach.refused
+		let connection = try self.link.connection() otherwise return BackendDetach.refused
 
 		for _ in 0 upto GdbUnsolicitedPacketsMax 'eachRead'
 			let answer = connection.answerWithin(sliceMs as GdbWaitMs)
@@ -1212,7 +1212,7 @@ export type GdbRemoteBackend
 			return self.borrowedStopKeptWaiting()
 		end 'notAStopReply'
 
-		var stopRead = gdbStopReportOf(payload)
+		let stopRead = gdbStopReportOf(payload)
 
 		match stopRead 'read'
 			malformed then return false
@@ -1242,7 +1242,7 @@ export type GdbRemoteBackend
 	end 'borrowedStopKeptWaiting'
 
 	function interruptTheProgram() returns bool
-		var connection = try self.link.connection() otherwise return false
+		let connection = try self.link.connection() otherwise return false
 
 		return connection.interrupt()
 	end 'interruptTheProgram'
@@ -1304,7 +1304,7 @@ export type GdbRemoteBackend
 	end 'liftTrap'
 
 	function forgetArmed(address DebugAddress)
-		var kept = DebugAddressArray.create(self.armed.count(), zeroed: false)
+		let kept = DebugAddressArray.create(self.armed.count(), zeroed: false)
 
 		for armedAt in self.armed 'eachArmed'
 			if armedAt != address 'anotherAddress'
@@ -1332,8 +1332,8 @@ export type GdbRemoteBackend
 	end 'readMemory'
 
 	function readInPieces(address DebugAddress, bytes BackendByteCount) returns BackendMemoryRead
-		var connection = try self.link.connection() otherwise return BackendMemoryRead.unreadable
-		var gathered = ByteArray.create(bytes as ElementIndex, zeroed: false)
+		let connection = try self.link.connection() otherwise return BackendMemoryRead.unreadable
+		let gathered = ByteArray.create(bytes as ElementIndex, zeroed: false)
 		var done = 0 as BackendByteCount
 
 		while done < bytes 'eachPiece'
@@ -1377,7 +1377,7 @@ export type GdbRemoteBackend
 	end 'writeMemory'
 
 	function writeInPieces(address DebugAddress, bytes ByteArray) returns bool
-		var connection = try self.link.connection() otherwise return false
+		let connection = try self.link.connection() otherwise return false
 		let total = bytes.count() as BackendByteCount
 		var done = 0 as BackendByteCount
 
@@ -1410,7 +1410,7 @@ export type GdbRemoteBackend
 		end 'noRegisterFile'
 
 		let spelled = gdbThreadText(thread)
-		var file = DebugRegisterFile.create()
+		let file = DebugRegisterFile.create()
 
 		if not self.classFilled(file, thread: spelled, vector: false, expedited: self.expeditedFor(spelled)) 'nothingCouldBeRead'
 			return BackendRegisterRead.unreadable
@@ -1511,7 +1511,7 @@ export type GdbRemoteBackend
 	// --- the one door onto the connection ---
 
 	function askStub(payload String, expectsStop bool) returns GdbAnswer
-		var connection = try self.link.connection() otherwise return GdbAnswer.broken(GdbNotConnectedReason)
+		let connection = try self.link.connection() otherwise return GdbAnswer.broken(GdbNotConnectedReason)
 		var answer = connection.ask(payload)
 
 		for _ in 0 upto GdbUnsolicitedPacketsMax 'eachRead'
@@ -1596,7 +1596,7 @@ export type GdbRemoteBackend
 			return
 		end 'nothingNewToKnow'
 
-		var stopRead = gdbStopReportOf(text)
+		let stopRead = gdbStopReportOf(text)
 
 		match stopRead 'read'
 			malformed then return
@@ -1633,19 +1633,19 @@ export type GdbRemoteBackend
 	end 'takeSetAside'
 
 	function answerWithin(budgetMs GdbWaitMs) returns GdbAnswer
-		var connection = try self.link.connection() otherwise return GdbAnswer.broken(GdbNotConnectedReason)
+		let connection = try self.link.connection() otherwise return GdbAnswer.broken(GdbNotConnectedReason)
 
 		return connection.answerWithin(budgetMs)
 	end 'answerWithin'
 
 	function tellStub(payload String) returns bool
-		var connection = try self.link.connection() otherwise return false
+		let connection = try self.link.connection() otherwise return false
 
 		return connection.writePacket(payload)
 	end 'tellStub'
 
 	function shakeHands() returns GdbHandshake
-		var connection = try self.link.connection() otherwise return GdbHandshake.refused(GdbNotConnectedReason)
+		let connection = try self.link.connection() otherwise return GdbHandshake.refused(GdbNotConnectedReason)
 
 		return connection.shakeHands()
 	end 'shakeHands'
@@ -1741,7 +1741,7 @@ function gdbStubWaitFailed(failure SubprocessError)
 end 'gdbStubWaitFailed'
 
 function gdbSlottedAmong(registers GdbRegisterInfoArray) returns GdbSlottedRegisterArray
-	var slotted = GdbSlottedRegisterArray.create(0)
+	let slotted = GdbSlottedRegisterArray.create(0)
 
 	for info in registers 'eachRegister'
 		match gdbSlotForRegister(info.name) 'slot'
@@ -1791,7 +1791,7 @@ end 'gdbStopIsATrap'
 // exception mask and answers each as handled, so the faulting thread re-executes its instruction
 // forever and the program's own handler never runs.
 function gdbStubTakesUnmaskSignals(stub FilePath) returns bool
-	var arguments = StringArray.create(1, zeroed: false)
+	let arguments = StringArray.create(1, zeroed: false)
 	arguments.push(GdbUnmaskSignalsOption)
 
 	let asked = try Subprocess.run(Executable.path(stub), arguments: arguments, workingDirectory: Directory.currentPath(), timeoutMs: GdbUnmaskProbeMs) otherwise 'theProbeCouldNotRun'
@@ -1884,7 +1884,7 @@ function gdbFaultSignalOf(signal GdbSignalNumber) returns GdbSignalNumber
 end 'gdbFaultSignalOf'
 
 function gdbStopReportOf(payload String) returns GdbStopRead
-	var stop = GdbStopReport.create()
+	let stop = GdbStopReport.create()
 	let fields = payload.split(GdbFieldSeparator)
 	let head = try fields.get(0) otherwise return GdbStopRead.malformed
 

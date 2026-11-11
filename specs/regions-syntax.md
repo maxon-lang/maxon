@@ -219,7 +219,7 @@ function feed(tallier Tallier) returns Tally
 end 'feed'
 
 function main() returns ExitCode
-	var total = Total.create()
+	let total = Total.create()
 	let mutates = feed(function(n) gives total.bump(n))
 	let captures = mutates + 1
 	print("{mutates} {captures}\n")
@@ -499,7 +499,7 @@ error E2010: <fragment>:13:19: Expected 'a type' but got 'Own'
 ```
 
 <!-- test: capability-words-as-names-and-operands-compile-and-run -->
-`isolated`, `immutable`, `mutable` and `readonly` qualify a type only where a type is expected, so a function named `isolated` is called with or without a space before its parenthesis, a parameter named `mutable` is read, and a local named `immutable` is the operand of `not`.
+`isolated`, `immutable` and `mutable` qualify a type only where a type is expected, so a function named `isolated` is called with or without a space before its parenthesis, a parameter named `mutable` is read, and a local named `immutable` is the operand of `not`.
 
 ```maxon
 typealias Tally = int(0 to u64.max)

@@ -32,7 +32,7 @@ end 'sibling'
 
 function editor() returns Count
 	print("before\n")
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 
 	modify batch 'fill'
 		batch.push("x")
@@ -83,7 +83,7 @@ type Forest
 	export var leaves as LeafArray
 
 	static function create(size Tally) returns Self
-		var leaves = LeafArray.create(0)
+		let leaves = LeafArray.create(0)
 
 		for n in 1 to size 'build'
 			leaves.push(Leaf.create("leaf {n}", weight: n))
@@ -160,7 +160,7 @@ type Forest
 	export var leaves as LeafArray
 
 	static function create(size Tally) returns Self
-		var leaves = LeafArray.create(0)
+		let leaves = LeafArray.create(0)
 
 		for n in 1 to size 'build'
 			leaves.push(Leaf.create("leaf {n}", weight: n))
@@ -230,7 +230,7 @@ function describe(cell Cell, done Tally) returns String
 end 'describe'
 
 function main() returns ExitCode
-	var shelf = Shelf.create(7)
+	let shelf = Shelf.create(7)
 	let line = describe(shelf.cell, done: settle(shelf))
 	print("{line} {shelf.cell.text}\n")
 	return 0
@@ -339,7 +339,7 @@ end 'sibling'
 
 function editor() returns Count
 	print("before\n")
-	var h = Holder.create()
+	let h = Holder.create()
 	h.part.lines.push(pause())
 	print("after\n")
 	return 2

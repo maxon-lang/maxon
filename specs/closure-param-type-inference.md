@@ -256,7 +256,7 @@ typealias Score = int(i64.min to i64.max)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray.create(0)
+	let scores = ScoreArray.create(0)
 	scores.push(3)
 	scores.push(1)
 	scores.push(2)
@@ -282,7 +282,7 @@ alias's instance, and a closure that declares its parameters at `ByteArray` matc
 typealias Rows = Array with ByteArray
 
 function main() returns ExitCode
-	var rows = Rows.create(0)
+	let rows = Rows.create(0)
 	rows.push("ccc".toByteArray())
 	rows.push("a".toByteArray())
 	rows.push("bb".toByteArray())
@@ -307,7 +307,7 @@ The same comparator with its parameter types left out takes them from the generi
 typealias Rows = Array with ByteArray
 
 function main() returns ExitCode
-	var rows = Rows.create(0)
+	let rows = Rows.create(0)
 	rows.push("ccc".toByteArray())
 	rows.push("a".toByteArray())
 	rows.push("bb".toByteArray())
@@ -373,7 +373,7 @@ typealias TallyBatch = Batch with Tally
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var seed = TallyArray.create(0)
+	let seed = TallyArray.create(0)
 	seed.push(4)
 	print("{TallyBatch.measure(seed, inspect: function(items) gives items.count())}\n")
 	return 0

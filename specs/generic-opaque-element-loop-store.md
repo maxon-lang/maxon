@@ -86,7 +86,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	let s = "a filled string long enough to force a heap allocation"
 	b.fillTo(3, value: s)
 	let first = try b.at(0) otherwise return 1
@@ -143,7 +143,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	let s = "an unstored string long enough to force a heap allocation"
 	b.fillTo(0, value: s)
 	print("{s}\n")
@@ -200,7 +200,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.fillTo(100, value: "a repeated string long enough to force a heap allocation")
 	let middle = try b.at(50) otherwise return 1
 	print("{middle}\n")
@@ -257,7 +257,7 @@ end 'Bag'
 typealias NumBag = Bag with Num
 
 function main() returns ExitCode
-	var b = NumBag.create()
+	let b = NumBag.create()
 	b.fillTo(4, value: 9 as Num)
 	let third = try b.at(3) otherwise return 1
 	return third
@@ -306,7 +306,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	let echoed = b.fillTo(2, value: "a re-read string long enough to force a heap allocation")
 	print("{echoed}\n")
 	return b.count() as ExitCode
@@ -364,8 +364,8 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
-	var source = Strs.create(0)
+	let b = StrBag.create()
+	let source = Strs.create(0)
 	source.push("a source string long enough to force a heap allocation")
 	source.push("a second source string, also long enough to force a heap allocation")
 	b.copyFrom(source, upTo: 2)
@@ -439,7 +439,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	let s = "a filled string long enough to force a heap allocation"
 	b.fill(3, v: s)
 	let first = try b.at(0) otherwise return 1
@@ -495,7 +495,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	let s = "a filled string long enough to force a heap allocation"
 	b.fill(0, v: s)
 	print("{s}\n")
@@ -552,7 +552,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	let s = "a filled string long enough to force a heap allocation"
 	b.fillTo(3, value: s, seed: "a seed string long enough to force a heap allocation")
 	let first = try b.at(0) otherwise return 1
@@ -603,7 +603,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	let s = "an unstored string long enough to force a heap allocation"
 	b.fillTo(0, value: s, seed: "a seed string long enough to force a heap allocation")
 	print("{s}\n")
@@ -654,7 +654,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.fillTo(100, value: "a repeated string long enough to force a heap allocation", seed: "a seed string long enough to force a heap allocation")
 	let middle = try b.at(50) otherwise return 1
 	print("{middle}\n")
@@ -702,7 +702,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	let echoed = b.fillTo(2, value: "a re-read string long enough to force a heap allocation", seed: "a seed string long enough to force a heap allocation")
 	print("{echoed}\n")
 	return b.count() as ExitCode
@@ -752,8 +752,8 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
-	var source = Strs.create(0)
+	let b = StrBag.create()
+	let source = Strs.create(0)
 	source.push("a source string long enough to force a heap allocation")
 	source.push("a second source string, also long enough to force a heap allocation")
 	b.copyFrom(source, upTo: 2, seed: "a seed string long enough to force a heap allocation")

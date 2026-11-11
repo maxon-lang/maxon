@@ -202,7 +202,7 @@ end 'Slot'
 typealias TallySlot = Slot with Tally
 
 function intRound(seed Tally) returns Tally
-	var slot = TallySlot.create(seed)
+	let slot = TallySlot.create(seed)
 	slot.replace(seed + 1)
 	let other = TallySlot.choose(seed, fallback: seed + 5, useItem: seed > 1)
 	return slot.peek() + other.peek()
@@ -258,7 +258,7 @@ end 'Slot'
 typealias TextSlot = Slot with String
 
 function textRound(seed Tally) returns Tally
-	var slot = TextSlot.create("first {seed}")
+	let slot = TextSlot.create("first {seed}")
 	slot.replace("second {seed}")
 	let other = TextSlot.choose("c {seed}", fallback: "dd {seed}", useItem: seed > 3)
 	return (slot.peek().byteLength() + other.peek().byteLength()) as Tally
@@ -321,7 +321,7 @@ end 'Slot'
 typealias LabelSlot = Slot with Label
 
 function labelRound(seed Tally) returns Tally
-	var slot = LabelSlot.create(Label.create("a {seed}", weight: seed))
+	let slot = LabelSlot.create(Label.create("a {seed}", weight: seed))
 	slot.replace(Label.create("bb {seed}", weight: seed + 1))
 	let other = LabelSlot.choose(Label.create("c {seed}", weight: 7), fallback: Label.create("dd {seed}", weight: 9), useItem: seed > 5)
 	return slot.peek().weight + other.peek().weight
@@ -385,7 +385,7 @@ end 'Slot'
 typealias PromiseSlot = Slot with TallyPromise
 
 function promiseRound(seed Tally) returns Tally
-	var slot = PromiseSlot.create(async work(seed), origin: seed)
+	let slot = PromiseSlot.create(async work(seed), origin: seed)
 	slot.replace(async work(seed + 1), stamp: seed + 10)
 	let other = PromiseSlot.choose(async work(seed), spare: async work(seed + 2), useItem: seed > 1)
 	return slot.source() + other.source()

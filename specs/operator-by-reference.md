@@ -323,7 +323,7 @@ function main() returns ExitCode
 	let tagged = TaggedProbe.create(Tagged.create(2))
 	let counted = CountProbe.create(5)
 	let fixed = Tagged.create(2)
-	var moving = Tagged.create(2)
+	let moving = Tagged.create(2)
 	print("{tagged.matches(fixed)} {tagged.matches(moving)} {counted.matches(5)}\n")
 	return 0
 end 'main'

@@ -37,7 +37,7 @@
 function buildArm64WriteHexChunk() returns FunctionCodeChunk
 	let SlotBuffer = 0
 	let bufferSlots = alignUpStack(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
-	var asm = Arm64RuntimeAsm.beginFunction(bufferSlots)
+	let asm = Arm64RuntimeAsm.beginFunction(bufferSlots)
 
 	let loop = asm.newLabel()
 	let isDigit = asm.newLabel()
@@ -96,7 +96,7 @@ function buildArm64FaultBacktraceChunk(globalData GlobalDataTable) returns Funct
 	let SlotTextBase = 3
 	let SlotSymtable = 4
 	let SlotFrameBudget = 5
-	var asm = Arm64RuntimeAsm.beginFunction(6)
+	let asm = Arm64RuntimeAsm.beginFunction(6)
 
 	let walk = asm.newLabel()
 
@@ -281,7 +281,7 @@ function buildArm64FaultHandlerChunk(globalData GlobalDataTable, os Os) returns 
 	let SlotFaultSp = 3
 	let SlotFaultAddr = 4
 	let layout = arm64FaultContextLayout(os)
-	var asm = Arm64RuntimeAsm.beginFunction(5)
+	let asm = Arm64RuntimeAsm.beginFunction(5)
 
 	let memoryFault = asm.newLabel()
 	let arithmeticFault = asm.newLabel()
@@ -363,7 +363,7 @@ end 'buildArm64FaultHandlerChunk'
 // Slots: 0..2 = the `stack_t`.
 function buildArm64SignalStackInstallChunk(os Os) returns FunctionCodeChunk
 	let SlotSigstack = 0
-	var asm = Arm64RuntimeAsm.beginFunction(Arm64SigstackBytes / SpillSlotBytes)
+	let asm = Arm64RuntimeAsm.beginFunction(Arm64SigstackBytes / SpillSlotBytes)
 
 	let done = asm.newLabel()
 
@@ -437,7 +437,7 @@ end 'arm64EmitAuxiliaryEntryWalk'
 
 // mrt_linux_signal_stack_size — the arm64 twin of `X64Runtime.buildLinuxSignalStackSizeChunk`.
 function buildArm64LinuxSignalStackSizeChunk() returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let asm = Arm64RuntimeAsm.beginFunction(0)
 	let matched = asm.newLabel()
 	let next = asm.newLabel()
 	let sized = asm.newLabel()
@@ -463,7 +463,7 @@ function buildArm64LinuxSignalStackSizeChunk() returns FunctionCodeChunk
 end 'buildArm64LinuxSignalStackSizeChunk'
 
 function buildArm64LinuxHwcapProbeChunk(recordsCpuFeatures bool) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let asm = Arm64RuntimeAsm.beginFunction(0)
 	let found = asm.newLabel()
 	let next = asm.newLabel()
 	let probed = asm.newLabel()
@@ -535,7 +535,7 @@ end 'arm64SigstackLayout'
 // Slots: 0..2 = the `struct sigaction`.
 function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0
-	var asm = Arm64RuntimeAsm.beginFunction(DarwinSigactionBytes / SpillSlotBytes)
+	let asm = Arm64RuntimeAsm.beginFunction(DarwinSigactionBytes / SpillSlotBytes)
 
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
@@ -595,7 +595,7 @@ end 'arm64EmitDarwinSigactionCall'
 // ascending from slot 0, so `&act` is slot 0's address.
 function buildArm64LinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0
-	var asm = Arm64RuntimeAsm.beginFunction(LinuxSigactionSlots)
+	let asm = Arm64RuntimeAsm.beginFunction(LinuxSigactionSlots)
 
 	if carriesHostLock 'ownsABlock'
 		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxMainThreadBlockName)
@@ -698,7 +698,7 @@ function buildArm64GtStackOverflowChunk(globalData GlobalDataTable, os Os) retur
 	let SlotPc = 0
 	let SlotFp = 1
 	let SlotSp = 2
-	var asm = Arm64RuntimeAsm.beginFunction(3)
+	let asm = Arm64RuntimeAsm.beginFunction(3)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPc)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFp)

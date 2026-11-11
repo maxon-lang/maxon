@@ -104,7 +104,7 @@ describes **one** build; describing a second in the same run is an error.
 
 ```maxon
 export function build() returns ExitCode
-	var sources = StringArray.create(0)
+	let sources = StringArray.create(0)
 	sources.push("src")
 	sources.push("vendor/thirdparty")
 

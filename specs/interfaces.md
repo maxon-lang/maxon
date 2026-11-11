@@ -704,7 +704,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create(3)
+	let holder = Holder.create(3)
 	print("{holder.shape.area()}\n")
 	holder.useStrip(5)
 	print("{holder.shape.area()}\n")

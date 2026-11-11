@@ -10,9 +10,8 @@ category: memory-safety
 ## Documentation
 
 A getter that returns a **module global** — `return cachedX` — hands back a
-*borrow*: the `.data` slot owns the occupant, which OUTLIVES the call (until the
-process-exit global-cleanup decref). A DIRECT such read is correctly never
-retained.
+*borrow*: the global is image data, which OUTLIVES the call. A DIRECT such read is
+correctly never retained.
 
 The gap this test guards is the **forward across a call boundary**. When one
 function returns the *result* of a global getter —
@@ -27,82 +26,35 @@ end
 — `build` is itself borrow-returning, so its caller also borrows the result and
 never releases it. The returned-borrow retain that a **torn-down-local** element
 forward needs (`optionValue`'s `return parts.get(1)`, whose local `parts` dies at
-return) is here HARMFUL: retaining the global's outliving occupant mints a `+1`
-that no one ever releases. On a cached global that single leaked reference then
-survives the exit-time global-cleanup decref, stranding the whole object (and, for
-a cached IR module, its entire op/block working set).
+return) is here HARMFUL: retaining the global's outliving image mints a `+1`
+that no one ever releases, and the leak gate reports it.
 
 The compiler classifies such getters (`funcReturnsGlobalBorrow`, a strict subset of the
 borrow set) and suppresses the forward's retain, so the whole chain stays a clean
 borrow. A torn-down-local element forward keeps its retain (its source really does
 die at return), so this is scoped to genuinely-outliving global sources.
 
-This test builds a module-global container cache with a getter, forwards it through
+This test declares two module-global array caches with a getter, forwards one through
 a multi-path `build` (one arm returns the forwarded global, another a *different*
-cached global — the exact `buildRuntimeModuleForTarget` shape), and borrows the
-result. Under the leak gate the forward must not leak: the program returns the
-borrowed container's element count.
+cached global), and borrows the result. Under the leak gate the forward must not
+leak: the program returns the borrowed array's element count.
 
 ## Tests
 
 <!-- test: forward-global-getter-borrow -->
-Forwarding a module-global getter's borrow must not retain the outliving occupant.
+Forwarding a module-global getter's borrow must not retain the outliving image.
 ```maxon
 typealias Count = int(0 to 1000)
+typealias Names = Array with String
 
-type Item
-	export var v as String
+let cachedBase = ["first base item", "second base item", "third base item"]
+let cachedMerged = ["merged item"]
 
-	static function create(s String) returns Item
-		return Self{v: s}
-	end 'create'
-end 'Item'
-
-type Box uses Elem
-	typealias ElemArray = Array with Elem
-
-	export var items = ElemArray.create(0)
-
-	static function create() returns Self
-		return Self{}
-	end 'create'
-
-	function add(e Elem)
-		items.push(e)
-	end 'add'
-
-	function size() returns Count
-		return items.count()
-	end 'size'
-end 'Box'
-
-typealias ItemBox = Box with Item
-
-function makeBase() returns ItemBox
-	var b = ItemBox.create()
-	b.add(Item.create("first base item"))
-	b.add(Item.create("second base item"))
-	b.add(Item.create("third base item"))
-	return b
-end 'makeBase'
-
-function makeMerged() returns ItemBox
-	var merged = ItemBox.create()
-	merged.add(Item.create("merged item"))
-	return merged
-end 'makeMerged'
-
-let cachedBase = makeBase()
-let cachedMerged = makeMerged()
-
-// Mirrors loadRuntimeModule: returns a BORROW of the cachedBase global.
-function loadBase() returns immutable ItemBox
+function loadBase() returns immutable Names
 	return cachedBase
 end 'loadBase'
 
-// Mirrors buildRuntimeModuleForTarget: `let base = loadBase()` then a multi-path
-// return — the native arm forwards `base`, the merged arm returns a DIFFERENT global.
-function buildFor(wantMerged bool) returns immutable ItemBox
+function buildFor(wantMerged bool) returns immutable Names
 	let base = loadBase()
 	if not wantMerged 'native'
 		return base
@@ -110,14 +62,12 @@ function buildFor(wantMerged bool) returns immutable ItemBox
 	return cachedMerged
 end 'buildFor'
 
-// Mirrors augmentWithRuntime: borrow the result, read it, never release.
 function augment(wantMerged bool) returns Count
 	let rt = buildFor(wantMerged)
-	return rt.size()
+	return rt.count()
 end 'augment'
 
 function main() returns ExitCode
-	// native arm forwards the cachedBase global (3 items)
 	return augment(false)
 end 'main'
 ```

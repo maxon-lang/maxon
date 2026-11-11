@@ -36,7 +36,7 @@ public typealias RootCertificates = Array with ByteArray
 
 	function certificatesIn(text String) returns RootCertificates throws TrustStoreError
 		let blocks = try Pem.decode(text) otherwise throw TrustStoreError.malformed
-		var roots = RootCertificates.create(0)
+		let roots = RootCertificates.create(0)
 
 		for block in blocks 'eachBlock'
 			if block.label == TrustBundleCertificateLabel 'isCertificate'
@@ -70,8 +70,8 @@ public typealias RootCertificates = Array with ByteArray
 			throw TrustStoreError.unavailable
 		end 'unavailable'
 
-		var trusted = RootCertificates.create(0)
-		var denied = RootCertificates.create(0)
+		let trusted = RootCertificates.create(0)
+		let denied = RootCertificates.create(0)
 
 		try walkStore(store, trusted: trusted, denied: denied) otherwise (reason) 'unreadable'
 			__Builtins.trustStoreClose(store)
@@ -130,9 +130,9 @@ public typealias RootCertificates = Array with ByteArray
 	end 'fitsVerdict'
 
 	function isSelfIssued(certificate ByteArray) returns bool throws DerError
-		var reader = DerReader.create(certificate)
-		var signed = try reader.enterSequence()
-		var tbs = try signed.enterSequence()
+		let reader = DerReader.create(certificate)
+		let signed = try reader.enterSequence()
+		let tbs = try signed.enterSequence()
 		let leading = try tbs.peekHeader()
 
 		if leading.tagClass == DerTagClass.contextSpecific 'versioned'
@@ -149,7 +149,7 @@ public typealias RootCertificates = Array with ByteArray
 	end 'isSelfIssued'
 
 	function withoutDenied(trusted RootCertificates, denied RootCertificates) returns RootCertificates
-		var kept = RootCertificates.create(0)
+		let kept = RootCertificates.create(0)
 
 		for root in trusted 'eachTrusted'
 			var refused = false

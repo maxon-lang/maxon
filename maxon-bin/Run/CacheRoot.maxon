@@ -134,7 +134,7 @@ end 'physicalLookupCure'
 export function projectIdentityPathOf(spelled FilePath) returns FilePath throws RunCacheError
 	let anchored = spelled.anchoredAt(Directory.currentPath())
 	var existing = anchored.clone()
-	var absent = StringArray.create(0)
+	let absent = StringArray.create(0)
 
 	while true 'ascend'
 		let resolution = try physicalResolutionOf(existing)
@@ -228,7 +228,7 @@ function cacheRootCandidates() returns CacheRootCandidateArray
 	let vendorDir = FilePath.empty().join(CacheVendorDirName)
 	let userCacheDir = FilePath.empty().join(MaxonUserDirName).join(UserCacheDirName)
 
-	var candidates = CacheRootCandidateArray.create(0)
+	let candidates = CacheRootCandidateArray.create(0)
 	candidates.push(CacheRootCandidate.create(RunCacheRootVariable, suffix: vendorDir))
 
 	candidates.push(CacheRootCandidate.create(HomeDirectoryVariable, suffix: userCacheDir))
@@ -250,7 +250,7 @@ end 'cacheRootCandidates'
 // One entry per directory however many variables name it: `TEMP` and `TMPDIR` routinely hold one
 // path, and a caller acting per entry would act on that directory twice.
 export function hostCacheRoots() returns CacheRootArray throws RunCacheError
-	var roots = CacheRootArray.create(0)
+	let roots = CacheRootArray.create(0)
 
 	for candidate in cacheRootCandidates() 'eachCandidate'
 		let spelled = try Process.environmentVariable(candidate.variable) otherwise continue
@@ -410,7 +410,7 @@ export typealias AdmitsCacheEntry = function(FilePath) returns bool
 
 export function discardAllButNewestIn(dir FilePath, kept ElementIndex, admits AdmitsCacheEntry)
 	let listed = try Directory.list(dir) otherwise return
-	var stamps = EntryStampArray.create(0)
+	let stamps = EntryStampArray.create(0)
 
 	for path in listed 'eachEntry'
 		if admits(path) 'admitted'

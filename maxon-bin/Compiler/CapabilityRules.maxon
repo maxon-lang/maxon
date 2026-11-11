@@ -53,6 +53,89 @@ module function isolatedRecoveryRefusal(subject String, advice String) returns S
 	return "{subject} is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted{advice}"
 end 'isolatedRecoveryRefusal'
 
+module function uniqueAliasMessage(action String) returns String
+	return "cannot {action} a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`"
+end 'uniqueAliasMessage'
+
+export enum UniqueOrigin
+	owned
+	lentByLoop
+	lentByTuple
+	readFromSlot
+end 'UniqueOrigin'
+
+// @generated library-cache begin
+let CacheCasesUniqueOrigin = [UniqueOrigin.owned, UniqueOrigin.lentByLoop, UniqueOrigin.lentByTuple, UniqueOrigin.readFromSlot]
+
+function cacheReadUniqueOrigin(reader LibraryCacheReader) returns UniqueOrigin throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesUniqueOrigin.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadUniqueOrigin'
+
+function cacheTableAgreesUniqueOrigin() returns bool
+	let declared = UniqueOrigin.allCases
+
+	if CacheCasesUniqueOrigin.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesUniqueOrigin.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesUniqueOrigin'
+
+module function cacheEnumTablesAgreeInCompilerCapabilityRules() returns bool
+	if not cacheTableAgreesUniqueOrigin() 'disagreesCacheTableAgreesUniqueOrigin'
+		return false
+	end 'disagreesCacheTableAgreesUniqueOrigin'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerCapabilityRules'
+
+// @generated library-cache end
+
+export typealias UniqueOriginArray = Array with UniqueOrigin
+
+// @generated library-cache begin
+module function cacheWriteUniqueOriginArray(writer LibraryCacheWriter, value UniqueOriginArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item.ordinal as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteUniqueOriginArray'
+
+module function cacheReadUniqueOriginArray(reader LibraryCacheReader) returns UniqueOriginArray throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = UniqueOriginArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadUniqueOrigin(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadUniqueOriginArray'
+
+// @generated library-cache end
+
+module function keptUniqueRefusalSentence(origin UniqueOrigin, subject String) returns String
+	match origin 'origin'
+		lentByLoop then return "'{subject}' is only lent by the loop; move it out with `pop` or `remove`"
+		lentByTuple then return "'{subject}' is only lent by the tuple it was destructured from; move it out with `pop` or `remove`"
+		readFromSlot then return "a unique value cannot be moved out of a field or an element it was only read from; move it out with `pop` or `remove`, or `swap` it out of an isolated field"
+		owned then panic("keptUniqueRefusalSentence: an owned unique value has nothing to refuse")
+	end 'origin'
+end 'keptUniqueRefusalSentence'
+
 module function spellsCapabilityWord(word ByteArray) returns bool
 	return word.equals(IsolatedCapabilityWord) or word.equals(ImmutableCapabilityWord) or word.equals(MutableMarkerWord)
 end 'spellsCapabilityWord'
@@ -152,11 +235,10 @@ module function holderNounOf(place String) returns String
 	return "field"
 end 'holderNounOf'
 
-module function qualifierSlot(qualifier GenericArgQualifier) returns ParamCapability throws AbsentError
-	match qualifier 'qualifier'
-		plain then return ParamCapability.unmarked
-		frozen then return ParamCapability.immutable
-		readOnly then throw AbsentError.absent
+module function qualifierSlot(qualifier GenericArgQualifier) returns ParamCapability
+	return match qualifier 'qualifier'
+		plain gives ParamCapability.unmarked
+		frozen gives ParamCapability.immutable
 	end 'qualifier'
 end 'qualifierSlot'
 

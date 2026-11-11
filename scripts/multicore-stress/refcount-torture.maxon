@@ -89,7 +89,13 @@ let rounds = 6000
 // arm and free the box under a live holder (the segfault half).
 let chunk = 8
 
-let shared = makeSharedBox()
+type SharedText
+	export let text as String
+
+	static function create(text String) returns SharedText
+		return Self{text: text}
+	end 'create'
+end 'SharedText'
 
 // ⚠ A HEAP record is required: an immortal `.rdata` literal takes
 // `__str_retain`'s CLONE arm and never touches a refcount, and an inline
@@ -108,7 +114,7 @@ end 'makeSharedBox'
 // unambiguous — the bag cannot be kept alive past the round by a scope rule
 // this program did not intend.
 function churnRound(s String, n Integer) returns Integer
-	var bag = StringArray.create(0)
+	let bag = StringArray.create(0)
 
 	var j = 0 as Integer
 
@@ -122,7 +128,7 @@ end 'churnRound'
 
 // ⭐ THE RACING TASK. Every one of the `taskCount` tasks churns the SAME
 // heap `String`, `shared`, so every incref and every decref below lands on ONE word.
-function hammer(idx Integer, roundCount Integer, perRound Integer) returns Integer
+function hammer(shared immutable SharedText, idx Integer, roundCount Integer, perRound Integer) returns Integer
 	// Marks this CPU-bound function a legitimate `async` target (the E3073
 	// yielding contract) without claiming fake I/O. No-op at runtime.
 	Scheduler.parallelBoundary()
@@ -131,26 +137,27 @@ function hammer(idx Integer, roundCount Integer, perRound Integer) returns Integ
 	var r = 0 as Integer
 
 	while r < roundCount 'round'
-		acc = acc + churnRound(shared, n: perRound)
+		acc = acc + churnRound(shared.text, n: perRound)
 		r = r + 1
 	end 'round'
 
 	// ⭐ READ THE BOX AFTER THE CHURN. The lost-incref half frees the record
 	// while this task still holds it; touching the bytes here turns that into a
 	// fault or a wrong answer rather than a quiet pass.
-	acc = acc + (shared.byteLength() as Integer)
+	acc = acc + (shared.text.byteLength() as Integer)
 
 	// Index-derived so the aggregate changes if a task ran twice or not at all.
 	return acc + idx
 end 'hammer'
 
 function main() returns ExitCode
-	var promises = IntPromiseArray.create(0)
+	let shared = SharedText.create(makeSharedBox())
+	let promises = IntPromiseArray.create(0)
 
 	// Spawn every task before awaiting any, so the scheduler spins up worker Ms
 	// to service the backlog — that is what puts more than one M on the word.
 	for i in 0 upto taskCount 'spawn'
-		promises.push(async hammer(i, roundCount: rounds, perRound: chunk))
+		promises.push(async hammer(shared, idx: i, roundCount: rounds, perRound: chunk))
 	end 'spawn'
 
 	var total = 0 as Integer

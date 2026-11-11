@@ -195,8 +195,8 @@ function emitCownBranchOnSenders(module StdModule, block IrBlock, root ValueId, 
 end 'emitCownBranchOnSenders'
 
 function emitCownClaimFrontSender(module StdModule, func IrFunction, scan IrBlock, root ValueId, outcome CownSendWake, empty IrBlock, won IrBlock, carried ValueIdArray, ids ValueMinter) returns ValueId
-	var claim = module.addBlock(func, label: b"sendfrontclaim", heat: BlockHeat.normal)
-	var skip = module.addBlock(func, label: b"sendfrontskip", heat: BlockHeat.normal)
+	let claim = module.addBlock(func, label: b"sendfrontclaim", heat: BlockHeat.normal)
+	let skip = module.addBlock(func, label: b"sendfrontskip", heat: BlockHeat.normal)
 
 	let front = emitCownBranchOnSenders(module, block: scan, root: root, waiting: claim, none: empty, ids: ids)
 
@@ -213,9 +213,9 @@ function emitCownClaimFrontSender(module StdModule, func IrFunction, scan IrBloc
 end 'emitCownClaimFrontSender'
 
 function emitCownReadyClaimedSender(module StdModule, func IrFunction, cur IrBlock, sender ValueId, cont IrBlock, ids ValueMinter)
-	var disarm = module.addBlock(func, label: b"sendwakedisarm", heat: BlockHeat.normal)
-	var readyLocked = module.addBlock(func, label: b"sendwakereadylocked", heat: BlockHeat.normal)
-	var readyFree = module.addBlock(func, label: b"sendwakereadyfree", heat: BlockHeat.normal)
+	let disarm = module.addBlock(func, label: b"sendwakedisarm", heat: BlockHeat.normal)
+	let readyLocked = module.addBlock(func, label: b"sendwakereadylocked", heat: BlockHeat.normal)
+	let readyFree = module.addBlock(func, label: b"sendwakereadyfree", heat: BlockHeat.normal)
 
 	let deadline = emitLoadField(module, block: cur, record: sender, offset: GtOffSendDeadline, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: deadline, pred: StdCmpPred.eq, against: GtDeadlineMaxNs, whenTrue: readyFree, whenFalse: disarm, ids: ids)
@@ -237,7 +237,7 @@ module function emitCownSharesStep(module StdModule, block IrBlock, cown ValueId
 end 'emitCownSharesStep'
 
 function emitCownGiveBack(module StdModule, func IrFunction, cur IrBlock, cown ValueId, unit FullRangeInt, joined IrBlock, ids ValueMinter)
-	var freeRegion = module.addBlock(func, label: b"cownfreeregion", heat: BlockHeat.normal)
+	let freeRegion = module.addBlock(func, label: b"cownfreeregion", heat: BlockHeat.normal)
 
 	let prior = emitCownSharesStep(module, block: cur, cown: cown, delta: -unit, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: prior, pred: StdCmpPred.eq, against: unit, whenTrue: freeRegion, whenFalse: joined, ids: ids)
@@ -269,7 +269,7 @@ function emitCownSchedule(module StdModule, block IrBlock, cown ValueId, beh Val
 end 'emitCownSchedule'
 
 function emitCownTailSwap(module StdModule, func IrFunction, cur IrBlock, cown ValueId, beh ValueId, joined IrBlock, ids ValueMinter) returns ValueId
-	var swap = module.addBlock(func, label: b"cownswap", heat: BlockHeat.normal)
+	let swap = module.addBlock(func, label: b"cownswap", heat: BlockHeat.normal)
 
 	module.setTerminator(cur, op: StdOp.branch(swap.id))
 
@@ -285,9 +285,9 @@ function emitCownPublish(module StdModule, func IrFunction, cur IrBlock, cown Va
 		panic("emitCownPublish: '{String.from(func.name)}' is guarded and does not pin its thread, so asynchronous preemption can stop it between the tail swap and the link store; publish from an unguarded or pinned runtime function such as '{String.from(CownEnqueueFinishName)}'")
 	end 'stoppablePublisher'
 
-	var swapped = module.addBlock(func, label: b"cownswapped", heat: BlockHeat.normal)
-	var idle = module.addBlock(func, label: b"cownidle", heat: BlockHeat.normal)
-	var busy = module.addBlock(func, label: b"cownbusy", heat: BlockHeat.normal)
+	let swapped = module.addBlock(func, label: b"cownswapped", heat: BlockHeat.normal)
+	let idle = module.addBlock(func, label: b"cownidle", heat: BlockHeat.normal)
+	let busy = module.addBlock(func, label: b"cownbusy", heat: BlockHeat.normal)
 
 	let prev = emitCownTailSwap(module, func: func, cur: cur, cown: cown, beh: beh, joined: swapped, ids: ids)
 	emitBranchOnCompare(module, block: swapped, value: prev, pred: StdCmpPred.eq, against: CownNoRunner, whenTrue: idle, whenFalse: busy, ids: ids)
@@ -307,7 +307,7 @@ function emitCownEnqueueMessage(module StdModule, func IrFunction, cur IrBlock, 
 	emitStoreField(module, block: cur, record: beh, offset: BehOffKind, value: emitConst(module, block: cur, value: CownBehaviourKind.message.rawValue, ids: ids))
 
 	let payload = emitFieldAddr(module, block: cur, record: beh, offset: BehOffPayload, ids: ids)
-	var copied = emitForwardCopy(module, func: func, cur: cur, dest: payload, src: msg, byteCount: bytes, ids: ids)
+	let copied = emitForwardCopy(module, func: func, cur: cur, dest: payload, src: msg, byteCount: bytes, ids: ids)
 
 	emitCownPublish(module, func: func, cur: copied, cown: cown, beh: beh, joined: joined, ids: ids)
 end 'emitCownEnqueueMessage'
@@ -318,7 +318,7 @@ function emitCownEnqueueFinish(module StdModule, block IrBlock, cown ValueId, jo
 end 'emitCownEnqueueFinish'
 
 function emitCownFinishState(module StdModule, func IrFunction, cur IrBlock, cown ValueId, joined IrBlock, ids ValueMinter)
-	var drop = module.addBlock(func, label: b"cownfinishdrop", heat: BlockHeat.normal)
+	let drop = module.addBlock(func, label: b"cownfinishdrop", heat: BlockHeat.normal)
 
 	let state = emitLoadField(module, block: cur, record: cown, offset: CownOffState, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: state, pred: StdCmpPred.ne, against: 0, whenTrue: drop, whenFalse: joined, ids: ids)
@@ -334,10 +334,10 @@ function emitCownGateMasked(module StdModule, block IrBlock, gate ValueId, mask 
 end 'emitCownGateMasked'
 
 function buildCownSpawn(module StdModule)
-	var func = IrFunction.createFromStd(CownSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params())
-	var ids = ValueMinter.create(6)
+	let func = IrFunction.createFromStd(CownSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 6, paramTypes: sixI64Params())
+	let ids = ValueMinter.create(6)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 6)
 	let startCode = 0
 	let startRecord = 1
@@ -373,12 +373,12 @@ function buildCownStaging(module StdModule, bytes ByteOffset)
 		panic("buildCownStaging: the largest request union is {bytes} byte(s), past the {SchedArenaChunkBytes}-byte scheduler-arena chunk a carve cannot span")
 	end 'largerThanAChunk'
 
-	var func = IrFunction.createFromStd(CownStagingName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(CownStagingName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var carve = module.addBlock(func, label: b"stagingcarve", heat: BlockHeat.normal)
-	var have = module.addBlock(func, label: b"staginghave", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let carve = module.addBlock(func, label: b"stagingcarve", heat: BlockHeat.normal)
+	let have = module.addBlock(func, label: b"staginghave", heat: BlockHeat.normal)
 
 	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
 	let staging = emitLoadField(module, block: entry, record: selfGt, offset: GtOffStaging, ids: ids)
@@ -394,19 +394,19 @@ function buildCownStaging(module StdModule, bytes ByteOffset)
 end 'buildCownStaging'
 
 function buildCownSend(module StdModule)
-	var func = IrFunction.createFromStd(CownSendName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(CownSendName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
+	let ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var attempt = module.addBlock(func, label: b"sendtry", heat: BlockHeat.normal)
-	var refuseClosed = module.addBlock(func, label: b"sendclosed", heat: BlockHeat.cold)
-	var roomCheck = module.addBlock(func, label: b"sendroomcheck", heat: BlockHeat.normal)
-	var reserve = module.addBlock(func, label: b"sendreserve", heat: BlockHeat.normal)
-	var enqueue = module.addBlock(func, label: b"sendenqueue", heat: BlockHeat.normal)
-	var full = module.addBlock(func, label: b"sendfull", heat: BlockHeat.cold)
-	var refuseFull = module.addBlock(func, label: b"sendrefusefull", heat: BlockHeat.cold)
-	var waitForRoom = module.addBlock(func, label: b"sendwaitforroom", heat: BlockHeat.cold)
-	var doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
+	let attempt = module.addBlock(func, label: b"sendtry", heat: BlockHeat.normal)
+	let refuseClosed = module.addBlock(func, label: b"sendclosed", heat: BlockHeat.cold)
+	let roomCheck = module.addBlock(func, label: b"sendroomcheck", heat: BlockHeat.normal)
+	let reserve = module.addBlock(func, label: b"sendreserve", heat: BlockHeat.normal)
+	let enqueue = module.addBlock(func, label: b"sendenqueue", heat: BlockHeat.normal)
+	let full = module.addBlock(func, label: b"sendfull", heat: BlockHeat.cold)
+	let refuseFull = module.addBlock(func, label: b"sendrefusefull", heat: BlockHeat.cold)
+	let waitForRoom = module.addBlock(func, label: b"sendwaitforroom", heat: BlockHeat.cold)
+	let doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let cown = 0
@@ -448,31 +448,31 @@ end 'buildCownSend'
 // Guarded and pinned, as `__cown_close` is: the inlined enqueue, schedule and ready frames outgrow
 // the unguarded stack margin (E5004).
 function buildCownSendWait(module StdModule)
-	var func = IrFunction.createFromStd(CownSendWaitName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(CownSendWaitName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var refuseFull = module.addBlock(func, label: b"sendwaitrefusefull", heat: BlockHeat.cold)
-	var waitGate = module.addBlock(func, label: b"sendwaitgate", heat: BlockHeat.normal)
-	var stagingMismatch = module.addBlock(func, label: b"sendstagingmismatch", heat: BlockHeat.cold)
-	var locked = module.addBlock(func, label: b"sendwaitlocked", heat: BlockHeat.normal)
-	var attempt = module.addBlock(func, label: b"sendwaittry", heat: BlockHeat.normal)
-	var refuseStopped = module.addBlock(func, label: b"sendwaitstopped", heat: BlockHeat.cold)
-	var roomCheck = module.addBlock(func, label: b"sendwaitroomcheck", heat: BlockHeat.normal)
-	var reserve = module.addBlock(func, label: b"sendwaitreserve", heat: BlockHeat.normal)
-	var raced = module.addBlock(func, label: b"sendwaitraced", heat: BlockHeat.normal)
-	var announce = module.addBlock(func, label: b"sendwaitannounce", heat: BlockHeat.normal)
-	var enqueue = module.addBlock(func, label: b"sendenqueue", heat: BlockHeat.normal)
-	var deadlined = module.addBlock(func, label: b"senddeadlined", heat: BlockHeat.normal)
-	var woken = module.addBlock(func, label: b"sendwoken", heat: BlockHeat.normal)
-	var wakeLocked = module.addBlock(func, label: b"sendwakelocked", heat: BlockHeat.normal)
-	var timedOut = module.addBlock(func, label: b"sendtimedout", heat: BlockHeat.normal)
-	var wakeUnlocked = module.addBlock(func, label: b"sendwakeunlocked", heat: BlockHeat.normal)
-	var wakeFailed = module.addBlock(func, label: b"sendwakefailed", heat: BlockHeat.normal)
-	var wakeStopped = module.addBlock(func, label: b"sendwakestopped", heat: BlockHeat.normal)
-	var wakeNotStopped = module.addBlock(func, label: b"sendwakenotstopped", heat: BlockHeat.normal)
-	var wakeUnexpected = module.addBlock(func, label: b"sendwakeunexpected", heat: BlockHeat.cold)
-	var doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let refuseFull = module.addBlock(func, label: b"sendwaitrefusefull", heat: BlockHeat.cold)
+	let waitGate = module.addBlock(func, label: b"sendwaitgate", heat: BlockHeat.normal)
+	let stagingMismatch = module.addBlock(func, label: b"sendstagingmismatch", heat: BlockHeat.cold)
+	let locked = module.addBlock(func, label: b"sendwaitlocked", heat: BlockHeat.normal)
+	let attempt = module.addBlock(func, label: b"sendwaittry", heat: BlockHeat.normal)
+	let refuseStopped = module.addBlock(func, label: b"sendwaitstopped", heat: BlockHeat.cold)
+	let roomCheck = module.addBlock(func, label: b"sendwaitroomcheck", heat: BlockHeat.normal)
+	let reserve = module.addBlock(func, label: b"sendwaitreserve", heat: BlockHeat.normal)
+	let raced = module.addBlock(func, label: b"sendwaitraced", heat: BlockHeat.normal)
+	let announce = module.addBlock(func, label: b"sendwaitannounce", heat: BlockHeat.normal)
+	let enqueue = module.addBlock(func, label: b"sendenqueue", heat: BlockHeat.normal)
+	let deadlined = module.addBlock(func, label: b"senddeadlined", heat: BlockHeat.normal)
+	let woken = module.addBlock(func, label: b"sendwoken", heat: BlockHeat.normal)
+	let wakeLocked = module.addBlock(func, label: b"sendwakelocked", heat: BlockHeat.normal)
+	let timedOut = module.addBlock(func, label: b"sendtimedout", heat: BlockHeat.normal)
+	let wakeUnlocked = module.addBlock(func, label: b"sendwakeunlocked", heat: BlockHeat.normal)
+	let wakeFailed = module.addBlock(func, label: b"sendwakefailed", heat: BlockHeat.normal)
+	let wakeStopped = module.addBlock(func, label: b"sendwakestopped", heat: BlockHeat.normal)
+	let wakeNotStopped = module.addBlock(func, label: b"sendwakenotstopped", heat: BlockHeat.normal)
+	let wakeUnexpected = module.addBlock(func, label: b"sendwakeunexpected", heat: BlockHeat.cold)
+	let doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let cown = 0
@@ -557,21 +557,21 @@ end 'buildCownSendWait'
 // decremented, so a later non-waiting send sees a full gate and cannot overtake the waiters. When no
 // sender is found, Waiters is cleared in the same CAS as the decrement.
 function buildCownDequeueSlow(module StdModule)
-	var func = IrFunction.createFromStd(CownDequeueSlowName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CownDequeueSlowName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var scan = module.addBlock(func, label: b"dequeuescan", heat: BlockHeat.normal)
-	var admit = module.addBlock(func, label: b"dequeueadmit", heat: BlockHeat.normal)
-	var admitted = module.addBlock(func, label: b"dequeueadmitted", heat: BlockHeat.normal)
-	var admitWoken = module.addBlock(func, label: b"dequeuewoken", heat: BlockHeat.normal)
-	var admitWake = module.addBlock(func, label: b"dequeuewake", heat: BlockHeat.normal)
-	var admitPaid = module.addBlock(func, label: b"dequeuepaid", heat: BlockHeat.normal)
-	var noSender = module.addBlock(func, label: b"dequeuenosender", heat: BlockHeat.normal)
-	var settle = module.addBlock(func, label: b"dequeuesettle", heat: BlockHeat.normal)
-	var settled = module.addBlock(func, label: b"dequeuesettled", heat: BlockHeat.normal)
-	var claimFinish = module.addBlock(func, label: b"dequeueclaimfinish", heat: BlockHeat.cold)
-	var doneBlock = module.addBlock(func, label: b"dequeuedone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let scan = module.addBlock(func, label: b"dequeuescan", heat: BlockHeat.normal)
+	let admit = module.addBlock(func, label: b"dequeueadmit", heat: BlockHeat.normal)
+	let admitted = module.addBlock(func, label: b"dequeueadmitted", heat: BlockHeat.normal)
+	let admitWoken = module.addBlock(func, label: b"dequeuewoken", heat: BlockHeat.normal)
+	let admitWake = module.addBlock(func, label: b"dequeuewake", heat: BlockHeat.normal)
+	let admitPaid = module.addBlock(func, label: b"dequeuepaid", heat: BlockHeat.normal)
+	let noSender = module.addBlock(func, label: b"dequeuenosender", heat: BlockHeat.normal)
+	let settle = module.addBlock(func, label: b"dequeuesettle", heat: BlockHeat.normal)
+	let settled = module.addBlock(func, label: b"dequeuesettled", heat: BlockHeat.normal)
+	let claimFinish = module.addBlock(func, label: b"dequeueclaimfinish", heat: BlockHeat.cold)
+	let doneBlock = module.addBlock(func, label: b"dequeuedone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let cown = 0
@@ -616,11 +616,11 @@ function buildCownDequeueSlow(module StdModule)
 end 'buildCownDequeueSlow'
 
 function buildCownEnqueueFinish(module StdModule)
-	var func = IrFunction.createFromStd(CownEnqueueFinishName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CownEnqueueFinishName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"enqueuefinishdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"enqueuefinishdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let cown = 0
@@ -642,39 +642,39 @@ end 'buildCownEnqueueFinish'
 // claim publishes through `__cown_enqueue_finish` for the same reason, so spinning on `next` is
 // bounded.
 function buildCownRun(module StdModule)
-	var func = IrFunction.createFromStd(CownRunName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true)
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(CownRunName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true)
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var loop = module.addBlock(func, label: b"runloop", heat: BlockHeat.normal)
-	var notMessage = module.addBlock(func, label: b"runnotmessage", heat: BlockHeat.normal)
-	var notStart = module.addBlock(func, label: b"runnotstart", heat: BlockHeat.normal)
-	var notFinish = module.addBlock(func, label: b"runnotfinish", heat: BlockHeat.normal)
-	var unknownKind = module.addBlock(func, label: b"rununknownkind", heat: BlockHeat.cold)
-	var account = module.addBlock(func, label: b"runaccount", heat: BlockHeat.normal)
-	var accountFast = module.addBlock(func, label: b"runaccountfast", heat: BlockHeat.normal)
-	var accountSlow = module.addBlock(func, label: b"runaccountslow", heat: BlockHeat.cold)
-	var accountWon = module.addBlock(func, label: b"runaccountwon", heat: BlockHeat.normal)
-	var claimFinish = module.addBlock(func, label: b"runclaimfinish", heat: BlockHeat.cold)
-	var messageCall = module.addBlock(func, label: b"runmessagecall", heat: BlockHeat.normal)
-	var startCall = module.addBlock(func, label: b"runstartcall", heat: BlockHeat.normal)
-	var finishCall = module.addBlock(func, label: b"runfinishcall", heat: BlockHeat.normal)
-	var finishDone = module.addBlock(func, label: b"runfinishdone", heat: BlockHeat.normal)
-	var grant = module.addBlock(func, label: b"rungrant", heat: BlockHeat.normal)
-	var grantRun = module.addBlock(func, label: b"rungrantrun", heat: BlockHeat.normal)
-	var grantExit = module.addBlock(func, label: b"rungrantexit", heat: BlockHeat.normal)
-	var afterCall = module.addBlock(func, label: b"runaftercall", heat: BlockHeat.normal)
-	var forward = module.addBlock(func, label: b"runforward", heat: BlockHeat.normal)
-	var drain = module.addBlock(func, label: b"rundrain", heat: BlockHeat.normal)
-	var drained = module.addBlock(func, label: b"rundrained", heat: BlockHeat.normal)
-	var spin = module.addBlock(func, label: b"runspin", heat: BlockHeat.normal)
-	var spinForward = module.addBlock(func, label: b"runspinforward", heat: BlockHeat.normal)
-	var advance = module.addBlock(func, label: b"runadvance", heat: BlockHeat.normal)
-	var carryOn = module.addBlock(func, label: b"runcarryon", heat: BlockHeat.normal)
-	var resched = module.addBlock(func, label: b"runresched", heat: BlockHeat.normal)
-	var released = module.addBlock(func, label: b"runreleased", heat: BlockHeat.normal)
-	var giveBack = module.addBlock(func, label: b"rungiveback", heat: BlockHeat.normal)
-	var exit = module.addBlock(func, label: b"runexit", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let loop = module.addBlock(func, label: b"runloop", heat: BlockHeat.normal)
+	let notMessage = module.addBlock(func, label: b"runnotmessage", heat: BlockHeat.normal)
+	let notStart = module.addBlock(func, label: b"runnotstart", heat: BlockHeat.normal)
+	let notFinish = module.addBlock(func, label: b"runnotfinish", heat: BlockHeat.normal)
+	let unknownKind = module.addBlock(func, label: b"rununknownkind", heat: BlockHeat.cold)
+	let account = module.addBlock(func, label: b"runaccount", heat: BlockHeat.normal)
+	let accountFast = module.addBlock(func, label: b"runaccountfast", heat: BlockHeat.normal)
+	let accountSlow = module.addBlock(func, label: b"runaccountslow", heat: BlockHeat.cold)
+	let accountWon = module.addBlock(func, label: b"runaccountwon", heat: BlockHeat.normal)
+	let claimFinish = module.addBlock(func, label: b"runclaimfinish", heat: BlockHeat.cold)
+	let messageCall = module.addBlock(func, label: b"runmessagecall", heat: BlockHeat.normal)
+	let startCall = module.addBlock(func, label: b"runstartcall", heat: BlockHeat.normal)
+	let finishCall = module.addBlock(func, label: b"runfinishcall", heat: BlockHeat.normal)
+	let finishDone = module.addBlock(func, label: b"runfinishdone", heat: BlockHeat.normal)
+	let grant = module.addBlock(func, label: b"rungrant", heat: BlockHeat.normal)
+	let grantRun = module.addBlock(func, label: b"rungrantrun", heat: BlockHeat.normal)
+	let grantExit = module.addBlock(func, label: b"rungrantexit", heat: BlockHeat.normal)
+	let afterCall = module.addBlock(func, label: b"runaftercall", heat: BlockHeat.normal)
+	let forward = module.addBlock(func, label: b"runforward", heat: BlockHeat.normal)
+	let drain = module.addBlock(func, label: b"rundrain", heat: BlockHeat.normal)
+	let drained = module.addBlock(func, label: b"rundrained", heat: BlockHeat.normal)
+	let spin = module.addBlock(func, label: b"runspin", heat: BlockHeat.normal)
+	let spinForward = module.addBlock(func, label: b"runspinforward", heat: BlockHeat.normal)
+	let advance = module.addBlock(func, label: b"runadvance", heat: BlockHeat.normal)
+	let carryOn = module.addBlock(func, label: b"runcarryon", heat: BlockHeat.normal)
+	let resched = module.addBlock(func, label: b"runresched", heat: BlockHeat.normal)
+	let released = module.addBlock(func, label: b"runreleased", heat: BlockHeat.normal)
+	let giveBack = module.addBlock(func, label: b"rungiveback", heat: BlockHeat.normal)
+	let exit = module.addBlock(func, label: b"runexit", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let cown = 0
@@ -780,25 +780,25 @@ function buildCownRun(module StdModule)
 end 'buildCownRun'
 
 function buildCownClose(module StdModule)
-	var func = IrFunction.createFromStd(CownCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CownCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var attempt = module.addBlock(func, label: b"closetry", heat: BlockHeat.normal)
-	var closing = module.addBlock(func, label: b"closeclosing", heat: BlockHeat.normal)
-	var closed = module.addBlock(func, label: b"closeclosed", heat: BlockHeat.normal)
-	var lockSenders = module.addBlock(func, label: b"closelocksenders", heat: BlockHeat.normal)
-	var drainSenders = module.addBlock(func, label: b"closedrainsenders", heat: BlockHeat.normal)
-	var stopSender = module.addBlock(func, label: b"closestopsender", heat: BlockHeat.normal)
-	var sendersDrained = module.addBlock(func, label: b"closesendersdrained", heat: BlockHeat.normal)
-	var readyLoop = module.addBlock(func, label: b"closereadyloop", heat: BlockHeat.normal)
-	var readyOne = module.addBlock(func, label: b"closereadyone", heat: BlockHeat.normal)
-	var readied = module.addBlock(func, label: b"closereadied", heat: BlockHeat.normal)
-	var settled = module.addBlock(func, label: b"closesettled", heat: BlockHeat.normal)
-	var payWake = module.addBlock(func, label: b"closepaywake", heat: BlockHeat.normal)
-	var afterSenders = module.addBlock(func, label: b"closeaftersenders", heat: BlockHeat.normal)
-	var enqueueFinish = module.addBlock(func, label: b"closeenqueuefinish", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"closedone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let attempt = module.addBlock(func, label: b"closetry", heat: BlockHeat.normal)
+	let closing = module.addBlock(func, label: b"closeclosing", heat: BlockHeat.normal)
+	let closed = module.addBlock(func, label: b"closeclosed", heat: BlockHeat.normal)
+	let lockSenders = module.addBlock(func, label: b"closelocksenders", heat: BlockHeat.normal)
+	let drainSenders = module.addBlock(func, label: b"closedrainsenders", heat: BlockHeat.normal)
+	let stopSender = module.addBlock(func, label: b"closestopsender", heat: BlockHeat.normal)
+	let sendersDrained = module.addBlock(func, label: b"closesendersdrained", heat: BlockHeat.normal)
+	let readyLoop = module.addBlock(func, label: b"closereadyloop", heat: BlockHeat.normal)
+	let readyOne = module.addBlock(func, label: b"closereadyone", heat: BlockHeat.normal)
+	let readied = module.addBlock(func, label: b"closereadied", heat: BlockHeat.normal)
+	let settled = module.addBlock(func, label: b"closesettled", heat: BlockHeat.normal)
+	let payWake = module.addBlock(func, label: b"closepaywake", heat: BlockHeat.normal)
+	let afterSenders = module.addBlock(func, label: b"closeaftersenders", heat: BlockHeat.normal)
+	let enqueueFinish = module.addBlock(func, label: b"closeenqueuefinish", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"closedone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let cown = 0
@@ -858,13 +858,13 @@ function buildCownClose(module StdModule)
 end 'buildCownClose'
 
 function buildCownSendAbandon(module StdModule)
-	var func = IrFunction.createFromStd(CownSendAbandonName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CownSendAbandonName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var dequeue = module.addBlock(func, label: b"abandondequeue", heat: BlockHeat.normal)
-	var woken = module.addBlock(func, label: b"abandonwoken", heat: BlockHeat.normal)
-	var gone = module.addBlock(func, label: b"abandongone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let dequeue = module.addBlock(func, label: b"abandondequeue", heat: BlockHeat.normal)
+	let woken = module.addBlock(func, label: b"abandonwoken", heat: BlockHeat.normal)
+	let gone = module.addBlock(func, label: b"abandongone", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let sender = 0
 
@@ -887,10 +887,10 @@ function buildCownSendAbandon(module StdModule)
 end 'buildCownSendAbandon'
 
 function buildCownHandleCloneBox(module StdModule)
-	var func = IrFunction.createFromStd(CownHandleCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CownHandleCloneBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let handleBox = 0
 
@@ -902,14 +902,14 @@ function buildCownHandleCloneBox(module StdModule)
 end 'buildCownHandleCloneBox'
 
 function buildCownHandleDestruct(module StdModule)
-	var func = IrFunction.createFromStd(CownHandleDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CownHandleDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var inspect = module.addBlock(func, label: b"destructinspect", heat: BlockHeat.normal)
-	var dropShare = module.addBlock(func, label: b"destructdrop", heat: BlockHeat.normal)
-	var closeIt = module.addBlock(func, label: b"destructclose", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"destructdone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let inspect = module.addBlock(func, label: b"destructinspect", heat: BlockHeat.normal)
+	let dropShare = module.addBlock(func, label: b"destructdrop", heat: BlockHeat.normal)
+	let closeIt = module.addBlock(func, label: b"destructclose", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"destructdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handleBox = 0
@@ -935,10 +935,10 @@ function buildCownHandleDestruct(module StdModule)
 end 'buildCownHandleDestruct'
 
 function buildCownReplyRefused(module StdModule)
-	var func = IrFunction.createFromStd(CownReplyRefusedName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CownReplyRefusedName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let cell = 0
 	let noResult = emitConst(module, block: entry, value: 0, ids: ids)
@@ -951,10 +951,10 @@ function buildCownReplyRefused(module StdModule)
 end 'buildCownReplyRefused'
 
 function buildCownUnknownTag(module StdModule)
-	var func = IrFunction.createFromStd(CownUnknownTagName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(CownUnknownTagName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.cold)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.cold)
 	emitRuntimeAbort(module, func: func, block: entry, abort: RuntimeAbort.serviceUnknownMessageTag, ids: ids)
 	module.functions.push(func)
 end 'buildCownUnknownTag'
@@ -965,16 +965,16 @@ function emitCownParkWaiting(module StdModule, block IrBlock, machine ValueId, g
 end 'emitCownParkWaiting'
 
 export function emitCownSendParkCommit(module StdModule, func IrFunction, block IrBlock, machine ValueId, gt ValueId, cown ValueId, ids ValueMinter) returns IrBlock
-	var arm = module.addBlock(func, label: b"sendparkarm", heat: BlockHeat.normal)
-	var unbounded = module.addBlock(func, label: b"sendparkunbounded", heat: BlockHeat.normal)
-	var committed = module.addBlock(func, label: b"sendparkcommitted", heat: BlockHeat.normal)
+	let arm = module.addBlock(func, label: b"sendparkarm", heat: BlockHeat.normal)
+	let unbounded = module.addBlock(func, label: b"sendparkunbounded", heat: BlockHeat.normal)
+	let committed = module.addBlock(func, label: b"sendparkcommitted", heat: BlockHeat.normal)
 
 	let deadline = emitLoadField(module, block: block, record: gt, offset: GtOffSendDeadline, ids: ids)
 	emitBranchOnCompare(module, block: block, value: deadline, pred: StdCmpPred.eq, against: GtDeadlineMaxNs, whenTrue: unbounded, whenFalse: arm, ids: ids)
 
 	// Lock order is the cown lock, then `__sched_lock`: arming the deadline takes the scheduler lock inside
 	// this cown lock's hold, so nothing may take a cown lock while holding `__sched_lock`.
-	var armed = emitGtArmTimerDeadline(module, func: func, cur: arm, gt: gt, deadline: deadline, tag: TimerTagSend, ids: ids)
+	let armed = emitGtArmTimerDeadline(module, func: func, cur: arm, gt: gt, deadline: deadline, tag: TimerTagSend, ids: ids)
 	emitCownLockLeave(module, block: armed, cown: cown, holder: CownLockHolder.machine(machine), ids: ids)
 	module.setTerminator(armed, op: StdOp.branch(committed.id))
 
@@ -1000,35 +1000,35 @@ end 'emitCownGroupSlotCown'
 // the granted count plus the bias; the party that reaches zero runs `code(group)`, which must call
 // `__cown_multi_release`.
 function buildCownAcquireMany(module StdModule)
-	var func = IrFunction.createFromStd(CownAcquireManyName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
-	var ids = ValueMinter.create(4)
+	let func = IrFunction.createFromStd(CownAcquireManyName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
+	let ids = ValueMinter.create(4)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var outer = module.addBlock(func, label: b"acquireouter", heat: BlockHeat.normal)
-	var take = module.addBlock(func, label: b"acquiretake", heat: BlockHeat.normal)
-	var scan = module.addBlock(func, label: b"acquirescan", heat: BlockHeat.normal)
-	var scanBody = module.addBlock(func, label: b"acquirescanbody", heat: BlockHeat.normal)
-	var placed = module.addBlock(func, label: b"acquireplaced", heat: BlockHeat.normal)
-	var skip = module.addBlock(func, label: b"acquireskip", heat: BlockHeat.normal)
-	var shiftStart = module.addBlock(func, label: b"acquireshiftstart", heat: BlockHeat.normal)
-	var shift = module.addBlock(func, label: b"acquireshift", heat: BlockHeat.normal)
-	var shiftBody = module.addBlock(func, label: b"acquireshiftbody", heat: BlockHeat.normal)
-	var write = module.addBlock(func, label: b"acquirewrite", heat: BlockHeat.normal)
-	var sealed = module.addBlock(func, label: b"acquiresealed", heat: BlockHeat.normal)
-	var initSlots = module.addBlock(func, label: b"acquireinit", heat: BlockHeat.normal)
-	var initBody = module.addBlock(func, label: b"acquireinitbody", heat: BlockHeat.normal)
-	var phaseOneStart = module.addBlock(func, label: b"acquirephaseonestart", heat: BlockHeat.normal)
-	var phaseOne = module.addBlock(func, label: b"acquirephaseone", heat: BlockHeat.normal)
-	var swapBlock = module.addBlock(func, label: b"acquireswap", heat: BlockHeat.normal)
-	var swapped = module.addBlock(func, label: b"acquireswapped", heat: BlockHeat.normal)
-	var grantedNow = module.addBlock(func, label: b"acquiregrantednow", heat: BlockHeat.normal)
-	var behind = module.addBlock(func, label: b"acquirebehind", heat: BlockHeat.normal)
-	var waitStart = module.addBlock(func, label: b"acquirewaitstart", heat: BlockHeat.normal)
-	var waitPhase = module.addBlock(func, label: b"acquirewaitphase", heat: BlockHeat.normal)
-	var link = module.addBlock(func, label: b"acquirelink", heat: BlockHeat.normal)
-	var phaseTwo = module.addBlock(func, label: b"acquirephasetwo", heat: BlockHeat.normal)
-	var runGroup = module.addBlock(func, label: b"acquirerun", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"acquiredone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let outer = module.addBlock(func, label: b"acquireouter", heat: BlockHeat.normal)
+	let take = module.addBlock(func, label: b"acquiretake", heat: BlockHeat.normal)
+	let scan = module.addBlock(func, label: b"acquirescan", heat: BlockHeat.normal)
+	let scanBody = module.addBlock(func, label: b"acquirescanbody", heat: BlockHeat.normal)
+	let placed = module.addBlock(func, label: b"acquireplaced", heat: BlockHeat.normal)
+	let skip = module.addBlock(func, label: b"acquireskip", heat: BlockHeat.normal)
+	let shiftStart = module.addBlock(func, label: b"acquireshiftstart", heat: BlockHeat.normal)
+	let shift = module.addBlock(func, label: b"acquireshift", heat: BlockHeat.normal)
+	let shiftBody = module.addBlock(func, label: b"acquireshiftbody", heat: BlockHeat.normal)
+	let write = module.addBlock(func, label: b"acquirewrite", heat: BlockHeat.normal)
+	let sealed = module.addBlock(func, label: b"acquiresealed", heat: BlockHeat.normal)
+	let initSlots = module.addBlock(func, label: b"acquireinit", heat: BlockHeat.normal)
+	let initBody = module.addBlock(func, label: b"acquireinitbody", heat: BlockHeat.normal)
+	let phaseOneStart = module.addBlock(func, label: b"acquirephaseonestart", heat: BlockHeat.normal)
+	let phaseOne = module.addBlock(func, label: b"acquirephaseone", heat: BlockHeat.normal)
+	let swapBlock = module.addBlock(func, label: b"acquireswap", heat: BlockHeat.normal)
+	let swapped = module.addBlock(func, label: b"acquireswapped", heat: BlockHeat.normal)
+	let grantedNow = module.addBlock(func, label: b"acquiregrantednow", heat: BlockHeat.normal)
+	let behind = module.addBlock(func, label: b"acquirebehind", heat: BlockHeat.normal)
+	let waitStart = module.addBlock(func, label: b"acquirewaitstart", heat: BlockHeat.normal)
+	let waitPhase = module.addBlock(func, label: b"acquirewaitphase", heat: BlockHeat.normal)
+	let link = module.addBlock(func, label: b"acquirelink", heat: BlockHeat.normal)
+	let phaseTwo = module.addBlock(func, label: b"acquirephasetwo", heat: BlockHeat.normal)
+	let runGroup = module.addBlock(func, label: b"acquirerun", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"acquiredone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let cowns = 0
@@ -1141,19 +1141,19 @@ function buildCownAcquireMany(module StdModule)
 end 'buildCownAcquireMany'
 
 function buildCownMultiRelease(module StdModule)
-	var func = IrFunction.createFromStd(CownMultiReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CownMultiReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var release = module.addBlock(func, label: b"releaseloop", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"releasebody", heat: BlockHeat.normal)
-	var forward = module.addBlock(func, label: b"releaseforward", heat: BlockHeat.normal)
-	var tryIdle = module.addBlock(func, label: b"releasetryidle", heat: BlockHeat.normal)
-	var spin = module.addBlock(func, label: b"releasespin", heat: BlockHeat.normal)
-	var spinForward = module.addBlock(func, label: b"releasespinforward", heat: BlockHeat.normal)
-	var handOff = module.addBlock(func, label: b"releasehandoff", heat: BlockHeat.normal)
-	var step = module.addBlock(func, label: b"releasestep", heat: BlockHeat.normal)
-	var freeGroup = module.addBlock(func, label: b"releasefree", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let release = module.addBlock(func, label: b"releaseloop", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"releasebody", heat: BlockHeat.normal)
+	let forward = module.addBlock(func, label: b"releaseforward", heat: BlockHeat.normal)
+	let tryIdle = module.addBlock(func, label: b"releasetryidle", heat: BlockHeat.normal)
+	let spin = module.addBlock(func, label: b"releasespin", heat: BlockHeat.normal)
+	let spinForward = module.addBlock(func, label: b"releasespinforward", heat: BlockHeat.normal)
+	let handOff = module.addBlock(func, label: b"releasehandoff", heat: BlockHeat.normal)
+	let step = module.addBlock(func, label: b"releasestep", heat: BlockHeat.normal)
+	let freeGroup = module.addBlock(func, label: b"releasefree", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let group = 0
@@ -1221,23 +1221,23 @@ function emitCownTestStep(module StdModule, block IrBlock, index ValueId, ids Va
 end 'emitCownTestStep'
 
 function buildCownTestMulti(module StdModule)
-	var func = IrFunction.createFromStd(CownTestMultiName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(CownTestMultiName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var notPowerOfTwo = module.addBlock(func, label: b"testnotpowertwo", heat: BlockHeat.cold)
-	var prepared = module.addBlock(func, label: b"testprepared", heat: BlockHeat.normal)
-	var makeLoop = module.addBlock(func, label: b"testmakeloop", heat: BlockHeat.normal)
-	var makeBody = module.addBlock(func, label: b"testmakebody", heat: BlockHeat.normal)
-	var spawnStart = module.addBlock(func, label: b"testspawnstart", heat: BlockHeat.normal)
-	var spawnLoop = module.addBlock(func, label: b"testspawnloop", heat: BlockHeat.normal)
-	var spawnBody = module.addBlock(func, label: b"testspawnbody", heat: BlockHeat.normal)
-	var waitLoop = module.addBlock(func, label: b"testwaitloop", heat: BlockHeat.normal)
-	var waitYield = module.addBlock(func, label: b"testwaityield", heat: BlockHeat.normal)
-	var verify = module.addBlock(func, label: b"testverify", heat: BlockHeat.normal)
-	var sumLoop = module.addBlock(func, label: b"testsumloop", heat: BlockHeat.normal)
-	var sumBody = module.addBlock(func, label: b"testsumbody", heat: BlockHeat.normal)
-	var check = module.addBlock(func, label: b"testcheck", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let notPowerOfTwo = module.addBlock(func, label: b"testnotpowertwo", heat: BlockHeat.cold)
+	let prepared = module.addBlock(func, label: b"testprepared", heat: BlockHeat.normal)
+	let makeLoop = module.addBlock(func, label: b"testmakeloop", heat: BlockHeat.normal)
+	let makeBody = module.addBlock(func, label: b"testmakebody", heat: BlockHeat.normal)
+	let spawnStart = module.addBlock(func, label: b"testspawnstart", heat: BlockHeat.normal)
+	let spawnLoop = module.addBlock(func, label: b"testspawnloop", heat: BlockHeat.normal)
+	let spawnBody = module.addBlock(func, label: b"testspawnbody", heat: BlockHeat.normal)
+	let waitLoop = module.addBlock(func, label: b"testwaitloop", heat: BlockHeat.normal)
+	let waitYield = module.addBlock(func, label: b"testwaityield", heat: BlockHeat.normal)
+	let verify = module.addBlock(func, label: b"testverify", heat: BlockHeat.normal)
+	let sumLoop = module.addBlock(func, label: b"testsumloop", heat: BlockHeat.normal)
+	let sumBody = module.addBlock(func, label: b"testsumbody", heat: BlockHeat.normal)
+	let check = module.addBlock(func, label: b"testcheck", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let cownCount = 0
@@ -1310,13 +1310,13 @@ function buildCownTestMulti(module StdModule)
 end 'buildCownTestMulti'
 
 function buildCownTestWorker(module StdModule)
-	var func = IrFunction.createFromStd(CownTestWorkerName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true)
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(CownTestWorkerName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true)
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var loop = module.addBlock(func, label: b"workerloop", heat: BlockHeat.normal)
-	var body = module.addBlock(func, label: b"workerbody", heat: BlockHeat.normal)
-	var finished = module.addBlock(func, label: b"workerfinished", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let loop = module.addBlock(func, label: b"workerloop", heat: BlockHeat.normal)
+	let body = module.addBlock(func, label: b"workerbody", heat: BlockHeat.normal)
+	let finished = module.addBlock(func, label: b"workerfinished", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let ctx = 0
@@ -1357,16 +1357,16 @@ function buildCownTestWorker(module StdModule)
 end 'buildCownTestWorker'
 
 function buildCownTestBody(module StdModule)
-	var func = IrFunction.createFromStd(CownTestBodyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(CownTestBodyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var enterLoop = module.addBlock(func, label: b"bodyenterloop", heat: BlockHeat.normal)
-	var enterBody = module.addBlock(func, label: b"bodyenterbody", heat: BlockHeat.normal)
-	var hold = module.addBlock(func, label: b"bodyhold", heat: BlockHeat.normal)
-	var leaveLoop = module.addBlock(func, label: b"bodyleaveloop", heat: BlockHeat.normal)
-	var leaveBody = module.addBlock(func, label: b"bodyleavebody", heat: BlockHeat.normal)
-	var finish = module.addBlock(func, label: b"bodyfinish", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let enterLoop = module.addBlock(func, label: b"bodyenterloop", heat: BlockHeat.normal)
+	let enterBody = module.addBlock(func, label: b"bodyenterbody", heat: BlockHeat.normal)
+	let hold = module.addBlock(func, label: b"bodyhold", heat: BlockHeat.normal)
+	let leaveLoop = module.addBlock(func, label: b"bodyleaveloop", heat: BlockHeat.normal)
+	let leaveBody = module.addBlock(func, label: b"bodyleavebody", heat: BlockHeat.normal)
+	let finish = module.addBlock(func, label: b"bodyfinish", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let group = 0

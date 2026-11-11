@@ -45,13 +45,13 @@ export type TypeNameInterner
 	static function made(sourceBytes SourceByteCount, base NameTableBase, baseCount TypeNameId) returns TypeNameInterner
 		let nameHint = internedNameHintFor(sourceBytes)
 		let offset = (baseCount - 1) if baseCount > 0 else 0
-		var interner = Self{table: NameTable.create(nameHint, byteHint: internedArenaHintFor(nameHint)), baselineCount: baseCount, baselineArenaBytes: 0, base: base, baseCount: baseCount, idOffset: offset}
+		let interner = Self{table: NameTable.create(nameHint, byteHint: internedArenaHintFor(nameHint)), baselineCount: baseCount, baselineArenaBytes: 0, base: base, baseCount: baseCount, idOffset: offset}
 		_ = interner.table.intern(EmptySourceText)
 		return interner
 	end 'made'
 
 	module function frozenNames() returns FrozenNames
-		var texts = NameRoster.create(self.table.count(), zeroed: false)
+		let texts = NameRoster.create(self.table.count(), zeroed: false)
 
 		for id in 0 upto self.table.count() 'eachName'
 			texts.push(self.table.ownedCopyOf(id))
@@ -94,7 +94,7 @@ export type TypeNameInterner
 	// a second owner.
 	export function namesSinceBaseline() returns NameRoster
 		let first = self.baselineTableMark()
-		var added = NameRoster.create(table.count() - first, zeroed: false)
+		let added = NameRoster.create(table.count() - first, zeroed: false)
 
 		for id in first upto table.count() 'eachAdded'
 			added.push(table.ownedCopyOf(id))
@@ -219,7 +219,7 @@ export type TypeNameInterner
 			panic("TypeNameInterner.foldInto: an overlay holds only the names past its base, so a fold into or out of one would renumber them against ids it does not own")
 		end 'anOverlay'
 
-		var mapping = TypeNameIdArray.create(source.table.count(), zeroed: false)
+		let mapping = TypeNameIdArray.create(source.table.count(), zeroed: false)
 
 		for srcId in 0 upto source.table.count() 'each'
 			mapping.push(self.table.internFrom(source.table, id: srcId) as TypeNameId)
@@ -393,7 +393,7 @@ end 'remapMaxonType'
 // once. ⚠ THE COUNT IS THE CALLER COUNT AND NOTHING ELSE CHECKS IT — the `PayloadField` walk below is a
 // LOOK-ALIKE, not a fourth caller: it rebuilds a different element type and cannot come through here.
 export function remapMaxonTypes(types MaxonTypeArray, remap TypeIdRemap) returns MaxonTypeArray
-	var remapped = MaxonTypeArray.create(types.count(), zeroed: false)
+	let remapped = MaxonTypeArray.create(types.count(), zeroed: false)
 
 	for t in types 'each'
 		remapped.push(remapMaxonType(t, remap: remap))
@@ -474,10 +474,10 @@ end 'remapStructLayoutFieldTypes'
 // (`remapArtifact` into `Project`, `ProgramSignatures.foldFile` into the index) go through here, so
 // the two cannot disagree about what a payload's declared type means.
 export function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeIdRemap)
-	var remappedCases = PayloadFieldArrayArray.create(layout.casePayloads.count(), zeroed: false)
+	let remappedCases = PayloadFieldArrayArray.create(layout.casePayloads.count(), zeroed: false)
 
 	for casePayloads in layout.casePayloads 'eachCase'
-		var remappedFields = PayloadFieldArray.create(casePayloads.count(), zeroed: false)
+		let remappedFields = PayloadFieldArray.create(casePayloads.count(), zeroed: false)
 
 		for field in casePayloads 'eachField'
 			remappedFields.push(PayloadField.create(field.name, declaredType: remapMaxonType(field.declaredType, remap: remap), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, capability: field.capability, typeSite: field.typeSite))

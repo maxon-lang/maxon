@@ -83,7 +83,7 @@ function pick(a WordArray, i Idx) returns Word
 end 'pick'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
@@ -120,7 +120,7 @@ function fill(a WordArray, n Word)
 end 'fill'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.resize(5)
 	fill(a, n: 5)
 	var seen = 0 as Word
@@ -151,7 +151,7 @@ function relabel(a Names, i Idx)
 end 'relabel'
 
 function main() returns ExitCode
-	var a = Names.create(0)
+	let a = Names.create(0)
 	for i in 0 upto 4 'seed'
 		a.push("original-{i}")
 	end 'seed'
@@ -182,7 +182,7 @@ the null slot back as a value: the program exits 0 where 42 is the answer.
 typealias Names = Array with String
 
 function main() returns ExitCode
-	var a = Names.create(0)
+	let a = Names.create(0)
 	a.reserve(2)
 	try a.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
 	try a.get(0) otherwise (e) 'handler'
@@ -233,7 +233,7 @@ typealias WordBag = Bag with Word
 typealias NameBag = Bag with String
 
 function main() returns ExitCode
-	var w = WordBag.create()
+	let w = WordBag.create()
 	w.add(10)
 	w.add(20)
 	w.put(1, value: 30)
@@ -242,7 +242,7 @@ function main() returns ExitCode
 		return 2
 	end 'words'
 
-	var n = NameBag.create()
+	let n = NameBag.create()
 	n.add("alpha")
 	n.add("beta")
 	n.put(0, value: "gamma")

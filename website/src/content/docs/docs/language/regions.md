@@ -28,7 +28,7 @@ Two further kinds of data sit outside the current region:
   its life. A `freeze` walk marks every object in the region it freezes as shared, so the result is read with
   atomic counts from any thread.
 
-A capability is a prefix word on a type, read like an adjective. The words are contextual: `readonly`,
+A capability is a prefix word on a type, read like an adjective. The words are contextual:
 `mutable`, `isolated` and `immutable` are qualifiers exactly where the grammar expects a type, and a name or an
 operand everywhere else. A local named `mutates` or `captures` keeps its meaning, and `swap(1, right: 2)`, with the
 parenthesis against the name, calls a function named `swap`, where `freeze (Box.create(7))` with a space is the
@@ -39,9 +39,8 @@ operator over a parenthesized operand (`specs/regions-syntax.md`).
 | `function pick(pair (immutable Box, Box))` | `immutable` qualifies the first tuple element |
 | `function bump(immutable self)` | `immutable` is the receiver's capability |
 | `type Cell uses T where T is isolated` | `isolated` is the bound |
-| `typealias Visit = function(readonly Box)` | `readonly` names a parameter of type `Box` |
+| `typealias Visit = function(mutable Box)` | `mutable` qualifies the parameter of type `Box` |
 | `swap slot with mutable(seed)` | `mutable(seed)` is a call to a function named `mutable` |
-| `var x as readonly Box` | `readonly` qualifies a type outside a container argument: **E2075** |
 | `typealias A = immutable int` | `immutable` qualifies a type that belongs to no region: **E2010** |
 | `typealias B = immutable (X, Y)` | `immutable` qualifies a tuple, which is not a record type: refused |
 
@@ -103,14 +102,17 @@ A generic type argument carries a capability. `List with Box` holds mutable `Box
 region and `List with immutable Box` holds frozen ones; a value that flows into either position is compared
 against it as a store into a slot, so a frozen value into the mutable position and a mutable one into the
 `immutable` position are both refused (**E3196** at a store, **E3207** at a call argument that the callee
-stores). `Array with immutable Box` and `Array with readonly Box` are
-different types (`specs/regions-generic-flows.md`).
+stores). `Array with immutable Box` and `Array with Box` are
+different types (`specs/regions-generic-flows.md`). An element read out of an `immutable` slot is read-only, so a
+`for` loop variable over `Array with immutable Box`, and what an `extension` member returns out of such an
+instance, is written through only as **E3197**; a `clone()` is the mutable copy.
 
 ## Constant Data
 
 A `let` whose initializer is a compile-time constant names **image data**: a literal, a `b"…"` byte string, a
 constant record, array or tuple literal, or another constant `let`. The `let` may be a module-level binding, a
-`static let`, a `let` field or a local, and the data is `immutable`. So is every inline `b"…"` literal, bound
+`static let`, a `let` field or a local, and the data is `immutable`; every module-level `let` and `static let` is
+image data, because its initializer calls nothing (**E3220**). So is every inline `b"…"` literal, bound
 or not. Image data allocates nothing at run time and is read with plain counts from any thread.
 
 Immutable data goes where it is only read, or where it is held as `immutable`:
@@ -127,6 +129,9 @@ Immutable data goes where it is only read, or where it is held as `immutable`:
   **E3207** (``'push' needs a writable receiver; 'Name' is immutable``; ``'grow' writes 'name' (line 5:
   `name.push(100)`); 'Name' is immutable``). A mutable copy comes from `.clone()`, or from building the value
   (`ByteArray.create` and `push`, or `"text".toByteArray()`).
+- A field default that names it (`var names = sharedNames`) stores it into a mutable field, so it is **E3196**;
+  build the value in the default, or declare the field `immutable`. A closure that returns it returns `immutable`
+  data (see [Closures](/docs/language/functions/#closures)).
 
 ```maxon
 let Name = b"abc"
@@ -188,7 +193,7 @@ function stamp(table Table)
 end 'stamp'
 
 function main() returns ExitCode
-	var live = Table.create()
+	let live = Table.create()
 	let frozen = freeze Table.create()
 	print("{describe(live)} {describe(frozen)}\n")    // describe takes either
 	stamp(live)                                        // stamp takes the mutable one
@@ -241,7 +246,7 @@ a generic method are judged as if they build a record from each unmarked argumen
 A field, parameter, result or local is declared `isolated`. A local takes the word after its initializer:
 
 ```maxon
-var builder = IndexBuilder.create() as isolated IndexBuilder
+let builder = IndexBuilder.create() as isolated IndexBuilder
 ```
 
 An expression whose inputs are all values, `immutable` data or moved `isolated` data is a fresh region where
@@ -266,7 +271,7 @@ the block and outer `var`s that hold values:
 
 ```maxon
 function buildIndex(declarations DeclarationArray) returns SettledIndex
-	var builder = IndexBuilder.create() as isolated IndexBuilder
+	let builder = IndexBuilder.create() as isolated IndexBuilder
 
 	modify builder 'fill'
 		for declaration in declarations 'eachDeclaration'
@@ -348,9 +353,14 @@ end 'Ticket'
 A type with a unique field is unique too, with no declaration and no generated `clone()` (**E3214**:
 ``'Wallet' is unique (its field 'ticket' holds a unique 'Ticket') and cannot be cloned``); so is a type that
 holds an array of unique values. A unique value cannot be frozen, and reading one out of a field or an element
-to bind, return or store it is **E3214**: move it out with `pop` or `remove`, or `swap` it out of an `isolated`
+to bind, return or store it is **E3214**, and so is a `for` loop variable or a tuple destructure of one handed
+to a parameter that keeps it: move it out with `pop` or `remove`, or `swap` it out of an `isolated`
 field. Handing a unique value to a parameter the callee only reads leaves it
-readable. The standard library's `Promise` is unique. The cases are in `specs/regions-unique.md`.
+readable. The standard library's `Promise` is unique, and so are the OS handle types (`TcpClient`,
+`TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`) and every type
+that holds one: binding a handle with `let`, pushing it into a container or handing it to a `spawn` moves it, a
+later read of the name is **E3102**, and a handle is never cloned. One owner holds a handle and lends it to calls.
+The cases are in `specs/regions-unique.md`.
 
 ## Region Bounds
 
@@ -487,4 +497,4 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3214](/docs/cli/error-codes/#e3214--semanticuniquevaluerefused) | a unique value cloned, aliased, frozen or moved out of a slot it was only read from |
 | [E3215](/docs/cli/error-codes/#e3215--semanticregionboundrefused) | a type argument that breaks a `where T is sendable` or `where T is isolated` bound |
 | [E3216](/docs/cli/error-codes/#e3216--semanticservicestateholdsapromise) | a service type whose state can hold a promise |
-| [E3217](/docs/cli/error-codes/#e3217--semanticmessageneedsacapability) | a service message or factory parameter, or a message reply, that holds data of its region and names neither `isolated` nor `immutable` |
+| [E3217](/docs/cli/error-codes/#e3217--semanticmessageneedsacapability) | a service message or factory parameter, or a message reply, that holds data of its region and names neither `isolated` nor `immutable`, or whose type cannot cross at all (a promise holder, a function value, an opaque type parameter, a thread-bound handle) |

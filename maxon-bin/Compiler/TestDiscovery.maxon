@@ -88,7 +88,7 @@ end 'cacheWriteDiscoveredTestArray'
 
 module function cacheReadDiscoveredTestArray(reader LibraryCacheReader) returns DiscoveredTestArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = DiscoveredTestArray.create(count, zeroed: false)
+	let result = DiscoveredTestArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try DiscoveredTest.cacheRead(reader)
@@ -116,8 +116,8 @@ let TestKeywordSpelling = "test"
 // drop a test from the report without saying so, and emit a dispatcher call to one the real compile
 // cannot resolve.
 export function discoverTests(inputPaths MaxonSourcePathArray, target Target) returns DiscoveredTestArray throws CompileError
-	var project = try loadProject(inputPaths, target: target, scriptlib: ScriptlibLoad.omitted, sourceSelection: SourceSelection.productionAndTests)
-	view signatures = try queryProgramSignatures(project)
+	let project = try loadProject(inputPaths, target: target, scriptlib: ScriptlibLoad.omitted, sourceSelection: SourceSelection.productionAndTests)
+	let signatures = try queryProgramSignatures(project)
 
 	// Nothing downstream refuses these: stopping at the declaration sweep makes this the last holder of
 	// `project`, so a lexer error the sweep reported dies with it and the roster is merely short that
@@ -127,8 +127,8 @@ export function discoverTests(inputPaths MaxonSourcePathArray, target Target) re
 		try refuseCompile(project)
 	end 'theSweepReported'
 
-	view declaredTests = signatures.settledDeclarations().declaredTests
-	var found = DiscoveredTestArray.create(declaredTests.count(), zeroed: false)
+	let declaredTests = signatures.settledDeclarations().declaredTests
+	let found = DiscoveredTestArray.create(declaredTests.count(), zeroed: false)
 
 	for declared in declaredTests 'eachDeclaredTest'
 		found.push(DiscoveredTest.create(declared.symbol, displayName: declared.displayName, file: declared.file, line: declared.line))

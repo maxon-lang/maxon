@@ -210,7 +210,7 @@ function step(k Code) returns Code throws StepError
 end 'step'
 
 function run(k Code) returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	try 'work'
 		let v = step(k)
 		print("v={v}\n")
@@ -260,7 +260,7 @@ function step(k Code) returns Code throws StepError
 end 'step'
 
 function run(k Code) returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	try 'work'
 		let v = step(k)
 		print("v={v}\n")
@@ -311,7 +311,7 @@ function step(k Code) returns Code throws StepError
 end 'step'
 
 function run(k Code) returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	try 'work'
 		let v = step(k)
 		print("v={v}\n")
@@ -363,7 +363,7 @@ function step(k Code) returns Code throws StepError
 end 'step'
 
 function run(k Code) returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	try 'work'
 		let v = step(k)
 		let u = a
@@ -413,7 +413,7 @@ function step(k Code) returns Code throws StepError
 end 'step'
 
 function run(k Code) returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	try 'work'
 		let v = step(k)
 		let u = a
@@ -463,7 +463,7 @@ function step(k Code) returns Code throws StepError
 end 'step'
 
 function run(k Code) returns ExitCode
-	var a = build(1)
+	let a = build(1)
 	try 'work'
 		let u = a
 		print("moved={u}\n")

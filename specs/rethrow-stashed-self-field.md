@@ -64,7 +64,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	try h.outer() otherwise (e) 'fail'
 		match e 'kind'
 			first then return 1

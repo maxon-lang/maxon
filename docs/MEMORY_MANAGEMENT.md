@@ -391,7 +391,7 @@ end 'readLevel'
 ### Clone
 
 ```maxon
-var b = a.clone()   // allocates a new, independent copy with rc=1
+let b = a.clone()   // allocates a new, independent copy with rc=1
 ```
 
 The compiler auto-generates `Cloneable` conformance for structs whose fields are all cloneable. Clone creates a deep copy -- each managed field is also cloned.

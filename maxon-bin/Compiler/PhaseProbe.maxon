@@ -124,7 +124,7 @@ export type PhaseDelta
 	// double-counting, which is the exact defect CompileTimings' header describes. A trap
 	// is the loudest available way to say so.
 	export function minus(inner PhaseDelta) returns PhaseDelta
-		var difference = self.clone()
+		let difference = self.clone()
 		difference.subtract(inner)
 		return difference
 	end 'minus'
@@ -200,7 +200,7 @@ export type PhaseProbe
 
 		// ⭐ THE PROCESS-WIDE COLUMNS, DELIBERATELY. A trace span is the MAIN THREAD's — the pool's workers
 		// open none (see `beginCounters`) — so this bracket is the one that must agree with the run total.
-		var probe = Self.openOn(CounterSource.processWide, opensSpan: true)
+		let probe = Self.openOn(CounterSource.processWide, opensSpan: true)
 		treeLock.markUpkeep(probe.upkeepMark)
 
 		return probe
@@ -225,7 +225,7 @@ export type PhaseProbe
 	end 'beginProcessWideCounters'
 
 	static function openOn(source CounterSource, opensSpan bool) returns PhaseProbe
-		var probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source, opensSpan: opensSpan, outerOpen: false, outer: CompilePhase.load, upkeepMark: PhaseDelta.zero()}
+		let probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source, opensSpan: opensSpan, outerOpen: false, outer: CompilePhase.load, upkeepMark: PhaseDelta.zero()}
 		probe.readCounters()
 		return probe
 	end 'openOn'
@@ -270,7 +270,7 @@ export type PhaseProbe
 		let outer = project.memory.allocTally.innermost
 		project.memory.allocTally.enter(phase)
 
-		var probe = Self.begin(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans, treeLock: project.session.treeLock)
+		let probe = Self.begin(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans, treeLock: project.session.treeLock)
 		probe.outerOpen = outerOpen
 		probe.outer = outer
 
@@ -283,7 +283,7 @@ export type PhaseProbe
 	// takes a fresh buffer off the slab and frees the old one. Array growth IS reallocation, so this is the
 	// whole difference between an alloc column that can see a growth policy and one that cannot.
 	export function elapsed() returns PhaseDelta
-		var delta = PhaseDelta.zero()
+		let delta = PhaseDelta.zero()
 		self.elapsedInto(delta)
 		return delta
 	end 'elapsed'

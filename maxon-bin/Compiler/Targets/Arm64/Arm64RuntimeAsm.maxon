@@ -83,7 +83,7 @@ export type Arm64RuntimeAsm
 	static function openFrame(entry ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, slots StackSize, outgoingArgBytes StackSize) returns Arm64RuntimeAsm
 		let frameBytes = alignUpStack(outgoingArgBytes + Arm64FrameRecordBytes + slots * SpillSlotBytes, alignment: StackFrameAlignment)
 
-		var code = entry
+		let code = entry
 		arm64EmitPrologue(code, frameSize: frameBytes, recordOffset: outgoingArgBytes, probeScratchIsFree: false)
 
 		return Self{
@@ -164,7 +164,7 @@ export type Arm64RuntimeAsm
 	export function finishChunk(name ByteArray, guarded bool = false) returns FunctionCodeChunk
 		arm64ResolveBlockBranches(self.code, blockOffsets: self.labelOffsets, branches: self.branches)
 
-		var chunk = FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs)
+		let chunk = FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs)
 		chunk.funcAdrpRelocs = self.funcAdrpRelocs
 		chunk.spendsCallerStack(self.stackBytesPerCall(), checks: guarded)
 

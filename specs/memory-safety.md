@@ -91,7 +91,7 @@ end 'Point'
 
 function main() returns ExitCode
 	var a = Point.create(1, y: 2)
-	var b = a
+	let b = a
 	b.x = 99
 	a = b
 	print("{a.x}")
@@ -120,7 +120,7 @@ end 'Point'
 
 function main() returns ExitCode
 	let a = Point.create(10, y: 20)
-	var b = a.clone()
+	let b = a.clone()
 	b.x = 99
 	if a is not b 'diff'
 		return a.x + a.y
@@ -182,17 +182,17 @@ end 'Leaf'
 typealias Leaves = Array with Leaf
 
 function main() returns ExitCode
-	var a = Leaves.create(0)
+	let a = Leaves.create(0)
 	a.push(Leaf.create("original label long enough for a heap record", value: 10))
 
-	var b = a.clone()
-	var cloned = try b.get(0) otherwise panic("no leaf")
+	let b = a.clone()
+	let cloned = try b.get(0) otherwise panic("no leaf")
 	cloned.label = "mutated"
 
 	b.push(Leaf.create("second label long enough for a heap record", value: 20))
 
-	view kept = try a.get(0) otherwise panic("no leaf")
-	view reread = try b.get(0) otherwise panic("no leaf")
+	let kept = try a.get(0) otherwise panic("no leaf")
+	let reread = try b.get(0) otherwise panic("no leaf")
 	print("{a.count()}:{kept.label}\n")
 	print("{b.count()}:{reread.label}\n")
 	return 0
@@ -216,16 +216,16 @@ typealias Row = Array with Integer
 typealias Grid = Array with Row
 
 function main() returns ExitCode
-	var a = Grid.create(0)
-	var row = Row.create(0)
+	let a = Grid.create(0)
+	let row = Row.create(0)
 	row.push(1)
 	a.push(row)
 
-	var b = a.clone()
-	var clonedRow = try b.get(0) otherwise panic("no row")
+	let b = a.clone()
+	let clonedRow = try b.get(0) otherwise panic("no row")
 	clonedRow.push(2)
 
-	view keptRow = try a.get(0) otherwise panic("no row")
+	let keptRow = try a.get(0) otherwise panic("no row")
 	print("{keptRow.count()} {clonedRow.count()}\n")
 	return 0
 end 'main'
@@ -258,15 +258,15 @@ end 'Leaf'
 typealias Leaves = Array with Leaf
 
 function main() returns ExitCode
-	var a = Leaves.create(0)
+	let a = Leaves.create(0)
 	a.push(Leaf.create("original label long enough for a heap record", value: 10))
 
 	let b = a.clone()
-	var c = b.clone()
-	var cloned = try c.get(0) otherwise panic("no leaf")
+	let c = b.clone()
+	let cloned = try c.get(0) otherwise panic("no leaf")
 	cloned.label = "mutated"
 
-	view fromA = try a.get(0) otherwise panic("no leaf")
+	let fromA = try a.get(0) otherwise panic("no leaf")
 	let fromB = try b.get(0) otherwise panic("no leaf")
 	print("{fromA.label}\n{fromB.label}\n{cloned.label}\n")
 	return 0
@@ -289,7 +289,7 @@ points at — so sharing it makes the clone and the original one string.
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var a = Words.create(0)
+	let a = Words.create(0)
 	a.push("original word long enough for a heap record")
 
 	let b = a.clone()
@@ -335,17 +335,17 @@ end 'Op'
 typealias Ops = Array with Op
 
 function main() returns ExitCode
-	var a = Ops.create(0)
+	let a = Ops.create(0)
 	a.push(Op.holds(Item.create("original label long enough for a heap record")))
 
-	var b = a.clone()
-	var bOp = try b.get(0) otherwise Op.none
+	let b = a.clone()
+	let bOp = try b.get(0) otherwise Op.none
 	match bOp 'mut'
 		holds(it) then it.rename("MUTATED")
 		none then return 3
 	end 'mut'
 
-	view aOp = try a.get(0) otherwise Op.none
+	let aOp = try a.get(0) otherwise Op.none
 	match aOp 'read'
 		holds(it) then print("a holds: {it.label}\n")
 		none then return 4
@@ -381,11 +381,11 @@ function payloadOf(w Word) returns String
 end 'payloadOf'
 
 function main() returns ExitCode
-	var a = Words.create(0)
+	let a = Words.create(0)
 	a.push(Word.spelled("original word long enough for a heap record"))
 
 	let b = a.clone()
-	view wa = try a.get(0) otherwise Word.blank
+	let wa = try a.get(0) otherwise Word.blank
 	let wb = try b.get(0) otherwise Word.blank
 	if payloadOf(wa) is payloadOf(wb) 'shared'
 		print("shared\n")
@@ -423,12 +423,12 @@ function textOf(s Slot) returns String
 end 'textOf'
 
 function main() returns ExitCode
-	var a = Slots.create(0)
+	let a = Slots.create(0)
 	a.push(Slot.filled("filled with a heap record"))
 	a.push(Slot.empty)
 
 	let b = a.clone()
-	view a0 = try a.get(0) otherwise Slot.empty
+	let a0 = try a.get(0) otherwise Slot.empty
 	let b0 = try b.get(0) otherwise Slot.empty
 	let b1 = try b.get(1) otherwise Slot.filled("wrong")
 	if textOf(a0) is textOf(b0) 'shared'
@@ -470,7 +470,7 @@ end 'mutate'
 
 function main() returns ExitCode
 	let a = Op.holds(Item.create("original label long enough for a heap record"))
-	var b = a.clone()
+	let b = a.clone()
 
 	match b 'mut'
 		holds(it) then mutate(it)
@@ -530,7 +530,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let a = Holder.create(Square.create(2))
-	var b = a.clone()
+	let b = a.clone()
 	b.shape.grow()
 	print("{a.shape.area()} {b.shape.area()}\n")
 	return 0
@@ -582,13 +582,13 @@ end 'Holder'
 typealias Holders = Array with Holder
 
 function main() returns ExitCode
-	var a = Holders.create(0)
+	let a = Holders.create(0)
 	a.push(Holder.create(Square.create(2)))
-	var b = a.clone()
-	var grown = try b.get(0) otherwise panic("no holder")
+	let b = a.clone()
+	let grown = try b.get(0) otherwise panic("no holder")
 	grown.shape.grow()
-	view kept = try a.get(0) otherwise panic("no holder")
-	view reread = try b.get(0) otherwise panic("no holder")
+	let kept = try a.get(0) otherwise panic("no holder")
+	let reread = try b.get(0) otherwise panic("no holder")
 	print("{kept.shape.area()} {reread.shape.area()}\n")
 	return 0
 end 'main'
@@ -763,7 +763,7 @@ end 'Outer'
 
 function main() returns ExitCode
 	let a = Outer.create(Holder.create(Square.create(2)))
-	var b = a.clone()
+	let b = a.clone()
 	b.holder.shape.grow()
 	print("{a.holder.shape.area()} {b.holder.shape.area()}\n")
 	return 0
@@ -942,7 +942,7 @@ end 'Decl'
 
 function main() returns ExitCode
 	let a = Decl.create(Op.holds(Item.create("original label long enough for a heap record")))
-	var b = a.clone()
+	let b = a.clone()
 
 	match b.op 'mut'
 		holds(it) then it.rename("MUTATED")
@@ -1067,10 +1067,10 @@ function nestedTextOf(o Outer) returns String
 end 'nestedTextOf'
 
 function main() returns ExitCode
-	var w = Words.create(0)
+	let w = Words.create(0)
 	w.push("inner element long enough for a heap record")
 
-	var a = Outers.create(0)
+	let a = Outers.create(0)
 	a.push(Outer.wraps(Inner.text("nested payload long enough for a heap record")))
 	a.push(Outer.holds(w))
 	a.push(Outer.pair(true, n: 3))
@@ -1085,7 +1085,7 @@ function main() returns ExitCode
 	end 'each'
 	print("{out}\n")
 
-	view a0 = try a.get(0) otherwise Outer.blank
+	let a0 = try a.get(0) otherwise Outer.blank
 	let b0 = try b.get(0) otherwise Outer.blank
 	if nestedTextOf(a0) is nestedTextOf(b0) 'shared'
 		print("nested payload SHARED\n")
@@ -1135,8 +1135,8 @@ If that empty buffer were the shared record, two builders would share it, and ap
 would publish the other's length.
 ```maxon
 function main() returns ExitCode
-	var a = StringBuilder.create()
-	var b = StringBuilder.create()
+	let a = StringBuilder.create()
+	let b = StringBuilder.create()
 	let fromA = a.build()
 	let fromB = b.build()
 	a.append("AAA")
@@ -1238,8 +1238,8 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
-	var borrowed = h.sites
+	let h = Holder.create()
+	let borrowed = h.sites
 	h.add(1)
 	print("borrowed={borrowed.count()} field={h.sites.count()} same={borrowed is h.sites}")
 	return 0
@@ -1278,7 +1278,7 @@ function through(col IntArray, holder Holder) returns Integer
 end 'through'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	let seen = through(h.sites, holder: h)
 	print("param saw={seen} field={h.sites.count()}")
 	return 0

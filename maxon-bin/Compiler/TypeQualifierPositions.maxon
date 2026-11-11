@@ -1,6 +1,5 @@
 module enum QualifierVerdict
 	plainName
-	readonlyQualifier
 	capabilityQualifier
 end 'QualifierVerdict'
 
@@ -29,15 +28,14 @@ end 'NominalLabelWatch'
 typealias QualifierGroupStack = Array with QualifierGroup
 typealias QualifierEntryStack = Array with ElementIndex
 
-let ReadonlyQualifierByte = 1
-let CapabilityQualifierByte = 2
+let CapabilityQualifierByte = 1
 let ReceiverPrefixWithoutSeparator = 3
 
 module type TypeQualifierPositions
 	let verdicts as ByteArray
 
 	module static function over(tokens TokenArray) returns TypeQualifierPositions
-		var machine = QualifierMachine.begin(tokens)
+		let machine = QualifierMachine.begin(tokens)
 		machine.run()
 
 		return Self{verdicts: machine.verdicts}
@@ -45,10 +43,6 @@ module type TypeQualifierPositions
 
 	module function verdictAt(index ElementIndex) returns QualifierVerdict
 		let found = try self.verdicts.get(index) otherwise return QualifierVerdict.plainName
-
-		if found == ReadonlyQualifierByte 'readonly'
-			return QualifierVerdict.readonlyQualifier
-		end 'readonly'
 
 		if found == CapabilityQualifierByte 'capability'
 			return QualifierVerdict.capabilityQualifier
@@ -122,7 +116,7 @@ type QualifierMachine
 
 		var qualifies = false
 
-		if kind == TokenKind.identifier and isTypeQualifierWord(token.value) 'aQualifierWord'
+		if kind == TokenKind.identifier and spellsCapabilityWord(token.value) 'aQualifierWord'
 			qualifies = self.recordVerdict(index, token: token)
 		end 'aQualifierWord'
 
@@ -153,11 +147,7 @@ type QualifierMachine
 			self.verdicts = ByteArray.create(self.tokens.count())
 		end 'firstQualifier'
 
-		if verdict == QualifierVerdict.readonlyQualifier 'readonly'
-			self.markVerdict(index, value: ReadonlyQualifierByte)
-		end 'readonly' else 'capability'
-			self.markVerdict(index, value: CapabilityQualifierByte)
-		end 'capability'
+		self.markVerdict(index, value: CapabilityQualifierByte)
 
 		return true
 	end 'recordVerdict'
@@ -181,20 +171,14 @@ type QualifierMachine
 			return QualifierVerdict.capabilityQualifier
 		end 'theReceiver'
 
-		let next = self.kindAfter(index)
-
-		if not readonlyOperandStartsWith(next) or not self.typePositionFor(token, next: next) 'notAQualifier'
+		if not qualifierOperandStartsWith(self.kindAfter(index)) or not self.typePositionHolds() 'notAQualifier'
 			return QualifierVerdict.plainName
 		end 'notAQualifier'
-
-		if isReadonlyWord(token.value) 'readonly'
-			return QualifierVerdict.readonlyQualifier
-		end 'readonly'
 
 		return QualifierVerdict.capabilityQualifier
 	end 'verdictOf'
 
-	function typePositionFor(token Token, next TokenKind) returns bool
+	function typePositionHolds() returns bool
 		if self.groups.isEmpty() 'atStatementLevel'
 			return self.typeHead
 		end 'atStatementLevel'
@@ -205,11 +189,10 @@ type QualifierMachine
 			expression or
 			declarationDefault gives self.typeHead
 			declaration gives entry > 0
-			// `function(readonly Foo)` names a parameter `readonly`; only `readonly (` qualifies a tuple.
-			functionType gives not (entry == 0 and isReadonlyWord(token.value) and next != TokenKind.leftParen)
+			functionType gives true
 			typeList gives entry == 0 or self.typeHead
 		end 'group'
-	end 'typePositionFor'
+	end 'typePositionHolds'
 
 	function namesTheReceiver(index ElementIndex) returns bool
 		if self.groups.isEmpty() or self.topGroup() != QualifierGroup.declaration or self.topEntry() != 0 'notTheFirstParameterSlot'
@@ -508,10 +491,6 @@ type QualifierMachine
 		end 'theMethodEnds'
 	end 'noteMethodClosing'
 end 'QualifierMachine'
-
-function isTypeQualifierWord(word ByteArray) returns bool
-	return isReadonlyWord(word) or spellsCapabilityWord(word)
-end 'isTypeQualifierWord'
 
 function receiverHeadAt(tokens TokenArray, wordIndex ElementIndex) returns bool
 	let word = try tokens.get(wordIndex) otherwise return false

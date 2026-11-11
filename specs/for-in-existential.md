@@ -96,7 +96,7 @@ function total(source Seq) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	var u = Upto.create(4)
+	let u = Upto.create(4)
 	print("{total(u)}\n")
 	return 0
 end 'main'
@@ -156,7 +156,7 @@ function report(source Counted) returns Integer
 end 'report'
 
 function main() returns ExitCode
-	var u = Upto.create(3)
+	let u = Upto.create(3)
 	print("{report(u)}\n")
 	return 0
 end 'main'
@@ -212,7 +212,7 @@ function total(source Seq) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	var t = IntTagged.create(5, tag: 7)
+	let t = IntTagged.create(5, tag: 7)
 	print("{total(t)}\n")
 	return 0
 end 'main'
@@ -263,7 +263,7 @@ function show(source Lines)
 end 'show'
 
 function main() returns ExitCode
-	var n = Numbered.create(3)
+	let n = Numbered.create(3)
 	show(n)
 	return 0
 end 'main'
@@ -350,7 +350,7 @@ end 'fromField'
 function main() returns ExitCode
 	print("{fromCall(4)}\n")
 	print("{fromLocal(4)}\n")
-	var h = Holder.create(makeSeq(4))
+	let h = Holder.create(makeSeq(4))
 	print("{fromField(h)}\n")
 	return 0
 end 'main'
@@ -421,7 +421,7 @@ function total(source Bag) returns Integer
 end 'total'
 
 function main() returns ExitCode
-	var filled = IntArray.create(0)
+	let filled = IntArray.create(0)
 	filled.push(4)
 	filled.push(5)
 	filled.push(6)
@@ -683,7 +683,7 @@ end 'Wrap'
 typealias UptoWrap = Wrap with Upto
 
 function main() returns ExitCode
-	var w = UptoWrap.create(Upto.create(4))
+	let w = UptoWrap.create(Upto.create(4))
 	print("{w.total()}\n")
 	return 0
 end 'main'

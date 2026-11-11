@@ -376,7 +376,7 @@ module type BatchClaim
 	export let libraryExtensionMethods as StringArray
 
 	module static function of(claims SourceClaims) returns BatchClaim
-		var mentioned = ClaimedNameSet.create()
+		let mentioned = ClaimedNameSet.create()
 
 		for name in claims.mentionedNames 'eachMention'
 			mentioned.insert(name)
@@ -469,13 +469,13 @@ end 'BatchGroup'
 module typealias BatchGroupArray = Array with BatchGroup
 
 module function partitionedByClaims(candidates ClaimedMemberArray) returns BatchGroupArray
-	var groups = BatchGroupArray.create(0)
+	let groups = BatchGroupArray.create(0)
 
 	for claimed in candidates 'eachMember'
 		var placed = false
 
 		for position in 0 upto groups.count() 'eachGroup'
-			var group = try groups.get(position) otherwise panic("SpecBatch: group {position} is in bounds of the {groups.count()} groups")
+			let group = try groups.get(position) otherwise panic("SpecBatch: group {position} is in bounds of the {groups.count()} groups")
 
 			if group.admits(claimed.claim) 'free'
 				group.admit(claimed)
@@ -485,7 +485,7 @@ module function partitionedByClaims(candidates ClaimedMemberArray) returns Batch
 		end 'eachGroup'
 
 		if not placed 'needsAGroup'
-			var group = BatchGroup.create()
+			let group = BatchGroup.create()
 			group.admit(claimed)
 			groups.push(group)
 		end 'needsAGroup'
@@ -579,7 +579,7 @@ end 'batchCaseName'
 function batchCaseSource(test SpecTest, caseIndex ElementIndex) returns String
 	let name = batchCaseName(caseIndex)
 	let rawLines = test.source.split(SourceLineBreak)
-	var lines = StringArray.create(rawLines.count(), zeroed: false)
+	let lines = StringArray.create(rawLines.count(), zeroed: false)
 
 	for rawLine in rawLines 'eachLine'
 		let line = rawLine.trimEnd(CharacterSet.newlines)
@@ -666,13 +666,13 @@ function batchEntrySource(members BatchMemberArray, facilities EntryFacilities) 
 end 'batchEntrySource'
 
 function mintedNamesForBatchCase(caseIndex ElementIndex) returns immutable NameRoster
-	var names = NameRoster.create(1, zeroed: false) as isolated NameRoster
+	let names = NameRoster.create(1, zeroed: false) as isolated NameRoster
 	names.push(freeze batchCaseName(caseIndex).toByteArray())
 	return freeze names
 end 'mintedNamesForBatchCase'
 
 function mintedNamesForBatchEntry() returns immutable NameRoster
-	var names = NameRoster.create(4, zeroed: false) as isolated NameRoster
+	let names = NameRoster.create(4, zeroed: false) as isolated NameRoster
 	names.push(freeze BatchIndexAlias.toByteArray())
 	names.push(freeze BatchLeftAlias.toByteArray())
 	names.push(freeze BatchRunType.toByteArray())
@@ -692,7 +692,7 @@ module type BatchProgram
 	end 'create'
 
 	module function allCases() returns TestRunIndexArray
-		var cases = TestRunIndexArray.create(self.members.count(), zeroed: false)
+		let cases = TestRunIndexArray.create(self.members.count(), zeroed: false)
 
 		for index in 0 upto self.members.count() 'eachMember'
 			cases.push(index)
@@ -721,7 +721,7 @@ function batchExePath(tempDir FilePath, ordinal ElementIndex, exeExtension Strin
 end 'batchExePath'
 
 function stageBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, facilities EntryFacilities) returns GeneratedBuild throws TestStagingError
-	var build = try GeneratedBuild.begin(batchSourceRoot(tempDir, ordinal: ordinal))
+	let build = try GeneratedBuild.begin(batchSourceRoot(tempDir, ordinal: ordinal))
 
 	for (iter, member) in members.withIterator() 'eachMember'
 		let test = try tests.get(member.testIndex) otherwise panic("SpecBatch: batch member {iter.index()} names test {member.testIndex}, past the {tests.count()} the spec selected")
@@ -762,7 +762,7 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 
 	let exePath = batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension)
 
-	var session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
+	let session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
 	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(0), poisonFreed: batchBuildsWithFreedBoxPoison(tests, members: members), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), scriptlib: ScriptlibLoad.omitted, entryFunction: freeze BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, session: session) otherwise (e) 'didNotCompile'
 		reportCompileError(e, sink: session.diagnostics)
 		return batchBuildAfterError(CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), ordinal: ordinal, count: members.count())
@@ -774,7 +774,7 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 		return BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: DrivesOtherProcessesGap), refused: TestRunIndexArray.create(0))
 	end 'aGapInPlacement'
 
-	var written = FilePathArray.create(staged.buildTargets.count(), zeroed: false)
+	let written = FilePathArray.create(staged.buildTargets.count(), zeroed: false)
 
 	for path in staged.buildTargets 'eachTarget'
 		if not path.equals(staged.root) 'aStagedFile'
@@ -824,7 +824,7 @@ module type BatchOutcome
 end 'BatchOutcome'
 
 function diagnosticsNaming(diagnostics String, ordinal ElementIndex, positions TestRunIndexArray) returns String
-	var named = StringArray.create(0)
+	let named = StringArray.create(0)
 
 	for line in diagnostics.split(SourceLineBreak) 'eachLine'
 		for position in positions 'eachPosition'
@@ -860,7 +860,7 @@ function testNameFor(member BatchMember, tests SpecTestArray) returns String
 end 'testNameFor'
 
 function membersNamedIn(diagnostics String, ordinal ElementIndex, count ElementIndex) returns TestRunIndexArray
-	var named = TestRunIndexArray.create(0)
+	let named = TestRunIndexArray.create(0)
 
 	for index in 0 upto count 'eachMember'
 		if namesCase(diagnostics, ordinal: ordinal, caseIndex: index) 'namesIt'
@@ -882,7 +882,7 @@ function namesCase(text String, ordinal ElementIndex, caseIndex ElementIndex) re
 end 'namesCase'
 
 function membersWithout(members BatchMemberArray, positions TestRunIndexArray) returns BatchMemberArray
-	var kept = BatchMemberArray.create(members.count(), zeroed: false)
+	let kept = BatchMemberArray.create(members.count(), zeroed: false)
 
 	for (iter, member) in members.withIterator() 'eachMember'
 		if not positions.contains(iter.index()) 'stays'
@@ -894,7 +894,7 @@ function membersWithout(members BatchMemberArray, positions TestRunIndexArray) r
 end 'membersWithout'
 
 function indexesOf(members BatchMemberArray) returns TestRunIndexArray
-	var indexes = TestRunIndexArray.create(members.count(), zeroed: false)
+	let indexes = TestRunIndexArray.create(members.count(), zeroed: false)
 
 	for member in members 'eachMember'
 		indexes.push(member.testIndex)
@@ -904,7 +904,7 @@ function indexesOf(members BatchMemberArray) returns TestRunIndexArray
 end 'indexesOf'
 
 function testNamesText(indexes TestRunIndexArray, tests SpecTestArray) returns String
-	var names = StringArray.create(indexes.count(), zeroed: false)
+	let names = StringArray.create(indexes.count(), zeroed: false)
 
 	for index in indexes 'eachIndex'
 		let test = try tests.get(index) otherwise panic("SpecBatch: test {index} is past the {tests.count()} the spec selected")
@@ -915,7 +915,7 @@ function testNamesText(indexes TestRunIndexArray, tests SpecTestArray) returns S
 end 'testNamesText'
 
 function trialBudgetErrors(unsettled TestRunIndexArray, tests SpecTestArray) returns StringArray
-	var errors = StringArray.create(0)
+	let errors = StringArray.create(0)
 
 	if unsettled.isEmpty() 'allSettled'
 		return errors
@@ -926,7 +926,7 @@ function trialBudgetErrors(unsettled TestRunIndexArray, tests SpecTestArray) ret
 end 'trialBudgetErrors'
 
 function environmentErrors(reason String, affected TestRunIndexArray, tests SpecTestArray) returns StringArray
-	var errors = StringArray.create(0)
+	let errors = StringArray.create(0)
 
 	if affected.isEmpty() 'nothingAffected'
 		return errors
@@ -943,7 +943,7 @@ end 'discardBatchLeftovers'
 
 module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchOutcome
 	var remaining = members.clone()
-	var refusals = BatchRefusalMap.create()
+	let refusals = BatchRefusalMap.create()
 	var last = BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: "no batch compile was attempted"), refused: TestRunIndexArray.create(0))
 
 	for _ in 0 upto MaxBatchCompileAttempts 'eachAttempt'
@@ -1014,8 +1014,8 @@ function failureTail(accepted BatchMemberArray) returns SettledTail
 end 'failureTail'
 
 function isolatedOutcome(last BatchBuild, prior BatchPrior, remaining BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchOutcome
-	var accepted = BatchMemberArray.create(0)
-	var settling = BatchSettling.begin()
+	let accepted = BatchMemberArray.create(0)
+	let settling = BatchSettling.begin()
 	let tail = settling.settleFrom(prior, accepted: accepted, candidates: remaining, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 	let unsettled = settling.unsettledIndexes()
 	let affected = indexesJoined(indexesOf(accepted), following: unsettled)
@@ -1030,7 +1030,7 @@ function isolatedOutcome(last BatchBuild, prior BatchPrior, remaining BatchMembe
 end 'isolatedOutcome'
 
 function indexesJoined(first TestRunIndexArray, following TestRunIndexArray) returns TestRunIndexArray
-	var joined = first.clone()
+	let joined = first.clone()
 	joined.append(following)
 	return joined
 end 'indexesJoined'
@@ -1087,7 +1087,7 @@ type BatchSettling
 
 		self.trialsLeft = self.trialsLeft - 1
 
-		var trial = accepted.clone()
+		let trial = accepted.clone()
 		trial.append(candidates)
 
 		let attempt = buildBatch(tempDir, ordinal: ordinal, tests: tests, members: trial, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
@@ -1114,7 +1114,7 @@ type BatchSettling
 		let failure = failureTail(accepted)
 		let partners = heldPartnersNamed(refused, held: accepted, tests: tests)
 		let blamed = namedCandidatePositions(refused, heldCount: accepted.count())
-		var trial = accepted.clone()
+		let trial = accepted.clone()
 		trial.append(candidates)
 
 		if not blamed.isEmpty() 'someNamed'
@@ -1139,7 +1139,7 @@ type BatchSettling
 end 'BatchSettling'
 
 function namedCandidatePositions(refused TestRunIndexArray, heldCount ElementIndex) returns TestRunIndexArray
-	var named = TestRunIndexArray.create(0)
+	let named = TestRunIndexArray.create(0)
 
 	for position in refused 'eachNamed'
 		if position >= heldCount 'aCandidate'
@@ -1151,7 +1151,7 @@ function namedCandidatePositions(refused TestRunIndexArray, heldCount ElementInd
 end 'namedCandidatePositions'
 
 function heldPartnersNamed(refused TestRunIndexArray, held BatchMemberArray, tests SpecTestArray) returns StringArray
-	var partners = StringArray.create(0)
+	let partners = StringArray.create(0)
 
 	for position in refused 'eachNamed'
 		if position < held.count() 'aHeldMember'
@@ -1166,7 +1166,7 @@ end 'heldPartnersNamed'
 function fileNamedRefusals(refusals BatchRefusalMap, blamed TestRunIndexArray, partners StringArray, candidates BatchMemberArray, trial BatchMemberArray, answer CompileAnswer, heldCount ElementIndex, ordinal ElementIndex, tests SpecTestArray) returns BatchMemberArray
 	for position in blamed 'eachBlamed'
 		let culprit = try candidates.get(position) otherwise panic("SpecBatch: blamed candidate {position} is past the {candidates.count()} candidates")
-		var named = TestRunIndexArray.create(1, zeroed: false)
+		let named = TestRunIndexArray.create(1, zeroed: false)
 		named.push(position + heldCount)
 
 		noteRefusal(refusals, testIndex: culprit.testIndex, diagnostics: diagnosticsInTestNames(diagnosticsNaming(answer.diagnostics, ordinal: ordinal, positions: named), ordinal: ordinal, members: trial, tests: tests), partners: partners)
@@ -1178,7 +1178,7 @@ end 'fileNamedRefusals'
 function noteRefused(refusals BatchRefusalMap, answer CompileAnswer, ordinal ElementIndex, refused TestRunIndexArray, remaining BatchMemberArray, tests SpecTestArray) returns BatchMemberArray
 	for position in refused 'eachRefused'
 		let member = try remaining.get(position) otherwise panic("SpecBatch: the batch compile named case {position}, past the {remaining.count()} it was built from")
-		var named = TestRunIndexArray.create(1, zeroed: false)
+		let named = TestRunIndexArray.create(1, zeroed: false)
 		named.push(position)
 		noteRefusal(refusals, testIndex: member.testIndex, diagnostics: diagnosticsInTestNames(diagnosticsNaming(answer.diagnostics, ordinal: ordinal, positions: named), ordinal: ordinal, members: remaining, tests: tests), partners: StringArray.create(0))
 	end 'eachRefused'
@@ -1257,7 +1257,7 @@ type MarkedStream
 end 'MarkedStream'
 
 function parseMarkedStream(text String) returns MarkedStream
-	var stream = MarkedStream.create()
+	let stream = MarkedStream.create()
 	let pieces = text.split(SpecMarkerWrapper)
 
 	for (iter, piece) in pieces.withIterator() 'eachPiece'
@@ -1291,7 +1291,7 @@ function parseMarkedStream(text String) returns MarkedStream
 end 'parseMarkedStream'
 
 function noteDescendantFrame(stream MarkedStream, piece String)
-	var region = try stream.regions.get(stream.regions.count() - 1) otherwise 'noOpenRegion'
+	let region = try stream.regions.get(stream.regions.count() - 1) otherwise 'noOpenRegion'
 		stream.clean = false
 		return
 	end 'noOpenRegion'
@@ -1349,7 +1349,7 @@ function noteDescendantCount(stream MarkedStream, index ElementIndex, code Strin
 end 'noteDescendantCount'
 
 function closeRegion(stream MarkedStream, index ElementIndex, code String, outstanding String, descendants String, tail String)
-	var region = try stream.regions.get(stream.regions.count() - 1) otherwise 'noOpenRegion'
+	let region = try stream.regions.get(stream.regions.count() - 1) otherwise 'noOpenRegion'
 		stream.clean = false
 		return
 	end 'noOpenRegion'
@@ -1424,16 +1424,16 @@ module union BatchReading
 	end 'needsRerun'
 end 'BatchReading'
 
-module typealias BatchReadingArray = Array with readonly BatchReading
+module typealias BatchReadingArray = Array with immutable BatchReading
 
 let OutsideTheMarkers = "the batch program printed outside the case markers — a case runs code before main that the batching checks did not catch; the runner must keep it out of batches"
 
 module function readBatch(batch ProcessCapture, caseCount ElementIndex) returns BatchReadingArray
-	var readings = BatchReadingArray.create(caseCount, zeroed: false)
+	let readings = BatchReadingArray.create(caseCount, zeroed: false)
 	let unreadable = BatchReading.unobserved
 	let process = batchProcessTrusted(batch)
-	var stdout = parseMarkedStream(batch.stdout)
-	var stderr = parseMarkedStream(batch.stderr)
+	let stdout = parseMarkedStream(batch.stdout)
+	let stderr = parseMarkedStream(batch.stderr)
 
 	for index in 0 upto caseCount 'eachCase'
 		if not process 'untrusted'
@@ -1459,7 +1459,7 @@ module function readBatch(batch ProcessCapture, caseCount ElementIndex) returns 
 end 'readBatch'
 
 module function unreadBatch(caseCount ElementIndex) returns BatchReadingArray
-	var readings = BatchReadingArray.create(caseCount, zeroed: false)
+	let readings = BatchReadingArray.create(caseCount, zeroed: false)
 	readings.refill(caseCount, value: BatchReading.unobserved)
 	return readings
 end 'unreadBatch'
@@ -1512,8 +1512,8 @@ module function readAlone(observation RunObservation, caseIndex ElementIndex) re
 end 'readAlone'
 
 function readAloneCapture(capture ProcessCapture, caseIndex ElementIndex) returns RunObservation
-	var stdout = parseMarkedStream(capture.stdout)
-	var stderr = parseMarkedStream(capture.stderr)
+	let stdout = parseMarkedStream(capture.stdout)
+	let stderr = parseMarkedStream(capture.stderr)
 
 	if not entryBegan(stdout, stderr: stderr, index: caseIndex) 'diedBeforeTheEntry'
 		return RunObservation.failed("the batch program died before case {caseIndex} began — a case runs code before main that failed, and the batching checks did not catch it; the runner must keep it out of batches")

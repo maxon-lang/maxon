@@ -44,7 +44,7 @@ end 'Readers'
 
 function main() returns ExitCode
 	let readers = Readers.create()
-	var planes = Planes.create()
+	let planes = Planes.create()
 	planes.set(1, value: 20)
 	planes.set(2, value: 30)
 	planes.set(3, value: 40)
@@ -669,7 +669,7 @@ end 'Readers'
 
 function main() returns ExitCode
 	let readers = Readers.create()
-	var planes = Planes.create()
+	let planes = Planes.create()
 	planes.set(4, value: 50)
 	planes.set(5, value: 60)
 	planes.set(6, value: 70)
@@ -1352,7 +1352,7 @@ end 'Writers'
 
 function main() returns ExitCode
 	let writers = Writers.create()
-	var planes = Planes.create()
+	let planes = Planes.create()
 
 	writers.writer(planes, 6, 77)
 
@@ -1441,7 +1441,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 48
+    x64.prologue 32
   __il_body#11:
     x64.leaRegRdata rbx, [rip + __fnrec_writeAt]
     x64.movRegImm32 rcx, 8
@@ -1457,29 +1457,21 @@ func @main {
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
     x64.callDirect __managed_create_fixed
+    x64.movRegReg rbx, r8
   __il_cont#9:
-    x64.movRegImm32 rax, 16
-    x64.movRegImm32 rax, 0
-    x64.leaRegSlot rbx, slot0
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rbx + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.loadRegBaseDisp.word64 r13, [r12 + 0]
     x64.movRegReg rcx, r13
     x64.callDirect __mm_retain
     x64.movRegReg r14, r8
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegImm32 rdx, 6
     x64.movRegImm32 rax, 77
     x64.loadRegBaseDisp.word64 rsi, [r13 + 0]
+    x64.movRegReg rcx, rbx
     x64.movRegReg r9, r13
     x64.callReg rsi
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 48]
   __im_cont#7:
     x64.cmpRegImm32 rax, 77
@@ -1487,7 +1479,6 @@ func @main {
     x64.jcc notEqual, scmerge
   andrhs:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
   __im_cont#8:
     x64.cmpRegImm32 rax, 0
@@ -1497,19 +1488,19 @@ func @main {
     x64.jcc equal, ifcont
   written:
     x64.movRegImm32 r13, 0
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.jmp exitdrop
   ifcont:
     x64.movRegImm32 r13, 1
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
   exitdrop:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Writers
   exitterminal:
     x64.movRegReg r8, r13
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1592,7 +1583,7 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 48
+    x64.prologue 32
   __il_body#11:
     x64.leaRegRdata rbx, [rip + __fnrec_writeAt]
     x64.movRegImm32 rcx, 8
@@ -1608,29 +1599,21 @@ func @main {
     x64.loadRegBaseDisp.word64 r9, [rdx + 40]
     x64.movRegReg rdx, rax
     x64.callDirect __managed_create_fixed
+    x64.movRegReg rbx, r8
   __il_cont#9:
-    x64.movRegImm32 rax, 16
-    x64.movRegImm32 rax, 0
-    x64.leaRegSlot rbx, slot0
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rbx + 0], rax
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
-    x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.loadRegBaseDisp.word64 r13, [r12 + 0]
     x64.movRegReg rcx, r13
     x64.callDirect __mm_retain
     x64.movRegReg r14, r8
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegImm32 rdx, 6
     x64.movRegImm32 rax, 77
     x64.loadRegBaseDisp.word64 rsi, [r13 + 0]
+    x64.movRegReg rcx, rbx
     x64.movRegReg r9, r13
     x64.callReg rsi
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 48]
   __im_cont#7:
     x64.cmpRegImm32 rax, 77
@@ -1638,7 +1621,6 @@ func @main {
     x64.jcc notEqual, scmerge
   andrhs:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 40]
   __im_cont#8:
     x64.cmpRegImm32 rax, 0
@@ -1648,19 +1630,19 @@ func @main {
     x64.jcc equal, ifcont
   written:
     x64.movRegImm32 r13, 0
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.jmp exitdrop
   ifcont:
     x64.movRegImm32 r13, 1
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
   exitdrop:
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Writers
   exitterminal:
     x64.movRegReg r8, r13
-    x64.epilogue 48
+    x64.epilogue 32
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1731,11 +1713,11 @@ func @writeAt {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x22
-    arm64.storeSlotReg slot4, x21
-    arm64.storeSlotReg slot3, x20
-    arm64.storeSlotReg slot2, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
   __il_body#11:
     arm64.leaRdata x19, __fnrec_writeAt
     arm64.movImm x0, 8
@@ -1751,29 +1733,21 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
     arm64.bl __managed_create_fixed
+    arm64.movRegReg x19, x0
   __il_cont#9:
-    arm64.movImm x1, 16
-    arm64.movImm x1, 0
-    arm64.leaRegSlot x19, slot0
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x19 + 0], x1
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x19 + 8], x1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
     arm64.movRegReg x0, x21
     arm64.bl __mm_retain
     arm64.movRegReg x22, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.movImm x1, 6
     arm64.movImm x2, 77
     arm64.loadRegBaseDisp.word64 x4, [x21 + 0]
+    arm64.movRegReg x0, x19
     arm64.movRegReg x3, x21
     arm64.blr x4
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 48]
   __im_cont#7:
     arm64.cmp x0, 77
@@ -1781,7 +1755,6 @@ func @main {
     arm64.b.ne scmerge
   andrhs:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
   __im_cont#8:
     arm64.cmp x0, 0
@@ -1790,23 +1763,23 @@ func @main {
     arm64.cbz x0, ifcont
   written:
     arm64.movImm x21, 0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.b exitdrop
   ifcont:
     arm64.movImm x21, 1
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.movRegReg x0, x19
     arm64.bl __managed_decref
   exitdrop:
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Writers
   exitterminal:
     arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.loadRegSlot x22, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
 }
 ```
@@ -1875,11 +1848,11 @@ func @writeAt {
 
 func @main {
   entry:
-    arm64.prologue 64
-    arm64.storeSlotReg slot5, x22
-    arm64.storeSlotReg slot4, x21
-    arm64.storeSlotReg slot3, x20
-    arm64.storeSlotReg slot2, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
   __il_body#11:
     arm64.leaRdata x19, __fnrec_writeAt
     arm64.movImm x0, 8
@@ -1895,29 +1868,21 @@ func @main {
     arm64.loadRegBaseDisp.word64 x3, [x1 + 40]
     arm64.movRegReg x1, x2
     arm64.bl __managed_create_fixed
+    arm64.movRegReg x19, x0
   __il_cont#9:
-    arm64.movImm x1, 16
-    arm64.movImm x1, 0
-    arm64.leaRegSlot x19, slot0
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x19 + 0], x1
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x19 + 8], x1
-    arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.loadRegBaseDisp.word64 x21, [x20 + 0]
     arm64.movRegReg x0, x21
     arm64.bl __mm_retain
     arm64.movRegReg x22, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.movImm x1, 6
     arm64.movImm x2, 77
     arm64.loadRegBaseDisp.word64 x4, [x21 + 0]
+    arm64.movRegReg x0, x19
     arm64.movRegReg x3, x21
     arm64.blr x4
     arm64.movRegReg x0, x22
     arm64.bl __mm_decref
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 48]
   __im_cont#7:
     arm64.cmp x0, 77
@@ -1925,7 +1890,6 @@ func @main {
     arm64.b.ne scmerge
   andrhs:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 40]
   __im_cont#8:
     arm64.cmp x0, 0
@@ -1934,23 +1898,23 @@ func @main {
     arm64.cbz x0, ifcont
   written:
     arm64.movImm x21, 0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.b exitdrop
   ifcont:
     arm64.movImm x21, 1
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.movRegReg x0, x19
     arm64.bl __managed_decref
   exitdrop:
     arm64.movRegReg x0, x20
     arm64.bl __destruct_Writers
   exitterminal:
     arm64.movRegReg x0, x21
-    arm64.loadRegSlot x19, slot2
-    arm64.loadRegSlot x20, slot3
-    arm64.loadRegSlot x21, slot4
-    arm64.loadRegSlot x22, slot5
-    arm64.epilogue 64
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
     arm64.ret
 }
 ```

@@ -97,7 +97,7 @@ function qualifiedEnumMember(callee ByteArray, prefixLength ElementIndex, member
 
 	let separator = try EnumFromNameCaseSeparator.get(0) otherwise panic("qualifiedEnumMember: get(0) failed on the one-byte separator the guard above just measured")
 
-	var declarationName = ByteArray.create(callee.count() - prefixLength, zeroed: false)
+	let declarationName = ByteArray.create(callee.count() - prefixLength, zeroed: false)
 
 	for i in prefixLength upto callee.count() 'eachByte'
 		let b = try callee.get(i) otherwise panic("qualifiedEnumMember: callee.get OOB at {i} below its own count")
@@ -153,7 +153,7 @@ let EnumLookupNoSuchCaseNameFlag = EnumLookupNoSuchCaseNameOrdinal + ErrorFlagOr
 // `Compiler.maxon` rather than the tail of `installEnumLookupHelpers`, because the installs run AFTER the
 // pipeline, where a diagnostic would have no error gate left to fail against.
 export function verifyEnumLookupErrorOrdinals(project Project)
-	var enumLookupErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinEnumLookupErrorEnum(project.interfaces.spellingOf(BuiltinInterfaceKind.error)), installer: b"installEnumLookupHelpers")
+	let enumLookupErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinEnumLookupErrorEnum(project.interfaces.spellingOf(BuiltinInterfaceKind.error)), installer: b"installEnumLookupHelpers")
 	enumLookupErrors.claim(EnumLookupNoSuchRawValueCaseName, ordinal: EnumLookupNoSuchRawValueOrdinal)
 	enumLookupErrors.claim(EnumLookupNoSuchCaseNameCaseName, ordinal: EnumLookupNoSuchCaseNameOrdinal)
 
@@ -290,18 +290,18 @@ end 'installEnumLookupHelpers'
 function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout, project Project)
 	let comparesBytes = enumRawValueIsBytes(layout.backing)
 
-	var func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: enumLookupThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: enumLookupThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let raw = 0
 
 	var cur = entry
 
 	for i in 0 upto layout.caseCount() 'eachCase'
-		var hit = module.addBlock(func, label: b"hit", heat: BlockHeat.normal)
-		var nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
+		let hit = module.addBlock(func, label: b"hit", heat: BlockHeat.normal)
+		let nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		emitRawValueTestBranch(module, block: cur, raw: raw, layout: layout, caseIndex: i, comparesBytes: comparesBytes, globalData: project.globalData, hit: hit, miss: nextTest, ids: ids)
 		emitOkReturn(module, block: hit, value: emitConst(module, block: hit, value: layout.tagOfIndex(i), ids: ids), ids: ids)
 		cur = nextTest
@@ -358,10 +358,10 @@ end 'enumRawValueIsBytes'
 // cases carry payloads therefore gets a body that is one error return, which is the honest answer
 // rather than an absent function.
 function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Project, representation UnionRepresentation)
-	var func = IrFunction.createFromStd(enumFromNameSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: enumLookupThrows())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(enumFromNameSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: enumLookupThrows())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let name = 0
 
@@ -372,8 +372,8 @@ function synthesizeEnumFromName(module StdModule, layout EnumLayout, project Pro
 			continue
 		end 'carriesAPayload'
 
-		var hit = module.addBlock(func, label: b"hit", heat: BlockHeat.normal)
-		var nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
+		let hit = module.addBlock(func, label: b"hit", heat: BlockHeat.normal)
+		let nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
 		emitNameTestBranch(module, block: cur, name: name, caseName: layout.caseNameAt(i), globalData: project.globalData, hit: hit, miss: nextTest, ids: ids)
 		emitCaseValueReturn(module, block: hit, layout: layout, caseIndex: i, project: project, representation: representation, ids: ids)
 		cur = nextTest
@@ -401,21 +401,21 @@ end 'synthesizeEnumFromName'
 function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseIndex CaseIndex, project Project, representation UnionRepresentation)
 	let arity = layout.payloadArityAt(caseIndex)
 	let paramCount = (1 + arity) as ParamCount
-	var paramTypes = StdTypeArray.create(paramCount, zeroed: false)
+	let paramTypes = StdTypeArray.create(paramCount, zeroed: false)
 
 	for _ in 0 upto paramCount 'eachParam'
 		paramTypes.push(StdType.i64)
 	end 'eachParam'
 
-	var func = IrFunction.createFromStd(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(caseIndex)), returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, throwsTypeName: enumLookupThrows())
-	var ids = ValueMinter.create(paramCount)
+	let func = IrFunction.createFromStd(enumFromNameCaseSymbol(layout.name, caseName: layout.caseNameAt(caseIndex)), returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, throwsTypeName: enumLookupThrows())
+	let ids = ValueMinter.create(paramCount)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: paramCount)
 	let name = 0
 
-	var build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
-	var miss = module.addBlock(func, label: b"nocase", heat: BlockHeat.normal)
+	let build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
+	let miss = module.addBlock(func, label: b"nocase", heat: BlockHeat.normal)
 	emitNameTestBranch(module, block: entry, name: name, caseName: layout.caseNameAt(caseIndex), globalData: project.globalData, hit: build, miss: miss, ids: ids)
 
 	if representation == UnionRepresentation.word 'aWord'

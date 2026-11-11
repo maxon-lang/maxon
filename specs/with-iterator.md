@@ -158,7 +158,7 @@ end 'printRest'
 
 function main() returns ExitCode
 	let toks = ["a", "b", "c", "d"]
-	var iter = try toks.createIterator() otherwise return 9
+	let iter = try toks.createIterator() otherwise return 9
 	try iter.advance() otherwise return 9
 	try iter.advance() otherwise return 9
 	printRest(iter)
@@ -196,7 +196,7 @@ function slowTally(n Tally) returns Tally throws WaitError
 end 'slowTally'
 
 function main() returns ExitCode
-	var promises = TallyPromiseArray.create(0)
+	let promises = TallyPromiseArray.create(0)
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
 
@@ -248,7 +248,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let calc = spawn Calc.create()
-	var replies = ReplyPromiseArray.create(0)
+	let replies = ReplyPromiseArray.create(0)
 	replies.push(try calc.divide(10, by: 2) otherwise panic("an open mailbox with room takes the send"))
 	replies.push(try calc.divide(10, by: 0) otherwise panic("an open mailbox with room takes the send"))
 
@@ -283,7 +283,7 @@ function slowTally(n Tally) returns Tally
 end 'slowTally'
 
 function main() returns ExitCode
-	var promises = TallyPromiseArray.create(0)
+	let promises = TallyPromiseArray.create(0)
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
 	var seen = 0 as Tally
@@ -313,7 +313,7 @@ function slowTally(n Tally) returns Tally
 end 'slowTally'
 
 function main() returns ExitCode
-	var promises = TallyPromiseArray.create(0)
+	let promises = TallyPromiseArray.create(0)
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
 	promises.push(async slowTally(4))
@@ -344,7 +344,7 @@ function slowTally(n Tally) returns Tally
 end 'slowTally'
 
 function main() returns ExitCode
-	var promises = TallyPromiseArray.create(0)
+	let promises = TallyPromiseArray.create(0)
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
 	var total = 0 as Tally
@@ -376,10 +376,10 @@ function slowTally(n Tally) returns Tally
 end 'slowTally'
 
 function main() returns ExitCode
-	var outer = TallyPromiseArray.create(0)
+	let outer = TallyPromiseArray.create(0)
 	outer.push(async slowTally(1))
 	outer.push(async slowTally(2))
-	var inner = TallyPromiseArray.create(0)
+	let inner = TallyPromiseArray.create(0)
 	inner.push(async slowTally(10))
 	inner.push(async slowTally(20))
 	var total = 0 as Tally
@@ -412,7 +412,7 @@ end 'Iterator'
 
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40]
-	var wrapped = try arr.withIterator() otherwise return 90
+	let wrapped = try arr.withIterator() otherwise return 90
 	try wrapped.advance() otherwise return 91
 	let (iter, value) = wrapped.currentAgain()
 	print("{iter.index()}:{value}\n")

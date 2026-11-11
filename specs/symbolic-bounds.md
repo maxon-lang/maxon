@@ -65,14 +65,14 @@ function total(a WordArray) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
 	if total(a) != 55 'sum'
 		return 1
 	end 'sum'
-	var empty = WordArray.create(0)
+	let empty = WordArray.create(0)
 	if total(empty) != 0 'none'
 		return 2
 	end 'none'
@@ -125,7 +125,7 @@ function flips(p WordArray) returns Word
 end 'flips'
 
 function main() returns ExitCode
-	var p = WordArray.create(0)
+	let p = WordArray.create(0)
 	p.push(4)
 	p.push(1)
 	p.push(2)
@@ -170,7 +170,7 @@ function double(a WordArray, n Count) returns Word
 end 'double'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i + 1)
 	end 'seed'
@@ -200,7 +200,7 @@ function walk(a WordArray, n Count) returns Word
 end 'walk'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(i)
 	end 'seed'
@@ -231,7 +231,7 @@ function overrun(a WordArray) returns Word
 end 'overrun'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 4 'seed'
 		a.push(i)
 	end 'seed'
@@ -259,11 +259,11 @@ function lastOr(a WordArray, fallback Word) returns Word
 end 'lastOr'
 
 function main() returns ExitCode
-	var empty = WordArray.create(0)
+	let empty = WordArray.create(0)
 	if lastOr(empty, fallback: 7) != 7 'emptyFallsBack'
 		return 1
 	end 'emptyFallsBack'
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(3)
 	a.push(8)
 	if lastOr(a, fallback: 7) != 8 'lastElement'
@@ -301,7 +301,7 @@ function growAndSum(a WordArray) returns Word
 end 'growAndSum'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 4 'seed'
 		a.push(i + 10)
 	end 'seed'
@@ -338,7 +338,7 @@ function nextSum(a WordArray) returns Word
 end 'nextSum'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(10)
 	a.push(20)
 	a.push(30)

@@ -285,7 +285,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var o = Outer.create(Inner.create(3))
+	let o = Outer.create(Inner.create(3))
 	o.writeIt(7)
 	return o.readIt()
 end 'main'
@@ -383,7 +383,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var o = Outer.create(Inner.create("abc"))
+	let o = Outer.create(Inner.create("abc"))
 	o.setViaAlias("hello world")
 	let a = o.lenViaAlias()
 	o.setViaSelf("hi")
@@ -410,7 +410,7 @@ type Inner
 	export var items as StringArray
 
 	static function create() returns Self
-		var a = StringArray.create(0)
+		let a = StringArray.create(0)
 		a.push("first iterated text {40 + 2}")
 		a.push("second iterated text {40 + 5}")
 		return Self{items: a}
@@ -436,7 +436,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var o = Outer.create(Inner.create())
+	let o = Outer.create(Inner.create())
 	return o.probe()
 end 'main'
 ```

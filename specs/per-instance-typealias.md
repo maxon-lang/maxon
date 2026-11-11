@@ -290,7 +290,7 @@ function main() returns ExitCode
 	let a = WA.create(1, tag: 5)
 	let aTag = a.getTag()
 	let bTag = aTag as WB.Idx
-	var a2 = WA.create(9, tag: 0)
+	let a2 = WA.create(9, tag: 0)
 	a2.setTag(aTag)
 	let check = a2.getTag()
 	if bTag == 5 'converted'
@@ -522,7 +522,7 @@ extension Holder
 	export typealias Bag = Array with Num
 
 	export function fill() returns Bag
-		var b = Bag.create(0)
+		let b = Bag.create(0)
 		b.push(self.v)
 		b.push(self.v)
 		return b
@@ -1151,11 +1151,11 @@ end 'Seq'
 function main() returns ExitCode
 	let box = Box.create(3)
 	let crate = Crate.create(4)
-	var all = box.all()
+	let all = box.all()
 	all.push(box.first())
-	var more = crate.all()
+	let more = crate.all()
 	more.push(crate.first())
-	var chain = crate.chained()
+	let chain = crate.chained()
 	chain.append(crate.first())
 	return (all.count() + more.count() + chain.count()) as ExitCode
 end 'main'
@@ -1240,9 +1240,9 @@ end 'Seq'
 function main() returns ExitCode
 	let flagged = Flagged.create(Flag.up)
 	let ranked = Ranked.create(Rank.create(2))
-	var hashed = flagged.hashedItems()
+	let hashed = flagged.hashedItems()
 	hashed.push(flagged.first())
-	var listed = ranked.rankedItems()
+	let listed = ranked.rankedItems()
 	listed.append(ranked.first())
 	return (hashed.count() + listed.count()) as ExitCode
 end 'main'
@@ -1434,9 +1434,9 @@ end 'Crate'
 function main() returns ExitCode
 	let box = Box.create(3)
 	let crate = Crate.create(4)
-	var listed = box.items()
+	let listed = box.items()
 	listed.prepend(box.n)
-	var arrayed = crate.items()
+	let arrayed = crate.items()
 	arrayed.push(crate.n)
 	return (listed.count() + arrayed.count()) as ExitCode
 end 'main'
@@ -1474,7 +1474,7 @@ export extension Box
 	export typealias Items = List with Digit
 
 	export function items() returns Items
-		var made = Items.create()
+		let made = Items.create()
 		made.append(self.n)
 		return made
 	end 'items'
@@ -1485,7 +1485,7 @@ export extension Crate
 	export typealias Items = Array with Digit
 
 	export function items() returns Items
-		var made = Items.create(0)
+		let made = Items.create(0)
 		made.push(self.n)
 		return made
 	end 'items'
@@ -1729,7 +1729,7 @@ end 'Seq'
 
 function main() returns ExitCode
 	let box = Box.create(3)
-	var xs = box.items()
+	let xs = box.items()
 	xs.prepend(box.first())
 	return xs.count() as ExitCode
 end 'main'
@@ -1783,9 +1783,9 @@ end 'Seq'
 // --- file: main.maxon
 function main() returns ExitCode
 	let box = Box.create(3)
-	var xs = box.items()
+	let xs = box.items()
 	xs.prepend(box.first())
-	var ys = box.wrapped()
+	let ys = box.wrapped()
 	ys.push(box.n)
 	return (xs.count() + ys.count()) as ExitCode
 end 'main'
@@ -1957,9 +1957,9 @@ end 'Seq'
 function main() returns ExitCode
 	let box = Box.create(3)
 	let plain = Plain.create(4)
-	var listed = box.items()
+	let listed = box.items()
 	listed.push(box.first() as Wide)
-	var arrayed = plain.items()
+	let arrayed = plain.items()
 	arrayed.push(plain.first())
 	return (listed.count() + arrayed.count()) as ExitCode
 end 'main'
@@ -2012,17 +2012,17 @@ typealias Number = int(0 to 99)
 typealias Numbers = Array with Number
 
 function main() returns ExitCode
-	var xs = Numbers.create(0)
+	let xs = Numbers.create(0)
 	xs.push(3)
 	xs.push(1)
 
-	var mapped = xs.map(function(n) gives n)
+	let mapped = xs.map(function(n) gives n)
 	mapped.push(5)
 
-	var ys = xs.firstTwo()
+	let ys = xs.firstTwo()
 	ys.prepend(2)
 
-	var zs = xs.spare()
+	let zs = xs.spare()
 	zs.prepend(4)
 
 	xs.sortBy(function(a, b) gives a.compare(b))
@@ -2055,7 +2055,7 @@ typealias Number = int(0 to 9)
 typealias Numbers = Array with Number
 
 function main() returns ExitCode
-	var xs = Numbers from [3, 1, 2]
+	let xs = Numbers from [3, 1, 2]
 	xs.sortBy(function(a, b) gives a.compare(b))
 	let first = try xs.rank(function(_) gives Ordering.equalTo) otherwise Ordering.lessThan
 	print("{xs.count()} {first.rawValue}\n")
@@ -2089,7 +2089,7 @@ typealias Number = int(0 to 99)
 typealias Numbers = Array with Number
 
 function main() returns ExitCode
-	var xs = Numbers.create(0)
+	let xs = Numbers.create(0)
 	let marker = 7 as Byte
 
 	for i in 0 upto 100 'fill'
@@ -2166,11 +2166,11 @@ typealias Number = int(0 to 99)
 typealias Numbers = Array with Number
 
 function main() returns ExitCode
-	var xs = Numbers.create(0)
+	let xs = Numbers.create(0)
 	xs.push(3)
 	xs.push(1)
 
-	var mapped = xs.map(function(n) gives n)
+	let mapped = xs.map(function(n) gives n)
 	mapped.push(5)
 
 	let total = xs.combine(function(a, b) gives (a + b) as Number, seed: 0)
@@ -2229,11 +2229,11 @@ end 'Zebra'
 typealias QuantumZebra = Zebra with Quantum
 
 function main() returns ExitCode
-	var sack = QuantumZebra.make()
+	let sack = QuantumZebra.make()
 	sack.add(3)
 	sack.add(1)
 
-	var mapped = sack.map(function(n) gives n)
+	let mapped = sack.map(function(n) gives n)
 	mapped.push(5)
 
 	let total = sack.combine(function(a, b) gives (a + b) as Quantum, seed: 0)
@@ -2292,14 +2292,14 @@ end 'Zebra'
 typealias QuantumZebra = Zebra with Quantum
 
 function main() returns ExitCode
-	var zebra = QuantumZebra.make()
+	let zebra = QuantumZebra.make()
 	zebra.add(2)
 
-	var xs = Quantums.create(0)
+	let xs = Quantums.create(0)
 	xs.push(3)
 	xs.push(1)
 
-	var mapped = xs.map(function(n) gives n)
+	let mapped = xs.map(function(n) gives n)
 	mapped.push(5)
 
 	let total = xs.combine(function(a, b) gives (a + b) as Quantum, seed: 0)
@@ -2329,8 +2329,8 @@ typealias Number = int(0 to 99)
 typealias Numbers = Array with Number
 
 function main() returns ExitCode
-	var xs = Numbers.create(0)
-	var zs = xs.spare()
+	let xs = Numbers.create(0)
+	let zs = xs.spare()
 	zs.push(4)
 	return zs.count() as ExitCode
 end 'main'
@@ -2412,7 +2412,7 @@ export type Holder
 	end 'create'
 
 	export function fill() returns Bag
-		var b = Bag.create(0)
+		let b = Bag.create(0)
 		b.push(self.v)
 		return b
 	end 'fill'
@@ -2420,7 +2420,7 @@ end 'Holder'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var b = Bag.create(0)
+	let b = Bag.create(0)
 	b.push(20)
 	b.push(22)
 	let h = Holder.create(1)
@@ -2456,7 +2456,7 @@ export type Holder
 	end 'create'
 
 	export function fill() returns Bag
-		var b = Bag.create(0)
+		let b = Bag.create(0)
 		b.push(self.v)
 		return b
 	end 'fill'
@@ -2476,7 +2476,7 @@ type Keeper
 end 'Keeper'
 
 function makeBag() returns Bag
-	var b = Bag.create(0)
+	let b = Bag.create(0)
 	b.push(20)
 	b.push(22)
 	return b
@@ -2510,7 +2510,7 @@ end 'main'
 whole program, so a user file writes it bare. The compiler's own spec harness spells it exactly this way.
 ```maxon
 function main() returns ExitCode
-	var paths = FilePathArray.create(0)
+	let paths = FilePathArray.create(0)
 	paths.push(try FilePath.from("a") otherwise panic("unreachable: 'a' is a valid path"))
 	paths.push(try FilePath.from("b") otherwise panic("unreachable: 'b' is a valid path"))
 	return paths.count() as ExitCode
@@ -2584,7 +2584,7 @@ export type HolderA
 end 'HolderA'
 
 export function fromA() returns Num
-	var b = Bag.create(0)
+	let b = Bag.create(0)
 	b.push(20)
 	return try b.get(0) otherwise 0
 end 'fromA'
@@ -2601,7 +2601,7 @@ export type HolderB
 end 'HolderB'
 
 export function fromB() returns Num
-	var b = Bag.create(0)
+	let b = Bag.create(0)
 	b.push("xx")
 	let first = try b.get(0) otherwise ""
 	return first.count() as Num

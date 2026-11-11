@@ -98,12 +98,12 @@ export function runMonitor(args MaxonArgs) returns ExitCode
 
 	let resolved = target.anchoredAt(Directory.currentPath())
 
-	var decoder = try DebugStreamDecoder.create(resolved, filter: filter) otherwise (e) 'noRing'
+	let decoder = try DebugStreamDecoder.create(resolved, filter: filter) otherwise (e) 'noRing'
 		printError("maxon monitor: {e.displayReason()}\n")
 		return OwnFailureExit
 	end 'noRing'
 
-	var child = try spawnTarget(resolved, arguments: childArguments(args.paths, from: exeIndex + 1), segment: decoder.segmentName()) otherwise (e) 'noChild'
+	let child = try spawnTarget(resolved, arguments: childArguments(args.paths, from: exeIndex + 1), segment: decoder.segmentName()) otherwise (e) 'noChild'
 		decoder.close()
 		printError("maxon monitor: could not spawn {spelling} ({e.displayReason()})\n")
 		return OwnFailureExit
@@ -198,7 +198,7 @@ end 'spawnTarget'
 // Everything after the executable, in the order typed. It is the CHILD's command line and reaches it
 // untouched — this driver neither reads nor rewrites any of it.
 function childArguments(tail SourcePathSpellingArray, from ArgumentIndex) returns StringArray
-	var argv = StringArray.create(tail.count(), zeroed: false)
+	let argv = StringArray.create(tail.count(), zeroed: false)
 
 	for (position, argument) in tail.withIterator() 'eachArgument'
 		if position.index() as ArgumentIndex >= from 'aChildArgument'

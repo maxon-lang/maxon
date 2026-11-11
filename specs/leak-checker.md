@@ -69,7 +69,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function use_array()
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -160,9 +160,9 @@ function decode(t MaxonType) returns Integer
 end 'decode'
 
 function main() returns ExitCode
-	var m = TypeMap.create()
+	let m = TypeMap.create()
 	m.upsert("a", value: ReturnType.value(MaxonType.named(42)))
-	view t = dispatch(m, key: "a")
+	let t = dispatch(m, key: "a")
 	return decode(t)
 end 'main'
 ```

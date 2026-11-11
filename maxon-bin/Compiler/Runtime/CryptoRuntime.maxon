@@ -277,8 +277,8 @@ type AesSizeLimits
 	end 'of'
 
 	function emitGuards(module StdModule, func IrFunction, entry IrBlock, bytes ValueId, refused IrBlock, next IrBlock, ids ValueMinter)
-		var bounded = module.addBlock(func, label: freeze "{self.prefix}bounded".toByteArray(), heat: BlockHeat.normal)
-		var stepped = module.addBlock(func, label: freeze "{self.prefix}stepped".toByteArray(), heat: BlockHeat.normal)
+		let bounded = module.addBlock(func, label: freeze "{self.prefix}bounded".toByteArray(), heat: BlockHeat.normal)
+		let stepped = module.addBlock(func, label: freeze "{self.prefix}stepped".toByteArray(), heat: BlockHeat.normal)
 
 		emitBranchOnCompare(module, block: entry, value: bytes, pred: StdCmpPred.lt, against: self.minBytes, whenTrue: refused, whenFalse: bounded, ids: ids)
 		emitBranchOnCompare(module, block: bounded, value: bytes, pred: StdCmpPred.gt, against: self.maxBytes, whenTrue: refused, whenFalse: stepped, ids: ids)
@@ -289,7 +289,7 @@ type AesSizeLimits
 end 'AesSizeLimits'
 
 function emitLengthSpanGuards(module StdModule, func IrFunction, entry IrBlock, next IrBlock, refused IrBlock, arr ValueId, at ValueId, length ValueId, prefix String, ids ValueMinter)
-	var inside = module.addBlock(func, label: freeze "{prefix}inside".toByteArray(), heat: BlockHeat.normal)
+	let inside = module.addBlock(func, label: freeze "{prefix}inside".toByteArray(), heat: BlockHeat.normal)
 
 	let bytes = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	emitBranchOnCompareValues(module, block: entry, a: at, pred: StdCmpPred.gt, b: bytes, whenTrue: refused, whenFalse: inside, ids: ids, operandType: StdType.u64)
@@ -311,15 +311,15 @@ function emitGcmRounds(module StdModule, block IrBlock, keyBlockBytes ValueId, i
 end 'emitGcmRounds'
 
 function buildAesExpandKey(module StdModule)
-	var func = IrFunction.createFromStd(AesCipherExpandKeyName, returnType: StdReturnType.void, paramCount: AesExpandKeyParams, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(AesExpandKeyParams)
+	let func = IrFunction.createFromStd(AesCipherExpandKeyName, returnType: StdReturnType.void, paramCount: AesExpandKeyParams, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(AesExpandKeyParams)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var bounded = module.addBlock(func, label: b"akbounded", heat: BlockHeat.normal)
-	var aligned = module.addBlock(func, label: b"akaligned", heat: BlockHeat.normal)
-	var sized = module.addBlock(func, label: b"aksized", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let bounded = module.addBlock(func, label: b"akbounded", heat: BlockHeat.normal)
+	let aligned = module.addBlock(func, label: b"akaligned", heat: BlockHeat.normal)
+	let sized = module.addBlock(func, label: b"aksized", heat: BlockHeat.normal)
 	var expand = module.addBlock(func, label: b"akexpand", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"akbad", heat: BlockHeat.cold)
+	let bad = module.addBlock(func, label: b"akbad", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: AesExpandKeyParams)
 	let schedule = 0
@@ -363,12 +363,12 @@ function emitDecryptionKeys(module StdModule, block IrBlock, scheduleBytes Value
 end 'emitDecryptionKeys'
 
 function buildAesBlockRoutine(module StdModule, name ByteArray, routine CryptoRoutine)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: AesBlockParams, paramTypes: fiveI64Params())
-	var ids = ValueMinter.create(AesBlockParams)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: AesBlockParams, paramTypes: fiveI64Params())
+	let ids = ValueMinter.create(AesBlockParams)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var crypt = module.addBlock(func, label: b"abcrypt", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"abbad", heat: BlockHeat.cold)
+	let bad = module.addBlock(func, label: b"abbad", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: AesBlockParams)
 	let output = 0
@@ -378,13 +378,13 @@ function buildAesBlockRoutine(module StdModule, name ByteArray, routine CryptoRo
 	let inputAt = 4
 
 	let scheduleBytes = emitLoadField(module, block: entry, record: schedule, offset: ManagedRecordLengthOffset, ids: ids)
-	var outputSpan = module.addBlock(func, label: b"aboutput", heat: BlockHeat.normal)
+	let outputSpan = module.addBlock(func, label: b"aboutput", heat: BlockHeat.normal)
 	AesSizeLimits.of(AesSizedBuffer.schedule).emitGuards(module, func: func, entry: entry, bytes: scheduleBytes, refused: bad, next: outputSpan, ids: ids)
 
-	var inputSpan = module.addBlock(func, label: b"abinput", heat: BlockHeat.normal)
-	var outputInside = module.addBlock(func, label: b"abo", heat: BlockHeat.normal)
+	let inputSpan = module.addBlock(func, label: b"abinput", heat: BlockHeat.normal)
+	let outputInside = module.addBlock(func, label: b"abo", heat: BlockHeat.normal)
 	emitSpanGuards(module, entry: outputSpan, inside: outputInside, next: inputSpan, refused: bad, arr: output, at: outputAt, byteCount: AesBlockBytes, ids: ids)
-	var inputInside = module.addBlock(func, label: b"abi", heat: BlockHeat.normal)
+	let inputInside = module.addBlock(func, label: b"abi", heat: BlockHeat.normal)
 	emitSpanGuards(module, entry: inputSpan, inside: inputInside, next: crypt, refused: bad, arr: input, at: inputAt, byteCount: AesBlockBytes, ids: ids)
 
 	// The detach comes first so the data pointers below are read after it: an output that shares its
@@ -412,13 +412,13 @@ function buildAesBlockRoutine(module StdModule, name ByteArray, routine CryptoRo
 end 'buildAesBlockRoutine'
 
 function buildAesCtrXor(module StdModule)
-	var func = IrFunction.createFromStd(AesCipherCtrXorName, returnType: StdReturnType.void, paramCount: AesCtrParams, paramTypes: sixI64Params())
-	var ids = ValueMinter.create(AesCtrParams)
+	let func = IrFunction.createFromStd(AesCipherCtrXorName, returnType: StdReturnType.void, paramCount: AesCtrParams, paramTypes: sixI64Params())
+	let ids = ValueMinter.create(AesCtrParams)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var counterCheck = module.addBlock(func, label: b"cxcounter", heat: BlockHeat.normal)
-	var dispatch = module.addBlock(func, label: b"cxdispatch", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"cxbad", heat: BlockHeat.cold)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let counterCheck = module.addBlock(func, label: b"cxcounter", heat: BlockHeat.normal)
+	let dispatch = module.addBlock(func, label: b"cxdispatch", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"cxbad", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: AesCtrParams)
 	let buffer = 0
@@ -438,8 +438,8 @@ function buildAesCtrXor(module StdModule)
 
 	for exponent in 0 upto AesCtrGroupCount - 1 'eachProbedGroup'
 		let group = aesCtrGroupBlocks(exponent)
-		var arm = module.addBlock(func, label: freeze "cxarm{group}".toByteArray(), heat: BlockHeat.normal)
-		var unmatched = module.addBlock(func, label: freeze "cxprobe{group}".toByteArray(), heat: BlockHeat.normal)
+		let arm = module.addBlock(func, label: freeze "cxarm{group}".toByteArray(), heat: BlockHeat.normal)
+		let unmatched = module.addBlock(func, label: freeze "cxprobe{group}".toByteArray(), heat: BlockHeat.normal)
 
 		emitBranchOnCompare(module, block: probe, value: blocks, pred: StdCmpPred.eq, against: group as FullRangeInt, whenTrue: arm, whenFalse: unmatched, ids: ids)
 		buildAesCtrArm(module, func: func, arm: arm, group: group, buffer: buffer, bufferAt: bufferAt, schedule: schedule, scheduleBytes: scheduleBytes, counterBlock: counterBlock, counterOffset: counterOffset, refused: bad, ids: ids)
@@ -447,7 +447,7 @@ function buildAesCtrXor(module StdModule)
 	end 'eachProbedGroup'
 
 	let widest = aesCtrGroupBlocks(AesCtrGroupCount - 1)
-	var widestArm = module.addBlock(func, label: freeze "cxarm{widest}".toByteArray(), heat: BlockHeat.normal)
+	let widestArm = module.addBlock(func, label: freeze "cxarm{widest}".toByteArray(), heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: probe, value: blocks, pred: StdCmpPred.eq, against: widest as FullRangeInt, whenTrue: widestArm, whenFalse: bad, ids: ids)
 	buildAesCtrArm(module, func: func, arm: widestArm, group: widest, buffer: buffer, bufferAt: bufferAt, schedule: schedule, scheduleBytes: scheduleBytes, counterBlock: counterBlock, counterOffset: counterOffset, refused: bad, ids: ids)
 
@@ -457,7 +457,7 @@ function buildAesCtrXor(module StdModule)
 end 'buildAesCtrXor'
 
 function buildAesCtrArm(module StdModule, func IrFunction, arm IrBlock, group AesCtrGroupBlocks, buffer ValueId, bufferAt ValueId, schedule ValueId, scheduleBytes ValueId, counterBlock ValueId, counterOffset ValueId, refused IrBlock, ids ValueMinter)
-	var inside = module.addBlock(func, label: freeze "cxspan{group}".toByteArray(), heat: BlockHeat.normal)
+	let inside = module.addBlock(func, label: freeze "cxspan{group}".toByteArray(), heat: BlockHeat.normal)
 	var crypt = module.addBlock(func, label: freeze "cxcrypt{group}".toByteArray(), heat: BlockHeat.normal)
 	emitSpanGuards(module, entry: arm, inside: inside, next: crypt, refused: refused, arr: buffer, at: bufferAt, byteCount: (group as FullRangeInt) * AesBlockBytes, ids: ids)
 
@@ -475,13 +475,13 @@ function buildAesCtrArm(module StdModule, func IrFunction, arm IrBlock, group Ae
 end 'buildAesCtrArm'
 
 function buildAesGcmInit(module StdModule)
-	var func = IrFunction.createFromStd(AesCipherGcmInitName, returnType: StdReturnType.void, paramCount: AesGcmInitParams, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(AesGcmInitParams)
+	let func = IrFunction.createFromStd(AesCipherGcmInitName, returnType: StdReturnType.void, paramCount: AesGcmInitParams, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(AesGcmInitParams)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var keyBlockCheck = module.addBlock(func, label: b"gikeyblock", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let keyBlockCheck = module.addBlock(func, label: b"gikeyblock", heat: BlockHeat.normal)
 	var crypt = module.addBlock(func, label: b"gicrypt", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"gibad", heat: BlockHeat.cold)
+	let bad = module.addBlock(func, label: b"gibad", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: AesGcmInitParams)
 	let keyBlock = 0
@@ -510,8 +510,8 @@ function buildAesGcmInit(module StdModule)
 end 'buildAesGcmInit'
 
 function emitChunkUnlessEmpty(module StdModule, func IrFunction, cur IrBlock, count ValueId, routine CryptoRoutine, a0 ValueId, a1 ValueId, a2 ValueId, a3 ValueId, prefix String, ids ValueMinter) returns IrBlock
-	var run = module.addBlock(func, label: freeze "{prefix}run".toByteArray(), heat: BlockHeat.normal)
-	var joined = module.addBlock(func, label: freeze "{prefix}done".toByteArray(), heat: BlockHeat.normal)
+	let run = module.addBlock(func, label: freeze "{prefix}run".toByteArray(), heat: BlockHeat.normal)
+	let joined = module.addBlock(func, label: freeze "{prefix}done".toByteArray(), heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: cur, value: count, pred: StdCmpPred.eq, against: 0, whenTrue: joined, whenFalse: run, ids: ids)
 	module.appendOp(run, op: StdOp.cryptoRoutine(ids.mint(), routine: routine, a0Id: a0, a1Id: a1, a2Id: a2, a3Id: a3))
@@ -544,10 +544,10 @@ end 'emitGcmMessageStart'
 // Identical regions pass because each encrypt and decrypt chunk loads a run of blocks before it
 // stores that run. Any other overlap would load bytes an earlier store replaced, so it is refused.
 function emitGcmRegionsDoNotOverlap(module StdModule, func IrFunction, cur IrBlock, destination ValueId, destinationBytes ValueId, source ValueId, sourceBytes ValueId, refused IrBlock, next IrBlock, ids ValueMinter)
-	var written = module.addBlock(func, label: b"gpwritten", heat: BlockHeat.normal)
-	var apart = module.addBlock(func, label: b"gpapart", heat: BlockHeat.normal)
-	var below = module.addBlock(func, label: b"gpbelow", heat: BlockHeat.normal)
-	var above = module.addBlock(func, label: b"gpabove", heat: BlockHeat.normal)
+	let written = module.addBlock(func, label: b"gpwritten", heat: BlockHeat.normal)
+	let apart = module.addBlock(func, label: b"gpapart", heat: BlockHeat.normal)
+	let below = module.addBlock(func, label: b"gpbelow", heat: BlockHeat.normal)
+	let above = module.addBlock(func, label: b"gpabove", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: cur, value: sourceBytes, pred: StdCmpPred.eq, against: 0, whenTrue: next, whenFalse: written, ids: ids)
 	emitBranchOnCompare(module, block: written, value: destinationBytes, pred: StdCmpPred.eq, against: 0, whenTrue: next, whenFalse: apart, ids: ids)
@@ -563,17 +563,17 @@ end 'emitGcmRegionsDoNotOverlap'
 function buildAesGcmPass(module StdModule, opening bool)
 	let name = AesCipherGcmOpenName if opening else AesCipherGcmSealName
 	let returned = StdReturnType.value(builtinProtocolResultStdType(RequirementType.ofTag(ValueTypeTag.boolean))) if opening else StdReturnType.void
-	var func = IrFunction.createFromStd(name, returnType: returned, paramCount: AesGcmPassParams, paramTypes: sixI64Params())
-	var ids = ValueMinter.create(AesGcmPassParams)
+	let func = IrFunction.createFromStd(name, returnType: returned, paramCount: AesGcmPassParams, paramTypes: sixI64Params())
+	let ids = ValueMinter.create(AesGcmPassParams)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var nonceCheck = module.addBlock(func, label: b"gpnonce", heat: BlockHeat.normal)
-	var sourceCheck = module.addBlock(func, label: b"gpsource", heat: BlockHeat.normal)
-	var measure = module.addBlock(func, label: b"gpmeasure", heat: BlockHeat.normal)
-	var spanCheck = module.addBlock(func, label: b"gpspan", heat: BlockHeat.normal)
-	var detach = module.addBlock(func, label: b"gpdetach", heat: BlockHeat.normal)
-	var overlap = module.addBlock(func, label: b"gpoverlap", heat: BlockHeat.normal)
-	var bad = module.addBlock(func, label: b"gpbad", heat: BlockHeat.cold)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let nonceCheck = module.addBlock(func, label: b"gpnonce", heat: BlockHeat.normal)
+	let sourceCheck = module.addBlock(func, label: b"gpsource", heat: BlockHeat.normal)
+	let measure = module.addBlock(func, label: b"gpmeasure", heat: BlockHeat.normal)
+	let spanCheck = module.addBlock(func, label: b"gpspan", heat: BlockHeat.normal)
+	let detach = module.addBlock(func, label: b"gpdetach", heat: BlockHeat.normal)
+	let overlap = module.addBlock(func, label: b"gpoverlap", heat: BlockHeat.normal)
+	let bad = module.addBlock(func, label: b"gpbad", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: AesGcmPassParams)
 	let output = 0
@@ -658,8 +658,8 @@ function buildAesGcmPass(module StdModule, opening bool)
 		emitClearGcmMessage(module, block: crypt, message: message, ids: ids)
 		module.setTerminator(crypt, op: StdOp.retVoid)
 	end 'sealing' else 'opening'
-		var accepted = module.addBlock(func, label: b"gpaccepted", heat: BlockHeat.normal)
-		var rejected = module.addBlock(func, label: b"gprejected", heat: BlockHeat.normal)
+		let accepted = module.addBlock(func, label: b"gpaccepted", heat: BlockHeat.normal)
+		let rejected = module.addBlock(func, label: b"gprejected", heat: BlockHeat.normal)
 		let received = emitBin(module, block: crypt, a: sourceBase, b: length, opcode: StdBinOpcode.add, ids: ids)
 		let receivedHigh = emitLoadField(module, block: crypt, record: received, offset: 0, ids: ids)
 		let receivedLow = emitLoadField(module, block: crypt, record: received, offset: MachineWordBytes, ids: ids)

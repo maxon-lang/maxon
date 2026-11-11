@@ -85,7 +85,7 @@ end 'LspDocumentBlock'
 module typealias LspDocumentBlockArray = Array with LspDocumentBlock
 
 module function symbolsServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create(0)
+	let served = LspMethodArray.create(0)
 	served.push(LspMethod.documentSymbol)
 	served.push(LspMethod.foldingRange)
 	return served
@@ -109,9 +109,9 @@ end 'symbolsAnswer'
 // outline is a different answer rather than a fuller one: it changes what an editor's breadcrumb shows
 // and what its outline filter matches. Members and statement labels are deliberately not symbols here.
 function documentSymbolAnswer(source String, blocks LspDocumentBlockArray) returns LspAnswer
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 	let index = LspLineIndex.build(source)
-	var symbols = JsonNodeIdArray.create(0)
+	let symbols = JsonNodeIdArray.create(0)
 
 	for block in blocks 'eachBlock'
 		// A nested block is not a top-level symbol, and a statement label declares nothing an outline can
@@ -126,7 +126,7 @@ function documentSymbolAnswer(source String, blocks LspDocumentBlockArray) retur
 
 		let kind = symbolKindOf(block.kind)
 
-		var symbol = LspJsonObject.create(doc)
+		let symbol = LspJsonObject.create(doc)
 		symbol.put(SymbolNameKey, value: JsonNode.stringNode(String.from(block.name)))
 		symbol.put(LspKindKey, value: JsonNode.numberNode(kind as JsonFloat))
 		symbol.putNode(LspRangeKey, value: blockRangeNode(doc, source: source, index: index, block: block))
@@ -160,8 +160,8 @@ end 'symbolKindOf'
 // and a region that begins and ends on one line has nothing to collapse — an editor draws a useless
 // chevron for it.
 function foldingRangeAnswer(blocks LspDocumentBlockArray) returns LspAnswer
-	var doc = JsonDoc.create()
-	var ranges = JsonNodeIdArray.create(0)
+	let doc = JsonDoc.create()
+	let ranges = JsonNodeIdArray.create(0)
 
 	for block in blocks 'eachBlock'
 		if not lspBlockIsTerminated(block) 'stillBeingWritten'
@@ -172,7 +172,7 @@ function foldingRangeAnswer(blocks LspDocumentBlockArray) returns LspAnswer
 			continue
 		end 'nothingToCollapse'
 
-		var range = LspJsonObject.create(doc)
+		let range = LspJsonObject.create(doc)
 		range.put(FoldStartLineKey, value: JsonNode.numberNode(block.startLine as JsonFloat))
 		range.put(FoldEndLineKey, value: JsonNode.numberNode(block.endLine as JsonFloat))
 		ranges.push(range.finish())
@@ -236,8 +236,8 @@ typealias OpenBlockArray = Array with OpenBlock
 // rest of the file from one such line.
 module function lspDocumentBlocks(tokens TokenArray) returns LspDocumentBlockArray
 	let lines = lspTokenLines(tokens)
-	var open = OpenBlockArray.create(0)
-	var closed = LspDocumentBlockArray.create(0)
+	let open = OpenBlockArray.create(0)
+	let closed = LspDocumentBlockArray.create(0)
 
 	for tokenLine in lines 'eachLine'
 		let first = lspTokenAt(tokens, index: tokenLine.firstIndex)
@@ -409,7 +409,7 @@ end 'innermostKindIs'
 
 // Group the stream into source lines, layout tokens excluded.
 module function lspTokenLines(tokens TokenArray) returns LspTokenLineArray
-	var lines = LspTokenLineArray.create(0)
+	let lines = LspTokenLineArray.create(0)
 	var firstIndex = 0 as ElementIndex
 	var lastIndex = 0 as ElementIndex
 	var currentLine = 0 as LineNumber

@@ -96,7 +96,7 @@ type ReferenceIndexBuilder
 	var levelHeadings as StringArray
 
 	static function create() returns ReferenceIndexBuilder
-		var levelHeadings = StringArray.create(0)
+		let levelHeadings = StringArray.create(0)
 
 		for _ in 0 to MaxHeadingLevel 'eachLevel'
 			levelHeadings.push("")
@@ -158,7 +158,7 @@ function headingLevelOf(line String) returns HeadingLevel throws HeadingError
 end 'headingLevelOf'
 
 module function referenceIndexOf(document String) returns ReferenceIndex
-	var builder = ReferenceIndexBuilder.create()
+	let builder = ReferenceIndexBuilder.create()
 	var inFence = false
 
 	for line in document.split(LineFeed) 'eachLine'
@@ -184,7 +184,7 @@ module function referenceIndexOf(document String) returns ReferenceIndex
 end 'referenceIndexOf'
 
 function qualifiedNamesIn(document String) returns StringSet
-	var qualified = StringSet.create()
+	let qualified = StringSet.create()
 	var previous = ""
 	var current = ""
 	var afterDot = false
@@ -268,7 +268,7 @@ function leadingWord(text String) returns String
 end 'leadingWord'
 
 function publicDeclarationsIn(source String, fileName String) returns PublicDeclarationArray
-	var declarations = PublicDeclarationArray.create(0)
+	let declarations = PublicDeclarationArray.create(0)
 	var reservedScopeEnd = ""
 	var owner = ""
 	var ownerIsPublic = false
@@ -371,14 +371,14 @@ module type DeclarationRoster
 	end 'add'
 
 	function ownersByMember() returns OwnersByMember
-		var owners = OwnersByMember.create()
+		let owners = OwnersByMember.create()
 
 		for declaration in self.declarations 'eachDeclaration'
 			if declaration.owner.isEmpty() 'topLevel'
 				continue
 			end 'topLevel'
 
-			var declaring = try owners.get(declaration.name) otherwise StringArray.create(0)
+			let declaring = try owners.get(declaration.name) otherwise StringArray.create(0)
 
 			if not declaring.contains(declaration.owner) 'newOwner'
 				declaring.push(declaration.owner)
@@ -393,8 +393,8 @@ module type DeclarationRoster
 		let owners = self.ownersByMember()
 
 		var declared = 0 as Count
-		var missing = StringArray.create(0)
-		var missingFiles = StringArray.create(0)
+		let missing = StringArray.create(0)
+		let missingFiles = StringArray.create(0)
 
 		for declaration in self.declarations 'eachDeclaration'
 			declared = declared + 1
@@ -414,7 +414,7 @@ module type DeclarationRoster
 end 'DeclarationRoster'
 
 function otherDeclarers(owners OwnersByMember, declaration PublicDeclaration) returns StringArray
-	var others = StringArray.create(0)
+	let others = StringArray.create(0)
 	let declaring = try owners.get(declaration.name) otherwise return others
 
 	for owner in declaring 'eachOwner'
@@ -427,7 +427,7 @@ function otherDeclarers(owners OwnersByMember, declaration PublicDeclaration) re
 end 'otherDeclarers'
 
 function reportByFile(labels StringArray, files StringArray) returns String
-	var distinct = StringArray.create(0)
+	let distinct = StringArray.create(0)
 
 	for file in files 'eachFile'
 		if not distinct.contains(file) 'firstSighting'
@@ -435,10 +435,10 @@ function reportByFile(labels StringArray, files StringArray) returns String
 		end 'firstSighting'
 	end 'eachFile'
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	for file in distinct 'eachDistinctFile'
-		var here = StringArray.create(0)
+		let here = StringArray.create(0)
 
 		for (iter, label) in labels.withIterator() 'eachLabel'
 			if (try files.get(iter.index()) otherwise panic("stdlib-reference: every label has the file that declares it")) == file 'declaredHere'

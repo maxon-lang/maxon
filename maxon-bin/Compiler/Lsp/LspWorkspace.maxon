@@ -138,7 +138,7 @@ function placedDocument(path FilePath, dir FilePath, folders LspFolderArray) ret
 end 'placedDocument'
 
 function ancestryAbove(dir FilePath, folders LspFolderArray) returns DocumentAncestry throws RunCacheError
-	var names = RootNameArray.create(0)
+	let names = RootNameArray.create(0)
 	var current = dir.resolve(Directory.currentPath())
 
 	while true 'ascend'
@@ -321,7 +321,7 @@ module type HeldWorkspace
 		let selection = selectionOfRequest(request)
 
 		if self.corpora.contains(selection) 'heldAlready'
-			var held = try self.corpora.get(selection) otherwise panic("HeldWorkspace.sweptFor: the corpus for this selection was found one line above")
+			let held = try self.corpora.get(selection) otherwise panic("HeldWorkspace.sweptFor: the corpus for this selection was found one line above")
 
 			let swept = held.sweptFor(root, request: request, workspace: workspace)
 
@@ -361,8 +361,8 @@ module type HeldWorkspace
 	// the client showing this project as loading for the rest of the session.
 	function builtSwept(root SweepRoot, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
 		let sources = sourcesUnder(root, selection: selection, workspace: workspace)
-		var project = try libraryTierProject(sources.root, tiers: tiers, buffer: OpenBuffer.none, fileMemos: workspace.fileMemos) otherwise return SweptProject.unavailable
-		var fresh = HeldCorpus.create(project, selection: selection, sources: sources, sweptAtMs: Clock.nowMs())
+		let project = try libraryTierProject(sources.root, tiers: tiers, buffer: OpenBuffer.none, fileMemos: workspace.fileMemos) otherwise return SweptProject.unavailable
+		let fresh = HeldCorpus.create(project, selection: selection, sources: sources, sweptAtMs: Clock.nowMs())
 
 		let swept = fresh.sweptFor(root, request: request, workspace: workspace)
 
@@ -465,13 +465,13 @@ module type LspWorkspaceState
 	end 'create'
 
 	module function projectInputsOf(name RootName) returns ProjectInputsAnswer
-		var root = self.held.rootAt(name)
+		let root = self.held.rootAt(name)
 
 		return root.inputs.answerFor(root.name.spelled, workspace: self)
 	end 'projectInputsOf'
 
 	module function projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket) returns ProjectResolution
-		var root = try self.held.rootSpelledAs(dir) otherwise return ProjectResolution.superseded
+		let root = try self.held.rootSpelledAs(dir) otherwise return ProjectResolution.superseded
 
 		if not root.inputs.hold(answer, ticket: ticket) 'superseded'
 			return ProjectResolution.superseded
@@ -499,8 +499,8 @@ module type LspWorkspaceState
 	function requestResolution(dir FilePath) returns ResolutionTicket
 		self.nextResolutionTicket = self.nextResolutionTicket + 1
 		let ticket = self.nextResolutionTicket
-		var root = try self.held.rootSpelledAs(dir) otherwise panic("LspWorkspaceState.requestResolution: a resolution is requested only through `projectInputsOf`, which files the root under this very spelling first")
-		var resolver = root.resolver.obtained(function() gives spawn LspProjectResolver.create())
+		let root = try self.held.rootSpelledAs(dir) otherwise panic("LspWorkspaceState.requestResolution: a resolution is requested only through `projectInputsOf`, which files the root under this very spelling first")
+		let resolver = root.resolver.obtained(function() gives spawn LspProjectResolver.create())
 		self.arrivals.push(try resolver.resolve(dir.path, ticket: ticket, previous: freeze root.inputs.previousInputStamps().clone(), sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
 
 		return ticket
@@ -589,8 +589,8 @@ end 'folderIdentifiedAs'
 
 function forgetClientRoot(workspace LspWorkspaceState, root FilePath)
 	let spelled = root.normalize()
-	var kept = LspFolderArray.create(0)
-	var closed = LspFolderArray.create(0)
+	let kept = LspFolderArray.create(0)
+	let closed = LspFolderArray.create(0)
 
 	for folder in workspace.folders 'eachFolder'
 		if folder.name.spelled.equals(spelled) 'closesNow'
@@ -752,7 +752,7 @@ function heldProjectSwept(workspace LspWorkspaceState, root WorkspaceRoot, tiers
 	let key = name.key()
 
 	if var held = try workspace.held.recentAt(key) 'heldAlready'
-		var slot = held.workspace
+		let slot = held.workspace
 
 		match slot 'workspace'
 			built(heldWorkspace) then return heldWorkspace.sweptFor(SweepRoot.held(root), tiers: tiers, request: request, workspace: workspace)
@@ -760,7 +760,7 @@ function heldProjectSwept(workspace LspWorkspaceState, root WorkspaceRoot, tiers
 		end 'workspace'
 	end 'heldAlready'
 
-	var fresh = HeldWorkspace.create()
+	let fresh = HeldWorkspace.create()
 	let swept = fresh.sweptFor(SweepRoot.held(root), tiers: tiers, request: request, workspace: workspace)
 
 	match swept 'outcome'
@@ -778,8 +778,8 @@ function readerSelectionOf(readerPath FilePath) returns SourceSelection
 end 'readerSelectionOf'
 
 function writeProjectLoadingNotification(writer LspStdoutWriter.handle, rootPath String, loading bool)
-	var doc = JsonDoc.create()
-	var params = LspJsonObject.create(doc)
+	let doc = JsonDoc.create()
+	let params = LspJsonObject.create(doc)
 	params.put(LspRootPathKey, value: JsonNode.stringNode(rootPath))
 	params.put(ProjectLoadingKey, value: JsonNode.boolNode(loading))
 
@@ -787,7 +787,7 @@ function writeProjectLoadingNotification(writer LspStdoutWriter.handle, rootPath
 end 'writeProjectLoadingNotification'
 
 module function lspProjectCheckerFor(workspace LspWorkspaceState, name RootName, tiers LibraryTiers) returns LspProjectChecker.handle
-	var root = workspace.held.rootAt(name)
+	let root = workspace.held.rootAt(name)
 
 	return root.checker.obtained(function() gives spawn LspProjectChecker.create(name.spelled, stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, writer: workspace.writer.clone()))
 end 'lspProjectCheckerFor'
@@ -940,12 +940,12 @@ module type RecentHeldRoots
 	end 'forgetEveryCorpus'
 
 	function forgetCorpusAt(key String)
-		var held = try self.roots.get(key) otherwise return
+		let held = try self.roots.get(key) otherwise return
 		held.workspace = HeldWorkspaceSlot.notBuilt
 	end 'forgetCorpusAt'
 
 	function holdWorkspace(name RootName, workspace HeldWorkspace)
-		var held = self.rootAt(name)
+		let held = self.rootAt(name)
 		held.workspace = HeldWorkspaceSlot.built(workspace)
 	end 'holdWorkspace'
 
@@ -954,7 +954,7 @@ module type RecentHeldRoots
 	end 'peek'
 
 	function use(key String)
-		var kept = HeldProjectKeyArray.create(0)
+		let kept = HeldProjectKeyArray.create(0)
 
 		for existing in self.order 'eachKey'
 			if existing != key 'staysInOrder'
@@ -976,7 +976,7 @@ module type RecentHeldRoots
 	// `projectResolved` drops an answer for a root this map no longer holds, and the documents that
 	// asked would never be checked against it.
 	function evict(key String)
-		var held = try self.roots.get(key) otherwise panic("RecentHeldRoots.evict: '{key}' is in the order, so it is in the map")
+		let held = try self.roots.get(key) otherwise panic("RecentHeldRoots.evict: '{key}' is in the order, so it is in the map")
 
 		if held.inputs.isAwaitingResolution() 'awaitsItsResolver'
 			held.demote()
@@ -996,7 +996,7 @@ module type RecentHeldRoots
 
 	// Walks the map, not the order: a demoted root is in the map alone, and goes with its folder too.
 	function dropUnder(folder FilePath)
-		var gone = HeldProjectKeyArray.create(0)
+		let gone = HeldProjectKeyArray.create(0)
 
 		for (key, held) in self.roots 'eachRoot'
 			if held.name.identity.isInside(folder) 'goesWithTheFolder'
@@ -1008,7 +1008,7 @@ module type RecentHeldRoots
 			_ = self.roots.remove(key)
 		end 'eachGone'
 
-		var kept = HeldProjectKeyArray.create(0)
+		let kept = HeldProjectKeyArray.create(0)
 
 		for key in self.order 'eachKey'
 			if self.roots.contains(key) 'staysHeld'
@@ -1396,7 +1396,7 @@ end 'requestWhileCurrent'
 let UntrustedProjectNotice = "this project's source list applies once the workspace is trusted; until then the project is its directory"
 
 function decisionFor(dir FilePath, stamp ProjectFileStamp, trusted bool) returns InputsDecision
-	var voice = ManifestVoice.forEditor(LspServerCommandName)
+	let voice = ManifestVoice.forEditor(LspServerCommandName)
 	let need = projectNeedsARun(dir, voice: voice)
 
 	if not trusted 'neverRunsTheProjectFile'
@@ -1419,11 +1419,11 @@ end 'projectDirectoryAt'
 // are digested after it. One the previous run did not declare has no digest from before, so a write
 // to it during the run shows only as a modification time not settled before `started`.
 module function resolvedProjectInputs(dirPath String, previous DeclaredInputStamps) returns ProjectInputsAnswer
-	var dir = projectDirectoryAt(dirPath)
+	let dir = projectDirectoryAt(dirPath)
 	let started = WallClock.nowUnixSeconds() as Timestamp
 	let inputsBefore = declaredInputStampsOf(declaredPathsOf(previous), since: previous)
 	let before = projectFileStampIn(dir)
-	var voice = ManifestVoice.forEditor(LspServerCommandName)
+	let voice = ManifestVoice.forEditor(LspServerCommandName)
 	let inputs = projectInputs(dir, word: StatedText.unstated, severalTargets: SeveralTargets.holdEvery, voice: voice)
 	let inputsAfter = declaredInputStampsOf(declaredInputsOf(inputs), since: DeclaredInputStamps.create())
 	let settled = stampHolds(before, current: projectFileStampIn(dir)) and not inputsMovedBetween(inputsBefore, after: inputsAfter) and not unseenInputsModifiedSince(started, stamps: inputsAfter, seen: previous)
@@ -1436,7 +1436,7 @@ function answerFrom(inputs ProjectInputs, voice ManifestVoice, stamp ProjectFile
 end 'answerFrom'
 
 function untrustedNoticeFor(need RunNeed) returns StringArray
-	var notice = StringArray.create(0)
+	let notice = StringArray.create(0)
 
 	match need 'need'
 		needsARun then notice.push(UntrustedProjectNotice)
@@ -1457,7 +1457,7 @@ function refusalOf(inputs ProjectInputs, voice ManifestVoice) returns StringArra
 end 'refusalOf'
 
 function maxonSourcesIn(dir FilePath, selection SourceSelection) returns SourceSweep
-	var sources = MaxonSourcePathArray.create(0)
+	let sources = MaxonSourcePathArray.create(0)
 
 	_ = try collectMaxonSources(dir, into: sources, selection: selection, nestedProjects: NestedProjectRule.pruned) otherwise return SourceSweep.walkFailed
 
@@ -1571,7 +1571,7 @@ extension Project
 	function sweptForReader(walk SourceSweep, source ReaderSource) returns SweptProject
 		let reader = try self.refreshFromWalk(walk, source: source, unreadable: UnreadableSource.skipped) otherwise panic("sweptForReader: a corpus skips a source it cannot read, so its refresh refuses nothing")
 
-		view signatures = try self.foldedSignatures() otherwise return SweptProject.unavailable
+		let signatures = try self.foldedSignatures() otherwise return SweptProject.unavailable
 
 		return SweptProject.read(self, signatures: signatures, readerPath: reader)
 	end 'sweptForReader'
@@ -1611,7 +1611,7 @@ extension Project
 	end 'refreshFromDisk'
 
 	function refreshFromWalk(walk SourceSweep, source ReaderSource, unreadable UnreadableSource) returns FilePath throws CompileError
-		var kept = MaxonSourcePathSet.create()
+		let kept = MaxonSourcePathSet.create()
 
 		try self.keepWhatTheWalkLists(walk, kept: kept, unreadable: unreadable, request: SweepRequest.reading(source))
 
@@ -1633,7 +1633,7 @@ extension Project
 	end 'readerRegisteredFor'
 
 	function refreshWithoutReader(walk SourceSweep, request SweepRequest, unreadable UnreadableSource) throws CompileError
-		var kept = MaxonSourcePathSet.create()
+		let kept = MaxonSourcePathSet.create()
 
 		try self.keepWhatTheWalkLists(walk, kept: kept, unreadable: unreadable, request: request)
 
@@ -1741,7 +1741,7 @@ function unregisterWhatTheWalkNoLongerLists(project Project, walk SourceSweep, k
 end 'unregisterWhatTheWalkNoLongerLists'
 
 function pathsTheSweepDropped(project Project, kept MaxonSourcePathSet) returns MaxonSourcePathSet
-	var dropped = MaxonSourcePathSet.create()
+	let dropped = MaxonSourcePathSet.create()
 
 	for path in project.db.sourcePaths 'eachRegistered'
 		if not kept.contains(path) 'noLongerSwept'

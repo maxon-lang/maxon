@@ -124,7 +124,7 @@ function total(a WordArray) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
@@ -164,12 +164,12 @@ function total(a WordArray) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var empty = WordArray.create(0)
+	let empty = WordArray.create(0)
 	if total(empty) != 0 'emptyIsZero'
 		return 1
 	end 'emptyIsZero'
 
-	var one = WordArray.create(0)
+	let one = WordArray.create(0)
 	one.push(7)
 	if total(one) != 7 'oneElement'
 		return 2
@@ -255,7 +255,7 @@ function drain(c Cell, budget Word) returns Word
 end 'drain'
 
 function main() returns ExitCode
-	var c = Cell.of(3)
+	let c = Cell.of(3)
 	// 3+2, 2+1, 1+0, then 0+(-1) stops: three trips, and the field reaches zero.
 	if drain(c, budget: 2) != 3 'trips'
 		return 1
@@ -306,7 +306,7 @@ function main() returns ExitCode
 		trips = trips + 1
 	end 'feed'
 
-	var c = Cell.of(9)
+	let c = Cell.of(9)
 	if conditionalRead(c, n: trips) != 9 'readOnce'
 		return 1
 	end 'readOnce'
@@ -346,7 +346,7 @@ function grid(a WordArray, rows Word, k Word) returns Word
 end 'grid'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(2)
 	a.push(3)
 	a.push(5)

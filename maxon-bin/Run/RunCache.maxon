@@ -140,7 +140,7 @@ end 'publishDebugSidecar'
 function discardSupersededBuilds(slot RunSlot)
 	let current = slot.executable.filename()
 
-	var kept = BuildNameArray.create(2, zeroed: false)
+	let kept = BuildNameArray.create(2, zeroed: false)
 	kept.push(current)
 	kept.push(sidecarNameOf(current))
 
@@ -400,7 +400,7 @@ function freshnessKey(program FilePath, target Target, entryFunction ByteArray) 
 end 'freshnessKey'
 
 function cacheFormatLine() returns String
-	var fields = StringArray.create(1, zeroed: false)
+	let fields = StringArray.create(1, zeroed: false)
 	fields.push(cacheFormatName())
 
 	return manifestLine(VersionFieldLabel, fields: fields)
@@ -439,14 +439,14 @@ export type CompilerIdentity
 	end 'imageFields'
 
 	function fields() returns StringArray
-		var fields = self.imageFields()
+		let fields = self.imageFields()
 		fields.push(targetToString(self.target))
 
 		return fields
 	end 'fields'
 
 	export function lineage() returns String
-		var fields = StringArray.create(2, zeroed: false)
+		let fields = StringArray.create(2, zeroed: false)
 		fields.push(self.path.toString())
 		fields.push(targetToString(self.target))
 
@@ -454,7 +454,7 @@ export type CompilerIdentity
 	end 'lineage'
 
 	export function build() returns String
-		var fields = StringArray.create(2, zeroed: false)
+		let fields = StringArray.create(2, zeroed: false)
 		fields.push("{self.size}")
 		fields.push("{self.modifiedTime}")
 
@@ -493,7 +493,7 @@ end 'digestLines'
 function sourceLine(label String, path FilePath) returns String throws RunCacheError
 	let digest = try fileDigestOf(path) otherwise throw RunCacheError.unavailable("could not read {path.toString()}, which the build cache key is computed over")
 
-	var fields = StringArray.create(2, zeroed: false)
+	let fields = StringArray.create(2, zeroed: false)
 	fields.push(path.toString())
 	fields.push(hexOfLeadingBytes(digest, count: CacheNameDigestBytes))
 
@@ -520,12 +520,12 @@ module function libraryInputs(programPaths MaxonSourcePathArray) returns Compile
 	let stdlibDir = try locateStdlibDir() otherwise throw RunCacheError.unavailable("could not locate the stdlib/ directory, which the build cache key is computed over")
 	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise throw RunCacheError.unavailable("could not locate the runtime/ directory beside stdlib/, which the build cache key is computed over")
 
-	var walked = MaxonSourcePathArray.create(0)
+	let walked = MaxonSourcePathArray.create(0)
 	try walkLibraryRoot(stdlibDir, into: walked)
 	try walkLibraryRoot(runtimeDir, into: walked)
 	walked.append(try scriptlibInputs(programPaths, stdlibDir: stdlibDir))
 
-	var inputs = walked as CompileInputArray
+	let inputs = walked as CompileInputArray
 
 	for table in ucdTablePaths(stdlibDir) 'eachTable'
 		inputs.push(table)

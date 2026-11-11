@@ -1385,7 +1385,7 @@ end 'deep'
 function main() returns ExitCode
 	let first = async seedBytes()
 	let before = await first
-	var ps = IntPromiseArray.create(0)
+	let ps = IntPromiseArray.create(0)
 	var i = 0 as Integer
 	while i < 64 'deepEach'
 		ps.push(async deep(4000))
@@ -1647,7 +1647,7 @@ end 'shallow'
 function main() returns ExitCode
 	let first = async seedBytes()
 	let before = await first
-	var deeps = IntPromiseArray.create(0)
+	let deeps = IntPromiseArray.create(0)
 	var i = 0 as Integer
 	while i < 64 'deepEach'
 		deeps.push(async deep(4000))
@@ -1662,7 +1662,7 @@ function main() returns ExitCode
 	end 'awaitDeep'
 	let mid = async seedBytes()
 	let raised = await mid
-	var shallows = IntPromiseArray.create(0)
+	let shallows = IntPromiseArray.create(0)
 	var j = 0 as Integer
 	while j < 128 'shallowEach'
 		shallows.push(async shallow(1))
@@ -1728,7 +1728,7 @@ end 'neverWaits'
 function main() returns ExitCode
 	let first = async seedBytes()
 	let before = await first
-	var deeps = IntPromiseArray.create(0)
+	let deeps = IntPromiseArray.create(0)
 	var i = 0 as Integer
 	while i < 64 'deepEach'
 		deeps.push(async deep(4000))
@@ -1743,7 +1743,7 @@ function main() returns ExitCode
 	end 'awaitDeep'
 	let mid = async seedBytes()
 	let raised = await mid
-	var quick = IntPromiseArray.create(0)
+	let quick = IntPromiseArray.create(0)
 	var j = 0 as Integer
 	while j < 128 'quickEach'
 		quick.push(async neverWaits(1))
@@ -1810,7 +1810,7 @@ end 'neverWaits'
 function main() returns ExitCode
 	let first = async seedBytes()
 	let before = await first
-	var deeps = IntPromiseArray.create(0)
+	let deeps = IntPromiseArray.create(0)
 	var i = 0 as Integer
 	while i < 64 'deepEach'
 		deeps.push(async deep(4000))
@@ -1867,7 +1867,7 @@ function spin(rounds Integer) returns Integer
 	var total = 0 as Integer
 	var round = 0 as Integer
 	while round < rounds 'rounds'
-		var words = SpinWords.create(0)
+		let words = SpinWords.create(0)
 		words.push(round)
 		words.push(round + 1)
 		total = total + (words.count() as Integer)

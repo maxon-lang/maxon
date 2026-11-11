@@ -25,7 +25,7 @@ while the child is still alive: the child leaves only after the client has been 
 holding a copy of the accepted socket would keep the connection open for ever, and the case would not finish.
 ```maxon
 function waitingChild() returns ExitCode
-	var stdin = Console.stdin()
+	let stdin = Console.stdin()
 
 	_ = try stdin.readLine() otherwise return 0
 
@@ -55,9 +55,9 @@ function main() returns ExitCode
 		return 4
 	end 'refused4x27'
 
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("child")
-	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise 'refused5x31'
+	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise 'refused5x31'
 		reader.cancel()
 		return 5
 	end 'refused5x31'
@@ -89,7 +89,7 @@ the client, which closes its socket; the server, reading to the end of the conne
 the child is still alive, because the server closes the child's input only after it has seen that end.
 ```maxon
 function waitingChild() returns ExitCode
-	var stdin = Console.stdin()
+	let stdin = Console.stdin()
 
 	_ = try stdin.readLine() otherwise return 0
 
@@ -126,9 +126,9 @@ function main() returns ExitCode
 		return 4
 	end 'refused4x34'
 
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("child")
-	var child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise 'refused5x38'
+	let child = try StreamingSubprocess.spawn(Executable.path(me), arguments: argv) otherwise 'refused5x38'
 		closer.cancel()
 		return 5
 	end 'refused5x38'

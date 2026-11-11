@@ -299,7 +299,7 @@ function allocate(ranges LRArray) returns ExitCode
 end 'allocate'
 
 function main() returns ExitCode
-	var arr = LRArray.create(0)
+	let arr = LRArray.create(0)
 	arr.push(LiveRange.create(7))
 	arr.push(LiveRange.create(10))
 	return allocate(arr) + earliestSlot(SlotRange.create(0))
@@ -580,7 +580,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	return c.via() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -802,7 +802,7 @@ end 'Holder'
 typealias WH = Holder with W
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(1)
 	a.push(2)
 	var total = 0 as Integer
@@ -874,7 +874,7 @@ type Registry
 end 'Registry'
 
 function main() returns ExitCode
-	var registry = Registry.create()
+	let registry = Registry.create()
 	_ = registry.viaBare("a")
 	_ = registry.viaSelf("b")
 	return 0
@@ -921,7 +921,7 @@ type Registry
 end 'Registry'
 
 function main() returns ExitCode
-	var registry = Registry.create()
+	let registry = Registry.create()
 	_ = registry.hold("a")
 	return 0
 end 'main'
@@ -967,7 +967,7 @@ type Registry
 end 'Registry'
 
 function main() returns ExitCode
-	var registry = Registry.create()
+	let registry = Registry.create()
 	_ = registry.hold("a")
 	return 0
 end 'main'
@@ -1162,7 +1162,7 @@ function main() returns ExitCode
 	let label = "a label padded long enough to heap allocate {3}"
 	let f = function(n Integer) gives n + (label.byteLength() as Integer)
 	let p = Pair.create(f, second: f)
-	var ops = OpArray.create(0)
+	let ops = OpArray.create(0)
 	ops.push(f)
 	let h = Held.one(f)
 	var total = p.first(1) + p.second(2)
@@ -1536,7 +1536,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var counter = Counter.create(3)
+	let counter = Counter.create(3)
 	let read = counter.reader()
 	counter.n = 5
 	print("{read()} {counter.n}\n")
@@ -2170,7 +2170,7 @@ end 'swapThenMeasure'
 
 function main() returns ExitCode
 	let word = "a word padded long enough to heap allocate {1}"
-	var h = Holder.create(function(other mutable Holder) gives swapThenMeasure(other, text: word))
+	let h = Holder.create(function(other mutable Holder) gives swapThenMeasure(other, text: word))
 	print("{h.step(h)} {h.step(h)}\n")
 	return 0
 end 'main'
@@ -2203,7 +2203,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let word = "a word padded long enough to heap allocate {1}"
-	var h = Holder.create(function(n Integer) gives n + (word.byteLength() as Integer))
+	let h = Holder.create(function(n Integer) gives n + (word.byteLength() as Integer))
 	print("{h.step(h.swap(100))} {h.step(2)}\n")
 	return 0
 end 'main'
@@ -2226,7 +2226,7 @@ typealias OpArray = Array with Op
 
 function main() returns ExitCode
 	let label = "a label padded long enough to heap allocate {3}"
-	var ops = OpArray.create(0)
+	let ops = OpArray.create(0)
 	ops.push(function(n Integer) gives n + (label.byteLength() as Integer))
 	try ops.set(0, value: function(n Integer) gives n * 2) otherwise panic("one element")
 	let op = try ops.get(0) otherwise panic("one element")
@@ -2250,7 +2250,7 @@ typealias OpMap = Map with (Integer, Op)
 
 function main() returns ExitCode
 	let label = "a label padded long enough to heap allocate {3}"
-	var ops = OpMap.create()
+	let ops = OpMap.create()
 	ops.upsert(1, value: function(n Integer) gives n + (label.byteLength() as Integer))
 	print("{ops.count()}\n")
 	return 0
@@ -2385,7 +2385,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:18:27: cannot pass 'n' to a function that writes parameter 'dest' (in the closure at <fragment>:18:10): the closure holds its own copy of 'n', so a write through 'dest' cannot reach the original; pass a clone()
+error E2013: <fragment>:18:27: cannot pass 'n' to a function that writes parameter 'dest' (in the closure at <fragment>:18:10): the closure holds its own copy of 'n', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 <!-- test: closure-capture.error.a-captured-value-handed-to-a-conformer-that-writes-it-is-refused -->
@@ -2422,7 +2422,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:23:28: 'Doubler.bump' writes its parameter 'n', but 'bump' passes it the immutable 'start'
+error E2013: <fragment>:23:28: cannot pass 'start' to a function that writes argument 1 (in the closure at <fragment>:23:9): the closure holds its own copy of 'start', so a write through it cannot reach the original; pass a clone()
 ```
 
 ### A captured Promise
@@ -2817,7 +2817,7 @@ end 'Counter'
 
 function main() returns ExitCode
 	let source = Counter.create(7)
-	var target = Counter.create(1)
+	let target = Counter.create(1)
 	source.lend(target)
 	return target.read() as ExitCode
 end 'main'
@@ -3427,7 +3427,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	c.arm()
 	print("{c.read()}\n")
 	return 0
@@ -3468,13 +3468,13 @@ type Counter
 	end 'create'
 
 	export function arm()
-		var borrowed = self.left
+		let borrowed = self.left
 		self.right.read = function() gives borrowed.n
 	end 'arm'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	c.arm()
 	print("{c.right.read()}\n")
 	return 0
@@ -3627,14 +3627,14 @@ type Panel
 	end 'create'
 
 	export function rewire()
-		var old = self.left
+		let old = self.left
 		self.left = Button.create(2)
 		self.left.onClick = function() gives old.n
 	end 'rewire'
 end 'Panel'
 
 function main() returns ExitCode
-	var p = Panel.create()
+	let p = Panel.create()
 	p.rewire()
 	print("{p.left.onClick()} {p.left.n}\n")
 	return 0
@@ -3680,8 +3680,8 @@ type Pair
 	export var right as Outer
 
 	static function build() returns Self
-		var pair = Self{left: Inner.create(3), right: Outer.create(4)}
-		var borrowed = pair.left
+		let pair = Self{left: Inner.create(3), right: Outer.create(4)}
+		let borrowed = pair.left
 		pair.right.read = function() gives borrowed.n
 		return pair
 	end 'build'
@@ -3730,7 +3730,7 @@ end 'readTwice'
 
 function main() returns ExitCode
 	let wiring = wire
-	var a = Counter.create(1)
+	let a = Counter.create(1)
 	let b = Counter.create(2)
 	wiring(a, b)
 	print("{a.read()} {readTwice(b)}\n")
@@ -3894,8 +3894,8 @@ end 'main'
 0
 ```
 
-<!-- test: closure-capture.error.a-closure-writing-within-a-captured-parameter-writes-a-let-global -->
-A closure that writes the record a captured parameter's field holds writes the graph the parameter denotes, which a module `let` is refused by.
+<!-- test: closure-capture.error.a-closure-writing-within-a-captured-parameter-writes-a-frozen-record -->
+A closure that writes the record a captured parameter's field holds writes the graph the parameter denotes, which a frozen record is refused by.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -3921,24 +3921,23 @@ function zero(i Inner) returns Count
 	return 0
 end 'zero'
 
-let G = Outer.create(2)
-
 function bump(o Outer) returns Count
 	let f = function() gives zero(o.inner)
 	return f()
 end 'bump'
 
 function main() returns ExitCode
-	let r = bump(G)
-	print("{G.inner.n}{r}\n")
+	let g = freeze Outer.create(2)
+	let r = bump(g)
+	print("{g.inner.n}{r}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:33:15: 'bump' writes 'o' (line 28: `let f = function() gives zero(o.inner)`); 'G' is immutable
+error E3207: <fragment>:32:15: 'bump' writes 'o' (line 26: `let f = function() gives zero(o.inner)`); 'g' is immutable
 ```
 
-<!-- test: closure-capture.error.a-captured-parameter-written-within-by-a-closure-handed-to-a-callee-writes-a-let-global -->
+<!-- test: closure-capture.error.a-captured-parameter-written-within-by-a-closure-handed-to-a-callee-writes-a-frozen-record -->
 The closure is handed to a callee that calls it; the write is the same wherever the closure runs.
 
 ```maxon
@@ -3967,8 +3966,6 @@ end 'zero'
 
 typealias Thunk = function() returns Count mutates captures
 
-let G = Outer.create(2)
-
 function apply(g Thunk) returns Count
 	return g()
 end 'apply'
@@ -3979,13 +3976,14 @@ function bump(o Outer) returns Count
 end 'bump'
 
 function main() returns ExitCode
-	let r = bump(G)
-	print("{G.inner.n}{r}\n")
+	let g = freeze Outer.create(2)
+	let r = bump(g)
+	print("{g.inner.n}{r}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:39:15: 'bump' writes 'o' (line 34: `let f = function() gives zero(o.inner)`); 'G' is immutable
+error E3207: <fragment>:38:15: 'bump' writes 'o' (line 32: `let f = function() gives zero(o.inner)`); 'g' is immutable
 ```
 
 <!-- test: closure-capture.a-closure-writing-within-a-captured-parameter-writes-a-local-let -->
@@ -4101,7 +4099,7 @@ function arm(b Box, slot mutable Slot)
 end 'arm'
 
 function main() returns ExitCode
-	var slot = Slot.create()
+	let slot = Slot.create()
 	let b = Box.create(1)
 	arm(b, slot: slot)
 	print("{slot.show()} {b.n}\n")
@@ -4143,10 +4141,10 @@ function arm(b Box, slot mutable Slot)
 end 'arm'
 
 function main() returns ExitCode
-	var slot = Slot.create()
+	let slot = Slot.create()
 	let b = Box.create(1)
 	arm(b, slot: slot)
-	var x = slot.get()
+	let x = slot.get()
 	x.n = 5
 	print("{b.n}\n")
 	return 0
@@ -4191,10 +4189,10 @@ function fetch(slot Slot) returns Box
 end 'fetch'
 
 function main() returns ExitCode
-	var slot = Slot.create()
+	let slot = Slot.create()
 	let b = Box.create(1)
 	arm(b, slot: slot)
-	var x = fetch(slot)
+	let x = fetch(slot)
 	x.n = 5
 	print("{b.n}\n")
 	return 0
@@ -4245,11 +4243,11 @@ function helper(b Box, depth Count, slot mutable Slot, kept mutable Boxes)
 end 'helper'
 
 function main() returns ExitCode
-	var kept = Boxes.create(0)
-	var slot = Slot.create()
+	let kept = Boxes.create(0)
+	let slot = Slot.create()
 	let b = Box.create(1)
 	arm(b, depth: 1, slot: slot, kept: kept)
-	var k = try kept.get(0) otherwise return 1
+	let k = try kept.get(0) otherwise return 1
 	k.n = 5
 	print("{b.n}\n")
 	return 0
@@ -4582,7 +4580,7 @@ end 'bump'
 
 function main() returns ExitCode
 	let box = Box.create(1)
-	var scratch = Box.create(5)
+	let scratch = Box.create(5)
 	let step = 2 as Tally
 	let writer = function(b Box) gives bump(b, step: step)
 	let reader = function(b Box) gives b.weight + step
@@ -4653,7 +4651,7 @@ end 'bump'
 
 function main() returns ExitCode
 	let box = freeze Box.create(1)
-	var scratch = Box.create(5)
+	let scratch = Box.create(5)
 	let step = 2 as Tally
 	let writer = function(b Box) gives bump(b, step: step)
 	let reader = function(b Box) gives b.weight + step
@@ -4919,12 +4917,12 @@ end 'main'
 error E3207: <fragment>:39:11: the closure at <fragment>:27:16 needs 'b' frozen (it calls 'create', which needs 'held' frozen); 'v' is mutable. Freeze it first
 ```
 
-### A closure that stores into state a module-level `let` holds
+### A closure that writes state a module-level `let` holds
 
-Two closures of one shape reach one call through a parameter. One of them also stores a fresh record into a module-level `let`'s record, which is refused for the write, and the cycle the other closure closes through the parameter is reported once, at the call.
+Two closures of one shape reach one call through a parameter. One of them also pushes onto a module-level `let` array, which is refused for the write, and the cycle the other closure closes through the parameter is reported once, at the call.
 
-<!-- test: closure-capture.error.a-closure-storing-a-fresh-record-into-a-module-let-beside-a-plain-closure-of-its-shape -->
-`storePlain` and `storeAndStash` share the shape `Wire`; `storeAndStash` also stores a fresh `Counter` into the module-level `Hub`. The cycle both close when `drive` hands them one record twice is found at the call in `drive`.
+<!-- test: closure-capture.error.a-closure-pushing-onto-a-module-let-beside-a-plain-closure-of-its-shape -->
+`storePlain` and `storeAndStash` share the shape `Wire`; `storeAndStash` also pushes onto the module-level `Hub` array. The cycle both close when `drive` hands them one record twice is found at the call in `drive`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Thunk = function() returns Integer
@@ -4944,15 +4942,7 @@ type Counter
 	end 'create'
 end 'Counter'
 
-type Cell
-	export var held as Counter
-
-	static function create() returns Self
-		return Self{held: Counter.create()}
-	end 'create'
-end 'Cell'
-
-let Hub = Cell.create()
+let Hub = [0 as Integer]
 
 function storePlain(t mutable Counter, p mutable Counter) returns Tally
 	t.read = function() gives p.n
@@ -4961,7 +4951,7 @@ end 'storePlain'
 
 function storeAndStash(t mutable Counter, p mutable Counter) returns Tally
 	t.read = function() gives p.n
-	Hub.held = Counter.create()
+	Hub.push(1)
 	return 0
 end 'storeAndStash'
 
@@ -4977,11 +4967,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:37:2: cannot write through 'Hub': 'Hub' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
-error E3183: <fragment>:42:10: this value holds a closure that captures 'c' and is stored into a record 'c' holds, so 'c' would hold the closure and the closure would hold 'c', and neither would ever be released. Store it somewhere 'c' does not reach, or capture what the closure needs instead of 'c' itself
+error E3207: <fragment>:29:6: 'push' needs a writable receiver; 'Hub' is immutable
+error E3183: <fragment>:34:10: this value holds a closure that captures 'c' and is stored into a record 'c' holds, so 'c' would hold the closure and the closure would hold 'c', and neither would ever be released. Store it somewhere 'c' does not reach, or capture what the closure needs instead of 'c' itself
 ```
 
-<!-- test: closure-capture.error.a-closure-storing-a-fresh-record-into-a-module-let-before-a-plain-closure-of-its-shape -->
+<!-- test: closure-capture.error.a-closure-pushing-onto-a-module-let-before-a-plain-closure-of-its-shape -->
 The same two closures called in the other order.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -5002,15 +4992,7 @@ type Counter
 	end 'create'
 end 'Counter'
 
-type Cell
-	export var held as Counter
-
-	static function create() returns Self
-		return Self{held: Counter.create()}
-	end 'create'
-end 'Cell'
-
-let Hub = Cell.create()
+let Hub = [0 as Integer]
 
 function storePlain(t mutable Counter, p mutable Counter) returns Tally
 	t.read = function() gives p.n
@@ -5019,7 +5001,7 @@ end 'storePlain'
 
 function storeAndStash(t mutable Counter, p mutable Counter) returns Tally
 	t.read = function() gives p.n
-	Hub.held = Counter.create()
+	Hub.push(1)
 	return 0
 end 'storeAndStash'
 
@@ -5035,8 +5017,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:37:2: cannot write through 'Hub': 'Hub' is read-only (a module-level `let`) and nothing reachable through it may be written; use 'var', or write a clone()
-error E3183: <fragment>:42:10: this value holds a closure that captures 'c' and is stored into a record 'c' holds, so 'c' would hold the closure and the closure would hold 'c', and neither would ever be released. Store it somewhere 'c' does not reach, or capture what the closure needs instead of 'c' itself
+error E3207: <fragment>:29:6: 'push' needs a writable receiver; 'Hub' is immutable
+error E3183: <fragment>:34:10: this value holds a closure that captures 'c' and is stored into a record 'c' holds, so 'c' would hold the closure and the closure would hold 'c', and neither would ever be released. Store it somewhere 'c' does not reach, or capture what the closure needs instead of 'c' itself
 ```
 
 ### A store that meets two records names the first one declared
@@ -5219,7 +5201,7 @@ type Total
 end 'Total'
 
 function make() returns Bump
-	var total = Total.create()
+	let total = Total.create()
 	return function() gives total.bump()
 end 'make'
 

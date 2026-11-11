@@ -65,7 +65,7 @@ end 'pathArgument'
 // Every file under `dir` at any depth other than `kept`, for a report. Empty is what a tool that writes
 // nothing leaves.
 export function filesWrittenBeside(kept FilePath, dir FilePath) returns String
-	var written = FilePathArray.create(0)
+	let written = FilePathArray.create(0)
 
 	for entry in filesUnder(dir) 'eachFile'
 		if entry.toString() != kept.toString() 'written'
@@ -122,7 +122,7 @@ export function unknownMethodRequest(method String = "unknown/method", id Reques
 end 'unknownMethodRequest'
 
 export function runMcp(requests StringArray, devMode bool = false, environment Environment = Environment.inherit) returns McpRun
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("mcp-server")
 
 	if devMode 'dev'
@@ -143,7 +143,7 @@ export function runMcp(requests StringArray, devMode bool = false, environment E
 end 'runMcp'
 
 export function runMcpSingle(request String, devMode bool = false) returns McpRun
-	var reqs = StringArray.create(0)
+	let reqs = StringArray.create(0)
 	reqs.push(request)
 	return runMcp(reqs, devMode: devMode)
 end 'runMcpSingle'
@@ -154,7 +154,7 @@ export type StreamingMcpSession
 	// `binary` is a parameter because a case starts a server from a STAGED COPY and then replaces or
 	// renames that copy on disk; it must not be the tree's own slot.
 	export static function startFrom(binary FilePath, devMode bool = false) returns StreamingMcpSession
-		var argv = StringArray.create(0)
+		let argv = StringArray.create(0)
 		argv.push("mcp-server")
 
 		if devMode 'dev'
@@ -190,7 +190,7 @@ export type StreamingMcpSession
 end 'StreamingMcpSession'
 
 export function responseDocs(run McpRun) returns JsonDocArray
-	var docs = JsonDocArray.create(0)
+	let docs = JsonDocArray.create(0)
 
 	for line in run.stdout.split("\n") 'each'
 		let trimmed = line.trim()
@@ -220,7 +220,7 @@ function errorNode(doc JsonDoc) returns JsonNodeId
 end 'errorNode'
 
 export function toolNames(doc JsonDoc) returns StringArray
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 	let resId = resultNode(doc)
 	let toolsId = try doc.getChild(resId, key: "tools") otherwise return names
 	let count = try doc.arrayLength(toolsId) otherwise return names
@@ -340,7 +340,7 @@ export function passingSpecCase(name String) returns String
 end 'passingSpecCase'
 
 export function failingSpecCases(names StringArray) returns StringArray
-	var cases = StringArray.create(0)
+	let cases = StringArray.create(0)
 
 	for name in names 'eachName'
 		cases.push(failingSpecCase(name))
@@ -364,7 +364,7 @@ let CheckoutRuntimeDirName = "runtime"
 
 // Drive one request against a server started in the given mode and return its response.
 export function callTool(name String, argumentsJson String = "\{\}", devMode bool = false) returns JsonDoc
-	var reqs = StringArray.create(0)
+	let reqs = StringArray.create(0)
 	reqs.push(initRequest(1))
 	reqs.push(toolCallRequest(2, name: name, argumentsJson: argumentsJson))
 
@@ -373,7 +373,7 @@ export function callTool(name String, argumentsJson String = "\{\}", devMode boo
 end 'callTool'
 
 export function listTools(devMode bool = false) returns JsonDoc
-	var reqs = StringArray.create(0)
+	let reqs = StringArray.create(0)
 	reqs.push(initRequest(1))
 	reqs.push(toolsListRequest(2))
 
@@ -466,7 +466,7 @@ end 'mcpRequestText'
 // Anything that stops the exchange happening at all panics: none of it is the server answering
 // wrongly.
 function httpExchange(port NetworkPort, requestText String) returns HttpAnswer
-	var client = try TcpClient.connect("127.0.0.1", port: port) otherwise (e) 'noConnection'
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise (e) 'noConnection'
 		panic("McpHarness: could not connect to the MCP HTTP transport on port {port}: {e.name}")
 	end 'noConnection'
 
@@ -533,7 +533,7 @@ function parseHttpAnswer(raw String) returns HttpAnswer
 	end 'outsideTheStatusRange'
 
 	let statusCode = parsed as HttpAnswerStatus
-	var headers = HeaderMap.create()
+	let headers = HeaderMap.create()
 
 	for (iter, line) in lines.withIterator() 'eachLine'
 		if iter.index() == 0 'statusLine'
@@ -588,16 +588,40 @@ end 'drainedStderr'
 let StderrDrainBudget = 32
 let ResponseLineByteCap = 16777216
 
+export type HttpMcpAddress
+	export let hostName as String
+	export let port as NetworkPort
+
+	export static function at(hostName String, port NetworkPort) returns HttpMcpAddress
+		return HttpMcpAddress{hostName: hostName, port: port}
+	end 'at'
+
+	export function authority() returns String
+		return "{self.hostName}:{self.port}"
+	end 'authority'
+
+	export function loopbackOrigin() returns String
+		return "http://{self.authority()}"
+	end 'loopbackOrigin'
+
+	export function post(body String, sessionId McpSession) returns HttpAnswer
+		return self.request("POST", target: McpRoutePath, host: self.authority(), origin: "", sessionId: sessionId, body: body)
+	end 'post'
+
+	export function request(method String, target String, host String, origin String, sessionId McpSession, body String) returns HttpAnswer
+		return httpExchange(self.port, requestText: mcpRequestText(method, target: target, host: host, origin: origin, sessionId: sessionId, body: body))
+	end 'request'
+end 'HttpMcpAddress'
+
 // Every path owes `stop` or `terminate`: an unreleased `StreamingSubprocess` leaks and the run
 // exits 101.
 export type StreamingHttpMcpServer
 	export var server as StreamingSubprocess
 	export var endpoint as String
-	export var endpointHost as String
-	export var endpointPort as NetworkPort
+	export let address as HttpMcpAddress
 
 	export static function start(extraOptions StringArray, environment Environment = Environment.inherit, endsWithItsStdin bool = true) returns StreamingHttpMcpServer
-		var argv = StringArray.create(0)
+		let argv = StringArray.create(0)
 		argv.push("mcp-server")
 		argv.push(McpHttpOption)
 
@@ -609,7 +633,7 @@ export type StreamingHttpMcpServer
 			argv.push(option)
 		end 'eachOption'
 
-		var spawned = try StreamingSubprocess.spawnWithEnvironment(Executable.path(testedCompilerPath()), arguments: argv, workingDirectory: Directory.currentPath(), environment: environment) otherwise (e) 'spawnFailed'
+		let spawned = try StreamingSubprocess.spawnWithEnvironment(Executable.path(testedCompilerPath()), arguments: argv, workingDirectory: Directory.currentPath(), environment: environment) otherwise (e) 'spawnFailed'
 			panic("StreamingHttpMcpServer: `mcp-server {McpHttpOption}` did not spawn: {e.displayReason()}")
 		end 'spawnFailed'
 
@@ -645,27 +669,11 @@ export type StreamingHttpMcpServer
 			panic("StreamingHttpMcpServer: the endpoint names no port: {endpointText}")
 		end 'noPort'
 
-		return StreamingHttpMcpServer{server: spawned, endpoint: endpointText, endpointHost: parsedHost, endpointPort: parsedPort}
+		return StreamingHttpMcpServer{server: spawned, endpoint: endpointText, address: HttpMcpAddress.at(parsedHost, port: parsedPort)}
 	end 'start'
 
-	export function authority() returns String
-		return "{self.endpointHost}:{self.endpointPort}"
-	end 'authority'
-
-	export function loopbackOrigin() returns String
-		return "http://{self.authority()}"
-	end 'loopbackOrigin'
-
-	export function post(body String, sessionId McpSession) returns HttpAnswer
-		return self.request("POST", target: McpRoutePath, host: self.authority(), origin: "", sessionId: sessionId, body: body)
-	end 'post'
-
-	export function request(method String, target String, host String, origin String, sessionId McpSession, body String) returns HttpAnswer
-		return httpExchange(self.endpointPort, requestText: mcpRequestText(method, target: target, host: host, origin: origin, sessionId: sessionId, body: body))
-	end 'request'
-
 	export function initializeSession() returns (HttpAnswer, McpSession)
-		let answer = self.post(initRequest(1), sessionId: McpSession.none)
+		let answer = self.address.post(initRequest(1), sessionId: McpSession.none)
 		return (answer, answer.session())
 	end 'initializeSession'
 
@@ -716,7 +724,7 @@ export function sleepingProgramSource(sleepMs ProgramSleepMillis) returns String
 end 'sleepingProgramSource'
 
 export function debuggableProgramSource() returns String
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 	lines.push("typealias Step = int(0 to 1000000)")
 	lines.push("")
 	lines.push("function work(seed Step) returns Step")
@@ -790,7 +798,7 @@ end 'debugToolState'
 function payloadArray(payload JsonDoc, doc JsonDoc, key String) returns JsonNodeIdArray
 	let arrayId = try payload.getChild(payload.root, key: key) otherwise panic("McpHarness: a tool answered no `{key}`: {toolCallText(doc)}")
 	let count = try payload.arrayLength(arrayId) otherwise panic("McpHarness: `{key}` is not an array: {toolCallText(doc)}")
-	var elements = JsonNodeIdArray.create(0)
+	let elements = JsonNodeIdArray.create(0)
 
 	for i in 0 upto count 'eachElement'
 		elements.push(try payload.arrayAt(arrayId, index: i) otherwise panic("McpHarness: `{key}` has no element {i} of its {count}"))
@@ -801,7 +809,7 @@ end 'payloadArray'
 
 export function payloadArrayFields(doc JsonDoc, key String, field String) returns StringArray
 	let payload = toolPayload(doc)
-	var values = StringArray.create(0)
+	let values = StringArray.create(0)
 
 	for elementId in payloadArray(payload, doc: doc, key: key) 'eachElement'
 		values.push(try payload.getString(elementId, key: field) otherwise panic("McpHarness: a `{key}` element carries no string `{field}`: {toolCallText(doc)}"))
@@ -812,7 +820,7 @@ end 'payloadArrayFields'
 
 export function payloadArrayStrings(doc JsonDoc, key String) returns StringArray
 	let payload = toolPayload(doc)
-	var values = StringArray.create(0)
+	let values = StringArray.create(0)
 
 	for elementId in payloadArray(payload, doc: doc, key: key) 'eachElement'
 		values.push(payload.get(elementId).stringValue)
@@ -823,7 +831,7 @@ end 'payloadArrayStrings'
 
 export function debugEventKinds(doc JsonDoc) returns StringArray
 	let payload = toolPayload(doc)
-	var kinds = StringArray.create(0)
+	let kinds = StringArray.create(0)
 
 	for eventId in payloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
 		let kind = try payload.getString(eventId, key: DebugEventKindKey) otherwise continue
@@ -835,7 +843,7 @@ end 'debugEventKinds'
 
 export function debugEventLines(doc JsonDoc, kind String) returns StringArray
 	let payload = toolPayload(doc)
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	for eventId in payloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
 		let eventKind = try payload.getString(eventId, key: DebugEventKindKey) otherwise continue
@@ -851,7 +859,7 @@ end 'debugEventLines'
 
 export function debugOutputLines(doc JsonDoc) returns StringArray
 	let payload = toolPayload(doc)
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	for lineId in payloadArray(payload, doc: doc, key: DebugOutputKey) 'eachLine'
 		let line = payload.get(lineId)
@@ -868,7 +876,7 @@ end 'debugOutputLines'
 
 export function debugLocalNames(doc JsonDoc) returns StringArray
 	let payload = toolPayload(doc)
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 
 	for eventId in payloadArray(payload, doc: doc, key: DebugEventsKey) 'eachEvent'
 		let localsId = try payload.getChild(eventId, key: "locals") otherwise continue
@@ -951,8 +959,8 @@ export function debugBreakTargetArgument(line SourceLine) returns String
 	return argumentsOf([targetMember("main.maxon:{line}")])
 end 'debugBreakTargetArgument'
 
-export function httpToolCall(server StreamingHttpMcpServer, sessionId McpSession, id RequestId, name String, argumentsJson String = "\{\}") returns JsonDoc
-	let answer = server.post(toolCallRequest(id, name: name, argumentsJson: argumentsJson), sessionId: sessionId)
+export function httpToolCall(address HttpMcpAddress, sessionId McpSession, id RequestId, name String, argumentsJson String = "\{\}") returns JsonDoc
+	let answer = address.post(toolCallRequest(id, name: name, argumentsJson: argumentsJson), sessionId: sessionId)
 
 	if answer.statusCode != HttpOkStatus 'refused'
 		panic("mcp http tests: `{name}` over HTTP answered {answer.statusCode}: {answer.body}")

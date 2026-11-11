@@ -55,9 +55,7 @@ export function executeDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String,
 		return startDebugSession(reqDoc, idNode: idNode, args: args, exePath: exePath, debug: debug)
 	end 'start'
 
-	var holding = debug.hold
-
-	return match holding 'live'
+	return match debug.hold 'live'
 		empty gives toolErrorText(reqDoc, idNode: idNode, message: NoSessionMessage, repoRoot: ActingTree.host)
 		held(session) gives runDebugTool(reqDoc, idNode: idNode, name: name, args: args, session: session, debug: debug)
 	end 'live'
@@ -77,7 +75,7 @@ function debugStartReadOf(reqDoc JsonDoc, args OptionalNode) returns DebugStartR
 		return DebugStartRead.refused("`{DebugStartToolName}` takes either `{DebugProgramArgument.executable.name}` or `{DebugProgramArgument.source.name}`, and exactly one of them.")
 	end 'neitherOrBoth'
 
-	var targetEnv = EnvMap.create()
+	let targetEnv = EnvMap.create()
 
 	for entry in getOptionalStringListArg(reqDoc, args: args, key: "env") 'eachVariable'
 		match parseTargetEnv(entry) 'read'
@@ -114,7 +112,7 @@ end 'builtAndLaunched'
 function launchedInPlaceOfTheLive(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, image DebugImage, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, debug DebugSessionSlot) returns String
 	let replaced = debug.reap(DebugSessionEnding.terminateTheProgram)
 
-	var launch = DebugToolSession.launch(image, arguments: getOptionalStringListArg(reqDoc, args: args, key: "args"), targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced)
+	let launch = DebugToolSession.launch(image, arguments: getOptionalStringListArg(reqDoc, args: args, key: "args"), targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced)
 
 	return match launch 'started'
 		refused(reason) gives refusedStartReply(reqDoc, idNode: idNode, message: "{DebugStartToolName}: {reason}", replaced: replaced)
@@ -123,17 +121,19 @@ function launchedInPlaceOfTheLive(reqDoc JsonDoc, idNode JsonNodeId, args Option
 end 'launchedInPlaceOfTheLive'
 
 function refusedStartReply(reqDoc JsonDoc, idNode JsonNodeId, message String, replaced CollectedLines) returns String
-	var doc = JsonDoc.create()
-	var payload = toolErrorPayload(doc, message: message, repoRoot: ActingTree.host)
+	let doc = JsonDoc.create()
+	let payload = toolErrorPayload(doc, message: message, repoRoot: ActingTree.host)
 	payload.addNode(OutputKey, node: outputArray(doc, output: replaced))
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
 end 'refusedStartReply'
 
 function placedSessionReply(reqDoc JsonDoc, idNode JsonNodeId, session DebugToolSession, debug DebugSessionSlot, replaced CollectedLines) returns String
+	let state = session.currentState()
+	let output = replaced.followedBy(session.conversation.engine.takeOutput())
 	debug.place(session)
 
-	return debugToolReply(reqDoc, idNode: idNode, state: session.currentState(), replies: DebugReplyArray.create(0), output: replaced.followedBy(session.engine.takeOutput()))
+	return debugToolReply(reqDoc, idNode: idNode, state: state, replies: DebugReplyArray.create(0), output: output)
 end 'placedSessionReply'
 
 function runDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String, args OptionalNode, session DebugToolSession, debug DebugSessionSlot) returns String
@@ -148,7 +148,7 @@ function runDebugTool(reqDoc JsonDoc, idNode JsonNodeId, name String, args Optio
 end 'runDebugTool'
 
 function ranDebugCommand(reqDoc JsonDoc, idNode JsonNodeId, replies DebugReplyArray, session DebugToolSession) returns String
-	return debugToolReply(reqDoc, idNode: idNode, state: session.currentState(), replies: replies, output: session.engine.takeOutput())
+	return debugToolReply(reqDoc, idNode: idNode, state: session.currentState(), replies: replies, output: session.conversation.engine.takeOutput())
 end 'ranDebugCommand'
 
 function stopDebugSession(reqDoc JsonDoc, idNode JsonNodeId, debug DebugSessionSlot) returns String
@@ -288,8 +288,8 @@ end 'greenThreadCommandFor'
 // Events are embedded as JSON, not as strings: `debugEventLineFor` renders the
 // `maxon debug --batch` schema, and a quoted line would make every client parse each event again.
 function debugToolReply(reqDoc JsonDoc, idNode JsonNodeId, state DebugToolState, replies DebugReplyArray, output CollectedLines) returns String
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
+	let doc = JsonDoc.create()
+	let payload = JsonObjectBuilder.create()
 	payload.addString(doc, key: StateKey, value: state.name)
 	payload.addNode(EventsKey, node: eventArray(doc, replies: replies))
 	payload.addNode(OutputKey, node: outputArray(doc, output: output))
@@ -298,7 +298,7 @@ function debugToolReply(reqDoc JsonDoc, idNode JsonNodeId, state DebugToolState,
 end 'debugToolReply'
 
 function eventArray(doc JsonDoc, replies DebugReplyArray) returns JsonNodeId
-	var ids = JsonNodeIdArray.create(0)
+	let ids = JsonNodeIdArray.create(0)
 
 	for reply in replies 'eachReply'
 		match debugEventLineFor(reply) 'rendered'
@@ -317,7 +317,7 @@ function parsedEventNode(doc JsonDoc, text String) returns JsonNodeId
 end 'parsedEventNode'
 
 function outputArray(doc JsonDoc, output CollectedLines) returns JsonNodeId
-	var ids = JsonNodeIdArray.create(0)
+	let ids = JsonNodeIdArray.create(0)
 
 	if output.dropped > 0 'someWereDropped'
 		ids.push(doc.add(JsonNode.stringNode(droppedOutputNotice(output.dropped))))

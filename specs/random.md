@@ -31,7 +31,7 @@ A thousand draws below 6 each land in `0 upto 6`, and every one of the six value
 typealias FaceCounts = Array with bool
 
 function main() returns ExitCode
-	var seen = FaceCounts.create(0)
+	let seen = FaceCounts.create(0)
 	seen.resize(6)
 
 	for _ in 0 upto 1000 'eachDraw'
@@ -167,7 +167,7 @@ request is bytes 768 to 999, and 232 bytes drawn at random are all zero with pro
 typealias ByteTally = int(0 to 1000)
 
 function main() returns ExitCode
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.resize(1000)
 
 	if __Builtins.fillRandom(bytes.managed) != 0 'refused'
@@ -352,7 +352,7 @@ typealias FailureTally = int(0 to 100)
 typealias DrawSet = Set with String
 
 function uniqueFailures(id String, count RandomByteCount, repeat DrawRepeat) returns FailureTally
-	var seen = DrawSet.create()
+	let seen = DrawSet.create()
 
 	for _ in 1 to repeat 'eachDraw'
 		let drawn = try Random.bytes(count) otherwise return 1
@@ -390,7 +390,7 @@ typealias DistinctTally = int(0 to 256)
 typealias ValueSeen = Array with bool
 
 function distinctValues(drawn ByteArray) returns DistinctTally
-	var seen = ValueSeen.create(0)
+	let seen = ValueSeen.create(0)
 	seen.resize(256)
 
 	for byte in drawn 'eachByte'

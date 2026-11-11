@@ -214,7 +214,7 @@ type TestDir
 end 'TestDir'
 
 function createFile(path String, content String) throws TestFileError
-	var f = try TestFile.openWrite(path.toByteArray().managed)
+	let f = try TestFile.openWrite(path.toByteArray().managed)
 	try f.file.write(content.toByteArray().managed) otherwise 'err'
 		f.file.close()
 		panic("write failed")
@@ -237,7 +237,7 @@ function main() returns ExitCode
 	end 'c2Err'
 
 	// Search the directory
-	var dir = try TestDir.search("{dirPath}/*".toByteArray().managed) otherwise 'searchFail'
+	let dir = try TestDir.search("{dirPath}/*".toByteArray().managed) otherwise 'searchFail'
 		print("search failed")
 		return 2
 	end 'searchFail'
@@ -341,7 +341,7 @@ enum ProbeError implements Error
 end 'ProbeError'
 
 function writeFile(path String) throws ProbeError
-	var f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
+	let f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
 		throw ProbeError.failed
 	end 'openFail'
 	try f.write("x".toByteArray().managed) otherwise 'writeFail'
@@ -357,7 +357,7 @@ function main() returns ExitCode
 	try writeFile("{dirPath}/alpha.txt") otherwise return 2
 	try writeFile("{dirPath}/beta.txt") otherwise return 2
 
-	var dir = try __ManagedDirectory.openSearch("{dirPath}/*.txt".toByteArray().managed) otherwise return 3
+	let dir = try __ManagedDirectory.openSearch("{dirPath}/*.txt".toByteArray().managed) otherwise return 3
 	var count = 0 as ExitCode
 	while (try dir.next() otherwise return 4) != 0 'loop'
 		count = count + 1
@@ -392,7 +392,7 @@ enum ProbeError implements Error
 end 'ProbeError'
 
 function writeFile(path String) throws ProbeError
-	var f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
+	let f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
 		throw ProbeError.failed
 	end 'openFail'
 	try f.write("x".toByteArray().managed) otherwise 'writeFail'
@@ -407,7 +407,7 @@ function main() returns ExitCode
 	try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
 	try writeFile("{dirPath}/only.txt") otherwise return 2
 
-	var dir = try __ManagedDirectory.openSearch("{dirPath}/*.txt".toByteArray().managed) otherwise return 3
+	let dir = try __ManagedDirectory.openSearch("{dirPath}/*.txt".toByteArray().managed) otherwise return 3
 	var found = 0 as Count
 	while (try dir.next() otherwise return 4) != 0 'loop'
 		let name = String.init(dir.filename())
@@ -441,7 +441,7 @@ contract.
 
 ```maxon
 function main() returns ExitCode
-	var dir = try __ManagedDirectory.openSearch("./*".toByteArray().managed) otherwise return 1
+	let dir = try __ManagedDirectory.openSearch("./*".toByteArray().managed) otherwise return 1
 	dir.close()
 	try dir.next() otherwise (e) 'handler'
 		match e 'kind'
@@ -469,7 +469,7 @@ enum ProbeError implements Error
 end 'ProbeError'
 
 function writeFile(path String) throws ProbeError
-	var f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
+	let f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
 		throw ProbeError.failed
 	end 'openFail'
 	try f.write("x".toByteArray().managed) otherwise 'writeFail'
@@ -536,7 +536,7 @@ more handles live.
 function main() returns ExitCode
 	var i = 0 as Count
 	while i < 200 'loop'
-		var dir = try __ManagedDirectory.openSearch("./*".toByteArray().managed) otherwise return 1
+		let dir = try __ManagedDirectory.openSearch("./*".toByteArray().managed) otherwise return 1
 		_ = try dir.next() otherwise return 2
 		i = i + 1
 	end 'loop'
@@ -589,7 +589,7 @@ enum ProbeError implements Error
 end 'ProbeError'
 
 function writeFile(path String) throws ProbeError
-	var f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
+	let f = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise 'openFail'
 		throw ProbeError.failed
 	end 'openFail'
 	try f.write("x".toByteArray().managed) otherwise 'writeFail'
@@ -606,7 +606,7 @@ function main() returns ExitCode
 	try writeFile("{dirPath}/..config") otherwise return 2
 	try writeFile("{dirPath}/plain.txt") otherwise return 2
 
-	var dir = try __ManagedDirectory.openSearch("{dirPath}/*".toByteArray().managed) otherwise return 3
+	let dir = try __ManagedDirectory.openSearch("{dirPath}/*".toByteArray().managed) otherwise return 3
 	var seen = 0 as ExitCode
 	var dots = 0 as Count
 	while (try dir.next() otherwise return 4) != 0 'loop'
@@ -664,7 +664,7 @@ function main() returns ExitCode
 	let dirPath = "test_md_empty_search"
 	try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise return 1
 
-	var dir = try __ManagedDirectory.openSearch("{dirPath}/*".toByteArray().managed) otherwise return 2
+	let dir = try __ManagedDirectory.openSearch("{dirPath}/*".toByteArray().managed) otherwise return 2
 	let first = try dir.next() otherwise return 3
 	if first != 0 'emptyDirectoryHasNoRealEntry'
 		return 4

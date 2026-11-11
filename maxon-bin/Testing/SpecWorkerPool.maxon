@@ -486,10 +486,10 @@ end 'SuitePlan'
 // also nearly free — parsing nineteen markdown files costs less than one of the compiles it is
 // about to dispatch.
 function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns SuitePlan throws CompileError
-	var plans = SpecPlanArray.create(0)
-	var excluded = ExcludedCaseArray.create(0)
-	var directoryExcluded = ExcludedCaseArray.create(0)
-	var tally = FilterPatternTally.create(filterPatterns, spellings: filterPatterns)
+	let plans = SpecPlanArray.create(0)
+	let excluded = ExcludedCaseArray.create(0)
+	let directoryExcluded = ExcludedCaseArray.create(0)
+	let tally = FilterPatternTally.create(filterPatterns, spellings: filterPatterns)
 	var directorySelectsACase = false
 
 	let specPaths = try specFilePaths(specDir)
@@ -532,7 +532,7 @@ function buildPlans(specDir FilePath, filterPatterns FilterPatternArray, mode Sp
 				continue
 			end 'inAnotherShard'
 
-			var testNames = StringArray.create(tests.count(), zeroed: false)
+			let testNames = StringArray.create(tests.count(), zeroed: false)
 			var weight = 0 as JobWeight
 
 			for test in tests 'eachTest'
@@ -656,8 +656,8 @@ end 'popHeaviestJob'
 export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, runWorkingDir FilePath) returns ExitCode
 	silenceCompilerLogging()
 
-	var stdin = Console.stdin()
-	var fileMemos = SharedFileMemoMap.create()
+	let stdin = Console.stdin()
+	let fileMemos = SharedFileMemoMap.create()
 	print("{WorkerReadyMarker}\n")
 
 	while true 'jobLoop'
@@ -756,7 +756,7 @@ function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatt
 	// checks the records against its plan. See this file's protocol note.
 	print("{jobCountsLine(WorkerJobBatchMarker, first: run.batch.batched as ParsedCount, second: run.batch.programs as ParsedCount, third: run.batch.alone as ParsedCount)}\n")
 
-	view library = fileMemos.library.takeTotals()
+	let library = fileMemos.library.takeTotals()
 	print("{jobCountsLine(WorkerJobLibraryMarker, first: library.loaded as ParsedCount, second: library.written as ParsedCount, third: library.rejected as ParsedCount)}\n")
 	print("{jobCountsLine(WorkerJobCpuMarker, first: run.cpu.ticks as ParsedCount, second: run.cpu.reported as ParsedCount, third: run.cpu.unreported as ParsedCount)}\n")
 end 'runSpecJob'
@@ -859,7 +859,7 @@ end 'encodeRecordPayload'
 function decodeRecordPayload(payload String) returns String
 	let bytes = payload.toByteArray()
 	let n = bytes.count()
-	var decoded = ByteArray.create(n, zeroed: false)
+	let decoded = ByteArray.create(n, zeroed: false)
 	var i = 0 as ElementIndex
 
 	while i < n 'walk'
@@ -1008,7 +1008,7 @@ function takeJobCpuRecord(lines StringArray, specName String) returns SuiteCpuTa
 end 'takeJobCpuRecord'
 
 function takeJobHarnessRecords(lines StringArray) returns StringArray
-	var errors = StringArray.create(0)
+	let errors = StringArray.create(0)
 
 	while true 'eachRecord'
 		let last = try lines.last() otherwise break
@@ -1031,7 +1031,7 @@ end 'takeJobBatchRecord'
 
 function takeJobLibraryRecord(lines StringArray, specName String) returns LibraryCacheTally
 	let counts = takeJobCounts(lines, specName: specName, marker: WorkerJobLibraryMarker, names: JobCountNames.create("loaded count", second: "written count", third: "rejected count"))
-	var tally = LibraryCacheTally.create()
+	let tally = LibraryCacheTally.create()
 	tally.loaded = counts.first as LibraryEntryTally
 	tally.written = counts.second as LibraryEntryTally
 	tally.rejected = counts.third as LibraryEntryTally
@@ -1090,7 +1090,7 @@ end 'decodeJobCount'
 // reach the worker) would otherwise show up as a suite that quietly reported a different set of
 // tests than the one it claims to have run.
 function resultsFromLines(lines StringArray, plan SpecPlan) returns SpecTestResultArray
-	var results = SpecTestResultArray.create(lines.count(), zeroed: false)
+	let results = SpecTestResultArray.create(lines.count(), zeroed: false)
 
 	if lines.count() != plan.testNames.count() 'wrongRecordCount'
 		panic("spec worker pool: '{plan.specName}' returned {lines.count()} record(s), expected {plan.testNames.count()} — a result was lost, or the worker selected different tests than the parent did")
@@ -1190,7 +1190,7 @@ typealias SpokeCellArray = Array with SpokeCell
 // place that decides what progress is. The instant IS the answer, written by the one party that knows
 // it. The cost is one clock read per line, against ~2 lines per test.
 function drainResultsThunk(reader StdoutReader, spoke SpokeCell) returns StringArray throws SubprocessError
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	while true 'lineLoop'
 		let line = try reader.readLine() otherwise (e) 'unread'
@@ -1262,7 +1262,7 @@ end 'lastStepIn'
 // is neither a breadcrumb nor a record survives this and is refused by `decodeWorkerLine`, so nothing
 // is silently walked past.
 function recordLinesOf(lines StringArray) returns StringArray
-	var records = StringArray.create(0)
+	let records = StringArray.create(0)
 
 	for line in lines 'eachLine'
 		if not line.startsWith(WorkerStepMarker) 'isNotABreadcrumb'
@@ -1288,7 +1288,7 @@ end 'recordLinesOf'
 // read error here means the handle is already gone, and there is nothing left to say about a worker
 // whose pipe we can no longer read.
 function drainChildStderr(child StreamingSubprocess) returns String
-	var out = TextJoiner.create()
+	let out = TextJoiner.create()
 
 	while true 'lineLoop'
 		let line = try child.readStderrLine() otherwise break
@@ -1316,7 +1316,7 @@ type PersistentWorkerHandle
 	// asked for, and `resultsFromLines` panics. This list is this function's selection parameters; a new
 	// one joins it in the same edit.
 	static function spawnNoWait(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle throws SubprocessError
-		var argv = StringArray.create(0)
+		let argv = StringArray.create(0)
 		argv.push(SpecTestCommandName)
 		argv.push(WorkerPersistentFlag)
 
@@ -1455,19 +1455,19 @@ type PersistentWorkerHandle
 
 		return terminateAndReap()
 	end 'exitAfterDeath'
-
-	// The end of a worker that will serve no more jobs: make sure it is gone, then free the handle.
-	// Called ONCE per death, after the parent has read everything the corpse had to say — a leaked
-	// handle is a leaked OS process slot, in a parent that is itself leak-gated.
-	//
-	// It terminates again rather than assuming: EOF on stdout is not the same fact as an exited
-	// process, and the wait costs nothing on a child that has already gone. The status is discarded
-	// here because the report already holds it — `exitAfterDeath` asked, one line earlier.
-	function releaseAfterDeath()
-		_ = terminateAndReap()
-		child.release()
-	end 'releaseAfterDeath'
 end 'PersistentWorkerHandle'
+
+// The end of a worker that will serve no more jobs: make sure it is gone, then free the handle.
+// Called ONCE per death, after the parent has read everything the corpse had to say — a leaked
+// handle is a leaked OS process slot, in a parent that is itself leak-gated.
+//
+// It terminates again rather than assuming: EOF on stdout is not the same fact as an exited
+// process, and the wait costs nothing on a child that has already gone. The status is discarded
+// here because the report already holds it — `exitAfterDeath` asked, one line earlier.
+function releaseAfterDeath(handle PersistentWorkerHandle)
+	_ = handle.terminateAndReap()
+	handle.child.release()
+end 'releaseAfterDeath'
 
 typealias PersistentWorkerHandleArray = Array with PersistentWorkerHandle
 
@@ -1520,7 +1520,7 @@ end 'deadWorkerStderr'
 // intermittently green suite. Failing it keeps the bug loud AND keeps the other ~200 specs reporting,
 // which holds a compiler panic's cost at one named FAIL rather than the whole run.
 function deadJobResults(plan SpecPlan, reason String) returns SpecTestResultArray
-	var results = SpecTestResultArray.create(plan.testNames.count(), zeroed: false)
+	let results = SpecTestResultArray.create(plan.testNames.count(), zeroed: false)
 
 	for testName in plan.testNames 'eachTest'
 		results.push(SpecTestResult.create(plan.specName, testName: testName, outcome: TestOutcome.fail(reason)))
@@ -1690,7 +1690,7 @@ end 'posixSigBusOn'
 // byte in hex — rather than a second nibble table, and at the FULL width of the code's own type, which
 // is what makes a fixed-width render honest here where `hexOffset` has to grow instead.
 function hexOf(code WorkerExitCode) returns String
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 
 	for i in 0 upto ExitCodeHexBytes 'eachByte'
 		out.append(hexByte((code shr (((ExitCodeHexBytes - 1 - i) * BitsPerByte) as ShiftCount)) as MachineWord))
@@ -1721,7 +1721,7 @@ end 'deathCause'
 // It reports every failing row rather than the first, for `SpecVerdictSelfTest`'s reason: one careless
 // edit breaks several, and a report naming one sends the reader back for another sweep per row.
 function requireWorkerExitDecodeHolds()
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 
 	checkExitDecode(broken, code: 0xC0000005, host: Os.windows, expected: "0xc0000005 (access violation)")
 	checkExitDecode(broken, code: 0xC0000017, host: Os.windows, expected: "0xc0000017 (out of memory)")
@@ -1863,7 +1863,7 @@ end 'formatSeconds'
 // at most one poll on a real wedge and by an unbounded amount on a suspended machine, which is the
 // case the header exists to let an operator tell apart: a run idle for 4000 s did not wedge, it slept.
 function abortOnWedgedPool(busy FixedBoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SpokeCellArray, expired FixedBoolArray, idleFor DurationMs, queued JobTally, dispatched JobTally, completed JobTally)
-	var report = TextJoiner.create()
+	let report = TextJoiner.create()
 	report.push("\n=== spec worker pool WEDGED: nothing dispatched or collected for {formatSeconds(idleFor)} (limit {formatSeconds(WedgeWatchdogMs)}) ===")
 	report.push("{dispatched} job(s) dispatched, {completed} collected, {queued} still queued")
 
@@ -1997,8 +1997,8 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	try prepareSharedDirs(specDir)
 
 	// ⭐⭐ **TWO QUEUES, AND THE `alone` ONE IS SERVED ONLY BY AN IDLE POOL** — `takeDispatchableJob`.
-	var jobQueue = SpecJobArray.create(0)
-	var aloneQueue = SpecJobArray.create(0)
+	let jobQueue = SpecJobArray.create(0)
+	let aloneQueue = SpecJobArray.create(0)
 
 	for i in 0 upto plans.count() 'enqueue'
 		let plan = try plans.get(i) otherwise panic("runSpecPool: plans.get({i}) is in bounds by construction")
@@ -2019,7 +2019,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		poolSize = jobCount as WorkerCount
 	end 'moreWorkersThanJobs'
 
-	var workers = spawnPool(harnessExe, count: poolSize, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+	let workers = spawnPool(harnessExe, count: poolSize, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 
 	// Per-slot state as PARALLEL ARRAYS rather than one array of slot structs: the in-flight drain
 	// Promise cannot live inside a struct the loop also keeps mutating (see `drainResultsThunk`),
@@ -2040,11 +2040,11 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	let runStrategy = runStrategyFor(effectiveTarget)
 
 	let slotCount = poolSize as ElementIndex
-	var busy = FixedBoolArray.create(slotCount)
-	var inFlight = SpecJobArray.create(slotCount, zeroed: false)
-	var drains = DrainPromiseArray.create(0)
-	var dispatchedAt = SlotInstantArray.create(slotCount, zeroed: false)
-	var spokeAt = SpokeCellArray.create(slotCount, zeroed: false)
+	let busy = FixedBoolArray.create(slotCount)
+	let inFlight = SpecJobArray.create(slotCount, zeroed: false)
+	let drains = DrainPromiseArray.create(0)
+	let dispatchedAt = SlotInstantArray.create(slotCount, zeroed: false)
+	let spokeAt = SpokeCellArray.create(slotCount, zeroed: false)
 
 	// Whether this slot's progress bound has already fired and the worker been terminated for it. A
 	// LATCH, not a re-derivable predicate: once a worker has been given up on it stays given up on, and
@@ -2052,7 +2052,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// poll while the EOF makes its way back through the runtime — printing a line each time.
 	// Re-stamping the dispatch instant instead cannot work: a worker that exited on its own would
 	// then have its bound pushed forward for ever.
-	var expired = FixedBoolArray.create(slotCount)
+	let expired = FixedBoolArray.create(slotCount)
 	let idleJob = SpecJob.idle()
 
 	// The placeholder instant, like `SpecJob.idle()` beside it: never read, because an idle slot's
@@ -2068,9 +2068,9 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 
 	// One bucket per plan, filled out of order and concatenated in plan order at the end. THIS is
 	// where worker-count invariance is won: nothing is reported as it arrives.
-	var buckets = SpecResultBuckets.create(plans.count(), zeroed: false)
+	let buckets = SpecResultBuckets.create(plans.count(), zeroed: false)
 
-	var harnessBuckets = HarnessErrorBuckets.create(plans.count(), zeroed: false)
+	let harnessBuckets = HarnessErrorBuckets.create(plans.count(), zeroed: false)
 
 	for _ in 0 upto plans.count() 'initBuckets'
 		buckets.push(SpecTestResultArray.create(0))
@@ -2095,7 +2095,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// with the scheduling, the set of jobs does not.
 	var cpu = SuiteCpuTally.zero()
 	var batch = BatchTally.zero()
-	var library = LibraryCacheTally.create()
+	let library = LibraryCacheTally.create()
 
 	// The watchdog's whole state. `dispatched + completed` counts every progress event this loop can
 	// make, so a poll that finds it unchanged since the previous poll found nothing moving — which is
@@ -2136,7 +2136,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 		// slot order would park on it while every other worker sat idle with its answer already in
 		// the pipe. That is head-of-line blocking, and it is what the non-blocking peek prevents.
 		if let readySlot = try findReadyDrain(busy, drains: drains, cursor: drainCursor) 'haveAnswer'
-			var handle = try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction")
+			let workerId = (try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction")).workerId
 
 			// Cloned out of the array so the borrow does not pin `inFlight` for the re-dispatch
 			// below, which overwrites this very slot.
@@ -2150,11 +2150,11 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 			// reaches here is a read that FAILED — the parent unable to read a pipe it owns, which is no
 			// test's failure and is the harness itself. Binding `e` is also what RELEASES it: a union's
 			// payload is a heap pointer, and the binding is what decrefs it.
-			var lines = try await drain otherwise (e) 'stdoutUnreadable'
-				abortOnDeadWorker(handle, job: job, reason: "the parent could not read its stdout: {e.displayReason()}")
+			let lines = try await drain otherwise (e) 'stdoutUnreadable'
+				abortOnDeadWorker(try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction"), job: job, reason: "the parent could not read its stdout: {e.displayReason()}")
 			end 'stdoutUnreadable'
 
-			try handle.child.reclaimStdout() otherwise panic("runSpecPool: the stdout of slot {readySlot}'s worker was not out after its drain ended")
+			try (try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction")).child.reclaimStdout() otherwise panic("runSpecPool: the stdout of slot {readySlot}'s worker was not out after its drain ended")
 
 			let plan = try plans.get(job.planIndex) otherwise panic("runSpecPool: plans.get({job.planIndex}) is in bounds by construction")
 
@@ -2170,10 +2170,10 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 				// ⭐ REAPED BEFORE ANYTHING IS PRINTED, because both reports carry it and the handle is
 				// released at the bottom of this block. See `PersistentWorkerHandle.exitAfterDeath` for
 				// why the deadline's own kill answers no code.
-				let workerExit = handle.exitAfterDeath(killedByDeadline)
-				reportDeadWorker(handle, specName: job.specName, lastStep: lastStep, exit: workerExit)
+				let workerExit = (try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction")).exitAfterDeath(killedByDeadline)
+				reportDeadWorker(try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction"), specName: job.specName, lastStep: lastStep, exit: workerExit)
 
-				try buckets.set(job.planIndex, value: deadJobResults(plan, reason: deadJobReason(handle.workerId, specName: job.specName, lastStep: lastStep, exit: workerExit))) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
+				try buckets.set(job.planIndex, value: deadJobResults(plan, reason: deadJobReason(workerId, specName: job.specName, lastStep: lastStep, exit: workerExit))) otherwise panic("runSpecPool: buckets.set({job.planIndex}) is in bounds by construction")
 
 				// ⚠ THE CPU TALLY MUST COVER THESE TESTS TOO. `runSpecPool`'s own cross-check requires
 				// exactly one reading per reported test, and a job that printed no WORKER_JOB_CPU record
@@ -2183,8 +2183,8 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 
 				// The dead handle is released HERE and the slot given a fresh worker, so `shutdownPool`
 				// neither shuts down a corpse nor counts it twice: the death is tallied once, now.
-				handle.releaseAfterDeath()
-				try workers.set(readySlot, value: spawnReadyWorker(harnessExe, workerId: handle.workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)) otherwise panic("runSpecPool: workers.set({readySlot}) is in bounds by construction")
+				releaseAfterDeath(try workers.get(readySlot) otherwise panic("runSpecPool: workers.get({readySlot}) is in bounds by construction"))
+				try workers.set(readySlot, value: spawnReadyWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)) otherwise panic("runSpecPool: workers.set({readySlot}) is in bounds by construction")
 				try busy.set(readySlot, value: false) otherwise panic("runSpecPool: busy.set({readySlot}) is in bounds by construction")
 
 				deadWorkers = deadWorkers + 1
@@ -2206,7 +2206,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 			// The READY terminator and the compile breadcrumbs come off first, then the counts records
 			// and the harness records off the END: what remains is exactly the result records `resultsFromLines` checks against the
 			// plan, one per test with no allowance for a line of any other kind.
-			var records = recordLinesOf(lines)
+			let records = recordLinesOf(lines)
 			cpu = cpu.plus(takeJobCpuRecord(records, specName: job.specName))
 			library.add(takeJobLibraryRecord(records, specName: job.specName))
 			batch = batch.plus(takeJobBatchRecord(records, specName: job.specName))
@@ -2279,7 +2279,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 end 'runSpecPool'
 
 function concatHarnessErrors(buckets HarnessErrorBuckets) returns StringArray
-	var errors = StringArray.create(0)
+	let errors = StringArray.create(0)
 
 	for bucket in buckets 'eachSpec'
 		for text in bucket 'eachError'
@@ -2293,7 +2293,7 @@ end 'concatHarnessErrors'
 // The buckets, in plan order — the suite's report, assembled at last from answers that arrived in
 // whatever order the workers happened to finish.
 function concatBuckets(buckets SpecResultBuckets) returns SpecTestResultArray
-	var results = SpecTestResultArray.create(0)
+	let results = SpecTestResultArray.create(0)
 
 	for bucket in buckets 'eachSpec'
 		for result in bucket 'eachResult'
@@ -2374,15 +2374,14 @@ end 'settleRunWorkingDir'
 // There is no degraded mode to fall back to, and a pool that quietly ran with fewer workers than
 // it was asked for would be a harness lying about what it did.
 function spawnPool(harnessExe FilePath, count WorkerCount, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandleArray
-	var workers = PersistentWorkerHandleArray.create(count as ElementIndex, zeroed: false)
+	let workers = PersistentWorkerHandleArray.create(count as ElementIndex, zeroed: false)
 
 	for i in 0 upto count as ElementIndex 'spawnPhase'
 		workers.push(spawnWorker(harnessExe, workerId: i as WorkerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork))
 	end 'spawnPhase'
 
 	for i in 0 upto count as ElementIndex 'readyPhase'
-		var handle = try workers.get(i) otherwise panic("spawnPool: workers.get({i}) is in bounds by construction")
-		awaitWorkerHello(handle)
+		awaitWorkerHello(try workers.get(i) otherwise panic("spawnPool: workers.get({i}) is in bounds by construction"))
 	end 'readyPhase'
 
 	return workers
@@ -2413,7 +2412,7 @@ end 'awaitWorkerHello'
 // wedge report indexes by it, and so does every message), so minting a new one would make the report
 // stop lining up with the pool it describes.
 function spawnReadyWorker(harnessExe FilePath, workerId WorkerId, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandle
-	var handle = spawnWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
+	let handle = spawnWorker(harnessExe, workerId: workerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork)
 	awaitWorkerHello(handle)
 	return handle
 end 'spawnReadyWorker'
@@ -2487,8 +2486,8 @@ function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy Fixe
 			continue
 		end 'stillSpeaking'
 
-		var handle = try workers.get(slot) otherwise panic("enforceProgressDeadlines: workers.get({slot}) is in bounds by construction")
-		printError("error: spec worker {handle.workerId} has said nothing about '{job.specName}' for {formatSeconds(silent)}, past the {formatSeconds(deadline)} one step is allowed — terminating it\n")
+		let workerId = (try workers.get(slot) otherwise panic("enforceProgressDeadlines: workers.get({slot}) is in bounds by construction")).workerId
+		printError("error: spec worker {workerId} has said nothing about '{job.specName}' for {formatSeconds(silent)}, past the {formatSeconds(deadline)} one step is allowed — terminating it\n")
 
 		// TERMINATE, do NOT release: the dispatch loop's dead-worker path still has to read this
 		// worker's stderr, and it is the ONE place a handle is freed. Killing here closes the worker's
@@ -2496,7 +2495,7 @@ function enforceProgressDeadlines(workers PersistentWorkerHandleArray, busy Fixe
 		//
 		// ⛔ THE STATUS IS DISCARDED BECAUSE THIS KILL CHOSE IT. `expired` is what the dead-worker path
 		// reads instead, and `exitAfterDeath` turns it into the one arm that reports no code at all.
-		_ = handle.terminateAndReap()
+		_ = (try workers.get(slot) otherwise panic("enforceProgressDeadlines: workers.get({slot}) is in bounds by construction")).terminateAndReap()
 		try expired.set(slot, value: true) otherwise panic("enforceProgressDeadlines: expired.set({slot}) is in bounds by construction")
 	end 'eachSlot'
 
@@ -2534,12 +2533,10 @@ end 'enforceProgressDeadlines'
 // worker last spoke on its PREVIOUS job — and terminate a healthy worker part-way into its first
 // compile. Dispatch is the moment the interval starts, so dispatch is what starts it.
 function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job SpecJob, busy FixedBoolArray, inFlight SpecJobArray, drains DrainPromiseArray, dispatchedAt SlotInstantArray, spokeAt SpokeCellArray, expired FixedBoolArray)
-	var handle = try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")
-
-	try handle.sendJob(job.toJobLine()) otherwise (e) 'sendFailed'
+	try (try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")).sendJob(job.toJobLine()) otherwise (e) 'sendFailed'
 		// A broken stdin pipe means the worker is already gone — and gone with NO JOB IN HAND, which is
 		// the one death that still aborts rather than being recovered. See `abortOnDeadWorker`.
-		abortOnDeadWorker(handle, job: job, reason: "could not send it the job: {e.displayReason()}")
+		abortOnDeadWorker(try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction"), job: job, reason: "could not send it the job: {e.displayReason()}")
 	end 'sendFailed'
 
 	let dispatchInstant = Clock.nowMs()
@@ -2552,7 +2549,7 @@ function sendAndDrain(workers PersistentWorkerHandleArray, slot WorkerId, job Sp
 	// The spawn hands the green thread its OWN REFERENCE to `spokeAt` (see `drainResultsThunk`), so the
 	// stamps it writes land in the array this loop reads. It is the parent's array throughout: the drain
 	// only ever writes its own slot, and only the dispatcher ever reads one.
-	let reader = try handle.child.takeStdout() otherwise panic("sendAndDrain: the stdout of slot {slot}'s worker is already out")
+	let reader = try (try workers.get(slot) otherwise panic("sendAndDrain: workers.get({slot}) is in bounds by construction")).child.takeStdout() otherwise panic("sendAndDrain: the stdout of slot {slot}'s worker is already out")
 	let drain = async drainResultsThunk(reader, spoke: (try spokeAt.get(slot) otherwise panic("sendAndDrain: spokeAt.get({slot}) is in bounds by construction")).clone())
 
 	if slot == drains.count() as WorkerId 'firstDispatchToThisSlot'
@@ -2573,9 +2570,7 @@ function shutdownPool(workers PersistentWorkerHandleArray) returns WorkerTally
 	var failed = 0 as WorkerTally
 
 	for i in 0 upto workers.count() 'eachWorker'
-		var handle = try workers.get(i) otherwise panic("shutdownPool: workers.get({i}) is in bounds by construction")
-
-		let code = try handle.shutdownAndDrainStderr() otherwise (e) 'shutdownFailed'
+		let code = try (try workers.get(i) otherwise panic("shutdownPool: workers.get({i}) is in bounds by construction")).shutdownAndDrainStderr() otherwise (e) 'shutdownFailed'
 			printError("error: spec worker {i} did not shut down cleanly: {e.displayReason()}\n")
 			failed = failed + 1
 			continue

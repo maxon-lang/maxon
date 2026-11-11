@@ -58,7 +58,7 @@ end 'IndexBuilder'
 typealias SettledIndex = immutable IndexBuilder
 
 function buildIndex(declarations DeclarationArray) returns SettledIndex
-	var builder = IndexBuilder.create() as isolated IndexBuilder
+	let builder = IndexBuilder.create() as isolated IndexBuilder
 
 	modify builder 'fill'
 		for declaration in declarations 'eachDeclaration'
@@ -70,7 +70,7 @@ function buildIndex(declarations DeclarationArray) returns SettledIndex
 end 'buildIndex'
 
 function main() returns ExitCode
-	var declarations = DeclarationArray.create(0)
+	let declarations = DeclarationArray.create(0)
 	declarations.push(Declaration.create("alpha", line: 3))
 	declarations.push(Declaration.create("beta", line: 9))
 	let index = buildIndex(declarations)
@@ -109,7 +109,7 @@ function total(items FrozenNodes) returns Count
 end 'total'
 
 function main() returns ExitCode
-	var nodes = NodeArray.create(0) as isolated NodeArray
+	let nodes = NodeArray.create(0) as isolated NodeArray
 	modify nodes 'fill'
 		nodes.push(Node.create(1))
 		nodes.push(Node.create(2))
@@ -240,12 +240,12 @@ type Indexer
 end 'Indexer'
 
 function main() returns ExitCode
-	var words = WordArray.create(0)
+	let words = WordArray.create(0)
 	words.push("a")
 	words.push("b")
 	words.push("a")
 
-	var indexer = Indexer.create()
+	let indexer = Indexer.create()
 	indexer.addWords(words)
 	indexer.addWord("a")
 
@@ -416,7 +416,7 @@ typealias LineArray = Array with String
 typealias Thunk = function() returns Tally
 
 function make() returns Thunk
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 
 	modify batch 'fill'
 		batch.push("a")
@@ -490,7 +490,7 @@ end 'Row'
 
 function main() returns ExitCode
 	var keep = Row.create("a")
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 
 	modify batch 'fill'
 		batch.push("x")
@@ -627,7 +627,7 @@ function slow() returns Tally
 end 'slow'
 
 function main() returns ExitCode
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 	let later = async slow()
 
 	modify batch 'edit'
@@ -655,7 +655,7 @@ function sibling() returns Count
 end 'sibling'
 
 function editor() returns Count
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 
 	for round in 0 upto 4 'eachRound'
 		modify batch 'fill'
@@ -848,7 +848,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	holder.page.lines = LineArray.create(0)
 	holder.page.lines.push("a")
 	holder.page.lines.push("b")
@@ -892,7 +892,7 @@ type Bag implements Grows
 end 'Bag'
 
 function stretch(g Grows)
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 
 	modify batch 'fill'
 		g.grow(5)
@@ -932,7 +932,7 @@ end 'rename'
 
 function run(edit Edit)
 	var row = Row.create("a")
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 
 	modify batch 'fill'
 		edit(row)
@@ -976,7 +976,7 @@ end 'consume'
 
 function main() returns ExitCode
 	var row = Row.create("a")
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 
 	modify batch 'fill'
 		let n = consume(function() gives row.rename())
@@ -1661,7 +1661,7 @@ type Relay
 end 'Relay'
 
 function main() returns ExitCode
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 
 	modify batch 'fill'
 		_ = spawn Relay.create()
@@ -1700,7 +1700,7 @@ end 'push'
 
 function main() returns ExitCode
 	let h = spawn(capacity: 1) Store.create()
-	var batch = LineArray.create(0) as isolated LineArray
+	let batch = LineArray.create(0) as isolated LineArray
 
 	modify batch 'edit'
 		push(h)
@@ -1818,8 +1818,8 @@ function either(a Pair, b Pair, flag bool) returns Pair
 end 'either'
 
 function main() returns ExitCode
-	var x = Pair.create()
-	var y = Pair.create()
+	let x = Pair.create()
+	let y = Pair.create()
 	let old = swap either(x, b: y, flag: true).part with Box.create(1)
 	print("{old.n} {x.part.n}\n")
 	return 0
@@ -1859,8 +1859,8 @@ function either(a Pair, b Pair, flag bool) returns Pair
 end 'either'
 
 function main() returns ExitCode
-	var x = Pair.create()
-	var y = Pair.create()
+	let x = Pair.create()
+	let y = Pair.create()
 
 	modify either(x, b: y, flag: true).part 'window'
 		print("opened\n")

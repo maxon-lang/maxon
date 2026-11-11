@@ -83,7 +83,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	return b.size()
 end 'main'
 ```
@@ -129,7 +129,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create(7)
+	let b = IntBag.create(7)
 	return b.probe()
 end 'main'
 ```
@@ -164,7 +164,7 @@ type Bag uses Element
 	var n as Int
 
 	static function make() returns Self
-		var i = EChain.create()
+		let i = EChain.create()
 		return Self{n: i.count() + 5}
 	end 'make'
 
@@ -176,7 +176,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.make()
+	let b = IntBag.make()
 	return b.size()
 end 'main'
 ```
@@ -232,7 +232,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.add("a string long enough to be heap allocated")
 	b.add("another string long enough to be heap allocated")
 	return b.size()
@@ -286,7 +286,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create(7)
+	let b = IntBag.create(7)
 	return b.probe()
 end 'main'
 ```
@@ -355,7 +355,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	return b.walk()
 end 'main'
 ```
@@ -457,7 +457,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create(7)
+	let b = IntBag.create(7)
 	return b.probe()
 end 'main'
 ```
@@ -502,8 +502,8 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var a = IntBag.create(7)
-	var b = IntBag.create(9)
+	let a = IntBag.create(7)
+	let b = IntBag.create(9)
 	return a.probe(b)
 end 'main'
 ```
@@ -563,7 +563,7 @@ typealias IntBag = Bag with Int
 typealias IntChain = Inner with Int
 
 function main() returns ExitCode
-	var b = IntBag.create(7)
+	let b = IntBag.create(7)
 	return b.probe(IntChain.create(9))
 end 'main'
 ```
@@ -597,8 +597,8 @@ typealias StrBag = Bag with String
 typealias StrItems = Array with String
 
 function main() returns ExitCode
-	var b = StrBag.create("alpha {40 + 2} value long enough for a heap record")
-	var xs = StrItems.create(0)
+	let b = StrBag.create("alpha {40 + 2} value long enough for a heap record")
+	let xs = StrItems.create(0)
 	xs.push("beta {40 + 2} value long enough for a heap record")
 	print("{b.probe(xs)} {b.value()}\n")
 	return 0
@@ -649,7 +649,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create(7)
+	let b = IntBag.create(7)
 	return b.probe()
 end 'main'
 ```
@@ -699,7 +699,7 @@ typealias IntBag = Bag with Int
 typealias IntChain = Inner with Int
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	return b.probe(IntChain.create(9))
 end 'main'
 ```
@@ -842,7 +842,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create(7)
+	let b = IntBag.create(7)
 	return b.probe()
 end 'main'
 ```
@@ -904,7 +904,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create(7)
+	let b = IntBag.create(7)
 	return b.probe()
 end 'main'
 ```
@@ -973,7 +973,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create(7)
+	let b = IntBag.create(7)
 	return b.probe()
 end 'main'
 ```
@@ -1063,7 +1063,7 @@ type Bag uses Element
 	end 'create'
 
 	function probe(other Self) returns Int
-		view peer = other.chain
+		let peer = other.chain
 		return peer.slotSize()
 	end 'probe'
 end 'Bag'
@@ -1071,8 +1071,8 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var a = IntBag.create(7)
-	var b = IntBag.create(9)
+	let a = IntBag.create(7)
+	let b = IntBag.create(9)
 	return a.probe(b)
 end 'main'
 ```
@@ -1131,7 +1131,7 @@ typealias IntChain = Inner with Int
 typealias IntPair = Pair with Int
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	return b.probe(IntChain.create(9), pair: IntPair.create(7))
 end 'main'
 ```

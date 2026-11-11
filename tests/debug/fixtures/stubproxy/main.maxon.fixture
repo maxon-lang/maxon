@@ -216,7 +216,7 @@ type Relay
 end 'Relay'
 
 function packetsOf(text String) returns StringArray
-	var packets = StringArray.create(0)
+	let packets = StringArray.create(0)
 
 	for (iter, piece) in text.split(PacketStart).withIterator() 'eachPiece'
 		if iter.index() == 0 'beforeAnyPacket'
@@ -353,7 +353,7 @@ function traceFile() returns FilePath
 end 'traceFile'
 
 function forwardedArguments(arguments StringArray, replacing String, by String) returns StringArray
-	var forwarded = StringArray.create(arguments.count(), zeroed: false)
+	let forwarded = StringArray.create(arguments.count(), zeroed: false)
 	var replaceNext = false
 
 	for (iter, argument) in arguments.withIterator() 'eachArgument'
@@ -430,7 +430,7 @@ function served(arguments StringArray) returns ExitCode
 	let driver = driverEndpoint(arguments)
 	let door = try TcpListener.bind(Loopback, port: 0) otherwise panic("the stub proxy could not listen")
 	let proxied = forwardedArguments(arguments, replacing: ReverseConnectOption, by: "{Loopback}{HostPortSeparator}{door.port()}")
-	var stub = try StreamingSubprocess.spawn(Executable.path(realStub()), arguments: proxied) otherwise panic("the real stub could not start")
+	let stub = try StreamingSubprocess.spawn(Executable.path(realStub()), arguments: proxied) otherwise panic("the real stub could not start")
 	stub.closeStdin()
 
 	try door.setAcceptDeadline(ConnectBudgetMs) otherwise panic("the stub proxy could not put a deadline on its door")
@@ -441,7 +441,7 @@ end 'served'
 
 function relayed(stub StreamingSubprocess, stubSocket TcpClient, driver Endpoint, scenario Scenario) returns ExitCode
 	let driverSocket = try TcpClient.connect(driver.host, port: driver.port, deadlineMs: ConnectBudgetMs) otherwise panic("the stub proxy could not reach the debugger")
-	var relay = Relay.create(driverSocket, stub: stubSocket, scenario: scenario, trace: traceFile())
+	let relay = Relay.create(driverSocket, stub: stubSocket, scenario: scenario, trace: traceFile())
 
 	while relay.step() 'relaying'
 		drainedOutput(stub)

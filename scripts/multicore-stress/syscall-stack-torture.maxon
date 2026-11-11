@@ -146,7 +146,7 @@ function main() returns ExitCode
 	i = 0
 
 	while i < serviceCount 'kick'
-		view probe = try probes.get(i as ElementIndex) otherwise panic("syscall-stack-torture: probes.get OOB at {i} — the loop is bounded by the count the pushes above filled")
+		let probe = try probes.get(i as ElementIndex) otherwise panic("syscall-stack-torture: probes.get OOB at {i} — the loop is bounded by the count the pushes above filled")
 		try probe.identify(i) otherwise panic("syscall-stack-torture: a fresh service refused its first message")
 		try probe.churn(rounds) otherwise panic("syscall-stack-torture: a fresh service refused its second message")
 		i = i + 1
@@ -165,7 +165,7 @@ function main() returns ExitCode
 	i = 0
 
 	while i < serviceCount 'collect'
-		view probe = try probes.get(i as ElementIndex) otherwise panic("syscall-stack-torture: probes.get OOB at {i} in the collect loop")
+		let probe = try probes.get(i as ElementIndex) otherwise panic("syscall-stack-torture: probes.get OOB at {i} in the collect loop")
 		total = total + (try await probe.total() otherwise panic("syscall-stack-torture: service {i} did not answer — a shut-down service cannot be the reason, since this frame still holds its handle"))
 		i = i + 1
 	end 'collect'

@@ -24,25 +24,10 @@ end 'chunkStop'
 type MoveChunk
 	let moved as BoolArray
 	let values as ValueIdArray
-	let awaiting as MoveSlotIndexColumn
-	let anyAwaiting as bool
 
-	static function create(moved BoolArray, values ValueIdArray, awaiting MoveSlotIndexColumn) returns MoveChunk
-		var waiting = false
-
-		for slot in awaiting 'eachSlot'
-			if slot != NoMoveSiteList 'aDoorWaits'
-				waiting = true
-				break
-			end 'aDoorWaits'
-		end 'eachSlot'
-
-		return Self{moved: moved, values: values, awaiting: awaiting, anyAwaiting: waiting}
+	static function create(moved BoolArray, values ValueIdArray) returns MoveChunk
+		return Self{moved: moved, values: values}
 	end 'create'
-
-	function holdsAwaiting() returns bool
-		return self.anyAwaiting
-	end 'holdsAwaiting'
 
 	function movedAt(slot ElementIndex) returns bool
 		return try self.moved.get(slot) otherwise panic("MoveChunk.movedAt: slot {slot} is past the chunk")
@@ -52,12 +37,8 @@ type MoveChunk
 		return try self.values.get(slot) otherwise panic("MoveChunk.valueAt: slot {slot} is past the chunk")
 	end 'valueAt'
 
-	function awaitingAt(slot ElementIndex) returns ElementIndex
-		return try self.awaiting.get(slot) otherwise panic("MoveChunk.awaitingAt: slot {slot} is past the chunk")
-	end 'awaitingAt'
-
 	function sameSlot(other MoveChunk, slot ElementIndex) returns bool
-		return self.movedAt(slot) == other.movedAt(slot) and self.valueAt(slot) == other.valueAt(slot) and self.awaitingAt(slot) == other.awaitingAt(slot)
+		return self.movedAt(slot) == other.movedAt(slot) and self.valueAt(slot) == other.valueAt(slot)
 	end 'sameSlot'
 end 'MoveChunk'
 
@@ -95,10 +76,6 @@ export type MoveSlots
 		return self.chunkOfPosition(position).valueAt(position and MoveChunkMask)
 	end 'valueAt'
 
-	export function awaitingAt(position ElementIndex) returns ElementIndex
-		return self.chunkOfPosition(position).awaitingAt(position and MoveChunkMask)
-	end 'awaitingAt'
-
 	export function truncated(prefix ElementIndex) returns MoveSlots
 		if prefix > self.height 'tooShort'
 			panic("MoveSlots.truncated: the snapshot holds {self.height} owned bindings, fewer than the requested prefix of {prefix}")
@@ -108,7 +85,7 @@ export type MoveSlots
 	end 'truncated'
 
 	export function differences(other MoveSlots) returns MoveSlotIndexColumn
-		var found = MoveSlotIndexColumn.create(0)
+		let found = MoveSlotIndexColumn.create(0)
 		let shared = self.height if self.height < other.height else other.height
 
 		for index in 0 upto chunksHolding(shared) 'eachChunk'
@@ -136,10 +113,6 @@ export type MoveSlots
 	function chunkIsQuiet(index ElementIndex, edges MoveSlotsColumn, enclosing MoveSlotsColumn) returns bool
 		let mine = self.chunkAtIndex(index)
 
-		if mine.holdsAwaiting() 'waiting'
-			return false
-		end 'waiting'
-
 		for edge in edges 'eachEdge'
 			if index >= edge.chunkCount() or not (edge.chunkAtIndex(index) is mine) 'differs'
 				return false
@@ -156,11 +129,9 @@ export type MoveSlots
 	end 'chunkIsQuiet'
 
 	// A chunk every edge mark and every enclosing loop's entry mark shares by identity holds the same move
-	// state at all of those points, so settling its bindings is a no-op. A chunk holding an awaiting slot
-	// is visited anyway: a waiting move site is noted as read in a later iteration even when no slot
-	// changed.
+	// state at all of those points, so settling its bindings is a no-op.
 	export function unsettledPositions(edges MoveSlotsColumn, enclosing MoveSlotsColumn) returns MoveSlotIndexColumn
-		var found = MoveSlotIndexColumn.create(0)
+		let found = MoveSlotIndexColumn.create(0)
 
 		for index in 0 upto self.chunkCount() 'eachChunk'
 			if self.chunkIsQuiet(index, edges: edges, enclosing: enclosing) 'quiet'
@@ -197,7 +168,7 @@ type PositionSet
 	end 'note'
 
 	function drain(limit ElementIndex) returns MoveSlotIndexColumn
-		var taken = MoveSlotIndexColumn.create(0)
+		let taken = MoveSlotIndexColumn.create(0)
 
 		for position in self.members 'eachMember'
 			if position < limit 'withinTheLimit'
@@ -257,7 +228,7 @@ export type OwnedBindingIndex
 	end 'ownerOf'
 
 	export function cellPositions() returns MoveSlotIndexColumn
-		var positions = MoveSlotIndexColumn.create(0)
+		let positions = MoveSlotIndexColumn.create(0)
 		positions.append(self.cells)
 		positions.sort()
 		return positions
@@ -399,14 +370,14 @@ export type MoveLedger
 	end 'noteDirty'
 
 	export function takeChainDirtyPositions(height ElementIndex) returns MoveSlotIndexColumn
-		var positions = self.chainDirty.drain(height)
+		let positions = self.chainDirty.drain(height)
 		positions.sort()
 		return positions
 	end 'takeChainDirtyPositions'
 
 	export function takeRefreshPositions(height ElementIndex) returns MoveSlotIndexColumn
 		let kept = self.live.height if self.live.height < height else height
-		var positions = self.dirty.drain(kept)
+		let positions = self.dirty.drain(kept)
 		positions.sort()
 
 		for position in kept upto height 'eachNewPosition'
@@ -417,18 +388,18 @@ export type MoveLedger
 		return positions
 	end 'takeRefreshPositions'
 
-	export function install(positions MoveSlotIndexColumn, height ElementIndex, moved BoolArray, values ValueIdArray, awaiting MoveSlotIndexColumn)
-		self.live = self.overlay(self.live, height: height, positions: positions, moved: moved, values: values, awaiting: awaiting)
+	export function install(positions MoveSlotIndexColumn, height ElementIndex, moved BoolArray, values ValueIdArray)
+		self.live = self.overlay(self.live, height: height, positions: positions, moved: moved, values: values)
 	end 'install'
 
 	// `positions` must ascend without repeats (`sortedUniquePositions`): the walk only ever looks at the next
 	// one, so a position out of order is never reached and its slot silently keeps the base value.
-	export function overlay(base MoveSlots, height ElementIndex, positions MoveSlotIndexColumn, moved BoolArray, values ValueIdArray, awaiting MoveSlotIndexColumn) returns MoveSlots
+	export function overlay(base MoveSlots, height ElementIndex, positions MoveSlotIndexColumn, moved BoolArray, values ValueIdArray) returns MoveSlots
 		if positions.isEmpty() and height == base.height 'nothingToOverlay'
 			return base
 		end 'nothingToOverlay'
 
-		var chunks = MoveChunkColumn.create(chunksHolding(height), zeroed: false)
+		let chunks = MoveChunkColumn.create(chunksHolding(height), zeroed: false)
 		var next = 0 as ElementIndex
 
 		for index in 0 upto chunksHolding(height) 'eachChunk'
@@ -439,24 +410,21 @@ export type MoveLedger
 
 			let first = chunkFirst(index)
 			let stop = chunkStop(index, height: height)
-			var chunkMoved = BoolArray.create(stop - first, zeroed: false)
-			var chunkValues = ValueIdArray.create(stop - first, zeroed: false)
-			var chunkAwaiting = MoveSlotIndexColumn.create(stop - first, zeroed: false)
+			let chunkMoved = BoolArray.create(stop - first, zeroed: false)
+			let chunkValues = ValueIdArray.create(stop - first, zeroed: false)
 
 			for position in first upto stop 'eachPosition'
 				if next < positions.count() and (try positions.get(next) otherwise panic("MoveLedger.overlay: positions.get OOB at {next}")) == position 'overlaid'
 					chunkMoved.push(try moved.get(next) otherwise panic("MoveLedger.overlay: moved.get OOB at {next}"))
 					chunkValues.push(try values.get(next) otherwise panic("MoveLedger.overlay: values.get OOB at {next}"))
-					chunkAwaiting.push(try awaiting.get(next) otherwise panic("MoveLedger.overlay: awaiting.get OOB at {next}"))
 					next = next + 1
 				end 'overlaid' else 'kept'
 					chunkMoved.push(base.movedAt(position))
 					chunkValues.push(base.valueAt(position))
-					chunkAwaiting.push(base.awaitingAt(position))
 				end 'kept'
 			end 'eachPosition'
 
-			chunks.push(MoveChunk.create(chunkMoved, values: chunkValues, awaiting: chunkAwaiting))
+			chunks.push(MoveChunk.create(chunkMoved, values: chunkValues))
 		end 'eachChunk'
 
 		return MoveSlots.create(chunks, height: height)

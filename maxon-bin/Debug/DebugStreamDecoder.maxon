@@ -229,7 +229,7 @@ module type DebugStreamDecoder
 	/// it, it is a run that would print `tag=1` for every event and a capture block that would fail
 	/// without ever saying why.
 	module static function create(target FilePath, filter FamilyFilter) returns DebugStreamDecoder throws DecoderError
-		var segment = try SharedSegment.publish(scratchNameFor(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
+		let segment = try SharedSegment.publish(scratchNameFor(SegmentNamePrefix), bytes: DsSharedMemoryBytes) otherwise (e) 'noSegment'
 			throw DecoderError.segmentUnavailable(e)
 		end 'noSegment'
 
@@ -365,7 +365,7 @@ module type DebugStreamDecoder
 		let toEnd = (DsRingBytes - start) as SpanByteCount
 		let firstChunk = byteCount if byteCount < toEnd else toEnd
 
-		var copy = copySegmentBytes(segment, at: ringSlotOf(from), byteCount: firstChunk as SegmentByteCount)
+		let copy = copySegmentBytes(segment, at: ringSlotOf(from), byteCount: firstChunk as SegmentByteCount)
 
 		if firstChunk < byteCount 'wrapped'
 			copy.append(copySegmentBytes(segment, at: DsHeaderBytes as SegmentOffset, byteCount: (byteCount - firstChunk) as SegmentByteCount))
@@ -392,7 +392,7 @@ module type DebugStreamDecoder
 	// family step over an entry by exactly the same amount; spelling that out per branch is five chances to
 	// step by the wrong one and land the walk mid-payload.
 	function walkEntries(copy ByteArray, byteCount SpanByteCount, spanStart RingPosition) returns DecodedEventArray
-		var events = DecodedEventArray.create(0)
+		let events = DecodedEventArray.create(0)
 		var offset = 0 as ByteOffset
 		let spanEnd = byteCount as ByteOffset
 
@@ -819,7 +819,7 @@ function logTextIn(entry ByteArray, at ByteOffset, byteCount BytePos) returns St
 		panic("DebugStream: a log_text entry claims {byteCount} text bytes at {at}, past the {entry.count()} bytes of the drained span — its entry_size and its length field disagree")
 	end 'runsPastTheEntry'
 
-	var text = imageSlice(entry, start: at, count: byteCount)
+	let text = imageSlice(entry, start: at, count: byteCount)
 
 	while text.count() > 0 'trimTerminator'
 		let last = try text.get(text.count() - 1) otherwise break

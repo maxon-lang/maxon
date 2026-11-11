@@ -403,7 +403,7 @@ end 'Holder'
 typealias DoublerHolder = Holder with Doubler
 
 function main() returns ExitCode
-	var h = DoublerHolder.create(Doubler.create(1))
+	let h = DoublerHolder.create(Doubler.create(1))
 	h.run(Doubler.create(2))
 	return 0
 end 'main'
@@ -558,7 +558,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:29:13: 'x' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
+error E2013: <fragment>:29:13: 'x' is a let and cannot be passed to a `mutable` parameter; bind it to a `var`
 ```
 
 <!-- test: witness-by-reference.error.a-let-handed-to-an-existential-at-a-written-position-is-refused -->
@@ -593,7 +593,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:22:4: 'x' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
+error E2013: <fragment>:22:4: 'x' is a let and cannot be passed to a `mutable` parameter; bind it to a `var`
 ```
 
 <!-- test: witness-by-reference.a-let-is-accepted-where-no-conformer-writes-the-position -->
@@ -757,8 +757,8 @@ end 'main'
 0
 ```
 
-<!-- test: witness-by-reference.error.each-writer-of-a-requirement-is-named-with-its-own-parameter -->
-Two conformers write the position under different parameter names, so the refusal names each of them.
+<!-- test: witness-by-reference.error.a-requirement-two-conformers-write-under-different-names-is-refused-once -->
+Two conformers write the position under different parameter names, and the call is refused once: the refusal names the `let` and the `mutable` position, not a parameter.
 ```maxon
 typealias Wide = int(0 to 100)
 
@@ -815,8 +815,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:41:13: 'x' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
-error E2013: <fragment>:41:13: 'x' is a let and cannot be passed to the `mutable` parameter 'amount'; bind it to a `var`
+error E2013: <fragment>:41:13: 'x' is a let and cannot be passed to a `mutable` parameter; bind it to a `var`
 ```
 
 <!-- test: witness-by-reference.error.a-narrow-var-at-an-associated-type-formal-is-refused-at-the-call -->

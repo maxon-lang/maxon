@@ -91,11 +91,8 @@ Both names are reserved words, so no program can declare or shadow them.
 
 ## Tests
 
-<!-- test: caller-location-at-module-scope -->
-⭐ **A GLOBAL'S INITIALIZER IS A CALL SITE, so `__line__` and `__file__` mean there what they mean
-everywhere.** It is the one call written outside a function body, and it is walked rather than emitted —
-so the fill is a second implementation of the same rule, and this is what holds the two to one answer.
-
+<!-- test: error.caller-location-at-module-scope -->
+The initializer of a module-level or `static` `let` calls `Site.here`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 // --- file: main.maxon
 type Site
@@ -114,11 +111,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-main.maxon@10
+```maxoncstderr
+error E3220: <fragment>:12:12: the initializer of 'site' calls 'Site.here': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: caller-line -->

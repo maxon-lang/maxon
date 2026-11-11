@@ -86,7 +86,7 @@ export function runTest(args MaxonArgs) returns ExitCode
 		return NothingRanExitCode
 	end 'discoveryFailed'
 
-	var groups = try groupTestsByFile(tests) otherwise (e) 'groupingRefused'
+	let groups = try groupTestsByFile(tests) otherwise (e) 'groupingRefused'
 		return refuseTestRun(stagingRefusalReason(e))
 	end 'groupingRefused'
 
@@ -160,7 +160,7 @@ function reportedNotRun(refusal SubjectNotResolved, args MaxonArgs) returns Exit
 end 'reportedNotRun'
 
 function severalTargetsNotRun(projectFile FilePath, targets TaskNameArray, args MaxonArgs) returns ExitCode
-	var voice = testVoice(args)
+	let voice = testVoice(args)
 	reportSeveralTargets(projectFile, targets: targets, voice: voice)
 
 	return NothingRanExitCode
@@ -183,7 +183,7 @@ function subjectAt(place TestPlace, args MaxonArgs) returns TestSubject throws S
 end 'subjectAt'
 
 function projectSubject(dir FilePath, target StatedText, args MaxonArgs) returns TestSubject throws SubjectNotResolved
-	var voice = testVoice(args)
+	let voice = testVoice(args)
 
 	match projectInputs(dir, word: target, severalTargets: SeveralTargets.refuse, voice: voice) 'inputs'
 		walked then return TestSubject.projectDirectory(dir, sources: MaxonSourcePathArray from [dir])
@@ -224,7 +224,7 @@ function placeNamedBy(args MaxonArgs) returns TestPlace throws TestSubjectRefusa
 	end 'targetAndSubject'
 
 	let spelled = try args.positionalAt(SolePositionalIndex) otherwise return TestPlace.create(TestLocation.projectDirectory(Directory.currentPath()), target: StatedText.unstated)
-	var voice = testVoice(args)
+	let voice = testVoice(args)
 
 	match readingOfWord(Directory.currentPath(), word: spelled, voice: voice) 'reading'
 		aTarget then return TestPlace.create(TestLocation.projectDirectory(Directory.currentPath()), target: StatedText.stated(spelled))
@@ -318,16 +318,16 @@ end 'FilteredSelection'
 // `--select=` picks which of them run, so a filter can change between runs without changing the thing
 // being tested.
 function selectionFor(groups TestFileGroupArray, total ReportedTestCount, patterns FilterPatternArray) returns FilteredSelection
-	var keys = FilterPatternArray.create(patterns.count(), zeroed: false)
+	let keys = FilterPatternArray.create(patterns.count(), zeroed: false)
 
 	for pattern in patterns 'eachPattern'
 		keys.push(pattern.toLower())
 	end 'eachPattern'
 
-	var tally = FilterPatternTally.create(keys, spellings: patterns)
+	let tally = FilterPatternTally.create(keys, spellings: patterns)
 
 	// One slot per DISCOVERED test, indexed by run index — see `TestSelection`.
-	var selected = TestSelection.create(total as ElementIndex)
+	let selected = TestSelection.create(total as ElementIndex)
 
 	for group in groups 'eachFile'
 		// Lowered ONCE per file: it is the same haystack for every test the file declares.
@@ -358,7 +358,7 @@ end 'admitsTestNamed'
 // A value naming no pattern (`--filter=,`) is refused: it would otherwise add nothing to the union,
 // and as the only value it would keep every test.
 function filterPatterns(filterValues FilterPatternArray) returns FilterPatternArray throws FilterValueError
-	var patterns = FilterPatternArray.create(0)
+	let patterns = FilterPatternArray.create(0)
 
 	for value in filterValues 'eachValue'
 		var named = false
@@ -389,7 +389,7 @@ function filterValueRefusalReason(error FilterValueError) returns String
 end 'filterValueRefusalReason'
 
 function quotedPatterns(patterns FilterPatternArray) returns String
-	var quoted = StringArray.create(patterns.count(), zeroed: false)
+	let quoted = StringArray.create(patterns.count(), zeroed: false)
 
 	for pattern in patterns 'eachPattern'
 		quoted.push("'{pattern}'")
@@ -507,7 +507,7 @@ function buildTestBinary(subject TestSubject, target Target, groups TestFileGrou
 		return TestBinaryBuild.failed(refuseTestRun(stagingRefusalReason(e)))
 	end 'noBuildRoot'
 
-	var staged = try stageTestBuild(buildRoot.join("{StagedTreeDirName}"), subject: subject, groups: groups, tracksDescendants: targetProvidesFacility(target, facility: HostFacility.processDescendants)) otherwise (e) 'stagingRefused'
+	let staged = try stageTestBuild(buildRoot.join("{StagedTreeDirName}"), subject: subject, groups: groups, tracksDescendants: targetProvidesFacility(target, facility: HostFacility.processDescendants)) otherwise (e) 'stagingRefused'
 		return TestBinaryBuild.failed(refuseTestRun(stagingRefusalReason(e)))
 	end 'stagingRefused'
 
@@ -540,10 +540,10 @@ function runBuiltTests(args MaxonArgs, staged StagedTestBuild, binary FilePath, 
 	let plan = TestLaunchPlan.create(binary, timeoutMs: args.testTimeoutMs, tracksDescendants: staged.tracksDescendants)
 	removeEndedRunsScratch(plan.buildDirectory())
 
-	var progress = TestRunProgress.create()
+	let progress = TestRunProgress.create()
 	let reportOrder = reportFileOrder(staged.groups)
-	var ran = TestFileResultsArray.create(staged.groups.count(), zeroed: false)
-	var files = TestFileResultsArray.create(staged.groups.count(), zeroed: false)
+	let ran = TestFileResultsArray.create(staged.groups.count(), zeroed: false)
+	let files = TestFileResultsArray.create(staged.groups.count(), zeroed: false)
 	var emitted = 0 as ElementIndex
 
 	// The RUN follows the walk, so an order dependence that changes a RESULT still surfaces; only the

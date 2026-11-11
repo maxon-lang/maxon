@@ -46,7 +46,7 @@ type Container
 end 'Container'
 
 function main() returns ExitCode
-	var c = Container.create(1, child: Inner.create(10))
+	let c = Container.create(1, child: Inner.create(10))
 	c.replaceChild(Inner.create(20))
 	if c.child.value == 20 'check'
 		return 0
@@ -81,7 +81,7 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var p = Pair.create(5, right: Right.create(10))
+	let p = Pair.create(5, right: Right.create(10))
 	p.right = Right.create(20)
 	if p.right.left == 20 'check'
 		return 0
@@ -115,7 +115,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(0)
+	let c = Counter.create(0)
 	c.increment()
 	c.increment()
 	return c.value()
@@ -156,7 +156,7 @@ type Container
 end 'Container'
 
 function testAssign()
-	var c = Container.create(1, child: Inner.create(10))
+	let c = Container.create(1, child: Inner.create(10))
 	c.replaceChild(Inner.create(20))
 	print("{c.childValue()}\n")
 end 'testAssign'
@@ -196,7 +196,7 @@ type Pair
 end 'Pair'
 
 function testAssign()
-	var p = Pair.create(5, right: Right.create(10))
+	let p = Pair.create(5, right: Right.create(10))
 	p.right = Right.create(20)
 	print("{p.right.left}\n")
 end 'testAssign'

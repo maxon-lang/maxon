@@ -35,7 +35,7 @@ end 'Makers'
 
 function main() returns ExitCode
 	let makers = Makers.create()
-	var planes = makers.maker()
+	let planes = makers.maker()
 
 	if planes.get(0) == 0 'zero'
 		return 0
@@ -385,7 +385,7 @@ end 'Makers'
 
 function main() returns ExitCode
 	let makers = Makers.create()
-	var planes = makers.maker(8)
+	let planes = makers.maker(8)
 
 	if (try planes.get(7) otherwise 1) == 0 'zero'
 		return 0
@@ -2007,7 +2007,7 @@ func @__managed_create_fixed {
 `__managed_create_sized`; it no longer calls `__managed_create` and `__managed_reserve`.
 ```maxon
 function main() returns ExitCode
-	var memory = try __ManagedMemory.create(16, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(16, 1) otherwise return 1
 
 	try memory.setLength(16) otherwise return 2
 
@@ -2417,7 +2417,7 @@ frame of neither holds the walk's loop state: publishing a length on a record is
 store, and the last drop of a plain record is its owed-base probe and one free.
 ```maxon
 function main() returns ExitCode
-	var memory = try __ManagedMemory.create(16, 1) otherwise return 1
+	let memory = try __ManagedMemory.create(16, 1) otherwise return 1
 
 	try memory.setLength(16) otherwise return 2
 	try memory.setLength(8) otherwise return 3
@@ -3505,7 +3505,7 @@ func @__managed_shrink_length {
 ```maxon
 function main() returns ExitCode
 	let zeroed = ByteArray.create(16)
-	var reserved = ByteArray.create(16, zeroed: false)
+	let reserved = ByteArray.create(16, zeroed: false)
 	reserved.push(3)
 
 	return (zeroed.count() + reserved.count()) as ExitCode
@@ -5384,7 +5384,7 @@ end 'Makers'
 
 function main() returns ExitCode
 	let makers = Makers.create()
-	var cells = makers.maker(6)
+	let cells = makers.maker(6)
 
 	return cells.count() as ExitCode
 end 'main'
@@ -5742,7 +5742,7 @@ end 'Makers'
 
 function main() returns ExitCode
 	let makers = Makers.create()
-	var cells = makers.maker()
+	let cells = makers.maker()
 
 	return cells.count() as ExitCode
 end 'main'

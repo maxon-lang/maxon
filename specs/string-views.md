@@ -579,7 +579,7 @@ function readBack(bytes OctetArray) returns OctetSum
 end 'readBack'
 
 function main() returns ExitCode
-	var a = OctetArray.create(0)
+	let a = OctetArray.create(0)
 	a.push(72)
 	a.push(105)
 	let x = try a.get(0) otherwise 0
@@ -632,7 +632,7 @@ A pushed `ByteArray` and a literal of its elements both reach `String.from`, and
 stride: `Hi`, two bytes.
 ```maxon
 function main() returns ExitCode
-	var a = ByteArray.create(0)
+	let a = ByteArray.create(0)
 	a.push(72)
 	a.push(105)
 	let x = try a.get(0) otherwise 0

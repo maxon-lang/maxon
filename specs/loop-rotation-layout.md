@@ -66,8 +66,8 @@ function copyTail(source WordArray, scratch WordArray, n Word)
 end 'copyTail'
 
 function main() returns ExitCode
-	var source = WordArray.create(0)
-	var scratch = WordArray.create(0)
+	let source = WordArray.create(0)
+	let scratch = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		source.push(i * 3)
 		scratch.push(0)
@@ -100,7 +100,7 @@ function sumFrom(a WordArray, n Word, start Word) returns Word
 end 'sumFrom'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 1 to 3 'seed'
 		a.push(i)
 	end 'seed'
@@ -126,7 +126,7 @@ function sumFrom(a WordArray, n Word, start Word) returns Word
 end 'sumFrom'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 7 to 9 'seed'
 		a.push(i)
 	end 'seed'
@@ -157,7 +157,7 @@ function grid(a WordArray, rows Word, width Word) returns Word
 end 'grid'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 9 'seed'
 		a.push(i)
 	end 'seed'
@@ -192,7 +192,7 @@ function oddSum(a WordArray, n Word) returns Word
 end 'oddSum'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 1 to 8 'seed'
 		a.push(i)
 	end 'seed'
@@ -228,7 +228,7 @@ function weightedSum(a WordArray, n Word) returns Word
 end 'weightedSum'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 1 to 8 'seed'
 		a.push(i)
 	end 'seed'
@@ -286,7 +286,7 @@ function clampedSum(a WordArray, n Word) returns Word
 end 'clampedSum'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 1 to 4 'seed'
 		a.push(i)
 	end 'seed'
@@ -315,7 +315,7 @@ function walkDown(a WordArray, start Word) returns Word
 end 'walkDown'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 1 to 3 'seed'
 		a.push(i)
 	end 'seed'
@@ -352,12 +352,12 @@ function sumUntilZero(a WordArray) returns Word
 end 'sumUntilZero'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(6)
 	a.push(5)
 	a.push(0)
 	a.push(9)
-	var b = WordArray.create(0)
+	let b = WordArray.create(0)
 	b.push(0)
 	b.push(3)
 	return sumUntilZero(a) * 10 + sumUntilZero(b)
@@ -389,7 +389,7 @@ function firstNegative(a WordArray, n Word) returns Word
 end 'firstNegative'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(3)
 	a.push(4)
 	a.push(-1)
@@ -418,7 +418,7 @@ function indexOf(a WordArray, n Word, target Word) returns Word
 end 'indexOf'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	a.push(4)
 	a.push(8)
 	a.push(15)

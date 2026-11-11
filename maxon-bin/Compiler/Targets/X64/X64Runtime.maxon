@@ -219,7 +219,7 @@ let ConsoleProbeStderrLabel = b"__mrt_console_probe_stderr"
 // `RequiredData`'s prefix-from-byte-0 rule pinning the same bytes it pinned before. An 8-byte cell here
 // would displace every sub-word user global in the corpus.
 export function x64WindowsRuntimeGlobals(target Target) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create(0)
+	let out = DataSectionEntryArray.create(0)
 
 	if target.cpu != CpuArch.x64 or target.os != Os.windows 'notThisLane'
 		return out
@@ -315,7 +315,7 @@ export type X64RuntimeAsm
 
 		// The prologue is emitted into the buffer BEFORE the struct owns it — `Self{…}` is
 		// then a single immutable construction rather than a build-then-mutate.
-		var code = entry
+		let code = entry
 		encodePushReg(code, reg: X64Register.rbp)
 		encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: X64Register.rsp, wide: true)
 
@@ -381,7 +381,7 @@ export type X64RuntimeAsm
 
 		resolveChunkRel32Fixups(self.code, labelOffsets: self.labelOffsets, rel32Fixups: self.rel32Fixups)
 
-		var chunk = FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs)
+		let chunk = FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: self.rdataRelocs, iatRelocs: self.iatRelocs)
 		chunk.spendsCallerStack(self.stackBytesPerCall(), checks: guarded)
 		return chunk
 	end 'finishFunction'
@@ -751,7 +751,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	end 'bufferTooSmallToBackOff'
 
 	let wideSlots = writeStreamWideSlots()
-	var asm = X64RuntimeAsm.beginFunction(WriteStreamSlotWide + wideSlots, outgoingStackArgBytes: (writeStreamOutgoingArgWords() as StackSize) * SpillSlotBytes)
+	let asm = X64RuntimeAsm.beginFunction(WriteStreamSlotWide + wideSlots, outgoingStackArgBytes: (writeStreamOutgoingArgWords() as StackSize) * SpillSlotBytes)
 	requireWriteStreamFitsGreenThreadStack(asm, target: target)
 
 	// The buffer grows UPWARD in memory from the LAST of the slots it occupies, because slots grow downward
@@ -974,7 +974,7 @@ end 'buildWriteStreamChunk'
 // else — the handle, the console probe, the widening, the empty-string case — belongs to `mrt_write_stream`
 // and is not repeated here. rcx survives the length walk, so the string needs no frame slot.
 function buildWriteStderrChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	emitCstrLenIntoRax(asm, cstrReg: X64Register.rcx)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
@@ -998,7 +998,7 @@ function buildWriteHexChunk() returns FunctionCodeChunk
 	let SlotIndex = 1
 	let SlotBuffer = 2
 	let bufferSlots = alignUpStack(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
-	var asm = X64RuntimeAsm.beginFunction(SlotBuffer + bufferSlots)
+	let asm = X64RuntimeAsm.beginFunction(SlotBuffer + bufferSlots)
 
 	let loop = asm.newLabel()
 	let loopDone = asm.newLabel()
@@ -1075,7 +1075,7 @@ end 'buildWriteHexChunk'
 // r9 = hi, r10 = lo, r11 = mid, rax = the entry address then its `codeOffset`.
 function buildSymtabIndexChunk() returns FunctionCodeChunk
 	assertSymtabStride()
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let search = asm.newLabel()
 	let goLower = asm.newLabel()
@@ -1135,7 +1135,7 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 	let SlotTextOffset = 0
 	let SlotSymtable = 1
 	assertSymtabStride()
-	var asm = X64RuntimeAsm.beginFunction(2)
+	let asm = X64RuntimeAsm.beginFunction(2)
 
 	let unknown = asm.newLabel()
 	let newline = asm.newLabel()
@@ -1190,7 +1190,7 @@ function buildPrintInlineFramesChunk() returns FunctionCodeChunk
 	let SlotSite = 2
 	let SlotRangesEnd = 3
 	assertInlineTableStrides()
-	var asm = X64RuntimeAsm.beginFunction(4)
+	let asm = X64RuntimeAsm.beginFunction(4)
 
 	let scan = asm.newLabel()
 	let found = asm.newLabel()
@@ -1288,7 +1288,7 @@ function buildWalkFramesChunk(usesGt bool, os Os) returns FunctionCodeChunk
 	let SlotCounter = 3
 	let SlotTextBase = 4
 	let SlotSymtable = 5
-	var asm = X64RuntimeAsm.beginFunction(6)
+	let asm = X64RuntimeAsm.beginFunction(6)
 
 	let loop = asm.newLabel()
 	let elided = asm.newLabel()
@@ -1426,7 +1426,7 @@ function buildFaultBacktraceChunk() returns FunctionCodeChunk
 	let SlotTextBase = 3
 	let SlotSymtable = 4
 	let SlotFrameBudget = 5
-	var asm = X64RuntimeAsm.beginFunction(6)
+	let asm = X64RuntimeAsm.beginFunction(6)
 
 	let walk = asm.newLabel()
 
@@ -1583,7 +1583,7 @@ function buildFaultThunkChunk(usesGt bool, target Target, context HostContextLay
 	let SlotFaultRsp = 3
 	let SlotPanicPrefix = 4
 	let SlotLeaveTheStack = 5
-	var asm = X64RuntimeAsm.beginFunction(6)
+	let asm = X64RuntimeAsm.beginFunction(6)
 
 	let continueSearch = asm.newLabel()
 	let classified = asm.newLabel()
@@ -1666,7 +1666,7 @@ end 'buildFaultThunkChunk'
 // Slots: 0 = the guarantee's size.
 function buildRuntimeInitChunk(probesCpuFeatures bool) returns FunctionCodeChunk
 	let SlotGuaranteeBytes = 0
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 
 	if probesCpuFeatures 'probe'
 		encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: CpuFeatureProbeName)
@@ -1698,7 +1698,7 @@ let CpuidEcxHardwareAes = CpuidEcxAesNi or CpuidEcxPclmulqdq or CpuidEcxSsse3 or
 // callee-saved in the custom ABI, so it is saved in slot 0 and restored on the one path out.
 function buildCpuFeatureProbeChunk() returns FunctionCodeChunk
 	let SlotSavedRbx = 0
-	var asm = X64RuntimeAsm.beginFunction(1)
+	let asm = X64RuntimeAsm.beginFunction(1)
 	let stored = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSavedRbx), srcReg: X64Register.rbx, wide: true)
@@ -1773,12 +1773,12 @@ end 'emitStoreGlobalImm'
 //
 // ⭐⭐ **ON A GREEN THREAD IT GROWS THE STACK BEFORE STEP (1)** — see `emitPanicStackGuard`.
 function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target) returns FunctionCodeChunk
-	var entry = ByteArray.create(0)
-	var callFixups = CallFixupArray.create(0)
-	var rdataRelocs = RdataRelocationArray.create(0)
+	let entry = ByteArray.create(0)
+	let callFixups = CallFixupArray.create(0)
+	let rdataRelocs = RdataRelocationArray.create(0)
 	emitPanicStackGuard(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, usesGt: usesGt, target: target)
 	let guardBytes = codeHere(entry)
-	var asm = X64RuntimeAsm.beginFunctionAfterEntry(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: 0)
+	let asm = X64RuntimeAsm.beginFunctionAfterEntry(entry, callFixups: callFixups, rdataRelocs: rdataRelocs, slots: 0)
 
 	// (1) The caller's message — already in RCX, NUL-terminated and newline-suffixed by the pass.
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
@@ -1799,7 +1799,7 @@ function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool
 	// (5) exit(PanicExitCode) — the one step with an OS in it.
 	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: usesGt, target: target)
 
-	var chunk = asm.finishFunction(PanicName, guarded: usesGt)
+	let chunk = asm.finishFunction(PanicName, guarded: usesGt)
 	chunk.asyncUnsafePrefixBytes = guardBytes
 
 	return chunk
@@ -1871,7 +1871,7 @@ end 'emitCoverageAbortDump'
 // Built directly (not through X64RuntimeAsm, which opens a frame). Never actually executed while this
 // handler exits, but the kernel demands the address exists to build the return frame at all.
 function buildLinuxSigreturnTrampolineChunk() returns FunctionCodeChunk
-	var code = ByteArray.create(0)
+	let code = ByteArray.create(0)
 	encodeX64Syscall(code, number: X64LinuxSyscallRtSigreturn)
 	return FunctionCodeChunk.createWith(LinuxSigreturnName, code: code, callFixups: CallFixupArray.create(0), rdataRelocs: RdataRelocationArray.create(0), iatRelocs: RelocationArray.create(0))
 end 'buildLinuxSigreturnTrampolineChunk'
@@ -1884,7 +1884,7 @@ end 'buildLinuxSigreturnTrampolineChunk'
 // It measures, writes and guards the empty case in one body because a descriptor takes bytes as they are:
 // there is nothing on this lane for a stream writer to decide.
 function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 
 	let writeLap = asm.newLabel()
 	let done = asm.newLabel()
@@ -1933,7 +1933,7 @@ function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 	let SlotRbp = 1
 	let SlotRsp = 2
 	let SlotPanicPrefix = 3
-	var asm = X64RuntimeAsm.beginFunction(4)
+	let asm = X64RuntimeAsm.beginFunction(4)
 
 	let memoryFault = asm.newLabel()
 	let classified = asm.newLabel()
@@ -1986,7 +1986,7 @@ end 'buildLinuxFaultHandlerChunk'
 // negative errno as the base, making the first signal a kernel stack switch onto it; without the registration
 // the handler runs on the faulting stack, as it would with no `SA_ONSTACK` at all.
 function buildLinuxSignalStackInstallChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(LinuxStackTSlots)
+	let asm = X64RuntimeAsm.beginFunction(LinuxStackTSlots)
 	let done = asm.newLabel()
 
 	x64LinuxEmitSignalStackBytes(asm, dest: X64Register.rsi)
@@ -2021,7 +2021,7 @@ let X64SignalFrameFloorBytes = 4096
 // frames, each the larger of `AT_MINSIGSTKSZ` and the floor above. The auxiliary vector is found by walking
 // past `envp`'s NULL terminator.
 function buildLinuxSignalStackSizeChunk() returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(0)
+	let asm = X64RuntimeAsm.beginFunction(0)
 	let eachEnvironmentEntry = asm.newLabel()
 	let eachAuxiliaryEntry = asm.newLabel()
 	let nextAuxiliaryEntry = asm.newLabel()
@@ -2075,7 +2075,7 @@ end 'buildLinuxSignalStackSizeChunk'
 // signal.
 function buildLinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, probesCpuFeatures bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0
-	var asm = X64RuntimeAsm.beginFunction(LinuxSigactionSlots)
+	let asm = X64RuntimeAsm.beginFunction(LinuxSigactionSlots)
 
 	if carriesHostLock 'ownsABlock'
 		encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxMainThreadBlockName)
@@ -2208,7 +2208,7 @@ function buildGtStackOverflowChunk(exitRoute X64OsCallKind, target Target) retur
 	let SlotPc = 0
 	let SlotFp = 1
 	let SlotSp = 2
-	var asm = X64RuntimeAsm.beginFunction(3)
+	let asm = X64RuntimeAsm.beginFunction(3)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPc), srcReg: X64Register.rcx, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFp), srcReg: X64Register.rdx, wide: true)
@@ -2256,7 +2256,7 @@ let RegistryDataOutArgSlot = 1
 let RegistryBytesOutArgSlot = 2
 
 function utf16LittleEndian(text String) returns immutable ByteArray
-	var wide = ByteArray.create((text.byteLength() * 2 + 1) as ElementIndex, zeroed: false) as isolated ByteArray
+	let wide = ByteArray.create((text.byteLength() * 2 + 1) as ElementIndex, zeroed: false) as isolated ByteArray
 
 	modify wide 'fill'
 		for byte in text.bytes() 'eachByte'
@@ -2277,7 +2277,7 @@ function buildWindowsProcessNamespaceChunk(usesGt bool) returns FunctionCodeChun
 	let SlotBuffer = 0
 	let SlotCapacity = 1
 	let SlotBytes = 2
-	var asm = X64RuntimeAsm.beginFunction(3, outgoingStackArgBytes: ((RegGetValueStackArgWords as StackSize) * SpillSlotBytes))
+	let asm = X64RuntimeAsm.beginFunction(3, outgoingStackArgBytes: ((RegGetValueStackArgWords as StackSize) * SpillSlotBytes))
 
 	let read = asm.newLabel()
 	let tooSmall = asm.newLabel()
@@ -2454,7 +2454,7 @@ end 'emitWinDescDecimalIntoTemp'
 //
 // `seal` goes through `SetEnvironmentVariableW`, the copy of the environment Windows hands a child.
 function buildWindowsProcessDescendantsChunk(usesGt bool) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(WinDescSlotsEnd, outgoingStackArgBytes: ((QueryJobObjectStackArgWords as StackSize) * SpillSlotBytes))
+	let asm = X64RuntimeAsm.beginFunction(WinDescSlotsEnd, outgoingStackArgBytes: ((QueryJobObjectStackArgWords as StackSize) * SpillSlotBytes))
 	let tempDisp = asm.slotDisp(WinDescSlotTemp + WinDescTempSlots - 1)
 
 	let copyPrefix = asm.newLabel()
@@ -2891,7 +2891,7 @@ let WinTermSlotsEnd = WinTermSlotInfo + WinTermInfoSlots
 // reports no active process, so every process the kill reached has ended; a job still active after
 // `ProcessEndBoundMs` answers `TerminateTreeIncomplete`.
 function buildWindowsProcessTerminateChunk(usesGt bool) returns FunctionCodeChunk
-	var asm = X64RuntimeAsm.beginFunction(WinTermSlotsEnd, outgoingStackArgBytes: ((QueryJobObjectStackArgWords as StackSize) * SpillSlotBytes))
+	let asm = X64RuntimeAsm.beginFunction(WinTermSlotsEnd, outgoingStackArgBytes: ((QueryJobObjectStackArgWords as StackSize) * SpillSlotBytes))
 	let infoDisp = asm.slotDisp(WinTermSlotInfo + WinTermInfoSlots - 1)
 
 	let poll = asm.newLabel()

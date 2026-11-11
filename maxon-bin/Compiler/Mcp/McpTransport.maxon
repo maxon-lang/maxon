@@ -98,7 +98,7 @@ export function copyJsonNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns
 end 'copyJsonNode'
 
 function copyJsonArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
-	var ids = JsonNodeIdArray.create(node.children.count(), zeroed: false)
+	let ids = JsonNodeIdArray.create(node.children.count(), zeroed: false)
 
 	for childId in node.children 'each'
 		ids.push(copyJsonNode(src, srcId: childId, dst: dst))
@@ -108,7 +108,7 @@ function copyJsonArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNode
 end 'copyJsonArray'
 
 function copyJsonObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
-	var copied = JsonObjectBuilder.create()
+	let copied = JsonObjectBuilder.create()
 
 	for (iter, k) in node.keys.withIterator() 'each'
 		let childId = try node.children.get(iter.index()) otherwise panic("copyJsonObject: keys and children disagree in length")
@@ -229,7 +229,7 @@ function stringListArgIn(doc JsonDoc, argsId JsonNodeId, key String) returns Str
 end 'stringListArgIn'
 
 function stringListAt(doc JsonDoc, valueId JsonNodeId, key String) returns StringArray
-	var result = StringArray.create(0)
+	let result = StringArray.create(0)
 	let value = doc.get(valueId)
 
 	if value.kind == JsonKind.jsonString 'oneString'
@@ -259,8 +259,8 @@ end 'stringListAt'
 // =============================================================================
 
 export function rpcResultText(reqDoc JsonDoc, idNode JsonNodeId, resultDoc JsonDoc, resultRoot JsonNodeId) returns String
-	var envelope = JsonDoc.create()
-	var response = JsonObjectBuilder.create()
+	let envelope = JsonDoc.create()
+	let response = JsonObjectBuilder.create()
 	response.addString(envelope, key: "jsonrpc", value: "2.0")
 	response.addNode("id", node: copyJsonNode(reqDoc, srcId: idNode, dst: envelope))
 	response.addNode("result", node: copyJsonNode(resultDoc, srcId: resultRoot, dst: envelope))
@@ -270,13 +270,13 @@ export function rpcResultText(reqDoc JsonDoc, idNode JsonNodeId, resultDoc JsonD
 end 'rpcResultText'
 
 export function rpcErrorText(reqDoc JsonDoc, idNode JsonNodeId, code RpcStandardErrorCode, message String) returns String
-	var envelope = JsonDoc.create()
+	let envelope = JsonDoc.create()
 
-	var err = JsonObjectBuilder.create()
+	let err = JsonObjectBuilder.create()
 	err.addNumber(envelope, key: "code", value: code.rawValue as JsonFloat)
 	err.addString(envelope, key: "message", value: message)
 
-	var response = JsonObjectBuilder.create()
+	let response = JsonObjectBuilder.create()
 	response.addString(envelope, key: "jsonrpc", value: "2.0")
 	response.addNode("id", node: copyJsonNode(reqDoc, srcId: idNode, dst: envelope))
 	response.addNode("error", node: err.build(envelope))
@@ -286,16 +286,16 @@ export function rpcErrorText(reqDoc JsonDoc, idNode JsonNodeId, code RpcStandard
 end 'rpcErrorText'
 
 export function toolResultText(reqDoc JsonDoc, idNode JsonNodeId, payloadText String, isError bool) returns String
-	var envelope = JsonDoc.create()
+	let envelope = JsonDoc.create()
 
-	var item = JsonObjectBuilder.create()
+	let item = JsonObjectBuilder.create()
 	item.addString(envelope, key: "type", value: "text")
 	item.addString(envelope, key: "text", value: payloadText)
 
-	var contentArr = JsonNodeIdArray.create(0)
+	let contentArr = JsonNodeIdArray.create(0)
 	contentArr.push(item.build(envelope))
 
-	var result = JsonObjectBuilder.create()
+	let result = JsonObjectBuilder.create()
 	result.addNode("content", node: envelope.add(JsonNode.arrayNode(contentArr)))
 	result.addBool(envelope, key: "isError", value: isError)
 	let resultRoot = result.build(envelope)
@@ -318,7 +318,7 @@ function addRepoRootIfKnown(doc JsonDoc, payload JsonObjectBuilder, repoRoot Act
 end 'addRepoRootIfKnown'
 
 export function toolErrorPayload(doc JsonDoc, message String, repoRoot ActingTree) returns JsonObjectBuilder
-	var payload = JsonObjectBuilder.create()
+	let payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: false)
 	payload.addString(doc, key: "error", value: message)
 	addRepoRootIfKnown(doc, payload: payload, repoRoot: repoRoot)
@@ -327,7 +327,7 @@ export function toolErrorPayload(doc JsonDoc, message String, repoRoot ActingTre
 end 'toolErrorPayload'
 
 export function toolErrorText(reqDoc JsonDoc, idNode JsonNodeId, message String, repoRoot ActingTree) returns String
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 	let payload = toolErrorPayload(doc, message: message, repoRoot: repoRoot)
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: true)
@@ -340,8 +340,8 @@ export function addRunFields(doc JsonDoc, payload JsonObjectBuilder, command Str
 end 'addRunFields'
 
 export function formatSubprocessResult(res CollectedOutput, command String, repoRoot ActingTree) returns String
-	var doc = JsonDoc.create()
-	var payload = JsonObjectBuilder.create()
+	let doc = JsonDoc.create()
+	let payload = JsonObjectBuilder.create()
 	payload.addBool(doc, key: "success", value: res.succeeded())
 	addRunFields(doc, payload: payload, command: command, repoRoot: repoRoot, res: res)
 	payload.addString(doc, key: "stdout", value: res.stdout)
@@ -371,7 +371,7 @@ function byteAt(bytes ByteArray, at BytePos) returns Byte
 end 'byteAt'
 
 export function sliceBytes(bytes ByteArray, from BytePos, until BytePos) returns String
-	var out = ByteArray.create(until - from, zeroed: false)
+	let out = ByteArray.create(until - from, zeroed: false)
 
 	for i in from upto until 'copy'
 		out.push(byteAt(bytes, at: i))

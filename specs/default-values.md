@@ -381,7 +381,7 @@ it FOLDS into a construction and never runs; `Box.make` multiplies, so it stays 
 `__module_init` makes before `main`. The fill precedes that fork, which is what puts the two on one
 footing.
 
-<!-- test: default-values.top-level-factory-fills-defaults -->
+<!-- test: default-values.factory-fills-defaults -->
 ```maxon
 typealias Count = int(0 to 255)
 
@@ -403,10 +403,9 @@ type Pair
 	end 'create'
 end 'Pair'
 
-let boxed = Box.make(2)
-let paired = Pair.create(1)
-
 function main() returns ExitCode
+	let boxed = Box.make(2)
+	let paired = Pair.create(1)
 	print("{boxed.n} {boxed.tag} {paired.a} {paired.b}\n")
 	return 0
 end 'main'
@@ -418,14 +417,14 @@ end 'main'
 6 d 1 9
 ```
 
-### A defaulted container at module scope is materialized, and freed
+### A defaulted container is materialized, and freed
 
 ⚠ **A DEFAULT MAY BE MANAGED, AND THE SLOT THEN OWNS WHAT THE CALL BORROWED.** `tags StringArray =
-StringArray.create(0)` fills with a call to the parameter's synthesized helper, and `__module_init` is
+StringArray.create(0)` fills with a call to the parameter's synthesized helper, and the caller is
 sole owner of the array that helper returns — so the exit-101 leak gate is what this case is really
 asserting, over and above the count it prints.
 
-<!-- test: default-values.top-level-factory-fills-a-managed-default -->
+<!-- test: default-values.factory-fills-a-managed-default -->
 ```maxon
 typealias Names = Array with String
 
@@ -437,9 +436,8 @@ type Roster
 	end 'of'
 end 'Roster'
 
-let empty = Roster.of()
-
 function main() returns ExitCode
+	let empty = Roster.of()
 	return empty.names.count() as ExitCode
 end 'main'
 ```
@@ -626,7 +624,7 @@ end 'main'
 510
 ```
 
-<!-- test: default-values.a-module-scope-constant-may-name-a-defaulted-first-parameter -->
+<!-- test: default-values.a-local-may-name-a-defaulted-first-parameter -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -639,9 +637,8 @@ type Scaler
 	end 'make'
 end 'Scaler'
 
-let tripled = Scaler.make(scale: 3)
-
 function main() returns ExitCode
+	let tripled = Scaler.make(scale: 3)
 	print("{tripled.factor} {tripled.offset}\n")
 	return 0
 end 'main'

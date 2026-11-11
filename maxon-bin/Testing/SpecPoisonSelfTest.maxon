@@ -5,7 +5,7 @@ let PinnedSelfTestSource = "function main() returns ExitCode\n\treturn 0\nend 'm
 function selfTestCase(name String, pinsTargetIr bool, poisonFreed bool) returns SpecTest
 	let expectation = SpecExpectation.run(SpecExitCode.unpinned, stderr: SpecStderr.unpinned, stdout: SpecStdout.unpinned, sectionPins: SpecSectionPinArray.create(0))
 	let targetIr = SpecTargetIr.pinned("", span: TraceSlice.create(0, blockEnd: 0)) if pinsTargetIr else SpecTargetIr.unpinned(TraceSlice.create(0, blockEnd: 0))
-	var pinnedLanes = TargetKeyArray.create(0)
+	let pinnedLanes = TargetKeyArray.create(0)
 
 	if pinsTargetIr 'pinsALane'
 		pinnedLanes.push(PinnedSelfTestLane)
@@ -15,7 +15,7 @@ function selfTestCase(name String, pinsTargetIr bool, poisonFreed bool) returns 
 end 'selfTestCase'
 
 export function requireFreedBoxPoisonDecision()
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 
 	let plain = selfTestCase("plain", pinsTargetIr: false, poisonFreed: false)
 	let pinned = selfTestCase("pinned", pinsTargetIr: true, poisonFreed: false)
@@ -33,11 +33,11 @@ export function requireFreedBoxPoisonDecision()
 		broken.push("a pinned case carrying the poison marker is built without the freed-box fill")
 	end 'markedUnpoisoned'
 
-	var tests = SpecTestArray.create(2, zeroed: false)
+	let tests = SpecTestArray.create(2, zeroed: false)
 	tests.push(plain)
 	tests.push(selfTestCase("second", pinsTargetIr: false, poisonFreed: false))
 
-	var members = BatchMemberArray.create(2, zeroed: false)
+	let members = BatchMemberArray.create(2, zeroed: false)
 	members.push(BatchMember.create(0, shape: MainShape.returnsExitCode))
 	members.push(BatchMember.create(1, shape: MainShape.returnsExitCode))
 

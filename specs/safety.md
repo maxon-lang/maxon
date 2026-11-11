@@ -876,7 +876,7 @@ function ident(v Offset) returns Offset
 end 'ident'
 
 function main() returns ExitCode
-	var xs = NonZeroArray.create(0)
+	let xs = NonZeroArray.create(0)
 	xs.push(-ident(0))
 	let d = try xs.get(0) otherwise 1
 	print("before\n")
@@ -1595,7 +1595,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var m = NonZeroMap.create()
+	let m = NonZeroMap.create()
 	m.upsert(1, value: one - one)
 	let d = try m.get(1) otherwise 1
 	print("before\n")
@@ -1660,7 +1660,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var h = Holder.create(3)
+	let h = Holder.create(3)
 	h.d = one - one
 	print("before\n")
 	return 100 / h.d
@@ -1689,7 +1689,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var xs = NonZeroArray.create(0)
+	let xs = NonZeroArray.create(0)
 	xs.push(one)
 	try xs.set(0, value: one - one) otherwise ignore
 	let d = try xs.get(0) otherwise 1
@@ -1720,7 +1720,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var xs = NonZeroArray.create(0)
+	let xs = NonZeroArray.create(0)
 	xs.push(one)
 	xs.insert(0, value: one - one)
 	let d = try xs.get(0) otherwise 1
@@ -1751,7 +1751,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var xs = NonZeroArray.create(0)
+	let xs = NonZeroArray.create(0)
 	xs.growFilled(2, value: one - one)
 	let d = try xs.get(1) otherwise 1
 	print("before\n")
@@ -1781,7 +1781,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var xs = NonZeroArray.create(0)
+	let xs = NonZeroArray.create(0)
 	xs.push(one)
 	xs.refill(2, value: one - one)
 	let d = try xs.get(1) otherwise 1
@@ -1919,7 +1919,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var m = NonZeroKeys.create()
+	let m = NonZeroKeys.create()
 	m.upsert(one - one, value: 5)
 	print("before\n")
 	return 0
@@ -1948,7 +1948,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var s = NonZeroSet.create()
+	let s = NonZeroSet.create()
 	s.insert(one - one)
 	print("before\n")
 	return 0
@@ -1977,7 +1977,7 @@ end 'ident'
 
 function main() returns ExitCode
 	let one = ident(1) as NonZero
-	var xs = NonZeroList.create()
+	let xs = NonZeroList.create()
 	xs.append(one - one)
 	print("before\n")
 	return 0

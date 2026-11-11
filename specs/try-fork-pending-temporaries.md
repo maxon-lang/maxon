@@ -82,7 +82,7 @@ type Conf
 end 'Conf'
 
 function main() returns ExitCode
-	var c = Conf.create(3)
+	let c = Conf.create(3)
 	c.argv.push("a")
 	return (c.argv.count() as ExitCode) + c.n as ExitCode
 end 'main'
@@ -120,9 +120,9 @@ type Conf
 end 'Conf'
 
 function main() returns ExitCode
-	var ok = Conf.create(3)
+	let ok = Conf.create(3)
 	ok.argv.push("a")
-	var failed = Conf.create(900)
+	let failed = Conf.create(900)
 	failed.argv.push("b")
 	failed.argv.push("c")
 	return ((ok.argv.count() as Integer) + ok.n + (failed.argv.count() as Integer) + failed.n) as ExitCode

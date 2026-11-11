@@ -352,14 +352,14 @@ type Part
 end 'Part'
 
 function poke(getPart PartGetter) returns Tally
-	var p = getPart()
+	let p = getPart()
 	p.n = 5
 
 	return p.n
 end 'poke'
 
 function main() returns ExitCode
-	var held = Part.create()
+	let held = Part.create()
 	print("{poke(function() gives held)}\n")
 	return 0
 end 'main'
@@ -387,7 +387,7 @@ type Part
 end 'Part'
 
 function poke(make PartMaker) returns Tally
-	var p = make()
+	let p = make()
 	p.n = 7
 
 	return p.n
@@ -541,5 +541,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:21:13: a `freeze` is a `Holder` whose graph reaches a promise, which owns a green thread that exactly one owner may reclaim. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3217: <fragment>:21:13: a `freeze` is a `Holder` whose graph reaches a promise, which owns a green thread that exactly one owner may reclaim. Sharing hands the graph to every green thread, and this compiler marks each record in it shared at run time — but it can only mark a graph whose every type has a per-type walk, and this one does not. Share the scalars the value is built from, or keep it on this side and share what is needed of it
 ```

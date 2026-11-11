@@ -88,7 +88,7 @@ export type Allocation
 		// (`rangedAliasStorageBytes`), so a buffer filled as one and read as the other would hand every later
 		// read a stride it was not written at.
 		let color = RegisterColumn.absent(valueCount)
-		var holderOfReg = FixedValueIdArray.create(RegisterFileSize)
+		let holderOfReg = FixedValueIdArray.create(RegisterFileSize)
 
 		return Self{color: color, valueCount: valueCount, holderOfReg: holderOfReg}
 	end 'create'
@@ -612,9 +612,9 @@ export type RegAllocStats
 	export var repairedByEviction as EventCount
 
 	export static function create() returns RegAllocStats
-		var phaseNanos = DurationNanosArray.create(RegAllocPhase.allCases.count())
-		var phaseCpuTicks = CpuTicksArray.create(RegAllocPhase.allCases.count())
-		var maxPressureFunc = PressureFuncByClass.create(RegClassCount, zeroed: false)
+		let phaseNanos = DurationNanosArray.create(RegAllocPhase.allCases.count())
+		let phaseCpuTicks = CpuTicksArray.create(RegAllocPhase.allCases.count())
+		let maxPressureFunc = PressureFuncByClass.create(RegClassCount, zeroed: false)
 
 		for _ in 0 upto RegClassCount 'eachClass'
 			maxPressureFunc.push("")
@@ -1234,23 +1234,23 @@ end 'assertRegisterFacts'
 // second run (and the fresh variant memo it builds) costs nothing anybody will see.
 module function refuseForRegisterPressure(project Project, stdModule StdModule, funcIndex ElementIndex, target Target, abi immutable CalleeAbiTable, usesGt bool, pool RegMask, callerSaved RegMask, file RegisterFile) throws CompileError
 	let body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex), runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
-	var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
-	var iselCost = PhaseDelta.zero()
-	var lowered = lowerAndSplitUnit(unitLoweringFor(target, abi: abi, usesGt: usesGt), unitModule: body.unitModule, permitsTailCalls: body.encoding.permitsTailCalls, target: target, costs: costs, iselCost: iselCost)
+	let costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
+	let iselCost = PhaseDelta.zero()
+	let lowered = lowerAndSplitUnit(unitLoweringFor(target, abi: abi, usesGt: usesGt), unitModule: body.unitModule, permitsTailCalls: body.encoding.permitsTailCalls, target: target, costs: costs, iselCost: iselCost)
 	try refuseLoweredUnit(project, lowered: lowered, authorFilePath: stdModule.getFunc(funcIndex).sourceFilePath, funcIndex: funcIndex, hasAuthor: body.hasAuthor, pool: pool, callerSaved: callerSaved, file: file, costs: costs)
 end 'refuseForRegisterPressure'
 
 // The re-run's allocation of the lowered unit, which rewrites the unit's module and function in place.
 function refuseLoweredUnit(project Project, lowered LoweredUnit, authorFilePath FilePath, funcIndex ElementIndex, hasAuthor bool, pool RegMask, callerSaved RegMask, file RegisterFile, costs PoolPhaseCosts) throws CompileError
-	var func = lowered.targetModule.getFunc(UnitFunctionIndex)
+	let func = lowered.targetModule.getFunc(UnitFunctionIndex)
 
 	// The unit's function is synthesized and names no file; the diagnostic locates the loop in the
 	// author's, so the real function's path is put on the record the renderer reads.
 	func.sourceFilePath = authorFilePath
-	var opFacts = OpVariantFacts.create()
-	var refusal = RegAllocRefusalSite.create()
-	var counters = RegAllocCounters.create()
-	var facts = RegAllocFacts.create()
+	let opFacts = OpVariantFacts.create()
+	let refusal = RegAllocRefusalSite.create()
+	let counters = RegAllocCounters.create()
+	let facts = RegAllocFacts.create()
 
 	// It asks about no named value: the compile is failing, and a diagnostic run has no sidecar to fill.
 	try allocateFunctionCore(lowered.targetModule, func: func, hasAuthor: hasAuthor, pool: pool, callerSaved: callerSaved, file: file, valueClass: lowered.valueClass, opFacts: opFacts, counters: counters, costs: costs, facts: facts, refusal: refusal, debugValues: DebugValueRoster.empty(), debugLocations: DebugValueLocationArray.create(0), debugRanges: DebugValueRangeArray.create(0), debugSpans: DebugSpanRows.create()) otherwise 'refusedAgain'
@@ -1328,19 +1328,19 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 	// otherwise the allocator's biggest cost would hide in the wrong bucket.
 	let livenessBefore = costs.accumulated(RegAllocPhase.liveness.ordinal)
 	let splitProbe = PhaseProbe.beginCounters()
-	var driver = SplitDriver.create(module, func: func, topo: topo, pool: pool, file: file, valueClass: valueClass, opFacts: opFacts, costs: costs)
+	let driver = SplitDriver.create(module, func: func, topo: topo, pool: pool, file: file, valueClass: valueClass, opFacts: opFacts, costs: costs)
 	try driver.relievePressure(module, func: func, hasAuthor: hasAuthor, counters: counters, refusal: refusal)
 	costs.recordExcluding(RegAllocPhase.splitting.ordinal, probe: splitProbe, innerIndex: RegAllocPhase.liveness.ordinal, innerBefore: livenessBefore)
 
-	view liveness = driver.liveness
+	let liveness = driver.liveness
 
 	// Reuse-def copies the colorer materializes (two-address inputs that outlive their
 	// op) — consumed by the rewrite, which splices them. Populated during coloring.
-	var reuseCopies = ReuseCopyPlan.create()
+	let reuseCopies = ReuseCopyPlan.create()
 
 	// The save/reload brackets around calls in cold blocks — planned by the colorer, spliced by the
 	// rewrite, sized into the frame below.
-	var brackets = ColdCallBracketPlan.create(isArm64RegisterFile(file))
+	let brackets = ColdCallBracketPlan.create(isArm64RegisterFile(file))
 
 	let alloc = colorRepairingConfinements(module, driver: driver, func: func, pool: pool, callerSaved: callerSaved, counters: counters, reuseCopies: reuseCopies, brackets: brackets, costs: costs)
 
@@ -1436,7 +1436,7 @@ type DebugBlockPlaces
 	export var anchorCount as DebugOpAnchor
 
 	static function over(module TargetModule, func IrFunction, topo FuncTopology, opFacts OpVariantFacts, noteStores bool) returns DebugBlockPlaces
-		var places = Self{ordinalOfOp: DebugAnchorColumn.absent(module.ops.count()), placeOfLocal: DebugPlaceColumn.absent(topo.numBlocks), localOfPlace: CfgIndexArray.create(0), blockIdOfPlace: BlockIdColumn.create(0), siteKeyOfPlace: DebugSiteKeyColumn.create(0), blockFirst: DebugAnchorColumn.create(), blockLast: DebugAnchorColumn.create(), storedSlotAt: DebugSlotColumn.create(), anchorCount: 0}
+		let places = Self{ordinalOfOp: DebugAnchorColumn.absent(module.ops.count()), placeOfLocal: DebugPlaceColumn.absent(topo.numBlocks), localOfPlace: CfgIndexArray.create(0), blockIdOfPlace: BlockIdColumn.create(0), siteKeyOfPlace: DebugSiteKeyColumn.create(0), blockFirst: DebugAnchorColumn.create(), blockLast: DebugAnchorColumn.create(), storedSlotAt: DebugSlotColumn.create(), anchorCount: 0}
 
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("DebugBlockPlaces.over: blockRef from func.blockRefs not in module.blocks")
@@ -1501,21 +1501,21 @@ function harvestDebugValueRanges(module TargetModule, func IrFunction, liveness 
 		return
 	end 'runsStandAsHarvested'
 
-	var raw = DebugValueRangeArray.create(0)
+	let raw = DebugValueRangeArray.create(0)
 	collectDebugRuns(liveness, roster: roster, names: names, places: places, into: raw)
 	refineDebugRuns(raw, into: into, spans: spans, liveness: liveness, roster: roster, locations: locations, names: names, places: places, paramCount: func.paramCount)
 end 'harvestDebugValueRanges'
 
 function collectDebugRuns(liveness LivenessResult, roster DebugValueRoster, names DebugNameIndex, places DebugBlockPlaces, into DebugValueRangeArray)
-	var scratch = DebugNamedSlotColumn.create(0)
-	var touches = DebugTouches.create()
+	let scratch = DebugNamedSlotColumn.create(0)
+	let touches = DebugTouches.create()
 	collectDebugTouches(touches, liveness: liveness, names: names, ordinalOfOp: places.ordinalOfOp, placeOfLocal: places.placeOfLocal, blockFirst: places.blockFirst, siteKeyOfPlace: places.siteKeyOfPlace, scratch: scratch)
 	let byAnchor = touches.byAnchor(places.anchorCount)
 
-	var startOrd = DebugAnchorColumn.absent(roster.valueIds.count())
-	var endOrd = DebugAnchorColumn.absent(roster.valueIds.count())
-	var active = DebugNamedSlotColumn.create(0)
-	var members = ValueIdArray.create(0)
+	let startOrd = DebugAnchorColumn.absent(roster.valueIds.count())
+	let endOrd = DebugAnchorColumn.absent(roster.valueIds.count())
+	let active = DebugNamedSlotColumn.create(0)
+	let members = ValueIdArray.create(0)
 
 	for (place, local) in places.localOfPlace.withIterator() 'eachBlocksRuns'
 		let first = try places.blockFirst.get(place.index()) otherwise continue
@@ -1567,8 +1567,8 @@ type DebugNameIndex
 	var siteParents as DebugSiteKeyColumn
 
 	static function over(roster DebugValueRoster, valueCount ValueId) returns DebugNameIndex
-		var sites = CsrColumn.create(0)
-		var names = CsrColumn.create(0)
+		let sites = CsrColumn.create(0)
+		let names = CsrColumn.create(0)
 
 		for (iter, value) in roster.valueIds.withIterator() 'eachName'
 			if value < valueCount 'inThisFunction'
@@ -1578,8 +1578,8 @@ type DebugNameIndex
 		end 'eachName'
 
 		let bySite = buildCsr(sites, to: names, nodeCount: roster.siteKeyCount() as CsrIndex)
-		var values = CsrColumn.create(0)
-		var siteOrdered = CsrColumn.create(0)
+		let values = CsrColumn.create(0)
+		let siteOrdered = CsrColumn.create(0)
 
 		for site in 0 upto bySite.nodeCount() 'eachSite'
 			for k in 0 upto bySite.degree(site) 'eachNameOfTheSite'
@@ -1659,7 +1659,7 @@ type DebugNameIndex
 end 'DebugNameIndex'
 
 function siteParentsOf(roster DebugValueRoster) returns DebugSiteKeyColumn
-	var parents = DebugSiteKeyColumn.create(roster.siteKeyCount(), zeroed: false)
+	let parents = DebugSiteKeyColumn.create(roster.siteKeyCount(), zeroed: false)
 	parents.push(FunctionTextSiteKey)
 
 	for parent in roster.parentKeys 'eachSite'
@@ -1951,16 +1951,16 @@ type DebugBindingSites
 	static function over(roster DebugValueRoster, liveness LivenessResult, locations DebugValueLocationArray, places DebugBlockPlaces, topo FuncTopology, dom DominatorTree, paramCount ParamCount) returns DebugBindingSites
 		let index = liveness.useIndex
 		let count = roster.valueIds.count()
-		var defLocal = CfgIndexArray.create(count, zeroed: false)
-		var startAt = DebugAnchorColumn.absent(count)
-		var startAfterPrevious = FixedBoolArray.create(count)
-		var handoverAt = DebugAnchorColumn.absent(count)
-		var borrowed = FixedBoolArray.create(count)
-		var parsePlaced = FixedBoolArray.create(count)
-		var groupOfOrdinal = CsrColumn.create(roster.valueIds.count(), zeroed: false)
-		var ordinals = CsrColumn.create(roster.valueIds.count(), zeroed: false)
+		let defLocal = CfgIndexArray.create(count, zeroed: false)
+		let startAt = DebugAnchorColumn.absent(count)
+		let startAfterPrevious = FixedBoolArray.create(count)
+		let handoverAt = DebugAnchorColumn.absent(count)
+		let borrowed = FixedBoolArray.create(count)
+		let parsePlaced = FixedBoolArray.create(count)
+		let groupOfOrdinal = CsrColumn.create(roster.valueIds.count(), zeroed: false)
+		let ordinals = CsrColumn.create(roster.valueIds.count(), zeroed: false)
 		var groupCount = 0 as CsrIndex
-		var unplaceableGroups = CsrColumn.create(0)
+		let unplaceableGroups = CsrColumn.create(0)
 
 		for (iter, value) in roster.valueIds.withIterator() 'eachNamedValue'
 			let ordinal = iter.index()
@@ -2033,23 +2033,23 @@ type DebugBindingSites
 			ordinals.push(ordinal as CsrIndex)
 		end 'eachNamedValue'
 
-		var unplaceable = FlagColumn.create(groupCount as ElementIndex)
+		let unplaceable = FlagColumn.create(groupCount as ElementIndex)
 
 		for group in unplaceableGroups 'eachUnplaceableGroup'
 			try unplaceable.set(group, value: true) otherwise panic("DebugBindingSites.over: unplaceable.set OOB at {group}")
 		end 'eachUnplaceableGroup'
 
 		let byGroup = buildCsr(groupOfOrdinal, to: ordinals, nodeCount: groupCount)
-		var preOf = CfgIndexArray.create(count, zeroed: false)
-		var spanEnd = CfgIndexArray.create(count, zeroed: false)
+		let preOf = CfgIndexArray.create(count, zeroed: false)
+		let spanEnd = CfgIndexArray.create(count, zeroed: false)
 
 		for local in defLocal 'eachDefinitionBlock'
 			preOf.push(dom.preorderOf(local))
 			spanEnd.push(dom.preorderOf(local) + dom.dominatedCount(local))
 		end 'eachDefinitionBlock'
 
-		var orderKey = FixedCfgIndexArray.create(count)
-		var keyed = CfgIndexArray.create(ordinals.count(), zeroed: false)
+		let orderKey = FixedCfgIndexArray.create(count)
+		let keyed = CfgIndexArray.create(ordinals.count(), zeroed: false)
 
 		for grouped in ordinals 'eachGroupedOrdinal'
 			let key = debugBindingOrderKey(handoverAt, ordinal: grouped as ElementIndex)
@@ -2058,8 +2058,8 @@ type DebugBindingSites
 		end 'eachGroupedOrdinal'
 
 		keyed.sort()
-		var inBindingOrder = CsrColumn.create(keyed.count(), zeroed: false)
-		var preKeys = CsrColumn.create(keyed.count(), zeroed: false)
+		let inBindingOrder = CsrColumn.create(keyed.count(), zeroed: false)
+		let preKeys = CsrColumn.create(keyed.count(), zeroed: false)
 
 		for key in keyed 'eachKeyInOrder'
 			let grouped = key mod DebugOrdinalSpan
@@ -2068,8 +2068,8 @@ type DebugBindingSites
 		end 'eachKeyInOrder'
 
 		let byPre = buildCsr(preKeys, to: inBindingOrder, nodeCount: topo.numBlocks as CsrIndex)
-		var flowGroups = CsrColumn.create(ordinals.count(), zeroed: false)
-		var flowOrdinals = CsrColumn.create(ordinals.count(), zeroed: false)
+		let flowGroups = CsrColumn.create(ordinals.count(), zeroed: false)
+		let flowOrdinals = CsrColumn.create(ordinals.count(), zeroed: false)
 
 		for position in 0 upto byPre.nodeCount() 'eachPreorderPosition'
 			for k in 0 upto byPre.degree(position) 'eachOrdinalThere'
@@ -2080,7 +2080,7 @@ type DebugBindingSites
 		end 'eachPreorderPosition'
 
 		let byGroupInFlow = buildCsr(flowGroups, to: flowOrdinals, nodeCount: groupCount)
-		var looseGroup = FixedBoolArray.create(groupCount as ElementIndex)
+		let looseGroup = FixedBoolArray.create(groupCount as ElementIndex)
 
 		for (iter, parsed) in parsePlaced.withIterator() 'eachParsePlaced'
 			if parsed and not handoverAt.holds(iter.index()) 'withoutAPosition'
@@ -2088,8 +2088,8 @@ type DebugBindingSites
 			end 'withoutAPosition'
 		end 'eachParsePlaced'
 
-		var repeatsEarlier = FixedBoolArray.create(count)
-		var firstOfVersion = DebugVersionOrigins.create()
+		let repeatsEarlier = FixedBoolArray.create(count)
+		let firstOfVersion = DebugVersionOrigins.create()
 
 		for (iter, location) in locations.withIterator() 'eachSpilledVersion'
 			if location.kind != DebugValueInSpillSlot 'notInASlot'
@@ -2106,7 +2106,7 @@ type DebugBindingSites
 			end 'theFirstOrdinalOfIt'
 		end 'eachSpilledVersion'
 
-		var refinement = DebugRunRefinementColumn.create(count, zeroed: false)
+		let refinement = DebugRunRefinementColumn.create(count, zeroed: false)
 
 		for (iter, location) in locations.withIterator() 'eachLocation'
 			let ordinal = iter.index()
@@ -2161,23 +2161,23 @@ type DebugRunRefiner
 
 	static function over(topo FuncTopology, dom DominatorTree, places DebugBlockPlaces, names DebugNameIndex) returns DebugRunRefiner
 		let blockCount = topo.numBlocks
-		var visited = FixedCfgIndexArray.create(blockCount)
-		var revived = FixedCfgIndexArray.create(blockCount)
-		var cutStamp = FixedCfgIndexArray.create(blockCount)
-		var cutBefore = FixedDebugAnchorArray.create(blockCount)
-		var stopStamp = FixedCfgIndexArray.create(blockCount)
+		let visited = FixedCfgIndexArray.create(blockCount)
+		let revived = FixedCfgIndexArray.create(blockCount)
+		let cutStamp = FixedCfgIndexArray.create(blockCount)
+		let cutBefore = FixedDebugAnchorArray.create(blockCount)
+		let stopStamp = FixedCfgIndexArray.create(blockCount)
 		let siteCount = names.siteCount()
-		var viewOfSite = FixedCfgIndexArray.create(siteCount)
-		var childOf = CsrColumn.create(siteCount - 1, zeroed: false)
-		var children = CsrColumn.create(siteCount - 1, zeroed: false)
+		let viewOfSite = FixedCfgIndexArray.create(siteCount)
+		let childOf = CsrColumn.create(siteCount - 1, zeroed: false)
+		let children = CsrColumn.create(siteCount - 1, zeroed: false)
 
 		for site in 1 upto siteCount 'eachInlineSite'
 			childOf.push(names.parentOfSite(site) as CsrIndex)
 			children.push(site as CsrIndex)
 		end 'eachInlineSite'
 
-		var siteOf = CsrColumn.create(places.localOfPlace.count(), zeroed: false)
-		var localsOf = CsrColumn.create(places.localOfPlace.count(), zeroed: false)
+		let siteOf = CsrColumn.create(places.localOfPlace.count(), zeroed: false)
+		let localsOf = CsrColumn.create(places.localOfPlace.count(), zeroed: false)
 
 		for (place, local) in places.localOfPlace.withIterator() 'eachPlace'
 			siteOf.push(debugSiteKeyAt(places.siteKeyOfPlace, at: place.index()) as CsrIndex)
@@ -2668,7 +2668,7 @@ type DebugRunRefiner
 			return known - 1
 		end 'aViewAlreadyBuilt'
 
-		var keyed = CfgIndexArray.create(0)
+		let keyed = CfgIndexArray.create(0)
 		self.siteWalk.clear()
 		self.siteWalk.push(siteKey as ElementIndex)
 
@@ -2887,15 +2887,15 @@ type DebugRunRefiner
 			return
 		end 'alreadyOrdered'
 
-		var keyed = CfgIndexArray.create(self.holeStarts.count(), zeroed: false)
+		let keyed = CfgIndexArray.create(self.holeStarts.count(), zeroed: false)
 
 		for at in 0 upto self.holeStarts.count() 'eachHole'
 			keyed.push((try self.holeStarts.get(at) otherwise panic("DebugRunRefiner.normalizeHoles: holeStarts.get OOB at {at}")) * DebugOrdinalSpan + at)
 		end 'eachHole'
 
 		keyed.sort()
-		var starts = CfgIndexArray.create(0)
-		var ends = CfgIndexArray.create(0)
+		let starts = CfgIndexArray.create(0)
+		let ends = CfgIndexArray.create(0)
 
 		for key in keyed 'eachInOrder'
 			let at = key mod DebugOrdinalSpan
@@ -3001,9 +3001,9 @@ function debugOrderKeyOf(sites DebugBindingSites, ordinal ElementIndex) returns 
 end 'debugOrderKeyOf'
 
 function debugDominanceFrontiers(topo FuncTopology, dom DominatorTree) returns CsrGraph
-	var owners = CsrColumn.create(0)
-	var members = CsrColumn.create(0)
-	var recorded = IndexColumn.create(topo.numBlocks)
+	let owners = CsrColumn.create(0)
+	let members = CsrColumn.create(0)
+	let recorded = IndexColumn.create(topo.numBlocks)
 
 	if not dom.reducible 'noFrontierIsNeeded'
 		return buildCsr(owners, to: members, nodeCount: topo.numBlocks as CsrIndex)
@@ -3049,8 +3049,8 @@ function refineDebugRuns(raw DebugValueRangeArray, into DebugValueRangeArray, sp
 	let topo = liveness.cfg.topo
 	let dom = DominatorTree.of(topo)
 	let sites = DebugBindingSites.over(roster, liveness: liveness, locations: locations, places: places, topo: topo, dom: dom, paramCount: paramCount)
-	var runOrdinals = CsrColumn.create(0)
-	var runIndices = CsrColumn.create(0)
+	let runOrdinals = CsrColumn.create(0)
+	let runIndices = CsrColumn.create(0)
 
 	for (iter, range) in raw.withIterator() 'eachRawRun'
 		if sites.refinementOf(range.valueOrdinal) == DebugRunRefinement.none 'untouched'
@@ -3063,7 +3063,7 @@ function refineDebugRuns(raw DebugValueRangeArray, into DebugValueRangeArray, sp
 	end 'eachRawRun'
 
 	let runsOf = buildCsr(runOrdinals, to: runIndices, nodeCount: roster.valueIds.count() as CsrIndex)
-	var refiner = DebugRunRefiner.over(topo, dom: dom, places: places, names: names)
+	let refiner = DebugRunRefiner.over(topo, dom: dom, places: places, names: names)
 
 	for ordinal in 0 upto roster.valueIds.count() 'eachNamedValue'
 		if sites.refinementOf(ordinal) != DebugRunRefinement.none 'refined'
@@ -3237,7 +3237,7 @@ end 'StuckValues'
 // the bound below is what makes a non-convergence loud rather than infinite. In practice the corpus
 // converges in ONE round.
 function colorRepairingConfinements(module TargetModule, driver SplitDriver, func IrFunction, pool RegMask, callerSaved RegMask, counters RegAllocCounters, reuseCopies ReuseCopyPlan, brackets ColdCallBracketPlan, costs PoolPhaseCosts) returns Allocation
-	var stuck = StuckValues.create()
+	let stuck = StuckValues.create()
 
 	// ⚠ THE COUNTERS ONE COLOURING PASS MOVES, SNAPSHOT BEFORE THE FIRST — because a pass that ends with
 	// a stuck value is DISCARDED, and its decisions with it. Left in, the report would claim copies the
@@ -3400,7 +3400,7 @@ type ColorHints
 	export var contested as RegMaskColumn
 
 	static function create(valueCount ValueId) returns ColorHints
-		var fixedHintIsHot = BitRow.create()
+		let fixedHintIsHot = BitRow.create()
 		fixedHintIsHot.widen(bitsetWordsFor(valueCount as BitIndex))
 		return Self{fixedHint: RegisterColumn.absent(valueCount), copyHint: CopyPartnerColumn.absent(valueCount), fixedHintIsHot: fixedHintIsHot, contested: makeRegMaskColumn(valueCount)}
 	end 'create'
@@ -3473,13 +3473,13 @@ end 'ColorHints'
 // FORWARD-edge incoming (defined in a dominator) — the one already colored when the
 // phi is reached.
 function computeHints(module TargetModule, topo FuncTopology, valueCount ValueId) returns ColorHints
-	var hints = ColorHints.create(valueCount)
-	var buf = OperandList.create(0)
+	let hints = ColorHints.create(valueCount)
+	let buf = OperandList.create(0)
 
 	for local in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: local)
 
-		var ordered = OpIndexArray.create(0)
+		let ordered = OpIndexArray.create(0)
 		block.collectOpsInRunOrder(ordered)
 
 		for opIdx in ordered 'eachOp'
@@ -3731,32 +3731,32 @@ end 'collectPhiEdgeHints'
 // ==========================================================================
 
 function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, callerSaved RegMask, counters RegAllocCounters, reuseCopies ReuseCopyPlan, brackets ColdCallBracketPlan, stuck StuckValues) returns Allocation
-	view topo = liveness.cfg.topo
+	let topo = liveness.cfg.topo
 	let valueCount = liveness.valueCount
 	let wordsPerRow = liveness.wordsPerRow
-	var alloc = Allocation.create(valueCount)
-	var hints = computeHints(module, topo: topo, valueCount: valueCount)
-	var buf = OperandList.create(0)
+	let alloc = Allocation.create(valueCount)
+	let hints = computeHints(module, topo: topo, valueCount: valueCount)
+	let buf = OperandList.create(0)
 
 	// Scratch reused across every block — the live-set walks, the op list, and the death sweep's
 	// working row would otherwise each allocate once per block. `seenBelow` is ONE dense row (not a
 	// matrix); `computeBlockDeaths` returns it to zero in O(live) before the next block.
-	var liveBuf = ValueIdArray.create(0)
-	var seedBuf = ValueIdArray.create(0)
-	var ordered = OpIndexArray.create(0)
-	var seenBelow = BitRow.create()
+	let liveBuf = ValueIdArray.create(0)
+	let seedBuf = ValueIdArray.create(0)
+	let ordered = OpIndexArray.create(0)
+	let seenBelow = BitRow.create()
 	seenBelow.widen(wordsPerRow)
 
 	// The death scan's per-class live tally. It is never READ — the scan wants the row alone — but the
 	// backward step maintains it as it flips bits and its decrements panic on underflow, so it must be
 	// real and truthfully seeded. Allocated HERE and reused across every block, like every other
 	// buffer in this sweep.
-	var deathsLiveByClass = zeroClassRow()
+	let deathsLiveByClass = zeroClassRow()
 
-	var events = ClobberEvents.create()
+	let events = ClobberEvents.create()
 	events.widen(valueCount)
 
-	var deathsOfBlock = BlockDeathsArray.create(topo.numBlocks, zeroed: false)
+	let deathsOfBlock = BlockDeathsArray.create(topo.numBlocks, zeroed: false)
 
 	// Every block's deaths come before any block is colored: `hints.contested` gathers wants from LATER
 	// blocks, and a value is colored at its def. Run per block inside the sweep below, a value's
@@ -3786,9 +3786,9 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 
 		ordered.clear()
 		block.collectOpsInRunOrder(ordered)
-		view deaths = try deathsOfBlock.get(local) otherwise panic("colorFunction: no deaths for block {local}")
+		let deaths = try deathsOfBlock.get(local) otherwise panic("colorFunction: no deaths for block {local}")
 
-		view runs = liveness.coldRuns.of(local)
+		let runs = liveness.coldRuns.of(local)
 
 		for pos in 0 upto ordered.count() 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
@@ -4054,13 +4054,13 @@ function reportExhaustion(v ValueId, working RegMask, classPool RegMask, callerS
 		panic("reportExhaustion: value {v} is a {liveness.classOf(v).name} value but the allocatable pool offers NO register of that file (pool mask {classPool}). This is not pressure and no split can relieve it — the {liveness.classOf(v).name} pool is simply not enabled. A file becomes allocatable by having its registers in this TARGET's `allocatablePool` arm (on x64 that pool is `callerSavedMask` u `calleeSavedMask`, which `assertCalleeSavedListsMatchMasks` proves partition the file; arm64 spells its own); the call ops' `implicitDefs` must equal that target's caller-saved half — `callerSavedMaskFor`, held equal by `assertCallClobberConsistent` — or a value would silently survive a call in a register the callee clobbers.")
 	end 'noPoolForThisClass'
 
-	var occupants = valuesHoldingRegisters(held and classPool, alloc: alloc)
+	let occupants = valuesHoldingRegisters(held and classPool, alloc: alloc)
 	let situation = "value {v} ({liveness.classOf(v).name} pool {classPool}, of which HELD {held and classPool} and FORBIDDEN {liveness.forbiddenOf(v) and classPool}; {v} is allowed {allowedRegistersOf(liveness, valueId: v, pool: classPool)}, and a value live across a call is confined to the {regMaskPopcount(classPool and not callerSaved)} callee-saved {liveness.classOf(v).name} register(s) while an idiv reserves RAX/RDX)"
 	let occupancy = describeRegisterOccupants(occupants, liveness: liveness, alloc: alloc, classPool: classPool)
 	occupants.push(v)
 
-	var hall = HallScratch.create()
-	view verdict = hallVerdictAt(liveness, live: occupants, pool: classPool, scratch: hall)
+	let hall = HallScratch.create()
+	let verdict = hallVerdictAt(liveness, live: occupants, pool: classPool, scratch: hall)
 
 	if not verdict.feasible 'theExactVerdictIsOverflow'
 		panic("reportExhaustion: no free register for {situation} — and Hall's EXACT verdict at this point is OVERFLOW: {verdict.tight} of the values here are confined to the witness {verdict.witness}, which offers {regMaskPopcount(verdict.witness)} register(s), so {verdict.tight - regMaskPopcount(verdict.witness)} of them must leave. THE SPLITTER LEFT AN OVER-POOL POINT UNRELIEVED — relieving every one of them before coloring is what `SplitDriver.relievePressure`'s post-condition claims. If the witness IS the whole class pool it is plain per-file pigeonhole and `analyzeBlockPressure`'s `classRowGet(effective, ...) > classPoolSizeOf(...)` owns it; if it is a proper subset, `RegPoolCensus.screenViolates` plus `HallCondition`'s exact confirmation own it. ⚠ AND A REGISTER HELD AT AN OP THAT IS IN NO LIVE SET IS INVISIBLE TO BOTH — a reuse copy and a DEAD DEF are the two, `addOpTransientPressure` and `opConfinedTransient` are the ONE place each is counted, and a demand they miss is one no popcount over a live set can ever see. Occupants:{occupancy}")
@@ -4151,7 +4151,7 @@ end 'reportExhaustion'
 // Only the exhaustion path calls it, so allocating a fresh list is free: the compile is about to
 // abort. Ascending register order is what makes the listing and the verdict reproducible run to run.
 function valuesHoldingRegisters(mask RegMask, alloc Allocation) returns ValueIdArray
-	var out = ValueIdArray.create(0)
+	let out = ValueIdArray.create(0)
 
 	for regNum in 0 upto RegisterFileSize 'eachRegister'
 		if regMaskContains(mask, regNum: regNum) 'occupied'
@@ -4507,8 +4507,8 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 	// Collected backward as (pos, value) pairs, then bucketed by position — the scan discovers them
 	// in reverse, and a counting sort restores order in O(pairs + ops). `posOf` is the CSR KEY column
 	// (its entries are `ElementIndex`), `valueOf` the value column.
-	var posOf = CsrColumn.create(0)
-	var valueOf = CsrColumn.create(0)
+	let posOf = CsrColumn.create(0)
+	let valueOf = CsrColumn.create(0)
 
 	for ri in 0 upto n 'eachOpRev'
 		let pos = n - 1 - ri
@@ -4595,8 +4595,8 @@ end 'wantedByOp'
 //
 // ⛔ **A PHYSICAL OPERAND IS RE-MINTED, NOT PASSED THROUGH.** A `TargetVReg` is a box, and the isel binds one
 // to a local it names in several ops (`let scratch = x64PhysReg(rax)`), so the box has as many owners as
-// ops. The coloured module travels home from a pool worker in a reply, and the transfer walk aborts the
-// process on any record with a second owner (exit 96); minting every operand of every coloured op fresh
+// ops. The coloured module travels home from a pool worker in a reply, and a seed-built runtime's transfer
+// walk aborts the process on any record with a second owner (exit 96); minting every operand of every coloured op fresh
 // is what leaves each box with exactly one.
 function colorVRegWith(vreg TargetVReg, alloc Allocation) returns TargetVReg
 	return match vreg 'v'
@@ -4791,7 +4791,7 @@ end 'colorTargetOp'
 // ==========================================================================
 
 module function regAllocStatsMessage(stats RegAllocStats) returns String
-	var msg = StringBuilder.create()
+	let msg = StringBuilder.create()
 	msg.append("regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n")
 
 	// Iterated per class, not hand-listed: a hand-written pair of lines silently omits any register

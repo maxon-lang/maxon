@@ -49,7 +49,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -68,7 +68,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -89,7 +89,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -109,7 +109,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(30)
 	arr.insert(1, value: 20)
@@ -167,7 +167,7 @@ end 'main'
 An empty byte string is immutable image data, so the pushes go to its `.clone()`.
 ```maxon
 function main() returns ExitCode
-	var v = b"".clone()
+	let v = b"".clone()
 	v.push(7)
 	v.push(8)
 	return v.count() as ExitCode
@@ -181,7 +181,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = ""
-	var v = s.toByteArray()
+	let v = s.toByteArray()
 	v.push(65)
 	return v.count() as ExitCode
 end 'main'
@@ -210,7 +210,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	var i = 0 as Int
 	while i < 100 'fill'
 		arr.push(i)
@@ -232,7 +232,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -252,7 +252,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -274,7 +274,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	try arr.managed.setLength(100) otherwise 'overlen'
 		return 7
@@ -293,7 +293,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	let b = try arr.managed.byteAt(100) otherwise 7
@@ -311,7 +311,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -333,7 +333,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	try arr.managed.grow(8) otherwise panic("grow OOB")
 	try arr.managed.setLength(4) otherwise panic("setLength OOB")
 	try arr.managed.set(0, 10) otherwise panic("set OOB")
@@ -359,7 +359,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -385,7 +385,7 @@ Push three heap strings, then `resize(1)`. The two dropped strings must be freed
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("first heap string long enough to require an allocation")
 	xs.push("second heap string long enough to require an allocation")
 	xs.push("third heap string long enough to require an allocation")
@@ -405,7 +405,7 @@ Shrink directly through the `__ManagedMemory.setLength` builtin (the path
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("alpha string payload long enough to need a heap allocation")
 	xs.push("beta string payload long enough to need a heap allocation")
 	xs.push("gamma string payload long enough to need a heap allocation")
@@ -432,7 +432,7 @@ end 'Box'
 typealias BoxArray = Array with Box
 
 function main() returns ExitCode
-	var boxes = BoxArray.create(0)
+	let boxes = BoxArray.create(0)
 	boxes.push(Box.create("box one with a heap string payload long enough"))
 	boxes.push(Box.create("box two with a heap string payload long enough"))
 	boxes.push(Box.create("box three with a heap string payload long enough"))
@@ -451,7 +451,7 @@ Shrinking all the way to zero frees every element (equivalent to `clear`).
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("only string payload long enough to need a heap allocation")
 	xs.push("other string payload long enough to need a heap allocation")
 	xs.truncate(0)
@@ -470,7 +470,7 @@ the regrow must not double-free or leak.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("first string payload long enough to need a heap allocation")
 	xs.push("second string payload long enough to need a heap allocation")
 	xs.push("third string payload long enough to need a heap allocation")
@@ -510,7 +510,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	var i = 0 as Count
 	while i < 8 'fill'
 		a.push(77)
@@ -560,7 +560,7 @@ that still offers the operation and owns the invariant being tested.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	for i in 0 upto 4 'fill'
 		a.push("value-{i} padded out so this string needs a heap allocation")
 	end 'fill'
@@ -590,7 +590,7 @@ must not reappear.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha payload long enough to need a heap allocation here")
 	a.push("beta payload long enough to need a heap allocation here")
 	a.push("gamma payload long enough to need a heap allocation here")
@@ -625,7 +625,7 @@ caller owns, or it is freed twice.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("one payload long enough to need a heap allocation here")
 	a.push("two payload long enough to need a heap allocation here")
 	let popped = try a.pop() otherwise ""
@@ -651,7 +651,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.push(11)
 	a.push(22)
 	a.push(33)
@@ -683,7 +683,7 @@ cleared, so regrown slots read `false`.
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var b = BoolArray.create(0)
+	let b = BoolArray.create(0)
 	b.push(true)
 	b.push(true)
 	b.push(true)
@@ -745,7 +745,7 @@ function main() returns ExitCode
 		end 'k'
 	end 'negativeCount'
 
-	var m = try __ManagedMemory.create(4, 1) otherwise 'createFail'
+	let m = try __ManagedMemory.create(4, 1) otherwise 'createFail'
 		return 1
 	end 'createFail'
 	try m.setLength(5) otherwise (e) 'aboveCapacity'
@@ -819,11 +819,11 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(11)
 	arr.push(22)
 	arr.push(33)
-	var sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
+	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
 	try sub.managed.setLength(1) otherwise panic("setLength: a detached view publishes its live length")
 	try sub.managed.setByte(0, 99) otherwise panic("setByte: offset 0 of a detached 8-byte slot")
 	let parent = try arr.get(0) otherwise panic("get: index 0 of a length-3 array")
@@ -843,7 +843,7 @@ a little-endian target. It also pins the element TYPING `create`'s literal eleme
 fit a `Byte`, so a byte-only binding would refuse this program outright.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(0, value: 258) otherwise return 3
 	let lo = try mm.byteAt(0) otherwise return 4
@@ -864,7 +864,7 @@ allocated slots BEFORE a length publishes them, a read has nothing to see there.
 exactly the limit.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	let v = try mm.byteAt(2) otherwise 7
 	return v as ExitCode
@@ -882,7 +882,7 @@ asked to LOWER it, it throws `invalidCapacity` rather than silently keeping the 
 one thing that separates it from `reserve` (`maxon-bin/Compiler/Runtime/ManagedMemoryRuntime.maxon`, `buildManagedMemGrow`).
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
 	try mm.grow(8) otherwise return 2
 	if mm.capacity() != 8 'cap'
 		return 3
@@ -1000,7 +1000,7 @@ The round trip `setLength`'s contract names: four elements written while `length
 idiom has no spelling at all.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	if mm.length() != 0 'createPublishesNothing'
 		return 2
 	end 'createPublishesNothing'
@@ -1027,7 +1027,7 @@ The same rule with a NON-zero length, so the staged slot is genuinely past a liv
 empty one: index 2 is written while the length is 2, and reads back once the length reaches 3.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.set(0, value: 1) otherwise return 3
 	try mm.set(1, value: 2) otherwise return 3
@@ -1052,7 +1052,7 @@ is FALSE and an at-or-over test alone reads it as in range.
 ```maxon
 function main() returns ExitCode
 	var seen = 0 as Count
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	let cap = mm.capacity()
 	try mm.set(cap - 1, value: 7) otherwise return 2
 	try mm.set(cap, value: 7) otherwise (e) 'atCapacity'
@@ -1091,7 +1091,7 @@ the length is 1 and refuses a read at the same instant, and the read starts work
 publishes it. Reading an unpublished slot has nothing to see; writing one is the whole point.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(1, value: 77) otherwise return 3
 	let unpublished = try mm.get(1) otherwise 42
@@ -1204,7 +1204,7 @@ restage, publish again — which is what pins the destroy walk's per-slot NULL G
 ```maxon
 function main() returns ExitCode
 	var total = 0 as FullRangeInt
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(1, value: 5) otherwise return 3
 	try mm.set(1, value: 6) otherwise return 4
@@ -1230,7 +1230,7 @@ the live length but inside the capacity is ALLOWED. It exists because the Docume
 the stale LENGTH wording and a reader will find it.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(3, value: 65) otherwise return 3
 	try mm.setLength(4) otherwise return 4
@@ -1252,7 +1252,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	if arr.capacity() < 4 'needsASlotPastTheLength'
@@ -1280,11 +1280,11 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(11)
 	arr.push(22)
 	arr.push(33)
-	var sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
+	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
 	try sub.managed.set(1, value: 99) otherwise return 1
 	try sub.managed.set(2, value: 99) otherwise 'pastTheDetachedCapacity'
 		let parent = try arr.get(1) otherwise panic("get: index 1 of a length-3 array")
@@ -1325,7 +1325,7 @@ typealias StrArray = Array with String
 
 function main() returns ExitCode
 	var refused = 0 as Count
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("a published string, long enough to require an allocation")
 	try xs.set(99, value: "a string the array setter refuses, long enough to allocate") otherwise 'arraySurface'
 		refused = refused + 1
@@ -1371,7 +1371,7 @@ function launder(n Signed) returns Signed
 end 'launder'
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("a published string, long enough to require an allocation")
 	try xs.set(launder(-1) as ElementIndex, value: "a string refused for a negative index, long enough to allocate") otherwise 'negativeIndex'
 		return 42
@@ -1403,7 +1403,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(11)
 	arr.push(22)
 	arr.push(33)
@@ -1432,7 +1432,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(11)
 	arr.push(22)
 	arr.push(33)
@@ -1513,20 +1513,20 @@ typealias IntArray = Array with Int
 
 function main() returns ExitCode
 	var total = 0 as Byte
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(3, value: 65) otherwise return 3
 	try mm.setLength(4) otherwise return 4
 	total = total + (try mm.byteAt(3) otherwise return 5)
-	var words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 6
+	let words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 6
 	try words.setByte(0, value: 9) otherwise return 7
 	try words.setLength(1) otherwise return 8
 	total = total + (try words.byteAt(0) otherwise return 9)
-	var xs = IntArray.create(0)
+	let xs = IntArray.create(0)
 	xs.push(7)
 	try xs.managed.setByte(0, value: 3) otherwise return 10
 	total = total + (try xs.managed.byteAt(0) otherwise return 11)
-	var s = b"hello"
+	let s = b"hello"
 	total = total + (try s.managed.byteAt(1) otherwise return 12)
 	return (total - 136) as ExitCode
 end 'main'
@@ -1615,7 +1615,7 @@ throw), and the byte buffer is where a `setByte`/`byteAt` pair addresses a whole
 ```maxon
 function main() returns ExitCode
 	var total = 0 as Count
-	var words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	let words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try words.setLength(2) otherwise return 2
 	try words.set(0, value: 11) otherwise return 3
 	try words.set(1, value: 22) otherwise return 4
@@ -1627,14 +1627,14 @@ function main() returns ExitCode
 	let part = try words.slice(1, 2) otherwise return 8
 	total = total + ((try part.get(0) otherwise return 9) as Count)
 	total = total + part.length()
-	var more = try __ManagedMemory.create(1, elementSize: 8) otherwise return 10
+	let more = try __ManagedMemory.create(1, elementSize: 8) otherwise return 10
 	try more.setLength(1) otherwise return 11
 	try more.set(0, value: 33) otherwise return 12
 	words.append(more)
 	total = total + words.length()
 	words.clear()
 	total = total + words.length()
-	var bytes = try __ManagedMemory.create(4, elementSize: 1) otherwise return 14
+	let bytes = try __ManagedMemory.create(4, elementSize: 1) otherwise return 14
 	try bytes.setLength(2) otherwise return 15
 	try bytes.setByte(1, value: 5) otherwise return 16
 	total = total + ((try bytes.byteAt(1) otherwise return 17) as Count)
@@ -1686,9 +1686,9 @@ here and `a`'s second element must survive it.
 typealias Strings = Array with String
 
 function main() returns ExitCode
-	var a = Strings.create(0)
+	let a = Strings.create(0)
 	a.push("alpha is long enough to be heap allocated")
-	var b = Strings.create(0)
+	let b = Strings.create(0)
 	b.push("beta is also long enough to be heap allocated")
 	a.managed.append(b.managed)
 	if a.count() != 2 'badCount'
@@ -1755,7 +1755,7 @@ four slots and leaves the length at 0 (see `create-and-length`), so the buffer h
 write an element before there is anything for index 0 to name.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	try mm.setByte(0, 7) otherwise return 3
 	let gone = try mm.remove(0) otherwise return 4
@@ -2004,7 +2004,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	try arr.managed.set(0, value: 12) otherwise return 1
@@ -2376,9 +2376,9 @@ NOT forked: an ordinary `Array with Byte` still goes into it.
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
-	view m = try a.get(0) otherwise return 1
+	let m = try a.get(0) otherwise return 1
 	return m.length() as ExitCode
 end 'main'
 ```
@@ -2404,7 +2404,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let h = Holder.create(a)
 	let m = try h.bufs.get(0) otherwise return 1
@@ -2523,9 +2523,9 @@ The array control's positive half, for the reason its tuple twin has one.
 typealias BufArray = Array with ByteArray
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
-	view m = try a.get(0) otherwise return 1
+	let m = try a.get(0) otherwise return 1
 	return m.count() as ExitCode
 end 'main'
 ```
@@ -2586,7 +2586,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	return arr.managed.length() as ExitCode
@@ -2639,10 +2639,10 @@ function bufferOf(a ByteArray) returns __ManagedMemory
 end 'bufferOf'
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
-	view m = arr.managed
+	let m = arr.managed
 	var total = (m.length() as Integer) + bufLength(arr.managed) + (bufferOf(arr).length() as Integer) + (arr.count() as Integer)
 	var i = 0 as Count
 	while i < 4 'round'
@@ -2782,7 +2782,7 @@ what a future change to how a `var` merges its values could break silently.
 function main() returns ExitCode
 	var v = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try v.setLength(4) otherwise return 2
-	var w = try __ManagedMemory.create(2, elementSize: 1) otherwise return 3
+	let w = try __ManagedMemory.create(2, elementSize: 1) otherwise return 3
 	try w.setLength(2) otherwise return 4
 	v = w
 	return v.length() as ExitCode
@@ -2824,12 +2824,12 @@ mark is made there rather than per arm.
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	a.push("ab".toByteArray())
-	view g = try a.get(0) otherwise return 1
-	view f = try a.first() otherwise return 2
-	view l = try a.last() otherwise return 3
+	let g = try a.get(0) otherwise return 1
+	let f = try a.first() otherwise return 2
+	let l = try a.last() otherwise return 3
 	return (g.length() + f.length() + l.length()) as ExitCode
 end 'main'
 ```
@@ -2846,9 +2846,9 @@ roster AND still be dropped exactly once — the exit code proves the first, the
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
-	view p = try a.pop() otherwise return 1
+	let p = try a.pop() otherwise return 1
 	return p.length() as ExitCode
 end 'main'
 ```
@@ -2866,7 +2866,7 @@ it — so nothing here is dropped twice or leaked.
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	a.push("ab".toByteArray())
 	var total = 0 as Count
@@ -2891,7 +2891,7 @@ refused as an unknown `Array` method while `a.get(0).length()` answers, on the s
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let b = a.clone()
 	let m = try b.get(0) otherwise return 1
@@ -2911,7 +2911,7 @@ reason `clone` does — one container out from the rule that already made a slic
 typealias BufArray = Array with __ManagedMemory
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	a.push("ab".toByteArray())
 	let b = try a.slice(1, endIndex: 2) otherwise return 1
@@ -3019,7 +3019,7 @@ function slotted(t (BufArray, Int)) returns Int
 end 'slotted'
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	return slotted((a, 7)) as ExitCode
 end 'main'
@@ -3066,7 +3066,7 @@ function slotted(t (BufList, Int)) returns Int
 end 'slotted'
 
 function main() returns ExitCode
-	var a = BufList.create(0)
+	let a = BufList.create(0)
 	a.push("hello".toByteArray())
 	return slotted((a, 7)) as ExitCode
 end 'main'
@@ -3149,7 +3149,7 @@ type Holder
 	export var bufs as BufArray
 
 	static function create() returns Holder
-		var a = BufArray.create(0)
+		let a = BufArray.create(0)
 		a.push("hello".toByteArray())
 		return Self{bufs: a}
 	end 'create'
@@ -3178,7 +3178,7 @@ type Holder
 	export var bufs as BufArray
 
 	static function create() returns Holder
-		var a = BufArray.create(0)
+		let a = BufArray.create(0)
 		a.push("hello".toByteArray())
 		return Self{bufs: a}
 	end 'create'
@@ -3465,7 +3465,7 @@ function room(h Held) returns Int
 end 'room'
 
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	let h = Held.mem(mm)
 	return room(h) as ExitCode
@@ -3554,7 +3554,7 @@ union Held
 end 'Held'
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let h = Held.bufs(a)
 	match h 'k'
@@ -3635,7 +3635,7 @@ union Held
 end 'Held'
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let h = Held.bufs(a)
 	match h 'k'
@@ -3663,7 +3663,7 @@ union Held
 end 'Held'
 
 function main() returns ExitCode
-	var a = BufArray.create(0)
+	let a = BufArray.create(0)
 	a.push("hello".toByteArray())
 	let h = Held.bufs(a)
 	match h 'k'
@@ -4073,7 +4073,7 @@ function arrayWidth(xs B) returns Int2
 end 'arrayWidth'
 
 function main() returns ExitCode
-	var xs = B.create(0)
+	let xs = B.create(0)
 	xs.push(7 as Int2)
 	return ((textWidth("hello") as Int2) + arrayWidth(xs)) as ExitCode
 end 'main'
@@ -4124,7 +4124,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var xs = Nums.create(0)
+	let xs = Nums.create(0)
 	xs.push(7 as Int2)
 	let b = Bag.create(xs)
 	return (seed() + (b.items.count() as Int)) as ExitCode
@@ -4643,7 +4643,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-	var a = Ints.create(0)
+	let a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	return a.doubled() as ExitCode
@@ -4671,7 +4671,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-	var a = Ints.create(0)
+	let a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	return a.doubled() as ExitCode
@@ -4710,7 +4710,7 @@ extension Array
 end 'Array'
 
 function main() returns ExitCode
-	var a = Ints.create(0)
+	let a = Ints.create(0)
 	a.push(7)
 	a.push(9)
 	return a.survey() as ExitCode

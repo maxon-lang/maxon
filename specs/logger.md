@@ -49,10 +49,10 @@ function main() returns ExitCode
 	end 'iAmTheChild'
 
 	let me = try Process.executablePath() otherwise return 2
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("child")
 
-	var config = Configuration.create(Executable.path(me))
+	let config = Configuration.create(Executable.path(me))
 	config.arguments = argv
 	let run = try Subprocess.runConfiguration(config) otherwise return 3
 
@@ -378,7 +378,7 @@ end 'Setter'
 typealias ApplyReplyArray = Array with Promise with Integer
 
 function main() returns ExitCode
-	var replies = ApplyReplyArray.create(0)
+	let replies = ApplyReplyArray.create(0)
 
 	for i in 0 upto 8 'spawnEach'
 		let setter = spawn Setter.create("g{i}", quiet: i mod 2 == 1)
@@ -600,10 +600,10 @@ function main() returns ExitCode
 	end 'iAmTheChild'
 
 	let me = try Process.executablePath() otherwise return 2
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("child")
 
-	var config = Configuration.create(Executable.path(me))
+	let config = Configuration.create(Executable.path(me))
 	config.arguments = argv
 	let run = try Subprocess.runConfiguration(config) otherwise return 3
 
@@ -638,17 +638,19 @@ A program adds its own level helper to `Log` and `Logger` by extension, forwardi
 the record names the line that called the helper; the level filters it by rank.
 ```maxon
 // --- file: main.maxon
-let auditLevel = LogLevel.named("AUDIT", rank: 2)
+function auditLevel() returns LogLevel
+	return LogLevel.named("AUDIT", rank: 2)
+end 'auditLevel'
 
 extension Log
 	public static function audit(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
-		Log.log(auditLevel, message: message, attrs: attrs, file: file, line: line)
+		Log.log(auditLevel(), message: message, attrs: attrs, file: file, line: line)
 	end 'audit'
 end 'Log'
 
 extension Logger
 	public function audit(message String, attrs LogAttrArray = LogAttrArray.create(0), file String = __file__, line SourceLineNumber = __line__)
-		self.log(auditLevel, message: message, attrs: attrs, file: file, line: line)
+		self.log(auditLevel(), message: message, attrs: attrs, file: file, line: line)
 	end 'audit'
 end 'Logger'
 
@@ -669,6 +671,6 @@ end 'main'
 0
 ```
 ```stdout
-level=AUDIT source=main.maxon:19 msg=static
-level=AUDIT source=main.maxon:21 msg=instance via=logger n=1
+level=AUDIT source=main.maxon:21 msg=static
+level=AUDIT source=main.maxon:23 msg=instance via=logger n=1
 ```

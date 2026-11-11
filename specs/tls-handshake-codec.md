@@ -60,7 +60,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -104,7 +104,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderProtocolNames(names TlsProtocolNameArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for name in names 'eachName'
 		texts.push("\"{toHex(name)}\"")
@@ -114,7 +114,7 @@ function renderProtocolNames(names TlsProtocolNameArray) returns String
 end 'renderProtocolNames'
 
 function renderAuthorities(names TlsAuthorityNameArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for name in names 'eachName'
 		texts.push("\"{toHex(name)}\"")
@@ -124,7 +124,7 @@ function renderAuthorities(names TlsAuthorityNameArray) returns String
 end 'renderAuthorities'
 
 function renderSuites(codes TlsCipherSuiteCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -134,7 +134,7 @@ function renderSuites(codes TlsCipherSuiteCodeArray) returns String
 end 'renderSuites'
 
 function renderGroups(codes TlsGroupCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -144,7 +144,7 @@ function renderGroups(codes TlsGroupCodeArray) returns String
 end 'renderGroups'
 
 function renderSchemes(codes TlsSignatureSchemeCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -154,7 +154,7 @@ function renderSchemes(codes TlsSignatureSchemeCodeArray) returns String
 end 'renderSchemes'
 
 function renderVersions(codes TlsVersionCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -168,7 +168,7 @@ function renderShare(share TlsKeyShare) returns String
 end 'renderShare'
 
 function renderShares(shares TlsKeyShareArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for share in shares 'eachShare'
 		texts.push(renderShare(share))
@@ -198,7 +198,7 @@ function renderExtension(item TlsExtension) returns String
 end 'renderExtension'
 
 function renderExtensions(items TlsExtensionArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for item in items 'eachExtension'
 		texts.push(renderExtension(item))
@@ -215,7 +215,7 @@ function renderBlock(block TlsExtensionBlock) returns String
 end 'renderBlock'
 
 function renderEntries(entries TlsCertificateEntryArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for entry in entries 'eachEntry'
 		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions)}\}")
@@ -225,7 +225,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 end 'renderEntries'
 
 function renderCertificates(certificates ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for certificate in certificates 'eachCertificate'
 		texts.push("\{\"cert_data_hex\":\"{toHex(certificate)}\"\}")
@@ -337,7 +337,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -381,7 +381,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderProtocolNames(names TlsProtocolNameArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for name in names 'eachName'
 		texts.push("\"{toHex(name)}\"")
@@ -391,7 +391,7 @@ function renderProtocolNames(names TlsProtocolNameArray) returns String
 end 'renderProtocolNames'
 
 function renderAuthorities(names TlsAuthorityNameArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for name in names 'eachName'
 		texts.push("\"{toHex(name)}\"")
@@ -401,7 +401,7 @@ function renderAuthorities(names TlsAuthorityNameArray) returns String
 end 'renderAuthorities'
 
 function renderSuites(codes TlsCipherSuiteCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -411,7 +411,7 @@ function renderSuites(codes TlsCipherSuiteCodeArray) returns String
 end 'renderSuites'
 
 function renderGroups(codes TlsGroupCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -421,7 +421,7 @@ function renderGroups(codes TlsGroupCodeArray) returns String
 end 'renderGroups'
 
 function renderSchemes(codes TlsSignatureSchemeCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -431,7 +431,7 @@ function renderSchemes(codes TlsSignatureSchemeCodeArray) returns String
 end 'renderSchemes'
 
 function renderVersions(codes TlsVersionCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -445,7 +445,7 @@ function renderShare(share TlsKeyShare) returns String
 end 'renderShare'
 
 function renderShares(shares TlsKeyShareArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for share in shares 'eachShare'
 		texts.push(renderShare(share))
@@ -475,7 +475,7 @@ function renderExtension(item TlsExtension) returns String
 end 'renderExtension'
 
 function renderExtensions(items TlsExtensionArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for item in items 'eachExtension'
 		texts.push(renderExtension(item))
@@ -492,7 +492,7 @@ function renderBlock(block TlsExtensionBlock) returns String
 end 'renderBlock'
 
 function renderEntries(entries TlsCertificateEntryArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for entry in entries 'eachEntry'
 		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions)}\}")
@@ -502,7 +502,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 end 'renderEntries'
 
 function renderCertificates(certificates ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for certificate in certificates 'eachCertificate'
 		texts.push("\{\"cert_data_hex\":\"{toHex(certificate)}\"\}")
@@ -632,7 +632,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -676,7 +676,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderProtocolNames(names TlsProtocolNameArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for name in names 'eachName'
 		texts.push("\"{toHex(name)}\"")
@@ -686,7 +686,7 @@ function renderProtocolNames(names TlsProtocolNameArray) returns String
 end 'renderProtocolNames'
 
 function renderAuthorities(names TlsAuthorityNameArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for name in names 'eachName'
 		texts.push("\"{toHex(name)}\"")
@@ -696,7 +696,7 @@ function renderAuthorities(names TlsAuthorityNameArray) returns String
 end 'renderAuthorities'
 
 function renderSuites(codes TlsCipherSuiteCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -706,7 +706,7 @@ function renderSuites(codes TlsCipherSuiteCodeArray) returns String
 end 'renderSuites'
 
 function renderGroups(codes TlsGroupCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -716,7 +716,7 @@ function renderGroups(codes TlsGroupCodeArray) returns String
 end 'renderGroups'
 
 function renderSchemes(codes TlsSignatureSchemeCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -726,7 +726,7 @@ function renderSchemes(codes TlsSignatureSchemeCodeArray) returns String
 end 'renderSchemes'
 
 function renderVersions(codes TlsVersionCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -740,7 +740,7 @@ function renderShare(share TlsKeyShare) returns String
 end 'renderShare'
 
 function renderShares(shares TlsKeyShareArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for share in shares 'eachShare'
 		texts.push(renderShare(share))
@@ -770,7 +770,7 @@ function renderExtension(item TlsExtension) returns String
 end 'renderExtension'
 
 function renderExtensions(items TlsExtensionArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for item in items 'eachExtension'
 		texts.push(renderExtension(item))
@@ -787,7 +787,7 @@ function renderBlock(block TlsExtensionBlock) returns String
 end 'renderBlock'
 
 function renderEntries(entries TlsCertificateEntryArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for entry in entries 'eachEntry'
 		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions)}\}")
@@ -797,7 +797,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 end 'renderEntries'
 
 function renderCertificates(certificates ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for certificate in certificates 'eachCertificate'
 		texts.push("\{\"cert_data_hex\":\"{toHex(certificate)}\"\}")
@@ -919,7 +919,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -963,7 +963,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderProtocolNames(names TlsProtocolNameArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for name in names 'eachName'
 		texts.push("\"{toHex(name)}\"")
@@ -973,7 +973,7 @@ function renderProtocolNames(names TlsProtocolNameArray) returns String
 end 'renderProtocolNames'
 
 function renderAuthorities(names TlsAuthorityNameArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for name in names 'eachName'
 		texts.push("\"{toHex(name)}\"")
@@ -983,7 +983,7 @@ function renderAuthorities(names TlsAuthorityNameArray) returns String
 end 'renderAuthorities'
 
 function renderSuites(codes TlsCipherSuiteCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -993,7 +993,7 @@ function renderSuites(codes TlsCipherSuiteCodeArray) returns String
 end 'renderSuites'
 
 function renderGroups(codes TlsGroupCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -1003,7 +1003,7 @@ function renderGroups(codes TlsGroupCodeArray) returns String
 end 'renderGroups'
 
 function renderSchemes(codes TlsSignatureSchemeCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -1013,7 +1013,7 @@ function renderSchemes(codes TlsSignatureSchemeCodeArray) returns String
 end 'renderSchemes'
 
 function renderVersions(codes TlsVersionCodeArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for code in codes 'eachCode'
 		texts.push("{code}")
@@ -1027,7 +1027,7 @@ function renderShare(share TlsKeyShare) returns String
 end 'renderShare'
 
 function renderShares(shares TlsKeyShareArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for share in shares 'eachShare'
 		texts.push(renderShare(share))
@@ -1057,7 +1057,7 @@ function renderExtension(item TlsExtension) returns String
 end 'renderExtension'
 
 function renderExtensions(items TlsExtensionArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for item in items 'eachExtension'
 		texts.push(renderExtension(item))
@@ -1074,7 +1074,7 @@ function renderBlock(block TlsExtensionBlock) returns String
 end 'renderBlock'
 
 function renderEntries(entries TlsCertificateEntryArray) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for entry in entries 'eachEntry'
 		texts.push("\{\"cert_data_hex\":\"{toHex(entry.certificate())}\",\"extensions\":{renderExtensions(entry.extensions)}\}")
@@ -1084,7 +1084,7 @@ function renderEntries(entries TlsCertificateEntryArray) returns String
 end 'renderEntries'
 
 function renderCertificates(certificates ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for certificate in certificates 'eachCertificate'
 		texts.push("\{\"cert_data_hex\":\"{toHex(certificate)}\"\}")
@@ -1206,7 +1206,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1279,7 +1279,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1394,7 +1394,7 @@ noApplicationProtocol 120
 `TlsHandshakeCodec.encode` throws `TlsEncodeError.vectorTooLong` for a field that does not fit its length prefix (uint8 session id, uint16 ticket and extension block, uint24 handshake body) and writes the largest one that fits. A line prints the encoded length.
 ```maxon
 function filled(count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.resize(count)
 
 	return bytes

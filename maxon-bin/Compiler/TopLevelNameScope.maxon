@@ -91,14 +91,14 @@ type TopLevelNameLedger
 		let key = claim.directoryKey(directories)
 
 		if self.contested.contains(key) 'alreadyContested'
-			var claims = try self.contested.get(key) otherwise panic("TopLevelNameLedger.note: a contested key holds its claims")
+			let claims = try self.contested.get(key) otherwise panic("TopLevelNameLedger.note: a contested key holds its claims")
 			claims.push(claim)
 			self.contested.upsert(key, value: claims)
 			return
 		end 'alreadyContested'
 
 		if let incumbent = try self.first.get(key) 'aSecondClaim'
-			var claims = TopLevelNameClaimArray.create(0)
+			let claims = TopLevelNameClaimArray.create(0)
 			claims.push(incumbent)
 			claims.push(claim)
 			self.contested.upsert(key, value: claims)
@@ -126,14 +126,14 @@ type TopLevelNameLedger
 
 	function noteBindings(signatures ProgramSignatures, directories ModuleDirectoryByFile)
 		for index in 0 upto signatures.topLevelDeclCount() 'eachBinding'
-			view decl = signatures.declAt(index)
+			let decl = signatures.declAt(index)
 
 			self.note(TopLevelNameClaim.create(signatures.shadowRoster().bareSpellingOf(decl.name), family: TopLevelNameFamily.binding, keyword: BindingKeyword, filePath: decl.declFilePath, line: decl.nameLine, column: decl.nameColumn), directories: directories)
 		end 'eachBinding'
 	end 'noteBindings'
 
 	function collisions() returns TopLevelNameCollisionArray
-		var found = TopLevelNameCollisionArray.create(0)
+		let found = TopLevelNameCollisionArray.create(0)
 
 		for (_, claims) in self.contested 'eachContestedName'
 			self.collisionsOfOneName(claims, found: found)
@@ -174,7 +174,7 @@ export function checkTopLevelNameScopes(project Project, signatures ProgramSigna
 	end 'theUniverseIsUnreadable'
 
 	let directories = signatures.settledDeclarations().fileModuleDirectories
-	var ledger = TopLevelNameLedger.create()
+	let ledger = TopLevelNameLedger.create()
 	ledger.noteTypes(project, directories: directories)
 	ledger.noteFunctions(project, directories: directories)
 	ledger.noteBindings(signatures, directories: directories)

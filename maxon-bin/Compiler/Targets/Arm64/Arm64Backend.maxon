@@ -2867,7 +2867,7 @@ end 'arm64EmitStackFree'
 // than re-derived per function; it decides the prologue stack guard and whether every
 // `arm64ImportCall` goes through the system-stack door (`Arm64GtRuntime.DarwinLibcCallName`).
 export function emitArm64FunctionChunk(module TargetModule, func IrFunction, frameBytes StackSize, encoding FunctionEncodingFacts, greenThreads bool, target Target) returns FunctionCodeChunk
-	var relaxation = Arm64BranchRelaxation.create()
+	let relaxation = Arm64BranchRelaxation.create()
 
 	var chunk = encodeArm64FunctionChunk(module, func: func, frameBytes: frameBytes, encoding: encoding, greenThreads: greenThreads, target: target, relaxation: relaxation)
 	var relaxedBefore = 0 as MemberCount
@@ -2885,42 +2885,42 @@ end 'emitArm64FunctionChunk'
 // Runs once per relaxation pass, so it writes nothing but the chunk it returns and `relaxation`: an
 // effect on `module` here would happen once per pass.
 function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameBytes StackSize, encoding FunctionEncodingFacts, greenThreads bool, target Target, relaxation Arm64BranchRelaxation) returns FunctionCodeChunk
-	var code = ByteArray.create(0)
-	var callFixups = CallFixupArray.create(0)
-	var rdataRelocs = RdataRelocationArray.create(0)
+	let code = ByteArray.create(0)
+	let callFixups = CallFixupArray.create(0)
+	let rdataRelocs = RdataRelocationArray.create(0)
 
 	// A `leaFuncAddr`'s ADRP+ADD pair, chunk-local like the others; concat resolves each to its target
 	// function's `.text` offset and both writers patch the pair. Empty for a function that takes no
 	// function value.
-	var funcAdrpRelocs = Arm64FuncAdrpRelocArray.create(0)
+	let funcAdrpRelocs = Arm64FuncAdrpRelocArray.create(0)
 
 	// The libSystem GOT import calls this function makes (`osAllocPages`→mmap, `osWriteStdout`→write).
 	// Chunk-local like the others; concat rebases each into the writer's slot-indexed relocations, the
 	// same channel the entry stub's `_exit` rides. Empty for a function that touches no OS primitive.
-	var iatRelocs = RelocationArray.create(0)
-	var branches = Arm64BlockBranches.relaxing(relaxation)
+	let iatRelocs = RelocationArray.create(0)
+	let branches = Arm64BlockBranches.relaxing(relaxation)
 
 	// Dense-match jump tables encoded in this chunk, awaiting their per-slot block-address relocations —
 	// resolved after the block loop, when `blockOffsets` holds every block's chunk-local offset.
-	var jumpTables = JumpTablePendingArray.create(0)
-	var blockOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
+	let jumpTables = JumpTablePendingArray.create(0)
+	let blockOffsets = BlockOffsetTable.forBlockCount(func.nextBlockId)
 	let guarded = greenThreads and not encoding.skipsStackGuard
 	var unsafePrefixBytes = 0 as CodeOffset
 	var isFirstBlock = true
 
 	// Hoisted so a build without debug info pays one bool test per op and never reads the span column.
 	let captureSpans = module.spans.armed
-	var lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, encoding: encoding)
-	var runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
-	var blockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
+	let lineRows = DebugLineRowBuilder.forFunction(module, func: func, armed: captureSpans, encoding: encoding)
+	let runOffsets = DebugRunOffsets.forFunction(func, armed: captureSpans)
+	let blockEnds = BlockOffsetTable.forBlockCount(func.nextBlockId)
 
 	// Where this chunk's coverage counters land — the x64 backend's channel, filled the same way.
-	var covOffsets = CovPointOffsetArray.create(0)
+	let covOffsets = CovPointOffsetArray.create(0)
 	let atomics = arm64AtomicsModeOf(target.os)
 
 	// The code range of every run of blocks under one inline site — x64's channel, read off the block loop.
-	var inlineRanges = InlineRangeBuilder.create()
-	var asyncUnsafeRanges = InlineRangeBuilder.create()
+	let inlineRanges = InlineRangeBuilder.create()
+	let asyncUnsafeRanges = InlineRangeBuilder.create()
 	let stoppable = asyncPreemptionCanStop(greenThreads, skipsStackGuard: encoding.skipsStackGuard, pinsItsThread: encoding.pinsItsThread)
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -2976,7 +2976,7 @@ function encodeArm64FunctionChunk(module TargetModule, func IrFunction, frameByt
 
 	// `funcAdrpRelocs` is assigned after the fact so `createWith`'s signature — shared with the x64
 	// runtimes — stays unchanged (only arm64 chunks carry any).
-	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	let chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 	chunk.funcAdrpRelocs = funcAdrpRelocs
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: blockOffsets)
 
@@ -3027,20 +3027,20 @@ end 'appendArm64RuntimeChunks'
 // ==========================================================================
 
 function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable, project Project, funcNames FunctionNameIndex) returns CodeResult throws CompileError
-	var code = ByteArray.create(0)
-	var callFixups = CallFixupArray.create(0)
-	var relocations = RelocationArray.create(0)
-	var labelOffsets = FuncLabelOffsetMap.create()
-	var debugSymbols = DebugSymbolArray.create(0)
-	var rdataRelocations = RdataRelocationArray.create(0)
-	var funcAdrpRelocs = Arm64FuncAdrpRelocArray.create(0)
-	var jumpTableRelocs = JumpTableRelocArray.create(0)
+	let code = ByteArray.create(0)
+	let callFixups = CallFixupArray.create(0)
+	let relocations = RelocationArray.create(0)
+	let labelOffsets = FuncLabelOffsetMap.create()
+	let debugSymbols = DebugSymbolArray.create(0)
+	let rdataRelocations = RdataRelocationArray.create(0)
+	let funcAdrpRelocs = Arm64FuncAdrpRelocArray.create(0)
+	let jumpTableRelocs = JumpTableRelocArray.create(0)
 	let captureSpans = targetModule.spans.armed
-	var debugFunctions = DebugFunctionRangeArray.create(0)
-	var debugLineRows = DebugLineRowArray.create(0)
-	var covPointOffsets = CovPointOffsetArray.create(0)
-	var inlineFrames = InlineFrameTables.create()
-	var asyncUnsafe = AsyncUnsafeTable.create()
+	let debugFunctions = DebugFunctionRangeArray.create(0)
+	let debugLineRows = DebugLineRowArray.create(0)
+	let covPointOffsets = CovPointOffsetArray.create(0)
+	let inlineFrames = InlineFrameTables.create()
+	let asyncUnsafe = AsyncUnsafeTable.create()
 
 	// A label claimed twice is a wrong `.text` address, never a near miss — see `recordChunkLabel`, which
 	// owns the rule and the refusal for both native backends. `__symtable` and `__inlframes` go through
@@ -3075,7 +3075,7 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 		end 'rebaseImports'
 
 		for rr in chunk.rdataRelocs 'rebaseRdata'
-			var reloc = RdataRelocation.create(funcStart as CodeOffset + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
+			let reloc = RdataRelocation.create(funcStart as CodeOffset + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
 
 			// The chunk-local `rdataOffset` is the ADDEND inside the named object; this resolves the object and
 			// folds the two into the section-relative offset the writer adds a VMADDR to.
@@ -3131,7 +3131,7 @@ function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModul
 		panic("concatArm64FunctionChunks: '{String.from(EntryPointName)}' must lead .text but is at offset {entryOffset} — LC_MAIN.entryoff is its offset, so anything below it would move the process entry off the stub")
 	end 'entryNotFirst'
 
-	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: globalData.symdataImage)
+	let result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: globalData.symdataImage)
 	result.debugSymbols = debugSymbols
 	result.dataPrelude = globalData.dataSectionImage()
 	result.arm64FuncAdrpRelocs = funcAdrpRelocs
@@ -3260,7 +3260,7 @@ end 'arm64ResolveCallFixups'
 // the same in-place mutation idiom `GlobalDataTable.layOut` uses.
 function arm64ResolveFuncAdrpRelocs(funcAdrpRelocs Arm64FuncAdrpRelocArray, labelOffsets FuncLabelOffsetMap)
 	for i in 0 upto funcAdrpRelocs.count() 'resolve'
-		var reloc = try funcAdrpRelocs.get(i) otherwise panic("arm64ResolveFuncAdrpRelocs: index {i} OOB despite the upto bound")
+		let reloc = try funcAdrpRelocs.get(i) otherwise panic("arm64ResolveFuncAdrpRelocs: index {i} OOB despite the upto bound")
 		reloc.textOffset = try labelOffsets.get(reloc.funcName) otherwise panic("arm64ResolveFuncAdrpRelocs: leaFuncAddr of unknown function '{String.from(reloc.funcName)}'")
 	end 'resolve'
 end 'arm64ResolveFuncAdrpRelocs'
@@ -3281,11 +3281,11 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// `target` reaches the isel on the pool because the three OS-primitive lowerings differ per OS:
 	// macOS routes them through libSystem GOT imports, Linux through raw `svc #0` (see
 	// `arm64OsCallKind`), and the mmap anonymous-mapping flag word is a different number on each.
-	var chunks = FunctionCodeChunkArray.create(0)
-	var targetModule = try encodeOnTheBackendPool(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames, chunks: chunks)
+	let chunks = FunctionCodeChunkArray.create(0)
+	let targetModule = try encodeOnTheBackendPool(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames, chunks: chunks)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encodeRuntime)
-	var entryChunks = FunctionCodeChunkArray.create(0)
+	let entryChunks = FunctionCodeChunkArray.create(0)
 
 	// The entry stub `mrt_start`. It is hand-assembled (its macOS `_exit` GOT call has no TargetOp
 	// channel — see Arm64Runtime) and placed ahead of the pool's chunks so it LEADS `.text` and the

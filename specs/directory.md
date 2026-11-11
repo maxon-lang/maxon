@@ -287,7 +287,7 @@ function runTool(tool String, arguments StringArray) returns bool
 end 'runTool'
 
 function hostRefusesListing(directory FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 
 	#if os(Windows)
 	arguments.push("-NoProfile")
@@ -312,7 +312,7 @@ function hostRefusesListing(directory FilePath) returns bool
 end 'hostRefusesListing'
 
 function tokenBypassesDenial() returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 
 	#if os(Windows)
 	arguments.push("/priv")
@@ -331,7 +331,7 @@ function tokenBypassesDenial() returns bool
 end 'tokenBypassesDenial'
 
 function denyListing(directory FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 
 	#if os(Windows)
 	arguments.push(directory.toString())
@@ -346,7 +346,7 @@ function denyListing(directory FilePath) returns bool
 end 'denyListing'
 
 function restoreListing(directory FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 
 	#if os(Windows)
 	arguments.push(directory.toString())
@@ -627,7 +627,7 @@ and the link stays: nothing resolves through it, and only a lookup that does not
 let linkToolTimeoutMs = 30000
 
 function plantLink(link FilePath, target FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push("-s")
 	arguments.push(target.toString())
 	arguments.push(link.toString())
@@ -688,7 +688,7 @@ answer is `notFound`.
 let testToolTimeoutMs = 30000
 
 function hostFindsAnEntryAt(path FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push("-e")
 	arguments.push(path.toString())
 
@@ -865,7 +865,7 @@ never entered. The link is a junction on Windows and a symbolic link elsewhere.
 let linkToolTimeoutMs = 30000
 
 function plantDirectoryLink(link FilePath, target FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 
 	#if os(Windows)
 	arguments.push("/c")
@@ -950,7 +950,7 @@ function runAccessTool(tool String, arguments StringArray) returns bool
 end 'runAccessTool'
 
 function hostRefusesListing(directory FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 
 	#if os(Windows)
 	arguments.push("-NoProfile")
@@ -975,7 +975,7 @@ function hostRefusesListing(directory FilePath) returns bool
 end 'hostRefusesListing'
 
 function tokenBypassesDenial() returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 
 	#if os(Windows)
 	arguments.push("/priv")
@@ -994,7 +994,7 @@ function tokenBypassesDenial() returns bool
 end 'tokenBypassesDenial'
 
 function denyListing(directory FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 
 	#if os(Windows)
 	arguments.push(directory.toString())
@@ -1009,7 +1009,7 @@ function denyListing(directory FilePath) returns bool
 end 'denyListing'
 
 function restoreListing(directory FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 
 	#if os(Windows)
 	arguments.push(directory.toString())
@@ -1101,7 +1101,7 @@ function runAccessTool(tool String, arguments StringArray) returns bool
 end 'runAccessTool'
 
 function plantLink(link FilePath, target FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push("-s")
 	arguments.push(target.toString())
 	arguments.push(link.toString())
@@ -1110,7 +1110,7 @@ function plantLink(link FilePath, target FilePath) returns bool
 end 'plantLink'
 
 function setMode(mode String, directory FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push(mode)
 	arguments.push(directory.toString())
 
@@ -1118,7 +1118,7 @@ function setMode(mode String, directory FilePath) returns bool
 end 'setMode'
 
 function hostRefusesWriting(directory FilePath) returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push("-w")
 	arguments.push(directory.toString())
 
@@ -1136,7 +1136,7 @@ function hostRefusesWriting(directory FilePath) returns bool
 end 'hostRefusesWriting'
 
 function isRoot() returns bool
-	var arguments = StringArray.create(0)
+	let arguments = StringArray.create(0)
 	arguments.push("-u")
 
 	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's identity report did not run")

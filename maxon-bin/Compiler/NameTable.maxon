@@ -3,7 +3,7 @@ export typealias NameByteCount = int(0 to u32.max)
 export typealias NameTableRegrowthCount = int(0 to u64.max)
 
 typealias NameIdArray = Array with NameId
-typealias NameViewColumn = Array with readonly NameView
+typealias NameViewColumn = Array with immutable NameView
 typealias NameSpanArray = Array with NameSpan
 typealias NameDigestArray = Array with HashDigest
 
@@ -55,7 +55,7 @@ export type NameTable
 	export static function create(nameHint NameId, byteHint NameByteCount) returns NameTable
 		let names = NameTableMinimumReservedNames if nameHint < NameTableMinimumReservedNames else nameHint
 		let arena = NameTableMinimumReservedBytes if byteHint < NameTableMinimumReservedBytes else byteHint
-		var table = Self{bytes: ByteArray.create(0), spans: NameSpanArray.create(0), hashes: NameDigestArray.create(0), slotIds: NameIdArray.create(0), slotStates: SlotStateArray.create(0), views: NameViewColumn.create(0), tombstones: 0, reservedNames: names, reservedBytes: arena, regrown: 0, rehashed: 0}
+		let table = Self{bytes: ByteArray.create(0), spans: NameSpanArray.create(0), hashes: NameDigestArray.create(0), slotIds: NameIdArray.create(0), slotStates: SlotStateArray.create(0), views: NameViewColumn.create(0), tombstones: 0, reservedNames: names, reservedBytes: arena, regrown: 0, rehashed: 0}
 		table.bytes.reserve(arena as ElementIndex)
 		table.reserveColumns(names)
 		table.rebuildIndex(slotsForNames(names))
@@ -140,7 +140,7 @@ export type NameTable
 	// A copy nothing else holds — what a caller handing the name to another thread needs.
 	export function ownedCopyOf(id NameId) returns immutable ByteArray
 		let span = self.spanAt(id)
-		var copy = ByteArray.create(span.size as ElementIndex, zeroed: false) as isolated ByteArray
+		let copy = ByteArray.create(span.size as ElementIndex, zeroed: false) as isolated ByteArray
 
 		modify copy 'fill'
 			appendArenaWindow(copy, source: self.bytes, start: span.offset, size: span.size)

@@ -177,7 +177,7 @@ typealias Tally = int(0 to 1000000)
 typealias Table = Map with (Key, Tally)
 
 function main() returns ExitCode
-	var table = Table.create()
+	let table = Table.create()
 
 	for i in 0 upto 4096 'eachKey'
 		table.upsert(((i as Key) shl 32) or 2, value: i as Tally)
@@ -437,8 +437,10 @@ error E2062: <fragment>:8:31: Cannot use 'float' as a type argument: a float typ
 <!-- test: bool.equatable-and-comparable -->
 `bool` meets the library's `Equatable` and `Comparable`, so `contains` and `sort` serve an array of them.
 ```maxon
+typealias Flags = Array with bool
+
 function main() returns ExitCode
-	var flags = [true, false, true]
+	let flags = Flags from [true, false, true]
 	let found = flags.contains(false)
 	flags.sort()
 	let first = try flags.get(0) otherwise return 3

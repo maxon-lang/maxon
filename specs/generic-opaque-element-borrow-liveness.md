@@ -48,8 +48,8 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function rotateFirstTwo()
-		view a = try managed.get(0) otherwise panic("oob")
-		view b = try managed.get(1) otherwise panic("oob")
+		let a = try managed.get(0) otherwise panic("oob")
+		let b = try managed.get(1) otherwise panic("oob")
 		try managed.set(0, value: b) otherwise panic("oob")
 		try managed.set(1, value: a) otherwise panic("oob")
 	end 'rotateFirstTwo'
@@ -58,7 +58,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
 	a.push("beta {40 + 2} value long enough for a heap record")
 	a.rotateFirstTwo()
@@ -93,9 +93,9 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function rotateThree()
-		view a = try managed.get(0) otherwise panic("oob")
-		view b = try managed.get(1) otherwise panic("oob")
-		view c = try managed.get(2) otherwise panic("oob")
+		let a = try managed.get(0) otherwise panic("oob")
+		let b = try managed.get(1) otherwise panic("oob")
+		let c = try managed.get(2) otherwise panic("oob")
 		try managed.set(0, value: c) otherwise panic("oob")
 		try managed.set(1, value: a) otherwise panic("oob")
 		try managed.set(2, value: b) otherwise panic("oob")
@@ -105,7 +105,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
 	a.push("beta {40 + 2} value long enough for a heap record")
 	a.push("gamma {40 + 2} value long enough for a heap record")
@@ -154,9 +154,9 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
-	var b = StrArray.create(0)
+	let b = StrArray.create(0)
 	b.push("beta {40 + 2} value long enough for a heap record")
 	print("{a.readThenDisplace(b)}\n")
 	print("{try a.get(0) otherwise "?"}\n")
@@ -200,7 +200,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
 	a.push("beta {40 + 2} value long enough for a heap record")
 	a.rotateBare()
@@ -238,8 +238,8 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function rotateFirstTwo()
-		view a = try managed.get(0) otherwise panic("oob")
-		view b = try managed.get(1) otherwise panic("oob")
+		let a = try managed.get(0) otherwise panic("oob")
+		let b = try managed.get(1) otherwise panic("oob")
 		try managed.set(0, value: b) otherwise panic("oob")
 		try managed.set(1, value: a) otherwise panic("oob")
 	end 'rotateFirstTwo'
@@ -248,7 +248,7 @@ end 'Array'
 typealias SmallArray = Array with Small
 
 function main() returns ExitCode
-	var a = SmallArray.create(0)
+	let a = SmallArray.create(0)
 	a.push(7)
 	a.push(9)
 	a.rotateFirstTwo()
@@ -289,9 +289,9 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
-	var b = StrArray.create(0)
+	let b = StrArray.create(0)
 	b.push("beta {40 + 2} value long enough for a heap record")
 	a.setFrom(b)
 	print("{try a.get(0) otherwise "?"}\n")
@@ -324,7 +324,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function moveFirstInto(other Self)
-		view a = try managed.get(0) otherwise panic("oob")
+		let a = try managed.get(0) otherwise panic("oob")
 		try other.managed.set(0, value: a) otherwise panic("oob")
 		try managed.setLength(0) otherwise panic("length")
 	end 'moveFirstInto'
@@ -333,9 +333,9 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
-	var b = StrArray.create(0)
+	let b = StrArray.create(0)
 	b.push("beta {40 + 2} value long enough for a heap record")
 	a.moveFirstInto(b)
 	print("{a.count()} {try b.get(0) otherwise "?"}\n")
@@ -374,7 +374,7 @@ type Array uses Element implements BuiltinArrayLiteral
 		var w = 0 as Small
 		var i = 0 as Small
 		while i < hi 'scan'
-			view v = try managed.get(i) otherwise panic("oob")
+			let v = try managed.get(i) otherwise panic("oob")
 			try managed.set(w, value: v) otherwise panic("oob")
 			w = w + 1
 			i = i + 1
@@ -385,7 +385,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
 	a.push("beta {40 + 2} value long enough for a heap record")
 	a.compactDown(2)
@@ -427,7 +427,7 @@ end 'Array'
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var a = StrArray.create(0)
+	let a = StrArray.create(0)
 	a.push("alpha {40 + 2} value long enough for a heap record")
 	a.copyFirst()
 	print("{a.count()} {try a.get(1) otherwise "?"}\n")
@@ -447,8 +447,8 @@ The `pop` inside `set`'s argument list runs before the `set`, and the `set` rele
 `borrowed` read, which `borrowed` still holds.
 ```maxon
 function main() returns ExitCode
-	var xs = ["alpha {40 + 2} value long enough for a heap record", "beta {40 + 2} value long enough for a heap record"]
-	var ys = ["gamma {40 + 2} value long enough for a heap record"]
+	let xs = ["alpha {40 + 2} value long enough for a heap record", "beta {40 + 2} value long enough for a heap record"]
+	let ys = ["gamma {40 + 2} value long enough for a heap record"]
 	let borrowed = try xs.get(0) otherwise panic("oob")
 	try xs.set(0, value: try ys.pop() otherwise "z") otherwise panic("oob")
 	print("{borrowed}\n")
@@ -488,7 +488,7 @@ end 'Array'
 typealias SmallArray = Array with Small
 
 function main() returns ExitCode
-	var a = SmallArray.create(0)
+	let a = SmallArray.create(0)
 	a.push(7)
 	a.push(9)
 	let x = try a.get(0) otherwise 0
@@ -540,7 +540,7 @@ end 'Box'
 typealias StrBox = Box with String
 
 function main() returns ExitCode
-	var b = StrBox.create()
+	let b = StrBox.create()
 	b.add("alpha {40 + 2} value long enough for a heap record")
 	let kept = b.firstAfterClear()
 	print("[{kept}] {b.size()}\n")
@@ -580,7 +580,7 @@ type Box uses T
 	end 'wipe'
 
 	function collectWhileWiping() returns Items
-		var seen = Items.create(0)
+		let seen = Items.create(0)
 
 		for item in self.items 'scan'
 			wipe()
@@ -594,10 +594,10 @@ end 'Box'
 typealias StrBox = Box with String
 
 function main() returns ExitCode
-	var b = StrBox.create()
+	let b = StrBox.create()
 	b.add("alpha {40 + 2} value long enough for a heap record")
 	b.add("beta {40 + 2} value long enough for a heap record")
-	view seen = b.collectWhileWiping()
+	let seen = b.collectWhileWiping()
 	print("{seen.count()} [{try seen.get(0) otherwise "?"}] {b.size()}\n")
 	return 0
 end 'main'
@@ -638,10 +638,10 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create(0)
+	let xs = Words.create(0)
 	xs.push("alpha {40 + 2} value long enough for a heap record")
 	xs.push("beta {40 + 2} value long enough for a heap record")
-	var ys = Words.create(0)
+	let ys = Words.create(0)
 	let moved = StrBox.moveWhileClearing(xs, into: ys)
 	print("{moved} [{try ys.get(0) otherwise "?"}] {xs.count()}\n")
 	return 0
@@ -668,7 +668,7 @@ type Box uses T
 	end 'create'
 
 	static function keepFirst(items Items, into Items)
-		view first = try items.get(0) otherwise panic("empty")
+		let first = try items.get(0) otherwise panic("empty")
 		items.clear()
 		into.push(first)
 	end 'keepFirst'
@@ -678,9 +678,9 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create(0)
+	let xs = Words.create(0)
 	xs.push("alpha {40 + 2} value long enough for a heap record")
-	var ys = Words.create(0)
+	let ys = Words.create(0)
 	StrBox.keepFirst(xs, into: ys)
 	print("[{try ys.get(0) otherwise "?"}] {xs.count()}\n")
 	return 0
@@ -726,10 +726,10 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create(0)
+	let xs = Words.create(0)
 	xs.push("alpha {40 + 2} value long enough for a heap record")
 	xs.push("beta {40 + 2} value long enough for a heap record")
-	var ys = Words.create(0)
+	let ys = Words.create(0)
 	let counted = StrBox.drainAndCount(xs, into: ys)
 	print("{counted} [{try ys.get(0) otherwise "?"}] {xs.count()}\n")
 	return 0
@@ -781,10 +781,10 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var b = StrBox.create()
+	let b = StrBox.create()
 	b.add("alpha {40 + 2} value long enough for a heap record")
 	b.add("beta {40 + 2} value long enough for a heap record")
-	var ys = Words.create(0)
+	let ys = Words.create(0)
 	let moved = b.relocate(ys)
 	print("{moved} [{try ys.get(0) otherwise "?"}] {b.size()}\n")
 	return 0
@@ -839,12 +839,12 @@ typealias TagBox = Box with Tag
 typealias Tags = Array with Tag
 
 function main() returns ExitCode
-	var xs = Tags.create(0)
+	let xs = Tags.create(0)
 	xs.push(Tag.make("alpha {40 + 2} label long enough for a heap record", weight: 7))
 	xs.push(Tag.make("beta {40 + 2} label long enough for a heap record", weight: 9))
-	var ys = Tags.create(0)
+	let ys = Tags.create(0)
 	let moved = TagBox.moveWhileClearing(xs, into: ys)
-	view first = try ys.get(0) otherwise panic("empty")
+	let first = try ys.get(0) otherwise panic("empty")
 	print("{moved} [{first.describe()}] {xs.count()}\n")
 	return 0
 end 'main'
@@ -885,10 +885,10 @@ typealias SmallBox = Box with Count8
 typealias Smalls = Array with Count8
 
 function main() returns ExitCode
-	var xs = Smalls.create(0)
+	let xs = Smalls.create(0)
 	xs.push(7)
 	xs.push(9)
-	var ys = Smalls.create(0)
+	let ys = Smalls.create(0)
 	let moved = SmallBox.moveWhileClearing(xs, into: ys)
 	print("{moved} [{try ys.get(0) otherwise 0}] {xs.count()}\n")
 	return 0
@@ -941,10 +941,10 @@ typealias StrOuter = Outer with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var o = StrOuter.create()
+	let o = StrOuter.create()
 	o.add("alpha {40 + 2} value long enough for a heap record")
 	o.add("beta {40 + 2} value long enough for a heap record")
-	var ys = Words.create(0)
+	let ys = Words.create(0)
 	let n = o.relocate(ys)
 	print("{n} [{try ys.get(0) otherwise "?"}]\n")
 	return 0
@@ -979,7 +979,7 @@ type Box uses T
 			throw BoxError.empty
 		end 'none'
 
-		view first = try items.get(0) otherwise panic("empty")
+		let first = try items.get(0) otherwise panic("empty")
 		items.clear()
 		into.push(first)
 	end 'keepFirst'
@@ -989,9 +989,9 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create(0)
+	let xs = Words.create(0)
 	xs.push("alpha {40 + 2} value long enough for a heap record")
-	var ys = Words.create(0)
+	let ys = Words.create(0)
 	try StrBox.keepFirst(xs, into: ys) otherwise return 3
 	try StrBox.keepFirst(xs, into: ys) otherwise 'second'
 		print("second call refused\n")
@@ -1035,9 +1035,9 @@ typealias StrBox = Box with String
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create(0)
+	let xs = Words.create(0)
 	xs.push("alpha {40 + 2} value long enough for a heap record")
-	var ys = Words.create(0)
+	let ys = Words.create(0)
 	let moved = Box.moveWhileClearing(xs, into: ys)
 	let named = StrBox.moveWhileClearing(xs, into: ys)
 	print("{moved} {named} {xs.count()} {try ys.get(0) otherwise "?"}\n")
@@ -1086,11 +1086,11 @@ end 'Box'
 typealias Entries = Array with Entry
 
 function main() returns ExitCode
-	var xs = Entries.create(0)
+	let xs = Entries.create(0)
 	xs.push(Entry.create("alpha {40 + 2} value long enough for a heap record", n: 5))
-	var ys = Entries.create(0)
+	let ys = Entries.create(0)
 	let moved = Box.moveWhileClearing(xs, into: ys)
-	view first = try ys.get(0) otherwise panic("empty")
+	let first = try ys.get(0) otherwise panic("empty")
 	print("{moved} {xs.count()} {first.name} {first.n}\n")
 	return 0
 end 'main'
@@ -1147,7 +1147,7 @@ type Box uses T
 	end 'create'
 
 	static function emptyCount(n Count) returns Count
-		var scratch = Items.create(0)
+		let scratch = Items.create(0)
 		return scratch.count() + n
 	end 'emptyCount'
 end 'Box'
@@ -1225,7 +1225,7 @@ end 'Slot'
 typealias StrSlot = Slot with String
 
 function main() returns ExitCode
-	var s = StrSlot.create("alpha {40 + 2} value long enough for a heap record", second: "alpha {40 + 2} value long enough for a heap record")
+	let s = StrSlot.create("alpha {40 + 2} value long enough for a heap record", second: "alpha {40 + 2} value long enough for a heap record")
 	print("{s.run()}\n")
 	return 0
 end 'main'
@@ -1264,7 +1264,7 @@ end 'Slot'
 typealias StrSlot = Slot with String
 
 function main() returns ExitCode
-	var s = StrSlot.create("alpha {40 + 2} value long enough for a heap record", second: "alpha {40 + 2} value long enough for a heap record")
+	let s = StrSlot.create("alpha {40 + 2} value long enough for a heap record", second: "alpha {40 + 2} value long enough for a heap record")
 	print("{s.run()}\n")
 	return 0
 end 'main'
@@ -1308,7 +1308,7 @@ end 'Slot'
 typealias StrSlot = Slot with String
 
 function main() returns ExitCode
-	var s = StrSlot.create("alpha {40 + 2} value long enough for a heap record", second: "beta {40 + 2} value long enough for a heap record")
+	let s = StrSlot.create("alpha {40 + 2} value long enough for a heap record", second: "beta {40 + 2} value long enough for a heap record")
 	print("{s.run()}\n")
 	return 0
 end 'main'
@@ -1342,7 +1342,7 @@ type Slot uses T where T is Equatable
 	end 'observe'
 
 	function look() returns Count
-		view held = current
+		let held = current
 		return observe(held)
 	end 'look'
 
@@ -1351,7 +1351,7 @@ type Slot uses T where T is Equatable
 	end 'pass'
 
 	function lookSelf() returns Count
-		view held = self.current
+		let held = self.current
 		return observe(held)
 	end 'lookSelf'
 end 'Slot'
@@ -1359,7 +1359,7 @@ end 'Slot'
 typealias StrSlot = Slot with String
 
 function main() returns ExitCode
-	var s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
+	let s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
 	print("{s.look()} {s.pass()} {s.lookSelf()}\n")
 	return 0
 end 'main'
@@ -1418,7 +1418,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.add("alpha {40 + 2} value long enough for a heap record")
 	b.add("beta {40 + 2} value long enough for a heap record")
 	print("{b.walk()}\n")
@@ -1467,7 +1467,7 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var b = StrBag.create()
+	let b = StrBag.create()
 	b.add("alpha {40 + 2} value long enough for a heap record")
 	print("{b.matches("alpha {40 + 2} value long enough for a heap record")}\n")
 	return 0
@@ -1508,8 +1508,8 @@ error E2015: <fragment>:10:12: Unsupported: interpolating a value of type 'type 
 ```
 
 <!-- test: a-let-read-of-an-element-record-is-written-through -->
-The counted element read of the cases above does not make the element read-only: `first` is a `view` naming the
-record the container holds in slot 0, and a `view` forbids reassigning `first`, not writing the record, so the
+The counted element read of the cases above does not make the element read-only: `first` is a `let` naming the
+record the container holds in slot 0, and a `let` forbids reassigning `first`, not writing the record, so the
 write reaches the record slot 0 holds.
 
 ```maxon
@@ -1518,9 +1518,9 @@ typealias Row = Array with Count
 typealias Rows = Array with Row
 
 function main() returns ExitCode
-	var rows = Rows.create(0)
+	let rows = Rows.create(0)
 	rows.push(Row.create(0))
-	view first = try rows.get(0) otherwise Row.create(0)
+	let first = try rows.get(0) otherwise Row.create(0)
 	first.push(1)
 	return ((try rows.get(0) otherwise Row.create(0)).count() as ExitCode) + (rows.count() as ExitCode)
 end 'main'
@@ -1559,7 +1559,7 @@ type Wrapper uses T where T is Equatable
 	end 'observe'
 
 	function bareHead() returns Count
-		view held = inner.current
+		let held = inner.current
 		return observe(held)
 	end 'bareHead'
 end 'Wrapper'
@@ -1567,7 +1567,7 @@ end 'Wrapper'
 typealias StrWrapper = Wrapper with String
 
 function main() returns ExitCode
-	var w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
+	let w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
 	print("{w.bareHead()}\n")
 	return 0
 end 'main'
@@ -1609,8 +1609,8 @@ type Wrapper uses T where T is Equatable
 	end 'observe'
 
 	function viaLocal() returns Count
-		view via = self.inner
-		view held = via.current
+		let via = self.inner
+		let held = via.current
 		return observe(held)
 	end 'viaLocal'
 end 'Wrapper'
@@ -1618,7 +1618,7 @@ end 'Wrapper'
 typealias StrWrapper = Wrapper with String
 
 function main() returns ExitCode
-	var w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
+	let w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
 	print("{w.viaLocal()}\n")
 	return 0
 end 'main'
@@ -1661,7 +1661,7 @@ type Wrapper uses T where T is Equatable
 	end 'observe'
 
 	function nestedLook() returns Count
-		view held = self.inner.current
+		let held = self.inner.current
 		return observe(held)
 	end 'nestedLook'
 
@@ -1673,7 +1673,7 @@ end 'Wrapper'
 typealias StrWrapper = Wrapper with String
 
 function main() returns ExitCode
-	var w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
+	let w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
 	print("{w.nestedLook()} {w.nestedPass()}\n")
 	return 0
 end 'main'
@@ -1715,7 +1715,7 @@ type Wrapper uses T where T is Equatable
 	end 'observe'
 
 	function viaParam(c Inner) returns Count
-		view held = c.current
+		let held = c.current
 		return observe(held)
 	end 'viaParam'
 end 'Wrapper'
@@ -1724,7 +1724,7 @@ typealias StrWrapper = Wrapper with String
 typealias StrSlot = Slot with String
 
 function main() returns ExitCode
-	var w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
+	let w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
 	let s = StrSlot.create("beta {40 + 2} value long enough for a heap record")
 	print("{w.viaParam(s)}\n")
 	return 0
@@ -1767,7 +1767,7 @@ type Wrapper uses T where T is Equatable
 	end 'observe'
 
 	function viaPeer(other Self) returns Count
-		view held = other.inner.current
+		let held = other.inner.current
 		return observe(held)
 	end 'viaPeer'
 end 'Wrapper'
@@ -1775,8 +1775,8 @@ end 'Wrapper'
 typealias StrWrapper = Wrapper with String
 
 function main() returns ExitCode
-	var w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
-	var o = StrWrapper.create("beta {40 + 2} value long enough for a heap record")
+	let w = StrWrapper.create("alpha {40 + 2} value long enough for a heap record")
+	let o = StrWrapper.create("beta {40 + 2} value long enough for a heap record")
 	print("{w.viaPeer(o)}\n")
 	return 0
 end 'main'
@@ -1827,7 +1827,7 @@ type Outer uses T where T is Equatable
 	end 'observe'
 
 	function deepLook() returns Count
-		view held = self.mid.inner.current
+		let held = self.mid.inner.current
 		return observe(held)
 	end 'deepLook'
 end 'Outer'
@@ -1835,7 +1835,7 @@ end 'Outer'
 typealias StrOuter = Outer with String
 
 function main() returns ExitCode
-	var o = StrOuter.create("alpha {40 + 2} value long enough for a heap record")
+	let o = StrOuter.create("alpha {40 + 2} value long enough for a heap record")
 	print("{o.deepLook()}\n")
 	return 0
 end 'main'
@@ -1887,8 +1887,8 @@ end 'Bag'
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
-	var a = StrBag.create()
-	var b = StrBag.create()
+	let a = StrBag.create()
+	let b = StrBag.create()
 	b.add("alpha {40 + 2} value long enough for a heap record")
 	b.add("beta {40 + 2} value long enough for a heap record")
 	print("{a.walk(b)}\n")
@@ -1922,7 +1922,7 @@ type Slot uses T where T is Equatable
 	end 'observe'
 
 	function groupedLook() returns Count
-		view held = (current)
+		let held = (current)
 		return observe(held)
 	end 'groupedLook'
 
@@ -1934,7 +1934,7 @@ end 'Slot'
 typealias StrSlot = Slot with String
 
 function main() returns ExitCode
-	var s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
+	let s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
 	print("{s.groupedLook()} {s.groupedSelfPass()}\n")
 	return 0
 end 'main'
@@ -1968,7 +1968,7 @@ type Slot uses T where T is Equatable
 	end 'observe'
 
 	function peerLook(other Self) returns Count
-		view held = other.current
+		let held = other.current
 		return observe(held)
 	end 'peerLook'
 end 'Slot'
@@ -1976,8 +1976,8 @@ end 'Slot'
 typealias StrSlot = Slot with String
 
 function main() returns ExitCode
-	var s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
-	var t = StrSlot.create("beta {40 + 2} value long enough for a heap record")
+	let s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
+	let t = StrSlot.create("beta {40 + 2} value long enough for a heap record")
 	print("{s.peerLook(t)}\n")
 	return 0
 end 'main'
@@ -2016,8 +2016,8 @@ end 'Slot'
 typealias StrSlot = Slot with String
 
 function main() returns ExitCode
-	var s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
-	var t = StrSlot.create("beta {40 + 2} value long enough for a heap record")
+	let s = StrSlot.create("alpha {40 + 2} value long enough for a heap record")
+	let t = StrSlot.create("beta {40 + 2} value long enough for a heap record")
 	print("{s.peerPass(t)}\n")
 	return 0
 end 'main'

@@ -2234,7 +2234,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var b = Box.create()
+	let b = Box.create()
 	b.v = grow(5) as Percent
 	return b.v as ExitCode
 end 'main'
@@ -2269,7 +2269,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create(0)
+	let a = PA.create(0)
 	a.push(-grow(5))
 	return a.count()
 end 'main'
@@ -2295,7 +2295,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create(0)
+	let a = PA.create(0)
 	a.push(grow(5) as Percent)
 	return a.count()
 end 'main'
@@ -2349,7 +2349,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create(0)
+	let a = PA.create(0)
 	a.push(3)
 	try a.set(0, value: -grow(5)) otherwise 'oob'
 		return 9
@@ -2378,7 +2378,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create(0)
+	let a = PA.create(0)
 	a.push(3)
 	try a.set(0, value: grow(5) as Percent) otherwise 'oob'
 		return 9
@@ -2433,7 +2433,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create(0)
+	let a = PA.create(0)
 	a.push(3)
 	a.insert(0, value: grow(5) as Percent)
 	return a.count()
@@ -2460,7 +2460,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var a = PA.create(0)
+	let a = PA.create(0)
 	a.push(3)
 	a.insert(0, value: -grow(5))
 	return a.count()
@@ -2578,7 +2578,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var b = PB.create(1)
+	let b = PB.create(1)
 	b.put(grow(5) as Percent)
 	return b.v as ExitCode
 end 'main'
@@ -2622,7 +2622,7 @@ function grow(n Wide) returns Wide
 end 'grow'
 
 function main() returns ExitCode
-	var b = PB.create(1)
+	let b = PB.create(1)
 	b.put(grow(5) as Percent)
 	return b.v as ExitCode
 end 'main'
@@ -2657,7 +2657,7 @@ end 'Box'
 typealias IB = Box with FullInt
 
 function main() returns ExitCode
-	var b = IB.create(1)
+	let b = IB.create(1)
 	b.put(1000000)
 	return 42
 end 'main'
@@ -2688,7 +2688,7 @@ end 'Box'
 typealias SB = Box with String
 
 function main() returns ExitCode
-	var b = SB.create("a")
+	let b = SB.create("a")
 	b.put("hello")
 	return b.v.byteLength()
 end 'main'
@@ -2929,9 +2929,9 @@ function take(p Percent) returns Percent
 end 'take'
 
 function main() returns ExitCode
-	var b = Box.create()
+	let b = Box.create()
 	b.v = 42
-	var a = PA.create(0)
+	let a = PA.create(0)
 	a.push(3)
 	let s = Box.make(5)
 	return take(b.v) + (a.count() as Percent) + s.v
@@ -3013,7 +3013,7 @@ function widen(n Wide) returns Wide
 end 'widen'
 
 function main() returns ExitCode
-	var b = Box.make()
+	let b = Box.make()
 	let bad = widen(100)
 	b.v = bad as Percent
 	print("stored\n")
@@ -3140,7 +3140,7 @@ function widen(n Wide) returns Wide
 end 'widen'
 
 function main() returns ExitCode
-	var b = Box.make()
+	let b = Box.make()
 	print("default={b.v}\n")
 	let a = widen(9)
 	b.v = a as Percent
@@ -3316,7 +3316,7 @@ function widen(n Wide) returns Wide
 end 'widen'
 
 function main() returns ExitCode
-	var b = Box.make()
+	let b = Box.make()
 	let v0 = widen(0)
 	let v1 = widen(1)
 	let v2 = widen(2)

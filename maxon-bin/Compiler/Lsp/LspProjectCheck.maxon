@@ -50,7 +50,7 @@ module type LspProjectChecker
 			return
 		end 'supersededWhileSettling'
 
-		var warmed = self.warm
+		let warmed = self.warm
 
 		match warmed 'warm'
 			notBuilt then self.buildCold(request)
@@ -76,7 +76,7 @@ module type LspProjectChecker
 
 	function buildCold(request LspProjectCheckRequest)
 		let sources = self.sourcesFor(request)
-		var project = try createProject(sources.root, target: detectHostTarget(), stdlibDir: self.stdlibDir, runtimeDir: self.runtimeDir, scriptlib: ScriptlibTier.absent, debugStream: false, session: CompileSession.discarding()) otherwise (e) 'noProject'
+		let project = try createProject(sources.root, target: detectHostTarget(), stdlibDir: self.stdlibDir, runtimeDir: self.runtimeDir, scriptlib: ScriptlibTier.absent, debugStream: false, session: CompileSession.discarding()) otherwise (e) 'noProject'
 			self.publish(request, check: projectCheckFailedWith(e))
 			return
 		end 'noProject'
@@ -173,7 +173,7 @@ function projectCheckFailedWith(failure CompileError) returns ProjectCheck
 end 'projectCheckFailedWith'
 
 module function projectFailureLines(failure CompileError) returns StringArray
-	var sink = DiagnosticSink.capturing()
+	let sink = DiagnosticSink.capturing()
 	reportCompileError(failure, sink: sink)
 
 	return sink.emitted()

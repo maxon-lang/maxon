@@ -29,7 +29,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntSet = Set with Int
 
 function main() returns ExitCode
-	var s = IntSet.create()
+	let s = IntSet.create()
 	if s.count() != 0 'check'
 		return 1
 	end 'check'
@@ -82,7 +82,7 @@ end 'main'
 <!-- test: insert.new-element -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	s.insert(4)
 	return s.count()
 end 'main'
@@ -94,7 +94,7 @@ end 'main'
 <!-- test: insert.duplicate -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	s.insert(2)
 	return s.count()
 end 'main'
@@ -106,7 +106,7 @@ end 'main'
 <!-- test: insert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	s.insert(5)
 	if s.contains(5) 'check'
 		return 1
@@ -121,7 +121,7 @@ end 'main'
 <!-- test: remove.existing -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	let removed = s.remove(2)
 	if removed 'check'
 		return s.count()
@@ -136,7 +136,7 @@ end 'main'
 <!-- test: remove.nonexistent -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	let removed = s.remove(99)
 	if removed 'check'
 		return 1
@@ -151,7 +151,7 @@ end 'main'
 <!-- test: remove.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	_ = s.remove(2)
 	if s.contains(2) 'check'
 		return 1
@@ -196,7 +196,7 @@ end 'main'
 <!-- test: remove-reinsert -->
 ```maxon
 function main() returns ExitCode
-	var s = Set from [1, 2, 3]
+	let s = Set from [1, 2, 3]
 	_ = s.remove(2)
 	s.insert(2)
 	if s.contains(2) 'check'
@@ -232,7 +232,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntSet = Set with Int
 
 function main() returns ExitCode
-	var s = IntSet.create()
+	let s = IntSet.create()
 	var i = 0 as Int
 	while i < 20 'fill'
 		s.insert(i)
@@ -273,7 +273,7 @@ function add(s IntSet, v Int)
 end 'add'
 
 function main() returns ExitCode
-	var s = IntSet.create()
+	let s = IntSet.create()
 	add(s, v: 3)
 	add(s, v: 4)
 	add(s, v: 3)
@@ -310,7 +310,7 @@ type Reg
 end 'Reg'
 
 function main() returns ExitCode
-	var r = Reg.create()
+	let r = Reg.create()
 	r.add(3)
 	r.add(4)
 	r.add(3)
@@ -337,7 +337,7 @@ let Live = 2000 as Tally
 let Rounds = 2000 as Tally
 
 function main() returns ExitCode
-	var s = TallySet.create()
+	let s = TallySet.create()
 
 	for i in 0 upto Live 'seed'
 		s.insert(i)
@@ -388,7 +388,7 @@ typealias Codes = Array with Code
 typealias CodeSet = Set with Code
 
 function main() returns ExitCode
-	var codes = Codes.create(0)
+	let codes = Codes.create(0)
 	codes.push(3)
 	codes.push(7)
 	codes.push(11)
@@ -411,7 +411,7 @@ typealias Code = int(0 to 100)
 typealias Codes = Array with Code
 
 function makeCodes() returns Codes
-	var codes = Codes.create(0)
+	let codes = Codes.create(0)
 	codes.push(40)
 	codes.push(2)
 	return codes
@@ -438,7 +438,7 @@ typealias Codes = Array with Code
 typealias CodeSet = Set with Code
 
 function main() returns ExitCode
-	var codes = Codes.create(0)
+	let codes = Codes.create(0)
 	codes.push(5)
 	codes.push(9)
 	codes.push(5)
@@ -523,7 +523,7 @@ function main() returns ExitCode
 end 'main'
 
 function laterCodes() returns Codes
-	var codes = Codes.create(0)
+	let codes = Codes.create(0)
 	codes.push(6)
 	codes.push(6)
 	codes.push(1)
@@ -562,7 +562,7 @@ end 'Point'
 typealias Points = Array with Point
 
 function main() returns ExitCode
-	var points = Points.create(0)
+	let points = Points.create(0)
 	points.push(Point.create(1, y: 2))
 	points.push(Point.create(3, y: 4))
 	points.push(Point.create(1, y: 2))
@@ -619,7 +619,7 @@ module typealias Code = int(0 to 100)
 module typealias Codes = Array with Code
 
 function main() returns ExitCode
-	var codes = Codes.create(0)
+	let codes = Codes.create(0)
 	codes.push(2)
 	codes.push(2)
 	codes.push(9)
@@ -642,7 +642,7 @@ typealias Chars = Array with Character
 typealias CharSet = Set with Character
 
 function main() returns ExitCode
-	var chars = Chars.create(0)
+	let chars = Chars.create(0)
 	chars.push('a')
 	chars.push('b')
 	chars.push('a')
@@ -684,7 +684,7 @@ typealias Cells = Array with Cell
 typealias CellSet = Set with Cell
 
 function main() returns ExitCode
-	var cells = Cells.create(0)
+	let cells = Cells.create(0)
 	cells.push(Cell.create(4))
 	cells.push(Cell.create(4))
 	cells.push(Cell.create(5))
@@ -712,7 +712,7 @@ function total(s CodeSet) returns Count
 end 'total'
 
 function main() returns ExitCode
-	var codes = Codes.create(0)
+	let codes = Codes.create(0)
 	codes.push(4)
 	print("{total(CodeSet from [1, 2])} {total(CodeSet from codes)}\n")
 	return 0

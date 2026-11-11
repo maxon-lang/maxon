@@ -42,7 +42,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -177,7 +177,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -288,7 +288,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -408,7 +408,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -549,7 +549,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -577,7 +577,7 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function patterned(count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto count 'eachByte'
 		bytes.push(((index * 7 + 3) and 0xFF) as Byte)
@@ -676,7 +676,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -708,9 +708,9 @@ function blockVector(keyHex String, expectedHex String)
 	let plain = fromHex("00112233445566778899aabbccddeeff")
 	let sealed = try software.cryptBlock(plain, direction: AesDirection.encrypt) otherwise panic("the block is 16 bytes")
 	let opened = try software.cryptBlock(sealed, direction: AesDirection.decrypt) otherwise panic("the block is 16 bytes")
-	var into = ByteArray.create(0)
+	let into = ByteArray.create(0)
 	try software.cryptBlockInto(plain, output: into, at: 2, direction: AesDirection.encrypt) otherwise panic("the block is 16 bytes")
-	var intoOpened = fromHex("ff")
+	let intoOpened = fromHex("ff")
 	try software.cryptBlockInto(sealed, output: intoOpened, at: 0, direction: AesDirection.decrypt) otherwise panic("the block is 16 bytes")
 
 	print("{toHex(sealed) == expectedHex} {toHex(opened) == toHex(plain)} {toHex(into) == "0000{expectedHex}"} {toHex(intoOpened) == toHex(plain)}\n")
@@ -752,7 +752,7 @@ function main() returns ExitCode
 	let nonce = fromHex("f0f1f2f3f4f5f6f7f8f9fafb")
 	let software = try AesBitsliced.create(key) otherwise panic("the key is valid")
 	let aes = try Aes.create(key) otherwise panic("the key is valid")
-	var data = ByteArray.create(0)
+	let data = ByteArray.create(0)
 
 	for position in 0 upto 133 'eachByte'
 		data.push(((position * 7 + 3) and 0xFF) as Byte)
@@ -762,8 +762,8 @@ function main() returns ExitCode
 	let throughAes = try aes.xorKeyStream(nonce, counter: 0xFFFFFFF0, data: data) otherwise panic("the nonce is 12 bytes")
 	print("{toHex(throughSoftware) == toHex(throughAes)}\n")
 
-	var pastMaskSoftware = ByteArray.create(0)
-	var pastMaskAes = ByteArray.create(0)
+	let pastMaskSoftware = ByteArray.create(0)
+	let pastMaskAes = ByteArray.create(0)
 	pastMaskSoftware.reserve(data.count())
 	pastMaskAes.reserve(data.count())
 	let (softwareLow, softwareHigh) = try software.xorKeyStreamPastFirstBlock(nonce, counter: 1, data: data, output: pastMaskSoftware) otherwise panic("the nonce is 12 bytes")
@@ -801,7 +801,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -829,7 +829,7 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function filler(count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachByte'
 		bytes.push(0x5A)
@@ -843,19 +843,19 @@ function vector(keyHex String, expectedHex String)
 	let plain = fromHex("00112233445566778899aabbccddeeff")
 	let expected = fromHex(expectedHex)
 
-	var middle = filler(40)
+	let middle = filler(40)
 	try aes.encryptBlockInto(plain, output: middle, at: 11) otherwise panic("the block is 16 bytes")
 	let framed = "{toHex(filler(11))}{expectedHex}{toHex(filler(13))}"
 
-	var opened = filler(20)
+	let opened = filler(20)
 	try aes.decryptBlockInto(expected, output: opened, at: 2) otherwise panic("the block is 16 bytes")
 	let restored = "{toHex(filler(2))}00112233445566778899aabbccddeeff{toHex(filler(2))}"
 
-	var inPlace = plain.clone()
+	let inPlace = plain.clone()
 	try aes.encryptBlockInto(inPlace, output: inPlace, at: 0) otherwise panic("the block is 16 bytes")
 	try aes.decryptBlockInto(inPlace, output: inPlace, at: 0) otherwise panic("the block is 16 bytes")
 
-	var grown = filler(3)
+	let grown = filler(3)
 	try aes.encryptBlockInto(plain, output: grown, at: 6) otherwise panic("the block is 16 bytes")
 	let gap = "{toHex(filler(3))}000000{expectedHex}"
 
@@ -868,7 +868,7 @@ function main() returns ExitCode
 	vector("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f", expectedHex: "8ea2b7ca516745bfeafc49904b496089")
 
 	let aes = try Aes.create(fromHex("000102030405060708090a0b0c0d0e0f")) otherwise panic("the key is valid")
-	var untouched = filler(20)
+	let untouched = filler(20)
 	var refusals = ""
 
 	try aes.encryptBlockInto(fromHex("00112233"), output: untouched, at: 1) otherwise (failure) 'encryptRefused'
@@ -903,7 +903,7 @@ block block true
 A block written at index 5 needs the output to reach 21 bytes. An output of 20 bytes is one short and grows to 21; one of 21 holds the block exactly and stays 21; one of 22 holds it with a byte to spare and stays 22. `Aes` (the hardware cipher where the host has one) and `AesBitsliced` answer alike, in both directions.
 ```maxon
 function filler(count Count) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachByte'
 		bytes.push(0x5A)
@@ -913,7 +913,7 @@ function filler(count Count) returns ByteArray
 end 'filler'
 
 function lengthThroughAes(aes Aes, size Count, opening bool) returns Count
-	var output = filler(size)
+	let output = filler(size)
 
 	if opening 'open'
 		try aes.decryptBlockInto(filler(16), output: output, at: 5) otherwise panic("the block is 16 bytes")
@@ -925,7 +925,7 @@ function lengthThroughAes(aes Aes, size Count, opening bool) returns Count
 end 'lengthThroughAes'
 
 function lengthThroughBitsliced(cipher AesBitsliced, size Count, direction AesDirection) returns Count
-	var output = filler(size)
+	let output = filler(size)
 	try cipher.cryptBlockInto(filler(16), output: output, at: 5, direction: direction) otherwise panic("the block is 16 bytes")
 
 	return output.count()
@@ -987,11 +987,11 @@ function encryptedCount(aes Aes, block ByteArray, output ByteArray) returns Coun
 end 'encryptedCount'
 
 function main() returns ExitCode
-	var key = ByteArray.create(0)
+	let key = ByteArray.create(0)
 	key.resize(16)
-	var block = ByteArray.create(0)
+	let block = ByteArray.create(0)
 	block.resize(16)
-	var output = ByteArray.create(0)
+	let output = ByteArray.create(0)
 	let aes = try Aes.create(key) otherwise panic("the key is valid")
 	_ = encryptedCount(aes, block: block, output: output)
 	print("{try output.get(0) otherwise 0}\n")

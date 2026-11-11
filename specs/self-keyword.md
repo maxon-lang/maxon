@@ -74,7 +74,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(0)
+	let c = Counter.create(0)
 	c.increment()
 	c.increment()
 	return c.get()
@@ -106,7 +106,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(0)
+	let c = Counter.create(0)
 	c.increment()
 	c.increment()
 	c.increment()
@@ -139,7 +139,7 @@ type Accumulator
 end 'Accumulator'
 
 function main() returns ExitCode
-	var acc = Accumulator.create(0)
+	let acc = Accumulator.create(0)
 	acc.add(10)
 	acc.add(20)
 	acc.add(12)
@@ -203,7 +203,7 @@ type Value
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value.create(21)
+	let v = Value.create(21)
 	v.double()
 	return v.get()
 end 'main'

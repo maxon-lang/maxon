@@ -90,7 +90,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create(10, y: 20)
+	let p = Point.create(10, y: 20)
 	p.x = 30
 	return p.x
 end 'main'
@@ -114,7 +114,7 @@ type Config
 end 'Config'
 
 function main() returns ExitCode
-	var c = Config.create(1, count: 0)
+	let c = Config.create(1, count: 0)
 	c.count = 5
 	return c.count
 end 'main'
@@ -522,8 +522,8 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(41)
-	view d = c.bump()
+	let c = Counter.create(41)
+	let d = c.bump()
 	return d.value as ExitCode
 end 'main'
 ```
@@ -555,8 +555,8 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create(40)
-	var d = c.bump()
+	let c = Counter.create(40)
+	let d = c.bump()
 	d.value = d.value + 1
 	return c.value as ExitCode
 end 'main'
@@ -737,7 +737,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:11:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3207: <fragment>:12:4: 'push' needs a writable receiver; 'b' is immutable
 ```
 
 <!-- test: a-let-declared-global-returned-by-a-call-is-read -->

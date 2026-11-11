@@ -40,7 +40,7 @@ module type TlsPlaintextCipher implements TlsRecordCipher
 			throw TlsRecordError.recordOverflow
 		end 'overflow'
 
-		var record = tlsRecordHeader(contentType, version: nextVersion, bodyBytes: plaintext.count())
+		let record = tlsRecordHeader(contentType, version: nextVersion, bodyBytes: plaintext.count())
 		record.append(plaintext)
 		nextVersion = tlsRecordVersion
 
@@ -144,7 +144,7 @@ module type TlsRecordWriter
 	end 'writeApplicationData'
 
 	module function writeAlert(level TlsAlertLevel, alert TlsAlert) throws TlsHandshakeError
-		var body = ByteArray.create(0)
+		let body = ByteArray.create(0)
 		body.push(level.rawValue as Byte)
 		body.push(alert.rawValue as Byte)
 
@@ -156,7 +156,7 @@ module type TlsRecordWriter
 			return
 		end 'written'
 
-		var record = tlsRecordHeader(TlsContentType.changeCipherSpec, version: tlsRecordVersion, bodyBytes: tlsChangeCipherSpecBytes)
+		let record = tlsRecordHeader(TlsContentType.changeCipherSpec, version: tlsRecordVersion, bodyBytes: tlsChangeCipherSpecBytes)
 		record.push(tlsChangeCipherSpecBody as Byte)
 		records.push(record)
 		changeCipherSpecWritten = true

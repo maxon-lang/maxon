@@ -150,7 +150,7 @@ export typealias StringArray = Array with ExitCode
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var xs = StringArray.create(0)
+	let xs = StringArray.create(0)
 	xs.push(40)
 	xs.push(2)
 
@@ -454,7 +454,7 @@ export typealias Byte = float(0.0 to 1.0)
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var bytes = b"hi"
+	let bytes = b"hi"
 	let h = try bytes.get(0) otherwise 0
 	let f = 0.5 as legacy.Byte
 	return (h - (7 as stdlib.Byte) + (1 if f > 0.25 else 0)) as ExitCode
@@ -480,9 +480,9 @@ function countTheirs(xs stdlib.StringArray) returns ExitCode
 end 'countTheirs'
 
 function main() returns ExitCode
-	var mine = lib.StringArray.create(0)
+	let mine = lib.StringArray.create(0)
 	mine.push("a")
-	var theirs = stdlib.StringArray.create(0)
+	let theirs = stdlib.StringArray.create(0)
 	theirs.push("b")
 	theirs.push("c")
 	return (countMine(mine) * 10 + countTheirs(theirs)) as ExitCode
@@ -552,7 +552,7 @@ function flags(p alt.Pair, marks alt.Bag) returns ExitCode
 end 'flags'
 
 function main() returns ExitCode
-	var b = lib.Bag.create(0)
+	let b = lib.Bag.create(0)
 	b.push(7)
 	let p = lib.Point.make()
 	let marks = alt.Bag from [true]

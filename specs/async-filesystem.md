@@ -285,7 +285,7 @@ function readOn(h Holder) returns String throws HolderError
 	let size = try h.f.size() otherwise 'sizeFail'
 		throw HolderError.openFailed
 	end 'sizeFail'
-	var buffer = try __ManagedMemory.create(size + 1, 1) otherwise 'allocFail'
+	let buffer = try __ManagedMemory.create(size + 1, 1) otherwise 'allocFail'
 		throw HolderError.openFailed
 	end 'allocFail'
 	let bytesRead = try h.f.read(buffer, size) otherwise 'readFail'

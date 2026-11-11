@@ -235,7 +235,7 @@ type ConstrainedOwnerLedger
 	export let instancesByBase as InstancesByBaseMap
 
 	static function over(signatures ProgramSignatures) returns Self
-		var instancesByBase = InstancesByBaseMap.create()
+		let instancesByBase = InstancesByBaseMap.create()
 
 		for instance in 0 upto signatures.genericInstanceCount() 'eachInstance'
 			let baseName = signatures.genericInstanceBaseName(instance)
@@ -249,7 +249,7 @@ type ConstrainedOwnerLedger
 				continue
 			end 'baseAlreadyIndexed'
 
-			var first = InstanceBucket.create()
+			let first = InstanceBucket.create()
 			first.ids.push(instance)
 			instancesByBase.upsert(baseName, value: first)
 		end 'eachInstance'
@@ -373,7 +373,7 @@ export type LibraryFacts
 	// program calls. `requireUnreachableLibraryStayedDead` is what turns the second into a refusal rather
 	// than an empty callee.
 	export function withCompilerCalledTierUnreached(sweepAllocatorTier bool) returns LibraryFacts
-		var unreached = FunctionNameSet.create()
+		let unreached = FunctionNameSet.create()
 
 		for name in self.unreachedRuntimeTier 'eachAlreadyUnreached'
 			unreached.insert(name)
@@ -449,7 +449,7 @@ module function libraryReachOf(project Project, module MaxonModule, signatures P
 		return LibraryReach.noLibrarySource
 	end 'noStdlibSource'
 
-	var stdlibSet = FunctionNameSet.create()
+	let stdlibSet = FunctionNameSet.create()
 
 	for name in roster.names 'seed'
 		stdlibSet.insert(name)
@@ -457,7 +457,7 @@ module function libraryReachOf(project Project, module MaxonModule, signatures P
 
 	// Built once, here, and handed to both walks below: the short-circuit and the precise walk ask
 	// different questions of the same list, and a second build would be the same arena walked twice.
-	var initCallees = signatures.globalInitCallees()
+	let initCallees = signatures.globalInitCallees()
 
 	// Under `check-scriptlib` every package function, and under `check-stdlib` every stdlib function, is a
 	// reach root: nothing calls one there, and a diagnostic in a swept library body is dropped.
@@ -523,7 +523,7 @@ function demandOneStdlibFileIfReached(project Project, path FilePath, reachable 
 		return false
 	end 'notTheDemandTier'
 
-	view artifact = try queryParseOps(project, path: path)
+	let artifact = try queryParseOps(project, path: path)
 
 	for func in artifact.module.functions 'eachFunc'
 		if not reachable.contains(func.name) 'notReached'
@@ -563,10 +563,10 @@ end 'LibraryFunctionRoster'
 // Read back from each library file's PARSE ARTIFACT — a memo HIT, since `queryAllModule` has already
 // parsed it — so the cost is O(library functions) and touches nothing the user wrote.
 function libraryFunctionRoster(project Project) returns LibraryFunctionRoster throws CompileError
-	var names = NameRoster.create(0)
-	var runtimeTier = FunctionNameSet.create()
-	var compilerReached = FunctionNameSet.create()
-	var auditedLibrary = NameRoster.create(0)
+	let names = NameRoster.create(0)
+	let runtimeTier = FunctionNameSet.create()
+	let compilerReached = FunctionNameSet.create()
+	let auditedLibrary = NameRoster.create(0)
 
 	for fileIndex in 0 upto project.librarySourcePaths.count() 'eachFile'
 		try collectOneLibraryFile(project, path: try project.librarySourcePaths.get(fileIndex) otherwise panic("libraryFunctionRoster: fileIndex {fileIndex} is below project.librarySourcePaths.count()"), names: names, runtimeTier: runtimeTier, compilerReached: compilerReached, auditedLibrary: auditedLibrary)
@@ -580,7 +580,7 @@ function collectOneLibraryFile(project Project, path FilePath, names NameRoster,
 	let isRuntime = isRuntimeSourceFile(project, path: path)
 	let isAuditedLibrary = libraryBodiesAreEveryBody(project, path: path)
 	let isCompilerCalled = isRuntime and runtimeTierFileIsCompilerCalled(path)
-	view artifact = try queryParseOps(project, path: path)
+	let artifact = try queryParseOps(project, path: path)
 
 	for func in artifact.module.functions 'eachFunc'
 		names.push(func.name)
@@ -730,8 +730,8 @@ end 'LibraryReachSplit'
 // roster and its staleness argument live. It is read HERE and not folded into `reachable` because it must
 // answer on the short-circuit path too, where there is no walk to fold it into.
 function classifyLibraryReach(roster LibraryFunctionRoster, reachable FunctionNameSet) returns LibraryReachSplit
-	var unreachable = FunctionNameSet.create()
-	var unreachedRuntimeTier = FunctionNameSet.create()
+	let unreachable = FunctionNameSet.create()
+	let unreachedRuntimeTier = FunctionNameSet.create()
 
 	for name in roster.names 'classify'
 		if reachable.contains(name) or roster.compilerReached.contains(name) 'reached'
@@ -831,9 +831,9 @@ end 'classifyLibraryReach'
 function reachableMaxonFunctionNames(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, initCallees NameRoster) returns FunctionNameSet throws CompileError
 	let byName = (try FunctionNameIndex.create(module.functions, project: project)).byName
 
-	var reached = FixedBoolArray.create(module.funcCount())
-	var worklist = FuncIndexArray.create(0)
-	var names = FunctionNameSet.create()
+	let reached = FixedBoolArray.create(module.funcCount())
+	let worklist = FuncIndexArray.create(0)
+	let names = FunctionNameSet.create()
 
 	markOneReachable(project.entryFunctionName, byName: byName, reached: reached, worklist: worklist, names: names)
 
@@ -886,11 +886,11 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// rebuilt at the ask is a seven-push array plus its doubling reallocations per reached stdlib function.
 	let seedConformers = conformersMintedWithoutTheirOwnMethods(signatures)
 	let enumConformers = enumConformersByInterface(project)
-	var witnessInterfaces = InterfaceNameSet.create()
-	var witnessInterfaceOrder = NameRoster.create(0)
+	let witnessInterfaces = InterfaceNameSet.create()
+	let witnessInterfaceOrder = NameRoster.create(0)
 	var interfacesSeeded = 0 as ElementIndex
-	var creditedServices = CreditedServiceSet.create()
-	var ownerLedger = ConstrainedOwnerLedger.over(signatures)
+	let creditedServices = CreditedServiceSet.create()
+	let ownerLedger = ConstrainedOwnerLedger.over(signatures)
 
 	while true 'seedRounds'
 		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder, creditedServices: creditedServices, ownerLedger: ownerLedger)
@@ -902,7 +902,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 		end 'nothingLeftToSeedOrDrain'
 
 		while interfacesSeeded < witnessInterfaceOrder.count() 'eachNewlyNamedInterface'
-			view interfaceName = try witnessInterfaceOrder.get(interfacesSeeded) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
+			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
 			interfacesSeeded = interfacesSeeded + 1
 
 			for conformerName in seedConformers 'eachSeededConformer'
@@ -965,7 +965,7 @@ end 'reachableMaxonFunctionNames'
 // this walk reads. The other two names are uncontestable (`TypeResolution.isCompilerOwnedTypeName`), so
 // only this one moves.
 function conformersMintedWithoutTheirOwnMethods(signatures ProgramSignatures) returns NameRoster
-	var names = NameRoster.create(0)
+	let names = NameRoster.create(0)
 	names.push(StringConformerName)
 	names.push(CharacterConformerName)
 	names.push(signatures.arrayRecordBaseName())
@@ -993,15 +993,15 @@ typealias EnumConformersByInterface = Map with (ByteArray, NameRoster)
 // one name per slot, so a slotless row could never mark anything — which is what keeps the corpus's several
 // hundred `implements Error` enums out of this map entirely.
 function enumConformersByInterface(project Project) returns EnumConformersByInterface
-	var byInterface = EnumConformersByInterface.create()
-	view declared = declaredConformanceIndex(project)
+	let byInterface = EnumConformersByInterface.create()
+	let declared = declaredConformanceIndex(project)
 
 	for (conformerName, declaredInterfaces) in declared 'eachDeclaredConformer'
 		if not project.enumTypes.contains(conformerName) 'itsValuesComeFromACall'
 			continue
 		end 'itsValuesComeFromACall'
 
-		var reached = InterfaceNameSet.create()
+		let reached = InterfaceNameSet.create()
 		collectDeclaredInterfaceClosure(project.interfaces, declaredNames: declaredInterfaces, into: reached)
 
 		for interfaceName in reached 'eachReachedInterface'
@@ -1019,7 +1019,7 @@ function recordEnumWitnessCredit(byInterface EnumConformersByInterface, project 
 		return
 	end 'noSlotToCredit'
 
-	var conformers = try byInterface.get(interfaceName) otherwise NameRoster.create(0)
+	let conformers = try byInterface.get(interfaceName) otherwise NameRoster.create(0)
 	conformers.push(enumName)
 	byInterface.upsert(interfaceName, value: conformers)
 end 'recordEnumWitnessCredit'
@@ -1389,7 +1389,7 @@ function markEveryDeclaredWitnessImplOf(typeName ByteArray, project Project, sig
 		return
 	end 'theSeedOwnsThisConformer'
 
-	view conformedTo = try declaredConformanceIndex(project).get(typeName) otherwise 'declaresNoConformance'
+	let conformedTo = try declaredConformanceIndex(project).get(typeName) otherwise 'declaresNoConformance'
 		return
 	end 'declaresNoConformance'
 
@@ -1404,7 +1404,7 @@ end 'markEveryDeclaredWitnessImplOf'
 // them would call live library code dead and `requireUnreachableLibraryStayedDead` panics.
 function markConstraintArgumentImpls(ledger ConstrainedOwnerLedger, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached FixedBoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for owner in ledger.pending 'eachNewlyReachedOwner'
-		view instances = try ledger.instancesByBase.get(owner) otherwise panic("markConstraintArgumentImpls: '{String.from(owner)}' was filed because the index holds instances of it")
+		let instances = try ledger.instancesByBase.get(owner) otherwise panic("markConstraintArgumentImpls: '{String.from(owner)}' was filed because the index holds instances of it")
 
 		for instance in instances.ids 'eachInstance'
 			for constraint in signatures.structWhereConstraints(owner) 'eachConstraint'
@@ -1437,7 +1437,7 @@ function markWitnessImplsOfConformer(typeName ByteArray, interfaceName ByteArray
 		return
 	end 'thisPairHasNoTable'
 
-	view iface = try project.interfaces.entries.get(interfaceName) otherwise 'noSuchInterface'
+	let iface = try project.interfaces.entries.get(interfaceName) otherwise 'noSuchInterface'
 		// A witness position naming an interface the program does not declare is E3017's / E3011's, reported
 		// one pass later; a reachability walk has nothing to add and nothing to credit.
 		return
@@ -1623,7 +1623,7 @@ end 'userCodeDemandsAWitnessTable'
 // conformance, so this gate is TRUE in every compile. The shared list keeps it right for the reason it is
 // written — the seed and its gate are ONE roster — rather than by accident of which modules are listed.
 function corpusDeclaresASeededConformance(project Project, signatures ProgramSignatures) returns bool
-	view index = declaredConformanceIndex(project)
+	let index = declaredConformanceIndex(project)
 
 	for conformerName in conformersMintedWithoutTheirOwnMethods(signatures) 'eachSeededConformer'
 		if index.contains(conformerName) 'declaresOne'
@@ -1731,13 +1731,13 @@ end 'anyCalleeIsIn'
 // compiling for wasm.
 function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unreachable FunctionNameSet, target Target) returns StdlibSubstrateEntryMap
 	let nodeCount = stdlibNames.count()
-	var nodeOf = StdlibNodeByName.create()
+	let nodeOf = StdlibNodeByName.create()
 
 	for i in 0 upto nodeCount 'index'
 		nodeOf.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB below its own count()"), value: i as CsrIndex)
 	end 'index'
 
-	var state = SubstrateFixpoint.overNodes(nodeCount as CsrIndex, target: target)
+	let state = SubstrateFixpoint.overNodes(nodeCount as CsrIndex, target: target)
 
 	for func in module.functions 'eachFunc'
 		if unreachable.contains(func.name) 'notInTheProgram'
@@ -1758,7 +1758,7 @@ function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unre
 
 	state.propagateToCallers()
 
-	var entries = StdlibSubstrateEntryMap.create()
+	let entries = StdlibSubstrateEntryMap.create()
 
 	for i in 0 upto nodeCount 'publish'
 		if state.requiresSubstrate(i as CsrIndex) 'needsIt'
@@ -1910,7 +1910,7 @@ end 'SubstrateFixpoint'
 // than being silently swallowed by any of them.
 function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByName, state SubstrateFixpoint)
 	match op 'op'
-		call(_, callee, _, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		call(_, callee, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		literal or
 		ret or
 		retVoid or
@@ -1923,13 +1923,13 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 		loadIndirect or
 		storeIndirect or
 		stringLiteral then break
-		tryCall(_, _, callee, _, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		tryCall(_, _, callee, _, _, _, _, _) then noteSubstrateCallee(callee, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		throwError or
 		propagateError or
 		panicAbort then break
 		functionRef(_, funcName, _) then noteSubstrateCallee(funcName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		indirectCall then break
-		asyncCall(_, callee, _, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: GtSpawnName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		asyncCall(_, callee, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: GtSpawnName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 		await or
 		tryAwait or
 		sizeofType or
@@ -1946,7 +1946,7 @@ function noteSubstrateEdge(op MaxonOp, callerNode CsrIndex, nodeOf StdlibNodeByN
 
 		// The service and `async` ops are seeds as well as edges: a stdlib body is never blamed for its own
 		// ops, so the entry each lowers to must reach the user's crossing through this fixpoint.
-		serviceSpawn(_, _, _, _, callee, _, _, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: CownSpawnName, callerNode: callerNode, nodeOf: nodeOf, state: state)
+		serviceSpawn(_, _, _, _, callee, _, _, _, _, _, _) then noteSubstrateCalleeAndEntry(callee, entry: CownSpawnName, callerNode: callerNode, nodeOf: nodeOf, state: state)
 
 		// ⭐ A SEND REACHES ITS MESSAGE, so it is an EDGE exactly as an `async` spawn is — the handler runs on
 		// another green thread, but it is the same function and it reaches whatever that function reaches.

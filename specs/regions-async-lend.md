@@ -5,7 +5,7 @@ keywords: [async, by-reference, lent, promise, cancel, coroutine, mutable parame
 category: semantics
 ---
 
-# A variable passed by reference to `async` is lent until its promise is drained
+# A variable passed by reference, or a unique value passed, to `async` is lent until its promise is drained
 
 ## Documentation
 
@@ -14,6 +14,10 @@ caller's own cell, and the write is visible once the promise is awaited or cance
 the coroutine like a move that ends at the drain, and the caller may neither read, write nor pass it, nor name it in the
 statement that starts the coroutine. A tied promise is awaited or cancelled before its function returns, and
 `.cancel()` waits for the coroutine to finish.
+
+A `unique` value, local or parameter, passed to an `async` call is lent to the coroutine the same way: until the
+promise is awaited or cancelled, any read, `close()`, pass or move of it is E3102, and after the drain it is the
+caller's again.
 
 ## Tests
 
@@ -158,7 +162,7 @@ function shout(text mutable String) returns Tally
 end 'shout'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let promise = async shout(holder.f)
 	let k = await promise
 	print("{holder.f} {k}\n")
@@ -407,7 +411,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:12:22: cannot pass a literal to a function that writes parameter 'n' (in main); pass a `var`
+error E2013: <fragment>:12:22: cannot pass a literal to a function that writes parameter 'n' (in main); pass a `var`
 ```
 
 <!-- test: a-loop-that-reassigns-the-lent-holder-is-refused -->
@@ -563,7 +567,7 @@ function shout(text mutable String) returns Tally
 end 'shout'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	let promise = async shout(holder.f)
 	var lap = 0 as Tally
 
@@ -674,4 +678,183 @@ end 'main'
 ```
 ```maxoncstderr
 error E3102: <fragment>:27:3: use of moved value 'n': it is lent to the coroutine of the `async` call at 23:22 until that promise is awaited or cancelled
+```
+
+<!-- test: a-unique-local-handed-to-async-is-usable-after-the-await -->
+<!-- unsupported-targets: wasm32-wasi -->
+`token` is lent to the coroutine of `inspect` until `promise` is awaited, and it is the caller's again afterwards: the read after the await sees the same `Token` that the coroutine read.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Token is unique
+	var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function peek() returns Tally
+		return self.n
+	end 'peek'
+end 'Token'
+
+function inspect(token Token) returns Tally
+	sleep(1)
+
+	return token.peek() + 1
+end 'inspect'
+
+function main() returns ExitCode
+	let token = Token.create(5)
+	let promise = async inspect(token)
+	let answer = await promise
+	print("{answer} {token.peek()}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+6 5
+```
+```exitcode
+0
+```
+
+<!-- test: a-unique-parameter-read-before-the-await-is-refused -->
+A `unique` parameter handed to `async` is lent to the coroutine like a local is: `over` may not read `token` between the `async` and the await.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Token is unique
+	var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function peek() returns Tally
+		return self.n
+	end 'peek'
+end 'Token'
+
+function inspect(token Token) returns Tally
+	sleep(1)
+
+	return token.peek() + 1
+end 'inspect'
+
+function over(token Token) returns Tally
+	let promise = async inspect(token)
+	let before = token.peek()
+	let answer = await promise
+
+	return answer + before
+end 'over'
+
+function main() returns ExitCode
+	let token = Token.create(5)
+	print("{over(token)}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:24:15: use of moved value 'token': it is lent to the coroutine of the `async` call at 23:22 until that promise is awaited or cancelled
+```
+
+<!-- test: closing-a-unique-local-before-the-await-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+`close()` is a use like any other: it is refused while `token` is lent to the coroutine, so nothing can close a value under the coroutine that holds it.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Token is unique
+	var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function peek() returns Tally
+		return self.n
+	end 'peek'
+
+	function close()
+		self.n = 0
+	end 'close'
+end 'Token'
+
+function inspect(token Token) returns Tally
+	sleep(1)
+
+	return token.peek() + 1
+end 'inspect'
+
+function main() returns ExitCode
+	let token = Token.create(5)
+	let promise = async inspect(token)
+	token.close()
+	let answer = await promise
+	print("{answer}\n")
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:29:2: use of moved value 'token': it is lent to the coroutine of the `async` call at 28:22 until that promise is awaited or cancelled
+```
+
+<!-- test: a-unique-parameter-is-usable-and-closable-after-the-await -->
+<!-- unsupported-targets: wasm32-wasi -->
+Once `promise` is awaited the lend has ended: `over` reads `token` and closes it, and `after` is the value the coroutine saw, so the sum is 11.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Token is unique
+	var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function peek() returns Tally
+		return self.n
+	end 'peek'
+
+	function close()
+		self.n = 0
+	end 'close'
+end 'Token'
+
+function inspect(token Token) returns Tally
+	sleep(1)
+
+	return token.peek() + 1
+end 'inspect'
+
+function over(token Token) returns Tally
+	let promise = async inspect(token)
+	let answer = await promise
+	let after = token.peek()
+	token.close()
+
+	return answer + after
+end 'over'
+
+function main() returns ExitCode
+	let token = Token.create(5)
+	print("{over(token)}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+11
+```
+```exitcode
+0
 ```

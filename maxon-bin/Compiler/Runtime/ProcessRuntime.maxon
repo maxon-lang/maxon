@@ -103,15 +103,15 @@ let DescendantTokenMarkOffset = DescendantTokenBytesOffset - 1
 // The raw buffer is a scratch allocation this function owns end to end: it is freed on the one
 // exit, and what the caller receives is the independent `__ManagedMemory` copy.
 function buildProcessFill(module StdModule, name ByteArray, fill PathFill)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
-	var ids = ValueMinter.create(0)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var attempt = module.addBlock(func, label: b"pxattempt", heat: BlockHeat.normal)
-	var fitTest = module.addBlock(func, label: b"pxfit", heat: BlockHeat.normal)
-	var grow = module.addBlock(func, label: b"pxgrow", heat: BlockHeat.normal)
-	var unavailable = module.addBlock(func, label: b"pxnone", heat: BlockHeat.normal)
-	var copyOut = module.addBlock(func, label: b"pxcopy", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let attempt = module.addBlock(func, label: b"pxattempt", heat: BlockHeat.normal)
+	let fitTest = module.addBlock(func, label: b"pxfit", heat: BlockHeat.normal)
+	let grow = module.addBlock(func, label: b"pxgrow", heat: BlockHeat.normal)
+	let unavailable = module.addBlock(func, label: b"pxnone", heat: BlockHeat.normal)
+	let copyOut = module.addBlock(func, label: b"pxcopy", heat: BlockHeat.normal)
 
 	let (buffer, _) = emitGrowingPathFill(module, cur: entry, attempt: attempt, fitTest: fitTest, grow: grow, fill: fill, whenRefused: unavailable, whenFits: copyOut, ids: ids)
 
@@ -121,7 +121,7 @@ function buildProcessFill(module StdModule, name ByteArray, fill PathFill)
 	module.setTerminator(unavailable, op: StdOp.branch(copyOut.id))
 
 	let record = ids.mint()
-	var built = emitTextToManaged(module, func: func, cur: copyOut, cstr: buffer, record: record, encoding: encoding, ids: ids)
+	let built = emitTextToManaged(module, func: func, cur: copyOut, cstr: buffer, record: record, encoding: encoding, ids: ids)
 	emitRawFree(module, block: built, ptr: buffer, ids: ids)
 	module.setTerminator(built, op: StdOp.ret(record))
 
@@ -170,13 +170,13 @@ export function emitArmDescendantTracking(module StdModule, func IrFunction, cur
 		return cur
 	end 'nothingCanBeLeft'
 
-	var read = module.addBlock(func, label: b"descread", heat: BlockHeat.normal)
-	var grow = module.addBlock(func, label: b"descgrow", heat: BlockHeat.cold)
-	var inspect = module.addBlock(func, label: b"descinspect", heat: BlockHeat.normal)
-	var readFirst = module.addBlock(func, label: b"descreadfirst", heat: BlockHeat.normal)
-	var unmarked = module.addBlock(func, label: b"descunmarked", heat: BlockHeat.normal)
-	var armed = module.addBlock(func, label: b"descarmed", heat: BlockHeat.normal)
-	var release = module.addBlock(func, label: b"descrelease", heat: BlockHeat.normal)
+	let read = module.addBlock(func, label: b"descread", heat: BlockHeat.normal)
+	let grow = module.addBlock(func, label: b"descgrow", heat: BlockHeat.cold)
+	let inspect = module.addBlock(func, label: b"descinspect", heat: BlockHeat.normal)
+	let readFirst = module.addBlock(func, label: b"descreadfirst", heat: BlockHeat.normal)
+	let unmarked = module.addBlock(func, label: b"descunmarked", heat: BlockHeat.normal)
+	let armed = module.addBlock(func, label: b"descarmed", heat: BlockHeat.normal)
+	let release = module.addBlock(func, label: b"descrelease", heat: BlockHeat.normal)
 
 	let firstCapacity = emitConst(module, block: cur, value: DescendantsEnvValueUnits, ids: ids)
 	let name = emitLiteralHostString(module, block: cur, ids: ids, text: DescendantsEnvName)
@@ -248,8 +248,8 @@ function emitArmAction(module StdModule, func IrFunction, cur IrBlock, target Ta
 		return
 	end 'noFacility'
 
-	var tracked = module.addBlock(func, label: b"desctracked", heat: BlockHeat.normal)
-	var trackRefused = module.addBlock(func, label: b"desctrackrefused", heat: BlockHeat.cold)
+	let tracked = module.addBlock(func, label: b"desctracked", heat: BlockHeat.normal)
+	let trackRefused = module.addBlock(func, label: b"desctrackrefused", heat: BlockHeat.cold)
 
 	let verb = emitConst(module, block: cur, value: ProcessDescendantsVerbTrack, ids: ids)
 	let nothing = emitConst(module, block: cur, value: 0, ids: ids)
@@ -265,7 +265,7 @@ function emitArmAction(module StdModule, func IrFunction, cur IrBlock, target Ta
 end 'emitArmAction'
 
 function emitSealAndPublishToken(module StdModule, func IrFunction, tracked IrBlock, target Target, name ValueId, value ValueId, release IrBlock, copy ValueId, ids ValueMinter)
-	var sealed = module.addBlock(func, label: b"descsealed", heat: BlockHeat.normal)
+	let sealed = module.addBlock(func, label: b"descsealed", heat: BlockHeat.normal)
 
 	match environmentSnapshotShape(target) 'seal'
 		nulSeparatedBlock then emitSealThroughHostCall(module, func: func, cur: tracked, name: name, value: value, sealed: sealed, ids: ids)
@@ -278,7 +278,7 @@ function emitSealAndPublishToken(module StdModule, func IrFunction, tracked IrBl
 end 'emitSealAndPublishToken'
 
 function emitSealThroughHostCall(module StdModule, func IrFunction, cur IrBlock, name ValueId, value ValueId, sealed IrBlock, ids ValueMinter)
-	var refused = module.addBlock(func, label: b"descsealrefused", heat: BlockHeat.cold)
+	let refused = module.addBlock(func, label: b"descsealrefused", heat: BlockHeat.cold)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	let inert = emitConst(module, block: cur, value: DescendantsInertMark, ids: ids)
@@ -292,11 +292,11 @@ function emitSealThroughHostCall(module StdModule, func IrFunction, cur IrBlock,
 end 'emitSealThroughHostCall'
 
 function emitSealInEnvironmentVector(module StdModule, func IrFunction, cur IrBlock, sealed IrBlock, ids ValueMinter)
-	var scan = module.addBlock(func, label: b"descenvscan", heat: BlockHeat.normal)
-	var inspect = module.addBlock(func, label: b"descenvinspect", heat: BlockHeat.normal)
-	var matched = module.addBlock(func, label: b"descenvmatched", heat: BlockHeat.normal)
-	var advance = module.addBlock(func, label: b"descenvnext", heat: BlockHeat.normal)
-	var missing = module.addBlock(func, label: b"descenvmissing", heat: BlockHeat.cold)
+	let scan = module.addBlock(func, label: b"descenvscan", heat: BlockHeat.normal)
+	let inspect = module.addBlock(func, label: b"descenvinspect", heat: BlockHeat.normal)
+	let matched = module.addBlock(func, label: b"descenvmatched", heat: BlockHeat.normal)
+	let advance = module.addBlock(func, label: b"descenvnext", heat: BlockHeat.normal)
+	let missing = module.addBlock(func, label: b"descenvmissing", heat: BlockHeat.cold)
 
 	let vector = ids.mint()
 	module.appendOp(cur, op: StdOp.osEnvBlock(vector))
@@ -330,7 +330,7 @@ function emitSealInEnvironmentVector(module StdModule, func IrFunction, cur IrBl
 end 'emitSealInEnvironmentVector'
 
 export function armedDescendantsValue(token String) returns String
-	var value = token.toByteArray()
+	let value = token.toByteArray()
 
 	value.insert(0, value: DescendantsArmedMark as Byte)
 
@@ -346,22 +346,22 @@ end 'descendantsFramePrefix'
 // still awaiting has ended and is not reported. Each frame is assembled whole and written in one
 // stderr write, so a live child writing to the same stream cannot split it.
 function buildProcessDescendantGate(module StdModule)
-	var func = IrFunction.createFromStd(ProcessDescendantGateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(ProcessDescendantGateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var unarmed = module.addBlock(func, label: b"gateunarmed", heat: BlockHeat.normal)
-	var audit = module.addBlock(func, label: b"gateaudit", heat: BlockHeat.normal)
-	var listed = module.addBlock(func, label: b"gatelisted", heat: BlockHeat.normal)
-	var unlisted = module.addBlock(func, label: b"gateunlisted", heat: BlockHeat.cold)
-	var capped = module.addBlock(func, label: b"gatecapped", heat: BlockHeat.cold)
-	var scanStart = module.addBlock(func, label: b"gatescan", heat: BlockHeat.normal)
-	var scanHeader = module.addBlock(func, label: b"gatescanhdr", heat: BlockHeat.normal)
-	var scanLook = module.addBlock(func, label: b"gatescanlook", heat: BlockHeat.normal)
-	var scanByte = module.addBlock(func, label: b"gatescanbyte", heat: BlockHeat.normal)
-	var scanLine = module.addBlock(func, label: b"gatescanline", heat: BlockHeat.normal)
-	var scanStep = module.addBlock(func, label: b"gatescanstep", heat: BlockHeat.normal)
-	var finished = module.addBlock(func, label: b"gatedone", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let unarmed = module.addBlock(func, label: b"gateunarmed", heat: BlockHeat.normal)
+	let audit = module.addBlock(func, label: b"gateaudit", heat: BlockHeat.normal)
+	let listed = module.addBlock(func, label: b"gatelisted", heat: BlockHeat.normal)
+	let unlisted = module.addBlock(func, label: b"gateunlisted", heat: BlockHeat.cold)
+	let capped = module.addBlock(func, label: b"gatecapped", heat: BlockHeat.cold)
+	let scanStart = module.addBlock(func, label: b"gatescan", heat: BlockHeat.normal)
+	let scanHeader = module.addBlock(func, label: b"gatescanhdr", heat: BlockHeat.normal)
+	let scanLook = module.addBlock(func, label: b"gatescanlook", heat: BlockHeat.normal)
+	let scanByte = module.addBlock(func, label: b"gatescanbyte", heat: BlockHeat.normal)
+	let scanLine = module.addBlock(func, label: b"gatescanline", heat: BlockHeat.normal)
+	let scanStep = module.addBlock(func, label: b"gatescanstep", heat: BlockHeat.normal)
+	let finished = module.addBlock(func, label: b"gatedone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let code = 0 as ValueId
@@ -458,7 +458,7 @@ end 'isProcessRuntimeCallee'
 export let ProcessTierFileName = "Process.maxon"
 
 export function checkProcessDescendantsVerbs(signatures ProgramSignatures, tierPath FilePath)
-	var pins = TierGeometryPinArray.create(0)
+	let pins = TierGeometryPinArray.create(0)
 	pins.push(TierGeometryPin.create("the end verb", here: ProcessDescendantsVerbEnd, named: "DescendantsVerbEnd"))
 	requireTierGeometryAgrees(pins, signatures: signatures, tierPath: tierPath, emitterFile: "Compiler/Runtime/ProcessRuntime.maxon", layer: "checkProcessDescendantsVerbs")
 end 'checkProcessDescendantsVerbs'

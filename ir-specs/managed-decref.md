@@ -20,7 +20,7 @@ its one reference to the record on its way out, which reaches the last owner, an
 of its own, so the last owner goes to `__managed_release`. Prints `2`.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.push(7)
 	bytes.push(9)
 	let alias = bytes

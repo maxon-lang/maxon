@@ -58,7 +58,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -106,7 +106,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -234,7 +234,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -282,7 +282,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -428,7 +428,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -476,7 +476,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -586,7 +586,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -634,7 +634,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -789,7 +789,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -837,7 +837,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -938,7 +938,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -986,7 +986,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1123,7 +1123,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1171,7 +1171,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1272,7 +1272,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1320,7 +1320,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1412,7 +1412,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1460,7 +1460,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1561,7 +1561,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1609,7 +1609,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1800,7 +1800,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1848,7 +1848,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -1994,7 +1994,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2042,7 +2042,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -2161,7 +2161,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2209,7 +2209,7 @@ function joined(items TextArray) returns String
 end 'joined'
 
 function renderRecords(records ByteArrays) returns String
-	var texts = TextArray.create(0)
+	let texts = TextArray.create(0)
 
 	for record in records 'eachRecord'
 		texts.push("\"{toHex(record)}\"")
@@ -2472,7 +2472,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2494,7 +2494,7 @@ function peer() returns TlsX509Peer
 end 'peer'
 
 function configured(protocols TlsProtocolArray) returns TlsServerConfig
-	var config = TlsServerConfig.defaults(ByteArrays from [fromHex("3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197")], key: TlsPrivateKey.ecP256(fromHex("0f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b")))
+	let config = TlsServerConfig.defaults(ByteArrays from [fromHex("3082015930820100a00302010202010a300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3235303630313030303030305a170d3236303630313030303030305a300f310d300b06035504030c046c6561663059301306072a8648ce3d020106082a8648ce3d030107034200040b019cfdb984d032a96907cca9a63888323695b6404a7ddaacc63b5559364f2ca48f2b5d0e1151b6c0b5d17286d9a522cee437c42f410742ebb8493775fc47e9a34d304b300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130160603551d11040f300d820b6578616d706c652e636f6d300a06082a8648ce3d040302034700304402203bc12c6f77062e5eed59186b72a95e9652f4398685b8845ad8112a5085bb7ab602207c9761426fa260535fb0fa49efe2624a1f34e8e04eb43d8f3c72dd072e736197")], key: TlsPrivateKey.ecP256(fromHex("0f9999d9198528f9f986f8315fe0c7aaf7b2aef840198d77b859dc4f4a8c4a2b")))
 	config.protocols = protocols
 
 	return config
@@ -2524,7 +2524,7 @@ end 'hasDowngradeSentinel'
 function answer(label String, protocols TlsProtocolArray, hello ByteArray)
 	let config = configured(protocols)
 	let entropy = try TlsServerEntropy.fresh(config) otherwise panic("no entropy")
-	var server = try TlsServerHandshake.create(config, entropy: entropy, peer: peer()) otherwise panic("no server")
+	let server = try TlsServerHandshake.create(config, entropy: entropy, peer: peer()) otherwise panic("no server")
 
 	try server.receive(hello) otherwise (failure) 'refused'
 		print("{label} {failure} records={server.session().takeRecords().count()}\n")
@@ -2579,7 +2579,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2687,7 +2687,7 @@ type OptionalExtendedMasterSecret implements TlsClientHelloSource
 		end 'kept'
 
 		let message = try tlsDecodeClientHello(built.clone()) otherwise panic("the ClientHello the config builds decodes")
-		var kept = TlsExtensionArray.create(0)
+		let kept = TlsExtensionArray.create(0)
 
 		for item in tlsExtensionsOf(message.extensions()) 'eachExtension'
 			if item.extensionType() != TlsExtensionKind.extendedMasterSecret.code() 'other'
@@ -2755,7 +2755,7 @@ function serverHelloOffersExtendedMasterSecret(firstRecord ByteArray) returns bo
 end 'serverHelloOffersExtendedMasterSecret'
 
 function messagesOf(record ByteArray) returns ByteArrays
-	var messages = ByteArrays.create(0)
+	let messages = ByteArrays.create(0)
 	var offset = tlsRecordHeaderBytes as ElementIndex
 
 	while offset < record.count() 'eachMessage'
@@ -2813,8 +2813,8 @@ function scenario(label String, serverKind ServerKind, clientKind ClientKind, se
 	let clientEntropy = try TlsClientEntropy.fresh(clientConfig) otherwise panic("no client entropy")
 	let serverPeer = TlsX509Peer.create(ByteArrays from [fromHex("3082017e30820124a003020102020164300a06082a8648ce3d04030230163114301206035504030c0b436c69656e7420526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a30163114301206035504030c0b436c69656e7420526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000440dc1caaaee821a08a60dcb74b34befd018659bdb88f3c7b77e9884ebfb821dd99d3cb7909555d3f0ef6f05a87ec68cff0756403703002efe4607c9b92f86252a3633061300f0603551d130101ff040530030101ff301f0603551d23041830168014b403e63e7c1c8a1890af5fb031868a5afe1d8376301d0603551d0e04160414b403e63e7c1c8a1890af5fb031868a5afe1d8376300e0603551d0f0101ff040403020106300a06082a8648ce3d040302034800304502202b34aae7b62e533d12661be590a736eee7cd71c02124401b1d03f88e0455fa3b022100a9e9fee45aa249f83c6b148e6f1fab78dbfccea918ebcdedf797ec772e634bed")], now: 1767225600, purpose: X509Purpose.clientAuth)
 	let clientPeer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
-	var server = try TlsServerHandshake.create(serverConfig, entropy: serverEntropy, peer: serverPeer) otherwise panic("no server")
-	var client = try TlsClientHandshake.create(clientConfig, entropy: clientEntropy, peer: clientPeer, helloSource: OptionalExtendedMasterSecret.create(tweak == Tweak.withoutExtendedMasterSecret)) otherwise panic("no client")
+	let server = try TlsServerHandshake.create(serverConfig, entropy: serverEntropy, peer: serverPeer) otherwise panic("no server")
+	let client = try TlsClientHandshake.create(clientConfig, entropy: clientEntropy, peer: clientPeer, helloSource: OptionalExtendedMasterSecret.create(tweak == Tweak.withoutExtendedMasterSecret)) otherwise panic("no client")
 	let request = fromHex("474554202f20485454502f312e310d0a0d0a")
 	let response = fromHex("485454502f312e3120323030204f4b0d0a0d0a6f6b")
 
@@ -2882,7 +2882,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2990,7 +2990,7 @@ type OptionalExtendedMasterSecret implements TlsClientHelloSource
 		end 'kept'
 
 		let message = try tlsDecodeClientHello(built.clone()) otherwise panic("the ClientHello the config builds decodes")
-		var kept = TlsExtensionArray.create(0)
+		let kept = TlsExtensionArray.create(0)
 
 		for item in tlsExtensionsOf(message.extensions()) 'eachExtension'
 			if item.extensionType() != TlsExtensionKind.extendedMasterSecret.code() 'other'
@@ -3058,7 +3058,7 @@ function serverHelloOffersExtendedMasterSecret(firstRecord ByteArray) returns bo
 end 'serverHelloOffersExtendedMasterSecret'
 
 function messagesOf(record ByteArray) returns ByteArrays
-	var messages = ByteArrays.create(0)
+	let messages = ByteArrays.create(0)
 	var offset = tlsRecordHeaderBytes as ElementIndex
 
 	while offset < record.count() 'eachMessage'
@@ -3116,8 +3116,8 @@ function scenario(label String, serverKind ServerKind, clientKind ClientKind, se
 	let clientEntropy = try TlsClientEntropy.fresh(clientConfig) otherwise panic("no client entropy")
 	let serverPeer = TlsX509Peer.create(ByteArrays from [fromHex("3082017e30820124a003020102020164300a06082a8648ce3d04030230163114301206035504030c0b436c69656e7420526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a30163114301206035504030c0b436c69656e7420526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000440dc1caaaee821a08a60dcb74b34befd018659bdb88f3c7b77e9884ebfb821dd99d3cb7909555d3f0ef6f05a87ec68cff0756403703002efe4607c9b92f86252a3633061300f0603551d130101ff040530030101ff301f0603551d23041830168014b403e63e7c1c8a1890af5fb031868a5afe1d8376301d0603551d0e04160414b403e63e7c1c8a1890af5fb031868a5afe1d8376300e0603551d0f0101ff040403020106300a06082a8648ce3d040302034800304502202b34aae7b62e533d12661be590a736eee7cd71c02124401b1d03f88e0455fa3b022100a9e9fee45aa249f83c6b148e6f1fab78dbfccea918ebcdedf797ec772e634bed")], now: 1767225600, purpose: X509Purpose.clientAuth)
 	let clientPeer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
-	var server = try TlsServerHandshake.create(serverConfig, entropy: serverEntropy, peer: serverPeer) otherwise panic("no server")
-	var client = try TlsClientHandshake.create(clientConfig, entropy: clientEntropy, peer: clientPeer, helloSource: OptionalExtendedMasterSecret.create(tweak == Tweak.withoutExtendedMasterSecret)) otherwise panic("no client")
+	let server = try TlsServerHandshake.create(serverConfig, entropy: serverEntropy, peer: serverPeer) otherwise panic("no server")
+	let client = try TlsClientHandshake.create(clientConfig, entropy: clientEntropy, peer: clientPeer, helloSource: OptionalExtendedMasterSecret.create(tweak == Tweak.withoutExtendedMasterSecret)) otherwise panic("no client")
 	let request = fromHex("474554202f20485454502f312e310d0a0d0a")
 	let response = fromHex("485454502f312e3120323030204f4b0d0a0d0a6f6b")
 
@@ -3173,7 +3173,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -3289,7 +3289,7 @@ type OptionalExtendedMasterSecret implements TlsClientHelloSource
 		end 'kept'
 
 		let message = try tlsDecodeClientHello(built.clone()) otherwise panic("the ClientHello the config builds decodes")
-		var kept = TlsExtensionArray.create(0)
+		let kept = TlsExtensionArray.create(0)
 
 		for item in tlsExtensionsOf(message.extensions()) 'eachExtension'
 			if item.extensionType() != TlsExtensionKind.extendedMasterSecret.code() 'other'
@@ -3357,7 +3357,7 @@ function serverHelloOffersExtendedMasterSecret(firstRecord ByteArray) returns bo
 end 'serverHelloOffersExtendedMasterSecret'
 
 function messagesOf(record ByteArray) returns ByteArrays
-	var messages = ByteArrays.create(0)
+	let messages = ByteArrays.create(0)
 	var offset = tlsRecordHeaderBytes as ElementIndex
 
 	while offset < record.count() 'eachMessage'
@@ -3415,8 +3415,8 @@ function scenario(label String, serverKind ServerKind, clientKind ClientKind, se
 	let clientEntropy = try TlsClientEntropy.fresh(clientConfig) otherwise panic("no client entropy")
 	let serverPeer = TlsX509Peer.create(ByteArrays from [fromHex("3082017e30820124a003020102020164300a06082a8648ce3d04030230163114301206035504030c0b436c69656e7420526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a30163114301206035504030c0b436c69656e7420526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000440dc1caaaee821a08a60dcb74b34befd018659bdb88f3c7b77e9884ebfb821dd99d3cb7909555d3f0ef6f05a87ec68cff0756403703002efe4607c9b92f86252a3633061300f0603551d130101ff040530030101ff301f0603551d23041830168014b403e63e7c1c8a1890af5fb031868a5afe1d8376301d0603551d0e04160414b403e63e7c1c8a1890af5fb031868a5afe1d8376300e0603551d0f0101ff040403020106300a06082a8648ce3d040302034800304502202b34aae7b62e533d12661be590a736eee7cd71c02124401b1d03f88e0455fa3b022100a9e9fee45aa249f83c6b148e6f1fab78dbfccea918ebcdedf797ec772e634bed")], now: 1767225600, purpose: X509Purpose.clientAuth)
 	let clientPeer = TlsX509Peer.create(ByteArrays from [fromHex("3082012f3081d6a003020102020101300a06082a8648ce3d040302300f310d300b06035504030c04526f6f74301e170d3234303130313030303030305a170d3334303130313030303030305a300f310d300b06035504030c04526f6f743059301306072a8648ce3d020106082a8648ce3d0301070342000469fd1970f970c21034e836c954aefc78dffef4a3d72650f1ec5e70559cc0663d0722d3408f27d8be5a08ceb432c37b7049cc8758c88c3d85e4db83aa471b62b7a3233021300f0603551d130101ff040530030101ff300e0603551d0f0101ff040403020106300a06082a8648ce3d0403020348003045022053bac2d2f62299dd459d79bce22d671aeeb6ee3ed03a2f344be8a8392fd47b3e022100d8f59bc3b1ba00dc51028c7f1b8e99d86d4bb4126e22717c32988498c07f64d7")], now: 1767225600, purpose: X509Purpose.serverAuth)
-	var server = try TlsServerHandshake.create(serverConfig, entropy: serverEntropy, peer: serverPeer) otherwise panic("no server")
-	var client = try TlsClientHandshake.create(clientConfig, entropy: clientEntropy, peer: clientPeer, helloSource: OptionalExtendedMasterSecret.create(tweak == Tweak.withoutExtendedMasterSecret)) otherwise panic("no client")
+	let server = try TlsServerHandshake.create(serverConfig, entropy: serverEntropy, peer: serverPeer) otherwise panic("no server")
+	let client = try TlsClientHandshake.create(clientConfig, entropy: clientEntropy, peer: clientPeer, helloSource: OptionalExtendedMasterSecret.create(tweak == Tweak.withoutExtendedMasterSecret)) otherwise panic("no client")
 	let request = fromHex("474554202f20485454502f312e310d0a0d0a")
 	let response = fromHex("485454502f312e3120323030204f4b0d0a0d0a6f6b")
 

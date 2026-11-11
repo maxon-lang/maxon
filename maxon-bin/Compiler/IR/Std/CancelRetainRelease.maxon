@@ -147,10 +147,10 @@ function opKeyOf(blockId BlockId, opIdx ElementIndex) returns ElementIndex
 end 'opKeyOf'
 
 export function cancelRetainRelease(module StdModule)
-	var census = RetainCensus.create()
+	let census = RetainCensus.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		var func = module.getFunc(funcIndex)
+		let func = module.getFunc(funcIndex)
 
 		if func.blockRefs.count() == 0 or func.bodySplicedAway 'nothingToCancel'
 			continue
@@ -171,7 +171,7 @@ export function cancelRetainRelease(module StdModule)
 end 'cancelRetainRelease'
 
 function cancelOneSweep(module StdModule, func IrFunction, census RetainCensus) returns SweepVerdict
-	var state = FusionState.create(func)
+	let state = FusionState.create(func)
 
 	for offset in 0 upto census.sites.count() 'eachSiteFromTheLast'
 		let site = try census.sites.get(census.sites.count() - 1 - offset) otherwise panic("cancelOneSweep: sites.get OOB at {census.sites.count() - 1 - offset}")
@@ -205,13 +205,13 @@ function applyVacated(module StdModule, state FusionState)
 	end 'nothingVacated'
 
 	for blockRef in state.func.blockRefs 'eachBlock'
-		var block = module.getBlock(blockRef)
+		let block = module.getBlock(blockRef)
 
 		if not state.vacatedBlocks.contains(block.id as ElementIndex) 'untouched'
 			continue
 		end 'untouched'
 
-		var kept = OpIndexArray.create(0)
+		let kept = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			if not state.isVacated(block.id, opIdx: opIdx) 'stays'
@@ -246,7 +246,7 @@ function cancelSite(module StdModule, state FusionState, site RetainSite)
 		return
 	end 'alreadyCancelled'
 
-	view block = module.getBlock(site.blockRef)
+	let block = module.getBlock(site.blockRef)
 	let there = try block.bodyOpAt(site.position) otherwise 'movedByAnEarlierCancellation'
 		state.skippedAsMoved = true
 		return
@@ -286,7 +286,7 @@ function cancelSite(module StdModule, state FusionState, site RetainSite)
 end 'cancelSite'
 
 function findReleasePartner(module StdModule, state FusionState) returns bool
-	view first = module.getBlock(state.partner.retainBlockRef)
+	let first = module.getBlock(state.partner.retainBlockRef)
 
 	match scanWindow(module, block: first, from: state.partner.retainPosition + 1, state: state) 'firstWindow'
 		blocked then return false
@@ -306,7 +306,7 @@ function walkTheStraightPath(module StdModule, state FusionState, startId BlockI
 	var visited = 0 as ElementIndex
 
 	while true 'walkThePath'
-		view current = state.blockOf(module, id: currentId)
+		let current = state.blockOf(module, id: currentId)
 
 		if not current.hasTerminatorOp() 'noExit'
 			return false
@@ -325,7 +325,7 @@ function walkTheStraightPath(module StdModule, state FusionState, startId BlockI
 		end 'aCycle'
 
 		let predecessors = state.predecessorCount(nextId)
-		view next = state.blockOf(module, id: nextId)
+		let next = state.blockOf(module, id: nextId)
 
 		if predecessors == 0 or blockTakesValueAsArgument(next, value: state.partner.operand) 'notDominatedByTheOperand'
 			return false
@@ -432,11 +432,11 @@ function adoptInPlace(module StdModule, state FusionState)
 	end 'noCloneEntry'
 
 	let headId = state.partner.retainBlockId
-	var tail = splitBlockInPlace(module, func: state.func, head: state.blockOf(module, id: headId), position: state.partner.retainPosition + 1, label: b"adopted")
-	var cold = module.addBlock(state.func, label: b"adoptclone", heat: BlockHeat.cold, inlineSite: tail.inlineSite)
+	let tail = splitBlockInPlace(module, func: state.func, head: state.blockOf(module, id: headId), position: state.partner.retainPosition + 1, label: b"adopted")
+	let cold = module.addBlock(state.func, label: b"adoptclone", heat: BlockHeat.cold, inlineSite: tail.inlineSite)
 	state.registerBlocks(module)
 
-	var head = state.blockOf(module, id: headId)
+	let head = state.blockOf(module, id: headId)
 	let dropped = try head.popBodyOp() otherwise panic("adoptInPlace: the head of a split holds the retain it was split after")
 
 	if dropped != state.partner.retainOpIdx 'notTheRetain'
@@ -457,7 +457,7 @@ function adoptInPlace(module StdModule, state FusionState)
 end 'adoptInPlace'
 
 function edgeCarrying(target BlockId, value ValueId) returns BranchEdgeArray
-	var edges = BranchEdgeArray.create(0)
+	let edges = BranchEdgeArray.create(0)
 	edges.push(BranchEdge.create(target, argIds: argsOf(value)))
 	return edges
 end 'edgeCarrying'
@@ -465,7 +465,7 @@ end 'edgeCarrying'
 function bypassJoin(module StdModule, state FusionState)
 	let joinId = state.partner.joinBlockId
 	moveReleaseToTheFrontOf(module, state: state, joinId: joinId)
-	view join = state.blockOf(module, id: joinId)
+	let join = state.blockOf(module, id: joinId)
 	classifyBranch(module.getOp(join.terminatorIndex()), out: state.branch)
 
 	if join.bodyOpCount() == 1 and state.branch.isBranch() 'onlyTheReleaseRemains'
@@ -477,10 +477,10 @@ function bypassJoin(module StdModule, state FusionState)
 end 'bypassJoin'
 
 function moveReleaseToTheFrontOf(module StdModule, state FusionState, joinId BlockId)
-	var releaseBlock = state.blockOf(module, id: state.partner.releaseBlockId)
+	let releaseBlock = state.blockOf(module, id: state.partner.releaseBlockId)
 
 	if releaseBlock.id == joinId 'insideTheJoin'
-		var kept = OpIndexArray.create(0)
+		let kept = OpIndexArray.create(0)
 
 		for candidate in releaseBlock.bodyOps() 'eachOp'
 			if candidate != state.partner.releaseOpIdx 'stays'
@@ -493,16 +493,16 @@ function moveReleaseToTheFrontOf(module StdModule, state FusionState, joinId Blo
 		state.vacate(releaseBlock.id, opIdx: state.partner.releaseOpIdx)
 	end 'beyondTheJoin'
 
-	var join = state.blockOf(module, id: joinId)
+	let join = state.blockOf(module, id: joinId)
 	join.insertBodyOp(0, opIdx: state.partner.releaseOpIdx)
 end 'moveReleaseToTheFrontOf'
 
 function retargetPastTheRelease(module StdModule, state FusionState, join IrBlock, target BlockId)
-	var incoming = state.blockOf(module, id: state.partner.incomingBlockId)
-	view targetBlock = state.blockOf(module, id: target)
-	view passedToTarget = edgeArgsTo(join, targetId: target, takesArgs: targetBlock.blockArgs.count() != 0)
-	view passedToJoin = edgeArgsTo(incoming, targetId: join.id, takesArgs: join.blockArgs.count() != 0)
-	var mapped = ValueIdArray.create(passedToTarget.count(), zeroed: false)
+	let incoming = state.blockOf(module, id: state.partner.incomingBlockId)
+	let targetBlock = state.blockOf(module, id: target)
+	let passedToTarget = edgeArgsTo(join, targetId: target, takesArgs: targetBlock.blockArgs.count() != 0)
+	let passedToJoin = edgeArgsTo(incoming, targetId: join.id, takesArgs: join.blockArgs.count() != 0)
+	let mapped = ValueIdArray.create(passedToTarget.count(), zeroed: false)
 
 	for passed in passedToTarget 'eachPassedArg'
 		mapped.push(argumentOrItself(join, value: passed, supplied: passedToJoin))
@@ -515,14 +515,14 @@ function retargetPastTheRelease(module StdModule, state FusionState, join IrBloc
 end 'retargetPastTheRelease'
 
 function splitAfterTheRelease(module StdModule, state FusionState, joinId BlockId)
-	var tail = splitBlockInPlace(module, func: state.func, head: state.blockOf(module, id: joinId), position: 1, label: b"bypassed")
+	let tail = splitBlockInPlace(module, func: state.func, head: state.blockOf(module, id: joinId), position: 1, label: b"bypassed")
 	state.registerBlocks(module)
 
-	var join = state.blockOf(module, id: joinId)
-	var incoming = state.blockOf(module, id: state.partner.incomingBlockId)
-	var originalArgs = join.blockArgs
-	var freshArgs = IrBlockArgArray.create(originalArgs.count(), zeroed: false)
-	var passed = ValueIdArray.create(originalArgs.count(), zeroed: false)
+	let join = state.blockOf(module, id: joinId)
+	let incoming = state.blockOf(module, id: state.partner.incomingBlockId)
+	let originalArgs = join.blockArgs
+	let freshArgs = IrBlockArgArray.create(originalArgs.count(), zeroed: false)
+	let passed = ValueIdArray.create(originalArgs.count(), zeroed: false)
 
 	for arg in originalArgs 'eachArg'
 		let id = state.minter.mint()
@@ -530,7 +530,7 @@ function splitAfterTheRelease(module StdModule, state FusionState, joinId BlockI
 		passed.push(id)
 	end 'eachArg'
 
-	view passedToJoin = edgeArgsTo(incoming, targetId: joinId, takesArgs: originalArgs.count() != 0)
+	let passedToJoin = edgeArgsTo(incoming, targetId: joinId, takesArgs: originalArgs.count() != 0)
 	tail.blockArgs = originalArgs
 	join.blockArgs = freshArgs
 	module.setTerminator(join, op: StdOp.branch(tail.id))
@@ -559,7 +559,7 @@ function argumentOrItself(join IrBlock, value ValueId, supplied ValueIdArray) re
 end 'argumentOrItself'
 
 function edgesRetargeted(edges BranchEdgeArray, from BlockId, to BlockId, args ValueIdArray) returns BranchEdgeArray
-	var retargeted = edgesWithoutTarget(edges, droppedTarget: from)
+	let retargeted = edgesWithoutTarget(edges, droppedTarget: from)
 
 	if args.count() > 0 'theNewEdgeCarriesArgs'
 		retargeted.push(BranchEdge.create(to, argIds: args))

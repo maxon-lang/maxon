@@ -2,7 +2,7 @@
 //
 // ⚠ A run under `MAXON_MAX_PROCS=1` is THIS pool with one worker in it, not a serial fallback, which is what
 // makes the pinned and the default lane one code path and their outputs comparable at all. A binary whose runtime
-// cannot move what a worker answers (`RuntimeMovesSharedRecords`), and a compile tallying
+// cannot move what a worker answers (`RuntimeSharesAnyGraph`), and a compile tallying
 // allocations by tag, do the same worker's work on this thread (`FrontEndPlacement`).
 //
 // ⭐⭐ **WHAT MAKES A PARSE SAFE ON A WORKER IS THAT IT WRITES ONLY INTO AN OVERLAY OF ITS OWN.** A
@@ -15,7 +15,7 @@
 // send moves, so nothing else a worker reaches is reachable from any other thread.
 //
 // ⛔ **AND THE ARTIFACT HOLDS NO RECORD THE INDEX IT PARSED AGAINST HOLDS.** The answer moves, so a
-// record both held would abort it (exit 96) — and would leave two threads stepping one count. The
+// record both held would abort a seed-built binary (exit 96). The
 // artifact's own doors take the copies (`ParseStaging.artifactOwnedOp`), and `closeParseBand`
 // copies what it hands out.
 //
@@ -33,7 +33,7 @@
 // worker at all.
 //
 // ⚠ **WHAT A WORKER STRUCTURALLY CANNOT DO** is `BackendPool`'s list: await, or be
-// handed a record a second frame still owns (E3138 at the send, exit 96 at run time).
+// handed a record a second frame still owns (refused at the send, exit 96 at run time in a seed-built binary).
 
 // A reply cell for each message that carries one. No message throws, so the promise names no error
 // type.
@@ -149,9 +149,9 @@ export type FrontEndJob
 	export var holder as FrontEndWorkArray
 	export var answers as FrontEndAnswerArray
 
-	// ⭐ **EVERY RETURN IS `Self{…}`**, which is what makes a call to one of these the argument of a send (E3138).
+	// ⭐ **EVERY RETURN IS `Self{…}`**, which is what makes a call to one of these the argument of a send.
 	static function holding(work FrontEndWork) returns FrontEndJob
-		var holder = FrontEndWorkArray.create(0)
+		let holder = FrontEndWorkArray.create(0)
 		holder.push(work)
 		return Self{holder: holder, answers: FrontEndAnswerArray.create(0)}
 	end 'holding'
@@ -170,7 +170,7 @@ export type FrontEndJob
 
 	// ⛔ **THE COPIES ARE TAKEN IN HERE AND IN `parsing`, NOT BY THE CALLER.** A temporary the caller
 	// builds lives to the end of the sending statement, so the holder would share it with the sender's
-	// frame at the send's walk (exit 96); one built in this statement has died by the time the record
+	// frame at the send's walk (exit 96 in a seed-built binary); one built in this statement has died by the time the record
 	// is returned.
 	static function lexing(content String) returns isolated FrontEndJob
 		return Self.holding(FrontEndWork.lex(content.clone()))
@@ -226,7 +226,7 @@ export type FrontEndWorker
 		let idle = swap self.slot with job
 
 		modify self.slot 'work'
-			var work = self.slot.takeWork()
+			let work = self.slot.takeWork()
 			let answer = self.answered(work)
 			self.slot.answers.push(answer)
 		end 'work'
@@ -258,9 +258,9 @@ export type FrontEndWorker
 	end 'retire'
 
 	function answered(work FrontEndWork) returns FrontEndAnswer
-		var costs = PoolPhaseCosts.create(FrontEndStage.allCases.count())
-		var probe = PhaseProbe.beginCounters()
-		var outcome = self.outcomeOf(work, costs: costs, probe: probe)
+		let costs = PoolPhaseCosts.create(FrontEndStage.allCases.count())
+		let probe = PhaseProbe.beginCounters()
+		let outcome = self.outcomeOf(work, costs: costs, probe: probe)
 		return FrontEndAnswer.of(outcome, costs: costs)
 	end 'answered'
 
@@ -273,7 +273,7 @@ export type FrontEndWorker
 
 	function privateIndex() returns ProgramSignatures
 		let baseline = try self.baselines.get(0) otherwise panic("FrontEndWorker.privateIndex: a parse reached a worker holding no baseline — the pool hands every worker its baseline before the first parse it dispatches")
-		var index = ProgramSignatures.overlaying(baseline.declarations, template: baseline.template)
+		let index = ProgramSignatures.overlaying(baseline.declarations, template: baseline.template)
 
 		if let reach = try self.reaches.get(0) 'filedSinceTheBaseline'
 			index.adoptLiveReach(reach)
@@ -344,7 +344,7 @@ end 'FrontEndTools'
 //
 // ⛔ **A TYPE OF ITS OWN, BECAUSE THE IN-PROCESS FRONT END MUST CALL NO MESSAGE.** A message's body walks what
 // crosses with it even when it is called directly, and a binary whose runtime cannot move a shared-record graph
-// aborts that walk (`FrontEndPool.RuntimeMovesSharedRecords`).
+// aborts that walk (`FrontEndPool.RuntimeSharesAnyGraph`).
 type FrontEndWorkerState
 	var tools as FrontEndTools
 	var ownIndex as HeldIndexArray
@@ -365,7 +365,7 @@ type FrontEndWorkerState
 	end 'hold'
 
 	function ran(job FrontEndJob) returns FrontEndOutcome
-		var work = job.takeWork()
+		let work = job.takeWork()
 
 		match work 'work'
 			lex(content) then return FrontEndOutcome.lexed(self.lexed(content, edges: UntalliedEdges.create()))
@@ -378,7 +378,7 @@ type FrontEndWorkerState
 	end 'lexed'
 
 	function parsed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable) returns FileParseArtifact
-		var index = try self.ownIndex.get(0) otherwise panic("FrontEndWorkerState.parsed: a parse reached a worker holding no index — the pool hands every worker its baseline before the first parse it dispatches")
+		let index = try self.ownIndex.get(0) otherwise panic("FrontEndWorkerState.parsed: a parse reached a worker holding no index — the pool hands every worker its baseline before the first parse it dispatches")
 		return self.tools.parsed(job, tokens: tokens, overrides: overrides, index: index, costs: self.costs, probe: self.probe)
 	end 'parsed'
 end 'FrontEndWorkerState'
@@ -422,10 +422,10 @@ module type FrontEndPool
 	//
 	// ⛔ It exists only to stage a build from a released seed whose runtime predates shared-record moves, and is
 	// removed once a release carries that runtime.
-	static let RuntimeMovesSharedRecords = false
+	static let RuntimeSharesAnyGraph = false
 
 	// Qualified, so that no declaration outside this compiler answers it.
-	module static let RuntimeMovesSharedRecordsDefine = "Compiler.FrontEndPool.RuntimeMovesSharedRecords"
+	module static let RuntimeSharesAnyGraphDefine = "Compiler.FrontEndPool.RuntimeSharesAnyGraph"
 
 	var workers as FrontEndWorkerHandleArray
 	var inProcess as FrontEndWorkerStateArray
@@ -459,7 +459,7 @@ module type FrontEndPool
 	end 'create'
 
 	static function placement(project Project) returns FrontEndPlacement
-		if not FrontEndPool.RuntimeMovesSharedRecords 'runtimeCannot'
+		if not FrontEndPool.RuntimeSharesAnyGraph 'runtimeCannot'
 			return FrontEndPlacement.inProcessForRuntime
 		end 'runtimeCannot'
 
@@ -503,8 +503,8 @@ module type FrontEndPool
 	// `queryActiveTokens` in source-path order — so the token queries the signature sweep asks next are all hits.
 	module function lexEveryFile(project Project) throws CompileError
 		let buildKey = buildKeyOf(project)
-		var files = PoolJobArray.create(0)
-		var sizes = PoolJobSizeArray.create(0)
+		let files = PoolJobArray.create(0)
+		let sizes = PoolJobSizeArray.create(0)
 
 		for fileIndex in 0 upto project.db.sourcePaths.count() 'eachFile'
 			let held = try activeTokensAreHeld(project, path: sourcePathAt(project, fileIndex: fileIndex), buildKey: buildKey)
@@ -523,8 +523,8 @@ module type FrontEndPool
 		let probe = PhaseProbe.beginPhase(project, phase: CompilePhase.frontEndPool)
 		self.noteDrain(FrontEndDrainKind.lexing)
 
-		var outcomes = FrontEndOutcomeArray.create(0)
-		var slots = LandingSlots.create(project.db.sourcePaths.count())
+		let outcomes = FrontEndOutcomeArray.create(0)
+		let slots = LandingSlots.create(project.db.sourcePaths.count())
 		try self.drainEveryJob(project, input: FrontEndDrainInput.lexing(project), files: files, sizes: sizes, outcomes: outcomes, slots: slots)
 
 		for fileIndex in files 'landInSourcePathOrder'
@@ -538,19 +538,19 @@ module type FrontEndPool
 	// ⭐ **EVERY FILE'S PARSE, IN SOURCE-PATH ORDER** — the memoized ones from the memo, the rest parsed on the
 	// workers against `signatures`, which is at its settled baseline.
 	module function parseEveryFile(project Project, signatures ProgramSignatures) returns FileParseArtifactArray throws CompileError
-		var queries = ParseQueryArray.create(project.db.sourcePaths.count(), zeroed: false)
-		var files = PoolJobArray.create(0)
-		var sizes = PoolJobSizeArray.create(0)
+		let queries = ParseQueryArray.create(project.db.sourcePaths.count(), zeroed: false)
+		let files = PoolJobArray.create(0)
+		let sizes = PoolJobSizeArray.create(0)
 
 		for fileIndex in 0 upto project.db.sourcePaths.count() 'eachFile'
 			try requireStillWanted(project)
-			var query = try parseQueryOf(project, path: sourcePathAt(project, fileIndex: fileIndex))
+			let query = try parseQueryOf(project, path: sourcePathAt(project, fileIndex: fileIndex))
 			noteParseJob(query, fileIndex: fileIndex, files: files, sizes: sizes)
 			queries.push(query)
 		end 'eachFile'
 
-		var outcomes = FrontEndOutcomeArray.create(0)
-		var slots = LandingSlots.create(project.db.sourcePaths.count())
+		let outcomes = FrontEndOutcomeArray.create(0)
+		let slots = LandingSlots.create(project.db.sourcePaths.count())
 
 		if files.count() == 0 'everyParseIsMemoized'
 			return landParses(project, queries: queries, outcomes: outcomes, slots: slots)
@@ -611,7 +611,7 @@ module type FrontEndPool
 		end 'placement'
 
 		for slot in 0 upto self.workers.count() 'eachRetirement'
-			var worker = try self.workers.get(slot) otherwise panic("FrontEndPool.close: workers.get OOB at {slot} below count {self.workers.count()}")
+			let worker = try self.workers.get(slot) otherwise panic("FrontEndPool.close: workers.get OOB at {slot} below count {self.workers.count()}")
 			_ = try await worker.retire() otherwise panic("{workerGoneMessage("FrontEndPool.close", subject: "worker {slot}")}")
 		end 'eachRetirement'
 
@@ -692,7 +692,7 @@ module type FrontEndPool
 		end 'alreadyAdopted'
 
 		let handoff = try self.handoffs.get(0) otherwise panic("FrontEndPool.requireAdopted: a worker was handed the baseline before `holdBaseline` published its declarations and copied what a parse writes")
-		var worker = self.workerAt(workerSlot)
+		let worker = self.workerAt(workerSlot)
 
 		// Temporaries, so the send moves them: the handles are the worker's alone, and the declarations
 		// and the template they name are shared.
@@ -746,13 +746,13 @@ module type FrontEndPool
 	// ⭐ **THE WORKER'S OWN WORK, DONE ON THIS THREAD** — the same job, the same answer and the same landing as a
 	// drain on the pool, with nothing moved.
 	function drainInProcess(project Project, input FrontEndDrainInput, files PoolJobArray, outcomes FrontEndOutcomeArray, slots LandingSlots) throws CompileError
-		var worker = self.inProcessWorker(project, input: input)
+		let worker = self.inProcessWorker(project, input: input)
 
 		for job in 0 upto files.count() 'eachJob'
 			try requireStillWanted(project)
 			let fileIndex = fileOfJob(files, job: job)
 
-			var outcome = match input 'input'
+			let outcome = match input 'input'
 				lexing(sources) gives lexInProcess(project, worker: worker, content: sourceTextAt(sources, fileIndex: fileIndex))
 				parsing(queries) gives parseInProcess(project, worker: worker, query: queryAt(queries, fileIndex: fileIndex))
 			end 'input'
@@ -768,7 +768,7 @@ module type FrontEndPool
 			self.inProcess.push(FrontEndWorkerState.create(project.target.cpu, os: project.target.os, debugStream: project.debugStream))
 		end 'firstDrain'
 
-		var worker = try self.inProcess.get(0) otherwise panic("FrontEndPool.inProcessWorker: inProcess.get OOB at 0 after the push above")
+		let worker = try self.inProcess.get(0) otherwise panic("FrontEndPool.inProcessWorker: inProcess.get OOB at 0 after the push above")
 
 		match input 'input'
 			lexing then break
@@ -781,8 +781,8 @@ module type FrontEndPool
 	// ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.** The protocol is
 	// `PoolDispatch`'s, shared with the backend's two pools.
 	function drain(project Project, input FrontEndDrainInput, files PoolJobArray, sizes PoolJobSizeArray, workerCount PoolSize, outcomes FrontEndOutcomeArray, slots LandingSlots) throws CompileError
-		var dispatch = PoolDispatch.create(sizes, workerCount: workerCount, assignment: PoolAssignment.staticShare)
-		var replies = FrontEndReplyPromiseArray.create(dispatch.pipelineDepth(), zeroed: false)
+		let dispatch = PoolDispatch.create(sizes, workerCount: workerCount, assignment: PoolAssignment.staticShare)
+		let replies = FrontEndReplyPromiseArray.create(dispatch.pipelineDepth(), zeroed: false)
 
 		for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
 			self.dispatchJob(input, files: files, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies)
@@ -793,8 +793,8 @@ module type FrontEndPool
 			let freedWorker = dispatch.workerAt(ready)
 			let fileIndex = fileOfJob(files, job: dispatch.land(ready, outstanding: replies.count()))
 			let reply = try replies.remove(ready) otherwise panic("FrontEndPool.drain: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
-			var unit = await reply
-			var answer = unit.takeAnswer()
+			let unit = await reply
+			let answer = unit.takeAnswer()
 			self.noteCosts(answer.costs)
 			landOutcome(answer.outcome, fileIndex: fileIndex, outcomes: outcomes, slots: slots)
 
@@ -848,7 +848,7 @@ function lexInProcess(project Project, worker FrontEndWorkerState, content Strin
 end 'lexInProcess'
 
 function parseInProcess(project Project, worker FrontEndWorkerState, query ParseQuery) returns FrontEndOutcome
-	var job = merge FrontEndJob.parsing(query)
+	let job = merge FrontEndJob.parsing(query)
 
 	if not project.allocationsByTag 'untallied'
 		return worker.ran(job)
@@ -940,7 +940,7 @@ end 'parsedArtifactOf'
 
 // Every file's artifact in source-path order: a memoized one as the memo holds it, a parsed one landed now.
 function landParses(project Project, queries ParseQueryArray, outcomes FrontEndOutcomeArray, slots LandingSlots) returns FileParseArtifactArray
-	var artifacts = FileParseArtifactArray.create(queries.count(), zeroed: false)
+	let artifacts = FileParseArtifactArray.create(queries.count(), zeroed: false)
 
 	for fileIndex in 0 upto queries.count() 'eachFileInSourcePathOrder'
 		artifacts.push(landedArtifact(project, query: queryAt(queries, fileIndex: fileIndex), fileIndex: fileIndex, outcomes: outcomes, slots: slots))

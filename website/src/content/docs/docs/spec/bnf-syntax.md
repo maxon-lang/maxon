@@ -58,9 +58,7 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'continue'
 
 Contextual keywords are IDENTIFIER tokens that act as syntax in one position only: `module` (directly
 before a declaration), `test` (a top-level declaration followed by a `TEST_NAME`), `spawn` (followed by a
-type's factory call, optionally after a `(capacity: n)` group), `bits` (followed by `(` on a typealias right-hand side), `view` (a `view_decl`: at the start of a
-statement or after `if` or `then`, followed by an IDENTIFIER, or by a parenthesized list whose `)` is followed by
-`=`; and before a name in a `tuple_assign_stmt` target), `unique` (after `is` in a `type_decl` header: `type Ticket is unique`),
+type's factory call, optionally after a `(capacity: n)` group), `bits` (followed by `(` on a typealias right-hand side), `unique` (after `is` in a `type_decl` header: `type Ticket is unique`),
 `sendable` (after `is` in a `constraint`), `mutates` and `captures` (the `mutates_clause` ending a
 `function_type`), `modify` (a `modify_stmt`: at the start of a statement, followed by an IDENTIFIER or `self`,
 on a line ending in a LABEL), and `freeze`, `swap` and `merge` (a `region_expr`: not after `.`, followed by an
@@ -68,14 +66,13 @@ IDENTIFIER, `self`, `Self`, `try`, or a `(` set apart from the word by a space; 
 adjacent is a call). `__line__` and `__file__`
 are identifiers in the reserved `__` space, legal only as a parameter default (§3.1).
 
-`readonly`, `mutable`, `isolated` and `immutable` are contextual words that qualify a type exactly where the
+`mutable`, `isolated` and `immutable` are contextual words that qualify a type exactly where the
 grammar expects a type: after `as` or `returns`, after a parameter's name, as a `type_arg`, as an element of
 a `tuple_type`, in a `function_type` parameter, at the start of a `typealias_rhs`, and (for `isolated`)
 after `is` in a `constraint`. `mutable`, `isolated` and `immutable` also qualify `self` as a `receiver_param`.
-Everywhere else they are IDENTIFIER tokens, so `mutable(x)` is a call and `immutable` and `readonly` can name a
-local or an operand. A qualifier the position's production does not take is rejected there: `readonly` anywhere
-but a `type_arg` is E2075, and any other word the position does not take, or on a type that belongs to no region,
-is E2010. A `function_type` whose first parameter is `readonly` followed by a type names that parameter `readonly`.
+Everywhere else they are IDENTIFIER tokens, so `mutable(x)` is a call and `immutable` can name a local or an
+operand. A qualifier the position's production does not take, or one on a type that belongs to no region, is
+E2010.
 
 ### 1.4 Literals
 
@@ -267,7 +264,7 @@ needs no `try`: the test handles the error.
 ```
 function_decl = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 [ 'returns' [ capability ] type_ref ] [ throws_clause ] NEWLINE
-                body                                         (* `returns readonly T` is E2075 *)
+                body
                 'end' LABEL
 
 receiver_param
@@ -494,10 +491,8 @@ alias_type_args
               = type_arg { ',' type_arg }                    (* a bare list: typealias right-hand side only *)
               | '(' type_arg { ',' type_arg } ')'
 
-type_arg      = [ 'readonly' | capability ] generic_base 'with' [ INTEGER ] type_args    (* nested instance: parenthesize several arguments *)
-              | [ 'readonly' | capability ] type_ref
-
-                (* 'readonly' only on an Array or List element and a Map value: `Map with Key, readonly Value` (E2075) *)
+type_arg      = [ capability ] generic_base 'with' [ INTEGER ] type_args    (* nested instance: parenthesize several arguments *)
+              | [ capability ] type_ref
 
                 (* a capability on a type argument: `Array with immutable Job`, `Map with (String, isolated Job)`;
                    `isolated` only where the generic type declares `where T is isolated`, and never on a Map key
@@ -516,6 +511,9 @@ tuple_element = [ 'immutable' ] type_ref                     (* `isolated` and `
 ```
 top_level_let = visibility_prefix 'let' IDENTIFIER '=' expression NEWLINE
 ```
+
+The `expression` of a `top_level_let` and of a `static_field_decl` is a value known before the program runs and
+contains no function call: a call is E3220 (E2045 where the binding holds a number, `bool` or enum).
 
 ### 3.9 Default Declaration
 
@@ -588,7 +586,6 @@ statement     = return_stmt
               | annotated_decl
               | var_decl
               | let_decl
-              | view_decl
               | discard_stmt
               | modify_stmt
               | if_stmt
@@ -627,9 +624,6 @@ var_decl      = 'var' IDENTIFIER '=' ( expression | isolated_init )
 let_decl      = 'let' IDENTIFIER '=' ( expression | isolated_init )
               | 'let' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 
-view_decl     = 'view' IDENTIFIER '=' expression               (* contextual; another spelling of let_decl; a local binding only, E2077 elsewhere *)
-              | 'view' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
-
 discard_stmt  = '_' '=' expression
 
 isolated_init = expression 'as' 'isolated' type_ref            (* the whole initializer of a `var_decl` or `let_decl`:
@@ -645,7 +639,6 @@ modify_target = IDENTIFIER { '.' IDENTIFIER }
 ```
 
 Constraints:
-- An `@heap view` is E2077
 - The expression in `discard_stmt` must be a function call (error E3067)
 - `var _ = ...` and `let _ = ...` are not allowed; use `_ = ...` instead
 
@@ -671,7 +664,7 @@ tuple_assign_stmt
 
 tuple_assign_target
               = IDENTIFIER    (* must refer to an existing var-declared variable *)
-              | ( 'let' | 'var' | 'view' ) IDENTIFIER    (* declares a new binding *)
+              | ( 'let' | 'var' ) IDENTIFIER    (* declares a new binding *)
               | '_'           (* discard this element *)
 ```
 
@@ -703,7 +696,7 @@ condition     = expression
 if_try_stmt   = 'if' 'try' expression LABEL NEWLINE             (* only for a call that returns nothing; E3124 otherwise *)
                 body
                 'end' LABEL [ else_clause ]
-              | 'if' ('let' | 'var' | 'view') IDENTIFIER '=' 'try' expression LABEL NEWLINE
+              | 'if' ('let' | 'var') IDENTIFIER '=' 'try' expression LABEL NEWLINE
                 body
                 'end' LABEL [ else_clause ]
 ```

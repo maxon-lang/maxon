@@ -30,7 +30,7 @@ extension Mergeable
 		self.appendOps(source)
 		for i in 0 upto source.itemCount() 'eachItem'
 			let src = source.getItem(i)
-			var copy = self.cloneItem(src)
+			let copy = self.cloneItem(src)
 			self.pushItem(copy)
 		end 'eachItem'
 	end 'merge'
@@ -94,17 +94,17 @@ typealias IntContainer = Container with Integer
 typealias ExitCode = int(0 to 125)
 
 function main() returns ExitCode
-	var a = IntContainer.create()
+	let a = IntContainer.create()
 	a.pushOp(10)
 	a.pushOp(20)
-	var first = Wrapper.create(99)
+	let first = Wrapper.create(99)
 	a.pushItem(first)
 
-	var b = IntContainer.create()
+	let b = IntContainer.create()
 	b.merge(a)
 
 	if b.opsCount() == 2 and b.itemCount() == 1 'check'
-		view item = b.getItem(0)
+		let item = b.getItem(0)
 		if item.value == 99 'valueCheck'
 			return 0
 		end 'valueCheck'

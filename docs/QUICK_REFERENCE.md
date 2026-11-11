@@ -53,9 +53,9 @@ if value == i32.max 'check'         // comparisons, arithmetic, etc.
 
 Construction and range checks:
 ```maxon
-var p = 8080 as Port                // cast a value into the ranged type
-var x = 70000 as Port               // compile error: out of range
-var y = someExpression as Port      // runtime range check (panics on violation)
+let p = 8080 as Port                // cast a value into the ranged type
+let x = 70000 as Port               // compile error: out of range
+let y = someExpression as Port      // runtime range check (panics on violation)
 ```
 
 Subtypes: an alias that `implements` another widens to it, and to its ancestors, with no cast:
@@ -148,7 +148,8 @@ print("Status: {"on" if flag else "off"}")
 
 **`let` means the name is never reassigned; `var` means it may be.** A `let` record can be written through
 (a field store, `push`, a callee that writes its parameter). A number, `bool`, enum or `String` cannot change
-under a `let`, because changing one is reassigning it: use a `var`. `view` is another spelling of `let`.
+under a `let`, because changing one is reassigning it: use a `var`. A `var` that is never reassigned is E3077,
+even when it is written through (`push`, a field store).
 
 ```maxon
 let x = 42          // never reassigned; a constant: fits any alias its value fits
@@ -159,8 +160,8 @@ _ = sideEffect()  // discard: no binding, no unused check
 // Top-level constants (outside functions)
 let MAX_SIZE = 1024     // constant
 
-// Static fields (inside types): every initializer runs once, before main,
-// in dependency order, whether or not anything reads the field
+// Static fields (inside types): image data laid down before main; an initializer
+// calls nothing (E3220), and one that reads another static follows it in dependency order
 type Origin
 	export var x as Coord
 	export var y as Coord
@@ -172,31 +173,32 @@ type Origin
 end 'Origin'
 
 // Reference-by-default for structs
-var a = Point.create(1, y: 2)
-var points = PointArray.create(0)
+let a = Point.create(1, y: 2)
+let points = PointArray.create(0)
 points.push(a)          // the array shares a's record
 var b = try points.get(0) otherwise panic("pushed")
 b.x = 99                // a.x is now 99: a and b are one record
 b = Point.create(5, y: 6)  // rebinds b -- a is unaffected
-var m = a               // a MOVES into m; reading a afterwards is E3102
+var n = Point.create(7, y: 8)
+let m = n               // n is a var: it MOVES into m; reading n afterwards is E3102
+n = Point.create(9, y: 9)  // assigning n makes it usable again
 
 // Explicit clone for independent copy (requires Cloneable)
-var c = m.clone()       // deep copy -- c is independent
+let c = m.clone()       // deep copy -- c is independent
 c.x = 42                // m.x is still 99
 let kept = c            // c moves into kept; kept can be written through, not reassigned
 kept.x = 1              // legal: a let fixes the name, not the record
 
-// view is another spelling of let
-view first = try points.get(0) otherwise panic("pushed")
+let first = try points.get(0) otherwise panic("pushed")
 points.push(Point.create(3, y: 4))
 first.x = 7             // legal: first names the record points holds at 0
 ```
 
 All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks; reading a `_` parameter is E2004. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `_ =` requires a function call on the right-hand side (`_ = 42` is an error).
 
-**Assignment semantics:** A record is stored by reference: a record pushed into a container, stored in a field or passed to a call is shared, and a field write through one holder is visible through every other. `var b = a` and `let b = a` from a `var a` MOVE the record (reading `a` afterwards is E3102); from a `let a`, `b` names the same record and `a` stays usable. Reassignment (`b = Point.create(...)`) rebinds without affecting the record `b` held. Use `a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
+**Assignment semantics:** A record is stored by reference: a record pushed into a container, stored in a field or passed to a call is shared, and a field write through one holder is visible through every other. `let b = a` from a `var a` MOVES the record (reading `a` afterwards is E3102); from a `let a`, `b` names the same record and `a` stays usable. Reassignment (`b = Point.create(...)`) rebinds without affecting the record `b` held. Use `a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
 
-**Read-only data:** a constant (a `let` bound to a literal, a constant record or array literal, another constant `let`, and every inline `b"…"` literal), a `freeze` result, a module-level `let` built by a call, a `SharedValue` or registry read, a stored `Map` key or `Set` element, and an element of `Array with readonly T` / `Map with K, readonly V`. A write through constant or `immutable` data (a field store, a method that writes its receiver, an argument the callee writes) is E3207; through the others it is E3159. Binding the others to a `var`, or storing them where something may write them, is E3078. `clone()` makes a mutable copy. A `for`, `if let` or `match` binding follows its source.
+**Read-only data:** a constant (a `let` bound to a literal, a constant record or array literal, another constant `let`, and every inline `b"…"` literal), a `freeze` result, every module-level `let` (its initializer calls nothing: E3220), a `SharedValue` or registry read, a stored `Map` key or `Set` element, and an element of `Array with immutable T` / `Map with K, immutable V`. A write through constant or `immutable` data is E3207 where an argument is handed to a parameter the callee writes and E3197 at a field store or a method that writes its receiver; storing it where something may write it is E3196. `clone()` makes a mutable copy. A `for`, `if let` or `match` binding follows its source.
 
 **Constant data is `immutable`:** a field, array element or union payload that holds a `b"…"` literal or a constant `let` is declared `immutable ByteArray` (storing it into a plain one is E3196); a result that returns one is declared `immutable` (E3209); a `var` bound to a `b"…"` literal and then written is E3207, so build the array (`ByteArray.create` and `push`, or `"text".toByteArray()`). A `Map` key and a `Set` element are `immutable` slots: a key built at run time is `freeze`d where it is inserted. A union payload takes a capability word: `named(let name immutable ByteArray)`.
 
@@ -284,7 +286,7 @@ end 'check'
 greet("Smith", title: "Dr.")
 ```
 
-**Parameter passing:** A parameter is a `let` passed by value; reassigning it is E2013. A value-type parameter (a number, `bool`, an enum or `String`) the function reassigns is marked `mutable` before its type and is passed by reference -- the write propagates back to the caller's storage: a local `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a `let` to a `mutable` parameter is E2013 (bind it to a `var`), and passing other read-only data, a literal or an expression is E3159. The variable's declared type must be the parameter's type, alias included (E3005). A record parameter is never rebound; copy it into a local `var`. `mutable` before a message or factory parameter's type is a parse error (E2010).
+**Parameter passing:** A parameter is a `let` passed by value; reassigning it is E2013. A value-type parameter (a number, `bool`, an enum or `String`) the function reassigns is marked `mutable` before its type and is passed by reference -- the write propagates back to the caller's storage: a local `var`, a field (`p.x`, `self.count`) or a chain of them, written in place. Passing a `let` to a `mutable` parameter is E2013 (bind it to a `var`), and so is passing a literal, an expression, a module-level `let` or a captured name. The variable's declared type must be the parameter's type, alias included (E3005). A record parameter is never rebound; copy it into a local `var`. `mutable` before a message or factory parameter's type is a parse error (E2010).
 
 **Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `_ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
 
@@ -314,7 +316,7 @@ let addX = function(n Score) gives n + x     // single expression body
 let double = function(n Score) gives n * 2
 ```
 
-A closure owns what it captures. A captured scalar is copied when the closure is created; a captured local holding a record, `String`, array or promise is **moved** into the closure, so reading it afterwards is E3102 (clone it first if you still need it); a captured parameter, `self` or field is shared. A closure can be returned, stored anywhere, and passed to `async`; storing one into a record it captures is E3183. An escaping closure (stored or returned) keeps every record it captures, so handing a read-only value to a function whose parameter it captures is E3078; a closure that only runs where it is made writes what it writes of a captured parameter (E3159 for a read-only argument).
+A closure owns what it captures. A captured scalar is copied when the closure is created; a captured local holding a record, `String`, array or promise is **moved** into the closure, so reading it afterwards is E3102 (clone it first if you still need it); a captured parameter, `self` or field is shared. A closure can be returned, stored anywhere, and passed to `async`; storing one into a record it captures is E3183. A closure that only runs where it is made writes what it writes of a captured parameter (E3207 for a frozen argument), and a captured name handed to a parameter the callee writes is E2013 (pass a `clone()`).
 
 Closure parameters are checked for unused (E3012). Use `_` to discard: `function(_ Integer) gives 42`
 
@@ -564,8 +566,8 @@ type Point implements Hashable, Describable   // interface conformance
 end 'Point'
 
 // Instantiation
-var p = Point.create(10, y: 20)
-var o = Point.origin()
+let p = Point.create(10, y: 20)
+let o = Point.origin()
 
 // Static field access
 Point.count = Point.count + 1
@@ -698,29 +700,29 @@ enum ContentType
 		html = "text/html"
 end 'ContentType'
 
-var s = HttpStatus.notFound
+let s = HttpStatus.notFound
 if s == HttpStatus.notFound 'check'
 		// direct comparison allowed (enums support == and !=)
 end 'check'
 
-var result = match s 'handle'
+let result = match s 'handle'
 		ok gives 1
 		notFound gives 2
 		serverError gives 3
 end 'handle'
 
 // rawValue, name, ordinal, allCases, allCaseNames, fromRawValue, fromName
-var code = s.rawValue      // 404
-var name = s.name          // "notFound"
-var pos = s.ordinal        // 1 (declaration position, not raw value)
+let code = s.rawValue      // 404
+let name = s.name          // "notFound"
+let pos = s.ordinal        // 1 (declaration position, not raw value)
 for status in HttpStatus.allCases 'loop'  // iterate all cases
 		print("{status.name}\n")
 end 'loop'
 for n in HttpStatus.allCaseNames 'loop'   // iterate case names as Strings
 		print("{n}\n")
 end 'loop'
-var s2 = try HttpStatus.fromRawValue(200) otherwise HttpStatus.ok    // HttpStatus.ok
-var s3 = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok // HttpStatus.notFound
+let s2 = try HttpStatus.fromRawValue(200) otherwise HttpStatus.ok    // HttpStatus.ok
+let s3 = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok // HttpStatus.notFound
 
 export enum Permission
 		none = 0
@@ -737,12 +739,12 @@ enum Status
 	closed = "CLOSED"
 end 'Status'
 
-var st = Status.active
-var raw = st.rawValue                 // "ACTIVE" (String; Character for char-backed)
+let st = Status.active
+let raw = st.rawValue                 // "ACTIVE" (String; Character for char-backed)
 if st.rawValue == "ACTIVE" 'check'    // == / != compares against the String/Character peer
 	// ...
 end 'check'
-var s4 = try Status.fromRawValue("CLOSED") otherwise Status.active  // Status.closed
+let s4 = try Status.fromRawValue("CLOSED") otherwise Status.active  // Status.closed
 ```
 
 `.rawValue` reconstructs the declared backing literal from the runtime ordinal; `fromRawValue` takes the backing literal type (`String` / `Character`).
@@ -819,8 +821,8 @@ union Result
 		failure(code ErrorCode, message String)
 		pending
 end 'Result'
-var r = Result.success(42)
-var r2 = Result.failure(404, message: "Not found")
+let r = Result.success(42)
+let r2 = Result.failure(404, message: "Not found")
 
 // Pattern matching
 match result 'handle'
@@ -834,7 +836,7 @@ var box = Result.success(10)
 box = Result.success(42)
 
 // Create from name (throws EnumError.invalidName on unknown name)
-var c = try Result.fromName("success", 42) otherwise Result.pending
+let c = try Result.fromName("success", 42) otherwise Result.pending
 
 // Methods
 union Direction
@@ -957,7 +959,7 @@ panic("expected {a}, got {b}")      // interpolated strings supported
 
 ```maxon
 // isolated: a region of its own, one entry, written only inside `modify` or a one-call open
-var builder = IndexBuilder.create() as isolated IndexBuilder
+let builder = IndexBuilder.create() as isolated IndexBuilder
 modify builder 'fill'
 	builder.add(declaration.clone())      // `builder` is writable here; outer data is read-only
 end 'fill'
@@ -996,16 +998,16 @@ function reported(immutable self) returns Tally // runs on a frozen receiver onl
 
 ```maxon
 // Start a coroutine of the current green thread
-var promise = async someFunction(arg1, arg2)
+let promise = async someFunction(arg1, arg2)
 
 // Wait for the result
 var result = await promise
 
 // Parallel work
-var p1 = async taskA()
-var p2 = async taskB()
-var r1 = await p1
-var r2 = await p2
+let p1 = async taskA()
+let p2 = async taskB()
+let r1 = await p1
+let r2 = await p2
 
 // Void functions
 var p = async doWork()
@@ -1023,7 +1025,7 @@ p.cancel()
 typealias Tally = int(0 to u64.max)
 typealias IntPromise = Promise with Tally
 typealias IntPromiseArray = Array with IntPromise
-var arr = IntPromiseArray.create(0)
+let arr = IntPromiseArray.create(0)
 arr.push(async compute(1))
 arr.push(async compute(2))
 for q in arr 'each'
@@ -1051,8 +1053,8 @@ end 'each'
 typealias Tally = int(0 to u64.max)
 typealias IntArray = Array with Tally
 
-var arr = [1, 2, 3]                    // array literal
-var empty = IntArray.create(0)                 // typed empty array
+let arr = IntArray from [1, 2, 3]      // array literal
+let empty = IntArray.create(0)                 // typed empty array
 
 let n = arr.count()                    // length
 try arr.get(0) otherwise 0             // access (throws ArrayError)

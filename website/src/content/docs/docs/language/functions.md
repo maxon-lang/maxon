@@ -219,9 +219,9 @@ end 'main'
   the call site would be accepted.
 - Passing a `let` to a `mutable` parameter is **E2013** (``'y' is a let and cannot be passed to the `mutable`
   parameter 'n'; bind it to a `var` ``): the callee reassigns the caller's variable, and a `let` has none to
-  give. A `let` field is refused for the same reason the equivalent assignment is. Other
-  [read-only](/docs/language/memory-model/#read-only-values) data at a `mutable` position, such as a stored `Map` key, is **E3159**. A literal or
-  another expression is no storage for the write to reach, so it is **E3159** too (``cannot pass a literal to
+  give. A `let` field is refused for the same reason the equivalent assignment is, and so are a module-level
+  `let`, a stored `Map` key and a name a closure captured. A literal or
+  another expression is no storage for the write to reach, so it is **E2013** too (``cannot pass a literal to
   a function that writes parameter 'n'; pass a `var` ``). A callee that writes a field of its record parameter
   or receiver reaches through a `let` argument: `let acc = Accumulator.create()` followed by `acc.add(10)`,
   where `add` writes a field of `acc`, is legal.
@@ -233,7 +233,7 @@ end 'main'
   [Capabilities at Function Types and Requirements](/docs/language/regions/#capabilities-at-function-types-and-requirements)). A
   call through a function value or an
   interface passes the argument's storage at each `mutable` position, and a `let` handed to such
-  a position is **E2013**, as at a direct call; a literal or another expression is **E3159**. Through
+  a position is **E2013**, as at a direct call; so is a literal or another expression. Through
   a function value or an interface requirement the message names the position (`to a function that writes
   argument 1`).
 - A variable passed by reference is a flow in both directions: the callee reads the variable and may write
@@ -329,12 +329,13 @@ Clone a local before the closure when the function still needs it (`let mine = w
 captured inside a loop is moved on the first trip, so the second is **E3102**. A capture moves its local
 before the call it is an argument of runs, so that call may not also consume the local, take it by
 reference or write it as its receiver (**E3102**); a call that only reads it may. Inside a closure, a captured name is the closure's own
-copy, so passing it to a parameter the callee writes is **E3159**.
+copy, so passing it to a parameter the callee writes is **E2013**; pass a `clone()`.
 
-A closure that escapes — stored anywhere or returned — keeps every record it captures, so handing a read-only
-value to a function whose parameter such a closure captures is **E3078**. A closure that stays local — it is
-only called, where it is made or by a parameter that only calls it — writes what it writes of a parameter it
-captures, so handing that function a read-only value is **E3159**.
+A closure that stays local — it is only called, where it is made or by a parameter that only calls it — writes
+what it writes of a parameter it captures, so handing that function frozen data is **E3207**. A closure that
+returns constant or module-level `let` data returns `immutable` data: writing through its result is **E3207**,
+and it converts only to a function type that declares `returns immutable` (**E3210**); take a `.clone()` or
+declare the result.
 
 A call through a closure held in a local `let` is judged against that one closure: `reader(box)` takes a
 frozen `box` when `reader` only reads its parameter, though a closure of the same shape beside it writes
@@ -344,9 +345,8 @@ so a call through it is judged against all of them.
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
 and the captures, so a closure may be returned, stored in a field, a container or
 a union payload, and passed to `async`. A plain function is a record that
-lives for the whole program. Copies share: `var g = f`, `g = f` and `f.clone()` hold the same closure, and a
-function value is exempt from **E3078**. A module-level `let` may hold a function value, including a closure
-a factory call returns.
+lives for the whole program. Copies share: `var g = f`, `g = f` and `f.clone()` hold the same closure.
+A module-level `let` may hold a function value: a function name or a closure that captures nothing.
 
 **A closure may not be stored into what it captures.** The record would hold the closure and the closure the
 record, and neither would ever be released, so storing a closure — directly, or inside a value holding it —

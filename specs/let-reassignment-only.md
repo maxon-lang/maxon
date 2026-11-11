@@ -1,7 +1,7 @@
 ---
 feature: let-reassignment-only
 status: experimental
-keywords: [let, view, reassign, write through, alias, E2013, E3159, E3077, E3102, E3207]
+keywords: [let, reassign, write through, alias, E2013, E3159, E3077, E3102, E3207]
 category: semantics
 ---
 
@@ -11,7 +11,7 @@ category: semantics
 
 A `let` is a name that is never reassigned. It does not freeze what the name holds: a field store, a mutating
 method such as `push` and a callee that writes its parameter all reach through a `let` to the record or
-container it names. `view` is another spelling of `let`.
+container it names.
 
 What a `let` still refuses is rebinding. Assigning to it is **E2013**, and so is handing it to a `mutable`
 parameter, because that parameter reassigns the caller's variable.
@@ -239,7 +239,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let h = Holder.create()
-	var c = h.box
+	let c = h.box
 	c.n = 7
 	print("{h.box.n}\n")
 	return 0
@@ -273,7 +273,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	let b = h.box
 	h.box.n = 7
 	print("{b.n}\n")
@@ -307,7 +307,7 @@ function retarget(p Box)
 end 'retarget'
 
 function main() returns ExitCode
-	var b = Box.create(1)
+	let b = Box.create(1)
 	retarget(b)
 	print("{b.n}\n")
 	return 0
@@ -601,7 +601,7 @@ typealias Count = int(0 to 1000)
 typealias Counted = Map with (String, Count)
 
 function main() returns ExitCode
-	var m = Counted.create()
+	let m = Counted.create()
 	m.upsert("a", value: 1)
 
 	for (k, _) in m 'each'
@@ -612,10 +612,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:5: cannot pass 'k', which is read-only (a `for` element of a read-only source), to a function that writes parameter 'self' (in main); pass a clone()
+error E2013: <fragment>:10:5: 'k' is a let and cannot be passed to the `mutable` parameter 'self'; bind it to a `var`
 ```
 
-<!-- test: a-view-is-written-through-like-a-let -->
+<!-- test: a-let-bound-to-a-field-is-written-through-like-a-let -->
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -636,8 +636,8 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
-	view v = h.box
+	let h = Holder.create()
+	let v = h.box
 	v.n = 9
 	print("{h.box.n}\n")
 	return 0
@@ -650,7 +650,7 @@ end 'main'
 9
 ```
 
-<!-- test: error.reassigning-a-view -->
+<!-- test: error.reassigning-a-let-bound-to-a-record -->
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -663,7 +663,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	view v = Box.create(1)
+	let v = Box.create(1)
 	v = Box.create(2)
 	print("{v.n}\n")
 	return 0
@@ -859,6 +859,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3077: <fragment>:21:6: variable 'h' is never reassigned; use 'let' instead of 'var'
 error E3077: <fragment>:22:6: variable 'node' is never reassigned; use 'let' instead of 'var'
 ```
 

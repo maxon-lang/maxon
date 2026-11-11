@@ -338,7 +338,7 @@ end 'cacheWriteAbandonedRegionArray'
 
 function cacheReadAbandonedRegionArray(reader LibraryCacheReader) returns AbandonedRegionArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = AbandonedRegionArray.create(count, zeroed: false)
+	let result = AbandonedRegionArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try AbandonedRegion.cacheRead(reader)
@@ -355,12 +355,12 @@ end 'cacheReadAbandonedRegionArray'
 // `Project`, so a pool worker may run it; the caller reports what the artifact refused. Its
 // parser's anchors are its own, so the artifact holds no record from outside itself.
 export function parseFile(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, signatures ProgramSignatures) returns FileParseArtifact
-	var parser = Parser.create(tokens, job: job, signatures: signatures, anchors: ParserAnchors.create())
+	let parser = Parser.create(tokens, job: job, signatures: signatures, anchors: ParserAnchors.create())
 	signatures.openParseBand(overrides)
 
 	// A refusal and its blame may hold records the index owns (a `throws` clause's name, a recorded constant's
 	// error, an instantiation's file), and the artifact crosses back from a pool worker, so it carries copies.
-	var artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
+	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		_ = signatures.closeParseBand(job.path)
 		parser.forgetKindVerdicts()
 		return parser.abortedParseArtifact(ParseRefusal.refused(parseErr.clone(), blame: parser.libraryBlame.clone(), consequence: consequenceOfRefusal(parseErr, parser: parser, job: job, signatures: signatures)))
@@ -421,7 +421,6 @@ function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 		undefinedQualifiedFunction(callee, _, _, _) gives namedConsequence(freeze callee.toByteArray())
 		enumMatchNotExhaustive(_, typeName, _, _, _) gives namedConsequence(freeze typeName.toByteArray())
 		serviceTypeNotASpawnTarget(_, typeName, _, _) gives namedConsequence(freeze typeName.toByteArray())
-		serviceReplyGraphNotWalkable(_, message, _, _) gives ConsequenceOf.handlerBody(freeze message.toByteArray())
 		spawnStartRequiresTry(_, factory, _, _) gives namedConsequence(genericTemplateName(factory))
 		genericArgumentCountRefused(_, explanation, _, _) gives ConsequenceOf.genericArgumentCount(explanation)
 		memberAccessOnNonStruct(_, _, _, origin) gives consequenceOfReceiverOrigin(origin)
@@ -456,7 +455,6 @@ function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 		useAfterMovePassedTwice or
 		promiseCannotBeBorrowed or
 		promiseAlreadyConsumed or
-		deepLet or
 		controlOutsideLoop or
 		labelTargetsOwnLoop or
 		labelTargetsOwnMatch or
@@ -635,11 +633,8 @@ function consequenceNamedBy(error SourceParseError) returns ConsequenceOf
 		ucdTableLabelUnknown or
 		builtinUnknownArgLabel or
 		serviceNotASpawnTarget or
-		serviceValueNotTransferable or
-		serviceArgumentNotUnique or
 		serviceNotAMessage or
 		serviceReplyNotCarriable or
-		serviceReplyAliasesState or
 		serviceReplyInstanceUnknown or
 		registryRefused or
 		duplicateDeclaration gives ConsequenceOf.unrelated
@@ -839,7 +834,7 @@ end 'cacheWriteFuncSignatureEntryArray'
 
 function cacheReadFuncSignatureEntryArray(reader LibraryCacheReader) returns FuncSignatureEntryArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FuncSignatureEntryArray.create(count, zeroed: false)
+	let result = FuncSignatureEntryArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try FuncSignatureEntry.cacheRead(reader)
@@ -899,7 +894,7 @@ end 'cacheWriteFunctionRangeCheckEntryArray'
 
 function cacheReadFunctionRangeCheckEntryArray(reader LibraryCacheReader) returns FunctionRangeCheckEntryArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FunctionRangeCheckEntryArray.create(count, zeroed: false)
+	let result = FunctionRangeCheckEntryArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try FunctionRangeCheckEntry.cacheRead(reader)
@@ -952,7 +947,7 @@ end 'cacheWriteUnbuiltBodyArray'
 
 function cacheReadUnbuiltBodyArray(reader LibraryCacheReader) returns UnbuiltBodyArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = UnbuiltBodyArray.create(count, zeroed: false)
+	let result = UnbuiltBodyArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try UnbuiltBody.cacheRead(reader)
@@ -1291,7 +1286,7 @@ export type FileParseArtifact
 	// File what the parse that built this artifact wrote into the signature index, with each instance row known
 	// by the band id the parse handed it.
 	export function recordParseMints(mints LocalInstanceMints)
-		var bandIds = GenericInstanceIdArray.create(mints.rows.count(), zeroed: false)
+		let bandIds = GenericInstanceIdArray.create(mints.rows.count(), zeroed: false)
 
 		for position in 0 upto mints.rows.count() 'eachRow'
 			bandIds.push(BandInstanceIdBase + position)
@@ -1309,7 +1304,7 @@ export type FileParseArtifact
 			entries then break
 		end 'state'
 
-		var byOp = self.registryUseSitesForWrite()
+		let byOp = self.registryUseSitesForWrite()
 
 		for opIndex in first to limit 'eachOpWithAUse'
 			_ = byOp.remove(opIndex)
@@ -1319,12 +1314,12 @@ export type FileParseArtifact
 	// Record an alias this file declared and never named, and a type name this file cannot see. Each
 	// installs its own list on the first entry (`DeferredNameDiagnosticRoster`, `DeferredDiagnosticRoster`).
 	export function recordUnusedTypeAlias(entry DeferredNameDiagnostic)
-		var recorded = self.unusedTypeAliasesForWrite()
+		let recorded = self.unusedTypeAliasesForWrite()
 		recorded.push(entry)
 	end 'recordUnusedTypeAlias'
 
 	export function recordHiddenTypeName(entry Diagnostic)
-		var recorded = self.hiddenTypeNamesForWrite()
+		let recorded = self.hiddenTypeNamesForWrite()
 		recorded.push(entry)
 	end 'recordHiddenTypeName'
 
@@ -1340,7 +1335,7 @@ export type FileParseArtifact
 	end 'adoptHiddenTypeNames'
 
 	function recordHiddenTypeNames(entries DiagnosticArray)
-		var rendered = RenderedDiagnosticSet.create()
+		let rendered = RenderedDiagnosticSet.create()
 
 		for entry in entries 'eachEntry'
 			let text = entry.render()
@@ -1387,7 +1382,7 @@ export type FileParseArtifact
 	end 'recordServiceAwaitSite'
 
 	export function recordRegistryUseSite(site RegistryUseSite)
-		var byOp = self.registryUseSitesForWrite()
+		let byOp = self.registryUseSitesForWrite()
 		byOp.upsert(self.module.opCount(), value: site)
 	end 'recordRegistryUseSite'
 
@@ -1493,7 +1488,7 @@ export type FileParseArtifact
 		self.funcSignatures.push(FuncSignatureEntry.create(name, signature: signature.clone(), returnType: returnType.clone(), nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized))
 	end 'recordFuncSignature'
 
-	// ⭐ **THE INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is ONE statement (E3159), so a
+	// ⭐ **THE INSTALL DOORS.** A `match` arm binds its payload IMMUTABLY and is ONE statement (E3207), so a
 	// list cannot be written in the arm that reads it: each door below installs the
 	// list on the first entry and ANSWERS it, and the caller writes through a `var` alias of that answer.
 
@@ -1551,7 +1546,7 @@ export type FileParseArtifact
 	// header says why both registries need it). Here rather than at `parseEnumDeclaration`'s tail so the
 	// artifact's enum list and the sweep's are filled by one rule.
 	export function recordEnumType(layout EnumLayout)
-		var owned = layout.clone()
+		let owned = layout.clone()
 		self.enumTypes.push(owned)
 		appendUnionCasesCompanion(self.enumTypes, layout: owned)
 	end 'recordEnumType'
@@ -1878,15 +1873,15 @@ function artifactOwnedHold(op MaxonOp) returns MaxonOp
 	end 'hold'
 end 'artifactOwnedHold'
 
-// A call's names are copied and its value-id columns kept: the parser builds `args`, `argRanges` and
-// `defaultedArgs` for this op, while a label or a blamed name may be a parameter name the index holds. Bound in a
+// A call's names are copied and its value-id columns kept: the parser builds `args` and
+// `argRanges` for this op, while a label or a blamed name may be a parameter name the index holds. Bound in a
 // match of its own, for `LowerMaxonToStd.lowerIndirectCall`'s reason.
 function artifactOwnedCall(op MaxonOp) returns MaxonOp
 	match op 'call'
-		call(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.call(result, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
-		tryCall(result, errorFlag, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
-		asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint) then return MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint)
-		serviceSpawn(result, typeName, state, capacity, callee, args, argLabels, argRanges, argImmutableNames, defaultedArgs, mint, startReplies) then return MaxonOp.serviceSpawn(result, typeName: typeName, state: state, capacity: capacity, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedBlames(argImmutableNames), defaultedArgs: defaultedArgs, mint: mint, startReplies: startReplies)
+		call(result, callee, args, argLabels, argRanges, argImmutableNames, mint) then return MaxonOp.call(result, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedNames(argImmutableNames), mint: mint)
+		tryCall(result, errorFlag, callee, args, argLabels, argRanges, argImmutableNames, mint) then return MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedNames(argImmutableNames), mint: mint)
+		asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, mint) then return MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedNames(argImmutableNames), mint: mint)
+		serviceSpawn(result, typeName, state, capacity, callee, args, argLabels, argRanges, argImmutableNames, mint, startReplies) then return MaxonOp.serviceSpawn(result, typeName: typeName, state: state, capacity: capacity, callee: callee, args: args, argLabels: ownedNames(argLabels), argRanges: argRanges, argImmutableNames: ownedNames(argImmutableNames), mint: mint, startReplies: startReplies)
 		default panic("artifactOwnedCall: reached with an op that is not a named call — `artifactOwnedOp` routes only `call`, `tryCall`, `asyncCall` and `serviceSpawn` here")
 	end 'call'
 end 'artifactOwnedCall'
@@ -1895,10 +1890,6 @@ end 'artifactOwnedCall'
 function ownedNames(names NameRoster) returns NameRoster
 	return names if names.isEmpty() else names.clone()
 end 'ownedNames'
-
-function ownedBlames(blames WriteBlameArray) returns WriteBlameArray
-	return blames if blames.isEmpty() else blames.clone()
-end 'ownedBlames'
 
 // Fold `artifact` into the whole-program build in source-path order:
 //   1. reconcile the artifact's local type-name ids into the project interner,
@@ -2089,7 +2080,7 @@ end 'noteWrittenGenericAliasNames'
 // Append one recorded list to a whole-program one — its own function because a `match` arm may not open a
 // `for`, and a walk that deferred nothing never reaches it.
 function pushEachDeferredDiagnostic(into DeferredNameDiagnosticArray, recorded DeferredNameDiagnosticArray)
-	var target = into
+	let target = into
 
 	for entry in recorded 'each'
 		target.push(entry)
@@ -2129,7 +2120,7 @@ module function noteFactsLostTo(project Project, diagnostic Diagnostic)
 end 'noteFactsLostTo'
 
 function noteMemberRefusedAt(project Project, filePath FilePath, line LineNumber, backing PoisonBacking)
-	view heads = try queryDeclarationHeads(project, path: filePath) otherwise return
+	let heads = try queryDeclarationHeads(project, path: filePath) otherwise return
 	project.poison.noteRefusedMemberAt(filePath, line: line, heads: heads, backing: backing)
 end 'noteMemberRefusedAt'
 
@@ -2141,12 +2132,12 @@ module function noteDeclarationLostTo(project Project, filePath FilePath, poison
 end 'noteDeclarationLostTo'
 
 function noteDeclarationRefusedAt(project Project, filePath FilePath, line LineNumber, backing PoisonBacking)
-	view heads = try queryDeclarationHeads(project, path: filePath) otherwise return
+	let heads = try queryDeclarationHeads(project, path: filePath) otherwise return
 	project.poison.noteRefusedDeclarationAt(filePath, line: line, heads: heads, backing: backing)
 end 'noteDeclarationRefusedAt'
 
 function noteBodyAbandonedAt(project Project, filePath FilePath, line LineNumber, backing PoisonBacking)
-	view heads = try queryDeclarationHeads(project, path: filePath) otherwise return
+	let heads = try queryDeclarationHeads(project, path: filePath) otherwise return
 	project.poison.noteAbandonedBodyAt(filePath, line: line, heads: heads, backing: backing)
 end 'noteBodyAbandonedAt'
 
@@ -2185,26 +2176,26 @@ end 'commitTypeNameDeclsInPathOrder'
 typealias TypeNameDeclsByFile = Map with (String, TypeNameDeclArray)
 
 module function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathArray, directories ModuleDirectoryByFile) returns TypeNameCollisionArray
-	var collisions = TypeNameCollisionArray.create(0)
+	let collisions = TypeNameCollisionArray.create(0)
 
 	if decls.isEmpty() 'nothingDeclared'
 		return collisions
 	end 'nothingDeclared'
 
-	var byFile = TypeNameDeclsByFile.create()
+	let byFile = TypeNameDeclsByFile.create()
 
 	for decl in decls 'eachDecl'
 		let file = decl.claim.declFilePath.toString()
-		var declared = try byFile.get(file) otherwise TypeNameDeclArray.create(0)
+		let declared = try byFile.get(file) otherwise TypeNameDeclArray.create(0)
 		declared.push(decl)
 		byFile.upsert(file, value: declared)
 	end 'eachDecl'
 
-	var registry = TypeNameRegistry.create()
+	let registry = TypeNameRegistry.create()
 
 	for entry in sourceFilesInPathOrder(paths) 'eachInPathOrder'
 		let path = try paths.get(entry.position) otherwise panic("nominalNameCollisionsOf: paths.get OOB at {entry.position} below count {paths.count()}")
-		var declared = (try byFile.get(path.toString()) otherwise continue).clone()
+		let declared = (try byFile.get(path.toString()) otherwise continue).clone()
 		declared.sortBy(function(left TypeNameDecl, right TypeNameDecl) gives compareTypeNameDecls(left, right: right))
 
 		for collision in registry.recordAll(declared, roster: ShadowSpellingRoster.none(), directories: directories) 'eachCollisionHere'
@@ -2226,7 +2217,7 @@ module function reportTypeNameCollisions(project Project, collisions TypeNameCol
 end 'reportTypeNameCollisions'
 
 module function sourceFilesInPathOrder(paths FilePathArray) returns SourceFileInPathOrderArray
-	var ordered = SourceFileInPathOrderArray.create(paths.count(), zeroed: false)
+	let ordered = SourceFileInPathOrderArray.create(paths.count(), zeroed: false)
 	let workingDirectory = Directory.currentPath()
 
 	for (iter, path) in paths.withIterator() 'eachSourcePath'
@@ -2325,21 +2316,21 @@ export function checkTypeSymbolNamespace(project Project, signatures ProgramSign
 	// Walked in gid order, which is intern order and therefore source-path order over the sweep — so
 	// which instantiation of a colliding pair is the NEWCOMER is a property of the program rather than
 	// of a map's iteration.
-	var claimed = CompiledTypeNameClaimMap.create()
-	var contested = ContestedTypeNameMap.create()
+	let claimed = CompiledTypeNameClaimMap.create()
+	let contested = ContestedTypeNameMap.create()
 
 	for gid in 0 upto instantiationCount 'eachInstantiation'
 		if instanceNamesATypeFromAFailedFile(project, signatures: signatures, gid: gid) 'aTypeOfAFileThatFailedToParse'
 			continue
 		end 'aTypeOfAFileThatFailedToParse'
 
-		view compiled = signatures.mangleGenericInstance(gid)
+		let compiled = signatures.mangleGenericInstance(gid)
 
 		// A rejected newcomer is deliberately NOT recorded: the incumbent stays the one every later
 		// instantiation is measured against, which is `TypeNameRegistry`'s own rule (a rejected
 		// declaration never displaces) applied to the compiled half.
 		if let first = try claimed.get(compiled) 'earlierInstantiation'
-			var members = try contested.get(compiled) otherwise GenericInstanceIdArray.create(0)
+			let members = try contested.get(compiled) otherwise GenericInstanceIdArray.create(0)
 
 			if members.isEmpty() 'firstCollision'
 				members.push(first)
@@ -2413,7 +2404,7 @@ type InstantiationClaim
 end 'InstantiationClaim'
 
 function reportContestedTypeNames(project Project, signatures ProgramSignatures, contested ContestedTypeNameMap)
-	var names = NameRoster.create(contested.count(), zeroed: false)
+	let names = NameRoster.create(contested.count(), zeroed: false)
 
 	for (compiled, _) in contested 'eachContestedName'
 		names.push(compiled)
@@ -2423,7 +2414,7 @@ function reportContestedTypeNames(project Project, signatures ProgramSignatures,
 
 	for compiled in names 'eachInOrder'
 		let members = try contested.get(compiled) otherwise panic("reportContestedTypeNames: '{String.from(compiled)}' was filed contested by the walk that built this map")
-		var claims = InstantiationClaimArray.create(members.count(), zeroed: false)
+		let claims = InstantiationClaimArray.create(members.count(), zeroed: false)
 
 		for gid in members 'eachMember'
 			claims.push(InstantiationClaim.of(project, signatures: signatures, gid: gid))
@@ -2646,7 +2637,7 @@ function committedStructLayout(layout StructLayout, signatures ProgramSignatures
 		return layout
 	end 'aHeapRecord'
 
-	var settled = layout.clone()
+	let settled = layout.clone()
 	settled.settleInlinePacking(signatures.inlineBitWidthsOf(layout.name))
 	return settled
 end 'committedStructLayout'
@@ -2755,14 +2746,13 @@ end 'commitFunctionTypeAliases'
 // ⚠ **A RENUMBERING IS APPLIED IN PLACE, AND ONE RECORD CAN BE REACHED TWICE** (a binding filed in several
 // places), so a renumbering must not move an id it already moved. An instance renumbering is safe when no id it
 // moves FROM is one it moves TO — true of the parse's band ids, which no merge assigns — and otherwise it is
-// taken through the band in two walks. A name renumbering is applied once, and per binding at most once
-// (`VarInfo.renumberedIn`).
+// taken through the band in two walks. A name renumbering is applied once.
 function renumberArtifact(project Project, artifact FileParseArtifact, signatures ProgramSignatures)
 	let adopted = adoptedInstanceIds(artifact, signatures: signatures)
 	let names = TypeIdRemap.unmoved() if artifact.typeIdsAreProjectGlobal else project.typeNames.foldInto(artifact.typeNames)
 	artifact.typeIdsAreProjectGlobal = true
 
-	var moves = InstanceMoves.create()
+	let moves = InstanceMoves.create()
 
 	for position in 0 upto artifact.instanceIdsInUse.count() 'eachRow'
 		let inUse = try artifact.instanceIdsInUse.get(position) otherwise panic("renumberArtifact: instanceIdsInUse.get OOB at {position}")
@@ -2770,7 +2760,7 @@ function renumberArtifact(project Project, artifact FileParseArtifact, signature
 		moves.add(inUse, target: target, scratch: BandInstanceIdBase + position)
 	end 'eachRow'
 
-	moves.applyTo(project, artifact: artifact, names: names)
+	moves.applyTo(artifact, names: names)
 	artifact.instanceIdsInUse = adopted
 end 'renumberArtifact'
 
@@ -2803,18 +2793,18 @@ type InstanceMoves
 		return false
 	end 'movesOntoAMovedId'
 
-	function applyTo(project Project, artifact FileParseArtifact, names TypeIdRemap)
+	function applyTo(artifact FileParseArtifact, names TypeIdRemap)
 		if self.movesOntoAMovedId() 'throughTheBand'
-			rewriteTypeIds(project, artifact: artifact, remap: TypeIdRemap.unmoved().movingInstances(self.intoTheBand))
-			rewriteTypeIds(project, artifact: artifact, remap: names.movingInstances(self.outOfTheBand))
+			rewriteTypeIds(artifact, remap: TypeIdRemap.unmoved().movingInstances(self.intoTheBand))
+			rewriteTypeIds(artifact, remap: names.movingInstances(self.outOfTheBand))
 		end 'throughTheBand' else 'direct'
-			rewriteTypeIds(project, artifact: artifact, remap: names.movingInstances(self.direct))
+			rewriteTypeIds(artifact, remap: names.movingInstances(self.direct))
 		end 'direct'
 	end 'applyTo'
 end 'InstanceMoves'
 
-export function rebaseArtifact(project Project, artifact FileParseArtifact, rebase ParseRebase)
-	var moves = InstanceMoves.create()
+export function rebaseArtifact(artifact FileParseArtifact, rebase ParseRebase)
+	let moves = InstanceMoves.create()
 	var scratch = BandInstanceIdBase + (artifact.instanceIdsInUse.count() as GenericInstanceId)
 
 	for (original, current) in rebase.instances 'eachBaselineRow'
@@ -2822,7 +2812,7 @@ export function rebaseArtifact(project Project, artifact FileParseArtifact, reba
 		scratch = scratch + 1
 	end 'eachBaselineRow'
 
-	moves.applyTo(project, artifact: artifact, names: TypeIdRemap.unmoved().movingInterfaces(rebase.interfaces.clone()))
+	moves.applyTo(artifact, names: TypeIdRemap.unmoved().movingInterfaces(rebase.interfaces.clone()))
 end 'rebaseArtifact'
 
 // The id each of the artifact's parse rows is adopted under by this merge — every artifact no real parse built
@@ -2837,31 +2827,28 @@ end 'adoptedInstanceIds'
 // Rewrite every type id the artifact holds through `remap`. The list is every id-bearing place a parse fills,
 // whether or not a pass after the merge reads it today: an id left stale is a wrong answer waiting for its first
 // reader.
-function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeIdRemap)
+function rewriteTypeIds(artifact FileParseArtifact, remap TypeIdRemap)
 	if not remap.movesAnything() 'nothingMoves'
 		return
 	end 'nothingMoves'
 
-	project.lastRenumbering = project.lastRenumbering + 1
-	let epoch = project.lastRenumbering
-
 	for i in 0 upto artifact.module.functions.count() 'eachFunc'
-		var func = try artifact.module.functions.get(i) otherwise panic("rewriteTypeIds: functions.get OOB at {i}")
-		func.renumberTypeIds(remap, epoch: epoch)
+		let func = try artifact.module.functions.get(i) otherwise panic("rewriteTypeIds: functions.get OOB at {i}")
+		func.renumberTypeIds(remap)
 	end 'eachFunc'
 
 	for position in 0 upto artifact.module.ops.count() 'eachOp'
-		var op = try artifact.module.ops.get(position) otherwise panic("rewriteTypeIds: ops.get OOB at {position}")
+		let op = try artifact.module.ops.get(position) otherwise panic("rewriteTypeIds: ops.get OOB at {position}")
 		try artifact.module.ops.set(position, value: renumberedOp(op, remap: remap)) otherwise panic("rewriteTypeIds: ops.set OOB at {position}")
 	end 'eachOp'
 
 	for j in 0 upto artifact.funcSignatures.count() 'eachSignatureEntry'
-		var entry = try artifact.funcSignatures.get(j) otherwise panic("rewriteTypeIds: funcSignatures.get OOB at {j}")
+		let entry = try artifact.funcSignatures.get(j) otherwise panic("rewriteTypeIds: funcSignatures.get OOB at {j}")
 		entry.signature.renumberTypeIds(remap)
 		entry.returnType = remapMaxonReturnType(entry.returnType, remap: remap)
 	end 'eachSignatureEntry'
 
-	var aliases = FunctionTypeAliasArray.create(artifact.functionTypeAliases.count(), zeroed: false)
+	let aliases = FunctionTypeAliasArray.create(artifact.functionTypeAliases.count(), zeroed: false)
 
 	for alias in artifact.functionTypeAliases 'eachFunctionAlias'
 		aliases.push(alias.withInstancesRenumbered(remap))
@@ -2869,7 +2856,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 
 	artifact.functionTypeAliases = aliases
 
-	var renumberedInterfaces = IrInterfaceArray.create(artifact.interfaces.count(), zeroed: false)
+	let renumberedInterfaces = IrInterfaceArray.create(artifact.interfaces.count(), zeroed: false)
 
 	for iface in artifact.interfaces 'eachInterface'
 		renumberedInterfaces.push(iface.withInstancesRenumbered(remap))
@@ -2877,7 +2864,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 
 	artifact.interfaces = renumberedInterfaces
 
-	var renumberedConformances = ConformanceDeclArray.create(artifact.conformances.count(), zeroed: false)
+	let renumberedConformances = ConformanceDeclArray.create(artifact.conformances.count(), zeroed: false)
 
 	for decl in artifact.conformances 'eachConformance'
 		renumberedConformances.push(decl.withInstancesRenumbered(remap))
@@ -2893,7 +2880,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 		remapEnumLayoutPayloadTypes(layout, remap: remap)
 	end 'eachEnum'
 
-	var sites = GenericInstantiationSiteArray.create(artifact.inferredInstantiationSites.count(), zeroed: false)
+	let sites = GenericInstantiationSiteArray.create(artifact.inferredInstantiationSites.count(), zeroed: false)
 
 	for site in artifact.inferredInstantiationSites 'eachInferredSite'
 		sites.push(GenericInstantiationSite.create(remap.applyInstance(site.gid), nameLine: site.nameLine, nameColumn: site.nameColumn, filePath: site.filePath))
@@ -2902,17 +2889,17 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 	artifact.inferredInstantiationSites = sites
 end 'rewriteTypeIds'
 
-export function footprintOf(project Project, artifact FileParseArtifact, signatures ProgramSignatures) returns ParseFootprint
+export function footprintOf(artifact FileParseArtifact, signatures ProgramSignatures) returns ParseFootprint
 	if artifact.typeIdsAreProjectGlobal 'alreadyMerged'
 		panic("footprintOf: a stashed artifact already carries program-wide name ids — a parse is stashed before its merge, while every name id it holds is its own file's")
 	end 'alreadyMerged'
 
-	var moduleWatcher = TypeIdRemap.watching(FileLocalNamesBase)
-	rewriteTypeIds(project, artifact: artifact, remap: moduleWatcher)
+	let moduleWatcher = TypeIdRemap.watching(FileLocalNamesBase)
+	rewriteTypeIds(artifact, remap: moduleWatcher)
 
-	var instances = GenericInstanceIdSet.create()
-	var names = ObservedNameSet.create()
-	var interfaces = ObservedInterfaceSet.create()
+	let instances = GenericInstanceIdSet.create()
+	let names = ObservedNameSet.create()
+	let interfaces = ObservedInterfaceSet.create()
 	absorbWatched(moduleWatcher, instances: instances, names: names, interfaces: interfaces)
 
 	match artifact.parseMints 'mints'
@@ -2924,7 +2911,7 @@ export function footprintOf(project Project, artifact FileParseArtifact, signatu
 end 'footprintOf'
 
 function watchMints(mints LocalInstanceMints, instances GenericInstanceIdSet, names ObservedNameSet, interfaces ObservedInterfaceSet)
-	var watcher = TypeIdRemap.watching(mints.typeNameBaseline)
+	let watcher = TypeIdRemap.watching(mints.typeNameBaseline)
 	mints.watchedBy(watcher)
 	absorbWatched(watcher, instances: instances, names: names, interfaces: interfaces)
 end 'watchMints'
@@ -3009,7 +2996,7 @@ function commitFuncSignatures(project Project, artifact FileParseArtifact)
 			// `__fieldDefault#Bag#items` — a symbol absent from the source. The kept entry is still chosen
 			// exactly as for a reported duplicate: the two paths differ in what they SAY, never in what the
 			// registry holds.
-			view blamed = blamedFunctionDeclaration(project, newcomer: entry)
+			let blamed = blamedFunctionDeclaration(project, newcomer: entry)
 
 			if not blamed.synthesized 'theAuthorWroteThisName'
 				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(blamed), line: blamed.nameLine, column: blamed.nameColumn, filePath: blamed.sourceFilePath)
@@ -3031,7 +3018,7 @@ function holdFunctionFloor(project Project, entry FuncSignatureEntry)
 end 'holdFunctionFloor'
 
 function blamedFunctionDeclaration(project Project, newcomer FuncSignatureEntry) returns FuncSignatureEntry
-	var floor = try project.funcSignatureFloors.get(newcomer.name) otherwise panic("blamedFunctionDeclaration: '{String.from(newcomer.name)}' is in funcSignatures, and every name committed there has its floor committed beside it")
+	let floor = try project.funcSignatureFloors.get(newcomer.name) otherwise panic("blamedFunctionDeclaration: '{String.from(newcomer.name)}' is in funcSignatures, and every name committed there has its floor committed beside it")
 
 	if newcomerDisplacesTheFloor(project, newcomer: newcomer, floor: floor) 'theFloorIsBlamed'
 		holdFunctionFloor(project, entry: newcomer)

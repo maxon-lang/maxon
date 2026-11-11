@@ -49,7 +49,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -127,14 +127,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -152,7 +152,7 @@ type EchoHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		view request = exchange.request()
+		let request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
 		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
@@ -170,7 +170,7 @@ function serving(server HttpServer) returns HttpServeEnd
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
-	var request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
+	let request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
 
 	request.setBody(body)
 
@@ -184,24 +184,21 @@ function fetch(method HttpMethod, url String, body String, options TlsClientOpti
 end 'fetch'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let peer = async serving(server)
 	let port = server.port()
+	let peer = async serving(server)
 
 	print("get: {fetch(HttpMethod.get, url: "https://localhost:{port}/hello?q=1", body: "", options: clientOptions())}\n")
 	print("post: {fetch(HttpMethod.post, url: "https://localhost:{port}/submit", body: "name=maxon", options: clientOptions())}\n")
 	print("ip: {fetch(HttpMethod.get, url: "https://127.0.0.1:{port}/ip", body: "", options: clientOptions())}\n")
 
+	peer.cancel()
 	server.close()
-
-	let ended = await peer
-
-	print("ended: {ended.name}\n")
 
 	return 0
 end 'exchangeOver'
 
 function main() returns ExitCode
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
 
 	return exchangeOver(server)
 end 'main'
@@ -210,7 +207,6 @@ end 'main'
 get: 200 connection=close [get https://localhost/hello?q=1 body=0 tls13 alpn=http/1.1 peers=0]
 post: 200 connection=close [post https://localhost/submit?- body=10 tls13 alpn=http/1.1 peers=0]
 ip: 200 connection=close [get https://127.0.0.1/ip?- body=0 tls13 alpn=http/1.1 peers=0]
-ended: closed
 ```
 ```exitcode
 0
@@ -230,7 +226,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -308,14 +304,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -333,7 +329,7 @@ type EchoHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		view request = exchange.request()
+		let request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
 		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
@@ -351,7 +347,7 @@ function serving(server HttpServer) returns HttpServeEnd
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
-	var request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
+	let request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
 
 	request.setBody(body)
 
@@ -364,24 +360,28 @@ function fetch(method HttpMethod, url String, body String, options TlsClientOpti
 	return "{response.statusCode().number()} connection={connection} [{response.body()}]"
 end 'fetch'
 
+function fetchOver(server HttpServer, client TlsClientOptions) returns String
+	let boundPort = server.port()
+	let peer = async serving(server)
+	let result = fetch(HttpMethod.get, url: "https://localhost:{boundPort}/v", body: "", options: client)
+
+	peer.cancel()
+	server.close()
+
+	return result
+end 'fetchOver'
+
 function scenario(label String, serverProtocol TlsProtocol, clientProtocol TlsProtocol) returns String
-	var options = serverOptions()
+	let options = serverOptions()
 
 	try options.setProtocols(TlsProtocolArray from [serverProtocol]) otherwise return "{label}: the server protocols were refused"
 
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: options) otherwise return "{label}: bind failed"
-	var client = clientOptions()
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: options) otherwise return "{label}: bind failed"
+	let client = clientOptions()
 
 	try client.setProtocols(TlsProtocolArray from [clientProtocol]) otherwise return "{label}: the client protocols were refused"
 
-	let peer = async serving(server)
-	let result = fetch(HttpMethod.get, url: "https://localhost:{server.port()}/v", body: "", options: client)
-
-	server.close()
-
-	let ended = await peer
-
-	return "{label}: {result} ended={ended.name}"
+	return "{label}: {fetchOver(server, client: client)}"
 end 'scenario'
 
 function main() returns ExitCode
@@ -394,10 +394,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-1.3 and 1.3: 200 connection=close [get https://localhost/v?- body=0 tls13 alpn=http/1.1 peers=0] ended=closed
-1.2 and 1.2: 200 connection=close [get https://localhost/v?- body=0 tls12 alpn=http/1.1 peers=0] ended=closed
-server 1.3, client 1.2: error tlsFailed(peerAlert(protocolVersion)) ended=closed
-server 1.2, client 1.3: error tlsFailed(peerAlert(protocolVersion)) ended=closed
+1.3 and 1.3: 200 connection=close [get https://localhost/v?- body=0 tls13 alpn=http/1.1 peers=0]
+1.2 and 1.2: 200 connection=close [get https://localhost/v?- body=0 tls12 alpn=http/1.1 peers=0]
+server 1.3, client 1.2: error tlsFailed(peerAlert(protocolVersion))
+server 1.2, client 1.3: error tlsFailed(peerAlert(protocolVersion))
 ```
 ```exitcode
 0
@@ -418,7 +418,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -482,14 +482,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -518,7 +518,7 @@ type BodyEchoHandler implements HttpHandler
 end 'BodyEchoHandler'
 
 function payload() returns String
-	var text = StringBuilder.create()
+	let text = StringBuilder.create()
 
 	for row in 0 upto PayloadRows 'eachRow'
 		text.append("{row:08x}0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-\n")
@@ -532,40 +532,40 @@ function serveEcho(server HttpServer) returns HttpServeEnd
 end 'serveEcho'
 
 function exchangeOver(server HttpServer) returns ExitCode
+	let boundPort = server.port()
 	let peer = async serveEcho(server)
 	let sent = payload()
 
-	var request = try HttpRequest.create(HttpMethod.post, url: "https://localhost:{server.port()}/echo") otherwise 'refused2x158'
+	let request = try HttpRequest.create(HttpMethod.post, url: "https://localhost:{boundPort}/echo") otherwise 'refused2x158'
 		peer.cancel()
 		return 2
 	end 'refused2x158'
 
 	request.setBody(sent)
 
-	var limits = HttpClientLimits.create()
+	let limits = HttpClientLimits.create()
 
 	limits.timeoutMs = 110000
 
 	let response = try HttpClient.send(request, limits: limits, tls: clientOptions()) otherwise (error) 'failed'
 		print("error {describeHttp(error)}\n")
-		server.close()
 		peer.cancel()
+		server.close()
 
 		return 3
 	end 'failed'
 
+	peer.cancel()
 	server.close()
 
-	let ended = await peer
-
-	print("status={response.statusCode().number()} sent={sent.byteLength()} received={response.body().byteLength()} identical={response.body() == sent} ended={ended.name}\n")
+	print("status={response.statusCode().number()} sent={sent.byteLength()} received={response.body().byteLength()} identical={response.body() == sent}\n")
 
 	return 0
 end 'exchangeOver'
 
 function main() returns ExitCode
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
-	var limits = HttpServerLimits.create()
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
+	let limits = HttpServerLimits.create()
 
 	limits.maxBodyBytes = 8388608
 	limits.readDeadlineMs = 110000
@@ -576,7 +576,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-status=200 sent=2359296 received=2359296 identical=true ended=closed
+status=200 sent=2359296 received=2359296 identical=true
 ```
 ```exitcode
 0
@@ -596,7 +596,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -674,14 +674,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -699,7 +699,7 @@ type EchoHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		view request = exchange.request()
+		let request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
 		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
@@ -717,7 +717,7 @@ function serving(server HttpServer) returns HttpServeEnd
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
-	var request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
+	let request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
 
 	request.setBody(body)
 
@@ -731,24 +731,21 @@ function fetch(method HttpMethod, url String, body String, options TlsClientOpti
 end 'fetch'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let peer = async serving(server)
 	let port = server.port()
+	let peer = async serving(server)
 
 	for number in 1 to 5 'eachRequest'
 		print("{number}: {fetch(HttpMethod.get, url: "https://localhost:{port}/n?{number}", body: "", options: clientOptions())}\n")
 	end 'eachRequest'
 
+	peer.cancel()
 	server.close()
-
-	let ended = await peer
-
-	print("ended: {ended.name}\n")
 
 	return 0
 end 'exchangeOver'
 
 function main() returns ExitCode
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
 
 	return exchangeOver(server)
 end 'main'
@@ -759,7 +756,6 @@ end 'main'
 3: 200 connection=close [get https://localhost/n?3 body=0 tls13 alpn=http/1.1 peers=0]
 4: 200 connection=close [get https://localhost/n?4 body=0 tls13 alpn=http/1.1 peers=0]
 5: 200 connection=close [get https://localhost/n?5 body=0 tls13 alpn=http/1.1 peers=0]
-ended: closed
 ```
 ```exitcode
 0
@@ -779,7 +775,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -853,14 +849,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -876,7 +872,7 @@ let clientKeyHex = "3041020100301306072a8648ce3d020106082a8648ce3d03010704273025
 let verificationTime = 1767225600
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
-	var request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
+	let request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
 
 	request.setBody(body)
 
@@ -921,7 +917,7 @@ function serveChains(server HttpServer) returns HttpServeEnd
 end 'serveChains'
 
 function clientWithCertificate() returns TlsClientOptions
-	var options = clientOptions()
+	let options = clientOptions()
 
 	options.setIdentity(identityOf(clientLeafHex, keyHex: clientKeyHex))
 
@@ -929,29 +925,28 @@ function clientWithCertificate() returns TlsClientOptions
 end 'clientWithCertificate'
 
 function scenario(label String, server HttpServer) returns String
-	let peer = async serveChains(server)
 	let port = server.port()
+	let peer = async serveChains(server)
 	let anonymous = fetch(HttpMethod.get, url: "https://localhost:{port}/who", body: "", options: clientOptions())
 	let certified = fetch(HttpMethod.get, url: "https://localhost:{port}/who", body: "", options: clientWithCertificate())
 
+	peer.cancel()
 	server.close()
 
-	let ended = await peer
-
-	return "{label}\n  anonymous client: {anonymous}\n  client with a certificate: {certified}\n  ended={ended.name}"
+	return "{label}\n  anonymous client: {anonymous}\n  client with a certificate: {certified}"
 end 'scenario'
 
 function main() returns ExitCode
-	var required = serverOptions()
+	let required = serverOptions()
 
 	try required.requireClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return 1
 
-	var requested = serverOptions()
+	let requested = serverOptions()
 
 	try requested.requestClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return 2
 
-	var requiredServer = try HttpServer.bindTls("127.0.0.1", port: 0, options: required) otherwise return 3
-	var requestedServer = try HttpServer.bindTls("127.0.0.1", port: 0, options: requested) otherwise return 4
+	let requiredServer = try HttpServer.bindTls("127.0.0.1", port: 0, options: required) otherwise return 3
+	let requestedServer = try HttpServer.bindTls("127.0.0.1", port: 0, options: requested) otherwise return 4
 
 	print("{scenario("required", server: requiredServer)}\n")
 	print("{scenario("requested", server: requestedServer)}\n")
@@ -963,11 +958,9 @@ end 'main'
 required
   anonymous client: error tlsFailed(peerAlert(certificateRequired))
   client with a certificate: 200 connection=close [1 certificate, leaf is alice=true]
-  ended=closed
 requested
   anonymous client: 200 connection=close [no client certificate]
   client with a certificate: 200 connection=close [1 certificate, leaf is alice=true]
-  ended=closed
 ```
 ```exitcode
 0
@@ -987,7 +980,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1065,14 +1058,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -1094,7 +1087,7 @@ type EchoHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		view request = exchange.request()
+		let request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
 		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
@@ -1112,7 +1105,7 @@ function serving(server HttpServer) returns HttpServeEnd
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
-	var request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
+	let request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
 
 	request.setBody(body)
 
@@ -1126,7 +1119,7 @@ function fetch(method HttpMethod, url String, body String, options TlsClientOpti
 end 'fetch'
 
 function untrustingClient() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 
 	try options.setTrustedRoots(RootCertificates from [fromHex(otherRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
@@ -1135,7 +1128,7 @@ function untrustingClient() returns TlsClientOptions
 end 'untrustingClient'
 
 function misnamingClient() returns TlsClientOptions
-	var options = clientOptions()
+	let options = clientOptions()
 
 	try options.setServerName("other.example") otherwise panic("the case's name was refused")
 
@@ -1143,7 +1136,7 @@ function misnamingClient() returns TlsClientOptions
 end 'misnamingClient'
 
 function lateClient() returns TlsClientOptions
-	var options = clientOptions()
+	let options = clientOptions()
 
 	options.setVerificationTime(1800000000)
 
@@ -1155,7 +1148,7 @@ function exampleOptions() returns TlsServerOptions
 end 'exampleOptions'
 
 function exampleClient() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 
 	try options.setTrustedRoots(RootCertificates from [fromHex(exampleRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
@@ -1164,31 +1157,33 @@ function exampleClient() returns TlsClientOptions
 end 'exampleClient'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let peer = async serving(server)
 	let port = server.port()
+	let peer = async serving(server)
 
 	print("untrusted root: {fetch(HttpMethod.get, url: "https://localhost:{port}/", body: "", options: untrustingClient())}\n")
 	print("another name: {fetch(HttpMethod.get, url: "https://localhost:{port}/", body: "", options: misnamingClient())}\n")
 	print("after the certificate expired: {fetch(HttpMethod.get, url: "https://localhost:{port}/", body: "", options: lateClient())}\n")
 	print("trusted: {fetch(HttpMethod.get, url: "https://localhost:{port}/", body: "", options: clientOptions())}\n")
 
+	peer.cancel()
 	server.close()
-
-	let ended = await peer
-
-	print("ended: {ended.name}\n")
 
 	return 0
 end 'exchangeOver'
 
 function nameFromTheUrl() returns ExitCode
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: exampleOptions()) otherwise return 2
-	let peer = async serving(server)
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: exampleOptions()) otherwise return 2
+
+	return namedExchange(server)
+end 'nameFromTheUrl'
+
+function namedExchange(server HttpServer) returns ExitCode
 	let port = server.port()
+	let peer = async serving(server)
 
 	print("host from the url: {fetch(HttpMethod.get, url: "https://127.0.0.1:{port}/", body: "", options: exampleClient())}\n")
 
-	var named = exampleClient()
+	let named = exampleClient()
 
 	try named.setServerName("example.com") otherwise 'refused3x226'
 		peer.cancel()
@@ -1197,17 +1192,14 @@ function nameFromTheUrl() returns ExitCode
 
 	print("named in the options: {fetch(HttpMethod.get, url: "https://127.0.0.1:{port}/", body: "", options: named)}\n")
 
+	peer.cancel()
 	server.close()
 
-	let ended = await peer
-
-	print("ended: {ended.name}\n")
-
 	return 0
-end 'nameFromTheUrl'
+end 'namedExchange'
 
 function main() returns ExitCode
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
 	let first = exchangeOver(server)
 
 	if first != 0 'failed'
@@ -1222,10 +1214,8 @@ untrusted root: error tlsFailed(certificateRejected(unknownAuthority))
 another name: error tlsFailed(certificateRejected(hostnameMismatch))
 after the certificate expired: error tlsFailed(certificateRejected(expired))
 trusted: 200 connection=close [get https://localhost/?- body=0 tls13 alpn=http/1.1 peers=0]
-ended: closed
 host from the url: error tlsFailed(certificateRejected(hostnameMismatch))
 named in the options: 200 connection=close [get https://127.0.0.1/?- body=0 tls13 alpn=http/1.1 peers=0]
-ended: closed
 ```
 ```exitcode
 0
@@ -1245,7 +1235,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1333,14 +1323,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -1358,7 +1348,7 @@ type EchoHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		view request = exchange.request()
+		let request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
 		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
@@ -1376,7 +1366,7 @@ function serving(server HttpServer) returns HttpServeEnd
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
-	var request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
+	let request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
 
 	request.setBody(body)
 
@@ -1392,7 +1382,7 @@ end 'fetch'
 let ExtraBytes = 200000
 
 function filler() returns String
-	var text = StringBuilder.create()
+	let text = StringBuilder.create()
 
 	for row in 0 upto ExtraBytes / 16 'eachRow'
 		text.append("{row:08x}-padding\n")
@@ -1402,7 +1392,7 @@ function filler() returns String
 end 'filler'
 
 function plainBytesHeard(port NetworkPort) returns String
-	var client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect failed"
+	let client = try TcpClient.connect("127.0.0.1", port: port) otherwise return "connect failed"
 	let padding = filler()
 
 	_ = try client.send("GET / HTTP/1.1\r\nHost: x\r\n\r\n") otherwise (error) 'headUnsent'
@@ -1417,7 +1407,7 @@ function plainBytesHeard(port NetworkPort) returns String
 		return "send {error.name}"
 	end 'unsent'
 
-	var heard = alert.toByteArray()
+	let heard = alert.toByteArray()
 
 	while true 'reading'
 		let chunk = try client.recv(1024) otherwise break
@@ -1429,9 +1419,14 @@ function plainBytesHeard(port NetworkPort) returns String
 end 'plainBytesHeard'
 
 function plainClientOnTheTlsPort() returns ExitCode
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
-	let peer = async serving(server)
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
+
+	return plainExchange(server)
+end 'plainClientOnTheTlsPort'
+
+function plainExchange(server HttpServer) returns ExitCode
 	let port = server.port()
+	let peer = async serving(server)
 
 	print("raw plain bytes: {plainBytesHeard(port)}\n")
 
@@ -1439,32 +1434,32 @@ function plainClientOnTheTlsPort() returns ExitCode
 		print("HttpClient over http: error {describeHttp(error)}\n")
 
 		print("then over https: {fetch(HttpMethod.get, url: "https://localhost:{port}/after", body: "", options: clientOptions())}\n")
+		peer.cancel()
 		server.close()
-
-		let ended = await peer
-
-		print("ended: {ended.name}\n")
 
 		return 0
 	end 'refused'
 
 	print("a plain client was answered {plain.statusCode().number()}\n")
+	peer.cancel()
 	server.close()
 
-	_ = await peer
-
 	return 4
-end 'plainClientOnTheTlsPort'
+end 'plainExchange'
 
 function tlsClientOnThePlainPort() returns ExitCode
-	var server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
-	var limits = HttpServerLimits.create()
+	let server = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 1
+	let limits = HttpServerLimits.create()
 
 	limits.maxHeaderBytes = 64
 	server.setLimits(limits)
 
-	let peer = async serving(server)
+	return secureExchange(server)
+end 'tlsClientOnThePlainPort'
+
+function secureExchange(server HttpServer) returns ExitCode
 	let port = server.port()
+	let peer = async serving(server)
 
 	print("HttpClient over https to a plain server: {fetch(HttpMethod.get, url: "https://127.0.0.1:{port}/", body: "", options: clientOptions())}\n")
 
@@ -1474,14 +1469,11 @@ function tlsClientOnThePlainPort() returns ExitCode
 	end 'refused2x240'
 
 	print("then over http: {plain.statusCode().number()} [{plain.body()}]\n")
+	peer.cancel()
 	server.close()
 
-	let ended = await peer
-
-	print("ended: {ended.name}\n")
-
 	return 0
-end 'tlsClientOnThePlainPort'
+end 'secureExchange'
 
 function main() returns ExitCode
 	let first = plainClientOnTheTlsPort()
@@ -1497,10 +1489,8 @@ end 'main'
 raw plain bytes: heard 1503030002020a
 HttpClient over http: error invalidResponse
 then over https: 200 connection=close [get https://localhost/after?- body=0 tls13 alpn=http/1.1 peers=0]
-ended: closed
 HttpClient over https to a plain server: error tlsFailed(protocolError(unexpectedMessage))
 then over http: 200 [get http://127.0.0.1/still?- body=0 plaintext]
-ended: closed
 ```
 ```exitcode
 0
@@ -1520,7 +1510,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1598,14 +1588,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -1623,7 +1613,7 @@ type EchoHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		view request = exchange.request()
+		let request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
 		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
@@ -1641,7 +1631,7 @@ function serving(server HttpServer) returns HttpServeEnd
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
-	var request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
+	let request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
 
 	request.setBody(body)
 
@@ -1662,7 +1652,7 @@ type RedirectHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		var headers = HttpHeaders.create()
+		let headers = HttpHeaders.create()
 
 		headers.set("location", value: self.location)
 
@@ -1679,13 +1669,20 @@ function redirecting(server HttpServer, location String) returns HttpServeEnd
 end 'redirecting'
 
 function main() returns ExitCode
-	var secure = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
-	var plain = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 2
+	let secure = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
+	let plain = try HttpServer.bind("127.0.0.1", port: 0) otherwise return 2
+
+	return exchangeOver(secure, plain: plain)
+end 'main'
+
+function exchangeOver(secure HttpServer, plain HttpServer) returns ExitCode
+	let securePort = secure.port()
+	let plainPort = plain.port()
 	let securePeer = async serving(secure)
-	let location = "https://localhost:{secure.port()}/moved"
+	let location = "https://localhost:{securePort}/moved"
 	let plainPeer = async redirecting(plain, location: location)
 
-	let redirect = try HttpClient.get("http://127.0.0.1:{plain.port()}/") otherwise 'refused3x192'
+	let redirect = try HttpClient.get("http://127.0.0.1:{plainPort}/") otherwise 'refused3x192'
 		plainPeer.cancel()
 		securePeer.cancel()
 		return 3
@@ -1695,21 +1692,17 @@ function main() returns ExitCode
 	print("plain server: {redirect.statusCode().number()} location matches={target == location} body={redirect.body().byteLength()} bytes\n")
 	print("the location, fetched: {fetch(HttpMethod.get, url: target, body: "", options: clientOptions())}\n")
 
+	plainPeer.cancel()
+	securePeer.cancel()
 	plain.close()
 	secure.close()
 
-	let plainEnded = await plainPeer
-	let secureEnded = await securePeer
-
-	print("ended: {plainEnded.name} {secureEnded.name}\n")
-
 	return 0
-end 'main'
+end 'exchangeOver'
 ```
 ```stdout
 plain server: 301 location matches=true body=0 bytes
 the location, fetched: 200 connection=close [get https://localhost/moved?- body=0 tls13 alpn=http/1.1 peers=0]
-ended: closed closed
 ```
 ```exitcode
 0
@@ -1718,7 +1711,7 @@ ended: closed closed
 <!-- test: http-tls.stalled-handshakes-are-bounded -->
 <!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 1 -->
-A server that accepts the connection and never answers the ClientHello makes `HttpClient.send` throw `timedOut` once `HttpClientLimits.timeoutMs` has passed, and the server sees the client leave. A client that connects to the TLS server and sends nothing holds only its own connection: with no handshake deadline, so that nothing but the client's own `close()` can end it, the server serves the next request beside it. The accept deadline, set once that request is answered, ends `serve` as `acceptDeadlinePassed`; a stalled handshake before it does not.
+A server that accepts the connection and never answers the ClientHello makes `HttpClient.send` throw `timedOut` once `HttpClientLimits.timeoutMs` has passed, and the server sees the client leave. A client that connects to the TLS server and sends nothing holds only its own connection: with no handshake deadline, so that nothing but the client's own `close()` can end it, the server serves the next request beside it. The accept deadline, set before `serve` starts, ends `serve` as `acceptDeadlinePassed` once no further connection arrives within it; a stalled handshake before it does not.
 ```maxon
 function digit(symbol Byte) returns Byte
 	if symbol >= 0x61 'letter'
@@ -1729,7 +1722,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1807,14 +1800,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -1832,7 +1825,7 @@ type EchoHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		view request = exchange.request()
+		let request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
 		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
@@ -1850,7 +1843,7 @@ function serving(server HttpServer) returns HttpServeEnd
 end 'serving'
 
 function fetch(method HttpMethod, url String, body String, options TlsClientOptions) returns String
-	var request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
+	let request = try HttpRequest.create(method, url: url) otherwise return "bad-url"
 
 	request.setBody(body)
 
@@ -1865,7 +1858,7 @@ end 'fetch'
 
 let ClientBudgetMs = 600
 let RequestBytes = 65536
-let AcceptWindowMs = 100
+let AcceptWindowMs = 500
 
 function holdOpen(listener TcpListener) returns String
 	let connection = try listener.accept() otherwise return "accept failed"
@@ -1879,12 +1872,13 @@ end 'holdOpen'
 
 function stalledServer() returns ExitCode
 	let listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
+	let listenerPort = listener.port()
 	let peer = async holdOpen(listener)
-	let request = try HttpRequest.create(HttpMethod.get, url: "https://127.0.0.1:{listener.port()}/") otherwise 'refused2x178'
+	let request = try HttpRequest.create(HttpMethod.get, url: "https://127.0.0.1:{listenerPort}/") otherwise 'refused2x178'
 		peer.cancel()
 		return 2
 	end 'refused2x178'
-	var limits = HttpClientLimits.create()
+	let limits = HttpClientLimits.create()
 
 	limits.timeoutMs = ClientBudgetMs
 
@@ -1906,7 +1900,7 @@ function stalledServer() returns ExitCode
 end 'stalledServer'
 
 function patientServerOptions() returns TlsServerOptions
-	var options = serverOptions()
+	let options = serverOptions()
 
 	options.setHandshakeDeadline(0)
 
@@ -1914,9 +1908,14 @@ function patientServerOptions() returns TlsServerOptions
 end 'patientServerOptions'
 
 function stalledClient() returns ExitCode
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: patientServerOptions()) otherwise return 4
-	let peer = async serving(server)
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: patientServerOptions()) otherwise return 4
+
+	return silentExchange(server)
+end 'stalledClient'
+
+function silentExchange(server HttpServer) returns ExitCode
 	let port = server.port()
+	let peer = async serving(server)
 	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused5x212'
 		peer.cancel()
 		return 5
@@ -1924,19 +1923,24 @@ function stalledClient() returns ExitCode
 
 	print("after a client that sends nothing: {fetch(HttpMethod.get, url: "https://localhost:{port}/after", body: "", options: clientOptions())}\n")
 	silent.close()
+	peer.cancel()
 	server.close()
 
-	let ended = await peer
-
-	print("ended: {ended.name}\n")
-
 	return 0
-end 'stalledClient'
+end 'silentExchange'
 
 function acceptDeadline() returns ExitCode
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: patientServerOptions()) otherwise return 6
-	let peer = async serving(server)
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: patientServerOptions()) otherwise return 6
+
+	return deadlineExchange(server)
+end 'acceptDeadline'
+
+function deadlineExchange(server HttpServer) returns ExitCode
 	let port = server.port()
+
+	try server.setAcceptDeadline(AcceptWindowMs) otherwise return 7
+
+	let peer = async serving(server)
 	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused8x229'
 		peer.cancel()
 		return 8
@@ -1944,10 +1948,6 @@ function acceptDeadline() returns ExitCode
 
 	print("a stalled handshake, then a request: {fetch(HttpMethod.get, url: "https://localhost:{port}/after", body: "", options: clientOptions())}\n")
 
-	try server.setAcceptDeadline(AcceptWindowMs) otherwise 'refused7x233'
-		peer.cancel()
-		return 7
-	end 'refused7x233'
 	silent.close()
 
 	let ended = await peer
@@ -1955,7 +1955,7 @@ function acceptDeadline() returns ExitCode
 	print("with no more connections serve ended: {ended.name}\n")
 
 	return 0
-end 'acceptDeadline'
+end 'deadlineExchange'
 
 function main() returns ExitCode
 	let first = stalledServer()
@@ -1977,7 +1977,6 @@ end 'main'
 a server that never answers the hello: error timedOut
 the peer saw the client leave: connectionClosed
 after a client that sends nothing: 200 connection=close [get https://localhost/after?- body=0 tls13 alpn=http/1.1 peers=0]
-ended: closed
 a stalled handshake, then a request: 200 connection=close [get https://localhost/after?- body=0 tls13 alpn=http/1.1 peers=0]
 with no more connections serve ended: acceptDeadlinePassed
 ```
@@ -1999,7 +1998,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2063,14 +2062,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -2088,7 +2087,7 @@ type EchoHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		view request = exchange.request()
+		let request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let host = try request.url().host() otherwise "-"
 		let summary = "{request.method().name} {request.url().scheme}://{host}{request.url().path}?{query} body={request.body().byteLength()} {describeSecurity(exchange.security())}"
@@ -2106,11 +2105,11 @@ function serving(server HttpServer) returns HttpServeEnd
 end 'serving'
 
 function rawExchange(port NetworkPort, protocols StringArray, request String) returns String
-	var options = clientOptions()
+	let options = clientOptions()
 
 	try options.setApplicationProtocols(protocols) otherwise return "protocols refused"
 
-	var stream = try TlsClient.connect("localhost", port: port, options: options) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("localhost", port: port, options: options) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -2139,8 +2138,8 @@ function rawExchange(port NetworkPort, protocols StringArray, request String) re
 end 'rawExchange'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let peer = async serving(server)
 	let port = server.port()
+	let peer = async serving(server)
 	let plainRequest = "GET /raw HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
 
 	print("offering http/1.1: {rawExchange(port, protocols: ["http/1.1"], request: plainRequest)}\n")
@@ -2150,17 +2149,14 @@ function exchangeOver(server HttpServer) returns ExitCode
 	print("absolute-form https: {rawExchange(port, protocols: ["http/1.1"], request: "GET https://origin.example/p?x=1 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")}\n")
 	print("absolute-form http: {rawExchange(port, protocols: ["http/1.1"], request: "GET http://origin.example/p HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")}\n")
 
+	peer.cancel()
 	server.close()
-
-	let ended = await peer
-
-	print("ended: {ended.name}\n")
 
 	return 0
 end 'exchangeOver'
 
 function main() returns ExitCode
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
 
 	return exchangeOver(server)
 end 'main'
@@ -2172,7 +2168,6 @@ offering h2 and http/1.1: alpn=http/1.1 HTTP/1.1 200 OK | get https://localhost/
 offering only h2: connect: peerAlert(noApplicationProtocol)
 absolute-form https: alpn=http/1.1 HTTP/1.1 200 OK | get https://origin.example/p?x=1 body=0 tls13 alpn=http/1.1 peers=0
 absolute-form http: alpn=http/1.1 HTTP/1.1 400 Bad Request | 
-ended: closed
 ```
 ```exitcode
 0
@@ -2195,7 +2190,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2260,7 +2255,7 @@ type EchoHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		view url = exchange.request().url()
+		let url = exchange.request().url()
 		let host = try url.host() otherwise "-"
 		let authorityHost = try url.authorityHost() otherwise "-"
 		let summary = "{url.scheme} host={host} authorityHost={authorityHost} path={url.path}"
@@ -2278,14 +2273,14 @@ function serving(server HttpServer) returns HttpServeEnd
 end 'serving'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(try TlsIdentity.fromDer(ByteArrays from [fromHex(ipv6LeafHex)], key: fromHex(ipv6KeyHex)) otherwise panic("the case's identity was refused"))
+	let options = TlsServerOptions.create(try TlsIdentity.fromDer(ByteArrays from [fromHex(ipv6LeafHex)], key: fromHex(ipv6KeyHex)) otherwise panic("the case's identity was refused"))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientTrusting(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -2303,23 +2298,20 @@ function fetch(url String, options TlsClientOptions) returns String
 end 'fetch'
 
 function exchangeOver(server HttpServer) returns ExitCode
-	let peer = async serving(server)
 	let port = server.port()
+	let peer = async serving(server)
 
 	print("trusted: {fetch("https://[::1]:{port}/hello", options: clientTrusting(ipv6LeafHex))}\n")
 	print("untrusted: {fetch("https://[::1]:{port}/hello", options: clientTrusting(otherRootHex))}\n")
 
+	peer.cancel()
 	server.close()
-
-	let ended = await peer
-
-	print("ended: {ended.name}\n")
 
 	return 0
 end 'exchangeOver'
 
 function main() returns ExitCode
-	var server = try HttpServer.bindTls("::1", port: 0, options: serverOptions()) otherwise return 1
+	let server = try HttpServer.bindTls("::1", port: 0, options: serverOptions()) otherwise return 1
 
 	return exchangeOver(server)
 end 'main'
@@ -2332,7 +2324,6 @@ let verificationTime = 1767225600
 ```stdout
 trusted: 200 [https host=::1 authorityHost=[::1] path=/hello]
 untrusted: error tlsFailed(certificateRejected(unknownAuthority))
-ended: closed
 ```
 ```exitcode
 0
@@ -2351,7 +2342,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2401,7 +2392,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
@@ -2412,9 +2403,9 @@ let httpKeyHex = "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b
 let verificationTime = 1767225600
 
 function main() returns ExitCode
-	var first = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
+	let first = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions()) otherwise return 1
 
-	var second = try HttpServer.bindTls("127.0.0.1", port: first.port(), options: serverOptions()) otherwise (error) 'taken'
+	let second = try HttpServer.bindTls("127.0.0.1", port: first.port(), options: serverOptions()) otherwise (error) 'taken'
 		print("a second bind on the same port: {describe(error)}\n")
 		first.close()
 
@@ -2448,7 +2439,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2512,14 +2503,14 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
 end 'serverOptions'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -2560,13 +2551,18 @@ function fetchOnce(url String, options TlsClientOptions) returns String
 end 'fetchOnce'
 
 function main() returns ExitCode
-	var options = serverOptions()
+	let options = serverOptions()
 
 	options.setHandshakeDeadline(0)
 
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: options) otherwise return 1
-	let peer = async serveAnswers(server)
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: options) otherwise return 1
+
+	return exchangeOver(server)
+end 'main'
+
+function exchangeOver(server HttpServer) returns ExitCode
 	let port = server.port()
+	let peer = async serveAnswers(server)
 	let silent = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused2x160'
 		peer.cancel()
 		return 2
@@ -2575,18 +2571,14 @@ function main() returns ExitCode
 	print("a request beside a silent client: {fetchOnce("https://localhost:{port}/after", options: clientOptions())}\n")
 
 	silent.close()
+	peer.cancel()
 	server.close()
 
-	let ended = await peer
-
-	print("ended: {ended.name}\n")
-
 	return 0
-end 'main'
+end 'exchangeOver'
 ```
 ```stdout
 a request beside a silent client: 200 [answered]
-ended: closed
 ```
 ```exitcode
 0

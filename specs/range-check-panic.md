@@ -1449,13 +1449,13 @@ function small() returns Small
 end 'small'
 
 function fieldStore() returns Wide
-  var b = Box.create()
+  let b = Box.create()
   b.v = small() as Wide
   return b.v
 end 'fieldStore'
 
 function elementStore() returns Wide
-  var a = Wides.create(0)
+  let a = Wides.create(0)
   a.push(small() as Wide)
   return try a.get(0) otherwise panic("no slot")
 end 'elementStore'
@@ -1495,7 +1495,7 @@ function loose() returns Loose
 end 'loose'
 
 function main() returns ExitCode
-  var b = Box.create()
+  let b = Box.create()
   b.v = loose() as Wide
   print("v={b.v}\n")
   return 0
@@ -1532,7 +1532,7 @@ function loose() returns Loose
 end 'loose'
 
 function main() returns ExitCode
-  var a = Wides.create(0)
+  let a = Wides.create(0)
   a.push(-loose())
   let v = try a.get(0) otherwise panic("no slot")
   print("v={v}\n")
@@ -1741,7 +1741,7 @@ typealias NonNeg = int(0 to i64.max)
 typealias Ints = Array with Integer
 
 function main() returns ExitCode
-  var xs = Ints.create(0)
+  let xs = Ints.create(0)
   xs.push(10)
   xs.push(20)
   xs.push(30)
@@ -1921,7 +1921,7 @@ typealias NonNeg = int(0 to i64.max)
 typealias Ints = Array with Integer
 
 function main() returns ExitCode
-  var xs = Ints.create(0)
+  let xs = Ints.create(0)
   xs.push(10)
   xs.push(20)
   xs.push(30)
@@ -4068,7 +4068,7 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var p = Pair.create(5, b: 3)
+	let p = Pair.create(5, b: 3)
 
 	if p.a >= p.b 'ordered'
 		p.wipe()

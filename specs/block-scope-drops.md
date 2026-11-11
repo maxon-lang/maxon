@@ -297,7 +297,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function fill(sink ByteArray)
-	var scratch = ByteArray.create(0)
+	let scratch = ByteArray.create(0)
 	scratch.push('x')
 	var i = 0 as Count
 	while i < 3 'each'
@@ -307,7 +307,7 @@ function fill(sink ByteArray)
 end 'fill'
 
 function main() returns ExitCode
-	var sink = ByteArray.create(0)
+	let sink = ByteArray.create(0)
 	fill(sink)
 	return sink.count()
 end 'main'

@@ -31,7 +31,7 @@ end 'ListedProject'
 typealias ListedProjectArray = Array with ListedProject
 
 module function listProjectsAnswer(workspace LspWorkspaceState, documents LspDocumentTextMap) returns LspExtensionOutcome
-	var listed = ListedProjectArray.create(0)
+	let listed = ListedProjectArray.create(0)
 	let search = lspRootSearch(workspace)
 
 	for (uri, _) in documents 'eachDocument'
@@ -45,18 +45,18 @@ module function listProjectsAnswer(workspace LspWorkspaceState, documents LspDoc
 	// The map's order is its hashing's; the answer's is the roots'.
 	listed.sortBy(function(a ListedProject, b ListedProject) gives comparePathSpelling(a.root.spelled, right: b.root.spelled))
 
-	var doc = JsonDoc.create()
-	var projects = JsonNodeIdArray.create(listed.count(), zeroed: false)
+	let doc = JsonDoc.create()
+	let projects = JsonNodeIdArray.create(listed.count(), zeroed: false)
 
 	for entry in listed 'eachProject'
-		var project = LspJsonObject.create(doc)
+		let project = LspJsonObject.create(doc)
 		project.put(LspRootPathKey, value: JsonNode.stringNode(entry.root.spelled.toString()))
 		project.put(IsSingleFileKey, value: JsonNode.boolNode(entry.isSingleFile))
 		project.put(FileCountKey, value: JsonNode.numberNode(entry.fileCount as JsonFloat))
 		projects.push(project.finish())
 	end 'eachProject'
 
-	var result = LspJsonObject.create(doc)
+	let result = LspJsonObject.create(doc)
 	result.putNode(ProjectsKey, value: doc.add(JsonNode.arrayNode(projects)))
 	return LspExtensionOutcome.answered(LspAnswer.of(doc, result: result.finish()))
 end 'listProjectsAnswer'

@@ -35,12 +35,12 @@ type LetCastVerdictBook
 			let identity = read.subject.identity()
 
 			if let position = try self.index.get(identity) 'aKnownCast'
-				var known = try self.verdicts.get(position) otherwise panic("LetCastVerdictBook.file: verdicts.get OOB at {position} — the index is filed beside the verdict it names")
+				let known = try self.verdicts.get(position) otherwise panic("LetCastVerdictBook.file: verdicts.get OOB at {position} — the index is filed beside the verdict it names")
 				known.note(read, readerFile: readerFile)
 				continue
 			end 'aKnownCast'
 
-			var fresh = LetCastVerdict.create(read.subject.clone())
+			let fresh = LetCastVerdict.create(read.subject.clone())
 			fresh.note(read, readerFile: readerFile)
 			self.index.upsert(identity, value: self.verdicts.count())
 			self.verdicts.push(fresh)
@@ -49,7 +49,7 @@ type LetCastVerdictBook
 end 'LetCastVerdictBook'
 
 module function checkUnneededLetCasts(project Project, module MaxonModule, signatures ProgramSignatures) throws CompileError
-	var book = LetCastVerdictBook.create()
+	let book = LetCastVerdictBook.create()
 
 	for func in module.functions 'eachFunc'
 		book.file(func.letCastReads, readerFile: func.sourceFilePath)
@@ -60,7 +60,7 @@ module function checkUnneededLetCasts(project Project, module MaxonModule, signa
 		book.file(decl.letCastReads, readerFile: decl.declFilePath)
 	end 'eachDecl'
 
-	var mentions = MentionIndexMap.create()
+	let mentions = MentionIndexMap.create()
 
 	for verdict in book.verdicts 'eachCast'
 		if not verdict.everyReadClaimed 'aReadNeedsTheAlias'
@@ -71,7 +71,7 @@ module function checkUnneededLetCasts(project Project, module MaxonModule, signa
 			continue
 		end 'aMentionTheParserNeverSaw'
 
-		view subject = verdict.subject
+		let subject = verdict.subject
 		fileSecondary(project, code: ErrorCode.semanticUnneededCast, message: unneededLetCastMessage(subject.cast, name: subject.name), line: subject.cast.asRange.line, column: subject.cast.asRange.column, filePath: subject.declFile)
 	end 'eachCast'
 end 'checkUnneededLetCasts'
@@ -80,8 +80,8 @@ end 'checkUnneededLetCasts'
 // `#if`-disabled code, an uninstantiated template or a shadowing binding keeps the cast.
 function everyMentionIsARead(project Project, verdict LetCastVerdict, mentions MentionIndexMap) returns bool throws CompileError
 	let subject = verdict.subject
-	view inFile = try mentionIndexOf(project, file: subject.declFile, mentions: mentions)
-	view lines = try inFile.get(subject.name) otherwise LineNumberArray.create(0)
+	let inFile = try mentionIndexOf(project, file: subject.declFile, mentions: mentions)
+	let lines = try inFile.get(subject.name) otherwise LineNumberArray.create(0)
 	return mentionsWithin(lines, scope: subject.scope) == verdict.sites.count()
 end 'everyMentionIsARead'
 
@@ -92,15 +92,15 @@ function mentionIndexOf(project Project, file FilePath, mentions MentionIndexMap
 		return known
 	end 'aKnownFile'
 
-	view tokens = try queryTokens(project, path: file)
-	var built = MentionLinesMap.create()
+	let tokens = try queryTokens(project, path: file)
+	let built = MentionLinesMap.create()
 
 	for (iter, tok) in tokens.withIterator() 'eachToken'
 		if tok.kind != TokenKind.identifier or not isANameRead(tokens, position: iter.index()) 'notAMention'
 			continue
 		end 'notAMention'
 
-		var lines = try built.get(tok.value) otherwise LineNumberArray.create(0)
+		let lines = try built.get(tok.value) otherwise LineNumberArray.create(0)
 		lines.push(tok.line)
 		built.upsert(tok.value, value: lines)
 	end 'eachToken'

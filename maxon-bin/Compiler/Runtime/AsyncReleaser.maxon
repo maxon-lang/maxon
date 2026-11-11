@@ -261,7 +261,7 @@ end 'serviceReplyNeedsReleaser'
 //
 // ⚠ **AN UNDECLARED MESSAGE ANSWERS THE INERT PLAN**, on `asyncReleasePlanFor`'s reason.
 function serviceReplyReleasePlanFor(messageName ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
-	var noSlots = AsyncManagedSlotArray.create(0)
+	let noSlots = AsyncManagedSlotArray.create(0)
 	let sig = try funcSignatures.get(messageName) otherwise return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(0), cellSlots: AsyncCellSlotArray.create(0), resultSlots: AsyncManagedSlotArray.create(0), errorSlots: AsyncManagedSlotArray.create(0), calleeThrows: true, ownsImage: false)
 	return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(0), cellSlots: AsyncCellSlotArray.create(0), resultSlots: asyncResultSlotsOf(messageName, sig: sig, signatures: signatures, typeNames: typeNames), errorSlots: AsyncManagedSlotArray.create(0), calleeThrows: true, ownsImage: false)
 end 'serviceReplyReleasePlanFor'
@@ -269,8 +269,8 @@ end 'serviceReplyReleasePlanFor'
 // Every MESSAGE a reply cell is minted for anywhere in the module, in first-seen source order, deduped —
 // `collectAsyncSpawnTargets`' twin, over the op that mints a cell rather than the one that spawns a thread.
 export function collectServiceReplyTargets(module MaxonModule) returns NameRoster
-	var seen = AsyncReleaserSet.create()
-	var targets = NameRoster.create(0)
+	let seen = AsyncReleaserSet.create()
+	let targets = NameRoster.create(0)
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -363,9 +363,9 @@ function asyncReleasePlanFor(target AsyncSpawnTarget, funcSignatures FuncSignatu
 	let sig = try funcSignatures.get(target.callee) otherwise return AsyncReleasePlan.create(AsyncManagedSlotArray.create(0), consumedArgSlots: AsyncManagedSlotArray.create(0), cellSlots: AsyncCellSlotArray.create(0), resultSlots: AsyncManagedSlotArray.create(0), errorSlots: AsyncManagedSlotArray.create(0), calleeThrows: false, ownsImage: false)
 	let callee = target.callee
 	let placement = AsyncArgumentSlots.recorded(sig.paramTypes, byReference: target.byReference) if target.startsService else AsyncArgumentSlots.of(sig.paramTypes, byReference: target.byReference, capacity: asyncRegisterCapacityOf(target.target))
-	var argSlots = AsyncManagedSlotArray.create(0)
-	var consumedArgSlots = AsyncManagedSlotArray.create(0)
-	var cellSlots = AsyncCellSlotArray.create(0)
+	let argSlots = AsyncManagedSlotArray.create(0)
+	let consumedArgSlots = AsyncManagedSlotArray.create(0)
+	let cellSlots = AsyncCellSlotArray.create(0)
 	let consume = signatures.consumeOf(genericTemplateName(callee))
 
 	// The ARGUMENTS, in PARAMETER order, each at the offset `placement` gives it — the order the spawn
@@ -433,7 +433,7 @@ function asyncResultSlotsOfType(resultType MaxonType, signatures ProgramSignatur
 		return asyncSlotsAt(GtOffResult, signatures: signatures, typeNames: typeNames, slotType: resultType, aggregateName: aggregateName)
 	end 'aSingleWord'
 
-	var slots = AsyncManagedSlotArray.create(0)
+	let slots = AsyncManagedSlotArray.create(0)
 	slots.push(AsyncManagedSlot.create(GtOffResult, drop: FieldDropKind.existential(GtOffReplyWitness - GtOffResult)))
 	return slots
 end 'asyncResultSlotsOfType'
@@ -446,7 +446,7 @@ function asyncParamSlots(placement AsyncArgumentSlots, param ParamCount, signatu
 	end 'aSingleWord'
 
 	let witnessOffset = try placement.witnessOffsetOf(param) otherwise panic("asyncParamSlots: parameter {param} is held at an interface type by value and the placement carries no witness slot for it")
-	var slots = AsyncManagedSlotArray.create(0)
+	let slots = AsyncManagedSlotArray.create(0)
 	slots.push(AsyncManagedSlot.create(offset, drop: FieldDropKind.existential(witnessOffset - offset)))
 	return slots
 end 'asyncParamSlots'
@@ -454,7 +454,7 @@ end 'asyncParamSlots'
 // The 0-or-1 slot list for ONE single-word slot of the GT struct, so "a managed slot is an (offset, drop)
 // pair decided by `asyncSlotOwnsHeap`" is written once for the arguments and the result.
 function asyncSlotsAt(offset ByteOffset, signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns AsyncManagedSlotArray
-	var slots = AsyncManagedSlotArray.create(0)
+	let slots = AsyncManagedSlotArray.create(0)
 
 	if asyncSlotOwnsHeap(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName) 'ownsHeap'
 		slots.push(AsyncManagedSlot.create(offset, drop: FieldDropKind.direct(asyncSlotDropCallee(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName))))
@@ -486,7 +486,7 @@ end 'asyncErrorSlotsOf'
 // `ordinal + ErrorFlagOrdinalBias`, a small integer that owns nothing, and handing it to a drop callee is a
 // wild free.
 function asyncBoxedErrorSlots(layout EnumLayout, signatures ProgramSignatures, errorName ByteArray) returns AsyncManagedSlotArray
-	var slots = AsyncManagedSlotArray.create(0)
+	let slots = AsyncManagedSlotArray.create(0)
 
 	if layout.carriesPayloads() 'boxedError'
 		slots.push(AsyncManagedSlot.create(GtOffThrew, drop: FieldDropKind.direct(signatures.unionBoxDropCallee(errorName))))
@@ -557,10 +557,10 @@ end 'asyncErasedUnionIsBoxed'
 // BEFORE `noteDestructorUsage` and the admission test is cheap while a second walk would not be. The
 // installer applies `asyncCalleeNeedsReleaser`.
 export function collectAsyncSpawnTargets(module MaxonModule, funcNames FunctionNameIndex, target Target) returns AsyncSpawnTargetArray
-	var seen = AsyncReleaserSet.create()
-	var callees = NameRoster.create(0)
-	var seenFactories = AsyncReleaserSet.create()
-	var factories = NameRoster.create(0)
+	let seen = AsyncReleaserSet.create()
+	let callees = NameRoster.create(0)
+	let seenFactories = AsyncReleaserSet.create()
+	let factories = NameRoster.create(0)
 
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
@@ -572,7 +572,7 @@ export function collectAsyncSpawnTargets(module MaxonModule, funcNames FunctionN
 		end 'eachBlock'
 	end 'eachFunc'
 
-	var targets = AsyncSpawnTargetArray.create(callees.count() + factories.count(), zeroed: false)
+	let targets = AsyncSpawnTargetArray.create(callees.count() + factories.count(), zeroed: false)
 
 	for callee in callees 'eachCallee'
 		targets.push(asyncSpawnTargetOf(callee, funcNames: funcNames, target: target))
@@ -597,8 +597,8 @@ end 'serviceStartTargetOf'
 
 function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets NameRoster, seenFactories AsyncReleaserSet, factories NameRoster)
 	match op 'op'
-		asyncCall(_, callee, _, _, _, _, _, _) then noteAsyncCallee(callee, seen: seen, targets: targets)
-		serviceSpawn(_, _, _, _, callee, _, _, _, _, _, _, _) then noteAsyncCallee(callee, seen: seenFactories, targets: factories)
+		asyncCall(_, callee, _, _, _, _, _) then noteAsyncCallee(callee, seen: seen, targets: targets)
+		serviceSpawn(_, _, _, _, callee, _, _, _, _, _, _) then noteAsyncCallee(callee, seen: seenFactories, targets: factories)
 
 		// Every other op names no SPAWNED callee, `await`/`tryAwait` included: the await side reaches its
 		// releaser through the GT struct at run time, which is the whole point of storing the address there.
@@ -745,11 +745,11 @@ end 'installAsyncReleasers'
 // second copy of the guard order — arguments always, result under `resultConsumed`, success under
 // `threw == 0` — would be the one place a wrong copy is a double free.
 function synthesizeReleaser(module StdModule, name ByteArray, plan AsyncReleasePlan)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let gt = 0
@@ -758,7 +758,7 @@ function synthesizeReleaser(module StdModule, name ByteArray, plan AsyncReleaseP
 	// The ARGUMENTS and the parameter cells, unconditionally: the thread holds them whether it ran,
 	// parked or never started, and the reference the spawn took is owed back on every one of those
 	// paths.
-	var cur = emitArgumentReleases(module, func: func, ids: ids, entry: entry, gt: gt, plan: plan)
+	let cur = emitArgumentReleases(module, func: func, ids: ids, entry: entry, gt: gt, plan: plan)
 
 	if plan.resultSlots.count() == 0 and plan.errorSlots.count() == 0 'argsOnly'
 		module.setTerminator(cur, op: StdOp.branch(done.id))
@@ -768,7 +768,7 @@ function synthesizeReleaser(module StdModule, name ByteArray, plan AsyncReleaseP
 	end 'argsOnly'
 
 	// `resultConsumed != 0` ⇒ an await already took the result's reference; stop here.
-	var releaseResult = module.addBlock(func, label: b"releaseresult", heat: BlockHeat.normal)
+	let releaseResult = module.addBlock(func, label: b"releaseresult", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: cur, value: resultConsumed, pred: StdCmpPred.eq, against: 0, whenTrue: releaseResult, whenFalse: done, ids: ids)
 
 	emitResultOrErrorRelease(module, func: func, ids: ids, start: releaseResult, done: done, gt: gt, plan: plan)
@@ -787,8 +787,8 @@ end 'ServiceStartReport'
 
 export function finishServiceStart(module StdModule, func IrFunction, entry IrBlock, nextValue ValueId, record ValueId, cown ValueId, state ValueId, target AsyncSpawnTarget, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner, report ServiceStartReport) returns ValueId
 	let plan = asyncReleasePlanFor(target, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
-	var ids = ValueMinter.resuming(nextValue)
-	var cur = emitCellSlotReleases(module, func: func, ids: ids, cur: emitSlotReleases(module, func: func, ids: ids, cur: entry, base: record, slots: plan.argSlots), base: record, slots: plan.cellSlots)
+	let ids = ValueMinter.resuming(nextValue)
+	let cur = emitCellSlotReleases(module, func: func, ids: ids, cur: emitSlotReleases(module, func: func, ids: ids, cur: entry, base: record, slots: plan.argSlots), base: record, slots: plan.cellSlots)
 
 	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(record)))
 
@@ -812,8 +812,8 @@ end 'storeServiceState'
 // gave it, so the failure arm hands that share back by releasing the handle. That arm stores no
 // state, so the cown's finish finds none and skips the drop.
 function finishReportedStart(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, cell ValueId, errorFlag ValueId, state ValueId, cown ValueId)
-	var started = module.addBlock(func, label: b"svcstarted", heat: BlockHeat.normal)
-	var failed = module.addBlock(func, label: b"svcfailed", heat: BlockHeat.cold)
+	let started = module.addBlock(func, label: b"svcstarted", heat: BlockHeat.normal)
+	let failed = module.addBlock(func, label: b"svcfailed", heat: BlockHeat.cold)
 	let handle = emitHandleBoxHolding(module, block: cur, mbox: cown, boxBytes: ServiceHandleBoxSize, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: errorFlag, pred: StdCmpPred.eq, against: NoErrorFlag, whenTrue: started, whenFalse: failed, ids: ids)
 
@@ -831,8 +831,8 @@ function emitArgumentReleases(module StdModule, func IrFunction, ids ValueMinter
 	end 'noArgumentToRead'
 
 	let argBuf = emitLoadField(module, block: entry, record: gt, offset: GtOffArgBuf, ids: ids)
-	var released = emitCellSlotReleases(module, func: func, ids: ids, cur: emitSlotReleases(module, func: func, ids: ids, cur: entry, base: argBuf, slots: plan.argSlots), base: argBuf, slots: plan.cellSlots)
-	var cur = emitUnranSlotReleases(module, func: func, ids: ids, cur: released, gt: gt, base: argBuf, slots: plan.consumedArgSlots)
+	let released = emitCellSlotReleases(module, func: func, ids: ids, cur: emitSlotReleases(module, func: func, ids: ids, cur: entry, base: argBuf, slots: plan.argSlots), base: argBuf, slots: plan.cellSlots)
+	let cur = emitUnranSlotReleases(module, func: func, ids: ids, cur: released, gt: gt, base: argBuf, slots: plan.consumedArgSlots)
 
 	if plan.ownsImage 'theImageIsTheThreads'
 		module.appendOp(cur, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(argBuf)))
@@ -860,8 +860,8 @@ function emitResultOrErrorRelease(module StdModule, func IrFunction, ids ValueMi
 		return
 	end 'nonThrowing'
 
-	var releaseSuccess = module.addBlock(func, label: b"releasesuccess", heat: BlockHeat.normal)
-	var releaseError = module.addBlock(func, label: b"releaseerror", heat: BlockHeat.normal)
+	let releaseSuccess = module.addBlock(func, label: b"releasesuccess", heat: BlockHeat.normal)
+	let releaseError = module.addBlock(func, label: b"releaseerror", heat: BlockHeat.normal)
 	let threw = ids.mint()
 	module.appendOp(start, op: StdOp.loadIndirect(threw, addrId: gt, offset: GtOffThrew, valueType: StdType.i64))
 	emitBranchOnCompare(module, block: start, value: threw, pred: StdCmpPred.eq, against: 0, whenTrue: releaseSuccess, whenFalse: releaseError, ids: ids)
@@ -905,8 +905,8 @@ function emitUnranSlotReleases(module StdModule, func IrFunction, ids ValueMinte
 		return cur
 	end 'nothingTheCalleeTakes'
 
-	var release = module.addBlock(func, label: b"releaseunrun", heat: BlockHeat.normal)
-	var ran = module.addBlock(func, label: b"ran", heat: BlockHeat.normal)
+	let release = module.addBlock(func, label: b"releaseunrun", heat: BlockHeat.normal)
+	let ran = module.addBlock(func, label: b"ran", heat: BlockHeat.normal)
 	let completed = emitGtStatusEquals(module, block: cur, status: emitLoadField(module, block: cur, record: gt, offset: GtOffStatus, ids: ids), want: GtStatus.completed, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(completed, thenBlockId: ran.id, elseBlockId: release.id))
 	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: release, base: base, slots: slots), op: StdOp.branch(ran.id))
@@ -928,7 +928,7 @@ function emitCellSlotRelease(module StdModule, func IrFunction, ids ValueMinter,
 	module.appendOp(cur, op: StdOp.loadIndirect(cell, addrId: base, offset: slot.offset, valueType: StdType.i64))
 	let nonNull = emitCompareWithConstant(module, block: cur, value: cell, pred: StdCmpPred.ne, against: 0, ids: ids)
 	var release = module.addBlock(func, label: b"releasecell", heat: BlockHeat.normal)
-	var cont = module.addBlock(func, label: b"cont", heat: BlockHeat.normal)
+	let cont = module.addBlock(func, label: b"cont", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: release.id, elseBlockId: cont.id))
 
 	match slot.content 'content'

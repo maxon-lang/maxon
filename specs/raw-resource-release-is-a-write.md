@@ -50,7 +50,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3207: <fragment>:5:25: 'close' writes its receiver; the receiver is immutable
-error E3159: <fragment>:5:26: cannot pass a value read out of a `SharedValue` or registry value, which is read-only, to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
 <!-- test: a-let-pin-is-released -->
@@ -73,7 +72,7 @@ The accepted twin: the owner holds the segment in a `var`, closes it, and every 
 
 ```maxon
 function main() returns ExitCode
-	var segment = try SharedSegment.create("maxon-spec-raw-var", bytes: 4096) otherwise return 1
+	let segment = try SharedSegment.create("maxon-spec-raw-var", bytes: 4096) otherwise return 1
 	segment.close()
 	let refused = try segment.copyOut(0, byteCount: 8) otherwise 'closed'
 		return 0
@@ -90,7 +89,7 @@ A `DebugPort` frees its scratch pages in `close()`: a port is closed by its owne
 
 ```maxon
 function main() returns ExitCode
-	var port = DebugPort.create()
+	let port = DebugPort.create()
 	port.close()
 	print("{port.isReady()}\n")
 	return 0
@@ -126,7 +125,7 @@ A `ProcessTrace` frees its scratch pages in `close()`: a trace is closed by its 
 
 ```maxon
 function main() returns ExitCode
-	var trace = ProcessTrace.create()
+	let trace = ProcessTrace.create()
 	trace.close()
 	print("{trace.isReady()}\n")
 	return 0

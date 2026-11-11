@@ -252,7 +252,7 @@ typealias Tally = int(0 to u64.max)
 typealias TallyArray = Array with Tally
 
 function main() returns ExitCode
-	var values = TallyArray.create(0)
+	let values = TallyArray.create(0)
 	values.push(10)
 	values.push(20)
 
@@ -281,7 +281,7 @@ range excludes 0 (`int(1 to 100)`), or of an enum or union whose raw values (tag
 typealias Names = Array with String
 
 function main() returns ExitCode
-	var names = Names.create(0)
+	let names = Names.create(0)
 	names.growFilled(3, value: "")    // three empty strings
 	names.push("ada")
 	names.truncate(2)
@@ -328,7 +328,7 @@ function read(v Vec4, at Slot) returns Int
 end 'read'
 
 function main() returns ExitCode
-	var v = Vec4.create()
+	let v = Vec4.create()
 
 	for i in 0 upto countof(Vec4) 'fill'
 		v.set(i, value: (i * 10) as Int)          // proven by the loop bounds
@@ -387,7 +387,7 @@ function total(values Buf) returns Int
 end 'total'
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(1, value: 7)
 
 	let literal = Buf from [10, 20, 30]

@@ -260,7 +260,7 @@ end 'main'
 <!-- test: toLower -->
 ```maxon
 function main() returns ExitCode
-	var s = "HELLO"
+	let s = "HELLO"
 	print(s.toLower())
 	return 0
 end 'main'
@@ -280,7 +280,7 @@ the receiver's bytes in place and returning the SAME buffer (which would make
 after both calls, and — because they do not mutate `self` — they are callable on a `let` binding.
 ```maxon
 function main() returns ExitCode
-	var a = "Hello World"
+	let a = "Hello World"
 	let lower = a.toLower()
 	let upper = a.toUpper()
 	print("{a}\n")
@@ -837,7 +837,7 @@ function relay(s String) returns String
 end 'relay'
 
 function main() returns ExitCode
-	var v = "ab"
+	let v = "ab"
 	var out = relay(v)
 	out.append("XY")
 	print("v={v} out={out}\n")
@@ -955,7 +955,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let v = make()
-	var h = Holder.create("zz")
+	let h = Holder.create("zz")
 	h.adopt(v)
 	h.grow()
 	h.show(v)
@@ -1002,7 +1002,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let v = make()
-	var h = Holder.adopting(v)
+	let h = Holder.adopting(v)
 	h.grow()
 	h.show(v)
 	return 0
@@ -1048,11 +1048,11 @@ end 'Holder'
 
 function main() returns ExitCode
 	let v = make()
-	var h = Holder.create("zz")
+	let h = Holder.create("zz")
 	h.adopt(v)
 	h.grow()
 	h.show(v)
-	var g = Holder.create(v)
+	let g = Holder.create(v)
 	g.grow()
 	g.show(v)
 	return 0
@@ -1102,7 +1102,7 @@ The copy-on-write view behind it is an optimisation, not the contract.
 function main() returns ExitCode
 	let who = "ello"
 	let s = "H{who}"
-	var arr = s.toByteArray()
+	let arr = s.toByteArray()
 	try arr.set(0, value: 74) otherwise panic("set")
 	let b0 = try arr.get(0) otherwise panic("get")
 	print("s={s} arr[0]={b0}")
@@ -1124,7 +1124,7 @@ ONE immortal object in read-only `.rodata`. A shared write would rewrite `b` too
 function main() returns ExitCode
 	let a = "Hello"
 	let b = "Hello"
-	var arr = a.toByteArray()
+	let arr = a.toByteArray()
 	try arr.set(0, value: 74) otherwise panic("set")
 	let b0 = try arr.get(0) otherwise panic("get")
 	print("a={a} b={b} arr[0]={b0}")
@@ -1152,7 +1152,7 @@ the case that would actually alias if the view had not already detached.
 function main() returns ExitCode
 	let who = "ello"
 	let s = "H{who}"
-	var arr = s.toByteArray()
+	let arr = s.toByteArray()
 	try arr.managed.set(0, 74) otherwise panic("set")
 	let b0 = try arr.get(0) otherwise panic("get")
 	print("s={s} arr[0]={b0}")

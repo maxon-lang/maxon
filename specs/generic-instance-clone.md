@@ -42,7 +42,7 @@ typealias StrBox = Box with String
 typealias BoxArray = Array with StrBox
 
 function makeClone() returns BoxArray
-	var src = BoxArray.create(0)
+	let src = BoxArray.create(0)
 	src.push(StrBox.create("first boxed string, long enough to live on the heap", tag: 10))
 	src.push(StrBox.create("second boxed string, long enough to live on the heap", tag: 20))
 	return src.clone()
@@ -88,14 +88,14 @@ typealias StrBox = Box with String
 typealias BoxArray = Array with StrBox
 
 function main() returns ExitCode
-	var src = BoxArray.create(0)
+	let src = BoxArray.create(0)
 	src.push(StrBox.create("original boxed string, long enough to live on the heap", tag: 7))
 
 	let copy = src.clone()
 
 	try src.set(0, value: StrBox.create("replaced", tag: 99)) otherwise return 91
 
-	view theirs = try src.get(0) otherwise return 92
+	let theirs = try src.get(0) otherwise return 92
 	if theirs.tag != 99 'sourceNotReplaced'
 		return 93
 	end 'sourceNotReplaced'
@@ -170,7 +170,7 @@ end 'Bag'
 typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	b.add(91, tag: 4)
 
 	let c = b.copy()
@@ -212,7 +212,7 @@ type Bucket
 end 'Bucket'
 
 function detached() returns Bucket
-	var b = Bucket.create(5)
+	let b = Bucket.create(5)
 	b.members.insert("a string long enough to force a heap allocation")
 	b.members.insert("a second string long enough to force a heap allocation")
 	return b.clone()
@@ -335,8 +335,8 @@ typealias SmallBag = Bag with Small
 typealias Smalls = Array with Small
 
 function main() returns ExitCode
-	var b = SmallBag.create()
-	var r = Smalls.create(0)
+	let b = SmallBag.create()
+	let r = Smalls.create(0)
 	r.push(41)
 	b.addRow(r)
 	let c = b.copyRows()
@@ -448,7 +448,7 @@ end 'Bag'
 typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	b.add(91, tag: 4)
 
 	let c = b.copy()
@@ -499,11 +499,11 @@ end 'Bag'
 typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	b.add(91, tag: 4)
 
-	view c = b.items
-	view e = try c.get(0) otherwise return 90
+	let c = b.items
+	let e = try c.get(0) otherwise return 90
 	return 4 as ExitCode if e.v.equals(91) else 70 as ExitCode
 end 'main'
 ```

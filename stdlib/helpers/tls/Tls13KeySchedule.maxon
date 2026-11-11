@@ -131,7 +131,7 @@ public type Tls13KeySchedule
 	public static function messageHash(suite Tls13CipherSuite, clientHello ByteArray) returns ByteArray
 		let hash = suite.hashAlgorithm()
 
-		var message = ByteArray.create(0)
+		let message = ByteArray.create(0)
 		message.push(tls13MessageHashType as Byte)
 		appendOrderedWord(message, word: hash.digestBytes() as OrderedWord, width: tls13MessageHashLengthBytes, order: ByteOrder.bigEndian)
 		message.append(sha2Once(hash, data: clientHello))
@@ -156,7 +156,7 @@ public type Tls13KeySchedule
 		try tls13RequireHash(suite, hash: helloHash)
 
 		let hash = suite.hashAlgorithm()
-		var zeros = ByteArray.create(hash.digestBytes())
+		let zeros = ByteArray.create(hash.digestBytes())
 
 		let emptyHash = sha2Once(hash, data: ByteArray.create(0))
 		let earlySecret = hkdfExtract(hash, salt: zeros, inputKeyMaterial: zeros)
@@ -239,7 +239,7 @@ end 'tls13Derive'
 function tls13Expand(hash HashAlgorithm, secret ByteArray, label String, context ByteArray, length HkdfOutputLength) returns ByteArray
 	let fullLabel = "{tls13LabelPrefix}{label}".toByteArray()
 
-	var info = ByteArray.create(0)
+	let info = ByteArray.create(0)
 	appendOrderedWord(info, word: length as OrderedWord, width: tls13LengthFieldBytes, order: ByteOrder.bigEndian)
 	info.push(fullLabel.count() as Byte)
 	info.append(fullLabel)

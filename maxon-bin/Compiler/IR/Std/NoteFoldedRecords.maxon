@@ -26,7 +26,7 @@ typealias FoldedFieldWriteArray = Array with FoldedFieldWrite
 // fields are plain stores of constants, and no later pass has yet deleted a store into a record nothing
 // reads.
 export function noteFoldedRecords(module StdModule)
-	var liveOps = OpIndexArray.create(0)
+	let liveOps = OpIndexArray.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		noteFoldedRecordsInFunc(module, func: module.getFunc(funcIndex), liveOps: liveOps)
@@ -42,8 +42,8 @@ function noteFoldedRecordsInFunc(module StdModule, func IrFunction, liveOps OpIn
 	let carried = carriedBlockArgValues(module, func: func, argBound: argBound)
 	let valueBound = namedOrDefinedValueBound(module, func: func)
 
-	var ownerOfValue = FoldedOwnerColumn.absent(valueBound)
-	var namedOfValue = FixedValueIdArray.create(valueBound)
+	let ownerOfValue = FoldedOwnerColumn.absent(valueBound)
+	let namedOfValue = FixedValueIdArray.create(valueBound)
 
 	for (iter, local) in func.debugLocals.withIterator() 'eachBinding'
 		for version in local.versions 'eachValue'
@@ -60,11 +60,11 @@ function noteFoldedRecordsInFunc(module StdModule, func IrFunction, liveOps OpIn
 		return
 	end 'noRecordIsFilledHere'
 
-	var def = StdFoldableDef.create()
+	let def = StdFoldableDef.create()
 	let constMap = collectConstValues(module, opIndices: liveOps, def: def)
-	var store = StdStoreOperands.create()
-	var writes = FoldedFieldWriteArray.create(0)
-	var refused = FixedBoolArray.create(func.debugLocals.count())
+	let store = StdStoreOperands.create()
+	let writes = FoldedFieldWriteArray.create(0)
+	let refused = FixedBoolArray.create(func.debugLocals.count())
 
 	for opIdx in liveOps 'eachOp'
 		classifyStoreOperands(opAt(module, opIdx: opIdx), store: store)
@@ -102,7 +102,7 @@ function namedOrDefinedValueBound(module StdModule, func IrFunction) returns Val
 end 'namedOrDefinedValueBound'
 
 function carriedBlockArgValues(module StdModule, func IrFunction, argBound ValueId) returns CarriedValues
-	var carried = CarriedValues.create(argBound)
+	let carried = CarriedValues.create(argBound)
 	let pairs = collectPhiOperands(module, func: func, refByBlockId: buildBlockIdIndex(module, func: func))
 
 	for i in 0 upto pairs.count() 'eachSlot'
@@ -133,7 +133,7 @@ function resolveThroughPhis(carried CarriedValues, value ValueId, argBound Value
 end 'resolveThroughPhis'
 
 function anyStoreIntoANamedValue(module StdModule, liveOps OpIndexArray, ownerOfValue FoldedOwnerColumn) returns bool
-	var store = StdStoreOperands.create()
+	let store = StdStoreOperands.create()
 
 	for opIdx in liveOps 'eachOp'
 		classifyStoreOperands(opAt(module, opIdx: opIdx), store: store)
@@ -217,7 +217,7 @@ function publishOneFoldedRecord(func IrFunction, writes FoldedFieldWriteArray, r
 		return
 	end 'aFieldTheCompilerCannotState'
 
-	var words = FullRangeIntArray.create(past - first, zeroed: false)
+	let words = FullRangeIntArray.create(past - first, zeroed: false)
 	var at = first
 
 	while at < past 'eachField'
@@ -231,7 +231,7 @@ function publishOneFoldedRecord(func IrFunction, writes FoldedFieldWriteArray, r
 		at = at + 1
 	end 'eachField'
 
-	var local = (try func.debugLocals.get(owner) otherwise panic("noteFoldedRecords: debugLocals.get OOB at {owner} of {func.debugLocals.count()}")).clone()
+	let local = (try func.debugLocals.get(owner) otherwise panic("noteFoldedRecords: debugLocals.get OOB at {owner} of {func.debugLocals.count()}")).clone()
 	local.noteFoldedRecord((try writes.get(first) otherwise panic("noteFoldedRecords: writes.get OOB at {first}, which its own run named")).recordValue, words: words)
 	func.replaceDebugLocal(owner, local: local)
 end 'publishOneFoldedRecord'

@@ -10,7 +10,7 @@ category: language
 
 ## Top-Level Let Declarations
 
-Top-level `let` declarations bind values at module scope. An initializer is read by the function body's expression parser, so it accepts every expression a body does, with the same meaning. A scalar binding is a compile-time constant inlined at every use; a record whose value is decided at compile time is laid down in the executable's read-only data, and any other record is built by `__module_init` before `main`.
+Top-level `let` declarations bind values at module scope. An initializer is read by the function body's expression parser, and it calls nothing: a call in it is refused (E3220). A scalar binding is a compile-time constant inlined at every use; a record or array built from literals is laid down in the executable's read-only data.
 
 ### Syntax
 
@@ -21,7 +21,7 @@ export let EXPORTED_NAME = expression
 
 ### Features
 
-- **Body expressions**: An initializer is any expression a function body accepts, typed and diagnosed as a body types and diagnoses it
+- **Literal expressions**: An initializer is a literal expression, typed and diagnosed as a body types and diagnoses it; a call is E3220
 - **Type inference**: Type is inferred from the initializer, and a derived constant keeps its operands' typealias
 - **Forward references**: Constants can reference other constants declared later in the file, or in another file that exports them
 - **Export support**: Use `export let` to make constants available to other modules
@@ -35,9 +35,8 @@ A scalar binding's initializer must have a value the body parser knows at compil
 - References to other top-level constants
 - Enum member access: `Color.Red`
 
-A call whose value is not known at compile time is **E2045**. Strings, byte strings, characters, arrays,
-maps, tuples and other records are not scalars: a constant one is laid down as read-only data, and any other
-is built before `main`.
+A call is not a constant: it is **E3220**, and a call of a non-generic function that returns a scalar is **E2045**. A literal construction (`X from [..]`, `[..]`, `{..}`) is not a call. Strings, byte strings, characters, arrays,
+maps, tuples and other records are not scalars: a constant one is laid down as read-only data.
 
 ### Examples
 
@@ -52,8 +51,7 @@ let PRIMES = [2, 3, 5, 7, 11]
 
 ### Restrictions
 
-- A call that returns a record runs in `__module_init` before `main`; a call that returns a scalar not
-  known at compile time is **E2045**
+- A call in an initializer is **E3220** (a call of a non-generic function that returns a scalar is **E2045**): write a literal, or build the value where it is used
 - Initializers that depend on each other in a cycle are **E2012**
 - A top-level `var` does not exist (`specs/module-var-removed.md`): a module-level binding is a `let`
 
@@ -382,12 +380,8 @@ end 'main'
 92
 ```
 
-<!-- test: file-private-same-name-three-directories-every-kind -->
-Three files of THREE directories each declare file-private `let`s of the same names, of every kind a `let`
-can be: a number, a constant derived from it, a `String`, a byte string, an array and a record built by a
-factory. Each file's reads, in its own functions, resolve to its OWN declaration; the file that
-declares nothing but `main` reads the third pair of declarations. The order the files arrive in does not
-change an answer.
+<!-- test: error.file-private-same-name-three-directories-every-kind -->
+The initializer of a module-level or `static` `let` calls `Tag.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 // --- file: a/a.maxon
 let base = 5
@@ -446,10 +440,9 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```stdout
-first alpha 10 3 5
-second beta 21 4 7
-third 11
+```maxoncstderr
+error E3220: a/<fragment>:8:14: the initializer of 'anchor' calls 'Tag.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3220: b/<fragment>:32:14: the initializer of 'anchor' calls 'Pin.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: from-literal-initializer -->
@@ -683,8 +676,8 @@ end 'main'
 1 one 2 3
 ```
 
-<!-- test: a-tuple-argument-of-a-top-level-factory -->
-A factory parameter declared at a tuple type takes a tuple literal in a file-scope call, as it does in a body.
+<!-- test: error.a-tuple-argument-of-a-top-level-factory -->
+The initializer of a module-level or `static` `let` calls `Pair.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Num = int(0 to 1000)
 typealias Step = (Num, String)
@@ -704,15 +697,12 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-1 one
+```maxoncstderr
+error E3220: <fragment>:13:9: the initializer of 'p' calls 'Pair.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
-<!-- test: a-tuple-argument-written-in-the-factory-signature -->
-The same call when the parameter spells its tuple type inline instead of through an alias.
+<!-- test: error.a-tuple-argument-written-in-the-factory-signature -->
+The initializer of a module-level or `static` `let` calls `Pair.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -732,11 +722,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-5 6
+```maxoncstderr
+error E3220: <fragment>:13:9: the initializer of 'p' calls 'Pair.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: a-tuple-payload-of-a-top-level-union-case -->
@@ -774,8 +761,8 @@ A map literal whose value column is a tuple fixes its columns from the first pai
 let table = [1: (2, "two"), 3: (4, "four")]
 
 function main() returns ExitCode
-	view first = try table.get(1) otherwise panic("absent")
-	view second = try table.get(3) otherwise panic("absent")
+	let first = try table.get(1) otherwise panic("absent")
+	let second = try table.get(3) otherwise panic("absent")
 	print("{first.0} {first.1} {second.0} {second.1}\n")
 	return 0
 end 'main'
@@ -837,9 +824,8 @@ end 'main'
 2 0 1 2 3
 ```
 
-<!-- test: parenthesised-records-and-tuples-at-file-scope -->
-Redundant parentheses around a factory call, a tuple literal or a tuple column change nothing, and the comma between
-a call's arguments does not make the parentheses around the call a tuple.
+<!-- test: error.parenthesised-records-and-tuples-at-file-scope -->
+The initializer of a module-level or `static` `let` calls `Pair.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -861,11 +847,9 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-1 2 3 three 4 5 6 six
+```maxoncstderr
+error E3220: <fragment>:13:15: the initializer of 'grouped' calls 'Pair.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3220: <fragment>:15:13: the initializer of 'mixed' calls 'Pair.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: an-unstated-tuple-constant-declared-in-another-file -->
@@ -1228,9 +1212,8 @@ end 'main'
 error E2001: <fragment>:13:23: unexpected token: 'zzz'
 ```
 
-<!-- test: a-top-level-let-is-initialized-by-a-directory-types-static -->
-A top-level `let` is initialized by a static of a type in another directory, through a one-segment
-chain, `sub.Calc`, and a two-segment one, `outer.inner.Deep` (30 + 12).
+<!-- test: error.a-top-level-let-is-initialized-by-a-directory-types-static -->
+The initializer of a module-level or `static` `let` calls `Calc.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 // --- file: sub/calc.maxon
 export type Calc
@@ -1258,12 +1241,13 @@ function main() returns ExitCode
 	return t.v + deep.v
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E3220: <fragment>:21:9: the initializer of 't' calls 'Calc.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3220: <fragment>:22:12: the initializer of 'deep' calls 'Deep.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
-<!-- test: a-parenthesised-qualified-factory-at-file-scope -->
-Parentheses around a directory-qualified factory call are the same call, as they are around an unqualified one.
+<!-- test: error.a-parenthesised-qualified-factory-at-file-scope -->
+The initializer of a module-level or `static` `let` calls `Calc.create`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 // --- file: sub/calc.maxon
 export type Calc
@@ -1281,10 +1265,89 @@ function main() returns ExitCode
 	return r.v
 end 'main'
 ```
-```exitcode
-7
+```maxoncstderr
+error E3220: <fragment>:12:9: the initializer of 'r' calls 'Calc.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
+<!-- test: error.a-module-let-cloning-an-array-literal-is-a-call -->
+`clone` is a call, and a call on a literal is still a call: the initializer of a module-level `let` calls
+nothing, so the program is refused (E3220).
+```maxon
+let numbers = [1, 2].clone()
+
+function main() returns ExitCode
+	return numbers.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3220: <fragment>:2:15: the initializer of 'numbers' calls 'Array.clone': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+```
+
+<!-- test: error.a-module-let-cloning-a-map-literal-is-a-call -->
+The `clone` of a map is the compiler's own copy of the container rather than a function a file declares, and it
+is a call all the same: the program is refused (E3220).
+```maxon
+typealias Tally = int(0 to 1000)
+
+let ledger = ["a": 1 as Tally].clone()
+
+function main() returns ExitCode
+	return ledger.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3220: <fragment>:4:14: the initializer of 'ledger' calls 'Map.clone': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+```
+
+<!-- test: error.a-module-let-slicing-an-array-literal-is-a-call -->
+```maxon
+let head = [1, 2, 3].slice(0, endIndex: 1)
+
+function main() returns ExitCode
+	return head.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3220: <fragment>:2:12: the initializer of 'head' calls 'Array.slice': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+```
+
+<!-- test: error.a-module-let-copying-a-module-let-record-is-a-call -->
+The `clone` of a record that owns a `String` is the compiler's generated deep copy, and it is a call: the program is
+refused (E3220).
+```maxon
+typealias Tally = int(0 to 1000)
+
+type Pair
+	export let left as Tally
+	export let label as String
+
+	static let seed = Self{left: 1, label: "a"}
+end 'Pair'
+
+let copy = Pair.seed.clone()
+
+function main() returns ExitCode
+	return copy.left as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3220: <fragment>:11:12: the initializer of 'copy' calls 'Pair.clone': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+```
+
+<!-- test: error.a-module-let-rendering-a-number-is-a-call -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+let limit = 5 as Tally
+let label = limit.toString()
+
+function main() returns ExitCode
+	return label.byteLength() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3220: <fragment>:5:13: the initializer of 'label' calls 'Tally.toString': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+```
 
 <!-- test: error.a-call-through-a-module-function-value-in-a-constant-is-not-a-constant -->
 `doubler` is a module-level function value; calling it in another top-level `let`'s initializer is a call,
@@ -1358,8 +1421,7 @@ end 'main'
 ```
 
 <!-- test: error.a-generic-call-in-a-constant-is-not-a-constant -->
-A generic function's call in a top-level `let`'s initializer is a call, not a constant, and it is refused
-as one rather than as an undefined function.
+A generic function's call in a top-level `let`'s initializer is a call, and it is refused as one under the generic function's own name.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1374,7 +1436,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2045: <fragment>:8:11: Function calls are not allowed in global variable initializers; 'larger()' is not a constant expression
+error E3220: <fragment>:8:11: the initializer of 'big' calls 'larger': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 
@@ -1475,8 +1537,7 @@ end 'useSqrt'
 ```
 
 <!-- test: error.a-refused-initializer-call-beside-an-unused-typealias-reports-both -->
-An unused typealias in another file is reported ahead of an initializer's undefined call, as it is ahead
-of the same call in a function body.
+An unused typealias in another file is reported beside an initializer's refused call.
 ```maxon
 // --- file: main.maxon
 let G = nothere(7)
@@ -1489,7 +1550,7 @@ end 'main'
 typealias Unused = int(0 to 5)
 ```
 ```maxoncstderr
-error E3004: <fragment>:3:9: call to undefined function 'nothere'
+error E3220: <fragment>:3:9: the initializer of 'G' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 error E3062: <fragment>:10:11: unused typealias: 'Unused'
 ```
 
@@ -2238,7 +2299,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:3:9: call to undefined function 'nothere'
+error E3220: <fragment>:3:9: the initializer of 'G' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-constant-read-after-a-refused-call-constant-reports-the-call-once -->
@@ -2252,7 +2313,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:2:9: call to undefined function 'nothere'
+error E3220: <fragment>:2:9: the initializer of 'G' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-static-initializer-calling-a-sibling-instance-method-bare-has-no-receiver -->
@@ -2320,7 +2381,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:2:9: call to undefined function 'nothere'
+error E3220: <fragment>:2:9: the initializer of 'G' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-method-call-on-a-refused-call-constant-reports-the-call-once -->
@@ -2333,7 +2394,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:2:9: call to undefined function 'nothere'
+error E3220: <fragment>:2:9: the initializer of 'G' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 
@@ -2347,7 +2408,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:2:9: call to undefined function 'nothere'
+error E3220: <fragment>:2:9: the initializer of 'f' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-type-read-after-a-refused-call-constant-is-used -->
@@ -2364,7 +2425,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:4:9: call to undefined function 'nothere'
+error E3220: <fragment>:4:9: the initializer of 'G' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 
@@ -2381,12 +2442,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:4:9: call to undefined function 'nothere'
+error E3220: <fragment>:4:9: the initializer of 'G' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
-<!-- test: a-factory-initializer-past-a-same-named-constant-in-another-file-folds -->
-`make` names a constant in `other.maxon`, which `main.maxon` cannot see, and a factory `main.maxon`
-declares; the initializer's call means the factory, as a body call would. Returns 7.
+<!-- test: error.a-factory-initializer-past-a-same-named-constant-in-another-file-folds -->
+The initializer of a module-level or `static` `let` calls `make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 // --- file: main.maxon
 typealias Digit = int(0 to 9)
@@ -2422,10 +2482,9 @@ export function other() returns Zero
 	return make
 end 'other'
 ```
-```exitcode
-7
+```maxoncstderr
+error E3220: <fragment>:17:9: the initializer of 'G' calls 'make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
-
 
 <!-- test: error.a-field-assignment-through-a-refused-call-static-var-reports-the-call-once -->
 `Holder.shared`'s initializer is a refused call, so writing one of its fields is not reported again.
@@ -2448,13 +2507,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:7:22: call to undefined function 'nothere'
+error E3220: <fragment>:7:22: the initializer of 'Holder.shared' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 
-<!-- test: a-static-initializer-folds-its-sibling-factory-past-a-same-named-constant -->
-A top-level constant named `make` is not a function, so inside `Box` the bare call means the sibling
-factory, as a body call would. Returns 7.
+<!-- test: error.a-static-initializer-folds-its-sibling-factory-past-a-same-named-constant -->
+The initializer of a module-level or `static` `let` calls `Box.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Digit = int(0 to 9)
 
@@ -2482,12 +2540,12 @@ function main() returns ExitCode
 	return 1
 end 'main'
 ```
-```exitcode
-7
+```maxoncstderr
+error E3220: <fragment>:9:22: the initializer of 'Box.origin' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-static-initializer-calling-a-generic-sibling-is-not-a-constant -->
-`pick` is a generic sibling static, so the initializer's bare call means it and is refused as a call.
+`pick` is a generic sibling static, so the initializer's bare call means it and is refused as a call under the sibling's own name.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2508,7 +2566,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2045: <fragment>:5:20: Function calls are not allowed in global variable initializers; 'pick()' is not a constant expression
+error E3220: <fragment>:5:20: the initializer of 'Registry.seed' calls 'Registry.pick': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-top-level-initializer-call-to-a-hidden-generic-is-not-exported -->
@@ -2558,7 +2616,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:13:36: call to undefined function 'nothere'
+error E3220: <fragment>:13:9: the initializer of 'G' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-refused-call-inside-a-record-literal-in-a-function-body-reports-the-call-alone -->
@@ -2610,14 +2668,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:4:9: call to undefined function 'nothere'
+error E3220: <fragment>:4:9: the initializer of 'G' calls 'nothere': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 
-<!-- test: a-static-initializer-calling-a-function-valued-binding-past-a-sibling-calls-the-binding -->
-`make` is a top-level binding holding a function value a call built; a body call `make()` inside `Box`
-calls it, so the initializer calls it too, not the sibling factory: `origin` is `other`'s `3`, not the
-sibling's `7`.
+<!-- test: error.a-static-initializer-calling-a-function-valued-binding-past-a-sibling-calls-the-binding -->
+The initializer of a module-level or `static` `let` calls `makerOf`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Digit = int(0 to 9)
 typealias Maker = function() returns Box
@@ -2654,12 +2710,13 @@ function main() returns ExitCode
 	return (Box.originOf() + Box.make().n) as ExitCode
 end 'main'
 ```
-```exitcode
-10
+```maxoncstderr
+error E3220: <fragment>:13:12: the initializer of 'make' calls 'makerOf': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3220: <fragment>:18:22: the initializer of 'Box.origin' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
-<!-- test: a-static-method-body-calling-a-function-valued-binding-past-a-sibling-calls-the-binding -->
-The same call in a static method's body.
+<!-- test: error.a-static-method-body-calling-a-function-valued-binding-past-a-sibling-calls-the-binding -->
+The initializer of a module-level or `static` `let` calls `makerOf`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Digit = int(0 to 9)
 typealias Maker = function() returns Box
@@ -2695,10 +2752,9 @@ function main() returns ExitCode
 	return (Box.originOf() + Box.make().n) as ExitCode
 end 'main'
 ```
-```exitcode
-10
+```maxoncstderr
+error E3220: <fragment>:13:12: the initializer of 'make' calls 'makerOf': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
-
 
 <!-- test: a-closure-bound-by-a-top-level-let-is-called-and-passed-as-a-function-value -->
 `addSeven` is a closure literal in a top-level initializer. Calling it and handing it to a function-typed
@@ -2792,8 +2848,7 @@ end 'apply'
 ```
 
 <!-- test: error.a-static-initializer-calling-a-function-valued-binding-past-a-sibling-with-a-parameter-calls-the-binding -->
-The sibling `make` takes a `Digit` the argument does not fit, but the call means the function-valued
-binding, as a body call does, so the refusal is the binding's arity, not the sibling's parameter's.
+The initializer of a module-level or `static` `let` calls `makerOf`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Digit = int(0 to 9)
 typealias Maker = function() returns Box
@@ -2827,11 +2882,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:18:26: 'Maker' expects 0 argument(s) but 1 were provided
+error E3220: <fragment>:13:12: the initializer of 'make' calls 'makerOf': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+error E3220: <fragment>:18:22: the initializer of 'Box.origin' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-static-method-body-calling-a-function-valued-binding-past-a-sibling-with-a-parameter -->
-The same call in a static method's body.
+The initializer of a module-level or `static` `let` calls `makerOf`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Digit = int(0 to 9)
 typealias Maker = function() returns Box
@@ -2864,13 +2920,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:23:20: 'Maker' expects 0 argument(s) but 1 were provided
+error E3220: <fragment>:13:12: the initializer of 'make' calls 'makerOf': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 
 <!-- test: error.a-static-initializer-calling-a-sibling-past-a-same-named-constant-reports-the-siblings-defect -->
-`make` names a constant that is not a function, so the call means the sibling factory, and its argument's
-range is refused exactly as it is with no constant of that name.
+The initializer of a module-level or `static` `let` calls `Box.make`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 typealias Digit = int(0 to 9)
 
@@ -2899,7 +2954,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:9:22: Value 42 is outside the range of 'Digit' (int(0 to 9))
+error E3220: <fragment>:9:22: the initializer of 'Box.origin' calls 'Box.make': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-static-method-calling-a-sibling-past-a-same-named-constant-reports-the-siblings-defect -->
@@ -3036,8 +3091,8 @@ end 'main'
 error E3005: <fragment>:11:9: argument type mismatch for 'n': expected 'Small', got 'ExitCode' — cast the argument with 'as Small'
 ```
 
-<!-- test: a-match-expression-in-a-call-argument-ends-a-top-level-let-at-its-own-line -->
-The newlines a `match` expression keeps between its arms inside a call's parentheses belong to the initializer: the `let` ends at the line holding the closing parenthesis.
+<!-- test: error.a-match-expression-in-a-call-argument-ends-a-top-level-let-at-its-own-line -->
+The initializer of a module-level or `static` `let` calls `tag`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 enum Mode
 	quiet
@@ -3059,11 +3114,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-loud! next
+```maxoncstderr
+error E3220: <fragment>:11:13: the initializer of 'LABEL' calls 'tag': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: a-match-expression-in-a-parenthesised-group-ends-a-top-level-let-at-its-own-line -->
@@ -3121,7 +3173,8 @@ tail
 next
 ```
 
-<!-- test: a-handler-block-otherwise-in-a-call-argument-ends-a-top-level-let-at-its-own-line -->
+<!-- test: error.a-handler-block-otherwise-in-a-call-argument-ends-a-top-level-let-at-its-own-line -->
+The initializer of a module-level or `static` `let` calls `parse`, and a module-level initializer calls nothing, so the program is refused (E3220).
 ```maxon
 enum ParseError implements Error
 	bad
@@ -3149,11 +3202,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-3! next
+```maxoncstderr
+error E3220: <fragment>:17:13: the initializer of 'LABEL' calls 'parse': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
 <!-- test: error.a-return-in-a-handler-block-of-a-top-level-let-names-the-initializer -->
@@ -3228,43 +3278,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3148: <fragment>:2:22: 'bits(5)' is not a legal width: bits(n) takes 1, 2, 4, 8, 16, 32 or 64 — the widths a slot or a sub-byte packed field can hold
-```
-
-<!-- test: error.a-field-read-of-a-type-with-a-refused-member-reports-only-the-refusal -->
-```maxon
-typealias Count = int(0 to 1000)
-
-type Box
-	view n as Count
-
-	static function create(n Count) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Box'
-
-function main() returns ExitCode
-	let b = Box.create(1)
-	print("{b.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2077: <fragment>:5:2: `view` binds a local name, so it cannot declare a field, a module-level binding, an extension member or a `@heap` binding; use `let` or `var`
-```
-
-<!-- test: error.a-read-of-a-refused-module-binding-in-a-healthy-body-reports-only-the-refusal -->
-```maxon
-typealias Count = int(0 to 1000)
-
-view limit = 3 as Count
-
-function main() returns ExitCode
-	print("{limit}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2077: <fragment>:4:1: `view` binds a local name, so it cannot declare a field, a module-level binding, an extension member or a `@heap` binding; use `let` or `var`
 ```
 
 <!-- test: error.a-type-refused-in-one-file-and-written-in-a-healthy-file-reports-only-the-refusal -->
@@ -3444,7 +3457,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:14:3: the reply of the message `Maker.make` is a function value, a closure record that owns what it captures and does not cross to another thread. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3217: <fragment>:19:10: the message `Maker.make` returns a function value, a closure record that owns what it captures and does not cross to another thread, and this `spawn` makes `Maker` a service — whose reply is handed to the green thread that awaits it. `await` a promise in the handler and return the result it yields, return a value whose graph holds no function value or thread-bound handle, or drop the `returns` clause
 ```
 
 <!-- test: error.a-spawn-refusal-beside-another-methods-abandoned-body-is-still-reported -->
@@ -3480,7 +3493,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E2004: <fragment>:21:2: Expected expression but got 'end'
-error E3138: <fragment>:25:29: argument `seed` of `spawn Maker.create(…)` is a `MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3217: <fragment>:25:10: the message `Maker.make` returns a `Maker.Items` with no capability word, and this `spawn` makes `Maker` a service — whose reply is handed to the green thread that awaits it, so what crosses must be owned by one side or read-only on both. `isolated` gives the value away: the sender builds it for this one send and no other name reaches it afterwards. `immutable` shares it: the sender freezes it (`freeze x.clone()`), and both threads only read it. Write it `returns isolated …` or `returns immutable …`
 ```
 
 <!-- test: error.a-spawn-refusal-beside-an-unrelated-error-builds-no-loop-for-the-refused-instance -->
@@ -3516,7 +3529,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3004: <fragment>:21:9: call to undefined function 'nothere'
-error E3138: <fragment>:25:29: argument `seed` of `spawn Maker.create(…)` is a `MachinePin` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle other than a socket or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3217: <fragment>:25:10: the message `Maker.make` returns a `Maker.Items` with no capability word, and this `spawn` makes `Maker` a service — whose reply is handed to the green thread that awaits it, so what crosses must be owned by one side or read-only on both. `isolated` gives the value away: the sender builds it for this one send and no other name reaches it afterwards. `immutable` shares it: the sender freezes it (`freeze x.clone()`), and both threads only read it. Write it `returns isolated …` or `returns immutable …`
 ```
 
 <!-- test: error.an-unclosed-bracket-ends-at-a-column-one-module-function -->
@@ -3576,13 +3589,13 @@ error E2015: <fragment>:4:16: Unsupported: a typealias over 'newline' (a typeali
 error E3011: <fragment>:6:9: Unknown type 'Feed'
 ```
 
-<!-- test: error.an-abandoned-declaration-ends-at-a-view-declaration -->
+<!-- test: error.an-abandoned-declaration-ends-at-a-let-declaration -->
 ```maxon
 typealias Digit = int(0 to 9)
 
 typealias Bad =
 
-view shown = 3
+let shown = 3
 
 function main() returns ExitCode
 	return 0
@@ -3590,7 +3603,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:4:16: Unsupported: a typealias over 'newline' (a typealias names `int(low to high)`, `float(low to high)`, `bits(n)`, `function(...)`, a tuple `(A, B)` or a generic instance `Base with …`)
-error E2077: <fragment>:6:1: `view` binds a local name, so it cannot declare a field, a module-level binding, an extension member or a `@heap` binding; use `let` or `var`
 ```
 
 <!-- test: error.a-fold-redone-after-a-refused-binding-with-an-explained-consequence-does-not-panic -->
@@ -4115,8 +4127,8 @@ end 'other'
 function main() returns ExitCode
 	let frozen = freeze Box.create(1)
 	let loose = Box.create(2)
-	var items = Boxes.create(0)
-	var kept = FrozenBoxes.create(0)
+	let items = Boxes.create(0)
+	let kept = FrozenBoxes.create(0)
 	items.push(pick(frozen, second: loose))
 	kept.push(pick(frozen, second: loose))
 	let direct = pick(frozen, second: loose)
@@ -4158,8 +4170,8 @@ end 'other'
 function main() returns ExitCode
 	let frozen = freeze Box.create(1)
 	let loose = Box.create(2)
-	var items = Boxes.create(0)
-	var kept = FrozenBoxes.create(0)
+	let items = Boxes.create(0)
+	let kept = FrozenBoxes.create(0)
 	items.push(pick(frozen, second: loose))
 	kept.push(pick(frozen, second: loose))
 	let direct = pick(frozen, second: loose)
@@ -4206,8 +4218,8 @@ end 'other'
 function main() returns ExitCode
 	let frozen = freeze Box.create(1)
 	let loose = Box.create(2)
-	var items = Boxes.create(0)
-	var kept = FrozenBoxes.create(0)
+	let items = Boxes.create(0)
+	let kept = FrozenBoxes.create(0)
 	items.push(wrap(frozen, second: loose))
 	kept.push(wrap(frozen, second: loose))
 	let direct = wrap(frozen, second: loose)

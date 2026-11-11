@@ -62,7 +62,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -125,7 +125,7 @@ function suiteName(suite TlsCipherSuite) returns String
 end 'suiteName'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -252,13 +252,13 @@ type OpensslServer
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
-		var arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
+		let arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
 
 		for option in options 'eachOption'
 			arguments.push(option)
 		end 'eachOption'
 
-		var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+		let child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
 		let port = try acceptedPort(child) otherwise (error) 'unlistening'
 			child.release()
 
@@ -290,7 +290,7 @@ function finish(server OpensslServer) returns String
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	drainOutput(lines, child: server.child)
 	drainErrors(lines, child: server.child)
@@ -339,7 +339,7 @@ function bound(stream TlsStream) throws TlsError
 end 'bound'
 
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -381,7 +381,7 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 end 'talk'
 
 function run(label String, serverOptions StringArray, clientOptions TlsClientOptions, drops bool) returns String
-	var server = try OpensslServer.start(serverOptions) otherwise (error) 'unstarted'
+	let server = try OpensslServer.start(serverOptions) otherwise (error) 'unstarted'
 		return "{label}: openssl s_server did not start: {error.name}"
 	end 'unstarted'
 
@@ -394,7 +394,7 @@ function main() returns ExitCode
 	let directory = workspace()
 
 	for suite in ["TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256"] 'eachSuite'
-		var client = trustedClient(rootHex)
+		let client = trustedClient(rootHex)
 
 		try client.setProtocols(TlsProtocolArray from [TlsProtocol.tls13]) otherwise return 1
 
@@ -428,7 +428,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -491,7 +491,7 @@ function suiteName(suite TlsCipherSuite) returns String
 end 'suiteName'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -618,13 +618,13 @@ type OpensslServer
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
-		var arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
+		let arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
 
 		for option in options 'eachOption'
 			arguments.push(option)
 		end 'eachOption'
 
-		var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+		let child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
 		let port = try acceptedPort(child) otherwise (error) 'unlistening'
 			child.release()
 
@@ -656,7 +656,7 @@ function finish(server OpensslServer) returns String
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	drainOutput(lines, child: server.child)
 	drainErrors(lines, child: server.child)
@@ -705,7 +705,7 @@ function bound(stream TlsStream) throws TlsError
 end 'bound'
 
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -747,7 +747,7 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 end 'talk'
 
 function run(label String, serverOptions StringArray, clientOptions TlsClientOptions, drops bool) returns String
-	var server = try OpensslServer.start(serverOptions) otherwise (error) 'unstarted'
+	let server = try OpensslServer.start(serverOptions) otherwise (error) 'unstarted'
 		return "{label}: openssl s_server did not start: {error.name}"
 	end 'unstarted'
 
@@ -757,7 +757,7 @@ function run(label String, serverOptions StringArray, clientOptions TlsClientOpt
 end 'run'
 
 function line(directory String, name String, rsa bool) returns String
-	var client = trustedClient(rootHex)
+	let client = trustedClient(rootHex)
 
 	try client.setProtocols(TlsProtocolArray from [TlsProtocol.tls12]) otherwise return "protocols refused"
 
@@ -809,7 +809,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -876,7 +876,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -1004,13 +1004,13 @@ type OpensslServer
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
-		var arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
+		let arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
 
 		for option in options 'eachOption'
 			arguments.push(option)
 		end 'eachOption'
 
-		var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+		let child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
 		let port = try acceptedPort(child) otherwise (error) 'unlistening'
 			child.release()
 
@@ -1042,7 +1042,7 @@ function finish(server OpensslServer) returns String
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	drainOutput(lines, child: server.child)
 	drainErrors(lines, child: server.child)
@@ -1091,7 +1091,7 @@ function bound(stream TlsStream) throws TlsError
 end 'bound'
 
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1133,7 +1133,7 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 end 'talk'
 
 function run(label String, serverOptions StringArray, clientOptions TlsClientOptions, drops bool) returns String
-	var server = try OpensslServer.start(serverOptions) otherwise (error) 'unstarted'
+	let server = try OpensslServer.start(serverOptions) otherwise (error) 'unstarted'
 		return "{label}: openssl s_server did not start: {error.name}"
 	end 'unstarted'
 
@@ -1146,7 +1146,7 @@ function main() returns ExitCode
 	let directory = workspace()
 
 	for protocol in TlsProtocol.allCases 'eachProtocol'
-		var client = trustedClient(rootHex)
+		let client = trustedClient(rootHex)
 
 		try client.setProtocols(TlsProtocolArray from [protocol]) otherwise return 1
 		client.setIdentity(identityOf(clientLeafHex, keyHex: clientKeyHex))
@@ -1180,7 +1180,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1243,7 +1243,7 @@ function suiteName(suite TlsCipherSuite) returns String
 end 'suiteName'
 
 function trustedClient(rootHex String) returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(rootHex)]) otherwise panic("the case's root was refused")
 	try options.setServerName("example.com") otherwise panic("the case's server name was refused")
 	options.setVerificationTime(1767225600)
@@ -1370,13 +1370,13 @@ type OpensslServer
 	export var port as NetworkPort
 
 	static function start(options StringArray) returns OpensslServer throws InteropError
-		var arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
+		let arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-rev", "-msg"]
 
 		for option in options 'eachOption'
 			arguments.push(option)
 		end 'eachOption'
 
-		var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+		let child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
 		let port = try acceptedPort(child) otherwise (error) 'unlistening'
 			child.release()
 
@@ -1408,7 +1408,7 @@ function finish(server OpensslServer) returns String
 		return "wait: {error.displayReason()}"
 	end 'stuck'
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	drainOutput(lines, child: server.child)
 	drainErrors(lines, child: server.child)
@@ -1457,7 +1457,7 @@ function bound(stream TlsStream) throws TlsError
 end 'bound'
 
 function talk(server OpensslServer, options TlsClientOptions, drops bool) returns String
-	var stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
+	let stream = try TlsClient.connect("127.0.0.1", port: server.port, options: options, dialDeadlineMs: probeTimeoutMs) otherwise (error) 'refused'
 		return "connect: {describe(error)}"
 	end 'refused'
 
@@ -1499,7 +1499,7 @@ function talk(server OpensslServer, options TlsClientOptions, drops bool) return
 end 'talk'
 
 function run(label String, serverOptions StringArray, clientOptions TlsClientOptions, drops bool) returns String
-	var server = try OpensslServer.start(serverOptions) otherwise (error) 'unstarted'
+	let server = try OpensslServer.start(serverOptions) otherwise (error) 'unstarted'
 		return "{label}: openssl s_server did not start: {error.name}"
 	end 'unstarted'
 
@@ -1512,7 +1512,7 @@ function main() returns ExitCode
 	let directory = workspace()
 
 	for protocol in TlsProtocol.allCases 'eachProtocol'
-		var closing = trustedClient(rootHex)
+		let closing = trustedClient(rootHex)
 
 		try closing.setProtocols(TlsProtocolArray from [protocol]) otherwise return 1
 
@@ -1520,7 +1520,7 @@ function main() returns ExitCode
 
 		print("{run(closingLabel, serverOptions: ["-cert", "{directory}/server.pem", "-key", "{directory}/server.key"], clientOptions: closing, drops: false)}\n")
 
-		var dropping = trustedClient(rootHex)
+		let dropping = trustedClient(rootHex)
 
 		try dropping.setProtocols(TlsProtocolArray from [protocol]) otherwise return 2
 
@@ -1557,7 +1557,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1624,7 +1624,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -1717,7 +1717,7 @@ end 'readLine'
 
 
 function serveOnce(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -1764,13 +1764,13 @@ union ClientOutcome
 end 'ClientOutcome'
 
 function attemptClient(directory String, port NetworkPort, options StringArray) returns ClientOutcome
-	var arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "example.com", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "example.com", "-attime", "{verificationTime}", "-ign_eof"]
+	let arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "example.com", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "example.com", "-attime", "{verificationTime}", "-ign_eof"]
 
 	for option in options 'eachOption'
 		arguments.push(option)
 	end 'eachOption'
 
-	var configuration = Configuration.create(opensslExecutable())
+	let configuration = Configuration.create(opensslExecutable())
 
 	configuration.arguments = arguments
 	configuration.standardInput = InputSource.bytes("ping\n")
@@ -1780,7 +1780,7 @@ function attemptClient(directory String, port NetworkPort, options StringArray) 
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	for line in result.stdout.split("\n") 'eachLine'
 		lines.push(line.trim())
@@ -1797,7 +1797,7 @@ end 'attemptClient'
 
 function exchange(label String, directory String, serverOptions TlsServerOptions, clientOptions StringArray) returns String
 	for _ in 0 upto maxClientAttempts 'attempts'
-		var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+		let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 			return "{label}: bind: {describe(error)}"
 		end 'refused'
 
@@ -1805,11 +1805,10 @@ function exchange(label String, directory String, serverOptions TlsServerOptions
 			return "{label}: deadline: {describe(error)}"
 		end 'unbounded'
 
+		let listenerPort = listener.port()
 		let peer = async serveOnce(listener)
-		let outcome = attemptClient(directory, port: listener.port(), options: clientOptions)
+		let outcome = attemptClient(directory, port: listenerPort, options: clientOptions)
 		let server = await peer
-
-		listener.close()
 
 		match outcome 'outcome'
 			observed(client) then return "{label}: server[{server}] s_client[{client}]"
@@ -1825,7 +1824,7 @@ function main() returns ExitCode
 	let directory = workspace()
 
 	for suite in ["TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256"] 'eachSuite'
-		var server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+		let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
 		try server.setProtocols(TlsProtocolArray from [TlsProtocol.tls13]) otherwise return 1
 
@@ -1859,7 +1858,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -1926,7 +1925,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -2019,7 +2018,7 @@ end 'readLine'
 
 
 function serveOnce(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -2066,13 +2065,13 @@ union ClientOutcome
 end 'ClientOutcome'
 
 function attemptClient(directory String, port NetworkPort, options StringArray) returns ClientOutcome
-	var arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "example.com", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "example.com", "-attime", "{verificationTime}", "-ign_eof"]
+	let arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "example.com", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "example.com", "-attime", "{verificationTime}", "-ign_eof"]
 
 	for option in options 'eachOption'
 		arguments.push(option)
 	end 'eachOption'
 
-	var configuration = Configuration.create(opensslExecutable())
+	let configuration = Configuration.create(opensslExecutable())
 
 	configuration.arguments = arguments
 	configuration.standardInput = InputSource.bytes("ping\n")
@@ -2082,7 +2081,7 @@ function attemptClient(directory String, port NetworkPort, options StringArray) 
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	for line in result.stdout.split("\n") 'eachLine'
 		lines.push(line.trim())
@@ -2099,7 +2098,7 @@ end 'attemptClient'
 
 function exchange(label String, directory String, serverOptions TlsServerOptions, clientOptions StringArray) returns String
 	for _ in 0 upto maxClientAttempts 'attempts'
-		var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+		let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 			return "{label}: bind: {describe(error)}"
 		end 'refused'
 
@@ -2107,11 +2106,10 @@ function exchange(label String, directory String, serverOptions TlsServerOptions
 			return "{label}: deadline: {describe(error)}"
 		end 'unbounded'
 
+		let listenerPort = listener.port()
 		let peer = async serveOnce(listener)
-		let outcome = attemptClient(directory, port: listener.port(), options: clientOptions)
+		let outcome = attemptClient(directory, port: listenerPort, options: clientOptions)
 		let server = await peer
-
-		listener.close()
 
 		match outcome 'outcome'
 			observed(client) then return "{label}: server[{server}] s_client[{client}]"
@@ -2176,7 +2174,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2243,7 +2241,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function trustedServer(identity TlsIdentity) returns TlsServerOptions
-	var options = TlsServerOptions.create(identity)
+	let options = TlsServerOptions.create(identity)
 	options.setVerificationTime(1767225600)
 
 	return options
@@ -2336,7 +2334,7 @@ end 'readLine'
 
 
 function serveOnce(listener TlsListener) returns String
-	var stream = try listener.accept() otherwise (error) 'refused'
+	let stream = try listener.accept() otherwise (error) 'refused'
 		return "accept: {describe(error)}"
 	end 'refused'
 
@@ -2383,13 +2381,13 @@ union ClientOutcome
 end 'ClientOutcome'
 
 function attemptClient(directory String, port NetworkPort, options StringArray) returns ClientOutcome
-	var arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "example.com", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "example.com", "-attime", "{verificationTime}", "-ign_eof"]
+	let arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "example.com", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "example.com", "-attime", "{verificationTime}", "-ign_eof"]
 
 	for option in options 'eachOption'
 		arguments.push(option)
 	end 'eachOption'
 
-	var configuration = Configuration.create(opensslExecutable())
+	let configuration = Configuration.create(opensslExecutable())
 
 	configuration.arguments = arguments
 	configuration.standardInput = InputSource.bytes("ping\n")
@@ -2399,7 +2397,7 @@ function attemptClient(directory String, port NetworkPort, options StringArray) 
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	for line in result.stdout.split("\n") 'eachLine'
 		lines.push(line.trim())
@@ -2416,7 +2414,7 @@ end 'attemptClient'
 
 function exchange(label String, directory String, serverOptions TlsServerOptions, clientOptions StringArray) returns String
 	for _ in 0 upto maxClientAttempts 'attempts'
-		var listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+		let listener = try TlsListener.bind("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
 			return "{label}: bind: {describe(error)}"
 		end 'refused'
 
@@ -2424,11 +2422,10 @@ function exchange(label String, directory String, serverOptions TlsServerOptions
 			return "{label}: deadline: {describe(error)}"
 		end 'unbounded'
 
+		let listenerPort = listener.port()
 		let peer = async serveOnce(listener)
-		let outcome = attemptClient(directory, port: listener.port(), options: clientOptions)
+		let outcome = attemptClient(directory, port: listenerPort, options: clientOptions)
 		let server = await peer
-
-		listener.close()
 
 		match outcome 'outcome'
 			observed(client) then return "{label}: server[{server}] s_client[{client}]"
@@ -2444,13 +2441,13 @@ function main() returns ExitCode
 	let directory = workspace()
 
 	for protocol in TlsProtocol.allCases 'eachProtocol'
-		var server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
+		let server = trustedServer(identityOf(leafP256Hex, keyHex: keyP256Hex))
 
 		try server.requireClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return 1
 		try server.setProtocols(TlsProtocolArray from [protocol]) otherwise return 2
 
 		let version = ["-tls1_3"] if protocol == TlsProtocol.tls13 else ["-tls1_2"]
-		var options = version.clone()
+		let options = version.clone()
 
 		options.push("-cert")
 		options.push("{directory}/client.pem")
@@ -2487,7 +2484,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2557,7 +2554,7 @@ function describeHttp(error HttpError) returns String
 end 'describeHttp'
 
 function clientOptions() returns TlsClientOptions
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 	try options.setTrustedRoots(RootCertificates from [fromHex(httpRootHex)]) otherwise panic("the case's root was refused")
 	options.setVerificationTime(verificationTime)
 
@@ -2600,7 +2597,7 @@ function stage(directory String, name String, text String)
 end 'stage'
 
 function servedFile() returns String
-	var text = StringBuilder.create()
+	let text = StringBuilder.create()
 
 	for row in 0 upto FileRows 'eachRow'
 		text.append("{row:06x} the quick brown fox jumps over the lazy dog 0123456789\n")
@@ -2694,13 +2691,13 @@ type OpensslServer
 	export var port as NetworkPort
 
 	static function start(directory String, options StringArray) returns OpensslServer throws InteropError
-		var arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-msg", "-cert", "{directory}/server.pem", "-key", "{directory}/server.key"]
+		let arguments = ["s_server", "-accept", "127.0.0.1:0", "-naccept", "1", "-msg", "-cert", "{directory}/server.pem", "-key", "{directory}/server.key"]
 
 		for option in options 'eachOption'
 			arguments.push(option)
 		end 'eachOption'
 
-		var child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
+		let child = try StreamingSubprocess.spawn(opensslExecutable(), arguments: arguments) otherwise throw InteropError.spawnFailed
 		let port = try acceptedPort(child) otherwise (error) 'unlistening'
 			child.release()
 
@@ -2722,7 +2719,7 @@ end 'drainOutput'
 function sentCloseNotify(server OpensslServer) returns bool throws InteropError
 	_ = try server.child.waitWithTimeout(probeTimeoutMs) otherwise throw InteropError.timedOut
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	drainOutput(lines, child: server.child)
 	server.child.release()
@@ -2737,7 +2734,7 @@ function sentCloseNotify(server OpensslServer) returns bool throws InteropError
 end 'sentCloseNotify'
 
 function negotiatedProtocol(body String) returns String
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	for line in body.split("\n") 'eachLine'
 		lines.push(line.trim())
@@ -2771,7 +2768,7 @@ function fileFetched(server OpensslServer, directory String) returns String
 end 'fileFetched'
 
 function untrustedFetched(server OpensslServer) returns String
-	var options = TlsClientOptions.create()
+	let options = TlsClientOptions.create()
 
 	try options.setTrustedRoots(RootCertificates from [fromHex(otherRootHex)]) otherwise return "the root was refused"
 	options.setVerificationTime(verificationTime)
@@ -2792,7 +2789,7 @@ function verdict(label String, fetched String, success String, server OpensslSer
 end 'verdict'
 
 function statusPage(label String, directory String, flags StringArray, success String) returns String
-	var server = try OpensslServer.start(directory, options: flags) otherwise (error) 'unstarted'
+	let server = try OpensslServer.start(directory, options: flags) otherwise (error) 'unstarted'
 		return "{label}: openssl s_server did not start: {error.name}"
 	end 'unstarted'
 
@@ -2800,7 +2797,7 @@ function statusPage(label String, directory String, flags StringArray, success S
 end 'statusPage'
 
 function stagedFile(label String, directory String, flags StringArray) returns String
-	var server = try OpensslServer.start(directory, options: flags) otherwise (error) 'unstarted'
+	let server = try OpensslServer.start(directory, options: flags) otherwise (error) 'unstarted'
 		return "{label}: openssl s_server did not start: {error.name}"
 	end 'unstarted'
 
@@ -2808,7 +2805,7 @@ function stagedFile(label String, directory String, flags StringArray) returns S
 end 'stagedFile'
 
 function untrustedChain(directory String) returns String
-	var server = try OpensslServer.start(directory, options: ["-www"]) otherwise (error) 'unstarted'
+	let server = try OpensslServer.start(directory, options: ["-www"]) otherwise (error) 'unstarted'
 		return "openssl s_server did not start: {error.name}"
 	end 'unstarted'
 
@@ -2858,7 +2855,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -2925,7 +2922,7 @@ function identityOf(chainHex String, keyHex String) returns TlsIdentity
 end 'identityOf'
 
 function serverOptions() returns TlsServerOptions
-	var options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
+	let options = TlsServerOptions.create(identityOf(httpLeafHex, keyHex: httpKeyHex))
 	options.setVerificationTime(verificationTime)
 
 	return options
@@ -2962,7 +2959,7 @@ function stage(directory String, name String, text String)
 end 'stage'
 
 function servedFile() returns String
-	var text = StringBuilder.create()
+	let text = StringBuilder.create()
 
 	for row in 0 upto FileRows 'eachRow'
 		text.append("{row:06x} the quick brown fox jumps over the lazy dog 0123456789\n")
@@ -3029,7 +3026,7 @@ type InteropHandler implements HttpHandler
 	end 'create'
 
 	function handle(exchange mutable HttpExchange) throws HttpServerError
-		view request = exchange.request()
+		let request = exchange.request()
 		let query = try request.url().query() otherwise "-"
 		let connection = match exchange.security() 'security'
 			plaintext gives "plaintext"
@@ -3079,13 +3076,13 @@ union ClientOutcome
 end 'ClientOutcome'
 
 function attemptClient(directory String, port NetworkPort, request String, options StringArray) returns ClientOutcome
-	var arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "localhost", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "localhost", "-attime", "{verificationTime}", "-ign_eof"]
+	let arguments = ["s_client", "-connect", "127.0.0.1:{port}", "-servername", "localhost", "-CAfile", "{directory}/root.pem", "-verify_return_error", "-verify_hostname", "localhost", "-attime", "{verificationTime}", "-ign_eof"]
 
 	for option in options 'eachOption'
 		arguments.push(option)
 	end 'eachOption'
 
-	var configuration = Configuration.create(opensslExecutable())
+	let configuration = Configuration.create(opensslExecutable())
 
 	configuration.arguments = arguments
 	configuration.standardInput = InputSource.bytes(request)
@@ -3095,7 +3092,7 @@ function attemptClient(directory String, port NetworkPort, request String, optio
 		return ClientOutcome.observed("s_client: {error.displayReason()}")
 	end 'failed'
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 
 	for line in result.stdout.split("\n") 'eachLine'
 		lines.push(line.trim())
@@ -3142,38 +3139,40 @@ end 'ClientRun'
 
 typealias ClientRunArray = Array with ClientRun
 
-function scenario(label String, directory String, serverOptions TlsServerOptions, runs ClientRunArray) returns String
-	var server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
-		return "{label}: bind: {describe(error)}"
-	end 'refused'
-
+function runAll(server HttpServer, label String, directory String, runs ClientRunArray) returns String
+	let boundPort = server.port()
 	let peer = async serveInterop(server)
-	var report = StringBuilder.create()
+	let report = StringBuilder.create()
 
 	report.append("{label}\n")
 
 	for run in runs 'eachRun'
-		report.append("  {run.name}: {runClient(directory, port: server.port(), request: run.request, options: run.flags)}\n")
+		report.append("  {run.name}: {runClient(directory, port: boundPort, request: run.request, options: run.flags)}\n")
 	end 'eachRun'
 
+	peer.cancel()
 	server.close()
 
-	let ended = await peer
-
-	report.append("  ended={ended.name}")
-
 	return report.build()
+end 'runAll'
+
+function scenario(label String, directory String, serverOptions TlsServerOptions, runs ClientRunArray) returns String
+	let server = try HttpServer.bindTls("127.0.0.1", port: 0, options: serverOptions) otherwise (error) 'refused'
+		return "{label}: bind: {describe(error)}"
+	end 'refused'
+
+	return runAll(server, label: label, directory: directory, runs: runs)
 end 'scenario'
 
 function main() returns ExitCode
 	let directory = workspace()
 	let post = "POST /submit HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\nConnection: close\r\n\r\nname=maxon"
 	let clientCertificate = ["-tls1_3", "-cert", "{directory}/client.pem", "-key", "{directory}/client.key"]
-	var mutual = serverOptions()
+	let mutual = serverOptions()
 
 	try mutual.requireClientCertificates(RootCertificates from [fromHex(clientRootHex)]) otherwise return 1
 
-	var plainRuns = ClientRunArray.create(0)
+	let plainRuns = ClientRunArray.create(0)
 
 	plainRuns.push(ClientRun.create("tls1.3 GET", request: getRequest("/hello?x=1"), flags: ["-tls1_3"]))
 	plainRuns.push(ClientRun.create("tls1.2 GET with ALPN", request: getRequest("/old"), flags: ["-tls1_2", "-alpn", "http/1.1"]))
@@ -3181,14 +3180,14 @@ function main() returns ExitCode
 	plainRuns.push(ClientRun.create("ALPN h2 only", request: getRequest("/never"), flags: ["-alpn", "h2"]))
 	plainRuns.push(ClientRun.create("a good one after", request: getRequest("/last"), flags: ["-tls1_3"]))
 
-	var mutualRuns = ClientRunArray.create(0)
+	let mutualRuns = ClientRunArray.create(0)
 
 	mutualRuns.push(ClientRun.create("with a certificate", request: getRequest("/who"), flags: clientCertificate))
 	mutualRuns.push(ClientRun.create("without one", request: getRequest("/nobody"), flags: ["-tls1_3"]))
 	mutualRuns.push(ClientRun.create("with a certificate again", request: getRequest("/who"), flags: clientCertificate))
 
-	print("{scenario("plain server", directory: directory, serverOptions: serverOptions(), runs: plainRuns)}\n")
-	print("{scenario("client certificates required", directory: directory, serverOptions: mutual, runs: mutualRuns)}\n")
+	print(scenario("plain server", directory: directory, serverOptions: serverOptions(), runs: plainRuns))
+	print(scenario("client certificates required", directory: directory, serverOptions: mutual, runs: mutualRuns))
 
 	unstage(directory)
 
@@ -3202,12 +3201,10 @@ plain server
   tls1.3 POST: exit=0 verification=OK 200 OK [post /submit?- body=name=maxon tls13 alpn=none no client certificate]
   ALPN h2 only: unanswered
   a good one after: exit=0 verification=OK 200 OK [get /last?- body= tls13 alpn=none no client certificate]
-  ended=closed
 client certificates required
   with a certificate: exit=0 verification=OK 200 OK [get /who?- body= tls13 alpn=none 1 certificate, leaf is alice=true]
   without one: unanswered
   with a certificate again: exit=0 verification=OK 200 OK [get /who?- body= tls13 alpn=none 1 certificate, leaf is alice=true]
-  ended=closed
 ```
 ```exitcode
 0

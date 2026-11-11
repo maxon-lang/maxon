@@ -31,14 +31,14 @@ end 'Entry'
 typealias EntryMap = Map with (String, Entry)
 
 function main() returns ExitCode
-	var m = EntryMap.create()
-	var arr = ByteArray.create(0)
+	let m = EntryMap.create()
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
-	var e = Entry.create(arr, tag: 42)
+	let e = Entry.create(arr, tag: 42)
 	try m.insert("hello", value: e) otherwise ignore
-	view got = try m.get("hello") otherwise Entry.create(ByteArray.create(0), tag: 0)
+	let got = try m.get("hello") otherwise Entry.create(ByteArray.create(0), tag: 0)
 	print("{got.data.count()}\n")
 	print("{got.tag}\n")
 	let b = try got.data.get(1) otherwise 0
@@ -57,7 +57,7 @@ end 'main'
 
 <!-- test: struct-field-access-in-untaken-if-branch -->
 Accessing a struct field inside an untaken if branch must not corrupt function parameters.
-Uses a module-level struct with a Map field (same pattern as QueryDatabase).
+Uses a struct with a Map field handed in as a parameter (same pattern as QueryDatabase).
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -80,9 +80,7 @@ type Database
 	end 'create'
 end 'Database'
 
-let db = Database.create(EntryMap.create(), sourcePaths: StringArray.create(0))
-
-function storeAndCheck(key String, data ByteArray)
+function storeAndCheck(db Database, key String, data ByteArray)
 	if db.sourceFiles.contains(key) 'exists'
 		let existingCount = db.sourceFiles.count()
 		print("existing: {existingCount}\n")
@@ -93,11 +91,12 @@ function storeAndCheck(key String, data ByteArray)
 end 'storeAndCheck'
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
-	storeAndCheck("hello", data: arr)
+	let db = Database.create(EntryMap.create(), sourcePaths: StringArray.create(0))
+	storeAndCheck(db, key: "hello", data: arr)
 	return 0
 end 'main'
 ```
@@ -110,7 +109,7 @@ new
 ```
 
 <!-- test: multi-file-struct-param-after-global-branch -->
-Multi-file version: accessing global struct fields inside an untaken if branch must not corrupt function parameters across file boundaries. The exported aliases use names that don't clash with stdlib (which itself exports `ByteArray` from `stdlib/File.maxon`) — bare cross-file references to a name with multiple visible declarations would otherwise raise E3063.
+Multi-file version: accessing struct fields inside an untaken if branch must not corrupt function parameters across file boundaries. The exported aliases use names that don't clash with stdlib (which itself exports `ByteArray` from `stdlib/File.maxon`) — bare cross-file references to a name with multiple visible declarations would otherwise raise E3063.
 ```maxon
 // --- file: api/0-Types.maxon
 export typealias EntryBytes = Array with Byte
@@ -133,10 +132,8 @@ export type Database
 	end 'create'
 end 'Database'
 
-export let db = Database.create(EntryMap.create(), sourcePaths: EntryPaths.create(0))
-
 // --- file: app/1-Logic.maxon
-export function storeAndCheck(key String, data EntryBytes)
+export function storeAndCheck(db Database, key String, data EntryBytes)
 	if db.sourceFiles.contains(key) 'exists'
 		let existingCount = db.sourceFiles.count()
 		print("existing: {existingCount}\n")
@@ -148,11 +145,12 @@ end 'storeAndCheck'
 
 // --- file: bin/main.maxon
 function main() returns ExitCode
-	var arr = EntryBytes.create(0)
+	let arr = EntryBytes.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
-	storeAndCheck("hello", data: arr)
+	let db = Database.create(EntryMap.create(), sourcePaths: EntryPaths.create(0))
+	storeAndCheck(db, key: "hello", data: arr)
 	return 0
 end 'main'
 ```

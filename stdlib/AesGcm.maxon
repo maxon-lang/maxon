@@ -194,14 +194,14 @@ type AesGcmSoftware
 
 	static function create(key ByteArray) returns AesGcmSoftware throws AesError
 		let cipher = try AesBitsliced.create(key)
-		var zeros = ByteArray.create(aesGcmBlockBytes)
+		let zeros = ByteArray.create(aesGcmBlockBytes)
 		let hashSubkey = try cipher.cryptBlock(zeros, direction: AesDirection.encrypt) otherwise panic("AesGcm: the hash subkey block was refused")
 
 		return Self{cipher: cipher, hashKey: GhashKey.create(hashSubkey)}
 	end 'create'
 
 	function seal(nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray
-		var sealed = ByteArray.create(plaintext.count() + aesGcmTagBytes, zeroed: false)
+		let sealed = ByteArray.create(plaintext.count() + aesGcmTagBytes, zeroed: false)
 		let (firstLane, secondLane) = applyBehindMask(nonce, data: plaintext, output: sealed)
 		let (tagHigh, tagLow) = authenticate(additionalData, ciphertext: sealed, firstLane: firstLane, secondLane: secondLane)
 		ghashAppendTag(sealed, high: tagHigh, low: tagLow)
@@ -213,10 +213,10 @@ type AesGcmSoftware
 	// first software batch. It stays local until `aeadRequireTag` passes: a throw drops it, so no path
 	// hands back unauthenticated bytes.
 	function open(nonce ByteArray, ciphertext ByteArray, received ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
-		var plaintext = ByteArray.create(ciphertext.count(), zeroed: false)
+		let plaintext = ByteArray.create(ciphertext.count(), zeroed: false)
 		let (firstLane, secondLane) = applyBehindMask(nonce, data: ciphertext, output: plaintext)
 		let (tagHigh, tagLow) = authenticate(additionalData, ciphertext: ciphertext, firstLane: firstLane, secondLane: secondLane)
-		var expected = ByteArray.create(aesGcmTagBytes, zeroed: false)
+		let expected = ByteArray.create(aesGcmTagBytes, zeroed: false)
 		ghashAppendTag(expected, high: tagHigh, low: tagLow)
 		try aeadRequireTag(expected, received: received)
 
@@ -294,7 +294,7 @@ public type AesGcm implements Aead
 	end 'usesHardware'
 
 	public function seal(nonce ByteArray, plaintext ByteArray, additionalData ByteArray) returns ByteArray throws AeadError
-		var sealed = ByteArray.create(plaintext.count() + aesGcmTagBytes, zeroed: false)
+		let sealed = ByteArray.create(plaintext.count() + aesGcmTagBytes, zeroed: false)
 		try sealInto(sealed, at: 0, nonce: nonce, plaintext: plaintext, additionalData: additionalData)
 
 		return sealed

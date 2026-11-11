@@ -50,7 +50,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create(0)
+	let words = Words.create(0)
 	var n = 0 as Count
 
 	while n < 7 'loop'
@@ -85,7 +85,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.lo = 1
 	words.hi = 2
 	let next = words.hits + 1
@@ -120,7 +120,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create(0)
+	let words = Words.create(0)
 	words.hits = 3
 	let next = words.hits + 1
 	let seen = words.hits
@@ -148,7 +148,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create(5)
+	let words = Words.create(5)
 	let seen = words.slot
 	words.slot = 100
 	words.slot = seen + 1
@@ -186,7 +186,7 @@ function reset(words mutable Words, depth Depth)
 end 'reset'
 
 function main() returns ExitCode
-	var words = Words.create(5)
+	let words = Words.create(5)
 	let seen = words.slot
 	reset(words, depth: 3)
 	words.slot = seen + 1
@@ -212,7 +212,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create(20)
+	let words = Words.create(20)
 	let before = words.total
 	words.total = before + 1
 	return (before + words.total) as ExitCode
@@ -237,7 +237,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create(20)
+	let words = Words.create(20)
 	let after = words.total + 1
 	words.total = after
 	return (after * 2 - words.total) as ExitCode
@@ -262,7 +262,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.slot = words.slot + 10
 	return words.slot as ExitCode
 end 'main'
@@ -288,7 +288,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.operand = 10
 	words.slot = words.slot + words.operand
 	return words.slot as ExitCode
@@ -313,7 +313,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.slot = words.slot - 10
 	return words.slot as ExitCode
 end 'main'
@@ -339,7 +339,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.operand = 10
 	words.slot = words.slot - words.operand
 	return words.slot as ExitCode
@@ -364,7 +364,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.slot = words.slot and 10
 	return words.slot as ExitCode
 end 'main'
@@ -390,7 +390,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.operand = 10
 	words.slot = words.slot and words.operand
 	return words.slot as ExitCode
@@ -415,7 +415,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.slot = words.slot or 10
 	return words.slot as ExitCode
 end 'main'
@@ -441,7 +441,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.operand = 10
 	words.slot = words.slot or words.operand
 	return words.slot as ExitCode
@@ -466,7 +466,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.slot = words.slot xor 10
 	return words.slot as ExitCode
 end 'main'
@@ -492,7 +492,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.operand = 10
 	words.slot = words.slot xor words.operand
 	return words.slot as ExitCode
@@ -519,7 +519,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.operand = 10
 	words.hits = words.operand + words.hits
 	return words.hits as ExitCode
@@ -544,7 +544,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.hits = 1 + words.hits
 	return words.hits as ExitCode
 end 'main'
@@ -569,7 +569,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.slot = 10 - words.slot
 	return words.slot as ExitCode
 end 'main'
@@ -595,7 +595,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.b = 20
 	words.a = words.b + 1
 	return words.a as ExitCode
@@ -623,7 +623,7 @@ type Words
 end 'Words'
 
 function main() returns ExitCode
-	var words = Words.create()
+	let words = Words.create()
 	words.operand = 3
 	words.slot = words.slot + words.operand * 8
 	return words.slot as ExitCode

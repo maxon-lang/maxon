@@ -61,7 +61,7 @@ function look(a StringArray, b StringArray)
 end 'look'
 
 function main() returns ExitCode
-	var x = StringArray.create(0)
+	let x = StringArray.create(0)
 	x.push("hello {40 + 2} world, long enough for the heap")
 	look(x, b: x)
 	print("{x.count()}\n")
@@ -109,7 +109,7 @@ function readThenClear(r Rec, log InnerArray) returns Coord
 end 'readThenClear'
 
 function main() returns ExitCode
-	var r = Rec.create()
+	let r = Rec.create()
 	r.ids.push(Inner.create(1234))
 	let got = readThenClear(r, log: r.ids)
 	print("{got} {r.ids.count()}\n")
@@ -143,7 +143,7 @@ function assign(dst Blk, src Blk)
 end 'assign'
 
 function main() returns ExitCode
-	var a = Blk.create()
+	let a = Blk.create()
 	a.args.push(7)
 	assign(a, src: a)
 	let v = try a.args.get(0) otherwise 0
@@ -177,7 +177,7 @@ type Blk
 end 'Blk'
 
 function main() returns ExitCode
-	var a = Blk.create()
+	let a = Blk.create()
 	a.args.push(7)
 	a.absorb(a)
 	let v = try a.args.get(0) otherwise 0
@@ -202,7 +202,7 @@ function areSame(a StringArray, b StringArray) returns bool
 end 'areSame'
 
 function main() returns ExitCode
-	var x = StringArray.create(0)
+	let x = StringArray.create(0)
 	x.push("hello {40 + 2} world, long enough for the heap")
 	print("{areSame(x, b: x)} {x.count()}\n")
 	return 0
@@ -406,7 +406,7 @@ function bump(n mutable Coord, h Holder) returns Coord
 end 'bump'
 
 function main() returns ExitCode
-	var h = Holder.create(5)
+	let h = Holder.create(5)
 	let seen = bump(h.n, h: Holder.create(7))
 	print("{seen} {h.n}\n")
 	return 0

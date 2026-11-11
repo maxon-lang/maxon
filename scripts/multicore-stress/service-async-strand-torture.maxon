@@ -47,7 +47,7 @@ type Worker
 end 'Worker'
 
 function batch(base Integer) returns Integer
-	var hs = WorkerHandleArray.create(0)
+	let hs = WorkerHandleArray.create(0)
 	var k = 0 as Integer
 
 	while k < BatchSize 'spawnEach'
@@ -55,11 +55,11 @@ function batch(base Integer) returns Integer
 		k = k + 1
 	end 'spawnEach'
 
-	var replies = ReplyPromiseArray.create(0)
+	let replies = ReplyPromiseArray.create(0)
 	var j = 0 as Integer
 
 	while j < BatchSize 'sendEach'
-		view h = try hs.get(j as ElementIndex) otherwise panic("hs.get OOB at {j} — bounded by the pushes above")
+		let h = try hs.get(j as ElementIndex) otherwise panic("hs.get OOB at {j} — bounded by the pushes above")
 		replies.push(try h.joinIt(base + j) otherwise panic("service-async-strand-torture: a fresh worker refused its only message"))
 		j = j + 1
 	end 'sendEach'

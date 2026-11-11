@@ -12,7 +12,7 @@ The cases of `specs/static-variables.md` whose subject is the emitted code. Each
 ## Tests
 
 <!-- test: an-image-let-element-held-across-a-call-takes-no-retain -->
-An element an accessor reads out of an image `let` is immortal: the image owns it for the whole run, so
+An element an accessor reads out of an image `static let` is immortal: the image owns it for the whole run, so
 `main` holds `q` across the call to `churn` with no `__mm_retain` and drops it with no `__mm_decref`.
 
 ```maxon
@@ -22,20 +22,16 @@ typealias Names = Array with String
 type Point
 	export var n as Num
 
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
+	static let origins = [Point{n: 1}]
 end 'Point'
-
-let Origins = [Point.create(1)]
 
 function churn(xs Names) returns Num
 	return xs.count() as Num
 end 'churn'
 
 function main() returns ExitCode
-	let q = try Origins.get(0) otherwise panic("one point")
-	var words = Names.create(0)
+	let q = try Point.origins.get(0) otherwise panic("one point")
+	let words = Names.create(0)
 	words.push("alpha")
 	let spent = churn(words)
 	return (q.n + spent) as ExitCode
@@ -46,7 +42,7 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __data_Origins@0 = i64 0
+  __data_Point.origins@0 = i64 0
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
@@ -64,7 +60,7 @@ func @main {
     x64.pushReg r12
     x64.prologue 32
     x64.movRegImm32 rdx, 0
-    x64.leaRegGlobal rax, __data_Origins
+    x64.leaRegGlobal rax, __data_Point.origins
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
@@ -122,7 +118,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.jmp __im_cont
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:20: one point\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:16: one point\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -131,7 +127,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -143,7 +139,7 @@ func @main {
 ```
 ```TargetIr:x64-linux
 data {
-  __data_Origins@0 = i64 0
+  __data_Point.origins@0 = i64 0
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
   __slab_arena_list@24 = i64 0
@@ -160,7 +156,7 @@ func @main {
     x64.pushReg r12
     x64.prologue 32
     x64.movRegImm32 rdx, 0
-    x64.leaRegGlobal rax, __data_Origins
+    x64.leaRegGlobal rax, __data_Point.origins
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rcx + 8]
     x64.cmpRegImm32 rax, 0
@@ -217,7 +213,7 @@ func @main {
     x64.movRegReg rbx, r8
     x64.jmp __im_cont
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:20: one point\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:16: one point\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -226,7 +222,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -238,7 +234,7 @@ func @main {
 ```
 ```TargetIr:arm64-macos
 data {
-  __data_Origins@0 = i64 0
+  __data_Point.origins@0 = i64 0
   __slab_arena_list@8 = i64 0
   __slab_arena_map_l1@16 = i64 0
   __slab_state@24 = i64 0
@@ -251,7 +247,7 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x1, 0
-    arm64.leaGlobal x0, __data_Origins
+    arm64.leaGlobal x0, __data_Point.origins
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
@@ -307,7 +303,7 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.b __im_cont
   tryerr:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:20: one point\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:16: one point\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -315,7 +311,7 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_4  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -326,7 +322,7 @@ func @main {
 ```
 ```TargetIr:arm64-linux
 data {
-  __data_Origins@0 = i64 0
+  __data_Point.origins@0 = i64 0
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
   __mrt_hwcap_atomics@24 = i64 0
@@ -342,7 +338,7 @@ func @main {
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movImm x1, 0
-    arm64.leaGlobal x0, __data_Origins
+    arm64.leaGlobal x0, __data_Point.origins
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x2, [x0 + 8]
     arm64.cmp x2, 0
@@ -398,7 +394,7 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.b __im_cont
   tryerr:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:20: one point\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:16: one point\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -406,7 +402,7 @@ func @main {
     arm64.epilogue 32
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_4  ; "panic at an-image-let-element-held-across-a-call-takes-no-retain.test:20: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -416,10 +412,10 @@ func @main {
 }
 ```
 
-<!-- test: an-inline-record-let-built-by-a-factory-over-constants-is-a-baked-word -->
-An inline record is a word, so a `let` of one built by a factory from constants is that word laid down at
-compile time: it owns no `.data` slot and nothing builds it before `main`. The Target IR's `data` block lists every
-`.data` slot, so a slot the `let` was given would show there.
+<!-- test: an-inline-record-static-let-over-constants-is-image-data -->
+An inline record is a word, so a `static let` of one written as a struct literal over constants is that word laid down in
+the image: nothing builds it before `main`, and each use is folded to the constant word. The Target IR's `data` block
+lists every `.data` slot, so a slot the `static let` was given would show there.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -427,15 +423,11 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	static function create(lo Half, hi Half) returns Self
-		return Self{lo: lo, hi: hi}
-	end 'create'
+	static let origin = Pair{lo: 1, hi: 2}
 end 'Pair'
 
-let origin = Pair.create(1, hi: 2)
-
 function main() returns ExitCode
-	return (origin.lo + origin.hi) as ExitCode
+	return (Pair.origin.lo + Pair.origin.hi) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -508,9 +500,10 @@ func @main {
 }
 ```
 
-<!-- test: an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data -->
+<!-- test: an-inline-record-field-of-a-heap-record-static-let-over-constants-is-image-data -->
 A heap record holding an inline record is image data when every field is a constant, the inline record's
-word included: the `let` owns no `.data` slot, so the `data` block lists none for it.
+word included: nothing builds either before `main`, and `main` reads the record by its `.rdata` address, so the `static
+let` owns no `.data` slot and the `data` block lists none for it.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -518,24 +511,18 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	static function create(lo Half, hi Half) returns Self
-		return Self{lo: lo, hi: hi}
-	end 'create'
+	static let seven = Pair{lo: 7, hi: 8}
 end 'Pair'
 
 type Holder
 	export let pair as Pair
 	export let tag as Half
 
-	static function create(pair Pair, tag Half) returns Self
-		return Self{pair: pair, tag: tag}
-	end 'create'
+	static let holder = Holder{pair: Pair.seven, tag: 9}
 end 'Holder'
 
-let holder = Holder.create(Pair.create(7, hi: 8), tag: 9)
-
 function main() returns ExitCode
-	return (holder.pair.lo + holder.pair.hi + holder.tag) as ExitCode
+	return (Holder.holder.pair.lo + Holder.holder.pair.hi + Holder.holder.tag) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -545,8 +532,7 @@ end 'main'
 data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __mrt_program_started@16 = i8 0
 }
 
 func @main {
@@ -577,7 +563,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-inline-record-field-of-a-heap-record-static-let-over-constants-is-image-data.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -587,8 +573,7 @@ func @main {
 ```
 ```TargetIr:arm64-macos
 data {
-  __slab_state@0 = i64 0
-  __mrt_program_started@8 = i8 0
+  __mrt_program_started@0 = i8 0
 }
 
 func @main {
@@ -616,7 +601,7 @@ func @main {
     arm64.epilogue 16
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at an-inline-record-field-of-a-heap-record-static-let-over-constants-is-image-data.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -628,8 +613,7 @@ data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
   __mrt_hwcap_atomics@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {
@@ -657,7 +641,7 @@ func @main {
     arm64.epilogue 16
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_1  ; "panic at an-inline-record-field-of-a-heap-record-static-let-over-constants-is-image-data.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -666,11 +650,10 @@ func @main {
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __mrt_console_probe_stdin@0 = i8 0
+  __mrt_console_probe_stdout@1 = i8 0
+  __mrt_console_probe_stderr@2 = i8 0
+  __mrt_program_started@3 = i8 0
 }
 
 func @main {
@@ -702,7 +685,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at an-inline-record-field-of-a-heap-record-let-over-constants-is-image-data.test:25: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at an-inline-record-field-of-a-heap-record-static-let-over-constants-is-image-data.test:19: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -711,8 +694,9 @@ func @main {
 }
 ```
 
-<!-- test: an-inline-record-let-naming-another-inline-record-let-is-a-baked-word -->
-A `let` bound to another inline-record `let` is the same word, so it owns no `.data` slot either.
+<!-- test: an-inline-record-static-let-naming-another-inline-record-static-let-is-image-data -->
+A `static let` bound to another inline-record `static let` is the same word, so it owns no `.data` slot either and each
+use is folded to that word.
 ```maxon
 typealias Half = int(0 to u32.max)
 
@@ -720,16 +704,12 @@ type Pair
 	export let lo as Half
 	export let hi as Half
 
-	static function create(lo Half, hi Half) returns Self
-		return Self{lo: lo, hi: hi}
-	end 'create'
+	static let first = Pair{lo: 3, hi: 4}
+	static let second = Pair.first
 end 'Pair'
 
-let first = Pair.create(3, hi: 4)
-let second = first
-
 function main() returns ExitCode
-	return (second.lo + second.hi) as ExitCode
+	return (Pair.second.lo + Pair.second.hi) as ExitCode
 end 'main'
 ```
 ```exitcode

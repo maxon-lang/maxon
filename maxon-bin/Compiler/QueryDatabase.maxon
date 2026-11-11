@@ -172,7 +172,7 @@ end 'cacheWriteFootprintNameIdArray'
 
 function cacheReadFootprintNameIdArray(reader LibraryCacheReader) returns FootprintNameIdArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FootprintNameIdArray.create(count, zeroed: false)
+	let result = FootprintNameIdArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as TypeNameId
@@ -239,7 +239,7 @@ end 'cacheWriteFootprintRowArray'
 
 function cacheReadFootprintRowArray(reader LibraryCacheReader) returns FootprintRowArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FootprintRowArray.create(count, zeroed: false)
+	let result = FootprintRowArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try FootprintRow.cacheRead(reader)
@@ -292,7 +292,7 @@ end 'cacheWriteFootprintInterfaceArray'
 
 function cacheReadFootprintInterfaceArray(reader LibraryCacheReader) returns FootprintInterfaceArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = FootprintInterfaceArray.create(count, zeroed: false)
+	let result = FootprintInterfaceArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
 		let item = try FootprintInterface.cacheRead(reader)
@@ -395,7 +395,7 @@ export type SharedLibraryParse
 			throw SharedMemoMiss.footprintMoved
 		end 'anAnswerMoved'
 
-		var rebasedArtifact = self.workingArtifact(consuming)
+		let rebasedArtifact = self.workingArtifact(consuming)
 		rebasedArtifact.parseMints = rebasedMints
 
 		return RebasedParse.create(rebasedArtifact, rebase: rebase)
@@ -538,7 +538,7 @@ export type SharedFileMemo
 
 	export function parseOf(variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable, consuming bool) returns RebasedParse throws SharedMemoMiss
 		let position = try self.positionAnswering(variant, key: key)
-		var held = try self.parses.get(position) otherwise panic("SharedFileMemo.parseOf: parses.get OOB at {position}, the position just found")
+		let held = try self.parses.get(position) otherwise panic("SharedFileMemo.parseOf: parses.get OOB at {position}, the position just found")
 		let rebased = try held.rebasedOnto(signatures, overrides: overrides, consuming: consuming)
 
 		if consuming 'noLaterCompileWillAsk'
@@ -647,7 +647,7 @@ end 'cacheWriteHashDigestSet'
 
 module function cacheReadHashDigestSet(reader LibraryCacheReader) returns HashDigestSet throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = HashDigestSet.create()
+	let result = HashDigestSet.create()
 
 	for _ in 0 upto count 'eachItem'
 		let item = (try reader.unsigned()) as HashDigest
@@ -973,7 +973,7 @@ export type QueryDatabase
 end 'QueryDatabase'
 
 function declaredTypeNamesIn(tokens TokenArray) returns NameRoster
-	var names = NameRoster.create(0)
+	let names = NameRoster.create(0)
 
 	for i in 0 upto tokens.count() 'eachToken'
 		let token = try tokens.get(i) otherwise panic("declaredTypeNamesIn: tokens.get OOB at {i} below count {tokens.count()}")
@@ -993,7 +993,7 @@ function declaredTypeNamesIn(tokens TokenArray) returns NameRoster
 end 'declaredTypeNamesIn'
 
 module function reservedSpellingsIn(tokens TokenArray) returns NameRoster
-	var spellings = NameRoster.create(0)
+	let spellings = NameRoster.create(0)
 
 	for token in tokens 'eachToken'
 		if token.kind == TokenKind.identifier and isCompilerReservedName(token.value) 'aReservedSpelling'
@@ -1010,8 +1010,8 @@ typealias ConditionalDepth = int(0 to u64.max)
 // so it is taken from every arm, which also keeps the fact independent of the target. A directive's
 // own condition is not a spelling.
 module function conditionalSpellingsIn(tokens TokenArray) returns NameRoster
-	var spellings = NameRoster.create(0)
-	var seen = UsedTypeNameSet.create()
+	let spellings = NameRoster.create(0)
+	let seen = UsedTypeNameSet.create()
 	var depth = 0 as ConditionalDepth
 	var onDirectiveLine = false
 

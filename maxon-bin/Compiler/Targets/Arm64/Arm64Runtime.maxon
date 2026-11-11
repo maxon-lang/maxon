@@ -142,11 +142,11 @@ end 'arm64ThreadPointerSource'
 // initialization and release the same way — `false` for a program with no managed
 // top-level global, which is every program in the scalar corpus.
 export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drainGreenThreads bool, captureArgv bool, debugStream bool, dumpCoverage bool, releasesRegistry bool, os Os, entryFunction ByteArray) returns FunctionCodeChunk
-	var code = ByteArray.create(0)
-	var callFixups = CallFixupArray.create(0)
-	var iatRelocs = RelocationArray.create(0)
-	var rdataRelocs = RdataRelocationArray.create(0)
-	var funcAdrpRelocs = Arm64FuncAdrpRelocArray.create(0)
+	let code = ByteArray.create(0)
+	let callFixups = CallFixupArray.create(0)
+	let iatRelocs = RelocationArray.create(0)
+	let rdataRelocs = RdataRelocationArray.create(0)
+	let funcAdrpRelocs = Arm64FuncAdrpRelocArray.create(0)
 
 	// The argument vector into the two `.data` words `__cl_count`/`__cl_arg` read. It rides
 	// `usesCommandLine`, so a program that never asks for its arguments carries neither the capture nor
@@ -262,7 +262,7 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, drain
 	// the end of this chunk into the next function rather than trusting it never to return.
 	arm64EmitBrk(code)
 
-	var chunk = FunctionCodeChunk.createWith(EntryPointName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	let chunk = FunctionCodeChunk.createWith(EntryPointName, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
 	chunk.funcAdrpRelocs = funcAdrpRelocs
 	return chunk
 end 'buildArm64EntryStubChunk'
@@ -294,7 +294,7 @@ end 'arm64EmitMainCall'
 // so `main`'s saved x29 ends the walk right after the return address into this chunk — which
 // carries no symbol and so prints `in mrt_start`, the line a program without green threads prints.
 export function buildArm64MainThreadEntryChunk(initGlobals bool, gatesDescendants bool, entryFunction ByteArray) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginRawFunction()
+	let asm = Arm64RuntimeAsm.beginRawFunction()
 
 	arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))
 	arm64EmitMainCall(asm.code, callFixups: asm.callFixups, initGlobals: initGlobals, releasesGlobals: false, entryFunction: entryFunction)
@@ -306,7 +306,7 @@ export function buildArm64MainThreadEntryChunk(initGlobals bool, gatesDescendant
 	arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x29), rt2: arm64RuntimeReg(Arm64Register.x30))
 	arm64EmitRet(asm.code)
 
-	var chunk = asm.finishChunk(MainThreadEntryName)
+	let chunk = asm.finishChunk(MainThreadEntryName)
 	chunk.spendsCallerStack(Arm64FrameRecordBytes as StackSize, checks: false)
 	return chunk
 end 'buildArm64MainThreadEntryChunk'

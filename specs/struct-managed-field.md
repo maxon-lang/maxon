@@ -250,7 +250,7 @@ end 'Outer'
 
 function main() returns ExitCode
 	let i = Inner.create(10)
-	var o = Outer.create(i)
+	let o = Outer.create(i)
 	o.inner.x = 42
 	return o.inner.x
 end 'main'
@@ -272,7 +272,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	h.text = "brandnew"
 	if h.text == "brandnew" 'updated'
 		return 8
@@ -302,7 +302,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var b = Box.create()
+	let b = Box.create()
 	b.setName("bb")
 	if b.name == "bb" 'ok'
 		return 2
@@ -474,7 +474,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	h.pending = OuterErr.unterminatedString(7, column: 13)
 	let r = match h.pending 'k'
 		unterminatedString(line, column) gives (line + column)
@@ -544,7 +544,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create(Named.create("a"))
+	let h = Holder.create(Named.create("a"))
 	h.n = Named.create("b")
 	if h.n.label == "b" 'updated'
 		return 9
@@ -578,7 +578,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create(Named.create("start"))
+	let h = Holder.create(Named.create("start"))
 	var i = 0 as FullRangeInt
 	while i < 5 'loop'
 		h.n = Named.create("iter")
@@ -624,7 +624,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create(Mid.create(Inner.create("a")))
+	let h = Holder.create(Mid.create(Inner.create("a")))
 	h.m = Mid.create(Inner.create("b"))
 	if h.m.inner.label == "b" 'ok'
 		return 4
@@ -660,7 +660,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create(Point.create(1))
+	let h = Holder.create(Point.create(1))
 	h.p = Point.create(2)
 	return h.p.x
 end 'main'

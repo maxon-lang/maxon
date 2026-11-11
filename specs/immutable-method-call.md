@@ -84,7 +84,7 @@ function grow(p IntArray) returns Integer
 end 'grow'
 
 function main() returns ExitCode
-	var v = IntArray.create(0)
+	let v = IntArray.create(0)
 	return grow(v) as ExitCode
 end 'main'
 ```
@@ -118,7 +118,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntSet = Set with Integer
 
 function main() returns ExitCode
-	var s = IntSet.create()
+	let s = IntSet.create()
 	s.insert(1)
 	return s.count() as ExitCode
 end 'main'
@@ -155,7 +155,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntSet = Set with Integer
 
 function main() returns ExitCode
-	var s = IntSet.create()
+	let s = IntSet.create()
 	let gone = s.remove(1)
 	if gone 'g'
 		return 1
@@ -235,7 +235,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(42)
 	let x = try arr.get(0) otherwise 0
 	return x
@@ -268,7 +268,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push(1)
 	return b.size() as ExitCode
 end 'main'
@@ -303,7 +303,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.add(1)
 	return b.size() as ExitCode
 end 'main'
@@ -335,7 +335,7 @@ type Buf
 end 'Buf'
 
 function main() returns ExitCode
-	var b = Buf.create()
+	let b = Buf.create()
 	b.grow()
 	return b.size() as ExitCode
 end 'main'
@@ -368,7 +368,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.add(1)
 	return b.size() as ExitCode
 end 'main'
@@ -377,8 +377,8 @@ end 'main'
 1
 ```
 
-<!-- test: error.push-through-a-field-chain-off-a-module-let -->
-A chain through a module-level `let` reaches immutable image data: `SharedFacts.counts` is three tokens, so
+<!-- test: error.push-through-a-field-chain-off-a-static-let -->
+A chain through a `static let` reaches immutable image data: `Facts.shared.counts` is a chain, so
 the receiver of the push is the field's own record rather than the binding. The push would write a page mapped
 read-only, which is a fault on x64 and, on wasm32-wasi, a silent rewrite of the constant.
 
@@ -387,23 +387,19 @@ typealias Count = int(0 to 1000)
 typealias CountArray = Array with Count
 
 type Facts
-	export var counts = CountArray.create(0)
+	export var counts as CountArray
 
-	static function create() returns Facts
-		return Self{}
-	end 'create'
+	static let shared = Facts{counts: CountArray from [0]}
 end 'Facts'
 
-let SharedFacts = Facts.create()
-
 function main() returns ExitCode
-	SharedFacts.counts.push(1)
+	Facts.shared.counts.push(1)
 
-	return SharedFacts.counts.count() as ExitCode
+	return Facts.shared.counts.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:16:21: 'push' needs a writable receiver; 'counts' is immutable
+error E3207: <fragment>:12:22: 'push' needs a writable receiver; 'counts' is immutable
 ```
 
 <!-- test: push-through-a-field-chain-off-a-local-let-ok -->
@@ -450,7 +446,7 @@ type Facts
 end 'Facts'
 
 function main() returns ExitCode
-	var facts = Facts.create()
+	let facts = Facts.create()
 	facts.counts.push(1)
 
 	return facts.counts.count() as ExitCode
@@ -511,24 +507,20 @@ abXY
 0
 ```
 
-<!-- test: error.append-to-a-string-field-off-a-module-let -->
+<!-- test: error.append-to-a-string-field-off-a-static-let -->
 ```maxon
 type Holder
 	export var name as String
 
-	static function create(name String) returns Self
-		return Self{name: name}
-	end 'create'
+	static let shared = Holder{name: "ab"}
 end 'Holder'
 
-let Shared = Holder.create("ab")
-
 function main() returns ExitCode
-	Shared.name.append("XY")
-	print("{Shared.name}\n")
+	Holder.shared.name.append("XY")
+	print("{Holder.shared.name}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:13:14: cannot pass 'Shared', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
+error E3207: <fragment>:9:21: 'append' needs a writable receiver; 'name' is immutable
 ```

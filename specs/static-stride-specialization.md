@@ -114,7 +114,7 @@ function total(a WordArray) returns Word
 end 'total'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
@@ -151,7 +151,7 @@ function fill(a WordArray, n Word)
 end 'fill'
 
 function main() returns ExitCode
-	var a = WordArray.create(0)
+	let a = WordArray.create(0)
 	for i in 0 upto 5 'seed'
 		a.push(0)
 	end 'seed'
@@ -193,7 +193,7 @@ function sumBytes(b ByteArray) returns Total
 end 'sumBytes'
 
 function main() returns ExitCode
-	var b = ByteArray.create(0)
+	let b = ByteArray.create(0)
 	for i in 0 upto 10 'seed'
 		b.push(i as Byte)
 	end 'seed'
@@ -229,7 +229,7 @@ typealias Q = int(0 to 3)
 typealias QArray = Array with Q
 
 function main() returns ExitCode
-	var a = QArray.create(0)
+	let a = QArray.create(0)
 	a.push(0)
 	a.push(1)
 	a.push(2)
@@ -297,7 +297,7 @@ typealias ByteBag = Bag with Byte
 typealias WordArray = Array with Word
 
 function main() returns ExitCode
-	var w = WordBag.create()
+	let w = WordBag.create()
 	w.add(1000000)
 	w.add(2000000)
 	w.put(1, value: 3000000)
@@ -308,7 +308,7 @@ function main() returns ExitCode
 		return 3
 	end 'wordSecond'
 
-	var b = ByteBag.create()
+	let b = ByteBag.create()
 	b.add(200)
 	b.add(7)
 	b.put(1, value: 255)
@@ -320,7 +320,7 @@ function main() returns ExitCode
 	end 'byteSecond'
 
 	// The same element width reached DIRECTLY, where the stride is known and the fork is gone.
-	var direct = WordArray.create(0)
+	let direct = WordArray.create(0)
 	direct.push(9)
 	if (try direct.get(0) otherwise return 1) != 9 'directWord'
 		return 6
@@ -363,7 +363,7 @@ end 'Bag'
 typealias ByteBag = Bag with Byte
 
 function main() returns ExitCode
-	var b = ByteBag.create()
+	let b = ByteBag.create()
 	b.add(200)
 	b.add(7)
 	if b.items.managed.elementSize() != 1 'theRecordIsByteStrided'

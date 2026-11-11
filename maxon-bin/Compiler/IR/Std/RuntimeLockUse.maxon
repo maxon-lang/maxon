@@ -22,7 +22,7 @@ module function requireRuntimeLocksAreUsedAsDeclared(module StdModule, firstFunc
 end 'requireRuntimeLocksAreUsedAsDeclared'
 
 function requireRuntimeLocksAreUsedWithNames(module StdModule, firstFuncIndex ElementIndex, sites RuntimeLockSiteByOp, byName FuncIndexByName, globalData GlobalDataTable, project Project) throws CompileError
-	var check = HeldLockCheck.create(firstFuncIndex, sites: sites, byName: byName)
+	let check = HeldLockCheck.create(firstFuncIndex, sites: sites, byName: byName)
 	check.survey(module, globalData: globalData)
 	check.propagate()
 
@@ -68,7 +68,7 @@ function blockAtIndex(module StdModule, func IrFunction, index ElementIndex) ret
 end 'blockAtIndex'
 
 function valueLabelsOf(module StdModule, ops OpIndexArray) returns ValueLabelMap
-	var labels = ValueLabelMap.create()
+	let labels = ValueLabelMap.create()
 
 	for opIdx in ops 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("valueLabelsOf: live op index {opIdx} not in module.ops")
@@ -141,9 +141,9 @@ type HeldLockCheck
 	end 'noteAddressTaken'
 
 	function survey(module StdModule, globalData GlobalDataTable)
-		var ops = OpIndexArray.create(0)
-		var call = StdCallOperands.create()
-		var reference = StdFunctionReference.create()
+		let ops = OpIndexArray.create(0)
+		let call = StdCallOperands.create()
+		let reference = StdFunctionReference.create()
 		let count = module.funcCount()
 		self.addressTaken.resize(count)
 		self.returnsHolding.resize(count)
@@ -336,24 +336,24 @@ type HeldLockCheck
 	// registered as requiring a lock enters holding it, because E5006 proves that of every caller.
 	function walk(module StdModule, position ElementIndex, summarizing bool) returns (LockSet, LockSet) throws HeldLockRefusal
 		let func = module.getFunc(position)
-		var ops = OpIndexArray.create(0)
+		let ops = OpIndexArray.create(0)
 		module.collectLiveOpIndices(func, into: ops)
 		let valueLabels = valueLabelsOf(module, ops: ops)
 
 		let blockCount = func.blockRefs.count()
-		var positionById = BlockPositionById.create()
+		let positionById = BlockPositionById.create()
 
 		for index in 0 upto blockCount 'eachBlock'
 			positionById.upsert(blockAtIndex(module, func: func, index: index).id, value: index)
 		end 'eachBlock'
 
 		let contract = try self.requires.get(position) otherwise panic("HeldLockCheck.walk: requires.get OOB at {position}")
-		var mayAtEntry = LockSetColumn.create(blockCount)
-		var mustAtEntry = LockSetColumn.create(blockCount)
-		var reached = FlagColumn.create(blockCount)
-		var work = BlockPositionArray.create(0)
-		var successors = BlockIdArray.create(0)
-		var blockOps = OpIndexArray.create(0)
+		let mayAtEntry = LockSetColumn.create(blockCount)
+		let mustAtEntry = LockSetColumn.create(blockCount)
+		let reached = FlagColumn.create(blockCount)
+		let work = BlockPositionArray.create(0)
+		let successors = BlockIdArray.create(0)
+		let blockOps = OpIndexArray.create(0)
 		var exitMay = NoLocks
 		var exitMust = NoLocks
 		var anyReturn = false
@@ -410,7 +410,7 @@ type HeldLockCheck
 	function transfer(module StdModule, func IrFunction, valueLabels ValueLabelMap, blockOps OpIndexArray, enteringMay LockSet, enteringMust LockSet, summarizing bool) returns (LockSet, LockSet) throws HeldLockRefusal
 		var may = enteringMay
 		var must = enteringMust
-		var call = StdCallOperands.create()
+		let call = StdCallOperands.create()
 
 		for opIdx in blockOps 'eachOp'
 			if let site = try self.sites.get(opIdx) 'aMark'
@@ -579,9 +579,9 @@ type HeldLockCheck
 
 	function chainFrom(module StdModule, start ElementIndex, bit LockSet) returns String
 		let count = self.directTakes.count()
-		var parent = FixedFuncIndexArray.create(count)
-		var visited = FlagColumn.create(count)
-		var queue = FuncIndexArray.create(0)
+		let parent = FixedFuncIndexArray.create(count)
+		let visited = FlagColumn.create(count)
+		let queue = FuncIndexArray.create(0)
 		queue.push(start)
 		try visited.set(start, value: true) otherwise panic("HeldLockCheck.chainFrom: visited.set OOB at {start}")
 		var head = 0 as ElementIndex
@@ -614,7 +614,7 @@ type HeldLockCheck
 	end 'chainFrom'
 
 	function pathNames(module StdModule, parent FixedFuncIndexArray, start ElementIndex, taker ElementIndex) returns String
-		var backwards = FuncIndexArray.create(0)
+		let backwards = FuncIndexArray.create(0)
 		var at = taker
 
 		while at != start 'toTheStart'
@@ -623,7 +623,7 @@ type HeldLockCheck
 		end 'toTheStart'
 
 		backwards.push(start)
-		var names = NameRoster.create(backwards.count(), zeroed: false)
+		let names = NameRoster.create(backwards.count(), zeroed: false)
 
 		for offset in 1 to backwards.count() 'eachName'
 			let position = try backwards.get(backwards.count() - offset) otherwise panic("HeldLockCheck.pathNames: backwards.get OOB at offset {offset}")

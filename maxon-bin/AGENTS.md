@@ -155,7 +155,8 @@ introduces, every local self-compile stays green, because the slot compiler is a
 builder. CI builds from the pinned seed, whose runtime lacks the behaviour, so seed → C1 → C2 can die
 (exit 96). Run `scripts/fetch-seed.sh` then `scripts/build-from-seed.sh` before pushing. Stage the
 dependency behind a builder-set `static let` capability that defaults to the old-safe path, as
-`FrontEndPool.RuntimeMovesSharedRecords` does, and remove it once a release carries the runtime.
+`FrontEndPool.RuntimeSharesAnyGraph` does (a seed-built `C1` runs its front end in process), and remove it
+once a release carries the runtime.
 
 ## maxon MCP tools (PREFER THESE — **IN A WORKTREE, PASS `repoRoot`**)
 

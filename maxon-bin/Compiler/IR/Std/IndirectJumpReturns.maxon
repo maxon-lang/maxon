@@ -8,18 +8,18 @@
 // returns correctly.
 export function markIndirectJumpReturns(module StdModule, byName FuncIndexByName)
 	let functionCount = module.funcCount()
-	var call = StdCallOperands.create()
-	var liveOps = OpIndexArray.create(0)
-	var calleeIndices = CsrColumn.create(0)
-	var callerIndices = CsrColumn.create(0)
-	var switchSeeds = BoolArray.create(functionCount)
+	let call = StdCallOperands.create()
+	let liveOps = OpIndexArray.create(0)
+	let calleeIndices = CsrColumn.create(0)
+	let callerIndices = CsrColumn.create(0)
+	let switchSeeds = BoolArray.create(functionCount)
 
 	for funcIndex in 0 upto functionCount 'eachFunction'
-		view func = module.getFunc(funcIndex)
+		let func = module.getFunc(funcIndex)
 		module.collectLiveOpIndices(func, into: liveOps)
 
 		for opIdx in liveOps 'eachOp'
-			view op = try module.ops.get(opIdx) otherwise panic("markIndirectJumpReturns: live op index {opIdx} not in module.ops")
+			let op = try module.ops.get(opIdx) otherwise panic("markIndirectJumpReturns: live op index {opIdx} not in module.ops")
 			classifyCallOperands(op, call: call)
 
 			if not call.namesACallee() 'namesNoFunction'
@@ -46,7 +46,7 @@ export function markIndirectJumpReturns(module StdModule, byName FuncIndexByName
 			continue
 		end 'staysAMatchedReturn'
 
-		var func = module.getFunc(funcIndex)
+		let func = module.getFunc(funcIndex)
 		func.returnsByIndirectJump = true
 	end 'eachMarked'
 end 'markIndirectJumpReturns'

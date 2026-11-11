@@ -180,11 +180,11 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var outer = IntArray.create(0)
+	let outer = IntArray.create(0)
 	outer.resize(3)
 	try outer.set(0, value: 10) otherwise panic("test invariant: set OOB")
 	if true 'block'
-		var inner = IntArray.create(0)
+		let inner = IntArray.create(0)
 		inner.resize(5)
 		try inner.set(0, value: 20) otherwise panic("test invariant: set OOB")
 	end 'block'
@@ -255,10 +255,10 @@ function repro(foos FooArray, names StringArray)
 end 'repro'
 
 function main() returns ExitCode
-	var foos = FooArray.create(0)
+	let foos = FooArray.create(0)
 	foos.push(Foo.create("outer1", k: 1))
 	foos.push(Foo.create("outer2", k: 2))
-	var names = StringArray.create(0)
+	let names = StringArray.create(0)
 	names.push("inner1")
 	names.push("inner2")
 	repro(foos, names: names)

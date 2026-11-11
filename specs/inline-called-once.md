@@ -92,9 +92,9 @@ end 'flipOnce'
 
 function main() returns ExitCode
 	let n = 5
-	var current = IntArray.create(0)
+	let current = IntArray.create(0)
 	current.resize(n)
-	var temp = IntArray.create(0)
+	let temp = IntArray.create(0)
 	temp.resize(n)
 
 	for i in 0 upto n 'fill'
@@ -148,7 +148,7 @@ end 'outer'
 
 function main() returns ExitCode
 	let n = 4
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.resize(n)
 	return outer(a, n: n) as ExitCode
 end 'main'
@@ -192,9 +192,9 @@ end 'flipOnce'
 
 function main() returns ExitCode
 	let n = 5
-	var current = IntArray.create(0)
+	let current = IntArray.create(0)
 	current.resize(n)
-	var temp = IntArray.create(0)
+	let temp = IntArray.create(0)
 	temp.resize(n - 1)
 
 	for i in 0 upto n 'fill'
@@ -254,7 +254,7 @@ function outer(a IntArray, n Integer) returns Integer
 end 'outer'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.resize(3)
 	return outer(a, n: 4) as ExitCode
 end 'main'
@@ -295,7 +295,7 @@ function scale(a IntArray, n Integer, factor Integer) returns Integer
 end 'scale'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.resize(3)
 
 	for i in 0 upto 3 'fill'
@@ -336,7 +336,7 @@ function divide(scratch IntArray, a NonZero) returns NonZero
 end 'divide'
 
 function main() returns ExitCode
-	var scratch = IntArray.create(0)
+	let scratch = IntArray.create(0)
 	scratch.resize(4)
 	return divide(scratch, a: 7) as ExitCode
 end 'main'
@@ -382,7 +382,7 @@ end 'divide'
 
 function main() returns ExitCode
 	let dividend = ident(i64.min)
-	var scratch = IntArray.create(0)
+	let scratch = IntArray.create(0)
 	scratch.resize(4)
 	let d = ident(-1)
 	return divide(scratch, d: d as NegativeOne, dividend: dividend) as ExitCode
@@ -422,7 +422,7 @@ end 'fill'
 
 function main() returns ExitCode
 	let n = 4
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.resize(n)
 	let first = fill(a, n: n, base: 1)
 	let second = fill(a, n: n, base: 2)
@@ -512,7 +512,7 @@ function report(a IntArray, n Integer) returns Integer
 end 'report'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.resize(5)
 	let total = report(a, n: 5)
 
@@ -553,7 +553,7 @@ end 'bumpAll'
 
 function main() returns ExitCode
 	let n = 4
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.resize(n)
 	var bumps = 10 as Integer
 	let returned = bumpAll(a, n: n, bumps: bumps)
@@ -587,7 +587,7 @@ end 'firstIndexOf'
 
 function main() returns ExitCode
 	let n = 4
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.resize(n)
 
 	for i in 0 upto n 'fill'
@@ -624,7 +624,7 @@ end 'fillSquares'
 
 function main() returns ExitCode
 	let n = 5
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	a.resize(n)
 	fillSquares(a, n: n)
 	let fourth = try a.get(4) otherwise panic("main: n = 5")

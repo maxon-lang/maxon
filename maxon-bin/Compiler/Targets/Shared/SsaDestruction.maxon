@@ -102,7 +102,7 @@ end 'MoveSequence'
 // (every phi shares its incoming value's register) produces no moves and no plan.
 export function buildSsaDestructionPlan(module TargetModule, alloc Allocation, liveness LivenessResult, counters RegAllocCounters) returns EdgeMovePlanArray
 	let topo = liveness.cfg.topo
-	var plans = EdgeMovePlanArray.create(0)
+	let plans = EdgeMovePlanArray.create(0)
 
 	for predLocal in 0 upto topo.numBlocks 'eachPred'
 		let predBlock = blockAt(module, topo: topo, local: predLocal)
@@ -125,13 +125,13 @@ function buildEdgePlan(module TargetModule, topo FuncTopology, predBlock IrBlock
 	let targetBlock = blockAt(module, topo: topo, local: succLocal)
 	let view = PhiEdgeView.resolve(targetBlock, argIds: edge.argIds, context: PhiEdgeConsumer.ssaDestruction)
 
-	var copy = ParallelCopy.create()
+	let copy = ParallelCopy.create()
 
 	for k in 0 upto view.count 'eachPhi'
 		copy.add(alloc.regNumOf(view.phiValueIdAt(k)), src: alloc.regNumOf(view.incomingAt(k)))
 	end 'eachPhi'
 
-	var moves = MoveSequence.create()
+	let moves = MoveSequence.create()
 	copy.sequence(moves)
 	let placement = classifyPlacement(topo, predLocal: predLocal, succLocal: succLocal)
 	let predBlockRef = try topo.blockRefByLocal.get(predLocal) otherwise panic("buildEdgePlan: predLocal out of range")
@@ -188,14 +188,14 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 	var seq = 0 as OpSeq
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
-		view bodyOps = block.bodyOps()
+		let block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
+		let bodyOps = block.bodyOps()
 		let bodyCount = bodyOps.count()
 
 		// Whether the plan's open bracket has had its saves spliced and its reloads not yet.
 		var owesReloads = false
 
-		var newRefs = OpIndexArray.create(0)
+		let newRefs = OpIndexArray.create(0)
 
 		// A `tryCall`'s two capture moves (`result ← R8/x0`, `flag ← R10/x9`) are emitted in source order
 		// like any other op: the result capture's def has the flag's register physically live after it
@@ -205,8 +205,8 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		for pos in 0 upto bodyCount 'eachOp'
 			let opIdx = try bodyOps.get(pos) otherwise panic("colorAndDropSelfMoves: bodyOps.get OOB")
 			let atSeq = (seq + pos) as OpSeq
-			var uncolored = try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops")
-			var colored = colorTargetOp(uncolored, alloc: alloc)
+			let uncolored = try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops")
+			let colored = colorTargetOp(uncolored, alloc: alloc)
 			try module.ops.set(opIdx, value: colored) otherwise panic("colorAndDropSelfMoves: ops.set OOB")
 
 			// A run's saves go before its first op whether or not that op is emitted: a dropped self-move
@@ -786,7 +786,7 @@ end 'spliceEdgeMoves'
 // terminator, on the only edge out).
 function splicePredEnd(module TargetModule, plan EdgeMovePlan)
 	for i in 0 upto plan.moveCount() 'eachMove'
-		var predBlock = try module.blocks.get(plan.predBlockRef) otherwise panic("splicePredEnd: predBlockRef {plan.predBlockRef} not in module.blocks")
+		let predBlock = try module.blocks.get(plan.predBlockRef) otherwise panic("splicePredEnd: predBlockRef {plan.predBlockRef} not in module.blocks")
 		module.appendOp(predBlock, op: moveOpOf(plan, i: i))
 	end 'eachMove'
 end 'splicePredEnd'
@@ -798,7 +798,7 @@ function spliceSuccStart(module TargetModule, plan EdgeMovePlan)
 		let opIdx = module.ops.count()
 		module.ops.push(moveOpOf(plan, i: i))
 		module.spans.pushNone(opIdx)
-		var succBlock = try module.blocks.get(plan.succBlockRef) otherwise panic("spliceSuccStart: succBlockRef {plan.succBlockRef} not in module.blocks")
+		let succBlock = try module.blocks.get(plan.succBlockRef) otherwise panic("spliceSuccStart: succBlockRef {plan.succBlockRef} not in module.blocks")
 		succBlock.insertBodyOp(i, opIdx: opIdx)
 	end 'eachMove'
 end 'spliceSuccStart'
@@ -844,18 +844,18 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, tar
 	// Collect the critical phi edges first (reads), then split them (writes) — the
 	// splits are independent (each only redirects its own edge through a new block),
 	// so the original CFG's classification stays valid across all of them.
-	var predRefs = BlockRefArray.create(0)
-	var succIds = BlockIdArray.create(0)
-	var heats = BlockHeatArray.create(0)
-	var roles = BlockRoleArray.create(0)
-	var sites = InlineSiteRefArray.create(0)
+	let predRefs = BlockRefArray.create(0)
+	let succIds = BlockIdArray.create(0)
+	let heats = BlockHeatArray.create(0)
+	let roles = BlockRoleArray.create(0)
+	let sites = InlineSiteRefArray.create(0)
 
 	for predLocal in 0 upto topo.numBlocks 'eachPred'
 		if topo.succ.degree(predLocal as CsrIndex) <= 1 'singleSucc'
 			continue
 		end 'singleSucc'
 
-		var predBlock = blockAt(module, topo: topo, local: predLocal)
+		let predBlock = blockAt(module, topo: topo, local: predLocal)
 
 		for edge in predBlock.branchEdges 'eachEdge'
 			let succLocal = try topo.localByBlockId.get(edge.targetBlockId) otherwise panic("splitCriticalEdgesInFunc: succ block id out of range")
@@ -866,7 +866,7 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, tar
 
 				// The split block runs exactly when the edge is taken, which is only when both ends run. Its
 				// moves complete the predecessor's branch, so it stays in the predecessor's text.
-				view succBlock = blockAt(module, topo: topo, local: succLocal)
+				let succBlock = blockAt(module, topo: topo, local: succLocal)
 				heats.push(colderHeat(predBlock.heat, b: succBlock.heat))
 				roles.push(asyncUnsafeEdgeRoleOf(predBlock, succ: succBlock))
 				sites.push(predBlock.inlineSite)
@@ -879,14 +879,14 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, tar
 		let succId = try succIds.get(k) otherwise panic("splitCriticalEdgesInFunc: succIds.get OOB")
 		let heat = try heats.get(k) otherwise panic("splitCriticalEdgesInFunc: heats.get OOB")
 		let role = try roles.get(k) otherwise panic("splitCriticalEdgesInFunc: roles.get OOB")
-		view inlineSite = try sites.get(k) otherwise panic("splitCriticalEdgesInFunc: sites.get OOB")
+		let inlineSite = try sites.get(k) otherwise panic("splitCriticalEdgesInFunc: sites.get OOB")
 		performCriticalSplit(module, funcIdx: funcIdx, predRef: predRef, succId: succId, heat: heat, role: role, inlineSite: inlineSite, target: target)
 	end 'eachSplit'
 end 'splitCriticalEdgesInFunc'
 
 function performCriticalSplit(module TargetModule, funcIdx ElementIndex, predRef ElementIndex, succId BlockId, heat BlockHeat, role BlockRole, inlineSite InlineSiteRef, target Target)
 	let newRef = addSplitBlock(module, funcIdx: funcIdx, succId: succId, heat: heat, role: role, inlineSite: inlineSite, target: target)
-	view newBlock = try module.blocks.get(newRef) otherwise panic("performCriticalSplit: newRef not in module.blocks")
+	let newBlock = try module.blocks.get(newRef) otherwise panic("performCriticalSplit: newRef not in module.blocks")
 	let newId = newBlock.id
 	moveBranchEdgeToSplit(module, predRef: predRef, succId: succId, splitRef: newRef)
 	retargetControlOp(module, predRef: predRef, oldTarget: succId, newTarget: newId)
@@ -898,13 +898,13 @@ end 'performCriticalSplit'
 // The inline site is COPIED: the predecessor keeps its own box, and the module travels home from a
 // pool worker in a reply that must own everything it reaches.
 function addSplitBlock(module TargetModule, funcIdx ElementIndex, succId BlockId, heat BlockHeat, role BlockRole, inlineSite InlineSiteRef, target Target) returns ElementIndex
-	var func = module.getFunc(funcIdx)
+	let func = module.getFunc(funcIdx)
 	let newId = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
 	module.blocks.push(IrBlock.create(newId, label: CritSplitLabel, heat: heat, inlineSite: copiedInlineSite(inlineSite), role: role))
 	let newRef = module.blocks.count() - 1
 	func.blockRefs.push(newRef)
-	var splitBlock = try module.blocks.get(newRef) otherwise panic("addSplitBlock: newRef not in module.blocks")
+	let splitBlock = try module.blocks.get(newRef) otherwise panic("addSplitBlock: newRef not in module.blocks")
 	module.setTerminator(splitBlock, op: unconditionalBranchTo(target, blockId: succId))
 	return newRef
 end 'addSplitBlock'
@@ -922,7 +922,7 @@ end 'unconditionalBranchTo'
 // block. The phi args now flow pred → split → succ, and the split block (one
 // successor) is where SSA destruction places their moves.
 function moveBranchEdgeToSplit(module TargetModule, predRef ElementIndex, succId BlockId, splitRef ElementIndex)
-	var movedArgs = extractPredEdge(module, predRef: predRef, succId: succId)
+	let movedArgs = extractPredEdge(module, predRef: predRef, succId: succId)
 	addSplitEdge(module, splitRef: splitRef, succId: succId, argIds: movedArgs)
 end 'moveBranchEdgeToSplit'
 
@@ -930,8 +930,8 @@ end 'moveBranchEdgeToSplit'
 function extractPredEdge(module TargetModule, predRef ElementIndex, succId BlockId) returns ValueIdArray
 	var movedArgs = ValueIdArray.create(0)
 	var found = false
-	var keptEdges = BranchEdgeArray.create(0)
-	var predBlock = try module.blocks.get(predRef) otherwise panic("extractPredEdge: predRef not in module.blocks")
+	let keptEdges = BranchEdgeArray.create(0)
+	let predBlock = try module.blocks.get(predRef) otherwise panic("extractPredEdge: predRef not in module.blocks")
 
 	for edge in predBlock.branchEdges 'eachEdge'
 		if (not found) and edge.targetBlockId == succId 'moveThis'
@@ -952,7 +952,7 @@ end 'extractPredEdge'
 
 // Give the split block its outgoing phi `branchEdge` to `succId`.
 function addSplitEdge(module TargetModule, splitRef ElementIndex, succId BlockId, argIds ValueIdArray)
-	var splitBlock = try module.blocks.get(splitRef) otherwise panic("addSplitEdge: splitRef not in module.blocks")
+	let splitBlock = try module.blocks.get(splitRef) otherwise panic("addSplitEdge: splitRef not in module.blocks")
 	splitBlock.branchEdges.push(BranchEdge.create(succId, argIds: argIds))
 end 'addSplitEdge'
 
@@ -986,9 +986,9 @@ export function retargetControlOp(module TargetModule, predRef ElementIndex, old
 	// arm takes ONE statement, so reading the slot as the union it is — rather than through a
 	// `hasCondBranchOp()`/`condBranchIndex()` pair whose second half panics if the first was not asked —
 	// needs the arm's work to be a call. The pair is unspellable in the wrong order here.
-	view predBlock = try module.blocks.get(predRef) otherwise panic("retargetControlOp: predRef not in module.blocks")
-	view condBranch = predBlock.condBranch
-	view terminator = predBlock.terminator
+	let predBlock = try module.blocks.get(predRef) otherwise panic("retargetControlOp: predRef not in module.blocks")
+	let condBranch = predBlock.condBranch
+	let terminator = predBlock.terminator
 	let predBlockId = predBlock.id
 
 	match condBranch 'condSlot'
@@ -1295,7 +1295,7 @@ end 'jumpTableNamesTarget'
 
 // The case-target table with every `oldTarget` slot rewritten to `newTarget`, others verbatim.
 function remapJumpTargets(caseTargets BlockIdArray, oldTarget BlockId, newTarget BlockId) returns BlockIdArray
-	var out = BlockIdArray.create(caseTargets.count(), zeroed: false)
+	let out = BlockIdArray.create(caseTargets.count(), zeroed: false)
 
 	for t in caseTargets 'eachSlot'
 		out.push(newTarget if t == oldTarget else t)
@@ -1320,7 +1320,7 @@ end 'moveOpOf'
 // has no phi and must not see a block-arg or branch-edge.
 function clearPhiModel(module TargetModule, func IrFunction)
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("clearPhiModel: blockRef not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("clearPhiModel: blockRef not in module.blocks")
 		block.blockArgs = IrBlockArgArray.create(0)
 		block.branchEdges = BranchEdgeArray.create(0)
 	end 'eachBlock'

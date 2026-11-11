@@ -17,7 +17,7 @@ end 'encodedSourceSpellings'
 
 function decodedSourceSpellings(reader LibraryCacheReader) returns NameRoster throws LibraryCacheDamage
 	let count = try reader.count()
-	var spellings = NameRoster.create(count, zeroed: false)
+	let spellings = NameRoster.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachSpelling'
 		let spelling = try reader.bytes()
@@ -28,7 +28,7 @@ function decodedSourceSpellings(reader LibraryCacheReader) returns NameRoster th
 end 'decodedSourceSpellings'
 
 module function encodedViewSection(facts RawStreamFacts, view SharedBuildView) returns immutable ByteArray
-	var writer = LibraryCacheWriter.create()
+	let writer = LibraryCacheWriter.create()
 	encodedSourceSpellings(writer, spellings: facts.declaredTypeNames)
 	encodedSourceSpellings(writer, spellings: facts.reservedSpellings)
 	encodedSourceSpellings(writer, spellings: facts.conditionalSpellings)
@@ -61,7 +61,7 @@ export function cacheReadSourceParseError(_ LibraryCacheReader) returns SourcePa
 end 'cacheReadSourceParseError'
 
 module function encodedBaseline(declarations LibraryDeclarations, key HashDigest) returns immutable ByteArray throws LibraryCacheDamage
-	var writer = LibraryCacheWriter.create()
+	let writer = LibraryCacheWriter.create()
 	writer.unsigned(key as CacheUnsigned)
 	cacheWriteFilePathArray(writer, value: declarations.manifest.deferred)
 	cacheWriteFilePathArray(writer, value: declarations.manifest.streamed)
@@ -85,7 +85,7 @@ module function decodedManifest(reader LibraryCacheReader, key HashDigest) retur
 end 'decodedManifest'
 
 module function decodedSignatures(reader LibraryCacheReader) returns ProgramSignatures throws LibraryCacheDamage
-	var signatures = try ProgramSignatures.cacheRead(reader)
+	let signatures = try ProgramSignatures.cacheRead(reader)
 	try reader.finished()
 	signatures.shareModuleDirectoriesWithProvenance()
 
@@ -93,7 +93,7 @@ module function decodedSignatures(reader LibraryCacheReader) returns ProgramSign
 end 'decodedSignatures'
 
 module function encodedParseSection(held SharedLibraryParse) returns immutable ByteArray throws LibraryCacheDamage
-	var writer = LibraryCacheWriter.create()
+	let writer = LibraryCacheWriter.create()
 	cacheWriteSharedLibraryParse(writer, value: held)
 
 	if writer.refused() 'aCaseTheFormatDoesNotCarry'
@@ -120,7 +120,7 @@ end 'cacheWriteTypeNameInterner'
 
 export function cacheReadTypeNameInterner(reader LibraryCacheReader) returns TypeNameInterner throws LibraryCacheDamage
 	let count = try reader.count()
-	var interner = TypeNameInterner.createForSource(0)
+	let interner = TypeNameInterner.createForSource(0)
 
 	for position in 0 upto count 'eachName'
 		let id = interner.intern(try reader.bytes())
@@ -185,7 +185,7 @@ end 'cacheWriteFixedElementCountColumn'
 
 module function cacheReadFixedElementCountColumn(reader LibraryCacheReader) returns FixedElementCountColumn throws LibraryCacheDamage
 	let count = try reader.count()
-	var column = FixedElementCountColumn.create()
+	let column = FixedElementCountColumn.create()
 
 	for _ in 0 upto count 'eachEntry'
 		let held = try reader.flag()

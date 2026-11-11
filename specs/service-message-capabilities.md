@@ -17,7 +17,7 @@ no word: numbers, `bool`, `String`, `Character`, enums and unions that hold no p
 `SharedValue` cells cross as they are. A type that holds a `unique` value moves on a send and needs none either.
 
 The roster is checked at the `spawn` that makes the type a service, once for the type's messages and once for the
-factory that `spawn` names. A refusal an older rule already raised at the same `spawn` keeps its code.
+factory that `spawn` names. A message parameter that is a promise, a function value or an opaque type parameter is refused at the same `spawn`, also as E3217.
 
 ## Tests
 
@@ -736,11 +736,11 @@ function main() returns ExitCode
 	let port = listener.port()
 	let acceptor = spawn Acceptor.create(listener)
 	let pending = try acceptor.next() otherwise return 2
-	var out = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused3x23'
+	let out = try TcpClient.connect("127.0.0.1", port: port) otherwise 'refused3x23'
 		pending.cancel()
 		return 3
 	end 'refused3x23'
-	var served = try await pending otherwise return 4
+	let served = try await pending otherwise return 4
 
 	_ = try out.send("handle") otherwise return 5
 
@@ -840,7 +840,7 @@ end 'main'
 error E3217: <fragment>:25:16: parameter `point` of the message `Watcher.watch` is a `Point` with no capability word, and this `spawn` makes `Watcher` a service — whose messages hand their arguments to another green thread, so what crosses must be owned by one side or read-only on both. `isolated` gives the value away: the sender builds it for this one send and no other name reaches it afterwards. `immutable` shares it: the sender freezes it (`freeze x.clone()`), and both threads only read it. Write it `watch(point isolated …)` or `watch(point immutable …)`
 ```
 
-<!-- test: error.a-promise-parameter-keeps-e3135-after-an-unmarked-record -->
+<!-- test: error.a-promise-parameter-keeps-e3217-after-an-unmarked-record -->
 The `Promise` parameter is refused first, by the rule that has always refused it, though the unmarked `Point` is declared before it.
 
 ```maxon
@@ -878,7 +878,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:30:13: parameter `p` of the message `Calc.hold` is a Promise, which is a green-thread handle its awaiter owns, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3217: <fragment>:30:13: parameter `p` of the message `Calc.hold` is a Promise, which is a green-thread handle its awaiter owns, and this `spawn` makes `Calc` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: error.a-reply-the-cell-cannot-carry-keeps-e3140-after-an-unmarked-record -->
@@ -963,7 +963,7 @@ end 'main'
 error E3216: <fragment>:27:12: `Svc.pending` is a `IntPromiseArray` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it. `Svc` is a service, and a service's state is run by whichever green thread takes its next message, so a promise kept in it could be awaited or dropped by a strand that does not own its coroutine. `await` the promise (or `.cancel()` it) before the message or factory returns and keep its result in the field
 ```
 
-<!-- test: error.a-type-parameter-keeps-e3135-beside-an-unmarked-record -->
+<!-- test: error.a-type-parameter-keeps-e3217-beside-an-unmarked-record -->
 `put` takes a bare `T` and `plot` an unmarked `Point`; the opaque parameter is refused first.
 
 ```maxon
@@ -1001,7 +1001,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3135: <fragment>:30:12: parameter `x` of the message `Box.put` is an opaque type parameter, whose layout is not known at the send, and this `spawn` makes `Box` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
+error E3217: <fragment>:30:12: parameter `x` of the message `Box.put` is an opaque type parameter, whose layout is not known at the send, and this `spawn` makes `Box` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message
 ```
 
 <!-- test: an-isolated-interface-value-is-merged-into-an-interface-field -->
@@ -1107,7 +1107,7 @@ end 'forward'
 
 function main() returns ExitCode
 	let sink = spawn Sink.create()
-	var chunk = Chunk.create() as isolated Chunk
+	let chunk = Chunk.create() as isolated Chunk
 
 	modify chunk 'fill'
 		chunk.cells.push(1)

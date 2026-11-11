@@ -36,14 +36,14 @@ public extension Array
 	function stablePartition(lo ElementIndex, hi ElementIndex, pivotIndex ElementIndex, scratch MergeScratchArray, pivotHold MergeScratchArray, cmp SortComparator) returns ElementIndex
 		pivotHold.clear()
 		pivotHold.push(try managed.get(pivotIndex) otherwise panic("stablePartition: get OOB at pivot"))
-		view pv = try pivotHold.get(0) otherwise panic("stablePartition: pivotHold is empty one line after a push into it")
+		let pv = try pivotHold.get(0) otherwise panic("stablePartition: pivotHold is empty one line after a push into it")
 
 		// Count the `< pivot` class so we can pick the smaller class to buffer.
 		var lessCount = 0 as ElementIndex
 		var scan = lo
 
 		while scan < hi 'count'
-			view v = try managed.get(scan) otherwise panic("stablePartition: get OOB during count")
+			let v = try managed.get(scan) otherwise panic("stablePartition: get OOB during count")
 
 			if cmp(v, pv) == Ordering.lessThan 'isLess'
 				lessCount = lessCount + 1
@@ -67,7 +67,7 @@ public extension Array
 			var i = lo
 
 			while i < hi 'splitGe'
-				var v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (ge)")
+				let v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (ge)")
 
 				if cmp(v, pv) != Ordering.lessThan 'toScratch'
 					try scratch.set(k, value: v) otherwise panic("stablePartition: scratch.set OOB (ge)")
@@ -102,7 +102,7 @@ public extension Array
 			var i = lo
 
 			while i < hi 'splitLess'
-				var v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (less)")
+				let v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (less)")
 
 				if cmp(v, pv) == Ordering.lessThan 'toScratch2'
 					try scratch.set(k, value: v) otherwise panic("stablePartition: scratch.set OOB (less)")

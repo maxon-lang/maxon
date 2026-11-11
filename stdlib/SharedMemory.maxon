@@ -78,7 +78,7 @@ public union SharedMemoryError implements Error
 end 'SharedMemoryError'
 
 /// A named section, mapped into this process.
-public type SharedSegment
+public type SharedSegment is unique
 	// The section object, and the base of this process's view of it. Both are needed to tear the mapping
 	// down — see `close`.
 	var handle as SegmentHandle
@@ -159,7 +159,7 @@ public type SharedSegment
 
 	static function mapped(rawHandle SegmentHandle, name String, bytes SegmentByteCount, publisher bool) returns SharedSegment throws SharedMemoryError
 		let mappedAt = __Builtins.sharedMemoryMap(rawHandle, bytes)
-		var segment = SharedSegment{handle: rawHandle, base: NoSection if mappedAt == NoSection else mappedAt as SegmentAddress, bytes: bytes, name: name, latch: OwnerLatch.create(true), publisher: publisher}
+		let segment = SharedSegment{handle: rawHandle, base: NoSection if mappedAt == NoSection else mappedAt as SegmentAddress, bytes: bytes, name: name, latch: OwnerLatch.create(true), publisher: publisher}
 
 		if mappedAt == NoSection 'mapFailed'
 			segment.close()

@@ -774,28 +774,25 @@ error E3010: <fragment>:5:14: unneeded cast: the literal 2 already fits every us
 ```
 
 <!-- test: error.unneeded.literal-top-level-let-read-by-a-top-level-factory-argument -->
-A record initializer's read counts the same way: the factory argument takes the plain constant.
+A record initializer's read counts the same way: the field of a `static let`'s record literal takes the plain constant.
 ```maxon
 typealias Wide = int(0 to 1000)
 typealias Small = int(0 to 100) implements Wide
 
+let Base = 2 as Wide
+
 type Holder
 	export var n as Small
 
-	static function create(n Small) returns Holder
-		return Self{n: n}
-	end 'create'
+	static let cell = Holder{n: Base as Small}
 end 'Holder'
 
-let Base = 2 as Wide
-let Cell = Holder.create(Base as Small)
-
 function main() returns ExitCode
-	return Cell.n as ExitCode
+	return Holder.cell.n as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: <fragment>:13:14: unneeded cast: the literal 2 already fits every use of 'Base'
+error E3010: <fragment>:5:14: unneeded cast: the literal 2 already fits every use of 'Base'
 ```
 
 <!-- test: error.unneeded.literal-let-to-a-full-range-alias-used-as-an-operand -->
@@ -1204,7 +1201,7 @@ function takes(b Bytes) returns Wide
 end 'takes'
 
 function main() returns ExitCode
-	var a = Bytes.create(0)
+	let a = Bytes.create(0)
 	a.push(7)
 	return takes(a)
 end 'main'

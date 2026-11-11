@@ -89,7 +89,7 @@ type Options
 	export var stats = false
 
 	static function parse(args StringArray) returns Options throws UsageError
-		var options = Self{jobs: availableWorkers()}
+		let options = Self{jobs: availableWorkers()}
 		var patternSeen = false
 		var flagsEnded = false
 
@@ -304,7 +304,7 @@ function readAtom(source ByteArray, at BufferPos, fold ByteFold) returns (Atom, 
 end 'readAtom'
 
 function readClass(source ByteArray, at BufferPos, fold ByteFold) returns (Atom, BufferPos) throws PatternError
-	var members = ByteMembership.create()
+	let members = ByteMembership.create()
 	let negated = at < source.count() as BufferPos and byteAt(source, position: at) == '^'
 	var cursor = at + 1 if negated else at
 	var named = false
@@ -366,7 +366,7 @@ type FixedMatcher implements Matcher
 	var fold as ByteFold
 
 	static function create(patternText String, fold ByteFold) returns Self
-		var needle = ByteArray.create(0)
+		let needle = ByteArray.create(0)
 
 		for b in patternText.bytes() 'eachByte'
 			needle.push(fold.apply(b))
@@ -410,7 +410,7 @@ type RegexMatcher implements Matcher
 
 	static function compile(patternText String, fold ByteFold) returns Self throws PatternError
 		let source = patternText.toByteArray()
-		var pieces = PieceArray.create(0)
+		let pieces = PieceArray.create(0)
 		let anchoredAtStart = not source.isEmpty() and byteAt(source, position: 0) == '^'
 		var anchoredAtEnd = false
 		var cursor = (1 if anchoredAtStart else 0) as BufferPos
@@ -544,7 +544,7 @@ type Searcher
 
 	function searchBuffer(buffer ByteArray) returns isolated FileReport
 		let isBinary = buffer.contains(ControlByte.nul)
-		var report = FileReport.create(isBinary) as isolated FileReport
+		let report = FileReport.create(isBinary) as isolated FileReport
 		var lineStart = 0 as BufferPos
 		var lineNumber = firstLineNumber as LineNumber
 
@@ -590,7 +590,7 @@ enum WalkError implements Error
 end 'WalkError'
 
 function walkTree(root FilePath) returns PathArray throws WalkError
-	var files = PathArray.create(0)
+	let files = PathArray.create(0)
 
 	if Directory.isDirectory(root) 'directory'
 		collectFiles(root, files: files)
@@ -657,7 +657,7 @@ type RunSummary
 end 'RunSummary'
 
 function renderReport(report FileReport, label String, style OutputStyle) returns String
-	var out = StringBuilder.create()
+	let out = StringBuilder.create()
 	let prefix = "{label}:" if style.namesFiles else ""
 
 	if style.filesWithMatches 'names'
@@ -699,8 +699,8 @@ function printUsage(problem UsageError)
 end 'printUsage'
 
 function searchStandardInput(searcher Searcher, style OutputStyle, summary RunSummary)
-	var stdin = Console.stdin()
-	var buffer = ByteArray.create(0)
+	let stdin = Console.stdin()
+	let buffer = ByteArray.create(0)
 
 	while true 'eachLine'
 		let line = try stdin.readLine() otherwise break
@@ -714,16 +714,16 @@ function searchStandardInput(searcher Searcher, style OutputStyle, summary RunSu
 end 'searchStandardInput'
 
 function findFiles(options Options, summary RunSummary) returns PathArray
-	var walks = WalkPromiseArray.create(0)
+	let walks = WalkPromiseArray.create(0)
 
 	for root in options.paths 'startWalks'
 		walks.push(async walkTree(root.clone()))
 	end 'startWalks'
 
-	var files = PathArray.create(0)
+	let files = PathArray.create(0)
 
 	for (walk, found) in walks.withIterator() 'finishWalks'
-		view tree = try await found otherwise 'unreadable'
+		let tree = try await found otherwise 'unreadable'
 			let root = try options.paths.get(walk.index()) otherwise panic("findFiles: one walk per path")
 			printError("maxgrep: {root}: cannot read\n")
 			summary.troubled = true
@@ -746,17 +746,17 @@ function submitSearch(replies ReportPromiseArray, searcher Searcher.handle, path
 end 'submitSearch'
 
 function searchFiles(files PathArray, request immutable SearchRequest, style OutputStyle, workers WorkerCount, summary RunSummary)
-	var searchers = SearcherArray.create(0)
+	let searchers = SearcherArray.create(0)
 
 	for _ in 1 to workers 'spawnWorkers'
 		searchers.push(spawn Searcher.create(freeze request.clone()))
 	end 'spawnWorkers'
 
-	var replies = ReportPromiseArray.create(0)
+	let replies = ReportPromiseArray.create(0)
 	var nextWorker = 0 as ElementIndex
 
 	for path in files 'sendFiles'
-		var searcher = try searchers.get(nextWorker) otherwise panic("searchFiles: nextWorker stays below the worker count")
+		let searcher = try searchers.get(nextWorker) otherwise panic("searchFiles: nextWorker stays below the worker count")
 		submitSearch(replies, searcher: searcher, path: path)
 		nextWorker = (nextWorker + 1) mod workers
 	end 'sendFiles'
@@ -764,7 +764,7 @@ function searchFiles(files PathArray, request immutable SearchRequest, style Out
 	for (received, reply) in replies.withIterator() 'receiveReports'
 		let path = try files.get(received.index()) otherwise panic("searchFiles: one reply per file")
 
-		view report = try await reply otherwise (e) 'failed'
+		let report = try await reply otherwise (e) 'failed'
 			match e 'why'
 				unreadable then printError("maxgrep: {path}: cannot read\n")
 			end 'why'
@@ -798,7 +798,7 @@ function main() returns ExitCode
 		return Outcome.troubled
 	end 'badPattern'
 
-	var summary = RunSummary.create()
+	let summary = RunSummary.create()
 
 	if options.paths.isEmpty() 'standardInput'
 		searchStandardInput(searcher, style: style, summary: summary)

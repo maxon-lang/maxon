@@ -75,7 +75,7 @@ end 'stagedProjectDiagnosticsRoot'
 // Open `content` at `root`/`fileName` in a session rooted at `root`, and hand back the one publish that
 // arrives. The buffer text is what the server is told the document holds, whatever the file on disk says.
 export function probeProjectDiagnostics(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
-	var client = LspClient.start()
+	let client = LspClient.start()
 	let probe = collectProjectDiagnostics(client, session: CorpusSessionRoot.clientRootUri(fileUriOf(root)), uri: fileUriOf(root.join(fileName)), content: content)
 	client.release()
 
@@ -83,7 +83,7 @@ export function probeProjectDiagnostics(root FilePath, fileName String, content 
 end 'probeProjectDiagnostics'
 
 export function probeProjectDiagnosticsUnrooted(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
-	var client = LspClient.start()
+	let client = LspClient.start()
 	let probe = collectProjectDiagnostics(client, session: CorpusSessionRoot.unrooted, uri: fileUriOf(root.join(fileName)), content: content)
 	client.release()
 
@@ -91,7 +91,7 @@ export function probeProjectDiagnosticsUnrooted(root FilePath, fileName String, 
 end 'probeProjectDiagnosticsUnrooted'
 
 export function probeProjectDiagnosticsThroughEditorUris(root FilePath, fileName String, content String) returns ProjectDiagnosticsProbe
-	var client = LspClient.start()
+	let client = LspClient.start()
 	let probe = collectProjectDiagnostics(client, session: CorpusSessionRoot.clientRootUri(editorUriOf(root)), uri: editorUriOf(root.join(fileName)), content: content)
 	client.release()
 
@@ -140,7 +140,7 @@ export let ProjectDiagnosticsAfterTheEdit = 1 as ProjectPublishIndex
 let ProjectDiagnosticsEditedVersion = 2
 
 export function probeProjectDiagnosticsAcrossAnEdit(root FilePath, fileName String, content String, editedContent String) returns ProjectDiagnosticsProbeArray
-	var client = LspClient.start()
+	let client = LspClient.start()
 	let probes = collectProjectDiagnosticsAcrossAnEdit(client, root: root, uri: fileUriOf(root.join(fileName)), content: content, editedContent: editedContent)
 	client.release()
 
@@ -156,7 +156,7 @@ function collectProjectDiagnosticsAcrossAnEdit(client LspClient, root FilePath, 
 end 'collectProjectDiagnosticsAcrossAnEdit'
 
 function diagnosticsAcrossAnEdit(client LspClient, root FilePath, uri String, content String, editedContent String) returns ProjectDiagnosticsProbeArray throws LspClientError
-	var probes = ProjectDiagnosticsProbeArray.create(0)
+	let probes = ProjectDiagnosticsProbeArray.create(0)
 
 	_ = try client.initializeAtRoot(root)
 	try client.initialized()
@@ -175,7 +175,7 @@ function diagnosticsAcrossAnEdit(client LspClient, root FilePath, uri String, co
 end 'diagnosticsAcrossAnEdit'
 
 function brokenProjectDiagnosticsPair(detail String) returns ProjectDiagnosticsProbeArray
-	var probes = ProjectDiagnosticsProbeArray.create(0)
+	let probes = ProjectDiagnosticsProbeArray.create(0)
 	probes.push(ProjectDiagnosticsProbe.broke(detail.clone()))
 	probes.push(ProjectDiagnosticsProbe.broke(detail))
 
@@ -183,7 +183,7 @@ function brokenProjectDiagnosticsPair(detail String) returns ProjectDiagnosticsP
 end 'brokenProjectDiagnosticsPair'
 
 export function probeProjectCheckAcrossAnEdit(root FilePath, fileName String, content String, diskEdits CorpusDiskEditArray, editedContent String) returns ProjectDiagnosticsProbeArray
-	var client = LspClient.start()
+	let client = LspClient.start()
 	let probes = collectProjectCheckAcrossAnEdit(client, root: root, uri: fileUriOf(root.join(fileName)), content: content, diskEdits: diskEdits, editedContent: editedContent)
 	client.release()
 
@@ -199,7 +199,7 @@ function collectProjectCheckAcrossAnEdit(client LspClient, root FilePath, uri St
 end 'collectProjectCheckAcrossAnEdit'
 
 function projectCheckAcrossAnEdit(client LspClient, root FilePath, uri String, content String, diskEdits CorpusDiskEditArray, editedContent String) returns ProjectDiagnosticsProbeArray throws LspClientError
-	var probes = ProjectDiagnosticsProbeArray.create(0)
+	let probes = ProjectDiagnosticsProbeArray.create(0)
 
 	_ = try client.initializeAtRoot(root)
 	try client.initialized()
@@ -274,7 +274,7 @@ export function probeProjectCheckSession(root FilePath, fileName String, content
 end 'probeProjectCheckSession'
 
 export function probeProjectCheckSessionRooted(rooting CorpusSessionRoot, root FilePath, fileName String, content String, edits StringArray) returns ProjectCheckSession
-	var client = LspClient.start()
+	let client = LspClient.start()
 	let session = collectProjectCheckSession(client, rooting: rooting, uri: fileUriOf(root.join(fileName)), content: content, edits: edits)
 	client.release()
 
@@ -316,7 +316,7 @@ export let ProjectCheckAbandoned = "abandoned"
 export let ProjectCheckUnloadable = "unloadable"
 
 export function expectOneProjectCheckOutcome(reports ProjectCheckReportArray, version DocumentVersion, outcome String, note String) throws TestFailure
-	var outcomes = StringArray.create(0)
+	let outcomes = StringArray.create(0)
 
 	for report in reports 'eachReport'
 		if report.version == "{version}" 'thisVersion'

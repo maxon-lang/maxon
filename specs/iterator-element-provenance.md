@@ -42,7 +42,7 @@ end 'Counter'
 typealias Plain = Array with Counter
 
 function main() returns ExitCode
-	var items = Plain.create(0)
+	let items = Plain.create(0)
 	items.push(Counter.create(4))
 	let frozen = items
 
@@ -75,7 +75,7 @@ end 'Counter'
 typealias Plain = Array with Counter
 
 function build() returns Plain
-	var items = Plain.create(0)
+	let items = Plain.create(0)
 	items.push(Counter.create(4))
 	return items
 end 'build'
@@ -126,7 +126,7 @@ function bumpAll(bag Bag)
 end 'bumpAll'
 
 function main() returns ExitCode
-	var items = Plain.create(0)
+	let items = Plain.create(0)
 	items.push(Counter.create(4))
 	let bag = Bag.create(items)
 	bumpAll(bag)
@@ -155,12 +155,12 @@ end 'Counter'
 typealias Plain = Array with Counter
 
 function main() returns ExitCode
-	var items = Plain.create(0)
+	let items = Plain.create(0)
 	items.push(Counter.create(4))
 	let frozen = items
 
-	var it = try frozen.createIterator() otherwise return 2
-	var c = it.current()
+	let it = try frozen.createIterator() otherwise return 2
+	let c = it.current()
 	c.n = 99
 
 	let first = try frozen.get(0) otherwise return 1
@@ -192,11 +192,11 @@ function bump(c Counter)
 end 'bump'
 
 function main() returns ExitCode
-	var items = Plain.create(0)
+	let items = Plain.create(0)
 	items.push(Counter.create(4))
 	let frozen = items
 
-	var it = try frozen.createIterator() otherwise return 2
+	let it = try frozen.createIterator() otherwise return 2
 	bump(it.current())
 
 	let first = try frozen.get(0) otherwise return 1
@@ -224,11 +224,11 @@ end 'Counter'
 typealias Plain = Array with Counter
 
 function main() returns ExitCode
-	var items = Plain.create(0)
+	let items = Plain.create(0)
 	items.push(Counter.create(4))
 	let frozen = items
 
-	var c = try frozen.get(0) otherwise return 2
+	let c = try frozen.get(0) otherwise return 2
 	c.n = 99
 
 	let first = try frozen.get(0) otherwise return 1
@@ -257,7 +257,7 @@ end 'Counter'
 typealias Plain = Array with Counter
 
 function main() returns ExitCode
-	var items = Plain.create(0)
+	let items = Plain.create(0)
 	items.push(Counter.create(4))
 	items.push(Counter.create(5))
 
@@ -265,15 +265,15 @@ function main() returns ExitCode
 		c.n = c.n + 10
 	end 'each'
 
-	var it = try items.createIterator() otherwise return 2
-	var c = it.current()
+	let it = try items.createIterator() otherwise return 2
+	let c = it.current()
 	c.n = c.n + 100
 	try it.advance() otherwise return 3
-	var d = it.current()
+	let d = it.current()
 	d.n = d.n + 1000
 
-	view first = try items.get(0) otherwise return 1
-	view second = try items.get(1) otherwise return 1
+	let first = try items.get(0) otherwise return 1
+	let second = try items.get(1) otherwise return 1
 	return (first.n + second.n - 1000 - 100) as ExitCode
 end 'main'
 ```
@@ -303,7 +303,7 @@ function read(c Counter) returns Integer
 end 'read'
 
 function main() returns ExitCode
-	var items = Plain.create(0)
+	let items = Plain.create(0)
 	items.push(Counter.create(4))
 	items.push(Counter.create(5))
 	let frozen = items
@@ -314,7 +314,7 @@ function main() returns ExitCode
 		total = total + read(c)
 	end 'each'
 
-	var it = try frozen.createIterator() otherwise return 2
+	let it = try frozen.createIterator() otherwise return 2
 	let head = it.current()
 	total = total + head.n
 	try it.advance() otherwise return 3

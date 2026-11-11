@@ -120,7 +120,7 @@ export typealias RdataRelocationArray = Array with RdataRelocation
 // calls are resolved — recovered from the symbols that DO survive onto the CodeResult, and it is what a
 // managed-opaque descriptor's `funcAbs64InRdata` relocation resolves its element destructor's address through.
 export function buildDebugSymbolIndex(debugSymbols DebugSymbolArray) returns DebugSymbolIndexMap
-	var index = DebugSymbolIndexMap.create()
+	let index = DebugSymbolIndexMap.create()
 
 	for sym in debugSymbols 'each'
 		index.upsert(sym.name, value: sym.codeOffset)
@@ -275,10 +275,10 @@ export typealias JumpTablePendingArray = Array with JumpTablePending
 // crux note asked to expose to concat: the chunk's own `BlockOffsetTable`, read per slot. Shared by the x64 and
 // arm64 chunk emitters.
 export function resolveJumpTableRelocs(jumpTables JumpTablePendingArray, blockOffsets BlockOffsetTable) returns JumpTableRelocArray
-	var out = JumpTableRelocArray.create(jumpTables.count(), zeroed: false)
+	let out = JumpTableRelocArray.create(jumpTables.count(), zeroed: false)
 
 	for pending in jumpTables 'eachTable'
-		var targetOffsets = CodeOffsetArray.create(pending.caseTargets.count(), zeroed: false)
+		let targetOffsets = CodeOffsetArray.create(pending.caseTargets.count(), zeroed: false)
 
 		for target in pending.caseTargets 'eachSlot'
 			targetOffsets.push(try blockOffsets.get(target) otherwise panic("resolveJumpTableRelocs: jump-table slot targets block {target}, which was never laid out in this chunk — every case target is a block in this function"))
@@ -293,7 +293,7 @@ end 'resolveJumpTableRelocs'
 // One jump-table reloc with its per-slot target offsets shifted from chunk-local to whole-`.text` by the
 // chunk's start. Shared by the x64 and arm64 concat passes (the reloc format is target-neutral).
 export function rebaseJumpTableReloc(reloc JumpTableReloc, funcStart CodeOffset) returns JumpTableReloc
-	var rebased = CodeOffsetArray.create(reloc.targetTextOffsets.count(), zeroed: false)
+	let rebased = CodeOffsetArray.create(reloc.targetTextOffsets.count(), zeroed: false)
 
 	for off in reloc.targetTextOffsets 'each'
 		rebased.push(funcStart + off)
@@ -465,7 +465,7 @@ export type DebugRunOffsets
 	var armed as bool
 
 	export static function forFunction(func IrFunction, armed bool) returns DebugRunOffsets
-		var window = DebugAnchorWindow.empty()
+		let window = DebugAnchorWindow.empty()
 
 		// Both ends of every run, because an op index is not monotonic in layout order — `compactOps`
 		// hands out dense slots in old-index order — so a run's `last` may sit numerically below its
@@ -504,7 +504,7 @@ export type DebugRunOffsets
 	end 'note'
 
 	export function resolve(func IrFunction, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable) returns DebugLocalCodeRangeArray
-		var ranges = DebugLocalCodeRangeArray.create(0)
+		let ranges = DebugLocalCodeRangeArray.create(0)
 
 		if not self.armed 'nothingToResolve'
 			return ranges
@@ -529,8 +529,8 @@ export type DebugRunOffsets
 
 	function resolveSpans(func IrFunction, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable, into DebugLocalCodeRangeArray)
 		let rows = func.debugLocalSpans
-		var viewOfSpan = CsrColumn.create(rows.spans.count(), zeroed: false)
-		var spanIndices = CsrColumn.create(rows.spans.count(), zeroed: false)
+		let viewOfSpan = CsrColumn.create(rows.spans.count(), zeroed: false)
+		let spanIndices = CsrColumn.create(rows.spans.count(), zeroed: false)
 
 		for (iter, span) in rows.spans.withIterator() 'eachSpan'
 			viewOfSpan.push(span.view as CsrIndex)
@@ -556,7 +556,7 @@ export type DebugRunOffsets
 	function spanResolver(rows DebugSpanRows, view ElementIndex, blockStarts BlockOffsetTable, blockEnds BlockOffsetTable) returns DebugSpanResolver
 		let viewFirst = rows.viewFirst(view)
 		let viewPast = rows.viewPast(view)
-		var resolver = DebugSpanResolver.create(viewPast - viewFirst)
+		let resolver = DebugSpanResolver.create(viewPast - viewFirst)
 
 		for at in viewFirst upto viewPast 'eachBlockOfTheView'
 			let blockId = try rows.blocks.get(at) otherwise panic("DebugRunOffsets.spanResolver: blocks.get OOB at {at}")

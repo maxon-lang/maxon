@@ -30,17 +30,17 @@ typealias IntList = List with Integer
 typealias IntListList = List with IntList
 
 function main() returns ExitCode
-	var inner1 = IntList.create()
+	let inner1 = IntList.create()
 	inner1.append(1)
 	inner1.append(2)
-	var inner2 = IntList.create()
+	let inner2 = IntList.create()
 	inner2.append(3)
 	inner2.append(4)
-	var outer = IntListList.create()
+	let outer = IntListList.create()
 	outer.append(inner1)
 	outer.append(inner2)
 	print("{outer.count()}\n")
-	view first = try outer.first() otherwise IntList.create()
+	let first = try outer.first() otherwise IntList.create()
 	print("{first.count()}\n")
 	let val = try first.get(0) otherwise 0
 	print("{val}\n")
@@ -64,14 +64,14 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list1 = IntList.create()
+	let list1 = IntList.create()
 	list1.append(10)
 	list1.append(20)
-	var list2 = IntList.create()
+	let list2 = IntList.create()
 	list2.append(30)
-	var arr = [list1, list2]
+	let arr = [list1, list2]
 	print("{arr.count()}\n")
-	view first = try arr.get(0) otherwise IntList.create()
+	let first = try arr.get(0) otherwise IntList.create()
 	print("{first.count()}\n")
 	let val = try first.get(0) otherwise 0
 	print("{val}\n")

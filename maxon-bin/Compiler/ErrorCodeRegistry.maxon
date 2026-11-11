@@ -114,6 +114,13 @@ export enum ErrorCode
 	// refused the same way, and the fix is to copy the union into a local `var`. An assignment to a
 	// method, a requirement or a static the compiler provides (`Ops.twice = f`) is refused here too: a
 	// method is not a binding, and only a binding is assigned.
+	// A `mutable` parameter is by reference: the callee overwrites the caller's own variable, so the
+	// argument must be a place the caller can write, a local `var` or a field or element of one. Refused
+	// here: a literal or an expression (``cannot pass a literal to a function that writes argument 1``), a
+	// parameter that is not marked `mutable`, a module-level `let`, a field of a `let` that is another name
+	// for a record held elsewhere, and a name a closure captured, since the closure holds its own copy and
+	// the write could not reach the original. Bind the value to a local `var` and pass that, or pass a
+	// `clone()`.
 	assignToImmutable = "E2013"
 
 	// One parameter list declares the same name twice. The second parameter would be dead and uncallable.
@@ -460,18 +467,6 @@ export enum ErrorCode
 	// building the outer project, or building the inner one -- and the editor reports it on the
 	// inner `.maxproj`. Move the inner project out of the outer project's directory.
 	nestedProjectFile = "E2074"
-
-	// `readonly` qualifies a type argument it cannot qualify. It marks the element type of an `Array` or a
-	// `List` (`Array with readonly Name`) and the value type of a `Map` (`Map with Key, readonly Value`), whose
-	// stored values are then read-only. A `Map` key and a `Set` element are read-only once stored and take no
-	// qualifier; any other generic type's arguments, and a type outside a `with` list, take none either. Remove
-	// the qualifier, or use `let` for a binding or a field.
-	readonlyQualifierMisplaced = "E2075"
-
-	// `view` declares something other than a local binding: a field, a module-level binding, an extension
-	// member, or an `@heap` binding. A `view` is a read-only name over data something else owns, valid only
-	// inside the function that binds it. Use `let` or `var`.
-	viewMisplaced = "E2077"
 
 	// A method is named without its call where a value is wanted: `apply(Ops.twice, x: 21)`. `Type.method`
 	// names a method -- a static one, an instance one read through its type, a static the compiler provides
@@ -954,37 +949,19 @@ export enum ErrorCode
 	// the declaring function's `end` (`Parser.reportVarShouldBeLet`) off the candidate list E3012
 	// walks, reading the per-function name set (`mutabilityExercisedNames`) the mutable doors record
 	// into, and REPORTED after every check ahead of code generation, only when none of them raised a
-	// diagnostic; it takes precedence over a code-generation error (E5001, E4015). A MOVE-OUT counts
-	// as a use of mutability: the keyword decides move-vs-alias, so advising `let` would silently turn
-	// a move into an alias. A `let` writes through to the record it names, so the initializer does not
-	// matter: a `var` bound from a fresh record, a read-only value or state something else may write
-	// (`var node = holder.box`) is reported alike, whenever the function neither reassigns it, writes
-	// through it, passes it to a parameter the callee writes nor moves it out. In library source
-	// (`stdlib/`, a `scriptlib/` package) it is reported only in a function the program reaches,
-	// because only there is that `let` judged.
+	// diagnostic; it takes precedence over a code-generation error (E5001, E4015). A `let` writes
+	// through to the record it names, so the keyword says nothing about the data behind the name: a
+	// `var` is kept only by what reassigns the name itself, which is an assignment, passing it to a
+	// `mutable` parameter, and calling a `mutable self` method on a value of a value type
+	// (`text.append("!")` over a `String`). A field store, a `push`, a call whose callee writes the
+	// parameter and a move out of the name leave the `var` unreassigned, so each is reported, whatever
+	// the initializer: a fresh record, a read-only value or state something else may write
+	// (`var node = holder.box`). A `var` bound to an array, map or tuple literal that is written
+	// through is reported with the fix `let x = [..].clone()`, because a plain `let` of a literal is
+	// constant data and refuses the write (E3207). In library source (`stdlib/`, a `scriptlib/`
+	// package) it is reported only in a function the program reaches, because only there is that
+	// `let` judged.
 	semanticVarShouldBeLet = "E3077"
-
-	// A read-only value would reach a place something may write. A `let` names a record that stays writable
-	// through it. Read-only are a module-level `let` built by a call, a value read from a
-	// `SharedValue` or a registry `default`, a stored `Map` key or `Set` element, an element of a `readonly`
-	// element type, and a `for`, `if let` or `match` binding over a read-only source, each through everything
-	// it reaches. Refused: binding such a value, a field of it or a call result that may share its storage to
-	// a `var`; storing it into a `var` field, a mutable container element or module storage, putting it in an
-	// array literal, or passing it to a parameter the callee keeps where something may write it, one an
-	// escaping closure captures included. When a callee both keeps and writes a read-only argument, the keep
-	// is reported here rather than the write (E3159). A closure, or a container or record holding one, keeps
-	// what it captures whether it reads or writes it.
-	// A `readonly` element has no other writer, so what is stored into one, directly or through a parameter
-	// the callee stores there, must be read-only, a value type, or moved in (a sole-owned value, or a `var`
-	// at its last use). A sole-owned tuple or record is moved in only when no record it holds is one a `var`
-	// of the function may still write. A generic body that keeps a value of its type parameter is judged at
-	// each instantiation.
-	// A parameter that keeps a `unique` value takes the caller's mutable data by move, so a `let` handed to it
-	// is refused; the moved `var` read again afterwards is E3102.
-	// Bind, store or pass a `clone()`. Scalars, `String`, `Character`, function values and records that are
-	// immutable aggregates (every field a `let` of a value type or of an immutable aggregate) are value types
-	// and are allowed. Constant and `immutable` data is refused by the capability checks instead (E3196, E3207).
-	semanticVarFromImmutable = "E3078"
 
 	// A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
 	semanticMatchDiscardedBindings = "E3081"
@@ -1163,8 +1140,10 @@ export enum ErrorCode
 	// single-owner model an owned value (an owned String, a struct box) has exactly one owner; a
 	// `let u = t` / `s = t` whose RHS is a bare `var` TRANSFERS ownership to the destination;
 	// the source is left moved-from. A `let` or `var` the sender owns, handed to a service message or to a
-	// `spawn`, moves the same way, a binding a closure captures moves into the closure, a `var` handed to a
-	// parameter that keeps a `unique` value moves into the callee, and one binding
+	// `spawn`, moves the same way, a binding a closure captures moves into the closure, a `let` or `var`
+	// handed to a parameter that keeps a `unique` value moves into the callee, a `unique` OS handle
+	// (`TcpClient`, `TlsStream`, `StreamingSubprocess`, …) moves when it is bound by `let`, pushed into a
+	// container or handed to a `spawn`, and one binding
 	// handed twice to one message is moved by the first. A later read of the source is refused -- it would read
 	// a value another owner now holds and will drop, and dropping it twice is a double-free. A value moved
 	// inside a loop is refused at its read on the next trip. A WRITE to a moved-from `var` is legal (it
@@ -1739,25 +1718,6 @@ export enum ErrorCode
 	// The cure is to name a static factory of the type you mean to start.
 	semanticServiceNotASpawnTarget = "E3134"
 
-	// A message of a service declares a parameter or a reply, or a `spawn` passes its factory an argument,
-	// whose value cannot cross to another green thread.
-	// A send moves an argument, and the receiving green thread must reach, count and
-	// release what it is handed through the request union's payload cascade. Three shapes cannot be reached that
-	// way. A `Promise` is a green-thread handle its awaiter owns, and so is any type that can hold one: a
-	// record with a promise in a field, a union with a case carrying one, an array or list of them. A coroutine
-	// belongs to the strand that started it, so a promise that crossed would be dropped, awaited or cancelled
-	// by a strand that does not own it. The type decides, so an empty array of promises is refused as well.
-	// A function value is a closure record
-	// that owns what it captures, and it does not cross to another thread. An
-	// opaque type parameter has no layout at the send, so the sender cannot know what it is handing over.
-	// A value held at an interface type does cross: the request carries its witness half beside it.
-	// The diagnostic fires at the `spawn` that made the type a service, which may be in a different file
-	// from the method it names: whether a type is a service is a whole-program property, and the site that
-	// decided it is the one worth naming. A factory argument is reported at the argument.
-	// The cure is to send a `.clone()`, to send the scalar the value is derived from, to `await` the promise
-	// and send or return the result, or to drop the parameter from the message and reach the value another way.
-	semanticServiceValueNotTransferable = "E3135"
-
 	// A member was called on a service or interface HANDLE that is not one of its messages.
 	// A handle's surface is exactly its service type's `export` INSTANCE methods, one variant of the
 	// synthesized request union each. That is the isolation boundary, and it is also what makes self-send
@@ -1777,89 +1737,6 @@ export enum ErrorCode
 	// It is neither E3018 (a missing FIELD) nor E3004 (an undefined FUNCTION): the member usually exists, on
 	// the type, and saying otherwise would read as a typo.
 	semanticServiceNotAMessage = "E3136"
-
-	// An `export` method of a SERVICE returns a value the service's own state can still reach, so the caller
-	// would end up holding a second reference to it -- on another green thread.
-	// A service's state is run by one green thread at a time, and the language guarantees one green thread per box: that
-	// is what makes a reference-count step a plain load/add/store rather than an atomic one. A reply that
-	// aliased service state would put one box in two green threads' hands, which corrupts the heap rather
-	// than merely being slow -- the same rule a message ARGUMENT obeys by MOVING, read from the other end.
-	// What is refused is a return this frame does not solely own: a field read yields a BORROW, and so does
-	// `self`. An ordinary function promotes such a return by taking a reference (`__mm_retain`), and that
-	// promotion is exactly what would make the second namer. What passes is a value this frame MINTED -- a
-	// fresh record, an interpolation, a `.clone()` -- or a call result the compiler can prove fresh; and a
-	// scalar, which owns nothing at all.
-	// The cure is `.clone()`, and here the clone is RIGHT rather than a workaround: the caller genuinely
-	// asked for a copy, and a copy is the only thing that can cross.
-	// The rule has two doors, because a generic service's body cannot answer it. At a concrete return type
-	// the diagnostic names the RETURN and carries the `spawn` that made the type a service as a note --
-	// whether a type is a service is a whole-program property, and the `spawn` deciding it may be in a
-	// different file from the method the rule fires on. A message declared `returns T` is DEFERRED there:
-	// one body serves every instantiation, so nothing in it can tell whether `T` is managed. It is judged
-	// instead at the `spawn` that fixes `T`, over the substituted type, and refused whenever that type is
-	// managed and the handler is not proven to mint what it hands back. A scalar `T` crosses. That door
-	// anchors the diagnostic at the `spawn` itself and so carries no note, and its sentence names the
-	// substituted type, which is what points at the instantiation refused.
-	semanticServiceReplyAliasesState = "E3137"
-
-	// A value handed to another green thread cannot be proven to have exactly one owner, so it may not
-	// cross. It is asked of a message argument, of a `spawn`'s state, and of a service handler's reply.
-	// A value this frame owns -- a `let` or `var` binding, a temporary or a literal alike -- MOVES and makes the
-	// service its one owner, and the sending frame gives up the reference it held; a later read of the binding
-	// is E3102. A box one green thread holds steps its count with a plain load/add/store, so a value this frame
-	// still shares with something else would put one box in two green threads' hands without saying so, which
-	// corrupts the heap.
-	// A read-only value the sender does not own -- a module-level `let`, a `let` field, a `SharedValue` or
-	// registry read, or a parameter the sending function never writes -- is SHARED instead: its graph is marked shared, so every count on it
-	// steps atomically, and nothing on either side may write it. Refused on that road: a parameter the
-	// sending function writes, and any shared value whose receiving handler writes or keeps its parameter.
-	// A borrowed `String` is copied at the send. So is a tuple none of whose elements owns heap,
-	// wherever this frame is not its one owner: it is a value, so the copy crosses and the sender
-	// keeps its own.
-	// Three shapes fail the move, and E3135 is the neighbouring rule about the argument's TYPE rather than its
-	// ownership. The first is an OWNED value this frame has already taken a second reference to -- a value
-	// pushed into a container, handed to another consuming call, or the source of a `for` loop the send sits in.
-	// The second is a BORROWED value this frame does not own at all that is not read-only -- a struct read out
-	// of a `var` field or an element of a container.
-	// The cure for those two is `.clone()`, which is explicit precisely because it is O(n) and the language
-	// makes costs visible; or restructuring so the value is freshly built at the send.
-	// A `view` is refused at a send, since it names data something else may write, and so is a record
-	// something may write that the value of a `view` declared earlier in the function may reach: the view's
-	// reference is a second owner for the rest of the function, whatever its initializer was. Reassigning the
-	// `var` a fresh record makes it sendable again. A record whose fields are all `let` is written by nothing,
-	// so it is shared instead and the view stays valid.
-	// Every argument of a `spawn`'s factory moves into the service on the same terms, so
-	// a borrowed one is refused, naming the argument and the `spawn` -- a generic factory's
-	// argument at a type parameter included. An owned one this frame also shares is caught by the
-	// run-time walk described below (exit 96). A field read off a temporary
-	// built in the factory call's own argument list crosses, because the `spawn` releases that
-	// temporary.
-	// An element a member hands back out of a field's container (`return self.queue.pop()`) has left the
-	// container but may still have another owner, so it is refused like a value read out of a field.
-	// The THIRD is about what the record HOLDS rather than about the record: SOLENESS IS NOT TRANSITIVE.
-	// A box this frame owns alone may point at a record a second owner holds too, because every co-owning
-	// store (a struct-field or union-payload move-in of a borrow, a consuming call, a container push) takes
-	// a reference where a move would give one up -- and handing the record over leaves that second owner
-	// behind on this green thread, stepping a count the service steps too. No compile-time tier can settle
-	// it: the retain can happen inside a callee the site cannot see, and `push(cell)` and
-	// `push(Cell.create())` build the same TYPE. So the graph is walked where the counts are -- at run time,
-	// immediately before the hand-off, by a synthesized per-type walk. The graph may reach one record several times when each of those references is
-	// one of its owners; a reachable record with an owner OUTSIDE the graph ABORTS the process (exit 96) on
-	// the sending green thread, before anything is enqueued. An immortal `.rdata` literal passes with no count
-	// to check; a shared copy-on-write BUFFER is detached, exactly as a write to it would detach it.
-	// A socket (`TcpClient`, `TcpListener`, `TlsStream`) walks like any record: its box counts its owners, so one
-	// the sender holds alone moves and one with another owner aborts (exit 96). It is never shared, so a share
-	// walk over one is refused (E3163, E3171).
-	// What this arm still REFUSES is the shape no walk can be built for, never a shape that might be
-	// shared: an opaque type parameter (the site cannot see its slots), a record no declaration in scope
-	// describes, and any graph reaching a type with no per-type cascade -- an OS handle other than a socket
-	// (a file, a directory, a machine pin), or a base-struct-less generic instance. Containers, records with
-	// managed fields, unions with managed payloads and values held at an interface type all cross. A value sent at its own type and widened at the send is refused here like
-	// any record; one already held at an interface type is walked through the conformer its witness names at
-	// run time, so a conformer no walk can be built for aborts the same way (exit 96) instead.
-	// A service reply whose type an instantiation still fixes is asked at the `spawn`, over the substituted
-	// type, rather than at the `return` -- so the diagnostic fires at the `spawn`.
-	semanticServiceArgumentNotUnique = "E3138"
 
 	// Two or more services can await replies from each other, so a message of each could be blocked waiting
 	// on the other. Mutual reentrancy is made UNREPRESENTABLE rather than diagnosed at run time.
@@ -2103,31 +1980,6 @@ export enum ErrorCode
 	// that survived and the rule that refused.
 	alwaysSplicedBodyIsStillCalled = "E3158"
 
-	// A write went through a read-only value. A write through a `let` binding, field or payload reaches
-	// the record it names. Read-only are a module-level `let` built by a call, a value read
-	// from a `SharedValue` or a registry `default`, a stored `Map` key or `Set` element, an element of a
-	// `readonly` element type, and a `for`, `if let` or `match` binding over a read-only source, each through
-	// everything it reaches. Constant and `immutable` data is E3207. Refused: a field store through one, a
-	// method that writes its receiver called on one, handing one to a parameter the callee writes (a call through
-	// a function value included), consuming a promise held in a `let` field, and a write through a record a call
-	// handed back out of one. Releasing a resource -- closing a handle, writing its raw memory -- writes its
-	// receiver too. Inside a closure, a captured name is the closure's own copy, so handing it to a parameter
-	// the callee writes is refused for the same reason. A closure that does not escape -- it is only called,
-	// where it is made or by a parameter that only calls it -- writes what it writes of a parameter it captures,
-	// so handing its function a read-only value there is refused; a closure that escapes keeps what it captures
-	// instead (E3078). The diagnostic names the read-only root. Use `var`, or write a `clone()`.
-	// A `for` loop variable or an `if let` binding over a writable source is writable through and is
-	// reassigned by nothing, so handing it to a parameter the callee reassigns is refused; the
-	// diagnostic calls a `for` one a loop variable. A call through a function value or an interface
-	// reports every argument a body it may land on writes, once for each writing body, and a dispatch
-	// names the conformer (`'Doubler.bump' writes its parameter 'n', but 'bump' passes it the
-	// immutable 'x'`). A function handed to a callback parameter is refused where it is handed in when
-	// it writes a read-only value the callee passes it (`'isBig' writes its parameter 'n', but
-	// 'Array.filter' passes it the immutable 'item'`). A promise an array or a record still owns, read out of
-	// it and handed to a parameter the callee reassigns, is refused the same way: the reassignment would drop
-	// a thread the container still names.
-	semanticWriteThroughImmutableRecord = "E3159"
-
 	// A handler over a combined error -- a block-form `try` whose calls throw several error types, at least one
 	// of them a union with payloads -- does not match its `(e)` exactly once on every path. Such an error may
 	// arrive as a heap box, and the box is released by the arm of the `match e` that runs, because only an arm
@@ -2157,24 +2009,6 @@ export enum ErrorCode
 	// and is refused, outside the generic's own body. Name the instance with a typealias:
 	// `typealias Inner = Box with T`.
 	bareGenericSubjectUnbound = "E3162"
-
-	// A message or the factory of a service may read a module-level `let` whose value no share walk
-	// can mark. In a program that spawns a service, every `let` record is marked shared before `main`
-	// runs, so the counts green threads on different OS threads step on it are atomic -- which needs a
-	// walk over its graph, and none can be built for an OS handle, a value held at an interface type,
-	// or a generic instance with no base layout. A `let` no message or factory can reach stays legal
-	// and unmarked, since only `main` counts it. Reached through the call graph a message runs,
-	// dispatches included, and reported at the read with the message or factory that reaches it; the
-	// note is the declaration. Keep the value in a field of the service that reads it.
-	semanticUnmarkableLetReadByAMessage = "E3163"
-
-	// A `spawn` runs while the module-level globals are still being initialized. A global initializer runs
-	// before `main`, and the `let`s every message may read are marked shared only once the last initializer
-	// has returned, so a service started earlier could step a plain count concurrently with the mark -- or read
-	// a global not yet built. Found by closing the call graph from the initializers, dispatches included, and
-	// reported at the `spawn`; the note is the initializer that reaches it. Start the service in `main`, or in
-	// a function `main` calls.
-	semanticSpawnDuringGlobalInitialization = "E3164"
 
 	// A declaration exposes a type less visible than the declaration. Whoever may reach a declaration must
 	// be able to name every type it exposes, so each type an exported surface names must carry a written
@@ -2239,7 +2073,7 @@ export enum ErrorCode
 	// and the walk must be able to mark everything the graph reaches: a function value (a closure record
 	// owns what it captures), a promise (one owner reclaims its green thread), an OS handle and a generic
 	// instance with no base layout cannot be marked. Fields may be `var` and may hold containers: every
-	// reader sees the value read-only (E3159, E3078). Reported at the key or the `SharedValue` type, naming
+	// reader sees the value read-only (E3197, E3207). Reported at the key or the `SharedValue` type, naming
 	// what the walk cannot mark. Hold that part in a service instead.
 	registryValueNotShareable = "E3171"
 
@@ -2256,9 +2090,8 @@ export enum ErrorCode
 	registryReachedFromGlobalInitializer = "E3173"
 
 	// A value handed to `Key.register` or `SharedValue.publish` has another owner: a second live name
-	// binds it, it is held somewhere the caller does not own outright, or the value of a `view` declared
-	// earlier in the function may reach it (a record whose fields are all `let` is shared and published as
-	// it is, and the view stays valid). A published value is read by
+	// binds it, or it is held somewhere the caller does not own outright (a record whose fields are all
+	// `let` is shared and published as it is). A published value is read by
 	// every thread at once and freed only when no reader can hold it, so no one may write or free it
 	// behind the registry. Reported at the argument. Publish a `.clone()`. A tuple none of whose
 	// elements owns heap is copied and the copy published.
@@ -2340,7 +2173,7 @@ export enum ErrorCode
 	// call, a closure literal that captures it, or the cell of another `mutable` parameter the callee writes. A hold cannot protect a value its cell overwrites, so the statement is refused.
 	// The refusal is per root binding: it counts reads of the local the cell is rooted in and of that local's
 	// field paths (`bump(h.n, h: h.copy())`), the fields of `self` sharing the one root `self`, and a module
-	// being one root. Another name for the same record, a `view` or a `var` that took the
+	// being one root. Another name for the same record, a `let` alias or a `var` that took the
 	// record by move, is not that local. A read that runs after the write sees the new value and is accepted.
 	// A call receiver that is itself a by-reference writer is judged after its arguments, and is refused
 	// when an argument reads the root it writes.
@@ -2361,11 +2194,6 @@ export enum ErrorCode
 	// comparison so it only reads both sides.
 	comparisonMethodWritesItsParameter = "E3187"
 
-	// Not reported for a `let` binding. A `let` is a name that is never reassigned, so it may bind state
-	// something else writes (`let node = holder.box`), and a write through either name reaches the same
-	// record.
-	semanticLetBindsWritableState = "E3188"
-
 	// A message that returns a value or throws is sent as a bare statement. Its send delivers a reply, and a
 	// statement keeps nothing, so the value and any error the handler throws would be lost. Reported even
 	// when the send's own error is handled (`try h.m(x) otherwise ignore`): the reply is the fault. Await
@@ -2373,13 +2201,6 @@ export enum ErrorCode
 	// `_ = try h.m(x)`. A message that returns nothing and throws nothing has no reply and may be sent as
 	// a statement.
 	semanticServiceReplyDropped = "E3190"
-
-	// A function throws a service send's error, `<Service>.<message>.sendError`, from a value it does not
-	// own alone -- a parameter, say, which its caller still holds. Whoever catches a send error takes the
-	// arguments out of its `mailboxFull` or `serviceStopped` case as their only owner, so the error must
-	// have no other holder. Propagate the failed send's error with a bare `try`, or `throw` the binding of
-	// the `otherwise (e)` that caught it, which hands the error over.
-	semanticServiceSendErrorNotSolelyOwned = "E3191"
 
 	// `sendTimeout:` is reserved on every message call: it is how many milliseconds the send waits for room
 	// in a full mailbox before it fails `mailboxFull`, and it stays with the send. Reported at a `spawn`
@@ -2418,16 +2239,20 @@ export enum ErrorCode
 	// read-only value into a mutable slot (store a copy). Constant data (a constant `let`, a `b"..."`
 	// literal) and a read of an `immutable` slot are immutable, so storing one into a plain field, element
 	// or payload says which declaration to change (``declare the field `immutable ByteArray` ``, or the
-	// `element`, or the `payload`). Reported at the stored value.
+	// `element`, or the `payload`). A field default that names constant or `immutable` data (`var names =
+	// sharedNames` over a module `let`) stores it into a mutable field and is refused the same way: build
+	// the value fresh in the default, or declare the field `immutable`. Reported at the stored value.
 	semanticCapabilityMismatchAtStore = "E3196"
 
 	// A write goes through data that is `immutable` or read-only: a field or element assigned through a
 	// frozen value, through the result of joining immutable and mutable data, or through data outside an open
 	// `modify` block, whose roots stay read-only while the block is open. A closure that writes a name it
 	// captured is judged at the capture the same way, so the captured name must be writable where the closure
-	// is made. The elements a `for` loop hands out over a read-only `List` (frozen, or a module `let`) are
-	// read-only, and so is the result of a function whose return paths mix frozen data with writable data,
-	// whatever the receiver is. Reported at the write. Write through a mutable value, a `clone()` for one, or
+	// is made. The elements a `for` loop hands out over a read-only `List` (frozen, or a module `let`) or over
+	// a collection whose element type is `immutable` (`Array with immutable Box`) are read-only, and so is
+	// what an extension member returns out of an instance with `immutable` elements, and the result of a
+	// function whose return paths mix frozen data with writable data, whatever the receiver is. Reported at
+	// the write. Write through a mutable value, a `clone()` for one, or
 	// make the write where the data is still writable; a function whose every path is frozen declares
 	// `returns immutable`.
 	semanticWriteThroughReadOnly = "E3197"
@@ -2509,7 +2334,11 @@ export enum ErrorCode
 	// record parameter, and so is a parameter that is only passed on to a callee that stores or writes it, an
 	// interface-typed one included. A parameter a record is built from takes no read-only argument (data an
 	// open `modify` block pauses, or a read-only result), and takes a frozen one only while nothing writes
-	// through the record built from it.
+	// through the record built from it. The element an iterator hands out of a frozen collection parameter
+	// is frozen, so a callee that writes it is refused; a generic body that keeps its type parameter in a
+	// frozen slot (a `Set` element, a `Map` key) takes frozen arguments at every instantiation, so a record
+	// or array that something may write is refused there; and a closure that returns constant or module
+	// `let` data returns `immutable` data, so writing through its result is refused.
 	// Reported at the argument. Pass data of the capability the parameter needs, a `clone()` or a `freeze`.
 	semanticArgumentCapabilityRefused = "E3207"
 
@@ -2536,7 +2365,9 @@ export enum ErrorCode
 	// does not declare the result capability (`returns isolated`, `returns immutable`) the boundary does.
 	// A closure that writes what it captured, or builds a record from it, is inferred to mutate its captures,
 	// so it converts only to a function type that declares `mutates captures`. A conformer whose result
-	// holds data from its receiver needs `mutable self` on the requirement.
+	// holds data from its receiver needs `mutable self` on the requirement. A closure that returns constant or
+	// module `let` data returns `immutable` data, so it converts only to a function type that declares
+	// `returns immutable`.
 	// Reported at the conversion, or at the name of the conforming method. Declare the capability on the
 	// boundary, or change the body to keep to it.
 	semanticCapabilityConversionRefused = "E3210"
@@ -2565,10 +2396,13 @@ export enum ErrorCode
 	semanticPromiseDropped = "E3213"
 
 	// A `unique` value is copied or given a second name. A type declared `is unique`, or holding a `unique`
-	// field, is never cloned, so `clone()` is refused. A unique value read out of a field or an element
-	// cannot be bound, passed to a parameter that keeps it, or given elsewhere, because the field or element
-	// goes on owning it and a unique value has one name. Move it out with `pop` or `remove`, `swap` it out of
-	// an isolated field, or read it through a `view`.
+	// field, is never cloned, so `clone()` is refused; the OS handle types (`TcpClient`, `TcpListener`,
+	// `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`, and every type holding
+	// one) are unique, so they are never cloned either. A unique value read out of a field, an element, a
+	// `for` loop variable or a tuple destructure cannot be bound, passed to a parameter that keeps it, or
+	// given elsewhere, because the field or element goes on owning it and a unique value has one name. Move
+	// it out with `pop` or `remove`, `swap` it out of an isolated field, or read what you need from it where
+	// it stands.
 	semanticUniqueValueRefused = "E3214"
 
 	// A type argument breaks a bound on a generic type's type parameter. `where T is sendable` takes a value,
@@ -2595,6 +2429,12 @@ export enum ErrorCode
 	// Numbers, `bool`, `String`, `Character`, enums, unions with no data, service handles,
 	// `SharedValue` cells and a `unique` value need no word. Write `isolated` to give the value away,
 	// built for this one send, or `immutable` to share it frozen (`freeze x.clone()`).
+	// Four kinds of value cannot cross a message whatever word is written, and are refused by this code
+	// too: a `Promise` or any type that can hold one (its awaiter owns it, and its coroutine belongs to the
+	// strand that started it), a function value (a closure record that owns what it captures), an opaque
+	// type parameter (its layout is not known at the send) and an OS handle bound to a thread, such as a
+	// `MachinePin`. `await` the promise and send its result, send the scalar the value is derived from,
+	// or drop the parameter.
 	semanticMessageNeedsACapability = "E3217"
 
 	// Unary `-` is applied to a value of a full-width unsigned alias (`int(0 to u64.max)`, which `Count`,
@@ -2610,6 +2450,15 @@ export enum ErrorCode
 	// reported. A name spelled in a branch of `#if` the target excludes counts as a use. Delete the declaration,
 	// or use it. An unused `typealias` is E3062. Reported once the program has no other error.
 	semanticUnusedFilePrivateDeclaration = "E3219"
+
+	// The initializer of a module-level `let` or a `static let` calls a function. Such a `let` is image
+	// data: its value is decided by the program text, laid down before `main` runs, and read as one copy by
+	// every function and thread, so nothing runs to build it. Write a literal instead: a number, a string,
+	// a `b"…"` literal, an enum case, an array, map or tuple literal, `Type from [...]`, another constant
+	// `let`, or, in a `static let`, a record literal of the declaring type. A value that needs a call to
+	// build is built where it is used, by a function that returns it, and a copy that must be changed is
+	// `.clone()`d from the constant where it is used.
+	semanticModuleLetCallsAFunction = "E3220"
 
 	// A member is used that its type does not have: a method the type does not declare, a method a
 	// conditional extension gives only to types meeting its `where` clause, or `allCases` on a union. The

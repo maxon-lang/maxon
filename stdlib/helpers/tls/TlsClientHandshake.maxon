@@ -25,8 +25,8 @@ module type TlsClientOffer
 
 	module static function of(hello TlsClientHello) returns TlsClientOffer
 		let scan = TlsExtensionScan.ofBlock(hello.extensions().clone())
-		var versions = scan.supportedVersions.clone()
-		var shareGroups = TlsGroupCodeArray.create(0)
+		let versions = scan.supportedVersions.clone()
+		let shareGroups = TlsGroupCodeArray.create(0)
 
 		if versions.isEmpty() 'implicit'
 			versions.push(tlsLegacyVersion)
@@ -68,14 +68,14 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 
 	public static function create(config TlsClientConfig, entropy TlsClientEntropy, peer TlsPeerAuthenticator, helloSource TlsClientHelloSource) returns TlsClientHandshake throws TlsHandshakeError
 		let sent = helloSource.first(try tlsBuildClientHello(config, entropy: entropy))
-		var hello = try tlsDecodeClientHello(sent.clone())
-		var session = TlsSession.create(TlsRole.client, firstRecordVersion: tlsRecordLegacyVersion)
+		let hello = try tlsDecodeClientHello(sent.clone())
+		let session = TlsSession.create(TlsRole.client, firstRecordVersion: tlsRecordLegacyVersion)
 
 		session.transcript.append(sent)
 		session.compatibility = hello.legacySessionId().count() != 0
 		try session.writer.writeHandshake(sent)
 
-		var offer = TlsClientOffer.of(hello.clone())
+		let offer = TlsClientOffer.of(hello.clone())
 
 		return Self{config: config, entropy: entropy, peer: peer, helloSource: helloSource, storedSession: session, phase: TlsClientPhase.awaitingServerHello, offer: offer, firstHello: hello, tls12: Tls12ClientFlow.create(config, entropy: entropy, peer: peer, session: session, offer: offer, clientRandom: hello.random())}
 	end 'create'
@@ -213,8 +213,8 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 			throw TlsHandshakeError.illegalParameter
 		end 'changesNothing'
 
-		var replacement = try replacementShares(scan)
-		var modified = TlsExtensionArray.create(0)
+		let replacement = try replacementShares(scan)
+		let modified = TlsExtensionArray.create(0)
 
 		for item in tlsExtensionsOf(firstHello.extensions()) 'eachExtension'
 			if item.extensionType() == TlsExtensionKind.cookie.code() 'staleCookie'
@@ -232,8 +232,8 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 			modified.push(TlsExtension.cookie(cookie))
 		end 'eachCookie'
 
-		var rebuilt = TlsClientHello.create(firstHello.legacyVersion, random: firstHello.random(), legacySessionId: firstHello.legacySessionId(), cipherSuites: firstHello.cipherSuites(), compressionMethods: firstHello.compressionMethods, extensions: TlsExtensionBlock.listed(modified))
-		var sent = helloSource.second(try tlsEncodedMessage(TlsHandshakeMessage.clientHello(rebuilt)))
+		let rebuilt = TlsClientHello.create(firstHello.legacyVersion, random: firstHello.random(), legacySessionId: firstHello.legacySessionId(), cipherSuites: firstHello.cipherSuites(), compressionMethods: firstHello.compressionMethods, extensions: TlsExtensionBlock.listed(modified))
+		let sent = helloSource.second(try tlsEncodedMessage(TlsHandshakeMessage.clientHello(rebuilt)))
 		let second = try tlsDecodeClientHello(sent)
 
 		storedSession.transcript.restartAsMessageHash(read.suite)
@@ -249,7 +249,7 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 	end 'acceptHelloRetryRequest'
 
 	function replacementShares(scan TlsExtensionScan) returns TlsKeyShareArray throws TlsHandshakeError
-		var shares = TlsKeyShareArray.create(0)
+		let shares = TlsKeyShareArray.create(0)
 
 		for group in scan.selectedGroups 'eachGroup'
 			if not offer.scan.supportedGroups.contains(group) or offer.shareGroups.contains(group) 'unusable'
@@ -277,7 +277,7 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 		try storedSession.input.requireKeyBoundary()
 
 		let named = try TlsNamedGroup.fromRawValue(share.group) otherwise throw TlsHandshakeError.illegalParameter
-		var secret = try entropy.secret(share.group)
+		let secret = try entropy.secret(share.group)
 		let shared = try named.sharedSecret(secret.privateKey, peerShare: share.keyExchange())
 		let stage = try Tls13KeySchedule.handshakeStage(suite, sharedSecret: shared, helloHash: storedSession.transcript.hash(suite.hashAlgorithm())) otherwise throw TlsHandshakeError.internalError
 
@@ -355,7 +355,7 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 	function acceptFinished(raw ByteArray, request TlsCertificateRequest) throws TlsHandshakeError
 		let verifyData = try tlsDecodeFinished(raw, protocol: TlsProtocol.tls13)
 		let suite = try storedSession.negotiatedSuite()
-		var (clientSecret, serverSecret, masterSecret) = try storedSession.handshakeSecrets()
+		let (clientSecret, serverSecret, masterSecret) = try storedSession.handshakeSecrets()
 
 		try storedSession.requireTls13Finished(verifyData, baseKey: serverSecret)
 		storedSession.transcript.append(raw)
@@ -374,7 +374,7 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 	end 'acceptFinished'
 
 	function clientFlight(request TlsCertificateRequest, suite Tls13CipherSuite, handshakeSecret ByteArray) returns ByteArray throws TlsHandshakeError
-		var flight = match request 'request'
+		let flight = match request 'request'
 			notRequested gives ByteArray.create(0)
 			requested(context, schemes) gives try clientAuthentication(context, schemes: schemes, suite: suite)
 		end 'request'
@@ -400,7 +400,7 @@ public type TlsClientHandshake implements TlsEndpoint, TlsMessageHandler
 			return try sentCertificate(context, chain: ByteArrays.create(0))
 		end 'unmatched'
 
-		var authentication = try sentCertificate(context, chain: chain)
+		let authentication = try sentCertificate(context, chain: chain)
 		let content = tlsCertificateVerifyContent(TlsRole.client, transcriptHash: storedSession.transcript.hash(suite.hashAlgorithm()))
 		let signature = try key.sign(scheme, message: content, salt: entropy.pssSalt)
 		let verify = try tlsEncodedMessage(TlsHandshakeMessage.certificateVerify(scheme.code(), signature: signature))

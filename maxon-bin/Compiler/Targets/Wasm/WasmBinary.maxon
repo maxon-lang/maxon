@@ -981,7 +981,7 @@ end 'writeI32ConstOffsetExpr'
 // call's pre-interned functype by the SAME encoded bytes `internFuncType` dedups on — one
 // encoder, so the intern-time key and the emit-time lookup key cannot disagree.
 export function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray) returns immutable ByteArray
-	var enc = ByteArray.create(0) as isolated ByteArray
+	let enc = ByteArray.create(0) as isolated ByteArray
 
 	modify enc 'fill'
 		enc.push(wasmFunctypeForm)
@@ -1008,8 +1008,8 @@ end 'encodeFuncType'
 // before the groups are written — but the corpus of local types is tiny, so building the groups
 // first costs nothing measurable.
 function writeLocalDecls(buf ByteArray, localTypes WasmValTypeArray)
-	var groupCounts = Wasm32IndexArray.create(0)
-	var groupTypes = WasmValTypeArray.create(0)
+	let groupCounts = Wasm32IndexArray.create(0)
+	let groupTypes = WasmValTypeArray.create(0)
 
 	for t in localTypes 'each'
 		let n = groupTypes.count()
@@ -1176,13 +1176,16 @@ export type WasmModuleBuilder
 		let funcIdx = (self.importModules.count() + self.funcBodies.count()) as Wasm32Index
 		self.requireDebugNameSlot(funcIdx, what: debugName)
 
-		var framed = ByteArray.create(0)
-		writeLocalDecls(framed, localTypes: localTypes)
-		framed.append(body)
-		framed.push(opEnd)
+		let framed = ByteArray.create(0) as isolated ByteArray
+
+		modify framed 'frame'
+			writeLocalDecls(framed, localTypes: localTypes)
+			framed.append(body)
+			framed.push(opEnd)
+		end 'frame'
 
 		self.funcTypeIndices.push(typeIdx)
-		self.funcBodies.push(framed)
+		self.funcBodies.push(freeze framed)
 		self.funcDebugNames.push(debugName)
 		return funcIdx
 	end 'addFunction'
@@ -1245,7 +1248,7 @@ export type WasmModuleBuilder
 	// are omitted (a wasm module names only the sections it uses) — the data section when the
 	// program has no top-level global, every other section being non-empty in practice.
 	export function finish() returns ByteArray
-		var module = ByteArray.create(0)
+		let module = ByteArray.create(0)
 		writeModuleHeader(module)
 
 		self.emitTypeSection(module)
@@ -1267,7 +1270,7 @@ export type WasmModuleBuilder
 			return
 		end 'empty'
 
-		var contents = ByteArray.create(0)
+		let contents = ByteArray.create(0)
 		writeUleb128(contents, value: self.funcTypes.count() as Wasm32Index)
 
 		for t in self.funcTypes 'each'
@@ -1284,7 +1287,7 @@ export type WasmModuleBuilder
 			return
 		end 'empty'
 
-		var contents = ByteArray.create(0)
+		let contents = ByteArray.create(0)
 		writeUleb128(contents, value: importCount as Wasm32Index)
 
 		for (iter, moduleName) in self.importModules.withIterator() 'each'
@@ -1307,7 +1310,7 @@ export type WasmModuleBuilder
 			return
 		end 'empty'
 
-		var contents = ByteArray.create(0)
+		let contents = ByteArray.create(0)
 		writeUleb128(contents, value: funcCount as Wasm32Index)
 
 		for typeIdx in self.funcTypeIndices 'each'
@@ -1326,7 +1329,7 @@ export type WasmModuleBuilder
 			return
 		end 'none'
 
-		var contents = ByteArray.create(0)
+		let contents = ByteArray.create(0)
 		writeUleb128(contents, value: 1)
 		contents.push(wasmRefTypeFuncref)
 		contents.push(wasmLimitsFlagMin)
@@ -1346,7 +1349,7 @@ export type WasmModuleBuilder
 
 		let funcCount = self.totalFunctionCount()
 
-		var contents = ByteArray.create(0)
+		let contents = ByteArray.create(0)
 		writeUleb128(contents, value: 1)
 		contents.push(wasmElemSegmentActiveFuncref)
 		writeI32ConstOffsetExpr(contents, offset: wasmElemTableStartOffset)
@@ -1364,7 +1367,7 @@ export type WasmModuleBuilder
 			return
 		end 'none'
 
-		var contents = ByteArray.create(0)
+		let contents = ByteArray.create(0)
 		writeUleb128(contents, value: 1)
 		contents.push(wasmLimitsFlagMin)
 		writeUleb128(contents, value: self.memoryMinPages)
@@ -1379,7 +1382,7 @@ export type WasmModuleBuilder
 			return
 		end 'empty'
 
-		var contents = ByteArray.create(0)
+		let contents = ByteArray.create(0)
 		writeUleb128(contents, value: exportCount as Wasm32Index)
 
 		for entry in self.exportEntries 'each'
@@ -1398,7 +1401,7 @@ export type WasmModuleBuilder
 			return
 		end 'empty'
 
-		var contents = ByteArray.create(0)
+		let contents = ByteArray.create(0)
 		writeUleb128(contents, value: funcCount as Wasm32Index)
 
 		for body in self.funcBodies 'each'
@@ -1420,7 +1423,7 @@ export type WasmModuleBuilder
 			return
 		end 'none'
 
-		var contents = ByteArray.create(0)
+		let contents = ByteArray.create(0)
 		writeUleb128(contents, value: segmentCount as Wasm32Index)
 
 		for segment in self.dataSegments 'each'
@@ -1441,16 +1444,16 @@ export type WasmModuleBuilder
 	// order, each LENGTH-PREFIXED, which is what lets a reader that does not know a subsection id skip
 	// it.
 	function emitNameSection(module ByteArray)
-		var contents = ByteArray.create(0)
+		let contents = ByteArray.create(0)
 		writeWasmName(contents, name: WasmNameSectionName)
 
-		var moduleNamePayload = ByteArray.create(0)
+		let moduleNamePayload = ByteArray.create(0)
 		writeWasmName(moduleNamePayload, name: WasmModuleDebugName)
 		writeIdTaggedBlob(contents, id: wasmNameSubsectionModule, payload: moduleNamePayload)
 
 		// The namemap: a count of PAIRS, then each `(funcIdx, name)`. The count is the array's own —
 		// see `funcDebugNames` for why it is not an arithmetic sum of the bands.
-		var namemap = ByteArray.create(0)
+		let namemap = ByteArray.create(0)
 		writeUleb128(namemap, value: self.funcDebugNames.count() as Wasm32Index)
 
 		for (iter, name) in self.funcDebugNames.withIterator() 'eachName'

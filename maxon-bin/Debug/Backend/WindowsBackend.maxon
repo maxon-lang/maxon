@@ -35,7 +35,7 @@ union BackendProcessHandle
 end 'BackendProcessHandle'
 
 function registerFileOf(context RegisterBlock) returns DebugRegisterFile throws DebuggeeError
-	var file = DebugRegisterFile.create()
+	let file = DebugRegisterFile.create()
 
 	for slot in 0 upto Win64GprCount 'eachGeneralRegister'
 		file.setValue(slot as BackendRegisterNumber, value: (try context.gpr(slot as Win64GprIndex)) as BackendWord)
@@ -76,7 +76,7 @@ export type WindowsBackend
 	end 'close'
 
 	export function listThreads() returns BackendThreadIdArray
-		var ids = BackendThreadIdArray.create(self.threads.count(), zeroed: false)
+		let ids = BackendThreadIdArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threads 'eachThread'
 			ids.push(entry.id)
@@ -535,7 +535,7 @@ export type WindowsBackend
 	function forgetThread(id BackendThreadId)
 		self.suspended = backendRosterWithout(self.suspended, thread: id)
 		self.breakInThreads = backendRosterWithout(self.breakInThreads, thread: id)
-		var kept = BackendThreadEntryArray.create(self.threads.count(), zeroed: false)
+		let kept = BackendThreadEntryArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threads 'eachThread'
 			if entry.id != id 'anotherThread'

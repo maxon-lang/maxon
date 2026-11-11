@@ -15,7 +15,7 @@ let InsertSpacesKey = "insertSpaces"
 let LspLineTerminator = "\n"
 
 module function formattingServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create(0)
+	let served = LspMethodArray.create(0)
 	served.push(LspMethod.formatting)
 	return served
 end 'formattingServedMethods'
@@ -33,8 +33,8 @@ module function formattingAnswer(request LspRequest) returns LspAnswer throws Ls
 		return LspAnswer.nothing()
 	end 'nothingToChange'
 
-	var doc = JsonDoc.create()
-	var edits = JsonNodeIdArray.create(0)
+	let doc = JsonDoc.create()
+	let edits = JsonNodeIdArray.create(0)
 	edits.push(wholeDocumentEdit(doc, of: request.text, replacedBy: formatted))
 
 	return LspAnswer.of(doc, result: doc.add(JsonNode.arrayNode(edits)))
@@ -65,7 +65,7 @@ function wholeDocumentEdit(doc JsonDoc, of String, replacedBy String) returns Js
 	// `split` on a non-empty delimiter always yields at least one line, so the last index exists.
 	let lastLine = try lines.get(lines.count() - 1) otherwise panic("wholeDocumentEdit: a split of {of.byteLength()} bytes yielded no lines")
 
-	var edit = LspJsonObject.create(doc)
+	let edit = LspJsonObject.create(doc)
 	edit.putNode(LspRangeKey, value: lspRangeNode(doc, startLine: 0, startCharacter: 0, endLine: (lines.count() - 1) as LspLineNumber, endCharacter: lastLine.utf16().count() as LspCharacter))
 	edit.put(LspNewTextKey, value: JsonNode.stringNode(replacedBy))
 

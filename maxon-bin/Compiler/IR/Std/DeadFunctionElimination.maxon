@@ -89,15 +89,15 @@
 // ⭐ **AND THE `.data` LABELS THE SURVIVORS NAME COME BACK WITH IT**, collected by the same op walk that
 // finds the call edges, so the layout that reads them cannot count a body this pass did not.
 export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable, project Project) returns DeadFunctionSurvivors throws CompileError
-	view index = try FunctionNameIndex.create(module.functions, project: project)
-	view byName = index.byName
+	let index = try FunctionNameIndex.create(module.functions, project: project)
+	let byName = index.byName
 
-	var reached = BoolArray.create(module.funcCount())
-	var worklist = FuncIndexArray.create(0)
+	let reached = BoolArray.create(module.funcCount())
+	let worklist = FuncIndexArray.create(0)
 
-	var reference = StdFunctionReference.create()
-	var referencedGlobals = ReferencedGlobalLabelSet.create()
-	var referencedRecords = ReferencedGlobalLabelSet.create()
+	let reference = StdFunctionReference.create()
+	let referencedGlobals = ReferencedGlobalLabelSet.create()
+	let referencedRecords = ReferencedGlobalLabelSet.create()
 	let recordCodes = functionRecordCodesOf(globalData)
 	try seedRoots(globalData, project: project, index: index, reached: reached, worklist: worklist)
 
@@ -107,7 +107,7 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("eliminateDeadFunctions: pop from a non-empty worklist")
-		view func = module.getFunc(idx)
+		let func = module.getFunc(idx)
 		requireNotSplicedAway(module, func: func, byName: byName, reached: reached)
 		markReferencesOf(module, func: func, byName: byName, reached: reached, worklist: worklist, reference: reference, referencedGlobals: referencedGlobals, recordCodes: recordCodes, referencedRecords: referencedRecords)
 	end 'walk'
@@ -121,7 +121,7 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 	// cannot report one — it is here for the POSITIONS, which the sweep renumbered. It goes through the one
 	// door anyway rather than a subset-only shortcut: a second construction path is a second place the
 	// check could be skipped, which is the shape this whole mechanism exists to remove.
-	var funcNames = try FunctionNameIndex.create(module.functions, project: project)
+	let funcNames = try FunctionNameIndex.create(module.functions, project: project)
 	return DeadFunctionSurvivors.create(funcNames, referencedGlobals: referencedGlobals)
 end 'eliminateDeadFunctions'
 
@@ -337,7 +337,7 @@ end 'seedRoots'
 typealias FunctionRecordCodeMap = Map with (ByteArray, immutable ByteArray)
 
 function functionRecordCodesOf(globalData GlobalDataTable) returns FunctionRecordCodeMap
-	var codes = FunctionRecordCodeMap.create()
+	let codes = FunctionRecordCodeMap.create()
 
 	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
 		if isFunctionRecordLabel(reloc.rdataLabel) 'aFunctionRecord'
@@ -381,7 +381,7 @@ end 'functionRecordCodesOf'
 // floor this program carries — E4015's ruling), and only a name called HERE is rooted or kept out of the
 // called-once rule. A second, ungated list would be the same roster spelled twice.
 module function compilerOwnedRoots(target Target, stub EntryStubCalls) returns CompilerOwnedRootArray
-	var roots = CompilerOwnedRootArray.create(0)
+	let roots = CompilerOwnedRootArray.create(0)
 	roots.push(CompilerOwnedRoot.create(ModuleInitName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(GlobalCleanupName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(RegistryReleaseName, isCalledHere: stub.releasesRegistry and not stub.runsMainOnAGreenThread))
@@ -503,7 +503,7 @@ end 'requireNotSplicedAway'
 // function does. Walks every reached function, on the failure path only.
 function referenceKeepingAlive(module StdModule, name ByteArray, byName FuncIndexByName, reached BoolArray) returns String
 	let funcIndexOfName = try byName.get(name) otherwise panic("referenceKeepingAlive: '{String.from(name)}' is a function of the module and so is in the name index")
-	var reference = StdFunctionReference.create()
+	let reference = StdFunctionReference.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let isReached = try reached.get(funcIndex) otherwise panic("referenceKeepingAlive: reached.get OOB at function index {funcIndex}")
@@ -771,7 +771,7 @@ end 'stdFunctionReferenceOf'
 // below is part of the sweep, not a courtesy after it — see `ValueOriginTable.remapFunctionIndices`.
 function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Project)
 	let total = module.funcCount()
-	var live = FuncIndexArray.create(0)
+	let live = FuncIndexArray.create(0)
 
 	for i in 0 upto total 'eachFunc'
 		let isLive = try reached.get(i) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {i}")
@@ -783,11 +783,11 @@ function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Pr
 
 	canonicalizeEmissionOrder(module, live: live)
 
-	var kept = IrFunctionArray.create(live.count(), zeroed: false)
+	let kept = IrFunctionArray.create(live.count(), zeroed: false)
 
 	// Old index → new index, filled for EVERY old index so the remap can index it directly; the entries
 	// for dropped functions are never read (the remap consults `reached` first).
-	var newIndexOfOld = FixedFuncIndexArray.create(total)
+	let newIndexOfOld = FixedFuncIndexArray.create(total)
 
 	// Did the sweep renumber any function that SURVIVES? Only a survivor whose index moved has an origin
 	// row to relocate.
@@ -827,7 +827,7 @@ function canonicalizeEmissionOrder(module StdModule, live FuncIndexArray)
 		end 'extendRun'
 
 		if runEnd - runStart > 1 and not runIsOrdered(module, live: live, from: runStart, upto: runEnd) 'worthSorting'
-			var run = FuncIndexArray.create(runEnd - runStart, zeroed: false)
+			let run = FuncIndexArray.create(runEnd - runStart, zeroed: false)
 
 			for position in runStart upto runEnd 'eachMember'
 				run.push(try live.get(position) otherwise panic("canonicalizeEmissionOrder: live.get OOB at {position}"))
@@ -860,8 +860,8 @@ end 'runIsOrdered'
 function sharesEmissionRun(module StdModule, left ElementIndex, right ElementIndex, live FuncIndexArray) returns bool
 	let leftIndex = try live.get(left) otherwise panic("sharesEmissionRun: live.get OOB at {left}")
 	let rightIndex = try live.get(right) otherwise panic("sharesEmissionRun: live.get OOB at {right}")
-	view leftFunc = module.getFunc(leftIndex)
-	view rightFunc = module.getFunc(rightIndex)
+	let leftFunc = module.getFunc(leftIndex)
+	let rightFunc = module.getFunc(rightIndex)
 
 	if not leftFunc.sourceFilePath.isEmpty() 'aParsedFunction'
 		return leftFunc.sourceFilePath.equals(rightFunc.sourceFilePath)
@@ -876,8 +876,8 @@ function sharesEmissionRun(module StdModule, left ElementIndex, right ElementInd
 end 'sharesEmissionRun'
 
 function compareWithinEmissionRun(module StdModule, left ElementIndex, right ElementIndex) returns Ordering
-	view leftFunc = module.getFunc(left)
-	view rightFunc = module.getFunc(right)
+	let leftFunc = module.getFunc(left)
+	let rightFunc = module.getFunc(right)
 	let leftIsParsed = not leftFunc.sourceFilePath.isEmpty()
 
 	if leftIsParsed != not rightFunc.sourceFilePath.isEmpty() 'aMixedPair'
@@ -917,7 +917,6 @@ enum SynthesisFamily
 	none
 	destructor
 	cloner
-	soleWalk
 	shareWalk
 	adapter
 	serviceStart
@@ -931,10 +930,6 @@ function synthesisFamilyOf(module StdModule, name ByteArray) returns SynthesisFa
 	if bytesStartWith(name, prefix: ClonerPrefix) 'aCloner'
 		return SynthesisFamily.cloner
 	end 'aCloner'
-
-	if bytesStartWith(name, prefix: SoleWalkPrefix) 'aSoleWalk'
-		return SynthesisFamily.soleWalk
-	end 'aSoleWalk'
 
 	if bytesStartWith(name, prefix: ShareWalkPrefix) 'aShareWalk'
 		return SynthesisFamily.shareWalk

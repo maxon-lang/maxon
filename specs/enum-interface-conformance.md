@@ -295,7 +295,7 @@ typealias Tally = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Tally)
 
 function main() returns ExitCode
-	var m = ColorMap.create()
+	let m = ColorMap.create()
 	try m.insert(Color.red, value: 10) otherwise ignore
 	try m.insert(Color.blue, value: 32) otherwise ignore
 	let a = try m.get(Color.red) otherwise 0
@@ -409,7 +409,7 @@ function through(g Grower, dest IntArray)
 end 'through'
 
 function main() returns ExitCode
-	var a = IntArray.create(0)
+	let a = IntArray.create(0)
 	through(Step.one, dest: a)
 	return try a.get(0) otherwise 55
 end 'main'

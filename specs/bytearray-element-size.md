@@ -64,7 +64,7 @@ reconstruction is garbage and the equality check fails.
 function main() returns ExitCode
 	let src = "Environment.inherit"
 	let bytes = src.toByteArray()
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	var i = 12 as Count
 	while i < bytes.count() 'copy'
 		let b = try bytes.get(i) otherwise 0
@@ -88,7 +88,7 @@ wrong stride would still push `count` bytes but pack them 8 apart, leaving a
 function main() returns ExitCode
 	let src = "hello world"
 	let bytes = src.toByteArray()
-	var out = ByteArray.create(0)
+	let out = ByteArray.create(0)
 	for b in bytes 'copy'
 		out.push(b)
 	end 'copy'
@@ -151,7 +151,7 @@ one byte. An 8-byte erase wipes the just-shifted `e` and `y` and the array reads
 back `h X \0 \0` with `count() == 4` — corrupt data behind a successful exit.
 ```maxon
 function main() returns ExitCode
-	var bytes = b"hey".clone()
+	let bytes = b"hey".clone()
 	bytes.insert(1, value: 88)
 	if bytes.count() != 4 'cnt'
 		return 1
@@ -170,7 +170,7 @@ heap-owned from birth and no copy-on-write ever runs. It must give the identical
 answer: the erase width follows `element_size`, not where the buffer came from.
 ```maxon
 function main() returns ExitCode
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	bytes.push(104)
 	bytes.push(101)
 	bytes.push(121)
@@ -192,7 +192,7 @@ the maximum number of live neighbours — five here, so an over-wide erase loses
 all five rather than the two `insert(1, ...)` loses.
 ```maxon
 function main() returns ExitCode
-	var bytes = b"axbxc".clone()
+	let bytes = b"axbxc".clone()
 	bytes.insert(0, value: 90)
 	if bytes.count() != 6 'cnt'
 		return 1
@@ -231,7 +231,7 @@ each has its own way of going wrong:
 * the remainder must exist at all — without it the array keeps its old last five bytes.
 ```maxon
 function main() returns ExitCode
-	var bytes = b"abcdefghijklmnopqrstu".clone()
+	let bytes = b"abcdefghijklmnopqrstu".clone()
 	bytes.insert(0, value: 90)
 	if bytes.count() != 22 'cnt'
 		return 1
@@ -252,7 +252,7 @@ the high word has not read yet; and the words must ASCEND, because the high word
 on `buffer[8]`, which the low word still has to read.
 ```maxon
 function main() returns ExitCode
-	var bytes = b"abcdefghijklmnopqrstu".clone()
+	let bytes = b"abcdefghijklmnopqrstu".clone()
 	let gone = try bytes.remove(0) otherwise panic("test invariant: index 0 is in bounds")
 	if gone != 97 'first'
 		return 1
@@ -354,7 +354,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var made = Bytes.create(0)
+	let made = Bytes.create(0)
 	made.push(65)
 	made.append(b"CD")
 	return 0 if made.count() == 3 and (try made.get(1) otherwise 0) == 67 and (try made.get(2) otherwise 0) == 68 else 1
@@ -539,7 +539,7 @@ was recorded last — gets one of the two wrong.
 typealias Byte = int(0 to u8.max)
 
 export function anyByte(b Integer) returns Integer
-	var a = b"\xdf"
+	let a = b"\xdf"
 	return (try a.get(0) otherwise 0) - (b as Byte)
 end 'anyByte'
 
@@ -552,7 +552,7 @@ function narrow(b Byte) returns Integer
 end 'narrow'
 
 function main() returns ExitCode
-	var mine = b"\x41"
+	let mine = b"\x41"
 	return anyByte(narrow(try mine.get(0) otherwise 0)) as ExitCode
 end 'main'
 ```
@@ -692,7 +692,7 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var made = Bytes.create(0)
+	let made = Bytes.create(0)
 	made.push(300)
 	made.push(700)
 	return 0 if made.count() == 2 and (try made.get(1) otherwise 0) == 700 else 1
@@ -714,7 +714,7 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var made = Bytes.create(0)
+	let made = Bytes.create(0)
 	made.push(300)
 
 	let path = FilePath from "test_widebyte_roundtrip.txt"
@@ -766,7 +766,7 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var made = Bytes.create(0)
+	let made = Bytes.create(0)
 	made.push(300)
 
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
@@ -1152,7 +1152,7 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function feed(v Integer) returns Integer
-	var made = Bytes.create(0)
+	let made = Bytes.create(0)
 	made.push(v as Byte)
 	return try made.get(0) otherwise 0
 end 'feed'
@@ -1677,7 +1677,7 @@ function takes(b Bytes) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var buf = Bytes.create(0)
+	let buf = Bytes.create(0)
 	buf.push(0)
 	try buf.managed.setByte(0, 223) otherwise return 3
 	return takes(buf)
@@ -1699,7 +1699,7 @@ function takes(b Bytes) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	let buf = try __ManagedMemory.create(8, 1) otherwise return 1
 	try buf.setLength(4) otherwise return 2
 	let raw = try buf.byteAt(0) otherwise return 3
 	return 0 if raw == 0 and takes(buf) == 0 else 4
@@ -1824,7 +1824,7 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create(0)
+	let b = Bytes.create(0)
 	b.push(65)
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	b.append(cwd)
@@ -1852,9 +1852,9 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create(0)
+	let b = Bytes.create(0)
 	b.push(65)
-	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let before = cwd.length()
 	cwd.append(b as __ManagedMemory)
 	return 0 if cwd.length() == before + 1 else 2
@@ -1875,9 +1875,9 @@ typealias Byte = int(0 to 100)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var b = Bytes.create(0)
+	let b = Bytes.create(0)
 	b.push(65)
-	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
+	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let before = cwd.length()
 	cwd.append(b as __ManagedMemory)
 	return 0 if cwd.length() == before + 1 else 2
@@ -1940,7 +1940,7 @@ function takes(b Bytes) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	let buf = try __ManagedMemory.create(8, 1) otherwise return 1
 	try buf.setLength(4) otherwise return 2
 	try buf.set(0, value: 200) otherwise return 3
 	return 0 if takes(buf) == 200 else 1
@@ -1961,10 +1961,10 @@ typealias Byte = int(0 to 1000)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var buf = try __ManagedMemory.create(2, 8) otherwise return 1
+	let buf = try __ManagedMemory.create(2, 8) otherwise return 1
 	try buf.setLength(1) otherwise return 2
 	try buf.set(0, value: 300) otherwise return 3
-	var made = Bytes.create(0)
+	let made = Bytes.create(0)
 	made.push(300)
 	return 0 if (try buf.get(0) otherwise 0) == 300 and (try made.get(0) otherwise 0) == 300 else 4
 end 'main'
@@ -2129,7 +2129,7 @@ sentence quoting it, that keeps this case off the lanes where its element is one
 typealias Codes = Array with ExitCode
 
 function main() returns ExitCode
-	var a = Codes.create(0)
+	let a = Codes.create(0)
 	a.push(1)
 	try a.managed.setByte(3, 223) otherwise return 3
 	return try a.get(0) otherwise 4
@@ -2155,7 +2155,7 @@ typealias Byte = int(0 to u16.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var a = Bytes.create(0)
+	let a = Bytes.create(0)
 	a.push(1)
 	try a.managed.setByte(1, 223) otherwise return 3
 	return 0 if (try a.get(0) otherwise 0) == 57089 else 4
@@ -2174,7 +2174,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var xs = IntArray.create(0)
+	let xs = IntArray.create(0)
 	xs.push(7)
 	try xs.managed.setByte(0, 3) otherwise return 1
 	return 0 if (try xs.get(0) otherwise 0) == 3 else 2
@@ -2192,7 +2192,7 @@ one byte and has no declared range for a raw byte to fall outside of — exactly
 literal is immutable, so the raw write goes into its `.clone()`.
 ```maxon
 function main() returns ExitCode
-	var v = b"abc".clone()
+	let v = b"abc".clone()
 	try v.managed.setByte(0, 223) otherwise return 3
 	return 0 if (try v.managed.byteAt(0) otherwise 0) == 223 else 4
 end 'main'
@@ -2218,7 +2218,7 @@ function takes(b Bytes) returns ExitCode
 end 'takes'
 
 function main() returns ExitCode
-	var buf = try __ManagedMemory.create(8, 1) otherwise return 1
+	let buf = try __ManagedMemory.create(8, 1) otherwise return 1
 	try buf.setLength(4) otherwise return 2
 	try buf.setByte(0, 223) otherwise return 3
 	return 0 if takes(buf) == 223 else 4
@@ -2243,7 +2243,7 @@ end 'widen'
 export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
-	var a = b"hi"
+	let a = b"hi"
 	let n = try a.get(0) otherwise 0
 	return (n - (widen(56) as Byte)) as ExitCode
 end 'main'
@@ -2315,7 +2315,7 @@ end 'Byte'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	var bytes = b"hi"
+	let bytes = b"hi"
 	let h = try bytes.get(0) otherwise 0
 	return (h as ExitCode) - 100 + a.Byte.make().v
 end 'main'

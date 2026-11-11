@@ -579,7 +579,7 @@ E3074.
 
 ```maxon
 function main() returns ExitCode
-	var args = StringArray.create(0)
+	let args = StringArray.create(0)
 	args.push("--version")
 
 	let result = try Subprocess.run(Executable.name("git"), arguments: args) otherwise (e) 'failed'
@@ -921,10 +921,10 @@ the child follows.
 
 ```maxon
 function main() returns ExitCode
-	var args = StringArray.create(0)
+	let args = StringArray.create(0)
 	args.push("--version")
 
-	var child = try StreamingSubprocess.spawn(Executable.name("git"), arguments: args) otherwise (e) 'spawn'
+	let child = try StreamingSubprocess.spawn(Executable.name("git"), arguments: args) otherwise (e) 'spawn'
 		print("{e.displayReason()}\n")
 		return 1
 	end 'spawn'
@@ -1021,7 +1021,7 @@ name outlives the process until it is withdrawn or the machine restarts.
 
 ```maxon
 function main() returns ExitCode
-	var segment = try SharedSegment.create("docs-demo-segment", bytes: 4096) otherwise (e) 'failed'
+	let segment = try SharedSegment.create("docs-demo-segment", bytes: 4096) otherwise (e) 'failed'
 		print("no segment: {e}\n")
 		return 1
 	end 'failed'
@@ -1208,10 +1208,10 @@ stopped, and stderr carries one line per process:
 A `SampledStack` has `programCounter`, `framePointer` and `stackPointer`; `linkRegister`, a `LinkRegister`
 that `holds(address)` on macOS and is `absent` on Windows and Linux; `reservation`, a
 `StackReservation`; `suspendedCycles`, the thread's CPU time read while it was stopped; and `window`, a
-`StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` stays readable until the
-sampler's next `capture`: `byteCount()` is the bytes copied, 0 once a later capture has replaced them, and
+`StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` owns its bytes, so it stays
+readable after `close()` and after later captures: `byteCount()` is the bytes copied, and
 `word(offset StackWindowOffset)` is the word `offset` bytes in, throwing `SamplerError.outOfWindow` outside the
-copy or after a later capture.
+copy.
 
 | `StackReservation` case | Meaning |
 |-------------------------|---------|

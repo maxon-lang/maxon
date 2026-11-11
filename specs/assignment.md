@@ -526,7 +526,7 @@ function main() returns ExitCode
 	var p = Point.create(1, y: 2)
 	p = makePoint(7)
 	p.x = 9
-	var q = Point.create(5, y: 5)
+	let q = Point.create(5, y: 5)
 	p = q
 	return p.x as ExitCode
 end 'main'
@@ -581,7 +581,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	let nums = [1, 2, 3]
 	return c.addAll(nums) as ExitCode
 end 'main'
@@ -704,7 +704,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var h = Holder.create()
+	let h = Holder.create()
 	h.c = Color.green
 	var c = Color.red
 	c = Color.green

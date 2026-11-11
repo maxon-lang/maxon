@@ -96,8 +96,8 @@ array is bound to no name. Before the promotion this printed `455743088879883039
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -123,8 +123,8 @@ borrow-yielding accessor funnels through one door, so one promotion covers all o
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -149,8 +149,8 @@ end 'main'
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -176,8 +176,8 @@ memory. Extending the container's lifetime is what puts the two back in order.
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -188,7 +188,7 @@ function make() returns Bytes
 end 'make'
 
 function main() returns ExitCode
-	var n = try make().get(0) otherwise ByteArray.create(0)
+	let n = try make().get(0) otherwise ByteArray.create(0)
 	return n.count()
 end 'main'
 ```
@@ -204,8 +204,8 @@ typealias Wide = int(i64.min to i64.max)
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -236,8 +236,8 @@ reaches it.
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -267,8 +267,8 @@ typealias Wide = int(i64.min to i64.max)
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -296,8 +296,8 @@ increfs). That incref has to run while the container is still alive, which it do
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -329,8 +329,8 @@ typealias Wide = int(i64.min to i64.max)
 typealias Bytes = Array with ByteArray
 
 function make(n Wide) returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	for _ in 0 upto n 'fill'
 		inner.push(1)
 	end 'fill'
@@ -356,8 +356,8 @@ scalar read alongside changes nothing.
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -492,8 +492,8 @@ typealias Wide = int(i64.min to i64.max)
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -521,8 +521,8 @@ floor; without it the allocator panics with `seedInUse: a use dominates its def`
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -633,8 +633,8 @@ holds.
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -662,7 +662,7 @@ typealias Wide = int(i64.min to i64.max)
 typealias Ints = Array with Wide
 
 function make() returns Ints
-	var outer = Ints.create(0)
+	let outer = Ints.create(0)
 	outer.push(41)
 	return outer
 end 'make'
@@ -685,8 +685,8 @@ list (the owned values NO binding owns) and not the owned-heap bit.
 typealias Bytes = Array with ByteArray
 
 function make() returns Bytes
-	var outer = Bytes.create(0)
-	var inner = ByteArray.create(0)
+	let outer = Bytes.create(0)
+	let inner = ByteArray.create(0)
 	inner.push(1)
 	inner.push(2)
 	inner.push(3)
@@ -721,7 +721,7 @@ function plain() returns Integer
 end 'plain'
 
 function make() returns IntPromiseArray
-	var s = IntPromiseArray.create(0)
+	let s = IntPromiseArray.create(0)
 	s.push(async plain())
 	return s
 end 'make'
@@ -749,7 +749,7 @@ function plain() returns Integer
 end 'plain'
 
 function make() returns IntPromiseArray
-	var s = IntPromiseArray.create(0)
+	let s = IntPromiseArray.create(0)
 	s.push(async plain())
 	return s
 end 'make'

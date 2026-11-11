@@ -267,7 +267,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.make()
+	let c = Counter.make()
 	return c.bumpTwice(5)
 end 'main'
 ```
@@ -309,7 +309,7 @@ end 'Cache'
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let viaFree = store(2, offset: 3, scale: 4)
-	var c = Cache.make()
+	let c = Cache.make()
 	c.store(99)
 	return viaFree
 end 'main'

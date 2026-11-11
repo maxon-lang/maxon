@@ -574,7 +574,7 @@ function mayFail() returns Integer throws TaskError
 end 'mayFail'
 
 function main() returns ExitCode
-		var arr = TaskPromiseArray.create(0)
+		let arr = TaskPromiseArray.create(0)
 		arr.push(async mayFail())
 		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
 		let r = try await p otherwise (e) 'failed'
@@ -615,7 +615,7 @@ function work(n Integer) returns Integer throws WorkError
 end 'work'
 
 function main() returns ExitCode
-		var arr = WorkPromiseArray.create(0)
+		let arr = WorkPromiseArray.create(0)
 		arr.push(async work(-1))
 		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
 		let r = try await p otherwise (e) 'failed'
@@ -711,7 +711,7 @@ function work() returns Integer
 end 'work'
 
 function park(p IntPromise) returns Integer
-	var pending = IntPromiseArray.create(0)
+	let pending = IntPromiseArray.create(0)
 	pending.push(p)
 
 	var sum = 0 as Integer
@@ -766,7 +766,7 @@ function swap(h Holder, next IntPromise)
 end 'swap'
 
 function main() returns ExitCode
-	var holder = Holder.of(async work())
+	let holder = Holder.of(async work())
 	holder.rearm(async work())
 	swap(holder, next: async work())
 	print("{await holder.p}\n")
@@ -848,7 +848,7 @@ function ask() returns IntPromise
 end 'ask'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create(0)
+	let pending = IntPromiseArray.create(0)
 	pending.push(ask())
 	pending.push(ask())
 
@@ -893,7 +893,7 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	var cell = Cell.of(async work())
+	let cell = Cell.of(async work())
 	cell.p = ask()
 	print("{await cell.p}\n")
 	return 0
@@ -931,7 +931,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create()
+	let holder = Holder.create()
 	holder.pending.push(ask())
 
 	var sum = 0 as Integer
@@ -968,7 +968,7 @@ function ask() returns IntPromise
 end 'ask'
 
 function main() returns ExitCode
-	var m = PromiseMap.create()
+	let m = PromiseMap.create()
 	m.upsert("a", value: ask())
 	m.upsert("b", value: async work())
 	print("{m.count()}\n")
@@ -1074,7 +1074,7 @@ function work() returns Integer
 end 'work'
 
 function park(p IntPromise, keep bool) returns Integer
-	var pending = IntPromiseArray.create(0)
+	let pending = IntPromiseArray.create(0)
 
 	if keep 'store'
 		pending.push(p)
@@ -1176,11 +1176,11 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	var source = IntPromiseArray.create(0)
+	let source = IntPromiseArray.create(0)
 	source.push(async work())
 
 	let popped = try source.pop() otherwise panic("one element was pushed")
-	var cell = Cell.of(async work())
+	let cell = Cell.of(async work())
 	cell.p = popped
 	print("{await cell.p}\n")
 	return 0
@@ -1249,10 +1249,10 @@ function work() returns Integer
 end 'work'
 
 function main() returns ExitCode
-	var source = IntPromiseArray.create(0)
+	let source = IntPromiseArray.create(0)
 	source.push(async work())
 
-	var sink = IntPromiseArray.create(0)
+	let sink = IntPromiseArray.create(0)
 	let moved = try source.pop() otherwise async work()
 	sink.push(moved)
 
@@ -1290,7 +1290,7 @@ function keep(pending IntPromiseArray, p IntPromise)
 end 'keep'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create(0)
+	let pending = IntPromiseArray.create(0)
 	let f = keep
 	f(pending, async work())
 
@@ -1362,7 +1362,7 @@ function drive(sink Sink, pending IntPromiseArray)
 end 'drive'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create(0)
+	let pending = IntPromiseArray.create(0)
 	drive(keep, pending: pending)
 
 	var sum = 0 as Integer
@@ -1485,7 +1485,7 @@ end 'Box'
 typealias PromiseBox = Box with IntPromise
 
 function main() returns ExitCode
-	var box = PromiseBox.create(async work())
+	let box = PromiseBox.create(async work())
 	box.replace(ask())
 	box.replace(async work())
 	print("{box.value.isComplete() or true}\n")
@@ -1527,7 +1527,7 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	var c = Cell.of(async w())
+	let c = Cell.of(async w())
 	let d = c.again(async w())
 	c.rearm(async w())
 	print("{await c.p} {await d.p}\n")
@@ -1630,7 +1630,7 @@ function swap(h Cell, next IntPromise)
 end 'swap'
 
 function main() returns ExitCode
-	var h = Cell.of(async w())
+	let h = Cell.of(async w())
 	swap(h, next: async w())
 	print("{await h.p}\n")
 	return 0
@@ -1660,7 +1660,7 @@ function park(m PromiseMap, p IntPromise)
 end 'park'
 
 function main() returns ExitCode
-	var m = PromiseMap.create()
+	let m = PromiseMap.create()
 	park(m, p: async w())
 	print("{m.count()}\n")
 	return 0
@@ -1891,7 +1891,7 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	var cell = Cell.of(async work())
+	let cell = Cell.of(async work())
 	cell.holdVia(async work())
 	print("{await cell.p}\n")
 	return 0
@@ -1932,7 +1932,7 @@ function relay(cell Cell, next IntPromise)
 end 'relay'
 
 function main() returns ExitCode
-	var cell = Cell.of(async work())
+	let cell = Cell.of(async work())
 	relay(cell, next: async work())
 	print("{await cell.p}\n")
 	return 0
@@ -2006,7 +2006,7 @@ function relay(sink Sink, pending IntPromiseArray, p IntPromise)
 end 'relay'
 
 function main() returns ExitCode
-	var pending = IntPromiseArray.create(0)
+	let pending = IntPromiseArray.create(0)
 	relay(keep, pending: pending, p: async work())
 
 	var sum = 0 as Integer
@@ -2501,7 +2501,7 @@ function makeText(i Idx) returns String
 end 'makeText'
 
 function main() returns ExitCode
-		var promises = StrPromiseArray.create(0)
+		let promises = StrPromiseArray.create(0)
 		for i in 0 upto 3 'spawn'
 				promises.push(async makeText(i))
 		end 'spawn'
@@ -2685,7 +2685,7 @@ function compute(n Integer) returns Integer
 end 'compute'
 
 function main() returns ExitCode
-		var arr = IntPromiseArray.create(0)
+		let arr = IntPromiseArray.create(0)
 		arr.push(async compute(10))
 		arr.push(async compute(20))
 		arr.push(async compute(12))
@@ -2723,7 +2723,7 @@ function work(n Integer) returns Integer throws WorkError
 end 'work'
 
 function main() returns ExitCode
-		var arr = IntPromiseArray.create(0)
+		let arr = IntPromiseArray.create(0)
 		arr.push(async work(10))
 		arr.push(async work(20))
 		arr.push(async work(-1))
@@ -2764,7 +2764,7 @@ function work(n Integer) returns Integer throws WorkError
 end 'work'
 
 function main() returns ExitCode
-		var arr = IntPromiseArray.create(0)
+		let arr = IntPromiseArray.create(0)
 		arr.push(async work(10))
 		arr.push(async work(20))
 		arr.push(async work(-1))
@@ -2801,9 +2801,9 @@ function joinArgs(label String, args StringArray) returns String
 end 'joinArgs'
 
 function main() returns ExitCode
-		var promises = StrPromiseArray.create(0)
+		let promises = StrPromiseArray.create(0)
 		for i in 0 upto 8 'spawn'
-				var argv = StringArray.create(0)
+				let argv = StringArray.create(0)
 				argv.push("arg{i}.a")
 				argv.push("arg{i}.b")
 				promises.push(async joinArgs("L{i}", args: argv.clone()))
@@ -3120,7 +3120,7 @@ function drainThunk() returns StringArray throws DrainError
 		throw DrainError.broken
 	end 'present'
 
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 	lines.push("one")
 	lines.push("two")
 	return lines
@@ -3165,19 +3165,19 @@ function drainThunk(n Integer) returns StringArray throws DrainError
 	if n < 0 'bad'
 		throw DrainError.broken
 	end 'bad'
-	var lines = StringArray.create(0)
+	let lines = StringArray.create(0)
 	lines.push("one")
 	lines.push("two")
 	return lines
 end 'drainThunk'
 
 function main() returns ExitCode
-	var promises = DrainPromiseArray.create(0)
+	let promises = DrainPromiseArray.create(0)
 	promises.push(async drainThunk(1))
 	promises.push(async drainThunk(2))
 	var total = 0 as Count
 	for p in promises 'each'
-		view lines = try await p otherwise 'died'
+		let lines = try await p otherwise 'died'
 			continue
 		end 'died'
 		total = total + lines.count()
@@ -3870,7 +3870,7 @@ typealias IntArray = Array with Integer
 
 function items() returns IntArray
 	Scheduler.yield()
-	var found = IntArray.create(0)
+	let found = IntArray.create(0)
 	found.push(4)
 	found.push(5)
 	return found
@@ -3949,7 +3949,7 @@ function shout(text String) returns Integer
 end 'shout'
 
 function main() returns ExitCode
-	var word = "hello padded out long enough to heap allocate {1}"
+	let word = "hello padded out long enough to heap allocate {1}"
 	let p = async shout(word)
 	print("{word}\n")
 	print("{await p}\n")
@@ -4075,7 +4075,7 @@ function poke(p Box) returns Integer
 end 'poke'
 
 function main() returns ExitCode
-	var b = Box.create()
+	let b = Box.create()
 	let pending = async poke(b)
 	let written = await pending
 
@@ -4342,7 +4342,7 @@ function boxed() returns (Box, Integer)
 end 'boxed'
 
 function main() returns ExitCode
-	var (b, _) = boxed()
+	let (b, _) = boxed()
 	let kept = b.clone()
 	let peek = function() gives kept.n
 	let p = async readIt(b)
@@ -4475,9 +4475,9 @@ function poke(p Box) returns Integer
 end 'poke'
 
 function main() returns ExitCode
-	var items = Boxes.create(0)
+	let items = Boxes.create(0)
 	items.push(Box.create())
-	view a = try items.get(0) otherwise panic("no box")
+	let a = try items.get(0) otherwise panic("no box")
 	print("{await async poke(a)}\n")
 	print("{items.count()}\n")
 	return 0
@@ -4516,11 +4516,11 @@ function show(p Box) returns Integer
 end 'show'
 
 function main() returns ExitCode
-	var items = Boxes.create(0)
+	let items = Boxes.create(0)
 	items.push(Box.create())
-	view a = first(items)
+	let a = first(items)
 	print("{await async show(a)}\n")
-	view kept = try items.get(0) otherwise panic("no box")
+	let kept = try items.get(0) otherwise panic("no box")
 	print("{items.count()} {kept.n}\n")
 	return 0
 end 'main'
@@ -4557,9 +4557,9 @@ function show(p Box) returns Integer
 end 'show'
 
 function main() returns ExitCode
-	var items = Boxes.create(0)
+	let items = Boxes.create(0)
 	items.push(Box.create())
-	view a = first(items)
+	let a = first(items)
 	print("{await async show(a)}\n")
 	print("{a.n}\n")
 	return 0
@@ -4622,46 +4622,8 @@ end 'main'
 7
 ```
 
-<!-- test: async-await.error.an-immutable-global-returned-by-a-call-cannot-be-written-by-a-coroutine -->
-`Box.get()` hands back the record the module-level `let G` holds, so a coroutine that writes its parameter may
-not be handed it, exactly as the direct call `poke(Box.get())` may not.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-
-	static function get() returns immutable Box
-		return G
-	end 'get'
-end 'Box'
-
-let G = Box.create()
-
-function poke(p Box) returns Integer
-	Scheduler.yield()
-	p.n = 99
-	return p.n
-end 'poke'
-
-function main() returns ExitCode
-	print("{await async poke(Box.get())}\n")
-	print("{G.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:25:22: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
-error E3207: <fragment>:25:27: 'poke' writes 'p' (line 20: `p.n = 99`); 'Box.get()' is immutable
-```
-
-<!-- test: async-await.error.an-immutable-global-in-a-let-cannot-be-written-by-a-coroutine -->
-`b` is a `let` naming the record the module-level `let G` holds, so a coroutine that writes its parameter may
-not be handed it.
+<!-- test: async-await.error.a-frozen-record-cannot-be-written-by-a-coroutine -->
+`b` names a frozen record, so a coroutine that writes its parameter may not be handed it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -4673,8 +4635,6 @@ type Box
 	end 'create'
 end 'Box'
 
-let G = Box.create()
-
 function poke(p Box) returns Integer
 	Scheduler.yield()
 	p.n = 99
@@ -4682,48 +4642,14 @@ function poke(p Box) returns Integer
 end 'poke'
 
 function main() returns ExitCode
-	let b = G
+	let b = freeze Box.create()
 	print("{await async poke(b)}\n")
-	print("{G.n}\n")
+	print("{b.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:22:22: cannot pass 'b', which is read-only (a module-level `let`), to a function that writes parameter 'p' (in main); pass a clone()
-error E3207: <fragment>:22:27: 'poke' writes 'p' (line 16: `p.n = 99`); 'b' is immutable
-```
-
-<!-- test: async-await.error.an-immutable-global-is-not-bound-to-a-var-before-a-coroutine -->
-A `var` is a writable name, so it may not hold the record the module-level `let G` holds: the binding is refused
-before any coroutine is handed it.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Box
-	export var n as Integer
-
-	static function create() returns Self
-		return Self{n: 7}
-	end 'create'
-end 'Box'
-
-let G = Box.create()
-
-function poke(p Box) returns Integer
-	Scheduler.yield()
-	p.n = 99
-	return p.n
-end 'poke'
-
-function main() returns ExitCode
-	var b = G
-	print("{await async poke(b)}\n")
-	print("{G.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:21:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3207: <fragment>:20:27: 'poke' writes 'p' (line 14: `p.n = 99`); 'b' is immutable
 ```
 
 <!-- test: async-await.error.a-closure-body-spanning-lines-takes-a-cell-resident-string -->
@@ -4786,7 +4712,7 @@ function measure(words Words) returns Integer
 end 'measure'
 
 function main() returns ExitCode
-	var items = Words.create(0)
+	let items = Words.create(0)
 	items.push("first padded out long enough to heap allocate {1}")
 	items.push("second padded out long enough to heap allocate {2}")
 
@@ -5033,7 +4959,7 @@ function work(n Integer) returns Box throws WorkError
 end 'work'
 
 function main() returns ExitCode
-		var arr = BoxPromiseArray.create(0)
+		let arr = BoxPromiseArray.create(0)
 		arr.push(async work(7))
 		arr.push(async work(-1))
 
@@ -5092,13 +5018,13 @@ function work(n Integer) returns Batch throws WorkError
 		if n < 0 'neg'
 				throw WorkError.failed("negative input")
 		end 'neg'
-		var lines = Lines.create(0)
+		let lines = Lines.create(0)
 		lines.push("line {n}")
 		return Batch.create(lines, tally: n)
 end 'work'
 
 function main() returns ExitCode
-		var arr = BatchPromiseArray.create(0)
+		let arr = BatchPromiseArray.create(0)
 		arr.push(async work(7))
 		arr.push(async work(-1))
 

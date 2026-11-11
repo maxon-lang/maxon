@@ -80,10 +80,10 @@ function segmentCallOp(call SegmentCall, result ValueId, first ValueId, bytes Va
 end 'segmentCallOp'
 
 function buildSharedMemorySegmentCall(module StdModule, call SegmentCall, target Target)
-	var func = IrFunction.createFromStd(segmentCallName(call), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(segmentCallName(call), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let first = 0
@@ -145,11 +145,11 @@ end 'emitHandleIsNull'
 // larger than the section, so a trial view of `bytes` is the size check; it is unmapped at once, and the
 // stdlib maps the section again. A name not yet published is `ERROR_FILE_NOT_FOUND`.
 function emitAdoptAnswer(module StdModule, func IrFunction, entry IrBlock, handle ValueId, bytes ValueId, lastError ValueId, ids ValueMinter)
-	var notOpened = module.addBlock(func, label: b"shmnoopen", heat: BlockHeat.cold)
-	var notYetPublished = module.addBlock(func, label: b"shmnotyet", heat: BlockHeat.cold)
-	var opened = module.addBlock(func, label: b"shmopened", heat: BlockHeat.normal)
-	var fits = module.addBlock(func, label: b"shmfits", heat: BlockHeat.normal)
-	var tooSmall = module.addBlock(func, label: b"shmsmall", heat: BlockHeat.cold)
+	let notOpened = module.addBlock(func, label: b"shmnoopen", heat: BlockHeat.cold)
+	let notYetPublished = module.addBlock(func, label: b"shmnotyet", heat: BlockHeat.cold)
+	let opened = module.addBlock(func, label: b"shmopened", heat: BlockHeat.normal)
+	let fits = module.addBlock(func, label: b"shmfits", heat: BlockHeat.normal)
+	let tooSmall = module.addBlock(func, label: b"shmsmall", heat: BlockHeat.cold)
 
 	module.setTerminator(entry, op: StdOp.condBranch(emitHandleIsNull(module, block: entry, handle: handle, ids: ids), thenBlockId: notOpened.id, elseBlockId: opened.id))
 
@@ -170,9 +170,9 @@ end 'emitAdoptAnswer'
 // `CreateFileMappingW` answers an existing section's handle with `ERROR_ALREADY_EXISTS` rather than failing.
 // That section is the adopt road's to open, so this handle is closed and the answer is `nameTaken`.
 function emitExclusiveCreateAnswer(module StdModule, func IrFunction, entry IrBlock, handle ValueId, lastError ValueId, ids ValueMinter)
-	var created = module.addBlock(func, label: b"shmmade", heat: BlockHeat.normal)
-	var existed = module.addBlock(func, label: b"shmexisted", heat: BlockHeat.cold)
-	var answered = module.addBlock(func, label: b"shmanswer", heat: BlockHeat.normal)
+	let created = module.addBlock(func, label: b"shmmade", heat: BlockHeat.normal)
+	let existed = module.addBlock(func, label: b"shmexisted", heat: BlockHeat.cold)
+	let answered = module.addBlock(func, label: b"shmanswer", heat: BlockHeat.normal)
 
 	module.setTerminator(entry, op: StdOp.condBranch(emitHandleIsNull(module, block: entry, handle: handle, ids: ids), thenBlockId: answered.id, elseBlockId: created.id))
 	module.setTerminator(created, op: StdOp.condBranch(emitLastErrorIs(module, block: created, lastError: lastError, error: Win32SegmentError.alreadyExists, ids: ids), thenBlockId: existed.id, elseBlockId: answered.id))
@@ -198,10 +198,10 @@ end 'emitExclusiveCreateAnswer'
 // announces bytes to another, and no lock spans the two. `__shm_copy_out` stays plain: it is sound only
 // after an acquire of the word that announced the range it copies.
 function buildSharedMemoryReadWord(module StdModule)
-	var func = IrFunction.createFromStd(SharedMemoryReadWordName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(SharedMemoryReadWordName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let base = 0
@@ -215,10 +215,10 @@ function buildSharedMemoryReadWord(module StdModule)
 end 'buildSharedMemoryReadWord'
 
 function buildSharedMemoryWriteWord(module StdModule)
-	var func = IrFunction.createFromStd(SharedMemoryWriteWordName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(SharedMemoryWriteWordName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let base = 0
@@ -243,10 +243,10 @@ end 'buildSharedMemoryWriteWord'
 // by its contract, so a copy that forgot the store would answer the empty array while holding
 // the right bytes.
 function buildSharedMemoryCopyOut(module StdModule)
-	var func = IrFunction.createFromStd(SharedMemoryCopyOutName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	let func = IrFunction.createFromStd(SharedMemoryCopyOutName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
+	let ids = ValueMinter.create(3)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let base = 0
@@ -256,7 +256,7 @@ function buildSharedMemoryCopyOut(module StdModule)
 	let record = ids.mint()
 	let destBuf = emitManagedByteBuffer(module, block: entry, record: record, byteCount: byteCount, ids: ids)
 	let src = emitBin(module, block: entry, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
-	var copied = emitForwardCopy(module, func: func, cur: entry, dest: destBuf, src: src, byteCount: byteCount, ids: ids)
+	let copied = emitForwardCopy(module, func: func, cur: entry, dest: destBuf, src: src, byteCount: byteCount, ids: ids)
 	emitStoreField(module, block: copied, record: record, offset: ManagedRecordLengthOffset, value: byteCount)
 	module.setTerminator(copied, op: StdOp.ret(record))
 
@@ -274,9 +274,9 @@ end 'buildSharedMemoryCopyOut'
 //
 // A zero base is a no-op at the unmap, so a segment whose map failed tears down on this path untested.
 function buildSharedMemoryClose(module StdModule)
-	var func = IrFunction.createFromStd(SharedMemoryCloseName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
+	let func = IrFunction.createFromStd(SharedMemoryCloseName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params())
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
 	let handle = 0
@@ -292,9 +292,9 @@ function buildSharedMemoryClose(module StdModule)
 end 'buildSharedMemoryClose'
 
 function buildSharedMemoryRelease(module StdModule)
-	var func = IrFunction.createFromStd(SharedMemoryReleaseName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
+	let func = IrFunction.createFromStd(SharedMemoryReleaseName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params())
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
 	let handle = 0
@@ -331,7 +331,7 @@ export function installSharedMemoryRuntime(module StdModule, usage RuntimeUsage,
 end 'installSharedMemoryRuntime'
 
 export function checkSharedMemoryAnswers(signatures ProgramSignatures, stdlibPath FilePath)
-	var pins = TierGeometryPinArray.create(0)
+	let pins = TierGeometryPinArray.create(0)
 	pins.push(TierGeometryPin.create("the refused answer", here: SharedSegmentAnswer.refused.rawValue, named: "NoSection"))
 	pins.push(TierGeometryPin.create("the name-taken answer", here: SharedSegmentAnswer.nameTaken.rawValue, named: "NameAlreadyPublished"))
 	pins.push(TierGeometryPin.create("the not-yet-published answer", here: SharedSegmentAnswer.notYetPublished.rawValue, named: "NotYetPublished"))

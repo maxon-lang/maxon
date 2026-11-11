@@ -537,7 +537,7 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	var w = Worker.create(7)
+	let w = Worker.create(7)
 	return try w.collect(false) otherwise 99
 end 'main'
 ```

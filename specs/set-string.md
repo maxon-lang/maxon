@@ -34,7 +34,7 @@ dropped at scope exit (the leak gate stays green).
 typealias StrSet = Set with String
 
 function main() returns ExitCode
-	var s = StrSet.create()
+	let s = StrSet.create()
 	s.insert("alice")
 	s.insert("bob")
 	s.insert("carol")
@@ -53,7 +53,7 @@ freed at scope exit are two distinct allocations). Count stays 3.
 typealias StrSet = Set with String
 
 function main() returns ExitCode
-	var s = StrSet.create()
+	let s = StrSet.create()
 	s.insert("alice")
 	s.insert("bob")
 	s.insert("carol")
@@ -72,7 +72,7 @@ end 'main'
 typealias StrSet = Set with String
 
 function main() returns ExitCode
-	var s = StrSet.create()
+	let s = StrSet.create()
 	s.insert("alice")
 	s.insert("bob")
 	if s.contains("bob") 'yes'
@@ -91,7 +91,7 @@ A key never inserted is absent; the borrowed argument still drops cleanly.
 typealias StrSet = Set with String
 
 function main() returns ExitCode
-	var s = StrSet.create()
+	let s = StrSet.create()
 	s.insert("alice")
 	s.insert("bob")
 	if s.contains("dave") 'yes'
@@ -112,7 +112,7 @@ remove), the borrowed argument once (at statement end), and the two survivors on
 typealias StrSet = Set with String
 
 function main() returns ExitCode
-	var s = StrSet.create()
+	let s = StrSet.create()
 	s.insert("alice")
 	s.insert("bob")
 	s.insert("carol")
@@ -133,7 +133,7 @@ A removed key is no longer present — the tombstoned slot is skipped by a later
 typealias StrSet = Set with String
 
 function main() returns ExitCode
-	var s = StrSet.create()
+	let s = StrSet.create()
 	s.insert("alice")
 	s.insert("bob")
 	_ = s.remove("bob")
@@ -153,7 +153,7 @@ Removing an absent key returns false and drops nothing stored — only the borro
 typealias StrSet = Set with String
 
 function main() returns ExitCode
-	var s = StrSet.create()
+	let s = StrSet.create()
 	s.insert("alice")
 	let removed = s.remove("zzz")
 	if removed 'ok'
@@ -175,7 +175,7 @@ drops at statement end. All twenty present and no leak.
 typealias StrSet = Set with String
 
 function main() returns ExitCode
-	var s = StrSet.create()
+	let s = StrSet.create()
 	var i = 0 as FullRangeInt
 	while i < 20 'fill'
 		s.insert("k{i}")
@@ -258,7 +258,7 @@ function main() returns ExitCode
 	var i = 0 as Counter
 	var acc = 0 as Counter
 	while i < 100 'loop'
-		var s = StrSet.create()
+		let s = StrSet.create()
 		s.insert("a{i}")
 		s.insert("b{i}")
 		if s.count() == 2 'ok'
@@ -290,7 +290,7 @@ function main() returns ExitCode
 	var i = 0 as Counter
 	var acc = 0 as Counter
 	while i < 100 'loop'
-		var s = StrSet.create()
+		let s = StrSet.create()
 		s.insert("dup")
 		s.insert("dup")
 		if s.count() == 1 'ok'
@@ -321,7 +321,7 @@ function main() returns ExitCode
 	var i = 0 as Counter
 	var acc = 0 as Counter
 	while i < 100 'loop'
-		var s = StrSet.create()
+		let s = StrSet.create()
 		s.insert("gone{i}")
 		let removed = s.remove("gone{i}")
 		if removed 'ok'
@@ -348,7 +348,7 @@ typealias Names = Array with String
 typealias NameSet = Set with String
 
 function main() returns ExitCode
-	var names = Names.create(0)
+	let names = Names.create(0)
 	names.push("alice")
 	names.push("bob")
 	names.push("alice")
@@ -378,7 +378,7 @@ A bare `Set` head over a call's `String` array owns the keys and drops the tempo
 typealias Names = Array with String
 
 function makeNames() returns Names
-	var names = Names.create(0)
+	let names = Names.create(0)
 	names.push("x{1}")
 	names.push("y")
 	names.push("x{1}")
@@ -405,7 +405,7 @@ typealias Names = Array with String
 typealias NameSet = Set with String
 
 function main() returns ExitCode
-	var names = Names.create(0)
+	let names = Names.create(0)
 	names.push("alice")
 	let s = NameSet from names
 	names.push("bob")

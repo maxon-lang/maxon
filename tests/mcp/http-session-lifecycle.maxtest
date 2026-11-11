@@ -14,7 +14,7 @@ function lifecycleServerName(answer HttpAnswer) returns String
 end 'lifecycleServerName'
 
 test 'an http initialize mints a session id and answers as this compiler'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (answer, sessionId) = server.initializeSession()
 	let name = lifecycleServerName(answer)
 	try server.stop()
@@ -29,10 +29,10 @@ test 'an http initialize mints a session id and answers as this compiler'
 end 'an http initialize mints a session id and answers as this compiler'
 
 test 'an http request carrying no session id is refused 404'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
-	let sessionless = server.post(toolsListRequest(2), sessionId: McpSession.none)
-	let withSession = server.post(toolsListRequest(3), sessionId: sessionId)
+	let sessionless = server.address.post(toolsListRequest(2), sessionId: McpSession.none)
+	let withSession = server.address.post(toolsListRequest(3), sessionId: sessionId)
 	try server.stop()
 
 	try Expect.equal(initialized.statusCode, expected: OkStatus, message: "the control `initialize` did not succeed, so nothing below says anything about sessions")
@@ -41,10 +41,10 @@ test 'an http request carrying no session id is refused 404'
 end 'an http request carrying no session id is refused 404'
 
 test 'an http request carrying an unknown session id is refused 404'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
-	let stranger = server.post(toolsListRequest(2), sessionId: McpSession.minted("00000000000000000000000000000000"))
-	let mine = server.post(toolsListRequest(3), sessionId: sessionId)
+	let stranger = server.address.post(toolsListRequest(2), sessionId: McpSession.minted("00000000000000000000000000000000"))
+	let mine = server.address.post(toolsListRequest(3), sessionId: sessionId)
 	try server.stop()
 
 	try Expect.equal(initialized.statusCode, expected: OkStatus)
@@ -53,11 +53,11 @@ test 'an http request carrying an unknown session id is refused 404'
 end 'an http request carrying an unknown session id is refused 404'
 
 test 'a DELETE ends the session and a later request on it is 404'
-	var server = StreamingHttpMcpServer.start(StringArray.create(0))
+	let server = StreamingHttpMcpServer.start(StringArray.create(0))
 	let (initialized, sessionId) = server.initializeSession()
-	let before = server.post(toolsListRequest(2), sessionId: sessionId)
-	let deleted = server.request("DELETE", target: McpRoutePath, host: server.authority(), origin: "", sessionId: sessionId, body: "")
-	let after = server.post(toolsListRequest(3), sessionId: sessionId)
+	let before = server.address.post(toolsListRequest(2), sessionId: sessionId)
+	let deleted = server.address.request("DELETE", target: McpRoutePath, host: server.address.authority(), origin: "", sessionId: sessionId, body: "")
+	let after = server.address.post(toolsListRequest(3), sessionId: sessionId)
 	try server.stop()
 
 	try Expect.equal(initialized.statusCode, expected: OkStatus)
@@ -67,13 +67,13 @@ test 'a DELETE ends the session and a later request on it is 404'
 end 'a DELETE ends the session and a later request on it is 404'
 
 test 'a session left idle past the timeout is reaped'
-	var server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
+	let server = StreamingHttpMcpServer.start(["{McpIdleTimeoutOptionPrefix}{IdleTimeoutSeconds}"])
 	let (initialized, sessionId) = server.initializeSession()
-	let before = server.post(toolsListRequest(2), sessionId: sessionId)
+	let before = server.address.post(toolsListRequest(2), sessionId: sessionId)
 
 	sleep(HttpSessionLifecyclePastIdleMs)
 
-	let after = server.post(toolsListRequest(3), sessionId: sessionId)
+	let after = server.address.post(toolsListRequest(3), sessionId: sessionId)
 	try server.stop()
 
 	try Expect.equal(initialized.statusCode, expected: OkStatus)
@@ -82,10 +82,10 @@ test 'a session left idle past the timeout is reaped'
 end 'a session left idle past the timeout is reaped'
 
 test 'an initialize past --max-sessions is refused 429'
-	var server = StreamingHttpMcpServer.start(["{McpMaxSessionsOptionPrefix}1"])
+	let server = StreamingHttpMcpServer.start(["{McpMaxSessionsOptionPrefix}1"])
 	let (first, firstId) = server.initializeSession()
 	let (second, secondId) = server.initializeSession()
-	let firstStillWorks = server.post(toolsListRequest(2), sessionId: firstId)
+	let firstStillWorks = server.address.post(toolsListRequest(2), sessionId: firstId)
 	try server.stop()
 
 	try Expect.equal(first.statusCode, expected: OkStatus, message: "the first session must be minted; it answered {first.statusCode}")

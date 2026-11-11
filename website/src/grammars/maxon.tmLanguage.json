@@ -268,16 +268,13 @@
       ]
     },
     "capability-words": {
-      "comment": "Approximates the language server's `capability` semantic token, which package.json colours with this same scope: a change to one belongs in the other. `isolated`, `immutable`, `mutable` and `readonly` are contextual and qualify only before a type start. This item holds the positions a lookbehind reaches: directly after a typed name, `returns`, `as` or `with` (never after a word that makes the next word an operand), stacked, after `= `, and as a receiver. The slots after `(` and `, ` are in `#type-list-slots` and apply only inside a type list (`#type-list-regions`: a function-type or closure list, a tuple group after `as`, `returns` or a qualifier, a `with` list, a typealias right-hand side) and never in a declaration's own parameter list, whose first word per entry is a name; `readonly` is a name in a function-type list. A line-based grammar cannot see a list opened on an earlier line, so a slot after a line break stays a name. A bare \\bimmutable\\b would paint every binding or parameter named by one.",
+      "comment": "Approximates the language server's `capability` semantic token, which package.json colours with this same scope: a change to one belongs in the other. `isolated`, `immutable` and `mutable` are contextual and qualify only before a type start. This item holds the positions a lookbehind reaches: directly after a typed name, `returns`, `as` or `with` (never after a word that makes the next word an operand), stacked, after `= `, and as a receiver. The slots after `(` and `, ` are in `#type-list-slots` and apply only inside a type list (`#type-list-regions`: a function-type or closure list, a tuple group after `as`, `returns` or a qualifier, a `with` list, a typealias right-hand side) and never in a declaration's own parameter list, whose first word per entry is a name. A line-based grammar cannot see a list opened on an earlier line, so a slot after a line break stays a name. A bare \\bimmutable\\b would paint every binding or parameter named by one.",
       "patterns": [
         {
-          "match": "(?<=\\w[ \\t])(?<!\\blet |\\bvar |\\bview |\\breturn |\\bthrow |\\bnot |\\band |\\bor |\\bxor |\\bin |\\bthen |\\bgives |\\belse |\\bif |\\bto |\\bupto |\\bmod |\\bshl |\\bshr |\\bis |\\btry |\\bawait |\\basync |\\botherwise |\\bpanic |\\bwhile |\\bfor |\\bmatch |\\bdefault |\\bignore |\\bthrows |\\bfrom |\\bwhere |\\buses |\\bextends |\\bimplements |\\bfunction |\\btype |\\benum |\\bunion |\\binterface |\\bextension |\\btypealias |\\bstatic |\\bexport |\\bpublic |\\bmodule |\\bfreeze |\\bswap |\\bmerge |\\bspawn )(?:(isolated|immutable|mutable)|(readonly))(?=[ \\t]+(?:(?:isolated|immutable|mutable)[ \\t]+)*(?:[A-Z(]|(?:int|float|bool|cstring)\\b))",
+          "match": "(?<=\\w[ \\t])(?<!\\blet |\\bvar |\\breturn |\\bthrow |\\bnot |\\band |\\bor |\\bxor |\\bin |\\bthen |\\bgives |\\belse |\\bif |\\bto |\\bupto |\\bmod |\\bshl |\\bshr |\\bis |\\btry |\\bawait |\\basync |\\botherwise |\\bpanic |\\bwhile |\\bfor |\\bmatch |\\bdefault |\\bignore |\\bthrows |\\bfrom |\\bwhere |\\buses |\\bextends |\\bimplements |\\bfunction |\\btype |\\benum |\\bunion |\\binterface |\\bextension |\\btypealias |\\bstatic |\\bexport |\\bpublic |\\bmodule |\\bfreeze |\\bswap |\\bmerge |\\bspawn )(isolated|immutable|mutable)(?=[ \\t]+(?:(?:isolated|immutable|mutable)[ \\t]+)*(?:[A-Z(]|(?:int|float|bool|cstring)\\b))",
           "captures": {
             "1": {
               "name": "storage.modifier.capability.maxon"
-            },
-            "2": {
-              "name": "keyword.other.maxon"
             }
           }
         },
@@ -321,18 +318,6 @@
           "match": "^\\s*(module)\\s+(?=\\b(function|type|union|enum|interface|typealias|var|let|static|extension)\\b)",
           "captures": {
             "1": {
-              "name": "keyword.other.maxon"
-            }
-          }
-        },
-        {
-          "comment": "`view` is contextual and mirrors the lexer's retagging (Lexer.viewOpensABindingAt): the word opens a binding only at a line start or directly after `if` or `then` (never `while`), and only when an identifier follows it (a keyword does not count) or a `(...)` pattern followed by `=`, with or without a space before the `(`. A bare \\bview\\b would paint every ordinary `view` variable, parameter and call.",
-          "match": "(?:^\\s*|\\b(if|then)\\s+)(view)(?=\\s+(?!(?:if|else|while|for|in|break|continue|return|end|match|then|fallthrough|default|upto|gives|try|otherwise|throw|async|await|panic|ignore|function|returns|let|var|type|union|enum|typealias|export|public|static|interface|extension|extends|uses|with|where|self|Self|throws|from|to|mod|and|or|not|xor|shl|shr|as|is|sizeof|countof|implements|true|false|int|float|bool|cstring)\\b)[A-Za-z_]|\\s*\\([^()]*\\)\\s*=(?!=))",
-          "captures": {
-            "1": {
-              "name": "keyword.control.maxon"
-            },
-            "2": {
               "name": "keyword.other.maxon"
             }
           }
@@ -644,25 +629,10 @@
         }
       ]
     },
-    "type-group-readonly-slots": {
-      "patterns": [
-        {
-          "match": "(?<=\\(|, )(readonly)(?=[ \\t]+(?:(?:isolated|immutable|mutable)[ \\t]+)*(?:[A-Z(]|(?:int|float|bool|cstring)\\b))",
-          "captures": {
-            "1": {
-              "name": "keyword.other.maxon"
-            }
-          }
-        }
-      ]
-    },
     "type-group-contents": {
       "patterns": [
         {
           "include": "#type-list-slots"
-        },
-        {
-          "include": "#type-group-readonly-slots"
         },
         {
           "include": "#type-group"
@@ -787,7 +757,7 @@
           ]
         },
         {
-          "begin": "(?<=\\bas |\\breturns |\\bimmutable |\\bisolated |\\bmutable |\\breadonly )\\(",
+          "begin": "(?<=\\bas |\\breturns |\\bimmutable |\\bisolated |\\bmutable )\\(",
           "end": "\\)",
           "patterns": [
             {

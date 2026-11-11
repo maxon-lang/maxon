@@ -11,13 +11,13 @@ test 'a spec-test run by a case gets a working directory of its own, not the one
 	let inner = freshOutsideCheckoutDir(NestedInnerDirName)
 	writeStagedFile(inner.join(NestedInnerSpecFileName), content: NestedInnerSpec)
 
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 	overrides.upsert(NestedCompilerVariable, value: testedCompilerPath().toString())
 	overrides.upsert(NestedSpecDirVariable, value: inner.toString())
 
 	let run = runSpecTest(staged, includeNetwork: false, environment: Environment.inheritUpdating(overrides))
 	let said = everythingSaid(run)
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 
 	if not said.contains(passVerdictLine(NestedRunCaseLabel)) 'nestedRunShared'
 		broken.push("the run inside the case did not run its case in a directory of its own. Expected '{passVerdictLine(NestedRunCaseLabel)}', and the run said:\n{said}\n")

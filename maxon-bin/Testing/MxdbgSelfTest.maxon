@@ -101,7 +101,7 @@ let RowPastWithdraw = 150 as MxdbgCodeOffset
 let ParseBatchFunction = 1 as MxdbgIndex
 
 export function requireMxdbgRoundTrip()
-	var broken = StringArray.create(0)
+	let broken = StringArray.create(0)
 
 	checkBuildIdIsAFunctionOfTheBytes(broken)
 	checkTablesRoundTrip(broken)
@@ -170,110 +170,110 @@ function checkTablesRoundTrip(broken StringArray)
 end 'checkTablesRoundTrip'
 
 function checkRefusesALineRowAtLineZero(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffLineTableOff, stride: MxdbgLineEntrySize, record: 0, field: MxdbgLineLine, value: 0)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.unnumberedPosition(MxdbgPositionHolder.lineRow, record: 0), damage: "an image whose line row 0 names line 0")
 end 'checkRefusesALineRowAtLineZero'
 
 function checkRefusesALineRowAtColumnZero(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffLineTableOff, stride: MxdbgLineEntrySize, record: 0, field: MxdbgLineCol, value: 0)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.unnumberedPosition(MxdbgPositionHolder.lineRow, record: 0), damage: "an image whose line row 0 names column 0")
 end 'checkRefusesALineRowAtColumnZero'
 
 function checkRefusesACallPositionAtLineZero(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffInlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, record: DebitSite, field: MxdbgInlineSiteCallLine, value: 0)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.unnumberedPosition(MxdbgPositionHolder.inlineSiteCall, record: DebitSite), damage: "an image whose inline site '{DebitName}' is called from line 0 of {AccountFileName}")
 end 'checkRefusesACallPositionAtLineZero'
 
 function checkRefusesAnInvertedFunctionRange(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffFuncTableOff, stride: MxdbgFuncEntrySize, record: ParseBatchFunction, field: MxdbgFuncCodeEnd, value: InvertedParseBatchEnd as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionRanges, record: ParseBatchFunction), damage: "an image whose function {ParseBatchFunction} ends at 0x{InvertedParseBatchEnd:x}, before it starts")
 end 'checkRefusesAnInvertedFunctionRange'
 
 function checkRefusesOverlappingFunctionRanges(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffFuncTableOff, stride: MxdbgFuncEntrySize, record: ParseBatchFunction, field: MxdbgFuncCodeStart, value: OverlappingParseBatchStart as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionRanges, record: ParseBatchFunction), damage: "an image whose function {ParseBatchFunction} starts at 0x{OverlappingParseBatchStart:x}, inside function 0")
 end 'checkRefusesOverlappingFunctionRanges'
 
 function checkRefusesARowOutsideItsFunction(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffLineTableOff, stride: MxdbgLineEntrySize, record: 0, field: MxdbgLineCodeOffset, value: RowPastWithdraw as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionLineOutsideItsRange, record: 0), damage: "an image whose function 0 lists a line row at 0x{RowPastWithdraw:x}, past its own end")
 end 'checkRefusesARowOutsideItsFunction'
 
 function checkRefusesAProloguePastItsFunction(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffFuncTableOff, stride: MxdbgFuncEntrySize, record: 0, field: MxdbgFuncPrologueOffset, value: RowPastWithdraw as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionPrologueOutsideItsRange, record: 0), damage: "an image whose function 0 starts its prologue at +0x{RowPastWithdraw:x}, past its own end")
 end 'checkRefusesAProloguePastItsFunction'
 
 function checkRefusesAnEmptyLocalScope(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffLocalTableOff, stride: MxdbgLocalEntrySize, record: 0, field: MxdbgLocalScopeStart, value: WithdrawEnd as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.localScopes, record: 0), damage: "an image whose local 0's scope starts at its function's end, so it covers nothing")
 end 'checkRefusesAnEmptyLocalScope'
 
 function checkRefusesADanglingCallFile(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffInlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, record: DebitSite, field: MxdbgInlineSiteCallFileId, value: PastEveryFile as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.danglingReference(MxdbgReference.siteCallFile, record: DebitSite, names: PastEveryFile), damage: "an image whose inline site '{DebitName}' is called from file {PastEveryFile}")
 end 'checkRefusesADanglingCallFile'
 
 function checkRefusesACyclicSiteParent(broken StringArray, buildId HashDigest)
-	var writer = MxdbgWriter.create()
+	let writer = MxdbgWriter.create()
 	writer.addFile(AccountFileName)
 	writer.addFunction(WithdrawName, displayName: WithdrawName, origin: MxdbgOrigin.authored, codeStart: WithdrawStart, codeEnd: WithdrawEnd, prologueOffset: WithdrawPrologueOffset, frameSize: WithdrawFrame, paramCount: WithdrawParams)
 	writer.addInlineSite(DebitName, parent: MxdbgNoInlineSite, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: MxdbgOrigin.authored)
 	writer.addInlineSite(CheckFundsName, parent: DebitSite, callFileId: MxdbgNoSourceFile, callLine: 0, callColumn: 0, origin: MxdbgOrigin.library)
 	writer.addInlineRange(DebitStart, codeEnd: DebitEnd, site: DebitSite)
 
-	var image = writer.build(buildId, targetTriple: SelfTestTriple, sourceRoot: SelfTestSourceRoot)
+	let image = writer.build(buildId, targetTriple: SelfTestTriple, sourceRoot: SelfTestSourceRoot)
 	overwriteTableWord(image, tableAt: MxdbgOffInlineSiteTableOff, stride: MxdbgInlineSiteEntrySize, record: DebitSite, field: MxdbgInlineSiteParent, value: CheckFundsSite as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.danglingReference(MxdbgReference.siteParent, record: DebitSite, names: CheckFundsSite), damage: "an image whose inline sites '{DebitName}' and '{CheckFundsName}' name each other as parents")
 end 'checkRefusesACyclicSiteParent'
 
 function checkRefusesAStringPastThePool(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffFuncTableOff, stride: MxdbgFuncEntrySize, record: 0, field: MxdbgFuncNameLen, value: PastEveryPool)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.stringPastPool(MxdbgPoolString.functionName, record: 0), damage: "an image whose function 0 names a string running {PastEveryPool} bytes past its string pool")
 end 'checkRefusesAStringPastThePool'
 
 function checkRefusesADanglingLocalType(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffLocalTableOff, stride: MxdbgLocalEntrySize, record: 0, field: MxdbgLocalTypeId, value: PastEveryType as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.danglingReference(MxdbgReference.localType, record: 0, names: PastEveryType), damage: "an image whose local 0 names type {PastEveryType}")
 end 'checkRefusesADanglingLocalType'
 
 function checkRefusesADanglingFieldType(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffFieldTableOff, stride: MxdbgFieldEntrySize, record: 0, field: MxdbgFieldTypeId, value: PastEveryType as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.danglingReference(MxdbgReference.fieldType, record: 0, names: PastEveryType), damage: "an image whose field 0 names type {PastEveryType}")
 end 'checkRefusesADanglingFieldType'
 
 function checkRefusesALineWindowPastItsTable(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffFuncTableOff, stride: MxdbgFuncEntrySize, record: 0, field: MxdbgFuncLineCount, value: PastEveryRow as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.windowPastTable(MxdbgWindow.functionLines, record: 0), damage: "an image whose function 0 claims {PastEveryRow} line rows")
 end 'checkRefusesALineWindowPastItsTable'
 
 function checkRefusesAnUnknownLocKind(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffLocalTableOff, stride: MxdbgLocalEntrySize, record: 0, field: MxdbgLocalLocKind, value: UnknownLocKind as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.unknownLocKind(0, word: UnknownLocKind), damage: "an image whose local 0 names location kind {UnknownLocKind}")
 end 'checkRefusesAnUnknownLocKind'
 
 function checkRefusesLineRowsOutOfOrder(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffLineTableOff, stride: MxdbgLineEntrySize, record: 0, field: MxdbgLineCodeOffset, value: RowPastItsSuccessor as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.functionLines, record: 0), damage: "an image whose function 0 lists a line row at 0x{RowPastItsSuccessor:x} ahead of one before it")
 end 'checkRefusesLineRowsOutOfOrder'
 
 function checkRefusesOverlappingInlineRanges(broken StringArray, buildId HashDigest)
-	var image = selfTestImage(buildId)
+	let image = selfTestImage(buildId)
 	overwriteTableWord(image, tableAt: MxdbgOffInlineRangeTableOff, stride: MxdbgInlineRangeEntrySize, record: 1, field: MxdbgInlineRangeCodeStart, value: DebitStart as MachineWord)
 	requireRefusedAs(broken, image: image, expected: MxdbgReadError.outOfOrder(MxdbgOrderedTable.inlineRanges, record: 1), damage: "an image whose inline range 1 starts inside range 0")
 end 'checkRefusesOverlappingInlineRanges'
@@ -383,7 +383,7 @@ function checkLocalRanges(broken StringArray, reader MxdbgReader)
 		return
 	end 'windowLost'
 
-	var runs = MxdbgCodeOffsetArray.create(0)
+	let runs = MxdbgCodeOffsetArray.create(0)
 
 	for k in withdraw.localFirst upto withdraw.localFirst + withdraw.localCount 'eachLocal'
 		let local = reader.localRecord(k as MxdbgIndex)
@@ -448,7 +448,7 @@ function checkTypeSignedness(broken StringArray, reader MxdbgReader)
 end 'checkTypeSignedness'
 
 function checkStatementRows(broken StringArray, reader MxdbgReader)
-	var accountFile = MxdbgIndexArray.create(1, zeroed: false)
+	let accountFile = MxdbgIndexArray.create(1, zeroed: false)
 	accountFile.push(AccountFileId)
 	let rows = reader.statementRowsOf(accountFile, line: SharedLine)
 
@@ -484,7 +484,7 @@ function checkCallSiteBias(broken StringArray)
 end 'checkCallSiteBias'
 
 function selfTestImage(buildId HashDigest) returns ByteArray
-	var writer = MxdbgWriter.create()
+	let writer = MxdbgWriter.create()
 	writer.addFile(AccountFileName)
 	writer.addFile(IoFileName)
 	writer.addType(AmountTypeName, kind: MxdbgTypeKindIntRanged, size: AmountTypeBytes, align: AmountTypeBytes, elementTypeId: MxdbgNoElementType, flags: MxdbgTypeFlagSigned)

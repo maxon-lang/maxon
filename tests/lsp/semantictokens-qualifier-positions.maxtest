@@ -1,7 +1,6 @@
 let QualifierPositionsUri = "file:///test.maxon"
 let QualifierPositionsFixture = "vscode-extension/test-fixtures/qualifier-positions.maxon"
 
-let QualifierPositionsKeywordType = 0
 let QualifierPositionsVariableType = 7
 let QualifierPositionsCapabilityType = 16
 
@@ -29,7 +28,7 @@ end 'QualifierClaims'
 
 test 'semantic tokens colour every position of the shared qualifier-positions fixture as the grammar fixture pins it'
 	let source = checkoutDocumentText(QualifierPositionsFixture)
-	var client = LspClient.start()
+	let client = LspClient.start()
 
 	if let data = try qualifierPositionTokensOf(client, source: source) 'tokens'
 		client.release()
@@ -41,7 +40,7 @@ end 'semantic tokens colour every position of the shared qualifier-positions fix
 
 test 'semantic tokens keep colouring a capability qualifier after an unclosed bracket'
 	let source = qualifierDriftFixture()
-	var client = LspClient.start()
+	let client = LspClient.start()
 
 	if let data = try qualifierPositionTokensOf(client, source: source) 'tokens'
 		client.release()
@@ -62,7 +61,7 @@ function qualifierPositionTokensOf(client LspClient, source String) returns Sema
 end 'qualifierPositionTokensOf'
 
 function assertQualifierDriftPositions(tokens LocatedSemanticTokenArray, source String) throws TestFailure
-	var claims = QualifierClaims.over(tokens, source: source)
+	let claims = QualifierClaims.over(tokens, source: source)
 
 	claims.expect(4, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a tuple element in a parameter type after an unclosed bracket on an earlier line")
 	claims.expect(7, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a parameter qualifier after an unclosed bracket on an earlier line")
@@ -73,15 +72,13 @@ function assertQualifierDriftPositions(tokens LocatedSemanticTokenArray, source 
 end 'assertQualifierDriftPositions'
 
 function assertQualifierPositions(tokens LocatedSemanticTokenArray, source String) throws TestFailure
-	var claims = QualifierClaims.over(tokens, source: source)
+	let claims = QualifierClaims.over(tokens, source: source)
 
 	claims.expect(4, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a tuple element in a parameter type, `p (immutable Foo, Bar)`")
 	claims.expect(9, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a tuple element in a field type, `var pair as (immutable Foo, Bar)`")
 	claims.expect(12, word: "immutable", expected: QualifierPositionsCapabilityType, what: "a tuple element in a return type, `returns (immutable Foo, Bar)`")
-	claims.expect(16, word: "readonly", expected: QualifierPositionsVariableType, what: "the parameter name in the function type `function(readonly Foo)`")
 	claims.expect(17, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the second slot of the function type `function(a T, immutable U)`")
 	claims.expect(18, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the third slot of the function type `function(a T, b U, immutable W)`")
-	claims.expect(21, word: "readonly", expected: QualifierPositionsKeywordType, what: "the qualifier of a declared local, `var x as readonly Foo`, which paints as the keyword it is refused as")
 	claims.expect(22, word: "isolated", expected: QualifierPositionsCapabilityType, what: "the qualifier after `as`, `as isolated Box`")
 	claims.expect(25, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the qualifier of a tuple typealias, `typealias Pair = immutable (X, Y)`")
 	claims.expect(26, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the qualifier of a value-type typealias, `typealias Plain = immutable int`")
@@ -93,7 +90,6 @@ function assertQualifierPositions(tokens LocatedSemanticTokenArray, source Strin
 	claims.expect(42, word: "isolated", expected: QualifierPositionsCapabilityType, what: "the second of the stacked words in `box mutable isolated Box`")
 	claims.expect(45, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the value slot of `Map with (K, immutable V)`")
 	claims.expect(46, word: "immutable", expected: QualifierPositionsCapabilityType, what: "the value slot of `Map with K, immutable V`")
-	claims.expect(47, word: "readonly", expected: QualifierPositionsKeywordType, what: "the element qualifier of `Array with readonly V`")
 	claims.expect(50, word: "mutable", expected: QualifierPositionsCapabilityType, what: "a typed closure-literal parameter, `function(box mutable Foo, by Count)`")
 	claims.expect(51, word: "immutable", expected: QualifierPositionsVariableType, what: "an untyped closure-literal parameter, `function(immutable) gives 1`")
 	claims.expect(54, word: "isolated", expected: QualifierPositionsCapabilityType, what: "the capability word naming the bound in `where T is isolated`")
@@ -105,7 +101,6 @@ function assertQualifierPositions(tokens LocatedSemanticTokenArray, source Strin
 	claims.expect(66, word: "isolated", expected: QualifierPositionsVariableType, what: "the operand after `spawn`")
 	claims.expect(67, word: "mutable", expected: QualifierPositionsVariableType, what: "the operand after `and`")
 	claims.expect(68, word: "isolated", expected: QualifierPositionsVariableType, what: "the operand after `merge`")
-	claims.expect(69, word: "readonly", expected: QualifierPositionsVariableType, what: "the operand `readonly(seed)` after `and`")
 	claims.expect(70, word: "immutable", expected: QualifierPositionsVariableType, what: "the binding in `let immutable = 1`")
 	claims.expect(71, word: "mutable", expected: QualifierPositionsVariableType, what: "the binding in `var mutable = 2`")
 	claims.expect(73, word: "isolated", expected: QualifierPositionsVariableType, what: "a word at the start of a line that follows a line ending in a name")

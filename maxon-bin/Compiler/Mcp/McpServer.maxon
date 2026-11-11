@@ -7,17 +7,17 @@
 export let McpServerCommandName = "mcp-server"
 
 function handleInitialize(reqDoc JsonDoc, idNode JsonNodeId) returns String
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 
-	var emptyTools = JsonObjectBuilder.create()
-	var caps = JsonObjectBuilder.create()
+	let emptyTools = JsonObjectBuilder.create()
+	let caps = JsonObjectBuilder.create()
 	caps.addNode("tools", node: emptyTools.build(doc))
 
-	var serverInfo = JsonObjectBuilder.create()
+	let serverInfo = JsonObjectBuilder.create()
 	serverInfo.addString(doc, key: "name", value: CompilerProductName)
 	serverInfo.addString(doc, key: "version", value: CompilerVersion)
 
-	var result = JsonObjectBuilder.create()
+	let result = JsonObjectBuilder.create()
 	result.addString(doc, key: "protocolVersion", value: McpProtocolVersion)
 	result.addNode("capabilities", node: caps.build(doc))
 	result.addNode("serverInfo", node: serverInfo.build(doc))
@@ -29,13 +29,13 @@ end 'handleInitialize'
 // An argument accepting several JSON types is emitted as `oneOf`, which is what a client needs in
 // order to offer every spelling rather than flagging one as a type error.
 function propertySchema(doc JsonDoc, prop McpProperty) returns JsonNodeId
-	var schema = JsonObjectBuilder.create()
+	let schema = JsonObjectBuilder.create()
 	let types = prop.jsonTypes()
 
 	if types.count() == 1 'oneType'
 		addTypeFields(schema, doc: doc, jsonType: try types.get(0) otherwise panic("propertySchema: a one-type property has its type"))
 	end 'oneType' else 'eitherType'
-		var alternatives = JsonNodeIdArray.create(types.count(), zeroed: false)
+		let alternatives = JsonNodeIdArray.create(types.count(), zeroed: false)
 
 		for jsonType in types 'eachType'
 			alternatives.push(typeSchema(doc, jsonType: jsonType))
@@ -65,7 +65,7 @@ function addNumberBounds(doc JsonDoc, schema JsonObjectBuilder, least JsonFloat,
 end 'addNumberBounds'
 
 function typeSchema(doc JsonDoc, jsonType String) returns JsonNodeId
-	var schema = JsonObjectBuilder.create()
+	let schema = JsonObjectBuilder.create()
 	addTypeFields(schema, doc: doc, jsonType: jsonType)
 	return schema.build(doc)
 end 'typeSchema'
@@ -80,8 +80,8 @@ function addTypeFields(schema JsonObjectBuilder, doc JsonDoc, jsonType String)
 end 'addTypeFields'
 
 function toolDescriptor(doc JsonDoc, spec McpToolSpec, devMode bool) returns JsonNodeId
-	var properties = JsonObjectBuilder.create()
-	var requiredNames = JsonNodeIdArray.create(0)
+	let properties = JsonObjectBuilder.create()
+	let requiredNames = JsonNodeIdArray.create(0)
 	var anyRequired = false
 
 	for prop in spec.properties 'each'
@@ -97,7 +97,7 @@ function toolDescriptor(doc JsonDoc, spec McpToolSpec, devMode bool) returns Jso
 		end 'isRequired'
 	end 'each'
 
-	var schema = JsonObjectBuilder.create()
+	let schema = JsonObjectBuilder.create()
 	schema.addString(doc, key: "type", value: JsonObjectType)
 	schema.addNode("properties", node: properties.build(doc))
 
@@ -105,7 +105,7 @@ function toolDescriptor(doc JsonDoc, spec McpToolSpec, devMode bool) returns Jso
 		schema.addNode("required", node: doc.add(JsonNode.arrayNode(requiredNames)))
 	end 'hasRequired'
 
-	var descriptor = JsonObjectBuilder.create()
+	let descriptor = JsonObjectBuilder.create()
 	descriptor.addString(doc, key: "name", value: spec.name)
 	descriptor.addString(doc, key: "description", value: spec.description)
 	descriptor.addNode("inputSchema", node: schema.build(doc))
@@ -114,8 +114,8 @@ function toolDescriptor(doc JsonDoc, spec McpToolSpec, devMode bool) returns Jso
 end 'toolDescriptor'
 
 function handleToolsList(reqDoc JsonDoc, idNode JsonNodeId, devMode bool) returns String
-	var doc = JsonDoc.create()
-	var descriptors = JsonNodeIdArray.create(0)
+	let doc = JsonDoc.create()
+	let descriptors = JsonNodeIdArray.create(0)
 
 	for spec in mcpToolRoster() 'each'
 		if not spec.visibleIn(devMode) 'hidden'
@@ -125,7 +125,7 @@ function handleToolsList(reqDoc JsonDoc, idNode JsonNodeId, devMode bool) return
 		descriptors.push(toolDescriptor(doc, spec: spec, devMode: devMode))
 	end 'each'
 
-	var result = JsonObjectBuilder.create()
+	let result = JsonObjectBuilder.create()
 	result.addNode("tools", node: doc.add(JsonNode.arrayNode(descriptors)))
 
 	return rpcResultText(reqDoc, idNode: idNode, resultDoc: doc, resultRoot: result.build(doc))
@@ -212,13 +212,13 @@ function handleToolsCall(reqDoc JsonDoc, idNode JsonNodeId, paramsId JsonNodeId,
 end 'handleToolsCall'
 
 function handleRpcMessage(line String, exePath FilePath, devMode bool, debug DebugSessionSlot, fileMemos SharedFileMemoMap) returns RpcReply
-	var doc = try Json.parse(line) otherwise return unattributedRpcError(RpcStandardErrorCode.parseError, message: "Parse error - invalid JSON")
+	let doc = try Json.parse(line) otherwise return unattributedRpcError(RpcStandardErrorCode.parseError, message: "Parse error - invalid JSON")
 
 	return handleRpcDocument(doc, exePath: exePath, devMode: devMode, debug: debug, fileMemos: fileMemos)
 end 'handleRpcMessage'
 
 function unattributedRpcError(code RpcStandardErrorCode, message String) returns RpcReply
-	var errDoc = JsonDoc.create()
+	let errDoc = JsonDoc.create()
 	let nullId = errDoc.add(JsonNode.nullNode())
 
 	return RpcReply.body(rpcErrorText(errDoc, idNode: nullId, code: code, message: message))
@@ -321,9 +321,9 @@ end 'runMcpServer'
 // One JSON object per line in each direction: MCP's stdio transport does not use the Content-Length
 // framing LSP and DAP do.
 function runMcpStdioServer(devMode bool, exePath FilePath) returns ExitCode
-	var stdin = Console.stdin()
-	var debug = DebugSessionSlot.create()
-	var fileMemos = SharedFileMemoMap.create()
+	let stdin = Console.stdin()
+	let debug = DebugSessionSlot.create()
+	let fileMemos = SharedFileMemoMap.create()
 
 	while true 'serverLoop'
 		let line = try stdin.readLine() otherwise 'eof'

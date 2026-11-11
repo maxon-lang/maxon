@@ -84,7 +84,7 @@ export function insertArm64FrameForFunction(module TargetModule, func IrFunction
 	var isFirstBlock = true
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("insertArm64FrameForFunction: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("insertArm64FrameForFunction: blockRef from func.blockRefs not in module.blocks")
 
 		if isFirstBlock 'entry'
 			insertArm64PrologueAtEntry(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount as SpillSlot, frameSize: frameSize, recordOffset: recordOffset)
@@ -123,11 +123,11 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 	// The `add x17, x29, #hi` folds this pass has to splice in, in ASCENDING block position. Collected
 	// per block and spliced ONCE, because `IrBlock.insertBodyOp` shifts a suffix on every call. Reused
 	// across blocks rather than reallocated.
-	var foldPositions = BlockOpPosArray.create(0)
-	var foldOps = OpIndexArray.create(0)
+	let foldPositions = BlockOpPosArray.create(0)
+	let foldOps = OpIndexArray.create(0)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("resolveArm64IncomingArgs: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("resolveArm64IncomingArgs: blockRef from func.blockRefs not in module.blocks")
 		foldPositions.clear()
 		foldOps.clear()
 
@@ -405,7 +405,7 @@ end 'appendArm64EpilogueBeforeReturn'
 function arm64UsedCalleeSaved(module TargetModule, func IrFunction) returns Arm64RegNumArray
 	let mask = colouredPhysicalRegs(module, func: func)
 	let fpBase = Arm64FirstVectorRegister
-	var used = Arm64RegNumArray.create(0)
+	let used = Arm64RegNumArray.create(0)
 
 	for reg in Arm64CalleeSavedGprLow upto Arm64CalleeSavedGprEnd 'gprs'
 		if regMaskContains(mask, regNum: reg) 'isUsed'

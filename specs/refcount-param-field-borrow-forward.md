@@ -72,11 +72,11 @@ type Lex
 	var counter as Integer
 
 	static function create() returns Self throws IterErr
-		var toks = TokBuf.create(0)
+		let toks = TokBuf.create(0)
 		for i in 0 upto 200 'fill'
 			toks.push(Tok.make(i))
 		end 'fill'
-		var cur = try toks.cursor() otherwise throw IterErr.stop
+		let cur = try toks.cursor() otherwise throw IterErr.stop
 		return Self{toks: toks, cur: cur, counter: 0}
 	end 'create'
 
@@ -115,15 +115,15 @@ type Lex
 end 'Lex'
 
 function run() returns Integer throws IterErr
-	var lex = try Lex.create()
+	let lex = try Lex.create()
 	var sum = 0 as Integer
 	for _ in 0 upto 40 'loop'
-		view a = try lex.consumeExpecting(1)
+		let a = try lex.consumeExpecting(1)
 		sum = sum + a.line
 	end 'loop'
-	view b = try lex.consumeExpecting(2)
-	view c = try lex.consumeExpecting(3)
-	view d = try lex.consumeExpecting(4)
+	let b = try lex.consumeExpecting(2)
+	let c = try lex.consumeExpecting(3)
+	let d = try lex.consumeExpecting(4)
 	sum = sum + b.line + c.line + d.line
 	return sum
 end 'run'

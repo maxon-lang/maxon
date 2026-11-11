@@ -49,7 +49,7 @@ export function installSharedValueRuntime(module StdModule, globalData GlobalDat
 		return
 	end 'noSharedValue'
 
-	view released = releasedRegistryPanicLabel(globalData)
+	let released = releasedRegistryPanicLabel(globalData)
 	buildSharedValueNew(module)
 	buildSharedValueInstall(module)
 	buildSharedValueCurrent(module, released: released)
@@ -64,7 +64,7 @@ export function installSharedValueRuntime(module StdModule, globalData GlobalDat
 end 'installSharedValueRuntime'
 
 function emitSkipIfReleased(module StdModule, func IrFunction, block IrBlock, held ValueId, done IrBlock, ids ValueMinter) returns IrBlock
-	var live = module.addBlock(func, label: b"regheld", heat: BlockHeat.normal)
+	let live = module.addBlock(func, label: b"regheld", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: block, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: done, whenFalse: live, ids: ids)
 	return live
 end 'emitSkipIfReleased'
@@ -74,7 +74,7 @@ module function openRuntimeFunction(name ByteArray, paramCount ParamCount, retur
 end 'openRuntimeFunction'
 
 function i64Params(count ParamCount) returns StdTypeArray
-	var params = StdTypeArray.create(count, zeroed: false)
+	let params = StdTypeArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'each'
 		params.push(StdType.i64)
@@ -90,8 +90,8 @@ function emitHolderCell(module StdModule, block IrBlock, holder ValueId, ids Val
 end 'emitHolderCell'
 
 function emitCallIfPresent(module StdModule, func IrFunction, block IrBlock, fn ValueId, argument ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	var callIt = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	var after = module.addBlock(func, label: b"shvafter", heat: BlockHeat.normal)
+	let callIt = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	let after = module.addBlock(func, label: b"shvafter", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: block, value: fn, pred: StdCmpPred.eq, against: NoRuntimeFunction, whenTrue: after, whenFalse: callIt, ids: ids)
 	module.appendOp(callIt, op: StdOp.callIndirect(ids.mint(), calleeReg: fn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(argument)))
 	module.setTerminator(callIt, op: StdOp.branch(after.id))
@@ -99,8 +99,8 @@ function emitCallIfPresent(module StdModule, func IrFunction, block IrBlock, fn 
 end 'emitCallIfPresent'
 
 function emitRetainedIfPresent(module StdModule, func IrFunction, block IrBlock, fn ValueId, value ValueId, result ValueId, ids ValueMinter) returns IrBlock
-	var callIt = module.addBlock(func, label: b"shvretain", heat: BlockHeat.normal)
-	var after = module.addBlock(func, label: b"shvretained", heat: BlockHeat.normal)
+	let callIt = module.addBlock(func, label: b"shvretain", heat: BlockHeat.normal)
+	let after = module.addBlock(func, label: b"shvretained", heat: BlockHeat.normal)
 	after.blockArgs.push(IrBlockArg.create(result, argType: StdType.i64))
 
 	emitBranchOnCompare(module, block: block, value: fn, pred: StdCmpPred.eq, against: NoRuntimeFunction, whenTrue: after, whenFalse: callIt, ids: ids)
@@ -123,9 +123,9 @@ end 'emitRefStep'
 // the old pointer before the swap and not yet retained it. The chain is dropped with the cell's
 // last reference.
 function emitChainReplaced(module StdModule, func IrFunction, block IrBlock, cell ValueId, replaced ValueId, ids ValueMinter) returns IrBlock
-	var chainIt = module.addBlock(func, label: b"shvchain", heat: BlockHeat.normal)
-	var retry = module.addBlock(func, label: b"shvchainretry", heat: BlockHeat.normal)
-	var chained = module.addBlock(func, label: b"shvchained", heat: BlockHeat.normal)
+	let chainIt = module.addBlock(func, label: b"shvchain", heat: BlockHeat.normal)
+	let retry = module.addBlock(func, label: b"shvchainretry", heat: BlockHeat.normal)
+	let chained = module.addBlock(func, label: b"shvchained", heat: BlockHeat.normal)
 
 	let dropFn = emitLoadField(module, block: block, record: cell, offset: SharedValueCellDropOffset, ids: ids)
 	emitBranchOnCompare(module, block: block, value: dropFn, pred: StdCmpPred.eq, against: NoRuntimeFunction, whenTrue: chained, whenFalse: chainIt, ids: ids)
@@ -145,9 +145,9 @@ function emitChainReplaced(module StdModule, func IrFunction, block IrBlock, cel
 end 'emitChainReplaced'
 
 function buildSharedValueNew(module StdModule)
-	var func = openRuntimeFunction(SharedValueNewName, paramCount: 3, returnsAWord: true)
-	var ids = ValueMinter.create(3)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValueNewName, paramCount: 3, returnsAWord: true)
+	let ids = ValueMinter.create(3)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let value = 0 as ValueId
 	let dropFn = 1
@@ -163,9 +163,9 @@ function buildSharedValueNew(module StdModule)
 end 'buildSharedValueNew'
 
 function buildSharedValueInstall(module StdModule)
-	var func = openRuntimeFunction(SharedValueInstallName, paramCount: 4, returnsAWord: false)
-	var ids = ValueMinter.create(4)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValueInstallName, paramCount: 4, returnsAWord: false)
+	let ids = ValueMinter.create(4)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 4)
 	let holder = 0 as ValueId
 
@@ -177,35 +177,35 @@ function buildSharedValueInstall(module StdModule)
 end 'buildSharedValueInstall'
 
 function buildSharedValueCurrent(module StdModule, released ByteArray)
-	var func = openRuntimeFunction(SharedValueCurrentName, paramCount: 1, returnsAWord: true)
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValueCurrentName, paramCount: 1, returnsAWord: true)
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let holder = 0
 
 	let cell = emitHolderCell(module, block: entry, holder: holder, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsRegistryLock: false, ids: ids)
+	let live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsRegistryLock: false, ids: ids)
 	let value = ids.mint()
 	module.appendOp(live, op: StdOp.loadAcquire(value, addrId: cell, offset: SharedValueCellCurrentOffset, valueType: StdType.i64))
 	let retainFn = emitLoadField(module, block: live, record: cell, offset: SharedValueCellRetainOffset, ids: ids)
 	let retainedValue = ids.mint()
-	var retained = emitRetainedIfPresent(module, func: func, block: live, fn: retainFn, value: value, result: retainedValue, ids: ids)
+	let retained = emitRetainedIfPresent(module, func: func, block: live, fn: retainFn, value: value, result: retainedValue, ids: ids)
 	module.setTerminator(retained, op: StdOp.ret(retainedValue))
 	module.functions.push(func)
 end 'buildSharedValueCurrent'
 
 function buildSharedValuePublish(module StdModule, released ByteArray)
-	var func = openRuntimeFunction(SharedValuePublishName, paramCount: 2, returnsAWord: false)
-	var ids = ValueMinter.create(2)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var retry = module.addBlock(func, label: b"shvpublishretry", heat: BlockHeat.normal)
-	var swapped = module.addBlock(func, label: b"shvpublished", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValuePublishName, paramCount: 2, returnsAWord: false)
+	let ids = ValueMinter.create(2)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let retry = module.addBlock(func, label: b"shvpublishretry", heat: BlockHeat.normal)
+	let swapped = module.addBlock(func, label: b"shvpublished", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let holder = 0
 	let value = 1
 
 	let cell = emitHolderCell(module, block: entry, holder: holder, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsRegistryLock: false, ids: ids)
+	let live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsRegistryLock: false, ids: ids)
 	let currentAddr = emitFieldAddr(module, block: live, record: cell, offset: SharedValueCellCurrentOffset, ids: ids)
 	module.setTerminator(live, op: StdOp.branch(retry.id))
 
@@ -214,47 +214,47 @@ function buildSharedValuePublish(module StdModule, released ByteArray)
 	let published = emitCasAt(module, block: retry, addr: currentAddr, expected: old, replacement: value, ids: ids)
 	emitBranchOnCasLost(module, block: retry, result: published, lost: retry, won: swapped, ids: ids)
 
-	var chained = emitChainReplaced(module, func: func, block: swapped, cell: cell, replaced: old, ids: ids)
+	let chained = emitChainReplaced(module, func: func, block: swapped, cell: cell, replaced: old, ids: ids)
 	module.setTerminator(chained, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildSharedValuePublish'
 
 function buildSharedValueReplace(module StdModule, released ByteArray)
-	var func = openRuntimeFunction(SharedValueReplaceName, paramCount: 3, returnsAWord: true)
-	var ids = ValueMinter.create(3)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var swapped = module.addBlock(func, label: b"shvreplaced", heat: BlockHeat.normal)
-	var declined = module.addBlock(func, label: b"shvdeclined", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValueReplaceName, paramCount: 3, returnsAWord: true)
+	let ids = ValueMinter.create(3)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let swapped = module.addBlock(func, label: b"shvreplaced", heat: BlockHeat.normal)
+	let declined = module.addBlock(func, label: b"shvdeclined", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let holder = 0
 	let value = 1
 	let old = 2
 
 	let cell = emitHolderCell(module, block: entry, holder: holder, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsRegistryLock: false, ids: ids)
+	let live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsRegistryLock: false, ids: ids)
 	let currentAddr = emitFieldAddr(module, block: live, record: cell, offset: SharedValueCellCurrentOffset, ids: ids)
 	let published = emitCasAt(module, block: live, addr: currentAddr, expected: old, replacement: value, ids: ids)
 	emitBranchOnCasLost(module, block: live, result: published, lost: declined, won: swapped, ids: ids)
 
-	var chained = emitChainReplaced(module, func: func, block: swapped, cell: cell, replaced: old, ids: ids)
+	let chained = emitChainReplaced(module, func: func, block: swapped, cell: cell, replaced: old, ids: ids)
 	module.setTerminator(chained, op: StdOp.ret(emitConst(module, block: chained, value: PublishedAnswer, ids: ids)))
 
 	let dropFn = emitLoadField(module, block: declined, record: cell, offset: SharedValueCellDropOffset, ids: ids)
-	var dropped = emitCallIfPresent(module, func: func, block: declined, fn: dropFn, argument: value, ids: ids, label: b"shvdropdeclined")
+	let dropped = emitCallIfPresent(module, func: func, block: declined, fn: dropFn, argument: value, ids: ids, label: b"shvdropdeclined")
 	module.setTerminator(dropped, op: StdOp.ret(emitConst(module, block: dropped, value: DeclinedAnswer, ids: ids)))
 	module.functions.push(func)
 end 'buildSharedValueReplace'
 
 function buildSharedValueRegistryRelease(module StdModule)
-	var func = openRuntimeFunction(SharedValueRegistryReleaseName, paramCount: 1, returnsAWord: false)
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"shvslotreleased", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValueRegistryReleaseName, paramCount: 1, returnsAWord: false)
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"shvslotreleased", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let slot = 0 as ValueId
 
 	let cell = emitHolderCell(module, block: entry, holder: slot, ids: ids)
-	var held = emitSkipIfReleased(module, func: func, block: entry, held: cell, done: done, ids: ids)
+	let held = emitSkipIfReleased(module, func: func, block: entry, held: cell, done: done, ids: ids)
 	module.appendOp(held, op: StdOp.storeRelease(slot, offset: SharedValueHolderCellOffset, valueId: emitConst(module, block: held, value: ReleasedHolder, ids: ids), valueType: StdType.i64))
 	module.appendOp(held, op: StdOp.call(ids.mint(), callee: SharedValueReleaseCellName, args: argsOf(cell)))
 	module.setTerminator(held, op: StdOp.branch(done.id))
@@ -264,14 +264,14 @@ function buildSharedValueRegistryRelease(module StdModule)
 end 'buildSharedValueRegistryRelease'
 
 function buildSharedValueReleaseCell(module StdModule)
-	var func = openRuntimeFunction(SharedValueReleaseCellName, paramCount: 1, returnsAWord: false, guarded: true)
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var lastRef = module.addBlock(func, label: b"shvlastref", heat: BlockHeat.normal)
-	var walkChain = module.addBlock(func, label: b"shvwalkchain", heat: BlockHeat.normal)
-	var dropNode = module.addBlock(func, label: b"shvdropnode", heat: BlockHeat.normal)
-	var freeCell = module.addBlock(func, label: b"shvfreecell", heat: BlockHeat.normal)
-	var done = module.addBlock(func, label: b"shvreleased", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValueReleaseCellName, paramCount: 1, returnsAWord: false, guarded: true)
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let lastRef = module.addBlock(func, label: b"shvlastref", heat: BlockHeat.normal)
+	let walkChain = module.addBlock(func, label: b"shvwalkchain", heat: BlockHeat.normal)
+	let dropNode = module.addBlock(func, label: b"shvdropnode", heat: BlockHeat.normal)
+	let freeCell = module.addBlock(func, label: b"shvfreecell", heat: BlockHeat.normal)
+	let done = module.addBlock(func, label: b"shvreleased", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let cell = 0
 
@@ -280,7 +280,7 @@ function buildSharedValueReleaseCell(module StdModule)
 
 	let dropFn = emitLoadField(module, block: lastRef, record: cell, offset: SharedValueCellDropOffset, ids: ids)
 	let current = emitLoadField(module, block: lastRef, record: cell, offset: SharedValueCellCurrentOffset, ids: ids)
-	var afterCurrent = emitCallIfPresent(module, func: func, block: lastRef, fn: dropFn, argument: current, ids: ids, label: b"shvdropcurrent")
+	let afterCurrent = emitCallIfPresent(module, func: func, block: lastRef, fn: dropFn, argument: current, ids: ids, label: b"shvdropcurrent")
 	module.setTerminator(afterCurrent, op: StdOp.branch(walkChain.id))
 
 	let node = emitLoadField(module, block: walkChain, record: cell, offset: SharedValueCellChainOffset, ids: ids)
@@ -289,7 +289,7 @@ function buildSharedValueReleaseCell(module StdModule)
 	emitStoreField(module, block: dropNode, record: cell, offset: SharedValueCellChainOffset, value: emitLoadField(module, block: dropNode, record: node, offset: SharedValueChainNextOffset, ids: ids))
 	let chainedValue = emitLoadField(module, block: dropNode, record: node, offset: SharedValueChainValueOffset, ids: ids)
 	emitSlabFree(module, block: dropNode, ptr: node, kind: SlabBufferKind.sharedValue, ids: ids)
-	var afterChained = emitCallIfPresent(module, func: func, block: dropNode, fn: dropFn, argument: chainedValue, ids: ids, label: b"shvdropchained")
+	let afterChained = emitCallIfPresent(module, func: func, block: dropNode, fn: dropFn, argument: chainedValue, ids: ids, label: b"shvdropchained")
 	module.setTerminator(afterChained, op: StdOp.branch(walkChain.id))
 
 	emitSlabFree(module, block: freeCell, ptr: cell, kind: SlabBufferKind.sharedValue, ids: ids)
@@ -307,9 +307,9 @@ function emitSharedValueBox(module StdModule, block IrBlock, cell ValueId, ids V
 end 'emitSharedValueBox'
 
 function buildSharedValueBoxCreate(module StdModule)
-	var func = openRuntimeFunction(SharedValueBoxCreateName, paramCount: 3, returnsAWord: true)
-	var ids = ValueMinter.create(3)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValueBoxCreateName, paramCount: 3, returnsAWord: true)
+	let ids = ValueMinter.create(3)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 
 	let cell = ids.mint()
@@ -319,9 +319,9 @@ function buildSharedValueBoxCreate(module StdModule)
 end 'buildSharedValueBoxCreate'
 
 function buildSharedValueBoxClone(module StdModule)
-	var func = openRuntimeFunction(SharedValueBoxCloneName, paramCount: 1, returnsAWord: true)
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValueBoxCloneName, paramCount: 1, returnsAWord: true)
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let box = 0
 
@@ -332,9 +332,9 @@ function buildSharedValueBoxClone(module StdModule)
 end 'buildSharedValueBoxClone'
 
 function buildSharedValueBoxRetain(module StdModule)
-	var func = openRuntimeFunction(SharedValueBoxRetainName, paramCount: 1, returnsAWord: true)
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValueBoxRetainName, paramCount: 1, returnsAWord: true)
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
@@ -346,9 +346,9 @@ function buildSharedValueBoxRetain(module StdModule)
 end 'buildSharedValueBoxRetain'
 
 function buildSharedValueBoxDrop(module StdModule)
-	var func = openRuntimeFunction(SharedValueBoxDropName, paramCount: 1, returnsAWord: false)
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let func = openRuntimeFunction(SharedValueBoxDropName, paramCount: 1, returnsAWord: false)
+	let ids = ValueMinter.create(1)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let box = 0
 

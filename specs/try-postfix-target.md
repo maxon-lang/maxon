@@ -64,7 +64,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -86,7 +86,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -108,7 +108,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	return arr
 end 'make'
@@ -128,7 +128,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function make() returns IntArray
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -228,7 +228,7 @@ type Gate
 end 'Gate'
 
 function main() returns ExitCode
-	var g = Gate.create()
+	let g = Gate.create()
 	try Gate.check(1) otherwise return 9
 	try g.bump(1) otherwise return 8
 	try Gate.check(-1) otherwise return 5
@@ -296,7 +296,7 @@ type Gate
 end 'Gate'
 
 function main() returns ExitCode
-	var g = Gate.create()
+	let g = Gate.create()
 	try g.driveTwice() otherwise return 9
 	try g.driveBad() otherwise return g.total()
 	return 0

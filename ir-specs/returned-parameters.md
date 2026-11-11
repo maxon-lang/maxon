@@ -1831,7 +1831,7 @@ function keepCells(cells TallyArray) returns TallyArray
 end 'keepCells'
 
 function freshCells() returns TallyArray
-	var cells = TallyArray.create(0)
+	let cells = TallyArray.create(0)
 	fill(cells, count: 3)
 
 	return cells

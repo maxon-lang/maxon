@@ -31,7 +31,7 @@ type Counter
 		var round = 0 as Word
 
 		while round < rounds 'eachRound'
-			var scratch = WordArray.create(4, zeroed: false)
+			let scratch = WordArray.create(4, zeroed: false)
 			scratch.push(round)
 			self.total = self.total + (scratch.count() as Word)
 			round = round + 1

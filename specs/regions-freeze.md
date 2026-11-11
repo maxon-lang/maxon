@@ -40,7 +40,7 @@ function plot(p Point) returns String
 end 'plot'
 
 function main() returns ExitCode
-	var cursor = Point.create(0, y: 0)
+	let cursor = Point.create(0, y: 0)
 	cursor.x = 7
 	let pinned = freeze Point.create(2, y: 3)
 	print("{plot(pinned)} {plot(cursor)}\n")
@@ -197,13 +197,13 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var chunk = Bag.create() as isolated Bag
+	let chunk = Bag.create() as isolated Bag
 
 	modify chunk 'fill'
 		chunk.add(5)
 	end 'fill'
 
-	var mine = merge chunk
+	let mine = merge chunk
 	mine.add(7)
 	print("{mine.size()}\n")
 	return 0

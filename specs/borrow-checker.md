@@ -20,7 +20,7 @@ collection while values read from it are still in use.
 The element read by `get` stays readable after the source grows and is cleared.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello {40 + 2} world, long enough for the heap"]
+	let arr = ["hello {40 + 2} world, long enough for the heap"]
 	let s = try arr.get(0) otherwise ""
 	arr.push("world")
 	arr.clear()
@@ -43,7 +43,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(42)
 	let v = try arr.get(0) otherwise 0
 	print("{v}\n")
@@ -66,7 +66,7 @@ typealias StringArray = Array with String
 
 function main() returns ExitCode
 	let arr1 = ["hello"]
-	var arr2 = StringArray.create(0)
+	let arr2 = StringArray.create(0)
 	let s = try arr1.get(0) otherwise ""
 	arr2.push("world")
 	print("{s}\n")
@@ -88,7 +88,7 @@ typealias ByteArrayMap = Map with (String, ByteArray)
 
 function intern(lookup ByteArrayMap, name String) returns ByteArray
 	let existing = try lookup.get(name) otherwise 'fresh'
-		var bytes = name.toByteArray()
+		let bytes = name.toByteArray()
 		lookup.upsert(name, value: bytes)
 		return bytes
 	end 'fresh'
@@ -96,8 +96,8 @@ function intern(lookup ByteArrayMap, name String) returns ByteArray
 end 'intern'
 
 function main() returns ExitCode
-	var m = ByteArrayMap.create()
-	view bytes = intern(m, name: "hello")
+	let m = ByteArrayMap.create()
+	let bytes = intern(m, name: "hello")
 	print("{bytes.count()}\n")
 	return 0
 end 'main'

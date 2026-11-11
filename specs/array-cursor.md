@@ -22,7 +22,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -51,7 +51,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -86,7 +86,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -113,7 +113,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -141,7 +141,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -168,7 +168,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -193,7 +193,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 
@@ -219,7 +219,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 
@@ -252,7 +252,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 
 	let cursor = try arr.cursor() otherwise 'fail'
@@ -279,7 +279,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -307,7 +307,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -357,7 +357,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 
@@ -386,7 +386,7 @@ Cursor over a bit-packed `Array with bool` must extract individual bits rather t
 typealias BoolArray = Array with bool
 
 function main() returns ExitCode
-	var arr = BoolArray.create(0)
+	let arr = BoolArray.create(0)
 	arr.push(true)
 	arr.push(false)
 	arr.push(true)
@@ -436,7 +436,7 @@ Peek over a byte-string-backed array, whose buffer is genuinely byte-packed (ele
 ```maxon
 function main() returns ExitCode
 	let bytes = b"0xFF"
-	var it = try bytes.createIterator() otherwise 'fail'
+	let it = try bytes.createIterator() otherwise 'fail'
 		return 99
 	end 'fail'
 
@@ -462,8 +462,8 @@ A push under a live cursor may reallocate the buffer; the cursor still reads the
 names, and can seek onto the element the push added.
 ```maxon
 function main() returns ExitCode
-	var a = ["x {40 + 2} long enough heap string", "y {40 + 2} long enough heap string", "z {40 + 2} long enough heap string", "w {40 + 2} long enough heap string"]
-	view c = try a.cursor() otherwise panic("cursor")
+	let a = ["x {40 + 2} long enough heap string", "y {40 + 2} long enough heap string", "z {40 + 2} long enough heap string", "w {40 + 2} long enough heap string"]
+	let c = try a.cursor() otherwise panic("cursor")
 	try c.seek(1) otherwise panic("seek")
 	a.push("v {40 + 2} long enough heap string")
 	print("{c.current()}\n")
@@ -485,8 +485,8 @@ v 42 long enough heap string
 past the live length and panics with an index out of range rather than reading the released slot.
 ```maxon
 function main() returns ExitCode
-	var a = ["x {40 + 2} long enough heap string", "y {40 + 2} long enough heap string", "z {40 + 2} long enough heap string", "w {40 + 2} long enough heap string"]
-	view c = try a.cursor() otherwise panic("cursor")
+	let a = ["x {40 + 2} long enough heap string", "y {40 + 2} long enough heap string", "z {40 + 2} long enough heap string", "w {40 + 2} long enough heap string"]
+	let c = try a.cursor() otherwise panic("cursor")
 	try c.seek(3) otherwise panic("seek")
 	a.clear()
 	print("{c.current()}\n")
@@ -594,7 +594,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)

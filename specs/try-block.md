@@ -490,7 +490,7 @@ typealias Score = int(0 to 100)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-    var arr = ScoreArray.create(0)
+    let arr = ScoreArray.create(0)
     arr.push(7)
     arr.push(11)
 
@@ -960,7 +960,7 @@ typealias Score = int(0 to 100)
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-    var arr = ScoreArray.create(0)
+    let arr = ScoreArray.create(0)
     arr.push(0)
     arr.push(0)
     arr.push(0)
@@ -996,7 +996,7 @@ typealias Signed = int(-50 to 50)
 typealias SignedArray = Array with Signed
 
 function main() returns ExitCode
-    var arr = SignedArray.create(0)
+    let arr = SignedArray.create(0)
     arr.push(-7)
     arr.push(11)
     arr.push(-25)
@@ -1027,7 +1027,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-    var arr = IntArray.create(0)
+    let arr = IntArray.create(0)
     arr.push(7)
     arr.push(11)
 
@@ -1213,12 +1213,12 @@ typealias Inner = Array with Score
 typealias Outer = Array with Inner
 
 function main() returns ExitCode
-    var outer = Outer.create(0)
+    let outer = Outer.create(0)
     outer.push(Inner.create(0))
     outer.push(Inner.create(0))
 
     try 'work'
-        var inner = outer.get(0)
+        let inner = outer.get(0)
         inner.push(7)
     end 'work' otherwise (e) 'h'
         match e 'k'
@@ -1227,7 +1227,7 @@ function main() returns ExitCode
         end 'k'
     end 'h'
 
-    view first = try outer.get(0) otherwise Inner.create(0)
+    let first = try outer.get(0) otherwise Inner.create(0)
     let v = try first.get(0) otherwise -1
     return v as ExitCode
 end 'main'
@@ -1247,13 +1247,13 @@ typealias Inner = Array with Score
 typealias Outer = Array with Inner
 
 function main() returns ExitCode
-    var outer = Outer.create(0)
+    let outer = Outer.create(0)
     outer.push(Inner.create(0))
     outer.push(Inner.create(0))
 
     try 'wrap'
         if true 'gate'
-            var inner = outer.get(0)
+            let inner = outer.get(0)
             inner.push(7)
         end 'gate'
     end 'wrap' otherwise (e) 'h'
@@ -1263,7 +1263,7 @@ function main() returns ExitCode
         end 'k'
     end 'h'
 
-    view first = try outer.get(0) otherwise Inner.create(0)
+    let first = try outer.get(0) otherwise Inner.create(0)
     let v = try first.get(0) otherwise -1
     return v as ExitCode
 end 'main'
@@ -2914,7 +2914,7 @@ function items(hit bool) returns IntArray throws ApiError
 		throw ApiError.notFound
 	end 'miss'
 
-	var found = IntArray.create(0)
+	let found = IntArray.create(0)
 	found.push(4)
 	return found
 end 'items'
@@ -3612,7 +3612,7 @@ function captured(n Tally, readers TextArray) returns Tally
 end 'captured'
 
 function main() returns ExitCode
-	var readers = TextArray.create(0)
+	let readers = TextArray.create(0)
 	let c9 = captured(9, readers: readers)
 	let c1 = captured(1, readers: readers)
 	let c7 = captured(7, readers: readers)

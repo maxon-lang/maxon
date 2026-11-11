@@ -1,5 +1,7 @@
 export let LibraryCacheDirName = "library"
-let LibraryCacheFormat = 23
+// A change to any column the library cache writes bumps this: an entry written under the old number would
+// otherwise be read under the new layout.
+let LibraryCacheFormat = 25
 let LibraryEntryExtension = ".mxlc"
 let LibraryEntryNameSeparator = "-"
 
@@ -170,7 +172,7 @@ export type LibraryCache
 	end 'heldBaseline'
 
 	export function holdBaseline(key HashDigest, kind LibraryEntryKind, declarations LibraryDeclarations)
-		var held = HeldBaseline.create(key, kind: kind, declarations: declarations)
+		let held = HeldBaseline.create(key, kind: kind, declarations: declarations)
 
 		if let position = try self.heldPosition(key, kind: kind) 'alreadyHeld'
 			try self.baselines.set(position, value: held) otherwise panic("LibraryCache.holdBaseline: baselines.set OOB at {position}, the position just found")
@@ -191,7 +193,7 @@ export type LibraryCache
 			return resolved
 		end 'alreadyResolved'
 
-		var resolved = resolvedLibraryDirectory(target) if self.onDisk else LibraryCacheDirectory.unavailable
+		let resolved = resolvedLibraryDirectory(target) if self.onDisk else LibraryCacheDirectory.unavailable
 		self.directories.upsert(key, value: resolved)
 
 		return resolved

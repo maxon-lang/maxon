@@ -116,7 +116,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	if arr.count() != 0 'check'
 		return 1
 	end 'check'
@@ -138,7 +138,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(42)
 	let val = try arr.get(0) otherwise -1
 	if val != 42 'check'
@@ -159,7 +159,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -181,7 +181,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -216,7 +216,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -242,7 +242,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -272,7 +272,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -323,7 +323,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -352,7 +352,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -393,7 +393,7 @@ function innerSum(arr IntArray) returns Int
 end 'innerSum'
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -423,7 +423,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 
 	if arr.isEmpty() == false 'e1'
 		return 1
@@ -456,7 +456,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -486,7 +486,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 
 	let val = try arr.get(5) otherwise -1
@@ -508,7 +508,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 
 	let val = try arr.get(0) otherwise -1
 	if val == -1 'check'
@@ -549,7 +549,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.reserve(100)
 
 	if arr.capacity() < 100 'cap'
@@ -577,9 +577,9 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var pushed = IntArray.create(0)
-	var inserted = IntArray.create(0)
-	var filled = IntArray.create(0)
+	let pushed = IntArray.create(0)
+	let inserted = IntArray.create(0)
+	let filled = IntArray.create(0)
 	var pushLadder = ""
 	var insertLadder = ""
 	var fillLadder = ""
@@ -630,7 +630,7 @@ Push string literals into an array and retrieve them.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("hello")
 	arr.push("world")
 
@@ -659,7 +659,7 @@ Push longer string literals (heap-allocated) into an array.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("hello this is a longer string")
 	arr.push("world this is also a longer string")
 
@@ -688,7 +688,7 @@ Push string variables into an array.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	let s1 = "first"
 	let s2 = "second"
 	arr.push(s1)
@@ -715,7 +715,7 @@ Iterate over an array of strings.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("a")
 	arr.push("b")
 	arr.push("c")
@@ -740,7 +740,7 @@ Get strings from array using get method.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("one")
 	arr.push("two")
 	arr.push("three")
@@ -764,7 +764,7 @@ Verify string array memory is properly managed (no leaks).
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("test string one")
 	arr.push("test string two")
 	arr.push("test string three")
@@ -788,7 +788,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -832,7 +832,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -873,7 +873,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(30)
 	arr.push(40)
@@ -909,7 +909,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 
@@ -939,7 +939,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 
 	arr.insert(0, value: 42)
 
@@ -967,7 +967,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 
@@ -997,7 +997,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(30)
 	arr.push(50)
@@ -1048,7 +1048,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -1090,7 +1090,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -1132,7 +1132,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -1169,7 +1169,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -1200,7 +1200,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 
@@ -1223,7 +1223,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 
 	let removed = try arr.remove(0) otherwise -1
 	if removed == -1 'check'
@@ -1246,7 +1246,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -1293,7 +1293,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 
 	arr.insert(0, value: 30)
 	arr.insert(0, value: 10)
@@ -1338,7 +1338,7 @@ Insert a string into the middle of a string array. Verifies shiftRight handles r
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("alpha")
 	arr.push("gamma")
 
@@ -1371,7 +1371,7 @@ Remove a string from the middle of a string array. Verifies shiftLeft handles re
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("x")
 	arr.push("y")
 	arr.push("z")
@@ -1414,13 +1414,13 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.create(0)
+	let arr = ItemArray.create(0)
 	arr.push(Item.create(1))
 	arr.push(Item.create(3))
 
 	arr.insert(1, value: Item.create(2))
 
-	view removed = try arr.remove(0) otherwise 'err'
+	let removed = try arr.remove(0) otherwise 'err'
 		return 99
 	end 'err'
 

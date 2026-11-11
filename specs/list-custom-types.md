@@ -30,11 +30,11 @@ end 'Point'
 typealias PointList = List with Point
 
 function main() returns ExitCode
-	var list = PointList.create()
+	let list = PointList.create()
 	list.append(Point.create(10, y: 20))
 	list.append(Point.create(30, y: 40))
-	view first = try list.first() otherwise Point.create(0, y: 0)
-	view second = try list.get(1) otherwise Point.create(0, y: 0)
+	let first = try list.first() otherwise Point.create(0, y: 0)
+	let second = try list.get(1) otherwise Point.create(0, y: 0)
 	print("{first.x}\n")
 	print("{first.y}\n")
 	print("{second.x}\n")
@@ -69,7 +69,7 @@ end 'Entry'
 typealias EntryList = List with Entry
 
 function main() returns ExitCode
-	var list = EntryList.create()
+	let list = EntryList.create()
 	list.append(Entry.create(1, value: 100))
 	list.append(Entry.create(2, value: 200))
 	list.append(Entry.create(3, value: 300))
@@ -105,10 +105,10 @@ end 'Person'
 typealias PersonList = List with Person
 
 function main() returns ExitCode
-	var list = PersonList.create()
+	let list = PersonList.create()
 	list.append(Person.create("Alice has a long name for heap", age: 30))
 	list.append(Person.create("Bob also has a long name for heap", age: 25))
-	view first = try list.first() otherwise Person.create("", age: 0)
+	let first = try list.first() otherwise Person.create("", age: 0)
 	print("{first.name}\n")
 	print("{first.age}\n")
 	return 0
@@ -139,11 +139,11 @@ end 'Pair'
 typealias PairList = List with Pair
 
 function main() returns ExitCode
-	var list = PairList.create()
+	let list = PairList.create()
 	list.prepend(Pair.create(3, b: 30))
 	list.prepend(Pair.create(2, b: 20))
 	list.prepend(Pair.create(1, b: 10))
-	view removed = try list.removeFirst() otherwise Pair.create(0, b: 0)
+	let removed = try list.removeFirst() otherwise Pair.create(0, b: 0)
 	print("{removed.a}\n")
 	print("{removed.b}\n")
 	print("{list.count()}\n")

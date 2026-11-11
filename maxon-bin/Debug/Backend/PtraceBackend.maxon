@@ -17,7 +17,7 @@ enum PtraceRelease
 end 'PtraceRelease'
 
 function ptraceSignalsWith(signals PtraceOwedSignalArray, signal BackendWord) returns PtraceOwedSignalArray
-	var more = signals.clone()
+	let more = signals.clone()
 	more.push(signal)
 
 	return more
@@ -161,7 +161,7 @@ export type PtraceBackend
 	end 'close'
 
 	export function listThreads() returns BackendThreadIdArray
-		var ids = BackendThreadIdArray.create(self.threads.count(), zeroed: false)
+		let ids = BackendThreadIdArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threads 'eachThread'
 			ids.push(entry.id)
@@ -365,7 +365,7 @@ export type PtraceBackend
 	// driver to read a process that is not there.
 	function takeTheHeldStop() returns PtraceHeldStopLookup
 		var taken = PtraceHeldStopLookup.none
-		var kept = PtraceHeldStopArray.create(self.held.count(), zeroed: false)
+		let kept = PtraceHeldStopArray.create(self.held.count(), zeroed: false)
 		let leaderLeft = self.holdsTheLeadersDeparture()
 
 		for stop in self.held 'eachHeld'
@@ -472,7 +472,7 @@ export type PtraceBackend
 	// A thread started while the others stop is born running, so the passes repeat until none runs;
 	// `handled` keeps a thread that did not stop from being asked again within the call.
 	function stopEveryOtherThread()
-		var handled = BackendThreadIdArray.create(0)
+		let handled = BackendThreadIdArray.create(0)
 		let deadline = debugDeadlineAfter(GroupStopBudgetMs as StopTimeoutMs)
 
 		while not debugDeadlinePassed(deadline) 'eachPass'
@@ -491,7 +491,7 @@ export type PtraceBackend
 	end 'stopEveryOtherThread'
 
 	function runningThreadsOutside(handled BackendThreadIdArray) returns BackendThreadIdArray
-		var running = BackendThreadIdArray.create(0)
+		let running = BackendThreadIdArray.create(0)
 
 		for entry in self.threads 'eachThread'
 			if not entry.stopped and not handled.contains(entry.id) 'stillRunning'
@@ -503,7 +503,7 @@ export type PtraceBackend
 	end 'runningThreadsOutside'
 
 	function threadsBroughtToAStop(targets BackendThreadIdArray) returns bool
-		var asked = BackendThreadIdArray.create(0)
+		let asked = BackendThreadIdArray.create(0)
 
 		for id in targets 'eachTarget'
 			if self.owesAStop(id) or self.stopSignalSent(id) 'itWillStop'
@@ -546,7 +546,7 @@ export type PtraceBackend
 	end 'drainOwedStops'
 
 	function continuedToTheirOwedStops(asked BackendThreadIdArray, faults PtraceFaultDrain) returns BackendThreadIdArray
-		var owing = BackendThreadIdArray.create(0)
+		let owing = BackendThreadIdArray.create(0)
 
 		for id in asked 'eachAsked'
 			if self.standsOwingAStop(id) and self.continuedTowardItsStop(id, faults: faults) 'itGoesToTakeIt'
@@ -769,7 +769,7 @@ export type PtraceBackend
 
 	// The reporter resumes last, giving every thread held through the stop a head start on it.
 	function resumableRoster() returns PtraceThreadEntryArray
-		var roster = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
+		let roster = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threadsEnding(self.stoppedThread()) 'eachThread'
 			if self.resumable(entry) 'itResumes'
@@ -781,7 +781,7 @@ export type PtraceBackend
 	end 'resumableRoster'
 
 	function threadsEnding(last BackendThreadId) returns PtraceThreadEntryArray
-		var ordered = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
+		let ordered = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threads 'theOthers'
 			if entry.id != last 'anotherThread'
@@ -821,7 +821,7 @@ export type PtraceBackend
 	// succeeds: the kernel does not re-raise an asynchronous signal its tracer withheld.
 	function resumeThread(thread BackendWord, asAStep bool) returns bool
 		let id = thread as BackendThreadId
-		view owed = self.owedSignalsOf(id)
+		let owed = self.owedSignalsOf(id)
 
 		if not self.trace.resume(thread as DebuggeeThreadId, signal: ptraceFirstSignalOf(owed) as DebuggeeSignal, stepping: asAStep) 'theKernelRefused'
 			return false
@@ -853,7 +853,7 @@ export type PtraceBackend
 
 	export function retireStopRequest()
 		self.stopRequested = false
-		var kept = PtraceHeldStopArray.create(self.held.count(), zeroed: false)
+		let kept = PtraceHeldStopArray.create(self.held.count(), zeroed: false)
 
 		for stop in self.held 'eachHeld'
 			if not stop.isARequestedStop() 'notTheDriversPause'
@@ -877,7 +877,7 @@ export type PtraceBackend
 			return
 		end 'theKernelRefused'
 
-		var leaderAlone = BackendThreadIdArray.create(1, zeroed: false)
+		let leaderAlone = BackendThreadIdArray.create(1, zeroed: false)
 		leaderAlone.push(leader)
 		self.awaitStops(leaderAlone)
 	end 'driverTrapTaken'
@@ -951,7 +951,7 @@ export type PtraceBackend
 		var standing = PtraceGroupStanding.gone
 
 		for entry in self.threads 'eachThread'
-			view state = self.trace.threadState(self.process as DebuggeeProcessId, thread: entry.id as DebuggeeThreadId)
+			let state = self.trace.threadState(self.process as DebuggeeProcessId, thread: entry.id as DebuggeeThreadId)
 
 			if state.isTraceStopped() 'itIsHeld'
 				return PtraceGroupStanding.held
@@ -987,7 +987,7 @@ export type PtraceBackend
 			return PtraceStopBorrow.alreadyStopped
 		end 'theLeaderStandsAlready'
 
-		var leaderAlone = BackendThreadIdArray.create(1, zeroed: false)
+		let leaderAlone = BackendThreadIdArray.create(1, zeroed: false)
 		leaderAlone.push(leader)
 
 		return PtraceStopBorrow.taken if self.threadsBroughtToAStop(leaderAlone) else PtraceStopBorrow.unavailable
@@ -1058,7 +1058,7 @@ export type PtraceBackend
 
 	export function readRegisters(thread BackendThreadId) returns BackendRegisterRead
 		let block = try self.trace.registers(thread as DebuggeeThreadId) otherwise return BackendRegisterRead.unreadable
-		var file = DebugRegisterFile.create()
+		let file = DebugRegisterFile.create()
 		let offsets = ptraceGprBlockOffsets()
 
 		for (iter, offset) in offsets.withIterator() 'eachGeneralRegister'
@@ -1139,7 +1139,7 @@ export type PtraceBackend
 	end 'entryOf'
 
 	function withEntryReplaced(updated PtraceThreadEntry)
-		var kept = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
+		let kept = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threads 'eachThread'
 			if entry.id == updated.id 'thisOne'
@@ -1201,7 +1201,7 @@ export type PtraceBackend
 
 	function forgotEndingTheHold(id BackendThreadId) returns bool
 		let holdEnded = self.stepping.forgetEndingTheHold(id)
-		var kept = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
+		let kept = PtraceThreadEntryArray.create(self.threads.count(), zeroed: false)
 
 		for entry in self.threads 'eachThread'
 			if entry.id != id 'anotherThread'

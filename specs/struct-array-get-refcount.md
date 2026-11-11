@@ -57,12 +57,12 @@ type List
 end 'List'
 
 function main() returns ExitCode
-		var list = List.create(NodeArray.create(0), head: -1)
+		let list = List.create(NodeArray.create(0), head: -1)
 		list.pushFront(10)
 		list.pushFront(20)
 		list.walk()
 		list.pushFront(30)
-		view n1 = try list.nodes.get(1) otherwise Node.create(0, next: -1)
+		let n1 = try list.nodes.get(1) otherwise Node.create(0, next: -1)
 		return n1.value
 end 'main'
 ```
@@ -95,13 +95,13 @@ function sumAll(pairs PairArray) returns Integer
 end 'sumAll'
 
 function main() returns ExitCode
-		var pairs = PairArray.create(0)
+		let pairs = PairArray.create(0)
 		pairs.push(Pair.create(1, b: 2))
 		pairs.push(Pair.create(3, b: 4))
 		pairs.push(Pair.create(5, b: 6))
 		let sum = sumAll(pairs)
 		// After sumAll, elements should still be valid
-		view p1 = try pairs.get(1) otherwise Pair.create(0, b: 0)
+		let p1 = try pairs.get(1) otherwise Pair.create(0, b: 0)
 		if sum == 21 'ok'
 				return p1.a + p1.b
 		end 'ok'
@@ -134,10 +134,10 @@ function readTwice(items ItemArray) returns Integer
 end 'readTwice'
 
 function main() returns ExitCode
-		var items = ItemArray.create(0)
+		let items = ItemArray.create(0)
 		items.push(Item.create(21))
 		let result = readTwice(items)
-		view check = try items.get(0) otherwise Item.create(0)
+		let check = try items.get(0) otherwise Item.create(0)
 		return check.id + result
 end 'main'
 ```
@@ -161,9 +161,9 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray.create(0)
+	let arr = SlotArray.create(0)
 	arr.push(Slot.create(10))
-	view result = try arr.get(1) otherwise Slot.create(-7)
+	let result = try arr.get(1) otherwise Slot.create(-7)
 	return result.value + 8
 end 'main'
 ```
@@ -178,7 +178,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -206,10 +206,10 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var a = NodeArray.create(0)
+	let a = NodeArray.create(0)
 	a.push(Node.create(10))
 	let fallback = Node.create(99)
-	view r = try a.get(9) otherwise fallback
+	let r = try a.get(9) otherwise fallback
 	return r.value + fallback.value
 end 'main'
 ```
@@ -233,9 +233,9 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var a = NodeArray.create(0)
+	let a = NodeArray.create(0)
 	let fallback = Node.create(99)
-	view r = try a.pop() otherwise fallback
+	let r = try a.pop() otherwise fallback
 	return r.value + fallback.value
 end 'main'
 ```

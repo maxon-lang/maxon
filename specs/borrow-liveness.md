@@ -55,7 +55,7 @@ end 'main'
 the first trip's `clear()` and `push`. It reads the element it was bound to.
 ```maxon
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	arr.push("first {3} long enough for the heap")
 	arr.push("second {4} long enough for the heap")
 	let first = try arr.get(0) otherwise "none"
@@ -96,7 +96,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	let s = try b.items.get(0) otherwise ""
 	b.items.clear()
 	print("[{s}] {b.items.count()}\n")
@@ -132,7 +132,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.peek()
 end 'main'
 ```
@@ -166,7 +166,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	return b.peek()
 end 'main'
 ```
@@ -191,7 +191,7 @@ function look(arr StringArray) returns ExitCode
 end 'look'
 
 function main() returns ExitCode
-	var a = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let a = ["hello world this is a long string for heap allocation {40 + 2}"]
 	return look(a)
 end 'main'
 ```
@@ -213,7 +213,7 @@ function grow(dest StringArray)
 end 'grow'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = try arr.get(0) otherwise ""
 	grow(arr)
 	print("[{s}] {arr.count()}\n")
@@ -240,7 +240,7 @@ function grow(n Integer, other StringArray, dest StringArray) returns Integer
 end 'grow'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let spare = StringArray.create(0)
 	let s = try arr.get(0) otherwise ""
 	let k = grow(1, dest: arr, other: spare)
@@ -267,7 +267,7 @@ function peek(src StringArray) returns Integer
 end 'peek'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	let arr = ["hello world this is a long string for heap allocation"]
 	let s = try arr.get(0) otherwise ""
 	let n = peek(arr)
 	print("[{s}] {n}\n")
@@ -288,10 +288,10 @@ The inner `arr` is a different binding, so writing it leaves the outer array and
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	let arr = ["hello world this is a long string for heap allocation"]
 	let s = try arr.get(0) otherwise ""
 	if s.byteLength() > 0 'inner'
-		var arr = StringArray.create(0)
+		let arr = StringArray.create(0)
 		arr.push("a wholly different array that shares only the name")
 		print("{arr.count()}\n")
 	end 'inner'
@@ -312,7 +312,7 @@ end 'main'
 The pushes reallocate the array's buffer; `s` holds the element itself, not a slot of the buffer.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = try arr.first() otherwise ""
 
 	for i in 0 upto 40 'grow'
@@ -336,7 +336,7 @@ end 'main'
 The caller owns the element `pop()` returns outright.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation", "second long string for the heap allocation path"]
+	let arr = ["hello world this is a long string for heap allocation", "second long string for the heap allocation path"]
 	let s = try arr.pop() otherwise ""
 	arr.clear()
 	print("[{s}]\n")
@@ -354,7 +354,7 @@ end 'main'
 ### `remove()` moves out too
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation", "second long string for the heap allocation path"]
+	let arr = ["hello world this is a long string for heap allocation", "second long string for the heap allocation path"]
 	let s = try arr.remove(0) otherwise ""
 	arr.clear()
 	print("[{s}]\n")
@@ -375,7 +375,7 @@ The element is read and measured inside `inner`; the `clear()` after the block w
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	let arr = ["hello world this is a long string for heap allocation"]
 	var n = 0 as Integer
 	if n == 0 'inner'
 		let s = try arr.get(0) otherwise ""
@@ -400,7 +400,7 @@ On the handler's path the get FAILED and `s` was never bound; the handler writes
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray.create(0)
+	let arr = StringArray.create(0)
 	let s = try arr.get(0) otherwise 'empty'
 		arr.push("a replacement long string for the heap allocation path")
 		return 7
@@ -434,7 +434,7 @@ function wipe(dest StringArray)
 end 'wipe'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	var total = 0 as Integer
 	for it in b.items 'scan'
 		wipe(b.items)
@@ -473,7 +473,7 @@ function wipe(dest StringArray)
 end 'wipe'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	var total = 0 as Integer
 	for it in b.items 'scan'
 		total = total + (it.byteLength() as Integer)
@@ -510,7 +510,7 @@ function wipe(dest StringArray)
 end 'wipe'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	var total = 0 as Integer
 	for it in b.items 'scan'
 		total = total + (it.byteLength() as Integer)
@@ -548,7 +548,7 @@ function wipe(dest StringArray)
 end 'wipe'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	var total = 0 as Integer
 	for _ in b.items 'scan'
 		wipe(b.items)
@@ -592,7 +592,7 @@ type Paths
 end 'Paths'
 
 function main() returns ExitCode
-	var paths = Paths.create()
+	let paths = Paths.create()
 	paths.doubled()
 	print("{paths.size()}\n")
 	return 0
@@ -610,7 +610,7 @@ end 'main'
 `try arr.get(0) otherwise return 1` binds `s` to the element it read, which outlives the `clear()`.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = try arr.get(0) otherwise return 1
 	arr.clear()
 	print("[{s}] {arr.count()}\n")
@@ -628,7 +628,7 @@ end 'main'
 ### … and so does a diverging `otherwise` BLOCK
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let s = try arr.get(0) otherwise 'empty'
 		return 7
 	end 'empty'
@@ -655,7 +655,7 @@ function sizeOf(s String) returns Integer
 end 'sizeOf'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	let arr = ["hello world this is a long string for heap allocation"]
 	let n = sizeOf(try arr.get(0) otherwise "")
 	arr.clear()
 	print("{n}\n")
@@ -681,7 +681,7 @@ function sizeOf(s String) returns Integer
 end 'sizeOf'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	let arr = ["hello world this is a long string for heap allocation"]
 	var total = 0 as Integer
 	for i in 0 upto sizeOf(try arr.get(0) otherwise "") 'l'
 		arr.clear()
@@ -715,7 +715,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	let s = try b.items.get(0) otherwise ""
 	b.other.clear()
 	print("[{s}] {b.items.count()} {b.other.count()}\n")
@@ -736,7 +736,7 @@ The merge carries the counted element, not a slot of the array.
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let n = 0 as Integer
 	let s = (try arr.get(0) otherwise "") if n == 0 else "a fallback string long enough for the heap"
 	arr.clear()
@@ -760,7 +760,7 @@ enum Mode
 end 'Mode'
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let arr = ["hello world this is a long string for heap allocation {40 + 2}"]
 	let m = Mode.first
 	let s = match m 'pick'
 		first gives try arr.get(0) otherwise ""
@@ -788,8 +788,8 @@ enum Mode
 end 'Mode'
 
 function main() returns ExitCode
-	var a = ["alpha string long enough for the heap allocation path {40 + 2}"]
-	var b = ["beta string long enough for the heap allocation path {40 + 2}"]
+	let a = ["alpha string long enough for the heap allocation path {40 + 2}"]
+	let b = ["beta string long enough for the heap allocation path {40 + 2}"]
 	let m = Mode.first
 	let s = match m 'pick'
 		first gives try a.get(0) otherwise ""
@@ -821,7 +821,7 @@ function look(arr StringArray) returns ExitCode throws ArrayError
 end 'look'
 
 function main() returns ExitCode
-	var a = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let a = ["hello world this is a long string for heap allocation {40 + 2}"]
 	return try look(a) otherwise 9
 end 'main'
 ```
@@ -837,7 +837,7 @@ end 'main'
 `s` owns the value it was assigned, so clearing the array leaves it intact.
 ```maxon
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation"]
+	let arr = ["hello world this is a long string for heap allocation"]
 	var s = "an initial string long enough for the heap allocation"
 	s = try arr.get(0) otherwise ""
 	arr.clear()
@@ -858,7 +858,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var arr = ["hello world this is a long string for heap allocation", "second long string for the heap allocation path"]
+	let arr = ["hello world this is a long string for heap allocation", "second long string for the heap allocation path"]
 	var s = "an initial string long enough for the heap allocation"
 	var i = 0 as Integer
 	while i < 2 'scan'
@@ -896,7 +896,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	b.wipe()
@@ -929,7 +929,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	b.wipe()
@@ -963,7 +963,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	b.wipe()
@@ -998,7 +998,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	b.items.push("beta string long enough for heap allocation {40 + 2}")
 	var total = 0 as Integer
@@ -1041,7 +1041,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	b.wipe()
@@ -1074,7 +1074,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	b.wipe()
@@ -1107,7 +1107,7 @@ function wipe(bag Bag)
 end 'wipe'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	wipe(b)
@@ -1141,7 +1141,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation")
 	let s = try b.items.get(0) otherwise ""
 	let n = b.room()
@@ -1175,7 +1175,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation")
 	let s = try b.items.get(0) otherwise ""
 	let n = b.size()
@@ -1255,7 +1255,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation")
 	b.add(42)
 	b.wipe()
@@ -1297,7 +1297,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	print("{b.measure()} {b.items.count()}\n")
 	return 0
@@ -1337,7 +1337,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	print("{b.measure()} {b.items.count()}\n")
 	return 0
@@ -1376,7 +1376,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation")
 	print("{b.ok()}\n")
 	return 0
@@ -1409,7 +1409,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation")
 	let s = try b.items.get(0) otherwise ""
 	b.add(42)
@@ -1454,7 +1454,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation")
 	let s = try b.items.get(0) otherwise ""
 	b.mark()
@@ -1490,7 +1490,7 @@ function wipe(b Bag)
 end 'wipe'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.get(0) otherwise ""
 	wipe(b)
@@ -1521,7 +1521,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("hello")
 	let s = try b.items.get(0) otherwise ""
 	b.n = 5
@@ -1541,8 +1541,8 @@ hello 5
 `c.current()` counts the element it returns, and the cursor counts its source.
 ```maxon
 function main() returns ExitCode
-	var xs = ["hello world this is a long string for heap allocation {40 + 2}"]
-	view c = try xs.cursor() otherwise return 1
+	let xs = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let c = try xs.cursor() otherwise return 1
 	let s = c.current()
 	xs.clear()
 	print("[{s}] {xs.count()}\n")
@@ -1560,8 +1560,8 @@ end 'main'
 ### A value read through a cursor, printed before the clear
 ```maxon
 function main() returns ExitCode
-	var xs = ["hello world this is a long string for heap allocation {40 + 2}"]
-	view c = try xs.cursor() otherwise return 1
+	let xs = ["hello world this is a long string for heap allocation {40 + 2}"]
+	let c = try xs.cursor() otherwise return 1
 	let s = c.current()
 	print("[{s}]\n")
 	xs.clear()
@@ -1593,9 +1593,9 @@ end 'Holder'
 typealias HolderArray = Array with Holder
 
 function main() returns ExitCode
-	var arr = HolderArray.create(0)
+	let arr = HolderArray.create(0)
 	arr.push(Holder.create())
-	var p = try arr.get(0) otherwise Holder.create()
+	let p = try arr.get(0) otherwise Holder.create()
 	let s = try p.items.get(0) otherwise ""
 	p.items.clear()
 	print("[{s}] {p.items.count()}\n")
@@ -1626,8 +1626,8 @@ function wipe(chain StringChain)
 end 'wipe'
 
 function main() returns ExitCode
-	var chain = StringChain.create()
-	view node = chain.insertLast("alpha string long enough for heap allocation {40 + 2}")
+	let chain = StringChain.create()
+	let node = chain.insertLast("alpha string long enough for heap allocation {40 + 2}")
 	wipe(chain)
 	print("[{node.value()}]\n")
 	return 0
@@ -1658,8 +1658,8 @@ function grow(chain StringChain)
 end 'grow'
 
 function main() returns ExitCode
-	var chain = StringChain.create()
-	view node = chain.insertLast("alpha string long enough for heap allocation {40 + 2}")
+	let chain = StringChain.create()
+	let node = chain.insertLast("alpha string long enough for heap allocation {40 + 2}")
 	grow(chain)
 	print("[{node.value()}] {chain.count()}\n")
 	return 0
@@ -1691,7 +1691,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.append("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.first() otherwise "none"
 	b.reset()
@@ -1725,7 +1725,7 @@ function wipe(b Bag)
 end 'wipe'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.append("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.items.first() otherwise "none"
 	wipe(b)
@@ -1767,7 +1767,7 @@ type Bag
 end 'Bag'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.inner.items.push("alpha string long enough for heap allocation {40 + 2}")
 	let s = try b.inner.items.get(0) otherwise "none"
 	b.reset()
@@ -1806,7 +1806,7 @@ function rename(b Bag)
 end 'rename'
 
 function main() returns ExitCode
-	var b = Bag.create()
+	let b = Bag.create()
 	b.items.push("alpha string long enough for heap allocation")
 	let s = try b.items.get(0) otherwise ""
 	b.retag()
@@ -1851,7 +1851,7 @@ type Cell
 end 'Cell'
 
 function main() returns ExitCode
-	var a = Cell.create()
+	let a = Cell.create()
 	a.fill(10)
 	let out = a.replace(a.s)
 	print("{out} {a.s}\n")
@@ -1894,7 +1894,7 @@ function clobber(c Cell, borrowed String) returns String
 end 'clobber'
 
 function main() returns ExitCode
-	var b = Cell.create()
+	let b = Cell.create()
 	b.fill(10)
 	let out = clobber(b, borrowed: b.s)
 	print("{out} {b.s}\n")
@@ -1931,7 +1931,7 @@ function build(n Count) returns String
 end 'build'
 
 function main() returns ExitCode
-	var a = StringArray.create(0)
+	let a = StringArray.create(0)
 	a.push(build(10))
 	let out = clobber(a, borrowed: try a.get(0) otherwise "")
 	print("{out} {a.count()}\n")
@@ -1974,7 +1974,7 @@ function measure(borrowed String) returns String
 end 'measure'
 
 function main() returns ExitCode
-	var b = Cell.create()
+	let b = Cell.create()
 	b.fill(10)
 	print("{measure(b.s)}\n")
 	return 0
@@ -2015,8 +2015,8 @@ function build(n Count) returns String
 end 'build'
 
 function main() returns ExitCode
-	var a = StringArray.create(0)
-	var b = StringArray.create(0)
+	let a = StringArray.create(0)
+	let b = StringArray.create(0)
 	a.push(build(4))
 	b.push(build(10))
 	let m = Mode.second
@@ -2076,7 +2076,7 @@ type Driver
 
 
 	function churn()
-		var junk = DeclArray.create(0)
+		let junk = DeclArray.create(0)
 
 		for i in 0 upto 50 'each'
 			junk.push(Decl.create("garbage-garbage-garbage {i}", weight: 99))
@@ -2109,7 +2109,7 @@ type Driver
 end 'Driver'
 
 function main() returns ExitCode
-	var d = Driver.create()
+	let d = Driver.create()
 	d.fill()
 	let t = d.run()
 	print("total {t}\n")
@@ -2168,7 +2168,7 @@ type Driver
 	end 'theHolder'
 
 	function churn()
-		var junk = DeclArray.create(0)
+		let junk = DeclArray.create(0)
 
 		for i in 0 upto 50 'each'
 			junk.push(Decl.create("garbage-garbage-garbage {i}", weight: 99))
@@ -2201,7 +2201,7 @@ type Driver
 end 'Driver'
 
 function main() returns ExitCode
-	var d = Driver.create()
+	let d = Driver.create()
 	d.fill()
 	let t = d.run()
 	print("total {t}\n")
@@ -2295,9 +2295,9 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var b = Outer.create(1)
+	let b = Outer.create(1)
 	let inner = b.inner
-	var h = Holder.create(b)
+	let h = Holder.create(b)
 	h.box = Outer.create(5)
 	print("{inner.label.byteLength()} {h.box.inner.label.byteLength()} {b.inner.label.byteLength()}\n")
 	return 0
@@ -2341,9 +2341,9 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var b = Outer.create(1)
+	let b = Outer.create(1)
 	let inner = b.inner
-	var h = Holder.create(Outer.create(0))
+	let h = Holder.create(Outer.create(0))
 	h.box = b
 	h.box = Outer.create(5)
 	print("{inner.label.byteLength()} {b.inner.label.byteLength()}\n")
@@ -2382,9 +2382,9 @@ end 'Outer'
 typealias Outers = Array with Outer
 
 function main() returns ExitCode
-	var b = Outer.create(1)
+	let b = Outer.create(1)
 	let inner = b.inner
-	var xs = Outers.create(0)
+	let xs = Outers.create(0)
 	xs.push(b)
 	xs.clear()
 	print("{inner.label.byteLength()} {xs.count()} {b.inner.label.byteLength()}\n")
@@ -2429,10 +2429,10 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var b = Outer.create(1)
+	let b = Outer.create(1)
 	let inner = b.inner
 	let peek = function() gives inner.label.byteLength()
-	var h = Holder.create(b)
+	let h = Holder.create(b)
 	h.box = Outer.create(5)
 	print("{peek()} {h.box.inner.label.byteLength()}\n")
 	return 0
@@ -2468,7 +2468,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var b = Outer.create(1)
+	let b = Outer.create(1)
 	let inner = b.inner
 
 	if inner.label.byteLength() > 0 'nested'
@@ -2520,7 +2520,7 @@ function choose(n Integer) returns Pick
 end 'choose'
 
 function main() returns ExitCode
-	var b = Outer.create(1)
+	let b = Outer.create(1)
 	let inner = b.inner
 	var r = match choose(1) 'pick'
 		first gives b
@@ -2598,7 +2598,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var b = Outer.create(1)
+	let b = Outer.create(1)
 	let inner = b.inner
 	var c = Outer.create(2)
 	c = b
@@ -2621,7 +2621,7 @@ end 'main'
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create(0)
+	let xs = Words.create(0)
 	xs.push("a word padded out long enough to heap allocate {1}")
 	let s = try xs.get(0) otherwise ""
 
@@ -2659,10 +2659,10 @@ function choose(n Integer) returns Pick
 end 'choose'
 
 function main() returns ExitCode
-	var xs = Words.create(0)
+	let xs = Words.create(0)
 	xs.push("a word padded out long enough to heap allocate {1}")
 	let s = try xs.get(0) otherwise ""
-	var r = match choose(1) 'pick'
+	let r = match choose(1) 'pick'
 		first gives xs
 		second gives Words.create(0)
 	end 'pick'
@@ -2686,7 +2686,7 @@ holds its own.
 typealias Words = Array with String
 
 function main() returns ExitCode
-	var xs = Words.create(0)
+	let xs = Words.create(0)
 	xs.push("a word padded out long enough to heap allocate {1}")
 	let s = try xs.get(0) otherwise ""
 	var c = Words.create(0)
@@ -2827,7 +2827,7 @@ function zero() returns Integer
 end 'zero'
 
 function main() returns ExitCode
-	var s = Slot.create(zero)
+	let s = Slot.create(zero)
 	fill(s)
 	print("{s.read()}\n")
 	return 0
@@ -2962,7 +2962,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var b = Outer.create(1)
+	let b = Outer.create(1)
 	let inner = b.inner
 	let r = b
 	print("{inner.label.byteLength()} {r.inner.label.byteLength()}\n")
@@ -3041,9 +3041,9 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var x = StringArray.create(0)
+	let x = StringArray.create(0)
 	x.push("hello {40 + 2} world, long enough for the heap")
-	var h = Holder.create(x)
+	let h = Holder.create(x)
 	let s = try x.get(0) otherwise ""
 	h.items.clear()
 	print("[{s}] {x.count()}\n")
@@ -3081,9 +3081,9 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var arr = ["first {1} padded out long enough for the heap", "second {2} padded out long enough for the heap"]
+	let arr = ["first {1} padded out long enough for the heap", "second {2} padded out long enough for the heap"]
 	let s = try arr.get(0) otherwise "none"
-	var h = Holder.create(arr)
+	let h = Holder.create(arr)
 	h.grow()
 	print("[{s}] {s.byteLength()} {arr.count()}\n")
 	return 0
@@ -3123,7 +3123,7 @@ type Person
 end 'Person'
 
 function main() returns ExitCode
-	var p = Person.create("original {40 + 2} value long enough for a heap record")
+	let p = Person.create("original {40 + 2} value long enough for a heap record")
 	let text = p.describe()
 	print("[{text}]\n")
 	print("[{p.current()}]\n")
@@ -3165,7 +3165,7 @@ type Person
 end 'Person'
 
 function main() returns ExitCode
-	var p = Person.create("original {40 + 2} value long enough for a heap record")
+	let p = Person.create("original {40 + 2} value long enough for a heap record")
 	print("{p.keptOriginal()}\n")
 	print("[{p.current()}]\n")
 	return 0
@@ -3202,15 +3202,15 @@ end 'announce'
 
 function replaceFirst(items Boxes, cb Hook)
 	cb()
-	view e = try items.get(0) otherwise panic("the caller pushed one")
+	let e = try items.get(0) otherwise panic("the caller pushed one")
 	try items.set(0, value: Box.create("replacement {7} padded out long enough for the heap")) otherwise panic("the caller pushed one")
 	let filler = Box.create("filler {9} padded out long enough for the heap")
-	view now = try items.get(0) otherwise panic("the caller pushed one")
+	let now = try items.get(0) otherwise panic("the caller pushed one")
 	print("[{e.label}] [{now.label}] [{filler.label}]\n")
 end 'replaceFirst'
 
 function main() returns ExitCode
-	var xs = Boxes.create(0)
+	let xs = Boxes.create(0)
 	xs.push(Box.create("original {40 + 2} padded out long enough for the heap"))
 	replaceFirst(xs, cb: announce)
 	return 0
@@ -3231,8 +3231,8 @@ The raw cursor's `current()` is an element read like `get`: it counts what it re
 `clear` releases only the buffer's reference.
 ```maxon
 function main() returns ExitCode
-	var xs = ["alpha {40 + 2} value long enough for a heap record"]
-	view c = try xs.managed.createCursor() otherwise return 1
+	let xs = ["alpha {40 + 2} value long enough for a heap record"]
+	let c = try xs.managed.createCursor() otherwise return 1
 	let s = c.current()
 	xs.managed.clear()
 	let filler = "filler {9} padded out long enough for the heap"
@@ -3276,7 +3276,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var a = Outer.create("first {40 + 2} padded out long enough for the heap")
+	let a = Outer.create("first {40 + 2} padded out long enough for the heap")
 	print("{a.nameAfterRebind()}\n")
 	return 0
 end 'main'
@@ -3315,7 +3315,7 @@ function nameAfterRebind(o Outer) returns String
 end 'nameAfterRebind'
 
 function main() returns ExitCode
-	var b = Outer.create("second {40 + 3} padded out long enough for the heap")
+	let b = Outer.create("second {40 + 3} padded out long enough for the heap")
 	print("{nameAfterRebind(b)}\n")
 	return 0
 end 'main'
@@ -3355,7 +3355,7 @@ function clobber(o Outer, name String) returns String
 end 'clobber'
 
 function main() returns ExitCode
-	var c = Outer.create("third {40 + 4} padded out long enough for the heap")
+	let c = Outer.create("third {40 + 4} padded out long enough for the heap")
 	print("{clobber(c, name: c.inner.name)}\n")
 	return 0
 end 'main'
@@ -3395,7 +3395,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var x = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let x = Outer.create("original {40 + 2} padded out long enough for the heap")
 	x.inner.name = x.dropInner()
 	let filler = Inner.create("filler {1} padded out long enough for the heap")
 	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
@@ -3445,7 +3445,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var x = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let x = Outer.create("original {40 + 2} padded out long enough for the heap")
 	x.middle.leaf.name = x.dropLeaf()
 	let filler = Leaf.create("filler {1} padded out long enough for the heap")
 	let filler2 = Leaf.create("filler {2} padded out long enough for the heap")
@@ -3491,7 +3491,7 @@ function describe(p Pair) returns String
 end 'describe'
 
 function main() returns ExitCode
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	let p = Pair.both(x.label, second: x.reset())
 	let filler = "filler {1} padded out long enough for the heap"
 	print("{describe(p)} [{x.label}] [{filler}]\n")
@@ -3531,7 +3531,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	let copy = x.snapshot()
 	let filler = "filler {1} padded out long enough for the heap"
 	print("{copy.describe()} {x.describe()} [{filler}]\n")
@@ -3562,7 +3562,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	let pair = (x.label, x.reset())
 	let filler = "filler {1} padded out long enough for the heap"
 	print("[{pair.0}] [{pair.1}] [{x.label}] [{filler}]\n")
@@ -3604,7 +3604,7 @@ function combine(x Holder, f Joiner) returns String
 end 'combine'
 
 function main() returns ExitCode
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	print("{combine(x, f: join)} [{x.label}]\n")
 	return 0
 end 'main'
@@ -3638,7 +3638,7 @@ function join(first String, second String) returns String
 end 'join'
 
 function main() returns ExitCode
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	let p = async join(x.label, second: x.reset())
 	let text = await p
 	print("{text} [{x.label}]\n")
@@ -3683,7 +3683,7 @@ end 'Joiner'
 
 function main() returns ExitCode
 	let h = spawn Joiner.create()
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	let text = try await h.take(x.label, second: x.reset()) otherwise "failed"
 	print("{text} [{x.label}]\n")
 	return 0
@@ -3723,7 +3723,7 @@ type Person
 end 'Person'
 
 function main() returns ExitCode
-	var p = Person.create("original {40 + 2} value long enough for a heap record")
+	let p = Person.create("original {40 + 2} value long enough for a heap record")
 	print("{p.keptOriginal()}\n")
 	let filler = "filler {1} value long enough for a heap record"
 	print("[{p.current()}] [{filler}]\n")
@@ -3768,7 +3768,7 @@ function readThrough(x Holder, f Reader) returns String
 end 'readThrough'
 
 function main() returns ExitCode
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	print("{readThrough(x, f: clobberThenRead)} [{x.label}]\n")
 	return 0
 end 'main'
@@ -3809,8 +3809,8 @@ end 'Box'
 typealias StringBox = Box with String
 
 function main() returns ExitCode
-	var b = StringBox.create("original {40 + 2} padded out long enough for the heap")
-	view pair = b.snapshot("replacement {7} padded out long enough for the heap")
+	let b = StringBox.create("original {40 + 2} padded out long enough for the heap")
+	let pair = b.snapshot("replacement {7} padded out long enough for the heap")
 	let filler = "filler {1} padded out long enough for the heap"
 	print("[{pair.0}] [{pair.1}] [{b.current()}] [{filler}]\n")
 	return 0
@@ -3840,7 +3840,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	let m = [x.label: x.reset()]
 	let filler = "filler {1} padded out long enough for the heap"
 	let found = try m.get("original {40 + 2} padded out long enough for the heap") otherwise "missing"
@@ -3866,13 +3866,13 @@ type Holder
 	export var items as StringArray
 
 	static function create() returns Self
-		var items = StringArray.create(0)
+		let items = StringArray.create(0)
 		items.push("original {40 + 2} padded out long enough for the heap")
 		return Self{items: items}
 	end 'create'
 
 	function reset() returns String
-		var fresh = StringArray.create(0)
+		let fresh = StringArray.create(0)
 		fresh.push("replacement {7} padded out long enough for the heap")
 		self.items = fresh
 		return "pushed {5} padded out long enough for the heap"
@@ -3880,9 +3880,9 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var x = Holder.create()
+	let x = Holder.create()
 	x.items.push(x.reset())
-	var filler = StringArray.create(0)
+	let filler = StringArray.create(0)
 	filler.push("filler {1} padded out long enough for the heap")
 	filler.push("filler {2} padded out long enough for the heap")
 	print("{x.items.count()} [{try x.items.get(0) otherwise "none"}] [{try filler.get(0) otherwise "none"}]\n")
@@ -3927,7 +3927,7 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var x = Outer.create("original {40 + 2} padded out long enough for the heap")
+	let x = Outer.create("original {40 + 2} padded out long enough for the heap")
 	x.inner.rename(x.dropInner())
 	let filler = Inner.create("filler {1} padded out long enough for the heap")
 	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
@@ -3986,8 +3986,8 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
-	view copy = x.snapshot()
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let copy = x.snapshot()
 	let filler = Tag.create("filler {1} padded out long enough for the heap")
 	print("{copy.describe()} {x.describe()} [{filler.name()}]\n")
 	return 0
@@ -4057,7 +4057,7 @@ end 'Joiner'
 
 function main() returns ExitCode
 	let h = spawn Joiner.create()
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	let text = try await h.take(x.inner.shape, second: x.reset()) otherwise "failed"
 	print("{text} [{x.inner.shape.name()}]\n")
 	return 0
@@ -4126,7 +4126,7 @@ end 'Joiner'
 
 function main() returns ExitCode
 	let h = spawn Joiner.create()
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	let v = x.inner.shape
 	let text = try await h.take(v, second: x.reset()) otherwise "failed"
 	print("{text} [{x.inner.shape.name()}]\n")
@@ -4190,7 +4190,7 @@ end 'Joiner'
 
 function main() returns ExitCode
 	let h = spawn Joiner.create()
-	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let x = Holder.create("original {40 + 2} padded out long enough for the heap")
 	let v = x.inner.shape
 	let text = try await h.take(v, second: x.reset()) otherwise "failed"
 	print("{text} [{x.inner.shape.name()}]\n")
@@ -4202,44 +4202,6 @@ end 'main'
 ```
 ```stdout
 [original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [replacement 7 padded out long enough for the heap]
-```
-
-<!-- test: a-merged-tuple-copy-of-a-module-let-field-is-writable -->
-### A trivial tuple read out of a module `let` and copied at a merge is a fresh, writable record
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Pairing
-	export var pair as (Num, Num)
-
-	static function create() returns Self
-		return Self{pair: (1, 2)}
-	end 'create'
-end 'Pairing'
-
-let Shared = Pairing.create()
-
-function fallback() returns (Num, Num)
-	return (7, 8)
-end 'fallback'
-
-function pick(c bool) returns Num
-	var t = Shared.pair if c else fallback()
-	t.1 = 99
-	return t.1
-end 'pick'
-
-function main() returns ExitCode
-	let n = pick(true)
-	print("t.1={n} shared.1={Shared.pair.1}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-t.1=99 shared.1=2
 ```
 
 <!-- test: a-merged-tuple-copy-of-a-let-field-is-writable -->
@@ -4279,45 +4241,6 @@ end 'main'
 t.1=99 p.1=2
 ```
 
-<!-- test: a-merged-tuple-copy-of-a-module-let-field-reassigned-is-writable -->
-### … and assigned to an existing `var` rather than declaring one
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Pairing
-	export var pair as (Num, Num)
-
-	static function create() returns Self
-		return Self{pair: (1, 2)}
-	end 'create'
-end 'Pairing'
-
-let Shared = Pairing.create()
-
-function fallback() returns (Num, Num)
-	return (7, 8)
-end 'fallback'
-
-function pick(c bool) returns Num
-	var t = fallback()
-	t = Shared.pair if c else fallback()
-	t.1 = 99
-	return t.1
-end 'pick'
-
-function main() returns ExitCode
-	let n = pick(true)
-	print("t.1={n} shared.1={Shared.pair.1}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-t.1=99 shared.1=2
-```
-
 <!-- test: a-let-field-array-through-a-merge-into-a-writing-callee-is-written -->
 ### A `let` field's array handed through a merge to a callee that writes it is written, as the bare read is
 
@@ -4339,7 +4262,7 @@ end 'grow'
 
 function main() returns ExitCode
 	let h = Holder.create()
-	var other = CountArray.create(0)
+	let other = CountArray.create(0)
 	let c = h.items.count() == 1
 	grow(h.items if c else other)
 	print("{h.items.count()}\n")
@@ -4382,7 +4305,7 @@ end 'fresh'
 function main() returns ExitCode
 	let h = Outer.create()
 	let c = h.inner.n == 1
-	var t = h.inner if c else fresh()
+	let t = h.inner if c else fresh()
 	t.n = 5
 	print("{h.inner.n}\n")
 	return 0
@@ -4393,49 +4316,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-
-<!-- test: a-module-let-fields-record-returned-through-a-merge-is-not-writable -->
-### A module `let`'s field record returned through a merge is not writable by the caller
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Inner
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Inner'
-
-type Outer
-	export let inner as Inner
-
-	static function create() returns Self
-		return Self{inner: Inner.create(1)}
-	end 'create'
-end 'Outer'
-
-let Shared = Outer.create()
-
-function fresh() returns Inner
-	return Inner.create(7)
-end 'fresh'
-
-function pick(c bool) returns Inner
-	let v = Shared.inner if c else fresh()
-	return v
-end 'pick'
-
-function main() returns ExitCode
-	var r = pick(true)
-	r.n = 5
-	print("{Shared.inner.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:33:2: cannot write through 'r': the result of 'pick', which may share storage with a module-level `let`, is read-only and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: a-let-fields-record-returned-through-a-merge-is-writable-by-the-caller -->
@@ -4470,7 +4350,7 @@ end 'pick'
 
 function main() returns ExitCode
 	let h = Outer.create()
-	var r = pick(h, c: true)
+	let r = pick(h, c: true)
 	r.n = 5
 	print("{h.inner.n}\n")
 	return 0
@@ -4569,56 +4449,6 @@ end 'main'
 original 42! original 42? original 42
 ```
 
-<!-- test: a-module-let-record-merged-into-a-let-is-readable-and-passed-on -->
-### A module `let`'s record merged into a `let` reads and passes to a reading callee
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Inner
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Inner'
-
-type Outer
-	export let inner as Inner
-
-	static function create() returns Self
-		return Self{inner: Inner.create(1)}
-	end 'create'
-end 'Outer'
-
-let Shared = Outer.create()
-
-function fresh() returns Inner
-	return Inner.create(7)
-end 'fresh'
-
-function show(i Inner) returns Num
-	return i.n
-end 'show'
-
-function pick(c bool) returns Inner
-	return Shared.inner if c else fresh()
-end 'pick'
-
-function main() returns ExitCode
-	let c = Shared.inner.n == 1
-	let v = Shared.inner if c else fresh()
-	let w = pick(c)
-	print("{show(v)} {show(w)} {show(pick(not c))}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1 1 7
-```
-
 <!-- test: let-field-string-rebound-into-a-by-reference-var-may-grow -->
 ### a `let` field's `String` rebound into a by-reference `var` is a copy the `var` may grow
 ```maxon
@@ -4650,77 +4480,6 @@ end 'main'
 ```
 ```stdout
 original 42!+ original 42
-```
-
-<!-- test: module-let-string-rebound-into-a-by-reference-var-may-grow -->
-### a module `let`'s `String` field rebound into a by-reference `var` is a copy the `var` may grow
-```maxon
-type Holder
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Holder'
-
-let Shared = Holder.create("original 42")
-
-function replace(s mutable String)
-	s = "{s}+"
-end 'replace'
-
-function main() returns ExitCode
-	var s = "start {0}"
-	replace(s)
-	s = Shared.text
-	s.append("!")
-	replace(s)
-	print("{s} {Shared.text}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-original 42!+ original 42
-```
-
-<!-- test: module-let-merged-into-a-var-then-a-field-bound-survives-the-var-rebinding -->
-### a field of a `var` merged from a module `let` or a fresh record survives the `var` being rebound
-```maxon
-type Item
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Item'
-
-type Wrap
-	export let item as Item
-
-	static function create(text String) returns Self
-		return Self{item: Item.create(text)}
-	end 'create'
-end 'Wrap'
-
-let Origin = Wrap.create("origin")
-
-function main() returns ExitCode
-	let c = Origin.item.text.byteLength() == 99
-	var w = Origin if c else Wrap.create("fresh {7} padded out long enough for the heap")
-	let e = w.item
-	w = Wrap.create("replacement {8} padded out long enough for the heap")
-	print("{e.text} {w.item.text}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
 ```
 
 <!-- test: let-field-string-in-one-arm-of-a-by-reference-var-grown-by-a-callee -->
@@ -4801,46 +4560,6 @@ end 'main'
 original 42 padded out long enough for the heap+ | original 42 padded out long enough for the heap
 ```
 
-<!-- test: module-let-string-in-the-earlier-arm-of-a-by-reference-var-grown-by-a-callee -->
-### a module `let`'s `String` on the EARLIER arm of a by-reference `var`, grown by a callee
-```maxon
-type Holder
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Holder'
-
-let Shared = Holder.create("original 42 padded out long enough for the heap")
-
-function grow(s mutable String)
-	s.append("+")
-end 'grow'
-
-function main() returns ExitCode
-	let c = Shared.text.byteLength() > 0
-	var s = "start {0}"
-	grow(s)
-
-	if c 'shared'
-		s = Shared.text
-	end 'shared' else 'fresh'
-		s = "fresh {7}"
-	end 'fresh'
-
-	grow(s)
-	print("{s} | {Shared.text}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-original 42 padded out long enough for the heap+ | original 42 padded out long enough for the heap
-```
-
 <!-- test: control-two-fresh-records-merged-into-a-var-then-a-field-bound-survives-the-var-rebinding -->
 ### control — two fresh records merged into a `var`, a bound field survives the `var` being rebound
 ```maxon
@@ -4864,48 +4583,6 @@ function main() returns ExitCode
 	let probe = Wrap.create("origin")
 	let c = probe.item.text.byteLength() == 99
 	var w = Wrap.create("other {1} padded out long enough for the heap") if c else Wrap.create("fresh {7} padded out long enough for the heap")
-	let e = w.item
-	w = Wrap.create("replacement {8} padded out long enough for the heap")
-	print("{e.text} {w.item.text}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
-```
-
-<!-- test: module-let-rebound-into-a-var-under-an-if-then-a-field-bound-survives-the-var-rebinding -->
-### a `var` rebound to a module `let`'s record under an `if`, a bound field survives the `var` being rebound
-```maxon
-type Item
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Item'
-
-type Wrap
-	export let item as Item
-
-	static function create(text String) returns Self
-		return Self{item: Item.create(text)}
-	end 'create'
-end 'Wrap'
-
-let Origin = Wrap.create("origin")
-
-function main() returns ExitCode
-	let c = Origin.item.text.byteLength() == 99
-	var w = Wrap.create("fresh {7} padded out long enough for the heap")
-
-	if c 'shared'
-		w = Origin
-	end 'shared'
-
 	let e = w.item
 	w = Wrap.create("replacement {8} padded out long enough for the heap")
 	print("{e.text} {w.item.text}\n")
@@ -4971,667 +4648,6 @@ end 'main'
 0
 ```
 
-<!-- test: match-merge-of-a-module-let-and-a-fresh-record-field-survives-the-rebind -->
-### a field of a `var` merged by a `match` from a module `let` or a fresh record survives the `var` being rebound
-```maxon
-enum Pick
-	first
-	second
-end 'Pick'
-
-type Item
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Item'
-
-type Wrap
-	export let item as Item
-
-	static function create(text String) returns Self
-		return Self{item: Item.create(text)}
-	end 'create'
-end 'Wrap'
-
-let Origin = Wrap.create("origin")
-
-function choose(fresh bool) returns Pick
-	return Pick.second if fresh else Pick.first
-end 'choose'
-
-function main() returns ExitCode
-	let c = Origin.item.text.byteLength() == 6
-	var w = match choose(c) 'pick'
-		first gives Origin
-		second gives Wrap.create("fresh {7} padded out long enough for the heap")
-	end 'pick'
-	let e = w.item
-	w = Wrap.create("replacement {8} padded out long enough for the heap")
-	print("{e.text} {w.item.text}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
-```
-
-<!-- test: try-otherwise-merge-of-a-fresh-record-and-a-module-let-field-survives-the-rebind -->
-### a field of a `var` merged by `try … otherwise` from a fresh record or a module `let` survives the `var` being rebound
-```maxon
-enum Boom implements Error
-	bad
-end 'Boom'
-
-type Item
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Item'
-
-type Wrap
-	export let item as Item
-
-	static function create(text String) returns Self
-		return Self{item: Item.create(text)}
-	end 'create'
-end 'Wrap'
-
-let Origin = Wrap.create("origin")
-
-function make(fail bool) returns Wrap throws Boom
-	if fail 'boom'
-		throw Boom.bad
-	end 'boom'
-
-	return Wrap.create("fresh {7} padded out long enough for the heap")
-end 'make'
-
-function main() returns ExitCode
-	let c = Origin.item.text.byteLength() == 99
-	var w = try make(c) otherwise Origin
-	let e = w.item
-	w = Wrap.create("replacement {8} padded out long enough for the heap")
-	print("{e.text} {w.item.text}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
-```
-
-<!-- test: ternary-of-two-module-lets-field-survives-the-rebind -->
-### a field of a `var` merged from two module `let`s survives the `var` being rebound
-```maxon
-type Item
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Item'
-
-type Wrap
-	export let item as Item
-
-	static function create(text String) returns Self
-		return Self{item: Item.create(text)}
-	end 'create'
-end 'Wrap'
-
-let Origin = Wrap.create("origin")
-let Other = Wrap.create("other")
-
-function main() returns ExitCode
-	let c = Origin.item.text.byteLength() == 6
-	var w = Origin if c else Other
-	let e = w.item
-	w = Wrap.create("replacement {8} padded out long enough for the heap")
-	print("{e.text} {w.item.text}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-origin replacement 8 padded out long enough for the heap
-```
-
-<!-- test: match-merge-of-a-module-let-into-a-var-then-written-is-refused -->
-### a `match` merge of a module `let`'s writable record into a `var`, then written through the `var`, is refused
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-enum Pick
-	first
-	second
-end 'Pick'
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origin = Point.create(1)
-
-function choose(fresh bool) returns Pick
-	return Pick.second if fresh else Pick.first
-end 'choose'
-
-function main() returns ExitCode
-	let c = Origin.n == 7
-	var q = match choose(c) 'pick'
-		first gives Origin
-		second gives Point.create(2)
-	end 'pick'
-	q.n = 9
-	print("{q.n} {Origin.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:25:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'q'; use 'let' instead of 'var', or use clone()
-```
-
-<!-- test: try-otherwise-merge-of-a-module-let-into-a-var-then-written-is-refused -->
-### a `try … otherwise` merge of a module `let`'s writable record into a `var`, then written through the `var`, is refused
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-enum Boom implements Error
-	bad
-end 'Boom'
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origin = Point.create(1)
-
-function make(fail bool) returns Point throws Boom
-	if fail 'boom'
-		throw Boom.bad
-	end 'boom'
-
-	return Point.create(2)
-end 'make'
-
-function main() returns ExitCode
-	let c = Origin.n == 1
-	var q = try make(c) otherwise Origin
-	q.n = 9
-	print("{q.n} {Origin.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3078: <fragment>:28:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'q'; use 'let' instead of 'var', or use clone()
-```
-
-<!-- test: statement-match-rebinding-a-var-to-a-module-let-or-a-fresh-record-field-survives-the-rebind -->
-### a `var` rebound by a statement `match` to a module `let` or a fresh record, a bound field survives the `var` being rebound
-```maxon
-enum Pick
-	first
-	second
-end 'Pick'
-
-type Item
-	export let text as String
-
-	static function create(text String) returns Self
-		return Self{text: text}
-	end 'create'
-end 'Item'
-
-type Wrap
-	export let item as Item
-
-	static function create(text String) returns Self
-		return Self{item: Item.create(text)}
-	end 'create'
-end 'Wrap'
-
-let Origin = Wrap.create("origin")
-
-function choose(fresh bool) returns Pick
-	return Pick.second if fresh else Pick.first
-end 'choose'
-
-function main() returns ExitCode
-	let c = Origin.item.text.byteLength() == 6
-	var w = Wrap.create("start {0} padded out long enough for the heap")
-
-	match choose(c) 'pick'
-		first then w = Origin
-		second then w = Wrap.create("fresh {7} padded out long enough for the heap")
-	end 'pick'
-
-	let e = w.item
-	w = Wrap.create("replacement {8} padded out long enough for the heap")
-	print("{e.text} {w.item.text}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
-```
-
-<!-- test: try-otherwise-merge-of-a-module-let-element-and-a-fresh-record-into-a-let-runs -->
-### the same merge into a `let` is accepted and reads the element on the OK edge and the fallback on the error edge
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function pick(index ElementIndex) returns Num
-	let found = try Origins.get(index) otherwise Point.create(2)
-	return found.n
-end 'pick'
-
-function main() returns ExitCode
-	print("{pick(0)} {pick(5)} {Origins.count()}\n")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1 2 1
-```
-
-<!-- test: for-in-element-of-a-module-let-array-into-a-var-then-written-is-refused -->
-### an element of a module `let` array bound by `for … in`, assigned to a `var` and written, is refused
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var q = Point.create(0)
-
-	for point in Origins 'each'
-		q = point
-	end 'each'
-
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:21:2: cannot write 'n' through 'q', which is read-only, as it joins immutable and mutable data
-```
-
-<!-- test: try-otherwise-merge-of-a-module-let-element-on-the-ok-edge-into-a-var-then-written-is-refused -->
-a `try … otherwise` whose OK edge reads a module `let`'s element record, merged with a fresh fallback into a `var` and written, is refused
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var q = try Origins.get(0) otherwise Point.create(2)
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:16:2: cannot write 'n' through 'q', which is read-only, as it joins immutable and mutable data
-```
-
-<!-- test: try-otherwise-diverging-read-of-a-module-let-element-into-a-var-then-written-is-refused -->
-a `try … otherwise panic` read of a module `let`'s element record into a `var`, then written, is refused
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var q = try Origins.get(0) otherwise panic("one point")
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:16:2: cannot write 'n' through 'q', which is immutable
-```
-
-
-<!-- test: try-otherwise-diverging-first-of-a-module-let-into-a-var-then-written-is-refused -->
-`first` hands back the module `let`'s element record as surely as `get` does, so the `var` that takes it is
-refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var q = try Origins.first() otherwise panic("one point")
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:16:2: cannot write 'n' through 'q', which is immutable
-```
-
-<!-- test: try-otherwise-diverging-map-get-of-a-module-let-into-a-var-then-written-is-refused -->
-A module `let` map's value record is read-only as well: `get` hands back the record the map holds.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Places = ["home": Point.create(1)]
-
-function main() returns ExitCode
-	var q = try Places.get("home") otherwise panic("one place")
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:16:2: cannot write 'n' through 'q', which is immutable
-```
-
-<!-- test: try-otherwise-diverging-last-of-a-module-let-into-a-var-then-written-is-refused -->
-`last` hands back the module `let`'s element record as `first` does.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var q = try Origins.last() otherwise panic("one point")
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:16:2: cannot write 'n' through 'q', which is immutable
-```
-
-<!-- test: a-clone-of-a-module-let-element-into-a-var-is-written-and-runs -->
-A clone of the module `let`'s element is a record of its own, so the `var` that takes it may write it.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	let held = try Origins.get(0) otherwise panic("one point")
-	var q = held.clone()
-	q.n = 9
-	let first = try Origins.get(0) otherwise panic("one point")
-	print("{q.n} {first.n}\n")
-	return 0
-end 'main'
-```
-```stdout
-9 1
-```
-
-<!-- test: a-generic-method-of-a-module-let-returning-its-argument-into-a-var-runs -->
-`echo` returns `T`, but the value it returns is its argument, a record `main` built, not one the module `let`
-holds, so the `var` that takes it may write it.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-type Box uses T
-	export var calls as Num
-
-	static function create() returns Self
-		return Self{calls: 0}
-	end 'create'
-
-	function echo(v T) returns T
-		return v
-	end 'echo'
-end 'Box'
-
-typealias PointBox = Box with Point
-
-let Shelf = PointBox.create()
-
-function main() returns ExitCode
-	var q = Shelf.echo(Point.create(2))
-	q.n = 9
-	print("{q.n} {Shelf.calls}\n")
-	return 0
-end 'main'
-```
-```stdout
-9 0
-```
-
-<!-- test: a-user-container-element-of-a-module-let-into-a-var-then-written-is-refused -->
-`Shelf.get` hands back an element of the array the module `let` holds, so the `var` that takes it is refused
-as a library accessor's result is.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-type Shelf uses T
-	export typealias Items = Array with T
-	var items as Items
-
-	static function create() returns Self
-		return Self{items: Items.create(0)}
-	end 'create'
-
-	function get(index ElementIndex) returns T throws ArrayError
-		return try self.items.get(index)
-	end 'get'
-end 'Shelf'
-
-typealias PointShelf = Shelf with Point
-
-let Racks = PointShelf.create()
-
-function main() returns ExitCode
-	var q = try Racks.get(0) otherwise Point.create(5)
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:31:2: cannot write 'n' through 'q', which is immutable
-```
-
-<!-- test: an-array-extension-element-of-a-module-let-into-a-var-then-written-is-refused -->
-A member an `extension Array` declares hands back the module `let`'s element record as the library's own
-accessors do.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-extension Array
-	function head() returns Element throws ArrayError
-		return try self.get(0)
-	end 'head'
-end 'Array'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var q = try Origins.head() otherwise panic("one point")
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:22:2: cannot write 'n' through 'q', which is immutable
-```
-
-<!-- test: a-list-first-of-a-module-let-into-a-var-then-written-is-refused -->
-`List.first` hands back the element record the module `let` list holds.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-typealias Points = List with Point
-
-let Queue = Points.create()
-
-function main() returns ExitCode
-	var q = try Queue.first() otherwise Point.create(5)
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:18:2: cannot write 'n' through 'q', which is immutable
-```
-
-<!-- test: a-list-last-of-a-module-let-into-a-var-then-written-is-refused -->
-`List.last` hands back the element record the module `let` list holds.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-typealias Points = List with Point
-
-let Queue = Points.create()
-
-function main() returns ExitCode
-	var q = try Queue.last() otherwise Point.create(5)
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:18:2: cannot write 'n' through 'q', which is immutable
-```
-
 <!-- test: an-array-extension-returning-its-argument-on-a-let-of-read-only-elements-into-a-var-runs -->
 `echo` returns `Element`, but what it returns is its argument, a record `main` built, so the `var` that takes
 it may write it even though the array's elements are read-only.
@@ -5652,11 +4668,11 @@ extension Array
 	end 'echo'
 end 'Array'
 
-typealias Points = Array with readonly Point
+typealias Points = Array with immutable Point
 
 function main() returns ExitCode
 	let ps = Points.create(0)
-	var q = ps.echo(Point.create(2))
+	let q = ps.echo(Point.create(2))
 	q.n = 9
 	print("{q.n}\n")
 	return 0
@@ -5668,7 +4684,7 @@ end 'main'
 
 <!-- test: a-read-only-list-element-returned-through-a-cursor-into-a-var-then-written-is-refused -->
 `pick` hands back an element of a list whose elements are read-only, reached through the list's cursor, so
-the `var` that takes it may not write it.
+the binding that takes it may not write it.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5680,9 +4696,9 @@ type Point
 	end 'create'
 end 'Point'
 
-typealias Points = List with readonly Point
+typealias Points = List with immutable Point
 
-function pick(ps Points, fallback Point) returns Point
+function pick(ps Points, fallback immutable Point) returns immutable Point
 	for p in ps 'each'
 		return p
 	end 'each'
@@ -5691,21 +4707,21 @@ function pick(ps Points, fallback Point) returns Point
 end 'pick'
 
 function main() returns ExitCode
-	var ps = Points.create()
-	ps.append(Point.create(1))
-	var q = pick(ps, fallback: Point.create(2))
+	let ps = Points.create()
+	ps.append(freeze Point.create(1))
+	let q = pick(ps, fallback: freeze Point.create(2))
 	q.n = 9
 	print("{q.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:25:6: cannot assign a value, which may share storage with a `readonly` element, to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+error E3197: <fragment>:26:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: an-array-extension-element-of-read-only-elements-into-a-var-then-written-is-refused -->
-`head` hands back the array's stored element, and the array's elements are read-only, so a `var` may
-not take it, whoever declared the member.
+`head` hands back the array's stored element, and the array's elements are read-only, so the binding
+that takes it may not write it, whoever declared the member.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5723,97 +4739,23 @@ extension Array
 	end 'head'
 end 'Array'
 
-typealias Points = Array with readonly Point
+typealias Points = Array with immutable Point
 
 function main() returns ExitCode
-	var ps = Points.create(0)
-	ps.push(Point.create(1))
-	var q = try ps.head() otherwise panic("one point")
+	let ps = Points.create(0)
+	ps.push(freeze Point.create(1))
+	let q = try ps.head() otherwise panic("one point")
 	q.n = 9
 	print("{q.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:6: cannot assign a value, which may share storage with a `readonly` element, to mutable binding 'q'; use 'let' instead of 'var', or use clone()
-```
-
-<!-- test: a-clone-of-a-module-let-array-is-pushed-and-runs -->
-A method call on a module `let` reads it as a receiver; a clone it returns is an array of its own that a
-`var` may grow.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var c = Origins.clone()
-	c.push(Point.create(2))
-	print("{c.count()} {Origins.count()}\n")
-	return 0
-end 'main'
-```
-```stdout
-2 1
-```
-
-<!-- test: a-user-member-returning-a-stored-element-from-a-loop-on-a-module-let-into-a-var-is-refused -->
-`pick` returns either an element of the array the module `let` holds or its argument, so the `var` that takes
-its result may be handed the `let`'s record.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-type Shelf uses T
-	export typealias Items = Array with T
-	var items as Items
-
-	static function create() returns Self
-		return Self{items: Items.create(0)}
-	end 'create'
-
-	function pick(fallback T) returns T
-		for p in self.items 'each'
-			return p
-		end 'each'
-
-		return fallback
-	end 'pick'
-end 'Shelf'
-
-typealias PointShelf = Shelf with Point
-
-let Racks = PointShelf.create()
-
-function main() returns ExitCode
-	var q = Racks.pick(Point.create(2))
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3208: <fragment>:34:16: 'pick' returns 'self' or 'fallback'; they must both be mutable or both immutable here
-error E3197: <fragment>:35:2: cannot write 'n' through 'q', which is immutable
+error E3197: <fragment>:24:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: an-array-extension-forwarding-a-stored-element-of-read-only-elements-is-not-written-through -->
-`front` returns what `head` returns, an element of the array whose elements are read-only, so no `var` may take it.
+`front` returns what `head` returns, an element of the array whose elements are read-only, so no binding that takes it may write it.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5835,737 +4777,19 @@ extension Array
 	end 'front'
 end 'Array'
 
-typealias Points = Array with readonly Point
+typealias Points = Array with immutable Point
 
 function main() returns ExitCode
-	var ps = Points.create(0)
-	ps.push(Point.create(1))
-	var q = try ps.front() otherwise panic("one point")
+	let ps = Points.create(0)
+	ps.push(freeze Point.create(1))
+	let q = try ps.front() otherwise panic("one point")
 	q.n = 9
 	print("{q.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:27:6: cannot assign a value, which may share storage with a `readonly` element, to mutable binding 'q'; use 'let' instead of 'var', or use clone()
-```
-
-<!-- test: a-user-member-merging-a-stored-element-with-its-argument-on-a-module-let-into-a-var-is-refused -->
-`getOr` returns either the module `let`'s element or its argument, so the `var` that takes its result is
-refused, as `try Origins.get(0) otherwise Point.create(2)` is.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-type Shelf uses T
-	export typealias Items = Array with T
-	var items as Items
-
-	static function create() returns Self
-		return Self{items: Items.create(0)}
-	end 'create'
-
-	function getOr(index ElementIndex, fallback T) returns T
-		return try self.items.get(index) otherwise fallback
-	end 'getOr'
-end 'Shelf'
-
-typealias PointShelf = Shelf with Point
-
-let Racks = PointShelf.create()
-
-function main() returns ExitCode
-	var q = Racks.getOr(5, fallback: Point.create(3))
-	q.n = 9
-	print("{q.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3208: <fragment>:30:16: 'getOr' returns 'self' or 'fallback'; they must both be mutable or both immutable here
-error E3197: <fragment>:31:2: cannot write 'n' through 'q', which is immutable
-```
-
-
-<!-- test: error.a-module-let-element-handed-to-a-writing-callee-is-refused -->
-The element `get` hands back is the module `let`'s record, so passing it to a function that writes it is
-refused, whichever door reads it.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	bump(try Origins.get(0) otherwise panic("one point"))
-	let first = try Origins.get(0) otherwise panic("one point")
-	print("{first.n}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3207: <fragment>:19:7: 'bump' writes 'p' (line 15: `p.n = 9`); 'Origins.get(0)' is immutable
-```
-
-<!-- test: error.a-module-let-element-written-through-a-receiver-method-is-refused -->
-A method that writes its receiver, called on the module `let`'s element, is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-
-	function reset()
-		self.n = 0
-	end 'reset'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	let p = try Origins.get(0) otherwise panic("one point")
-	p.reset()
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3207: <fragment>:20:2: 'reset' writes its receiver (line 12: `self.n = 0`); 'p' is immutable
-```
-
-<!-- test: error.a-module-let-element-from-first-handed-to-a-writing-callee-is-refused -->
-The element `first` hands back is the module `let`'s record, so passing it to a function that writes it is
-refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	bump(try Origins.first() otherwise panic("one point"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3207: <fragment>:19:7: 'bump' writes 'p' (line 15: `p.n = 9`); 'Origins.first()' is immutable
-```
-
-<!-- test: error.a-module-let-element-from-last-handed-to-a-writing-callee-is-refused -->
-The element `last` hands back is the module `let`'s record, so passing it to a function that writes it is
-refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	bump(try Origins.last() otherwise panic("one point"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3207: <fragment>:19:7: 'bump' writes 'p' (line 15: `p.n = 9`); 'Origins.last()' is immutable
-```
-
-<!-- test: error.a-module-let-element-handed-to-a-writing-function-value-is-refused -->
-A function value bound to a function that writes its parameter writes it as the function does, so handing
-it the module `let`'s element is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	let f = bump
-	f(try Origins.get(0) otherwise panic("one point"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3207: <fragment>:20:3: 'bump' writes 'p' (line 15: `p.n = 9`); 'Origins.get(0)' is immutable
-```
-
-<!-- test: error.a-module-let-element-handed-to-a-method-writing-its-argument-is-refused -->
-A method that writes its argument, handed the module `let`'s element, is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-type Holder
-	export var p as Point
-
-	static function create(p Point) returns Self
-		return Self{p: p}
-	end 'create'
-
-	function take(q Point)
-		q.n = 7
-	end 'take'
-end 'Holder'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	let h = Holder.create(Point.create(3))
-	h.take(try Origins.get(0) otherwise panic("one point"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3207: <fragment>:28:9: 'take' writes 'q' (line 20: `q.n = 7`); 'Origins.get(0)' is immutable
-```
-
-<!-- test: error.a-module-let-element-from-map-get-handed-to-a-writing-callee-is-refused -->
-The value `Map.get` hands back is the module `let` map's record, so passing it to a function that writes it
-is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-typealias PointMap = Map with String, Point
-
-let Places = PointMap.create()
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	bump(try Places.get("a") otherwise panic("no point"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3207: <fragment>:21:7: 'bump' writes 'p' (line 17: `p.n = 9`); 'Places.get("a")' is immutable
-```
-
-<!-- test: error.a-module-let-element-from-list-first-handed-to-a-writing-callee-is-refused -->
-The element `List.first` hands back is the module `let` list's record, so passing it to a function that
-writes it is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-typealias Points = List with Point
-
-let Queue = Points.create()
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	bump(try Queue.first() otherwise panic("one point"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3207: <fragment>:21:7: 'bump' writes 'p' (line 17: `p.n = 9`); 'Queue.first()' is immutable
-```
-
-<!-- test: error.a-module-let-element-from-list-last-handed-to-a-writing-callee-is-refused -->
-The element `List.last` hands back is the module `let` list's record, so passing it to a function that writes it is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-typealias Points = List with Point
-
-let Queue = Points.create()
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	bump(try Queue.last() otherwise panic("one point"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3207: <fragment>:21:7: 'bump' writes 'p' (line 17: `p.n = 9`); 'Queue.last()' is immutable
-```
-
-<!-- test: error.a-module-let-element-of-a-created-array-handed-to-a-writing-callee-is-refused -->
-An array the module `let` builds with `create` holds its elements as any `let` array does, so passing one to
-a function that writes it is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-typealias Pts = Array with Point
-
-let Arr = Pts.create(0)
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	bump(try Arr.get(0) otherwise panic("one point"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3207: <fragment>:21:7: 'bump' writes 'p' (line 17: `p.n = 9`); 'Arr.get(0)' is immutable
-```
-
-<!-- test: error.a-module-let-element-returned-by-a-function-handed-to-a-writing-callee-is-refused -->
-A function that returns the module `let`'s element hands back that record, so passing its result to a
-function that writes it is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function head() returns immutable Point
-	return try Origins.get(0) otherwise panic("one point")
-end 'head'
-
-function main() returns ExitCode
-	bump(head())
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:23:2: cannot pass the result of 'head', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
-error E3207: <fragment>:23:7: 'bump' writes 'p' (line 15: `p.n = 9`); 'head()' is immutable
-```
-
-<!-- test: error.a-module-let-element-bound-to-a-let-and-written-is-refused -->
-A `let` bound to the module `let`'s element is read-only at every depth, so writing its field is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	let p = try Origins.get(0) otherwise panic("one point")
-	p.n = 9
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:16:2: cannot write 'n' through 'p', which is immutable
-```
-
-<!-- test: error.a-module-let-element-stored-into-a-var-holders-field-is-refused -->
-Storing the module `let`'s element into a field of a `var` holder would let the holder write it, so the
-store is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-type Holder
-	export var p as Point
-
-	static function create(p Point) returns Self
-		return Self{p: p}
-	end 'create'
-end 'Holder'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var h = Holder.create(Point.create(2))
-	h.p = try Origins.get(0) otherwise panic("one point")
-	h.p.n = 9
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3196: <fragment>:24:8: cannot store an immutable 'Point' into 'p', which holds a mutable 'Point'; declare the field `immutable Point`
-```
-
-<!-- test: error.a-module-let-element-pushed-into-a-var-array-is-refused -->
-Pushing the module `let`'s element into a `var` array is refused, and the array's element, which may be that
-record, is not handed to a function that writes it.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	var arr = [Point.create(2)]
-	arr.push(try Origins.get(0) otherwise panic("one point"))
-	bump(try arr.get(1) otherwise panic("two points"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3196: <fragment>:20:11: cannot store an immutable 'Point' into 'an element of the container push writes', which holds a mutable 'Point'; declare the element `immutable Point`
-```
-
-<!-- test: error.a-module-let-element-returned-by-a-closure-handed-to-a-writing-callee-is-refused -->
-A closure that returns the module `let`'s element hands back that record, so passing its result to a
-function that writes it is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	let f = function() gives (try Origins.get(0) otherwise panic("one point"))
-	bump(f())
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3159: <fragment>:20:2: cannot pass a value, which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
-```
-
-<!-- test: error.a-module-let-element-rebound-to-a-var-and-written-is-refused -->
-Rebinding a `var` to the module `let`'s element would let the `var` write it, so the rebind is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var q = Point.create(2)
-	q = try Origins.get(0) otherwise panic("one point")
-	q.n = 9
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:17:2: cannot write 'n' through 'q', which is immutable
-```
-
-<!-- test: error.a-module-let-element-assigned-to-a-var-is-refused -->
-Assigning the module `let`'s element to a `var` would let the `var` write it, so the
-assignment is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var Cache = Point.create(0)
-	Cache = try Origins.get(0) otherwise panic("one point")
-	Cache.n = 9
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:17:2: cannot write 'n' through 'Cache', which is immutable
-```
-
-<!-- test: error.a-module-let-element-in-a-struct-literal-is-refused -->
-A struct literal that stores the module `let`'s element into a writable field would let its holder write
-it, so the store is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-type Holder
-	export var p as Point
-
-	static function fromOrigin() returns Self
-		return Self{p: try Origins.get(0) otherwise panic("one point")}
-	end 'fromOrigin'
-end 'Holder'
-
-function main() returns ExitCode
-	var h = Holder.fromOrigin()
-	h.p.n = 9
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3196: <fragment>:18:18: cannot store an immutable 'Point' into 'Holder.p', which holds a mutable 'Point'; declare the field `immutable Point`
-```
-
-<!-- test: error.a-module-let-element-kept-by-a-factory-is-refused -->
-A factory that keeps its argument in a writable field would let its holder write the module `let`'s
-element, so handing it that element is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-type Holder
-	export var p as Point
-
-	static function create(p Point) returns Self
-		return Self{p: p}
-	end 'create'
-end 'Holder'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	var h = Holder.create(try Origins.get(0) otherwise panic("one point"))
-	h.p.n = 9
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:24:2: cannot write 'n' through 'h.p', which is read-only
-```
-
-<!-- test: error.a-module-let-element-in-an-array-literal-is-refused -->
-An array literal holding the module `let`'s element, bound to a `var`, would let the array's element be
-written, so the element is not handed to a function that writes it.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	var arr = [try Origins.get(0) otherwise panic("one point")]
-	bump(try arr.get(0) otherwise panic("one point"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3196: <fragment>:19:13: cannot store an immutable 'Point' into 'an element of the array literal', which holds a mutable 'Point'; declare the element `immutable Point`
-```
-
-<!-- test: error.a-module-let-element-upserted-into-a-var-map-is-refused -->
-Upserting the module `let`'s element into a `var` map would let the map's value be written, so the value
-`get` hands back is not written.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-typealias PointMap = Map with String, Point
-
-let Origins = [Point.create(1)]
-
-function bump(p Point)
-	p.n = 9
-end 'bump'
-
-function main() returns ExitCode
-	var places = PointMap.create()
-	places.upsert("a", value: try Origins.get(0) otherwise panic("one point"))
-	bump(try places.get("a") otherwise panic("no point"))
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3196: <fragment>:22:28: cannot store an immutable 'Point' into 'Map.upsert.value', which holds a mutable 'Point'; declare the element `immutable Point`
-```
-
-<!-- test: error.a-module-let-element-merged-by-a-ternary-is-refused -->
-A ternary whose arm is the module `let`'s element may hand back that record, so binding it to a `var` that
-writes it is refused.
-```maxon
-typealias Num = int(i64.min to i64.max)
-
-type Point
-	export var n as Num
-
-	static function create(n Num) returns Self
-		return Self{n: n}
-	end 'create'
-end 'Point'
-
-let Origins = [Point.create(1)]
-
-function main() returns ExitCode
-	let flag = Origins.count() > 0
-	var q = (try Origins.get(0) otherwise panic("one point")) if flag else Point.create(5)
-	q.n = 9
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3197: <fragment>:17:2: cannot write 'n' through 'q', which is read-only, as it joins immutable and mutable data
+error E3197: <fragment>:28:2: cannot write 'n' through 'q', which is immutable
 ```
 
 <!-- test: an-argument-read-out-of-a-union-field-survives-the-callee-overwriting-the-field -->
@@ -6616,7 +4840,7 @@ function use(u LSlot, k Integer) returns Integer
 end 'use'
 
 function main() returns ExitCode
-	var vh = VarHolder.create(LSlot.lfilled(text(5)))
+	let vh = VarHolder.create(LSlot.lfilled(text(5)))
 	let d = vh.go()
 	print("d={d}")
 	return 0
@@ -6678,7 +4902,7 @@ function use(i Inner, k Integer) returns Integer
 end 'use'
 
 function main() returns ExitCode
-	var h = Holder.create(Inner.create(text(5)))
+	let h = Holder.create(Inner.create(text(5)))
 	let d = h.go()
 	print("d={d}")
 	return 0
@@ -6732,7 +4956,7 @@ function use(p Pair, k Integer) returns Integer
 end 'use'
 
 function main() returns ExitCode
-	var h = Holder.create((text(5), 2))
+	let h = Holder.create((text(5), 2))
 	let d = h.go()
 	print("d={d}")
 	return 0
@@ -6791,7 +5015,7 @@ function use(f Op, k Integer) returns Integer
 end 'use'
 
 function main() returns ExitCode
-	var h = Holder.create(makeOp())
+	let h = Holder.create(makeOp())
 	let d = h.go()
 	print("d={d}")
 	return 0
@@ -6860,7 +5084,7 @@ function use(i Labeled, k Integer) returns Integer
 end 'use'
 
 function main() returns ExitCode
-	var h = Holder.create(Tag.create(text(5)))
+	let h = Holder.create(Tag.create(text(5)))
 	let d = h.go()
 	print("d={d}")
 	return 0
@@ -6944,7 +5168,7 @@ function use(i Labeled, k Integer) returns Integer
 end 'use'
 
 function main() returns ExitCode
-	var h = Holder.create(Tag.create(text(5)))
+	let h = Holder.create(Tag.create(text(5)))
 	let d = h.go()
 	print("d={d}")
 	return 0
@@ -6988,74 +5212,52 @@ end 'main'
 error E3197: <fragment>:19:3: cannot write 'n' through 'p', which is immutable
 ```
 
-<!-- test: error.a-for-over-a-module-let-list-writes-its-element-is-refused -->
-A `for` over a module `let` `List` hands out the element records the list holds, so writing one is a write through immutable data.
+<!-- test: error.a-module-let-built-by-a-factory-call-is-refused -->
+### A module `let` whose initializer calls a factory is refused
+Module-level data is built by literals only, so no record reachable from a module `let` is ever the result of a call: a function's result is built where it is used.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
 type Point
 	export var n as Num
-	export var m as Num
 
 	static function create(n Num) returns Self
-		return Self{n: n, m: n}
+		return Self{n: n}
 	end 'create'
 end 'Point'
 
-typealias Points = List with Point
-
-let Queue = Points.create()
+let Origin = Point.create(1)
 
 function main() returns ExitCode
-	for q in Queue 'each'
-		q.m = 4
-	end 'each'
-
-	print("done\n")
+	print("{Origin.n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3197: <fragment>:19:3: cannot write 'm' through 'q', which is immutable
+error E3220: <fragment>:12:14: the initializer of 'Origin' calls 'Point.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```
 
-<!-- test: a-for-over-a-frozen-list-reads-its-elements -->
-Reading the elements of a frozen or module `let` `List` in a `for` is accepted: only a write through the element is refused.
+<!-- test: error.a-module-let-array-literal-holding-a-factory-call-is-refused -->
+### A module `let` array literal whose element is a factory call is refused
+The literal is not a call, but its element is.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
 type Point
 	export var n as Num
-	export var m as Num
 
 	static function create(n Num) returns Self
-		return Self{n: n, m: n}
+		return Self{n: n}
 	end 'create'
 end 'Point'
 
-typealias Points = List with Point
-
-let Queue = Points.create()
-
-function total(items Points) returns Num
-	var sum = 0 as Num
-
-	for p in items 'each'
-		sum = sum + p.n
-	end 'each'
-
-	return sum
-end 'total'
+let Origins = [Point.create(1)]
 
 function main() returns ExitCode
-	let frozen = freeze Points.create()
-	print("{total(frozen)} {total(Queue)}\n")
+	print("{Origins.count()}\n")
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-0 0
+```maxoncstderr
+error E3220: <fragment>:12:15: the initializer of 'Origins' calls 'Point.create': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
 ```

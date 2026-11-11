@@ -65,7 +65,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -86,7 +86,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.reserve(16)
 	let gone = try arr.managed.remove(1) otherwise 7
@@ -106,7 +106,7 @@ be erased. A leak or a double free is the failure; the run is leak-gated.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("first heap string long enough to require an allocation")
 	xs.push("second heap string long enough to require an allocation")
 	xs.push("third heap string long enough to require an allocation")
@@ -137,7 +137,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -163,7 +163,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -191,7 +191,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.reserve(16)
@@ -217,7 +217,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	try arr.managed.shiftLeft(0, 2) otherwise return 5
@@ -246,7 +246,7 @@ hole empty tests exactly the half this member owns.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("alpha heap string long enough to require an allocation")
 	xs.push("beta heap string long enough to require an allocation")
 	xs.reserve(3)
@@ -281,7 +281,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntegerArray = Array with Integer
 
 function main() returns ExitCode
-	var xs = IntegerArray.create(0)
+	let xs = IntegerArray.create(0)
 	xs.push(1)
 	xs.push(2)
 	xs.push(3)
@@ -313,7 +313,7 @@ stays 3, so slot 2 reads as an empty slot, and teardown releases `beta` and `gam
 release `alpha` leaks (exit 101); without the zeroing `gamma` is released twice.
 ```maxon
 function main() returns ExitCode
-	var xs = ["alpha {40 + 2} heap string one", "beta {40 + 2} heap string two", "gamma {40 + 2} heap string three"]
+	let xs = ["alpha {40 + 2} heap string one", "beta {40 + 2} heap string two", "gamma {40 + 2} heap string three"]
 	try xs.managed.shiftLeft(1, 2) otherwise return 3
 	let first = try xs.get(0) otherwise "missing"
 	let second = try xs.get(1) otherwise "missing"
@@ -345,7 +345,7 @@ never 101.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("alpha {40 + 2} heap string one")
 	xs.push("beta {40 + 2} heap string two")
 	xs.push("gamma {40 + 2} heap string three")
@@ -386,7 +386,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntegerArray = Array with Integer
 
 function main() returns ExitCode
-	var xs = IntegerArray.create(0)
+	let xs = IntegerArray.create(0)
 	xs.push(1)
 	xs.push(2)
 	xs.push(3)
@@ -421,7 +421,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntegerArray = Array with Integer
 
 function main() returns ExitCode
-	var xs = IntegerArray.create(0)
+	let xs = IntegerArray.create(0)
 	xs.push(1)
 	xs.push(2)
 	xs.push(3)
@@ -457,7 +457,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntegerArray = Array with Integer
 
 function main() returns ExitCode
-	var xs = IntegerArray.create(0)
+	let xs = IntegerArray.create(0)
 	xs.push(1)
 	xs.push(2)
 	xs.push(3)
@@ -496,7 +496,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -533,7 +533,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntegerArray = Array with Integer
 
 function main() returns ExitCode
-	var xs = IntegerArray.create(0)
+	let xs = IntegerArray.create(0)
 	xs.push(1)
 	xs.push(2)
 	xs.push(3)
@@ -566,7 +566,7 @@ slot 0 reads as an empty slot.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("alpha {40 + 2} heap string one")
 	xs.push("beta {40 + 2} heap string two")
 	xs.push("gamma {40 + 2} heap string three")
@@ -599,7 +599,7 @@ have freed a string it still owns.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("alpha {40 + 2} heap string one")
 	xs.push("beta {40 + 2} heap string two")
 	xs.push("gamma {40 + 2} heap string three")
@@ -628,7 +628,7 @@ destroy `alpha` while the array still counts it.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("alpha {40 + 2} heap string one")
 	xs.push("beta {40 + 2} heap string two")
 	xs.push("gamma {40 + 2} heap string three")
@@ -655,7 +655,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -676,7 +676,7 @@ element and store the pointer it just released.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("only heap string long enough to require an allocation")
 	try xs.managed.swap(0, j: 0) otherwise return 99
 	let only = try xs.get(0) otherwise "missing"
@@ -699,7 +699,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray.create(0)
+	let arr = ByteArray.create(0)
 	arr.push(10)
 	arr.reserve(16)
 	try arr.managed.swap(0, j: 4) otherwise return 5
@@ -721,7 +721,7 @@ strings print. A wrong answer here is a corrupted string; a double free is exit 
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("alpha heap string long enough to require an allocation")
 	xs.push("beta heap string long enough to require an allocation")
 	try xs.managed.swap(0, j: 1) otherwise return 99
@@ -749,7 +749,7 @@ exactly what was pushed — the leak gate is the assertion.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var xs = StrArray.create(0)
+	let xs = StrArray.create(0)
 	xs.push("one heap string long enough to require an allocation")
 	xs.push("two heap string long enough to require an allocation")
 	xs.push("three heap string long enough to require an allocation")
@@ -788,7 +788,7 @@ written.
 typealias Flags = Array with bool
 
 function main() returns ExitCode
-	var flags = Flags.create(0)
+	let flags = Flags.create(0)
 	flags.push(true)
 	flags.push(false)
 	flags.push(false)

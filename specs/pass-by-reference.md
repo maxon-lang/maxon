@@ -36,11 +36,11 @@ let result = double(n)  // result is 42
 
 ### What a `mutable` Parameter Takes
 
-The caller passes a `var`, or a field or element that is writable. A `let`, a literal or an expression result is refused, because no variable exists for the write to reach: a `let` that is handed to a `mutable` parameter is **E2013**, which also covers a loop variable; a captured name is E3159. A record-type parameter is never rebound: reassigning one is E2013 even where it is marked, and writing a field of it or growing an array it holds (`p.x = 99`, `p.items.push(x)`) is an ordinary write through the parameter.
+The caller passes a `var`, or a field or element that is writable. A `let`, a literal or an expression result is refused, because no variable exists for the write to reach: a `let` that is handed to a `mutable` parameter is **E2013**, which also covers a loop variable; a captured name is **E2013** too. A record-type parameter is never rebound: reassigning one is E2013 even where it is marked, and writing a field of it or growing an array it holds (`p.x = 99`, `p.items.push(x)`) is an ordinary write through the parameter.
 
 ### Closure Capture
 
-A closure does not capture by reference. A captured scalar is copied when the closure is created, so a later change to the original variable is not visible inside the closure, and an assignment inside the closure does not reach the outer scope. A captured managed local moves into the closure; a captured parameter, `self` or field is retained (`closure-capture.md`). Because the closure holds its own copy, passing a captured name to a `mutable` parameter is E3159: the write could not reach the variable.
+A closure does not capture by reference. A captured scalar is copied when the closure is created, so a later change to the original variable is not visible inside the closure, and an assignment inside the closure does not reach the outer scope. A captured managed local moves into the closure; a captured parameter, `self` or field is retained (`closure-capture.md`). Because the closure holds its own copy, passing a captured name to a `mutable` parameter is E2013: the write could not reach the variable.
 
 ### Reassigning a `mutable` Parameter
 
@@ -122,7 +122,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter.create()
+	let c = Counter.create()
 	c.bump()
 	print("{c.value()}")
 	return 0
@@ -156,7 +156,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point.create()
+	let p = Point.create()
 	p.x = 1
 	setTo99(p.x)
 	print("{p.x}")
@@ -209,11 +209,11 @@ type Outer
 end 'Outer'
 
 function main() returns ExitCode
-	var p = Outer.create()
+	let p = Outer.create()
 	p.a.b = 1
 	setTo99(p.a.b)
 
-	var q = Outer.create()
+	let q = Outer.create()
 	q.a.b = 2
 	q.bumpOwn()
 
@@ -252,7 +252,7 @@ end 'Box'
 
 function main() returns ExitCode
 	var scale = 1.0 as Weight
-	var b = Box.create()
+	let b = Box.create()
 	setTo99(b.w)
 	setTo99(scale)
 	print("{b.w} {scale}")
@@ -367,7 +367,7 @@ function setX(p Point)
 end 'setX'
 
 function main() returns ExitCode
-	var p = Point.create(1, y: 2)
+	let p = Point.create(1, y: 2)
 	setX(p)
 	print("{p.x}")
 	return 0
@@ -417,7 +417,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.maxon:12:27: cannot pass 'x' to a function that writes parameter 'dest' (in the closure at specs/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.maxon:12:10): the closure holds its own copy of 'x', so a write through 'dest' cannot reach the original; pass a clone()
+error E2013: specs/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.maxon:12:27: cannot pass 'x' to a function that writes parameter 'dest' (in the closure at specs/pass-by-reference/pass-by-reference.captured-let-to-mutating-param-error.maxon:12:10): the closure holds its own copy of 'x', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 <!-- test: pass-by-reference.captured-var-to-mutating-param-error -->
@@ -439,7 +439,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:13:27: cannot pass 'x' to a function that writes parameter 'dest' (in the closure at <fragment>:13:10): the closure holds its own copy of 'x', so a write through 'dest' cannot reach the original; pass a clone()
+error E2013: <fragment>:13:27: cannot pass 'x' to a function that writes parameter 'dest' (in the closure at <fragment>:13:10): the closure holds its own copy of 'x', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 <!-- test: pass-by-reference.captured-parameter-to-mutating-param-error -->
@@ -458,13 +458,13 @@ function run(p Integer) returns Integer
 end 'run'
 
 function main() returns ExitCode
-	var n = 1 as Integer
+	let n = 1 as Integer
 	print("{run(n)} {n}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:11:27: cannot pass 'p' to a function that writes parameter 'dest' (in the closure at <fragment>:11:10): the closure holds its own copy of 'p', so a write through 'dest' cannot reach the original; pass a clone()
+error E2013: <fragment>:11:27: cannot pass 'p' to a function that writes parameter 'dest' (in the closure at <fragment>:11:10): the closure holds its own copy of 'p', so a write through 'dest' cannot reach the original; pass a clone()
 ```
 
 <!-- test: pass-by-reference.nested-calls -->
@@ -901,7 +901,7 @@ end 'main'
 ```
 
 <!-- test: pass-by-reference.function-value-call-with-an-r-value-at-a-by-value-position-leaves-no-scratch-cell -->
-A function-value call takes an argument as a place only at a position its function type marks `mutable`, and a literal or an expression at such a position is refused (E3159). In a program that declares a `mutable` parameter, a literal and a freshly built `String` handed to a by-value position of a function-value call are read as values and bound to no cell, so the `String` is released once and the run ends without a leak.
+A function-value call takes an argument as a place only at a position its function type marks `mutable`, and a literal or an expression at such a position is refused (E2013). In a program that declares a `mutable` parameter, a literal and a freshly built `String` handed to a by-value position of a function-value call are read as values and bound to no cell, so the `String` is released once and the run ends without a leak.
 ```maxon
 typealias Count = int(0 to 1000)
 
@@ -952,7 +952,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:3: cannot pass 'n', which is read-only (a parameter), to a function that writes argument 1 (in apply); pass a clone()
+error E2013: <fragment>:10:3: cannot pass 'n', which is read-only (a parameter), to a function that writes argument 1 (in apply); pass a `var`
 ```
 
 <!-- test: pass-by-reference.error.a-function-value-names-no-parameter-so-the-refusal-counts-the-argument -->
@@ -976,7 +976,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:3: cannot pass 'x', which is read-only (a parameter), to a function that writes argument 2 (in apply); pass a clone()
+error E2013: <fragment>:10:3: cannot pass 'x', which is read-only (a parameter), to a function that writes argument 2 (in apply); pass a `var`
 ```
 
 <!-- test: pass-by-reference.error.a-let-handed-to-a-by-reference-function-value-is-refused -->
@@ -996,7 +996,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:11:3: 'v' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
+error E2013: <fragment>:11:3: 'v' is a let and cannot be passed to a `mutable` parameter; bind it to a `var`
 ```
 
 <!-- test: pass-by-reference.error.a-literal-handed-to-a-by-reference-function-value-is-refused -->
@@ -1015,7 +1015,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:3: cannot pass a literal to a function that writes argument 1 (in main); pass a `var`
+error E2013: <fragment>:10:3: cannot pass a literal to a function that writes argument 1 (in main); pass a `var`
 ```
 
 <!-- test: pass-by-reference.error.an-expression-handed-to-a-by-reference-function-value-is-refused -->
@@ -1035,7 +1035,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:11:3: cannot pass an expression to a function that writes argument 1 (in main); pass a `var`
+error E2013: <fragment>:11:3: cannot pass an expression to a function that writes argument 1 (in main); pass a `var`
 ```
 
 <!-- test: pass-by-reference.error.a-literal-handed-to-a-by-reference-parameter-of-a-function-type-is-refused -->
@@ -1058,7 +1058,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:6: cannot pass a literal to a function that writes argument 1 (in run); pass a `var`
+error E2013: <fragment>:10:6: cannot pass a literal to a function that writes argument 1 (in run); pass a `var`
 ```
 
 <!-- test: pass-by-reference.error.a-literal-handed-to-a-by-reference-interface-requirement-is-refused -->
@@ -1094,7 +1094,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:22:4: cannot pass a literal to a function that writes argument 1 (in drive); pass a `var`
+error E2013: <fragment>:22:4: cannot pass a literal to a function that writes argument 1 (in drive); pass a `var`
 ```
 
 
@@ -1176,7 +1176,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:11:3: 'v' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
+error E2013: <fragment>:11:3: 'v' is a let and cannot be passed to a `mutable` parameter; bind it to a `var`
 ```
 
 <!-- test: pass-by-reference.a-ranged-var-handed-to-a-function-value-keeps-its-range-guard -->
@@ -1244,7 +1244,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:15:3: 'v' is a let and cannot be passed to the `mutable` parameter 'n'; bind it to a `var`
+error E2013: <fragment>:15:3: 'v' is a let and cannot be passed to a `mutable` parameter; bind it to a `var`
 ```
 
 <!-- test: pass-by-reference.error.a-loop-variable-handed-to-a-parameter-that-reassigns-it-is-refused -->
@@ -1804,7 +1804,7 @@ function fill(row mutable Row)
 end 'fill'
 
 function main() returns ExitCode
-	var shelf = Shelf.create()
+	let shelf = Shelf.create()
 	fill(shelf.first())
 	print("{shelf.total()}\n")
 	return 0
@@ -1836,7 +1836,7 @@ function both(a mutable Row, b mutable Row)
 end 'both'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	both(row, b: row)
 	print("{row.n}\n")
 	return 0
@@ -1874,7 +1874,7 @@ function apply(edit RowEdit, row Row)
 end 'apply'
 
 function main() returns ExitCode
-	var row = Row.create(1)
+	let row = Row.create(1)
 	apply(raise, row: row)
 	print("{row.n}\n")
 	return 0

@@ -96,7 +96,7 @@ type Sorter
 end 'Sorter'
 
 function main() returns ExitCode
-	var rows = Rows.create(0)
+	let rows = Rows.create(0)
 	rows.push(Row.create(3))
 	rows.push(Row.create(1))
 	rows.push(Row.create(2))
@@ -563,7 +563,7 @@ function addOne(n Integer) returns Integer
 end 'addOne'
 
 export function makeHandlers() returns Handlers
-	var handlers = Handlers.create(0)
+	let handlers = Handlers.create(0)
 	handlers.push(addOne)
 	return handlers
 end 'makeHandlers'

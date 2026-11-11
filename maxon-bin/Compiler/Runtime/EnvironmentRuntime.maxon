@@ -59,7 +59,7 @@ export function isEnvironmentRuntimeCallee(callee ByteArray) returns bool
 end 'isEnvironmentRuntimeCallee'
 
 export function environmentRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
-	var out = DataSectionEntryArray.create(0)
+	let out = DataSectionEntryArray.create(0)
 
 	if not usage.usesEnvironment 'noEnvironment'
 		return out
@@ -120,13 +120,13 @@ function emitEnvironmentUnreadable(module StdModule, block IrBlock, ids ValueMin
 end 'emitEnvironmentUnreadable'
 
 function buildEnvironmentEntryFromHostList(module StdModule)
-	var func = IrFunction.createFromStd(EnvironmentEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(EnvironmentEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var upperBound = module.addBlock(func, label: b"envhupper", heat: BlockHeat.normal)
-	var fromList = module.addBlock(func, label: b"envhload", heat: BlockHeat.normal)
-	var pastEnd = module.addBlock(func, label: b"envhend", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let upperBound = module.addBlock(func, label: b"envhupper", heat: BlockHeat.normal)
+	let fromList = module.addBlock(func, label: b"envhload", heat: BlockHeat.normal)
+	let pastEnd = module.addBlock(func, label: b"envhend", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let index = 0
@@ -147,13 +147,13 @@ function buildEnvironmentEntryFromHostList(module StdModule)
 
 	let record = ids.mint()
 	let buffer = emitManagedByteBuffer(module, block: fromList, record: record, byteCount: total, ids: ids)
-	var afterName = emitForwardCopy(module, func: func, cur: fromList, dest: buffer, src: nameSource, byteCount: nameBytes, ids: ids)
+	let afterName = emitForwardCopy(module, func: func, cur: fromList, dest: buffer, src: nameSource, byteCount: nameBytes, ids: ids)
 
 	let separator = emitConst(module, block: afterName, value: EnvironmentSeparatorByte, ids: ids)
 	emitStoreByte(module, block: afterName, base: buffer, index: nameBytes, value: separator, ids: ids)
 
 	let valueDest = emitBin(module, block: afterName, a: buffer, b: nameAndSeparator, opcode: StdBinOpcode.add, ids: ids)
-	var afterValue = emitForwardCopy(module, func: func, cur: afterName, dest: valueDest, src: valueSource, byteCount: valueBytes, ids: ids)
+	let afterValue = emitForwardCopy(module, func: func, cur: afterName, dest: valueDest, src: valueSource, byteCount: valueBytes, ids: ids)
 
 	emitStoreField(module, block: afterValue, record: record, offset: ManagedRecordLengthOffset, value: total)
 	module.setTerminator(afterValue, op: StdOp.ret(record))
@@ -172,14 +172,14 @@ end 'buildEnvironmentEntryFromHostList'
 // ⚠ **NOTHING IS RELEASED, AND THAT IS THE SHAPE'S OWN CONTRACT rather than a forgotten free**: `environ` is
 // the live table this process runs on, not a copy taken for us. See `EnvironmentSnapshotShape.pointerVector`.
 function buildEnvironmentEntryFromVector(module StdModule)
-	var func = IrFunction.createFromStd(EnvironmentEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(EnvironmentEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var subscript = module.addBlock(func, label: b"envat", heat: BlockHeat.normal)
-	var found = module.addBlock(func, label: b"envfound", heat: BlockHeat.normal)
-	var noEntry = module.addBlock(func, label: b"envnone", heat: BlockHeat.normal)
-	var noVector = module.addBlock(func, label: b"envfail", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let subscript = module.addBlock(func, label: b"envat", heat: BlockHeat.normal)
+	let found = module.addBlock(func, label: b"envfound", heat: BlockHeat.normal)
+	let noEntry = module.addBlock(func, label: b"envnone", heat: BlockHeat.normal)
+	let noVector = module.addBlock(func, label: b"envfail", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let index = 0
@@ -199,7 +199,7 @@ function buildEnvironmentEntryFromVector(module StdModule)
 	emitBranchOnCompare(module, block: subscript, value: cursor, pred: StdCmpPred.eq, against: 0, whenTrue: noEntry, whenFalse: found, ids: ids)
 
 	let record = ids.mint()
-	var afterCopy = emitCStringToManaged(module, func: func, cur: found, cstr: cursor, record: record, ids: ids)
+	let afterCopy = emitCStringToManaged(module, func: func, cur: found, cstr: cursor, record: record, ids: ids)
 	module.setTerminator(afterCopy, op: StdOp.ret(record))
 
 	let emptyRecord = emitEmptyManaged(module, block: noEntry, ids: ids)
@@ -218,15 +218,15 @@ end 'buildEnvironmentEntryFromVector'
 // runtime-global cache with a lifetime nothing here can bound. An environment is tens of entries, so
 // the quadratic is over a number that does not grow.
 function buildEnvironmentEntryFromBlock(module StdModule)
-	var func = IrFunction.createFromStd(EnvironmentEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	let func = IrFunction.createFromStd(EnvironmentEntryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var noBlock = module.addBlock(func, label: b"envnone", heat: BlockHeat.normal)
-	var scan = module.addBlock(func, label: b"envscan", heat: BlockHeat.normal)
-	var skip = module.addBlock(func, label: b"envskip", heat: BlockHeat.normal)
-	var found = module.addBlock(func, label: b"envfound", heat: BlockHeat.normal)
-	var pastEnd = module.addBlock(func, label: b"envend", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let noBlock = module.addBlock(func, label: b"envnone", heat: BlockHeat.normal)
+	let scan = module.addBlock(func, label: b"envscan", heat: BlockHeat.normal)
+	let skip = module.addBlock(func, label: b"envskip", heat: BlockHeat.normal)
+	let found = module.addBlock(func, label: b"envfound", heat: BlockHeat.normal)
+	let pastEnd = module.addBlock(func, label: b"envend", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let index = 0
@@ -248,12 +248,12 @@ function buildEnvironmentEntryFromBlock(module StdModule)
 	let zeroIdx = emitConst(module, block: scan, value: 0, ids: ids)
 	let firstByte = emitHostUnit(module, block: scan, base: cursor, unitIndex: zeroIdx, ids: ids)
 	let blockEnded = emitCompareWithConstant(module, block: scan, value: firstByte, pred: StdCmpPred.eq, against: 0, ids: ids)
-	var stillCounting = module.addBlock(func, label: b"envcount", heat: BlockHeat.normal)
+	let stillCounting = module.addBlock(func, label: b"envcount", heat: BlockHeat.normal)
 	module.setTerminator(scan, op: StdOp.condBranch(blockEnded, thenBlockId: pastEnd.id, elseBlockId: stillCounting.id))
 
 	let remaining = emitLoadField(module, block: stillCounting, record: state, offset: EnvRemaining, ids: ids)
 	let arrived = emitCompareWithConstant(module, block: stillCounting, value: remaining, pred: StdCmpPred.eq, against: 0, ids: ids)
-	var stepOn = module.addBlock(func, label: b"envstep", heat: BlockHeat.normal)
+	let stepOn = module.addBlock(func, label: b"envstep", heat: BlockHeat.normal)
 	module.setTerminator(stillCounting, op: StdOp.condBranch(arrived, thenBlockId: found.id, elseBlockId: stepOn.id))
 
 	let oneStep = emitConst(module, block: stepOn, value: 1, ids: ids)
@@ -273,7 +273,7 @@ function buildEnvironmentEntryFromBlock(module StdModule)
 
 	let foundCursor = emitLoadField(module, block: found, record: state, offset: EnvCursor, ids: ids)
 	let record = ids.mint()
-	var afterCopy = emitTextToManaged(module, func: func, cur: found, cstr: foundCursor, record: record, encoding: module.hostText, ids: ids)
+	let afterCopy = emitTextToManaged(module, func: func, cur: found, cstr: foundCursor, record: record, encoding: module.hostText, ids: ids)
 	emitReleaseEnvironmentSnapshot(module, block: afterCopy, state: state, ids: ids)
 	module.setTerminator(afterCopy, op: StdOp.ret(record))
 

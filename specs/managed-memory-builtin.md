@@ -49,7 +49,7 @@ match. Exercises both the `set` and `get` runtime helpers' word path
 (elementSize=8).
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(3, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(3, elementSize: 8) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	try mm.set(0, value: 11) otherwise return 3
 	try mm.set(1, value: 22) otherwise return 3
@@ -80,7 +80,7 @@ small-array inline path may report more than the requested count as spare
 capacity). After three sets, length and capacity are independently observable.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(8, elementSize: 8) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	try mm.set(0, value: 100) otherwise return 3
 	try mm.set(1, value: 200) otherwise return 3
@@ -108,7 +108,7 @@ end 'main'
 readable through the (potentially relocated) buffer.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.set(0, value: 77) otherwise return 3
 	try mm.set(1, value: 88) otherwise return 3
@@ -138,11 +138,11 @@ receiver. Length grows by `other.length`, capacity grows automatically if
 needed.
 ```maxon
 function main() returns ExitCode
-	var a = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let a = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try a.setLength(2) otherwise return 2
 	try a.set(0, value: 1) otherwise return 3
 	try a.set(1, value: 2) otherwise return 3
-	var b = try __ManagedMemory.create(4, elementSize: 8) otherwise return 4
+	let b = try __ManagedMemory.create(4, elementSize: 8) otherwise return 4
 	try b.setLength(2) otherwise return 5
 	try b.set(0, value: 3) otherwise return 6
 	try b.set(1, value: 4) otherwise return 6
@@ -179,7 +179,7 @@ end 'main'
 capacity 3), holding a copy of indices 1..3 of the source.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(5, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(5, elementSize: 8) otherwise return 1
 	try mm.setLength(5) otherwise return 2
 	try mm.set(0, value: 10) otherwise return 3
 	try mm.set(1, value: 20) otherwise return 3
@@ -215,7 +215,7 @@ A byte-sized `__ManagedMemory` (`elementSize: 1`) supports `setByte` /
 `byteAt`. Each byte is independently addressable.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
+	let mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
 	try mm.setLength(8) otherwise return 2
 	try mm.setByte(0, value: 11) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
@@ -246,7 +246,7 @@ must read 0 and `capacity()` must still report the original allocated capacity
 (at least the requested count — the inline path reports the full size-class slack).
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(3) otherwise return 2
 	try mm.set(0, value: 42) otherwise return 3
 	try mm.set(1, value: 43) otherwise return 3
@@ -272,7 +272,7 @@ error path. The `try ... otherwise -1` branch must execute and the function
 must return -1 cast through ExitCode.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(0, value: 7) otherwise return 3
 	let _ = try mm.get(99) otherwise return 0
@@ -290,7 +290,7 @@ The `try ... otherwise return 0` branch executes; the trailing return must not
 fire.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(99, value: 42) otherwise return 0
 	return 5
@@ -306,7 +306,7 @@ end 'main'
 2). The `otherwise return 0` branch must execute.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	let _ = try mm.slice(0, endIndex: 99) otherwise return 0
 	return 5
@@ -321,7 +321,7 @@ end 'main'
 A buffer is not a number, so a `var` binds it with no cast.
 ```maxon
 function main() returns ExitCode
-	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	let mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(0, value: 42) otherwise return 3
 	let v = try mm.get(0) otherwise return 4
@@ -344,7 +344,7 @@ builtin does.
 typealias Words = __ManagedMemory with FullRangeInt
 
 function main() returns ExitCode
-	var w = try Words.create(2, elementSize: 8) otherwise return 1
+	let w = try Words.create(2, elementSize: 8) otherwise return 1
 	try w.setLength(2) otherwise return 2
 	try w.set(1, value: 7) otherwise return 3
 	let v = try w.get(1) otherwise return 4

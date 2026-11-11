@@ -152,13 +152,13 @@ export function installWordEntries(module StdModule)
 end 'installWordEntries'
 
 function buildWordGet(module StdModule, order WordByteOrder, width WordBytes)
-	var func = IrFunction.createFromStd(wordEntryName(WordAccess.get, order: order, width: width), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(wordEntryName(WordAccess.get, order: order, width: width), returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: arrayErrorThrows())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
-	var short = module.addBlock(func, label: b"short", heat: BlockHeat.normal)
-	var read = module.addBlock(func, label: b"read", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let oob = module.addBlock(func, label: b"oob", heat: BlockHeat.normal)
+	let short = module.addBlock(func, label: b"short", heat: BlockHeat.normal)
+	let read = module.addBlock(func, label: b"read", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
@@ -170,7 +170,7 @@ function buildWordGet(module StdModule, order WordByteOrder, width WordBytes)
 	let first = emitConst(module, block: read, value: WordFirstByteIndex, ids: ids)
 	let total = emitConst(module, block: read, value: wordByteCount(width), ids: ids)
 	let empty = emitConst(module, block: read, value: WordZero, ids: ids)
-	var loop = openCountedLoop(module, func: func, cur: read, from: first, to: total, label: b"wg", ids: ids, initial: argsOf(empty))
+	let loop = openCountedLoop(module, func: func, cur: read, from: first, to: total, label: b"wg", ids: ids, initial: argsOf(empty))
 
 	let slot = emitBin(module, block: loop.body, a: at, b: loop.index, opcode: StdBinOpcode.add, ids: ids)
 	let byte = ids.mint()
@@ -200,10 +200,10 @@ export function emitSpanGuards(module StdModule, entry IrBlock, inside IrBlock, 
 end 'emitSpanGuards'
 
 function buildWordPut(module StdModule, order WordByteOrder, width WordBytes)
-	var func = IrFunction.createFromStd(wordEntryName(WordAccess.put, order: order, width: width), returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
-	var ids = ValueMinter.create(2)
+	let func = IrFunction.createFromStd(wordEntryName(WordAccess.put, order: order, width: width), returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
 
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 	let arr = 0
 	let word = 1
@@ -211,7 +211,7 @@ function buildWordPut(module StdModule, order WordByteOrder, width WordBytes)
 
 	let first = emitConst(module, block: entry, value: WordFirstByteIndex, ids: ids)
 	let total = emitConst(module, block: entry, value: count, ids: ids)
-	var loop = openCountedLoop(module, func: func, cur: entry, from: first, to: total, label: b"wp", ids: ids)
+	let loop = openCountedLoop(module, func: func, cur: entry, from: first, to: total, label: b"wp", ids: ids)
 
 	let shift = emitWordByteShift(module, block: loop.body, index: loop.index, order: order, width: width, ids: ids)
 	let moved = emitBin(module, block: loop.body, a: word, b: shift, opcode: StdBinOpcode.shrLogical, ids: ids)

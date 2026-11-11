@@ -119,8 +119,8 @@ export type LibraryCacheWriter
 	end 'payload'
 
 	export function sealed() returns immutable ByteArray
-		var image = LibraryCacheMagic.toByteArray() as isolated ByteArray
-		var body = swap self.buffer with ByteArray.create(0)
+		let image = LibraryCacheMagic.toByteArray() as isolated ByteArray
+		let body = swap self.buffer with ByteArray.create(0)
 
 		modify image 'fill'
 			image.append(headerWordBytes(CacheSchemaFingerprint as CacheWord))
@@ -133,7 +133,7 @@ export type LibraryCacheWriter
 end 'LibraryCacheWriter'
 
 function headerWordBytes(word CacheWord) returns ByteArray
-	var bytes = ByteArray.create(HeaderWordByteCount, zeroed: false)
+	let bytes = ByteArray.create(HeaderWordByteCount, zeroed: false)
 
 	for position in 0 upto HeaderWordByteCount 'eachByte'
 		bytes.push(((word shr (position * ByteBitWidth)) and ByteMask) as Byte)
@@ -418,7 +418,7 @@ export type LibraryPackBuilder
 	end 'countInGroupOf'
 
 	export function sealed() returns immutable ByteArray
-		var writer = LibraryCacheWriter.create()
+		let writer = LibraryCacheWriter.create()
 		writer.unsigned(self.rows.count() as CacheUnsigned)
 
 		for (iter, row) in self.rows.withIterator() 'eachRow'
@@ -444,10 +444,10 @@ export type LibraryPack
 	let ends as PackOffsetArray
 
 	export static function open(image immutable ByteArray) returns LibraryPack throws LibraryCacheDamage
-		var reader = try LibraryCacheReader.open(image)
+		let reader = try LibraryCacheReader.open(image)
 		let count = try reader.count()
-		var rows = PackRowKeyArray.create(count, zeroed: false)
-		var lengths = PackOffsetArray.create(count, zeroed: false)
+		let rows = PackRowKeyArray.create(count, zeroed: false)
+		let lengths = PackOffsetArray.create(count, zeroed: false)
 
 		for _ in 0 upto count 'eachRow'
 			let first = (try reader.unsigned()) as HashDigest
@@ -457,8 +457,8 @@ export type LibraryPack
 			lengths.push(try reader.count())
 		end 'eachRow'
 
-		var starts = PackOffsetArray.create(count, zeroed: false)
-		var ends = PackOffsetArray.create(count, zeroed: false)
+		let starts = PackOffsetArray.create(count, zeroed: false)
+		let ends = PackOffsetArray.create(count, zeroed: false)
 		var at = reader.offset()
 
 		for length in lengths 'eachLength'

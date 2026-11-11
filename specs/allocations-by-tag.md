@@ -88,16 +88,16 @@ end 'Widget'
 typealias Widgets = Array with Widget
 
 function main() returns ExitCode
-	var holder = Widgets.create(0)
+	let holder = Widgets.create(0)
 	holder.reserve(Population)
 
-	var beforeCounts = CountSnapshot.create(0)
+	let beforeCounts = CountSnapshot.create(0)
 	beforeCounts.reserve(TallyBuckets)
 	for _ in 0 upto TallyBuckets 'sizeTheCountSnapshot'
 		beforeCounts.push(0)
 	end 'sizeTheCountSnapshot'
 
-	var beforeBytes = ByteSnapshot.create(0)
+	let beforeBytes = ByteSnapshot.create(0)
 	beforeBytes.reserve(TallyBuckets)
 	for _ in 0 upto TallyBuckets 'sizeTheByteSnapshot'
 		beforeBytes.push(0)
@@ -385,7 +385,7 @@ end 'Widget'
 typealias Widgets = Array with Widget
 
 function main() returns ExitCode
-	var holder = Widgets.create(0)
+	let holder = Widgets.create(0)
 	holder.reserve(Population)
 
 	let totalBefore = HeapStats.allocationsMade()
@@ -647,7 +647,7 @@ function main() returns ExitCode
 	var holder = Widgets.create(0)
 	holder.reserve(Population)
 
-	var beforeCounts = CountSnapshot.create(0)
+	let beforeCounts = CountSnapshot.create(0)
 	beforeCounts.reserve(TallyBuckets)
 	for _ in 0 upto TallyBuckets 'sizeTheSnapshot'
 		beforeCounts.push(0)
@@ -925,7 +925,7 @@ end 'Widget'
 typealias Widgets = Array with Widget
 
 function main() returns ExitCode
-	var holder = Widgets.create(0)
+	let holder = Widgets.create(0)
 	holder.reserve(Population)
 
 	let totalBefore = HeapStats.allocationsMade()

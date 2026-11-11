@@ -1005,7 +1005,7 @@ export type SpecTest
 	end 'rendersTargetIrOn'
 
 	export function lanesAwaitingAPin() returns TargetArray
-		var awaiting = TargetArray.create(0)
+		let awaiting = TargetArray.create(0)
 
 		for candidate in pinnableTargets() 'eachLane'
 			let key = targetToString(candidate)
@@ -1133,8 +1133,8 @@ export function requireEveryLanePinned(tests SpecTestArray, specPath FilePath)
 		return
 	end 'notAnIrSpec'
 
-	var report = TextJoiner.create()
-	var owed = TargetKeyArray.create(0)
+	let report = TextJoiner.create()
+	let owed = TargetKeyArray.create(0)
 
 	for test in tests 'eachTest'
 		let awaiting = test.lanesAwaitingAPin()
@@ -1158,7 +1158,7 @@ export function requireEveryLanePinned(tests SpecTestArray, specPath FilePath)
 		return
 	end 'everyLanePinned'
 
-	var fixes = TextJoiner.create()
+	let fixes = TextJoiner.create()
 
 	for lane in owed 'eachOwedLane'
 		fixes.push("  {UpdateRequiredFlag} {TargetFlagPrefix}{lane} {FilterFlagPrefix}{specPath.stem()}/")
@@ -1206,7 +1206,7 @@ function valueAfterKey(line String, key String) returns String
 end 'valueAfterKey'
 
 function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey String) returns SpecTestArray
-	var tests = SpecTestArray.create(0)
+	let tests = SpecTestArray.create(0)
 	let lineCount = lines.count()
 	var i = 0 as ElementIndex
 	var inTests = false
@@ -1281,11 +1281,11 @@ end 'exitCodeExpectationIn'
 
 function scanTestFromMarker(lines StringArray, markerIndex ElementIndex, markerLine String, markerOpenings StringArray, testOpening String, tests SpecTestArray, specPath FilePath, effectiveTargetKey String) returns ElementIndex
 	let closed = closedOpening(testOpening, markerIndex: markerIndex, specPath: specPath)
-	var builder = CaseBuilder.create(markerValueOf(closed), markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
-	var unsupportedTargets = TargetKeyArray.create(0)
-	var runtimeNames = RuntimeFunctionNameArray.create(0)
-	var programArgs = ProgramArgArray.create(0)
-	var pinnedLanes = TargetKeyArray.create(0)
+	let builder = CaseBuilder.create(markerValueOf(closed), markerIndex: markerIndex, specPath: specPath, effectiveTargetKey: effectiveTargetKey)
+	let unsupportedTargets = TargetKeyArray.create(0)
+	let runtimeNames = RuntimeFunctionNameArray.create(0)
+	let programArgs = ProgramArgArray.create(0)
+	let pinnedLanes = TargetKeyArray.create(0)
 	builder.refuseCrowdedLine(markerOpenings, line: markerLine, lineIndex: markerIndex)
 
 	let lineCount = lines.count()
@@ -2015,9 +2015,9 @@ function splitSourceSections(testName String, source String) returns SpecSourceS
 		end 'markerDrifted'
 	end 'eachKind'
 
-	var files = SpecSourceFileArray.create(0)
-	var overlays = SpecSourceFileArray.create(0)
-	var runtimeFiles = SpecSourceFileArray.create(0)
+	let files = SpecSourceFileArray.create(0)
+	let overlays = SpecSourceFileArray.create(0)
+	let runtimeFiles = SpecSourceFileArray.create(0)
 	let lines = source.split("\n")
 	let lineCount = lines.count()
 
@@ -2140,7 +2140,7 @@ end 'markerValueOf'
 //
 // The text before the first opening is not an opening, and a line carrying none yields none.
 function markerOpeningsIn(line String) returns StringArray
-	var openings = StringArray.create(0)
+	let openings = StringArray.create(0)
 
 	// ⛔⛔ **A DIRECTIVE IS A LINE, SO A LINE THAT MERELY MENTIONS ONE CARRIES NOTHING.** Every marker
 	// in this corpus is written alone on its own line; prose that QUOTES a marker —
@@ -2297,7 +2297,7 @@ end 'carriesDirective'
 // ⛔ **AND A MARKER THAT EXCLUDES EVERY SUPPORTED TARGET IS ALSO A PANIC.** That case runs nowhere,
 // which is the exact outcome the typo above produced, reached legitimately one key at a time.
 function parseUnsupportedTargetKeys(opening String, specPath FilePath, testName String) returns TargetKeyArray
-	var result = TargetKeyArray.create(0)
+	let result = TargetKeyArray.create(0)
 	let rawValue = markerValueOf(opening)
 	let spelledIn = "`{UnsupportedTargetsMarker} … -->`"
 
@@ -2346,7 +2346,7 @@ function namesPinnableTarget(key String) returns bool
 end 'namesPinnableTarget'
 
 function pinnableTargets() returns TargetArray
-	var pinnable = TargetArray.create(0)
+	let pinnable = TargetArray.create(0)
 
 	for candidate in supportedTargets() 'each'
 		if emitsTargetIr(candidate) 'pinnable'
@@ -2384,7 +2384,7 @@ function endsTestCase(line String, openings StringArray) returns bool
 end 'endsTestCase'
 
 function caseMarkerRoster() returns String
-	var spellings = StringArray.create(CaseDirective.allCases.count(), zeroed: false)
+	let spellings = StringArray.create(CaseDirective.allCases.count(), zeroed: false)
 
 	for directive in CaseDirective.allCases 'eachDirective'
 		spellings.push(directive.spelling())
@@ -2586,13 +2586,13 @@ end 'stdinAnchorIn'
 // Backslash escapes and single quotes are NOT honoured: nothing in `/specs` writes them, and the
 // platform rule they would have to mirror is per-OS.
 function parseProgramArgs(opening String) returns ProgramArgArray
-	var args = ProgramArgArray.create(0)
+	let args = ProgramArgArray.create(0)
 	let payload = markerValueOf(opening)
 
 	// The argument being accumulated, and whether one has been STARTED — which `current.isEmpty()`
 	// cannot answer: `""` starts an argument and contributes no characters to it, and inferring the
 	// flag from the buffer would drop exactly the empty argument the quote exists to write.
-	var current = StringBuilder.create()
+	let current = StringBuilder.create()
 	var haveArg = false
 	var inQuotes = false
 
@@ -2612,7 +2612,7 @@ function parseProgramArgs(opening String) returns ProgramArgArray
 		// Advanced ONCE, before the branches: both the next segment's start and the next character's
 		// position are this same index, and computing it twice would be one fact — and one panic
 		// message — written down twice.
-		var next = try payload.indexAfter(pos) otherwise panic("SpecParser.parseProgramArgs: indexAfter failed at character {at} of {length} on the payload '{payload}', which the while guard says is still in range")
+		let next = try payload.indexAfter(pos) otherwise panic("SpecParser.parseProgramArgs: indexAfter failed at character {at} of {length} on the payload '{payload}', which the while guard says is still in range")
 
 		if isQuote or isSeparator 'segmentEnds'
 			current.append(payload.slice(segmentStart, endIndex: pos))
@@ -2692,7 +2692,7 @@ end 'TextJoiner'
 // name (SpecTestRunner's `fragmentSource`).
 function readFence(lines StringArray, openIndex ElementIndex, specPath FilePath) returns FenceBlock
 	let lineCount = lines.count()
-	var text = TextJoiner.create()
+	let text = TextJoiner.create()
 	var i = openIndex + 1
 
 	while i < lineCount 'read'

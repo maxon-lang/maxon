@@ -260,8 +260,8 @@ export function insertRangeChecks(project Project, module StdModule)
 		compilerLogger(CompilerLogGroup.ir).debug("insertRangeChecks: {module.funcCount()} function(s)")
 	end 'debugging'
 
-	var waivers = EntryGuardWaivers.derive(project, module: module)
-	var spellings = DeclarationQualifierMemo.create()
+	let waivers = EntryGuardWaivers.derive(project, module: module)
+	let spellings = DeclarationQualifierMemo.create()
 
 	// An INDEX loop: the function's position is the key its minted ids are filed under
 	// (`ValueOriginTable.recordDerived`).
@@ -293,7 +293,7 @@ export function insertRangeChecks(project Project, module StdModule)
 		end 'noChecks'
 
 		let checks = try project.rangeChecks.get(func.name) otherwise panic("insertRangeChecks: rangeChecks.contains said yes but get failed for '{String.from(func.name)}'")
-		var emitter = RangeCheckEmitter.create(project, module: module, func: func, funcIndex: funcIndex, checks: checks, waivers: waivers, spellings: spellings)
+		let emitter = RangeCheckEmitter.create(project, module: module, func: func, funcIndex: funcIndex, checks: checks, waivers: waivers, spellings: spellings)
 		emitter.run()
 	end 'eachFunc'
 end 'insertRangeChecks'
@@ -383,7 +383,7 @@ type RangeCheckEmitter
 		// `RangeSiteWalk`), so the promise is checked HERE, once per function, rather than per site: a
 		// function that reached this pass unlowered would otherwise anchor every one of its guards at the
 		// top of its block, silently.
-		view stdPositions = self.stdPositionsOf()
+		let stdPositions = self.stdPositionsOf()
 
 		// ⚠ **BEFORE EVERY OTHER SITE IN THE FUNCTION, AND THAT IS AN ORDERING REQUIREMENT RATHER THAN A
 		// preference.** An entry guard splits the entry block at the end of its `param` ops, which is a
@@ -392,7 +392,7 @@ type RangeCheckEmitter
 		self.guardRangedParams()
 
 		for index in 0 upto self.functionChecks.sites.count() 'eachSite'
-			view site = try self.functionChecks.sites.get(index) otherwise panic("run: sites.get OOB at {index}")
+			let site = try self.functionChecks.sites.get(index) otherwise panic("run: sites.get OOB at {index}")
 			self.processSite(site, stdOpPos: try stdPositions.get(index) otherwise panic("run: '{String.from(self.func.name)}' recorded {stdPositions.count()} Std position(s) for {self.functionChecks.sites.count()} range-check site(s)"), filePath: self.functionChecks.filePath)
 		end 'eachSite'
 
@@ -405,7 +405,7 @@ type RangeCheckEmitter
 		self.materializeChainTails()
 
 		for index in 0 upto self.functionChecks.argSites.count() 'eachArgSite'
-			view argSite = try self.functionChecks.argSites.get(index) otherwise panic("run: argSites.get OOB at {index}")
+			let argSite = try self.functionChecks.argSites.get(index) otherwise panic("run: argSites.get OOB at {index}")
 			self.processArgSite(argSite, filePath: self.functionChecks.filePath)
 		end 'eachArgSite'
 
@@ -477,7 +477,7 @@ type RangeCheckEmitter
 	end 'processSite'
 
 	function checkLiteralUses()
-		var literalSites = RangeCheckSiteArray.create(0)
+		let literalSites = RangeCheckSiteArray.create(0)
 
 		for site in self.functionChecks.sites 'eachSite'
 			if siteIsALiteralUse(site) 'aLiteralUse'
@@ -489,7 +489,7 @@ type RangeCheckEmitter
 			return
 		end 'noLiteralUse'
 
-		var scratch = RangeScratch.create(StdPassTally.create())
+		let scratch = RangeScratch.create(StdPassTally.create())
 
 		for site in literalSites 'eachLiteralSite'
 			scratch.addProbe(site.value, block: site.block)
@@ -498,7 +498,7 @@ type RangeCheckEmitter
 		probeIntervals(self.module, func: self.func, scratch: scratch)
 
 		for ordinal in 0 upto literalSites.count() 'eachProbe'
-			view site = try literalSites.get(ordinal) otherwise panic("checkLiteralUses: literalSites.get OOB at {ordinal}")
+			let site = try literalSites.get(ordinal) otherwise panic("checkLiteralUses: literalSites.get OOB at {ordinal}")
 			let reached = scratch.probeWasReached(ordinal)
 			let low = scratch.probeLow(ordinal) if reached else i64.min
 			let high = scratch.probeHigh(ordinal) if reached else i64.max
@@ -678,7 +678,7 @@ type RangeCheckEmitter
 	// A guard whose bounds both elide splits nothing and is not a cascade to record: `emitGuardAt`
 	// hands back the head it was given.
 	function emitParamGuard(site RangeCheckParamSite, alias RangedTypeAlias, entryId BlockId, filePath FilePath)
-		var guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount)
+		let guardSite = self.guardSiteAt(entryId, stdOpPos: self.func.paramCount)
 		let headId = guardSite.block.id
 		self.requireGuardHeadHoldsOnlyParams(guardSite)
 
@@ -687,13 +687,13 @@ type RangeCheckEmitter
 		// bumps it, so `[firstMintedId, nextBlockId)` is exactly this guard's blocks with no second list
 		// to keep in step.
 		let firstMintedId = self.func.nextBlockId
-		view ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, chain: GuardChain.blockChain(entryId), source: GuardSource.door, filePath: filePath, line: site.line, column: site.column)
+		let ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, chain: GuardChain.blockChain(entryId), source: GuardSource.door, filePath: filePath, line: site.line, column: site.column)
 
 		if ok.id == headId 'bothBoundsElided'
 			return
 		end 'bothBoundsElided'
 
-		var owned = BlockIdArray.create(0)
+		let owned = BlockIdArray.create(0)
 		owned.push(headId)
 
 		for mintedId in firstMintedId upto self.func.nextBlockId 'eachMintedBlock'
@@ -883,7 +883,7 @@ type RangeCheckEmitter
 	// parameter was declared with is the one visible where the FUNCTION was written. The diagnostic's
 	// file stays this function's — see `guardVerdict`.
 	function processArgSite(site RangeCheckArgSite, filePath FilePath)
-		var alias = try self.aliasOfParameter(site.parameter) otherwise return
+		let alias = try self.aliasOfParameter(site.parameter) otherwise return
 		self.checkArgAgainstParamRange(site, alias: alias, filePath: filePath)
 	end 'processArgSite'
 
@@ -1018,7 +1018,7 @@ type RangeCheckEmitter
 	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
 		let isFloat = aliasIsFloat(alias)
 
-		view literals = self.floatConsts if isFloat else self.intConsts
+		let literals = self.floatConsts if isFloat else self.intConsts
 
 		if literals.contains(value) 'literal'
 			let v = literals.constantOf(value)
@@ -1069,14 +1069,14 @@ type RangeCheckEmitter
 	function emitCheckedGuard(site GuardSite, operand GuardedOperand, checks RangeBoundCheckArray, message ByteArray, chain GuardChain, isFloat bool, wrap WrapDemand) returns IrBlock
 		// The split advances the chain inside itself, before `appendPanicBlock`, and that order is
 		// load-bearing — see `extendGuardChain`.
-		var ok = self.splitFor(site, chain: chain)
+		let ok = self.splitFor(site, chain: chain)
 
 		// The dereference goes between the split and the cascade: after the split `site.block` holds
 		// exactly the ops that stood before the site, so the load lands past the `param` ops and
 		// immediately ahead of the cascade that reads it. It appends an op, never a block, so
 		// `extendGuardChain`'s "the last block registered is the continuation" invariant holds.
 		let compared = self.comparedValue(operand, head: site.block, isFloat: isFloat)
-		view panicBlock = appendPanicBlock(self.module, func: self.func, globalData: self.project.globalData, label: RangeCheckPanicLabel, message: message, ids: self.ids)
+		let panicBlock = appendPanicBlock(self.module, func: self.func, globalData: self.project.globalData, label: RangeCheckPanicLabel, message: message, ids: self.ids)
 
 		match self.wrapGuardOf(compared, head: site.block, demand: wrap) 'guard'
 			signTest(value) then self.emitCascade(site.block, value: value, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
@@ -1103,7 +1103,7 @@ type RangeCheckEmitter
 			return WrapGuard.signTest(result)
 		end 'noWrapToCheck'
 
-		view recorded = match self.functionChecks.wrapOperands 'column'
+		let recorded = match self.functionChecks.wrapOperands 'column'
 			unwritten gives WrapOperandsMap.create()
 			entries(byResult) gives byResult
 		end 'column'
@@ -1265,7 +1265,7 @@ type RangeCheckEmitter
 	// chain cuts left to right. Carving forward out of one stable list makes every copy a segment nobody
 	// copies again, so the whole chain moves B op refs in total.
 	function splitChainEnd(site GuardSite, sourceBlockId BlockId) returns IrBlock
-		var source = self.chainSourceOps(sourceBlockId, chainEnd: site.block)
+		let source = self.chainSourceOps(sourceBlockId, chainEnd: site.block)
 
 		// The block is about to hand its list over to the segment carved below, so park the pre-split list
 		// where the rest of the chain can still read it. Idempotent after the first split: `chainSourceOps`
@@ -1275,8 +1275,8 @@ type RangeCheckEmitter
 
 		// A mutable alias to the head block (a parameter binding is immutable; field writes need a `var`).
 		// It is the SAME heap object — IrBlock is a reference type — so these writes land on the real block.
-		var headBlock = site.block
-		var segment = OpIndexArray.create(site.position, zeroed: false)
+		let headBlock = site.block
+		let segment = OpIndexArray.create(site.position, zeroed: false)
 
 		for i in base upto base + site.position 'carveSegment'
 			let opIdx = try source.get(i) otherwise panic("splitChainEnd: block {sourceBlockId} of '{String.from(self.func.name)}' holds {source.count()} pre-split ops but its chain begins at {base} and the guard splits {site.position} ops into it")
@@ -1285,7 +1285,7 @@ type RangeCheckEmitter
 
 		headBlock.replaceBodyOps(segment)
 
-		var ok = splitBlockExit(self.module, func: self.func, head: headBlock, label: RangeCheckOkLabel)
+		let ok = splitBlockExit(self.module, func: self.func, head: headBlock, label: RangeCheckOkLabel)
 		self.extendGuardChain(sourceBlockId, continuation: ok, splitAt: site.position)
 		return ok
 	end 'splitChainEnd'
@@ -1330,7 +1330,7 @@ type RangeCheckEmitter
 				continue
 			end 'notInThisFunction'
 
-			var chainEnd = self.module.getBlock((tailRef - 1) as ElementIndex)
+			let chainEnd = self.module.getBlock((tailRef - 1) as ElementIndex)
 
 			if chainEnd.id == blockId 'neverSplit'
 				continue
@@ -1341,7 +1341,7 @@ type RangeCheckEmitter
 			end 'alreadyHoldsOps'
 
 			let base = try self.guardChainBase.get(blockId) otherwise panic("materializeChainTails: guardChainBase has no entry for block id {blockId}, which guardChainTail just answered for")
-			view source = self.chainSourceOps(blockId, chainEnd: chainEnd)
+			let source = self.chainSourceOps(blockId, chainEnd: chainEnd)
 
 			for i in base upto source.count() 'eachPendingOp'
 				let opIdx = try source.get(i) otherwise panic("materializeChainTails: pre-split list of block {blockId} holds {source.count()} ops but its last split cut at {base}")
@@ -1409,7 +1409,7 @@ type RangeCheckEmitter
 			if i == lastIndex 'lastCheck'
 				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: okId))
 			end 'lastCheck' else 'moreChecks'
-				var next = self.module.addBlock(self.func, label: b"__rc_chk", heat: BlockHeat.normal)
+				let next = self.module.addBlock(self.func, label: b"__rc_chk", heat: BlockHeat.normal)
 				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: next.id))
 				current = next
 			end 'moreChecks'
@@ -1478,7 +1478,7 @@ type RangeCheckEmitter
 	function guardSiteAt(blockId BlockId, stdOpPos ElementIndex) returns GuardSite
 		self.ensureChainIndex()
 
-		var block = blockById(self.module, refByBlockId: self.guardChainTail, id: blockId, from: self.func.name)
+		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: blockId, from: self.func.name)
 		let base = try self.guardChainBase.get(blockId) otherwise panic("guardSiteAt: guardChainBase has no entry for block id {blockId}, which blockById just resolved within the function")
 
 		if stdOpPos < base 'behindTheChain'
@@ -1491,7 +1491,7 @@ type RangeCheckEmitter
 		// filled only by `materializeChainTails` (see `guardChainSource`). Checked against the block as it
 		// stands, every guard after the first in a block would read a count of zero and this would fire on
 		// a program with nothing wrong with it.
-		view sourceOps = self.chainSourceOps(blockId, chainEnd: block)
+		let sourceOps = self.chainSourceOps(blockId, chainEnd: block)
 
 		if stdOpPos > sourceOps.count() 'pastTheBlock'
 			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {stdOpPos} of block {blockId}, which held only {sourceOps.count()} ops before this pass split it — `splitChainEnd` would silently carve the whole block into the head and anchor the guard at the end")
@@ -1528,13 +1528,13 @@ type RangeCheckEmitter
 	function retBlockOf(site RangeCheckReturnSite) returns RetBlockLookup
 		self.ensureChainIndex()
 
-		view block = blockById(self.module, refByBlockId: self.guardChainTail, id: site.block, from: self.func.name)
+		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: site.block, from: self.func.name)
 
 		if not block.hasTerminatorOp() 'noRetLeft'
 			return RetBlockLookup.notFound
 		end 'noRetLeft'
 
-		view term = try self.module.ops.get(block.terminatorIndex()) otherwise panic("retBlockOf: terminatorIndex of block {block.id} in '{String.from(self.func.name)}' not in module.ops")
+		let term = try self.module.ops.get(block.terminatorIndex()) otherwise panic("retBlockOf: terminatorIndex of block {block.id} in '{String.from(self.func.name)}' not in module.ops")
 
 		if not retMatchesValue(term, block: block, target: site.value) 'notThisSitesRet'
 			return RetBlockLookup.notFound
@@ -1591,7 +1591,7 @@ type RangeCheckEmitter
 	// patterns on the other, and nothing downstream could tell them apart from the payload alone.
 	function collectConsts()
 		for opIdx in self.module.liveOpIndices(self.func) 'eachOp'
-			view op = try self.module.ops.get(opIdx) otherwise panic("collectConsts: live op index {opIdx} not in module.ops")
+			let op = try self.module.ops.get(opIdx) otherwise panic("collectConsts: live op index {opIdx} not in module.ops")
 
 			match op 'c'
 				const(resultId, value, valueType) then self.recordConst(resultId, value: value, valueType: valueType)
@@ -1774,7 +1774,7 @@ end 'appendDeadReturn'
 // carries its label to the backend, which loads the address into the ABI's first-arg register and
 // calls `mrt_panic`.
 module function appendPanicBlock(module StdModule, func IrFunction, globalData GlobalDataTable, label ByteArray, message ByteArray, ids ValueMinter) returns IrBlock
-	var panicBlock = module.addBlock(func, label: label, heat: BlockHeat.cold)
+	let panicBlock = module.addBlock(func, label: label, heat: BlockHeat.cold)
 	let blobLabel = registerStringBlob(globalData, bytes: message)
 	module.appendOp(panicBlock, op: StdOp.osPanic(freeze blobLabel.toByteArray()))
 	appendDeadReturn(module, func: func, block: panicBlock, ids: ids)
@@ -1836,8 +1836,8 @@ let RangeCheckPanicLabel = b"__rc_panic"
 // or a pass that merges a throwing call's blocks, reinstates it with nothing in the way — take
 // `splitChainEnd` then.
 export function splitBlockInPlace(module StdModule, func IrFunction, head IrBlock, position ElementIndex, label ByteArray) returns IrBlock
-	var headBlock = head
-	var tailOps = OpIndexArray.create(headBlock.bodyOpCount() - position, zeroed: false)
+	let headBlock = head
+	let tailOps = OpIndexArray.create(headBlock.bodyOpCount() - position, zeroed: false)
 
 	for i in position upto headBlock.bodyOpCount() 'moveTail'
 		let opIdx = try headBlock.bodyOpAt(i) otherwise panic("splitBlockInPlace: bodyOpAt OOB at {i}")
@@ -1846,7 +1846,7 @@ export function splitBlockInPlace(module StdModule, func IrFunction, head IrBloc
 
 	headBlock.truncateBodyOps(position)
 
-	var ok = splitBlockExit(module, func: func, head: headBlock, label: label)
+	let ok = splitBlockExit(module, func: func, head: headBlock, label: label)
 	ok.replaceBodyOps(tailOps)
 	return ok
 end 'splitBlockInPlace'
@@ -1860,10 +1860,10 @@ end 'splitBlockInPlace'
 // caller outside its own two — there isn't one. `splitBlockInPlace` above is the shared entry;
 // `splitChainEnd` reaches this directly because it places the ops itself.
 function splitBlockExit(module StdModule, func IrFunction, head IrBlock, label ByteArray) returns IrBlock
-	var headBlock = head
+	let headBlock = head
 
 	// The tail runs exactly when the head does, and it is the same text.
-	var ok = module.addBlock(func, label: label, heat: headBlock.heat, inlineSite: headBlock.inlineSite, role: headBlock.role)
+	let ok = module.addBlock(func, label: label, heat: headBlock.heat, inlineSite: headBlock.inlineSite, role: headBlock.role)
 
 	ok.terminator = headBlock.terminator
 	ok.condBranch = headBlock.condBranch
@@ -1904,7 +1904,7 @@ let EmptyHighWord = 0
 // BEFORE THIS.** A WHOLLY NEGATIVE range's upper is a real bound and is not elided — see
 // `rangeNeedsUpperCheck`'s header for the two uncatchable `#DE`s eliding it reaches.
 function boundChecks(low FullRangeInt, high FullRangeInt, isFloat bool) returns RangeBoundCheckArray
-	var checks = RangeBoundCheckArray.create(0)
+	let checks = RangeBoundCheckArray.create(0)
 
 	// ⭐ THE UNSIGNED-MAX UPPER SHAPE — `int(N to u64.max)` over a non-negative low bound. Signed
 	// compares cannot express its upper (it rides as `-1`), so out-of-range is `value >= 0 AND
@@ -2161,7 +2161,7 @@ type EntryGuardWaivers
 	var callTargets as CallTargetsByFunction
 
 	static function derive(project Project, module StdModule) returns EntryGuardWaivers
-		var waivers = Self{candidates: WaivableParamsByCallee.create(), callTargets: CallTargetsByFunction.create()}
+		let waivers = Self{candidates: WaivableParamsByCallee.create(), callTargets: CallTargetsByFunction.create()}
 
 		for func in module.functions 'eachFunc'
 			waivers.collectCandidates(project, func: func)
@@ -2200,7 +2200,7 @@ type EntryGuardWaivers
 			return
 		end 'hasAnotherFloor'
 
-		var params = try self.candidates.get(callee) otherwise WaivableParamArray.create(0)
+		let params = try self.candidates.get(callee) otherwise WaivableParamArray.create(0)
 		params.push(param)
 		self.candidates.upsert(callee, value: params)
 	end 'addCandidateIfUnsignedFull'
@@ -2212,7 +2212,7 @@ type EntryGuardWaivers
 	end 'denyIfAnUncheckedPathReaches'
 
 	function denyAll(callee ByteArray)
-		var params = try self.candidates.get(callee) otherwise return
+		let params = try self.candidates.get(callee) otherwise return
 
 		for i in 0 upto params.count() 'eachParam'
 			denyParamAt(params, at: i)
@@ -2220,21 +2220,21 @@ type EntryGuardWaivers
 	end 'denyAll'
 
 	function denyCallsThatDidNotRecord(project Project, module StdModule)
-		var byName = FuncIndexByName.create()
+		let byName = FuncIndexByName.create()
 
 		for (position, func) in module.functions.withIterator() 'eachFunc'
 			byName.upsert(func.name, value: position.index())
 		end 'eachFunc'
 
-		var reference = StdFunctionReference.create()
-		var call = StdCallOperands.create()
+		let reference = StdFunctionReference.create()
+		let call = StdCallOperands.create()
 
 		for (position, func) in module.functions.withIterator() 'eachCaller'
 			if project.libraryFacts.bodyIsSwept(func.name) 'notInTheProgram'
 				continue
 			end 'notInTheProgram'
 
-			var recorded = RecordedCallArguments.create()
+			let recorded = RecordedCallArguments.create()
 			let checkedMarks = checkedCallMarksOf(project, name: func.name)
 
 			if let checks = try project.rangeChecks.get(func.name) 'recordsSites'
@@ -2282,16 +2282,16 @@ type EntryGuardWaivers
 	end 'denyCallsThatDidNotRecord'
 
 	function recordCallTarget(caller ElementIndex, callResult ValueId, callee ByteArray)
-		var targets = try self.callTargets.get(caller) otherwise CallTargetMap.create()
+		let targets = try self.callTargets.get(caller) otherwise CallTargetMap.create()
 		targets.upsert(callResult, value: callee)
 		self.callTargets.upsert(caller, value: targets)
 	end 'recordCallTarget'
 
 	function denyParamsTheCallDidNotRecord(project Project, callee ByteArray, sites RangeCheckSiteArray)
-		var params = try self.candidates.get(callee) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: '{String.from(callee)}' was just found among the candidates")
+		let params = try self.candidates.get(callee) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: '{String.from(callee)}' was just found among the candidates")
 
 		for i in 0 upto params.count() 'eachParam'
-			view param = try params.get(i) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: params.get OOB at {i}")
+			let param = try params.get(i) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: params.get OOB at {i}")
 
 			if not callRecordedSlot(project, callee: callee, sites: sites, slot: param.index) 'unrecorded'
 				denyParamAt(params, at: i)
@@ -2362,7 +2362,7 @@ function siteIsALiteralUse(site RangeCheckSite) returns bool
 end 'siteIsALiteralUse'
 
 function appendCallArgumentSite(recorded RecordedCallArguments, callResult ValueId, site RangeCheckSite)
-	var sites = try recorded.get(callResult) otherwise RangeCheckSiteArray.create(0)
+	let sites = try recorded.get(callResult) otherwise RangeCheckSiteArray.create(0)
 	sites.push(site)
 	recorded.upsert(callResult, value: sites)
 end 'appendCallArgumentSite'
@@ -2388,6 +2388,6 @@ function siteRecordsSlot(project Project, callee ByteArray, site RangeCheckSite,
 end 'siteRecordsSlot'
 
 function denyParamAt(params WaivableParamArray, at ElementIndex)
-	var denied = try params.get(at) otherwise panic("denyParamAt: params.get OOB at {at}")
+	let denied = try params.get(at) otherwise panic("denyParamAt: params.get OOB at {at}")
 	denied.waived = false
 end 'denyParamAt'

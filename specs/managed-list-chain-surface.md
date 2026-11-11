@@ -60,11 +60,11 @@ neighbour pointing at the wrong side.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view a = chain.insertFirst("alpha, long enough to be a real heap allocation")
-	view c = chain.insertLast("gamma, long enough to be a real heap allocation")
-	view b = chain.insertAfter(a, value: "beta, long enough to be a real heap allocation")
-	view z = chain.insertBefore(a, value: "zero, long enough to be a real heap allocation")
+	let chain = StrChain.create()
+	let a = chain.insertFirst("alpha, long enough to be a real heap allocation")
+	let c = chain.insertLast("gamma, long enough to be a real heap allocation")
+	let b = chain.insertAfter(a, value: "beta, long enough to be a real heap allocation")
+	let z = chain.insertBefore(a, value: "zero, long enough to be a real heap allocation")
 	var cur = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
@@ -104,12 +104,12 @@ observed leaked. A `throw` here would have to answer for it.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var a = StrChain.create()
-	var b = StrChain.create()
-	view na = a.insertLast("the only element of chain a, on the heap")
-	view nb = b.insertLast("the only element of chain b, on the heap")
+	let a = StrChain.create()
+	let b = StrChain.create()
+	let na = a.insertLast("the only element of chain a, on the heap")
+	let nb = b.insertLast("the only element of chain b, on the heap")
 	print("before\n")
-	view spliced = b.insertAfter(na, value: "a value chain b will never hold")
+	let spliced = b.insertAfter(na, value: "a value chain b will never hold")
 	print("after [{spliced.value()}] [{nb.value()}]\n")
 	return 0
 end 'main'
@@ -133,11 +133,11 @@ both this and the case above; testing merely for non-zero would admit this one.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view n = chain.insertLast("the element of the node about to be detached")
+	let chain = StrChain.create()
+	let n = chain.insertLast("the element of the node about to be detached")
 	chain.detach(n)
 	print("before\n")
-	view spliced = chain.insertBefore(n, value: "a value this chain will never hold")
+	let spliced = chain.insertBefore(n, value: "a value this chain will never hold")
 	print("after [{spliced.value()}]\n")
 	return 0
 end 'main'
@@ -175,18 +175,18 @@ function dump(c StrChain, tag String)
 end 'dump'
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view n1 = chain.insertLast("one, long enough to be a real heap allocation")
-	view n2 = chain.insertLast("two, long enough to be a real heap allocation")
-	view n3 = chain.insertLast("three, long enough to be a real heap allocation")
+	let chain = StrChain.create()
+	let n1 = chain.insertLast("one, long enough to be a real heap allocation")
+	let n2 = chain.insertLast("two, long enough to be a real heap allocation")
+	let n3 = chain.insertLast("three, long enough to be a real heap allocation")
 	chain.reinsertFirst(n3)
 	dump(chain, tag: "tail to front")
 	chain.reinsertLast(n3)
 	dump(chain, tag: "and back again")
 	chain.reinsertLast(n2)
 	dump(chain, tag: "middle to back")
-	var solo = StrChain.create()
-	view only = solo.insertLast("the only element there is, on the heap")
+	let solo = StrChain.create()
+	let only = solo.insertLast("the only element there is, on the heap")
 	solo.reinsertFirst(only)
 	dump(solo, tag: "a chain of one")
 	solo.reinsertLast(only)
@@ -216,9 +216,9 @@ leaks, which the run reports as **101**. Both directions run here.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view n1 = chain.insertLast("one, long enough to be a real heap allocation")
-	view n2 = chain.insertLast("two, long enough to be a real heap allocation")
+	let chain = StrChain.create()
+	let n1 = chain.insertLast("one, long enough to be a real heap allocation")
+	let n2 = chain.insertLast("two, long enough to be a real heap allocation")
 	for _ in 0 upto 8 'churn'
 		chain.detach(n2)
 		chain.reinsertFirst(n2)
@@ -226,7 +226,7 @@ function main() returns ExitCode
 		chain.reinsertLast(n2)
 	end 'churn'
 	print("{chain.count()} {n1.value()} {n2.value()}\n")
-	view h = try chain.head() otherwise 'empty'
+	let h = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	print("{h.value()}\n")
@@ -249,10 +249,10 @@ carried simply belongs to the new chain.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var a = StrChain.create()
-	var b = StrChain.create()
-	view na = a.insertLast("the element that stays in chain a, on the heap")
-	view nb = b.insertLast("the element chain a is about to take, on the heap")
+	let a = StrChain.create()
+	let b = StrChain.create()
+	let na = a.insertLast("the element that stays in chain a, on the heap")
+	let nb = b.insertLast("the element chain a is about to take, on the heap")
 	a.reinsertLast(nb)
 	print("a={a.count()} b={b.count()}\n")
 	var cur = try a.head() otherwise 'empty'
@@ -284,13 +284,13 @@ release the displaced element still prints the right answer. Sixteen do too — 
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	var n = chain.insertFirst("the first element, long enough to be a real allocation")
+	let chain = StrChain.create()
+	let n = chain.insertFirst("the first element, long enough to be a real allocation")
 	for _ in 0 upto 16 'churn'
 		n.setValue("a replacement element, long enough to be a real allocation")
 	end 'churn'
 	print("{n.value()}\n")
-	view h = try chain.head() otherwise 'empty'
+	let h = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	print("{h.value()}\n")
@@ -315,8 +315,8 @@ handle alone.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	var n = chain.insertFirst("the element the node is detached holding, on the heap")
+	let chain = StrChain.create()
+	let n = chain.insertFirst("the element the node is detached holding, on the heap")
 	chain.detach(n)
 	n.setValue("the element that replaced it after the detach, on the heap")
 	print("{n.value()} {chain.count()}\n")
@@ -331,7 +331,7 @@ the element that replaced it after the detach, on the heap 0
 ```
 
 <!-- test: setting-a-value-through-a-let-handle-writes-the-node -->
-`setValue` is the one member that WRITES a node, and a `view`-bound handle (a `let`) is accepted exactly as a
+`setValue` is the one member that WRITES a node, and a `let`-bound handle is accepted exactly as a
 `let`-bound chain's `insertLast` is: a `let` forbids reassigning the name, not writing the node it names.
 
 ⚠ What would be wrong is to have every
@@ -340,8 +340,8 @@ other write on these two types admitted through a `let` and this one refused.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
-	view n = chain.insertFirst("the first element, long enough to be a real allocation")
+	let chain = StrChain.create()
+	let n = chain.insertFirst("the first element, long enough to be a real allocation")
 	n.setValue("a replacement element, long enough to be a real allocation")
 	print("{n.value()}\n")
 	return 0
@@ -363,7 +363,7 @@ so the `let` can hold a populated one.
 typealias StrChain = __ManagedList with String
 
 function build() returns StrChain
-	var c = StrChain.create()
+	let c = StrChain.create()
 	c.insertLast("one, long enough to be a real heap allocation")
 	c.insertLast("two, long enough to be a real heap allocation")
 	return c
@@ -399,13 +399,13 @@ chain-continues arrival is admitted by the `.` the next hop is about to consume.
 typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
-	var chain = StrChain.create()
+	let chain = StrChain.create()
 	for _ in 0 upto 32 'fill'
 		chain.insertLast("an element nobody keeps a handle to, on the heap")
 	end 'fill'
 	chain.insertFirst("another element nobody keeps a handle to, on the heap").value()
 	print("{chain.count()}\n")
-	view h = try chain.head() otherwise 'empty'
+	let h = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	print("{h.value()}\n")

@@ -89,7 +89,7 @@ function isBig(n Int) returns bool
 end 'isBig'
 
 function main() returns ExitCode
-	var b = IntBag.create(30)
+	let b = IntBag.create(30)
 	if b.containsWhere(isBig) 'yes'
 		return 1
 	end 'yes'
@@ -146,7 +146,7 @@ function isLong(s String) returns bool
 end 'isLong'
 
 function main() returns ExitCode
-	var b = StrBag.create("a string long enough to be heap allocated")
+	let b = StrBag.create("a string long enough to be heap allocated")
 	if b.containsWhere(isLong) 'long'
 		print("long\n")
 		return 1

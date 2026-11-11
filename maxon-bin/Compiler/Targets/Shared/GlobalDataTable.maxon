@@ -320,7 +320,7 @@ function twosComplementDistance(to ByteOffset, from ByteOffset) returns MachineW
 end 'twosComplementDistance'
 
 // The rdata payloads themselves — one raw byte blob per registered global.
-export typealias ByteBlobArray = Array with readonly ByteArray
+export typealias ByteBlobArray = Array with immutable ByteArray
 
 // @generated library-cache begin
 export function cacheWriteByteBlobArray(writer LibraryCacheWriter, value ByteBlobArray)
@@ -333,10 +333,10 @@ end 'cacheWriteByteBlobArray'
 
 export function cacheReadByteBlobArray(reader LibraryCacheReader) returns ByteBlobArray throws LibraryCacheDamage
 	let count = try reader.count()
-	var result = ByteBlobArray.create(count, zeroed: false)
+	let result = ByteBlobArray.create(count, zeroed: false)
 
 	for _ in 0 upto count 'eachItem'
-		let item = try reader.bytes()
+		let item = freeze try reader.bytes()
 		result.push(item)
 	end 'eachItem'
 
@@ -683,7 +683,7 @@ export type GlobalDataTable
 			panic("GlobalDataTable.appendRdataPayload: '{label}' would be addressed at offset {labelAt} of a {bytes.count()}-byte payload — a label names a point WITHIN what it registers, and an EMPTY payload (a `b\"\"` blob) has only its start")
 		end 'labelPastPayload'
 
-		let payload = paddedTo(bytes, alignment: RdataPayloadAlignment)
+		let payload = frozenPaddedImage(bytes, alignment: RdataPayloadAlignment)
 		self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
 		self.rdataLabelOffsets.upsert(label, value: labelAt)
 		self.rdataSizeSoFar = self.rdataSizeSoFar + payload.count() as ByteOffset
@@ -704,7 +704,7 @@ export type GlobalDataTable
 	export function registerJumpTable(slotCount ElementIndex) returns String
 		let label = "{JumpTableLabelPrefix}{self.nextStringId}"
 		self.nextStringId = self.nextStringId + 1
-		var bytes = ByteArray.create(slotCount * JumpTableSlotBytes)
+		let bytes = ByteArray.create(slotCount * JumpTableSlotBytes)
 		self.appendRdataPayload(label, bytes: bytes, kind: RdataPayloadKind.jumpTable, labelAt: 0)
 		return label
 	end 'registerJumpTable'
@@ -848,7 +848,7 @@ export type GlobalDataTable
 	// A function record nothing surviving names stays in `.rdata` with its code slot unbaked: the
 	// function it names may have been swept, and `bakeFuncAbs64Relocs` panics on a reloc to one.
 	export function dropFunctionRecordRelocsExcept(referenced ReferencedGlobalLabelSet)
-		var kept = PendingRdataRelocArray.create(0)
+		let kept = PendingRdataRelocArray.create(0)
 
 		for reloc in self.pendingRdataRelocs 'eachRdataSlot'
 			if not isFunctionRecordLabel(reloc.rdataLabel) or referenced.contains(reloc.rdataLabel.toByteArray()) 'stillFilled'
@@ -860,7 +860,7 @@ export type GlobalDataTable
 	end 'dropFunctionRecordRelocsExcept'
 
 	export function functionNamesInRdata() returns NameRoster
-		var roster = NameRoster.create(self.pendingRdataRelocs.count(), zeroed: false)
+		let roster = NameRoster.create(self.pendingRdataRelocs.count(), zeroed: false)
 
 		for reloc in self.pendingRdataRelocs 'eachSlot'
 			roster.push(reloc.funcName)
@@ -870,7 +870,7 @@ export type GlobalDataTable
 	end 'functionNamesInRdata'
 
 	export function functionRecordLabelsNamedInRdata() returns StringArray
-		var named = StringArray.create(0)
+		let named = StringArray.create(0)
 
 		for reloc in self.pendingRdataAbsRelocs 'eachAbsoluteSlot'
 			if isFunctionRecordLabel(reloc.targetLabel) 'namesAFunctionRecord'
@@ -916,7 +916,7 @@ export type GlobalDataTable
 	export function rdataImage() returns ByteArray
 		self.requireColumnsAgree()
 
-		var image = ByteArray.create(0)
+		let image = ByteArray.create(0)
 
 		for (iter, payload) in self.values.withIterator() 'each'
 			let label = try self.names.get(iter.index()) otherwise panic("GlobalDataTable.rdataImage: values has {self.values.count()} payloads but names has {self.names.count()} — the two columns are pushed together and cannot disagree")
@@ -979,7 +979,7 @@ export type GlobalDataTable
 
 	// The BYTES registered under `label`. Read by `requireIdenticalPayload`'s collision compare and by
 	// `TargetPrinter`, which renders a String blob's text beside the label that names it.
-	export function payloadOf(label String) returns ByteArray
+	export function payloadOf(label String) returns immutable ByteArray
 		let index = self.payloadIndexOf(label, what: "payloadOf")
 		return try self.values.get(index as ElementIndex) otherwise panic("GlobalDataTable.payloadOf: nameIndex maps '{label}' to {index}, which values does not hold — the two columns are pushed together and cannot disagree")
 	end 'payloadOf'
@@ -1030,7 +1030,7 @@ export type GlobalDataTable
 	// resolved in either direction.
 	export function stampDataBlob(label String, bytes ByteArray)
 		let index = try self.dataBlobIndex.get(label) otherwise panic("GlobalDataTable.stampDataBlob: no .data run is labelled '{label}' — a stamp rewrites a run `registerDataBlob` reserved, so an unknown label means the reservation never ran or the two spell it differently")
-		var entry = try self.dataBlobs.get(index as ElementIndex) otherwise panic("GlobalDataTable.stampDataBlob: dataBlobIndex maps '{label}' to {index}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
+		let entry = try self.dataBlobs.get(index as ElementIndex) otherwise panic("GlobalDataTable.stampDataBlob: dataBlobIndex maps '{label}' to {index}, which dataBlobs does not hold — the index is written in the same call as the push and cannot disagree")
 
 		if bytes.count() != entry.bytes.count() 'lengthDiffers'
 			panic("GlobalDataTable.stampDataBlob: '{label}' reserves {entry.bytes.count()} bytes but the stamp carries {bytes.count()} — the reserved run is the registered length padded up to {MaxDataSlotBytes}, and resizing it would move every scalar global behind it")
@@ -1057,7 +1057,7 @@ export type GlobalDataTable
 		// The user's globals are laid out ahead of the runtime's, each segment sorted within itself. One
 		// sort over both would interleave them by size class, so a runtime word added anywhere would move
 		// every user global of a narrower class — and `.data` would stop being a function of the source.
-		var laidOut = sortBySizeDescendingStable(retainReachedSlots(rosterSegment(roster, from: 0, upto: userGlobalCount), referenced: referenced))
+		let laidOut = sortBySizeDescendingStable(retainReachedSlots(rosterSegment(roster, from: 0, upto: userGlobalCount), referenced: referenced))
 
 		for entry in sortBySizeDescendingStable(retainReachedSlots(rosterSegment(roster, from: userGlobalCount, upto: roster.count()), referenced: referenced)) 'eachRuntimeSlot'
 			laidOut.push(entry)
@@ -1071,7 +1071,7 @@ export type GlobalDataTable
 		var offset = 0 as ByteOffset
 
 		for i in 0 upto self.dataBlobs.count() 'eachRun'
-			var blob = try self.dataBlobs.get(i) otherwise panic("GlobalDataTable.layOut: dataBlobs.get OOB at {i} despite the upto bound")
+			let blob = try self.dataBlobs.get(i) otherwise panic("GlobalDataTable.layOut: dataBlobs.get OOB at {i} despite the upto bound")
 			blob.offset = offset
 			offset = offset + (blob.bytes.count() as ByteOffset)
 		end 'eachRun'
@@ -1080,7 +1080,7 @@ export type GlobalDataTable
 			// A `var` binding, so the entry's `offset` is written THROUGH the reference the array
 			// holds — `DataSectionEntry` is a `type`, so this is the very object the array stores,
 			// not a copy of it.
-			var entry = try self.dataSection.get(i) otherwise panic("GlobalDataTable.layOut: dataSection.get OOB at {i} despite the upto bound")
+			let entry = try self.dataSection.get(i) otherwise panic("GlobalDataTable.layOut: dataSection.get OOB at {i} despite the upto bound")
 
 			if self.dataBlobIndex.contains(entry.label) 'labelCollision'
 				panic("GlobalDataTable.layOut: '{entry.label}' is both a declared global and a reserved .data run — one label names one address, and `dataSectionOffsetOf` answers runs first, so the global would be unreachable")
@@ -1116,7 +1116,7 @@ export type GlobalDataTable
 	// a disagreement with `layOut` panics instead of emitting a global at an address its relocations
 	// do not name.
 	export function dataSectionImage() returns ByteArray
-		var image = ByteArray.create(0)
+		let image = ByteArray.create(0)
 
 		for blob in self.dataBlobs 'eachRun'
 			if image.count() as ByteOffset != blob.offset 'runDrift'
@@ -1183,7 +1183,7 @@ let MaxDataSlotBytes = 8 as BytePos
 // The roster minus every `walked` slot no surviving function names; `declared` slots pass untouched. Order
 // is preserved, which is what keeps every kept slot at the offset it has in a program that drops nothing.
 function retainReachedSlots(roster DataSectionEntryArray, referenced ReferencedGlobalLabelSet) returns DataSectionEntryArray
-	var kept = DataSectionEntryArray.create(0)
+	let kept = DataSectionEntryArray.create(0)
 
 	for entry in roster 'each'
 		let isKept = match entry.reach 'reach'
@@ -1200,7 +1200,7 @@ function retainReachedSlots(roster DataSectionEntryArray, referenced ReferencedG
 end 'retainReachedSlots'
 
 function rosterSegment(roster DataSectionEntryArray, from ElementIndex, upto ElementIndex) returns DataSectionEntryArray
-	var segment = DataSectionEntryArray.create(upto - from, zeroed: false)
+	let segment = DataSectionEntryArray.create(upto - from, zeroed: false)
 
 	for index in from upto upto 'eachEntry'
 		segment.push(try roster.get(index) otherwise panic("rosterSegment: entry {index} is not below the roster's {roster.count()}"))
@@ -1224,7 +1224,7 @@ end 'rosterSegment'
 // — every global an `int`, the commonest program there is — and rescans the whole placed list for
 // every entry.
 function sortBySizeDescendingStable(declared DataSectionEntryArray) returns DataSectionEntryArray
-	var sorted = DataSectionEntryArray.create(0)
+	let sorted = DataSectionEntryArray.create(0)
 	var size = MaxDataSlotBytes
 
 	while size > 0 'eachSizeClass'
@@ -1270,11 +1270,23 @@ function paddedTo(bytes ByteArray, alignment BytePos) returns ByteArray
 		return bytes
 	end 'alreadyAligned'
 
-	var padded = ByteArray.create(storedCount, zeroed: false)
+	let padded = ByteArray.create(storedCount, zeroed: false)
 	padded.append(bytes)
 	padded.growFilled(storedCount, value: PadByte)
 	return padded
 end 'paddedTo'
+
+function frozenPaddedImage(bytes ByteArray, alignment BytePos) returns immutable ByteArray
+	let storedCount = alignUp(bytes.count() as BytePos, alignment: alignment)
+	let padded = ByteArray.create(storedCount, zeroed: false) as isolated ByteArray
+
+	modify padded 'fill'
+		padded.append(bytes)
+		padded.growFilled(storedCount, value: PadByte)
+	end 'fill'
+
+	return freeze padded
+end 'frozenPaddedImage'
 
 // `value` rendered as a standalone `byteCount`-byte little-endian payload — what
 // `registerFloatConstant` mints a float island out of.
@@ -1286,7 +1298,7 @@ end 'paddedTo'
 // one fact written twice — with the two free to disagree about what `3.14` is.
 
 export function scalarImage(value FullRangeInt, byteCount BytePos) returns ByteArray
-	var bytes = ByteArray.create(byteCount as ElementIndex, zeroed: false)
+	let bytes = ByteArray.create(byteCount as ElementIndex, zeroed: false)
 	appendLittleEndianScalar(bytes, value: value, byteCount: byteCount)
 	return bytes
 end 'scalarImage'

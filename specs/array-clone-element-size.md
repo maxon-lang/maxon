@@ -83,26 +83,26 @@ typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
 function main() returns ExitCode
-	var n = NarrowCol.create(0)
+	let n = NarrowCol.create(0)
 	n.push(1)
 	n.push(2)
 	n.push(3)
 
-	var w = WideCol.create(0)
+	let w = WideCol.create(0)
 	w.push(9)
 
-	var c = n.clone()
+	let c = n.clone()
 	let c0 = try c.get(0) otherwise 0
 	let c1 = try c.get(1) otherwise 0
 	let c2 = try c.get(2) otherwise 0
 
-	var s = try n.slice(1, endIndex: 3) otherwise panic("slice 1..3 is in bounds")
+	let s = try n.slice(1, endIndex: 3) otherwise panic("slice 1..3 is in bounds")
 	let s0 = try s.get(0) otherwise 0
 	let s1 = try s.get(1) otherwise 0
 
-	var b = Bytes.create(0)
+	let b = Bytes.create(0)
 	b.push(65)
-	var bc = b.clone()
+	let bc = b.clone()
 	bc.append(b"CD")
 	let b0 = try bc.get(0) otherwise 0
 	let b1 = try bc.get(1) otherwise 0
@@ -132,19 +132,19 @@ typealias MidCol = Array with Mid
 typealias WideCol = Array with Wide
 
 function main() returns ExitCode
-	var n = NarrowCol.create(0)
+	let n = NarrowCol.create(0)
 	n.push(1)
 	n.push(2)
-	var m = MidCol.create(0)
+	let m = MidCol.create(0)
 	m.push(3)
 	m.push(4)
-	var w = WideCol.create(0)
+	let w = WideCol.create(0)
 	w.push(5)
 	w.push(6)
 
-	var nc = n.clone()
-	var mc = m.clone()
-	var wc = w.clone()
+	let nc = n.clone()
+	let mc = m.clone()
+	let wc = w.clone()
 
 	let n0 = try nc.get(0) otherwise 0
 	let m0 = try mc.get(0) otherwise 0

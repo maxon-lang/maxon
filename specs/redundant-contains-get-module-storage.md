@@ -13,48 +13,20 @@ lookups where one will do, and it is refused (E3087). The lint suppresses itself
 then-block that could have invalidated the membership answer — a write to a name in either path, or
 another call on the same receiver.
 
-That suppression scan can only see code it can connect to the path. **A top-level `var` breaks that
-premise**: its storage is reachable from every function in the program, so any call in the
-then-block may `upsert` into the very table the `contains` probed under a receiver spelling this
-walk cannot connect to it. Reporting one would be a false accusation, so a path rooted in a top-level
-`var` is not linted.
-
-**The boundary is MUTABILITY and not "the base is a local".** A top-level `let` refuses mutation at
-every door — `m.upsert(…)` on it directly and `fill(m)` into a mutating parameter are both E3159 —
-so nothing in a then-block can invalidate a membership answer probed through one, and a key that is
-a top-level `let` cannot be rewritten either. Both of those are exactly what the lint is for, and a
-test of "is the base a local or a capture" would skip both.
+**A top-level `let` key is linted.** A top-level `let` is read-only data, so a key that is a
+top-level `let` cannot be rewritten between the two lookups, and the lint reports the pair exactly as
+it does for a key that is a local. A test of "is the key a local or a capture" would skip it.
 
 A lint over the lowered IR cannot canonicalize a global load at all. The compiler's runs in the
-parser, which holds the tokens AND the declaration — so it can tell the two apart, and this is a case
-where the token-level design is SHARPER than an IR-level one
+parser, which holds the tokens AND the declaration — so it can tell a top-level `let` from a name a
+call could rewrite, and this is a case where the token-level design is SHARPER than an IR-level one
 rather than merely equivalent to it.
 
 ## Tests
 
-<!-- test: error.let-global-receiver-is-linted -->
-A top-level `let` container cannot be mutated by anything, so the second lookup is redundant and is
-reported.
-```maxon
-typealias StrMap = Map with (String, String)
-
-let m = StrMap.create()
-
-function main() returns ExitCode
-	let k = "a"
-	if m.contains(k) 'has'
-		print(try m.get(k) otherwise "?")
-	end 'has'
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3087: <fragment>:8:7: redundant 'Map.contains' followed by 'Map.get' on 'm': use 'if let v = try m.get(k)' (or 'if var') instead — performs one lookup instead of two
-```
-
 <!-- test: error.let-global-key-is-linted -->
-The KEY side of the same boundary: the receiver is a parameter and the key is a top-level `let`, so
-neither can be rewritten between the two lookups.
+The receiver is a parameter and the key is a top-level `let`, so neither can be rewritten between the two
+lookups.
 ```maxon
 typealias StrMap = Map with (String, String)
 

@@ -103,7 +103,7 @@ end 'commonSubexpressionEliminationHeadline'
 // no rewrite, no block rebuild and no prune. `recordValueSubstitution` always extends the column by at
 // least the slot it writes, so an empty column is an exact test for "found nothing".
 module function eliminateInFunc(module StdModule, func IrFunction, scratch CseScratch)
-	var subst = ValueIdArray.create(0)
+	let subst = ValueIdArray.create(0)
 
 	// ⛔⛔ **THE FUNCTION BOUNDARY IS ITSELF A TABLE SCOPE, AND IT IS NOT BELT-AND-BRACES — IT IS WHAT
 	// KEEPS A MISCOMPILE OUT.** A `ValueId` is FUNCTION-LOCAL, so an entry left in the table by the previous function
@@ -169,8 +169,8 @@ function analyzeFunc(module StdModule, func IrFunction, subst ValueIdArray, scra
 	end 'oneBlock'
 
 	let tree = StdDominatorTree.build(module, func: func)
-	var walk = StdDominatorWalk.create()
-	var scopes = CseScopeStack.create()
+	let walk = StdDominatorWalk.create()
+	let scopes = CseScopeStack.create()
 	walk.begin(tree)
 
 	while walk.advance(tree) 'depthFirst'
@@ -353,7 +353,7 @@ let SmallestUsefulBucketCount = 16
 // ⚠ It asks the ROSTER before reading `resultId`, because that field is meaningless on a record whose
 // shape is `neither` — the discipline `StdArithOperands`' header states.
 function redundantDefs(module StdModule, func IrFunction, subst ValueIdArray, operands StdArithOperands) returns StdValueUseSet
-	var doomed = StdValueUseSet.create()
+	let doomed = StdValueUseSet.create()
 
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("eliminateCommonSubexpressions: live op index {opIdx} not in module.ops")

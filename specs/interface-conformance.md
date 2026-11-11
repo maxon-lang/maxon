@@ -105,7 +105,7 @@ type SimpleCounter implements Counter
 end 'SimpleCounter'
 
 function main() returns ExitCode
-	var c = SimpleCounter.create(40)
+	let c = SimpleCounter.create(40)
 	c.increment()
 	c.increment()
 	return c.get()
@@ -145,7 +145,7 @@ type Buffer implements Readable, Writable
 end 'Buffer'
 
 function main() returns ExitCode
-	var buf = Buffer.create(0)
+	let buf = Buffer.create(0)
 	buf.write(42)
 	return buf.read()
 end 'main'
@@ -474,7 +474,7 @@ end 'Store'
 // --- file: main.maxon
 function main() returns ExitCode
 	let store = Store.create()
-	var bag = Bag.create(0)
+	let bag = Bag.create(0)
 	bag.push(3)
 	bag.push(4)
 	return store.put(bag) as ExitCode
@@ -513,7 +513,7 @@ function seed() returns B
 end 'seed'
 
 function main() returns ExitCode
-	var w = Widget.create()
+	let w = Widget.create()
 	let b = seed()
 	return w.process(b as A)
 end 'main'

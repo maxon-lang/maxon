@@ -56,7 +56,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -84,7 +84,7 @@ function toHex(bytes ByteArray) returns String
 end 'toHex'
 
 function openTls13(suite Tls13CipherSuite, keyHex String, ivHex String, sequenceNumber TlsSequenceNumber, record ByteArray) returns TlsOpenedRecord throws TlsRecordError
-	var protection = try Tls13RecordProtection.create(suite, key: fromHex(keyHex), iv: fromHex(ivHex), sequenceNumber: sequenceNumber)
+	let protection = try Tls13RecordProtection.create(suite, key: fromHex(keyHex), iv: fromHex(ivHex), sequenceNumber: sequenceNumber)
 
 	return try protection.open(record)
 end 'openTls13'
@@ -205,7 +205,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -234,7 +234,7 @@ end 'toHex'
 
 function fill(byteHex String, count Count) returns ByteArray
 	let byte = try fromHex(byteHex).get(0) otherwise panic("a fill byte")
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachCopy'
 		bytes.push(byte)
@@ -262,7 +262,7 @@ type Sealer
 end 'Sealer'
 
 function content(headHex String, byteHex String, count Count, tailHex String) returns ByteArray
-	var bytes = fromHex(headHex)
+	let bytes = fromHex(headHex)
 	bytes.append(fill(byteHex, count: count))
 	bytes.append(fromHex(tailHex))
 
@@ -270,7 +270,7 @@ function content(headHex String, byteHex String, count Count, tailHex String) re
 end 'content'
 
 function bigEndian(value Sequence) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto 8 'eachByte'
 		bytes.push(((value shr ((7 - index) * 8)) and 255) as Byte)
@@ -281,7 +281,7 @@ end 'bigEndian'
 
 function xorNonce(iv ByteArray, sequenceNumber Sequence) returns ByteArray
 	let sequenceBytes = bigEndian(sequenceNumber)
-	var nonce = ByteArray.create(0)
+	let nonce = ByteArray.create(0)
 
 	for (iter, byte) in iv.withIterator() 'eachByte'
 		if iter.index() < 4 'prefix'
@@ -295,7 +295,7 @@ function xorNonce(iv ByteArray, sequenceNumber Sequence) returns ByteArray
 end 'xorNonce'
 
 function header(typeByte Byte, length Count) returns ByteArray
-	var bytes = ByteArray from [typeByte, 3, 3]
+	let bytes = ByteArray from [typeByte, 3, 3]
 	bytes.push((length shr 8) as Byte)
 	bytes.push((length and 255) as Byte)
 
@@ -304,21 +304,21 @@ end 'header'
 
 function sealed13(sealer Sealer, ivHex String, sequenceNumber Sequence, inner ByteArray) returns ByteArray
 	let additionalData = header(23, length: inner.count() + 16)
-	var record = additionalData.clone()
+	let record = additionalData.clone()
 	record.append(sealer.seal(xorNonce(fromHex(ivHex), sequenceNumber: sequenceNumber), plaintext: inner, additionalData: additionalData))
 
 	return record
 end 'sealed13'
 
 function raw(headerHex String, byteHex String, count Count) returns ByteArray
-	var bytes = fromHex(headerHex)
+	let bytes = fromHex(headerHex)
 	bytes.append(fill(byteHex, count: count))
 
 	return bytes
 end 'raw'
 
 function openTls13(suite Tls13CipherSuite, keyHex String, ivHex String, sequenceNumber TlsSequenceNumber, record ByteArray) returns TlsOpenedRecord throws TlsRecordError
-	var protection = try Tls13RecordProtection.create(suite, key: fromHex(keyHex), iv: fromHex(ivHex), sequenceNumber: sequenceNumber)
+	let protection = try Tls13RecordProtection.create(suite, key: fromHex(keyHex), iv: fromHex(ivHex), sequenceNumber: sequenceNumber)
 
 	return try protection.open(record)
 end 'openTls13'
@@ -409,7 +409,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -438,7 +438,7 @@ end 'toHex'
 
 function fill(byteHex String, count Count) returns ByteArray
 	let byte = try fromHex(byteHex).get(0) otherwise panic("a fill byte")
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachCopy'
 		bytes.push(byte)
@@ -466,7 +466,7 @@ type Sealer
 end 'Sealer'
 
 function content(headHex String, byteHex String, count Count, tailHex String) returns ByteArray
-	var bytes = fromHex(headHex)
+	let bytes = fromHex(headHex)
 	bytes.append(fill(byteHex, count: count))
 	bytes.append(fromHex(tailHex))
 
@@ -474,7 +474,7 @@ function content(headHex String, byteHex String, count Count, tailHex String) re
 end 'content'
 
 function bigEndian(value Sequence) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for index in 0 upto 8 'eachByte'
 		bytes.push(((value shr ((7 - index) * 8)) and 255) as Byte)
@@ -485,7 +485,7 @@ end 'bigEndian'
 
 function xorNonce(iv ByteArray, sequenceNumber Sequence) returns ByteArray
 	let sequenceBytes = bigEndian(sequenceNumber)
-	var nonce = ByteArray.create(0)
+	let nonce = ByteArray.create(0)
 
 	for (iter, byte) in iv.withIterator() 'eachByte'
 		if iter.index() < 4 'prefix'
@@ -499,7 +499,7 @@ function xorNonce(iv ByteArray, sequenceNumber Sequence) returns ByteArray
 end 'xorNonce'
 
 function header(typeByte Byte, length Count) returns ByteArray
-	var bytes = ByteArray from [typeByte, 3, 3]
+	let bytes = ByteArray from [typeByte, 3, 3]
 	bytes.push((length shr 8) as Byte)
 	bytes.push((length and 255) as Byte)
 
@@ -507,7 +507,7 @@ function header(typeByte Byte, length Count) returns ByteArray
 end 'header'
 
 function sealed12(sealer Sealer, ivHex String, sequenceNumber Sequence, typeByte Byte, plaintext ByteArray, explicitNonce bool) returns ByteArray
-	var additionalData = bigEndian(sequenceNumber)
+	let additionalData = bigEndian(sequenceNumber)
 	additionalData.append(header(typeByte, length: plaintext.count()))
 
 	var body = ByteArray.create(0)
@@ -521,21 +521,21 @@ function sealed12(sealer Sealer, ivHex String, sequenceNumber Sequence, typeByte
 
 	body.append(sealer.seal(nonce, plaintext: plaintext, additionalData: additionalData))
 
-	var record = header(typeByte, length: body.count())
+	let record = header(typeByte, length: body.count())
 	record.append(body)
 
 	return record
 end 'sealed12'
 
 function raw(headerHex String, byteHex String, count Count) returns ByteArray
-	var bytes = fromHex(headerHex)
+	let bytes = fromHex(headerHex)
 	bytes.append(fill(byteHex, count: count))
 
 	return bytes
 end 'raw'
 
 function openTls12(suite Tls12CipherSuite, keyHex String, ivHex String, sequenceNumber TlsSequenceNumber, record ByteArray) returns TlsOpenedRecord throws TlsRecordError
-	var protection = try Tls12RecordProtection.create(suite, key: fromHex(keyHex), iv: fromHex(ivHex), sequenceNumber: sequenceNumber)
+	let protection = try Tls12RecordProtection.create(suite, key: fromHex(keyHex), iv: fromHex(ivHex), sequenceNumber: sequenceNumber)
 
 	return try protection.open(record)
 end 'openTls12'
@@ -608,7 +608,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -637,7 +637,7 @@ end 'toHex'
 
 function fill(byteHex String, count Count) returns ByteArray
 	let byte = try fromHex(byteHex).get(0) otherwise panic("a fill byte")
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachCopy'
 		bytes.push(byte)
@@ -647,7 +647,7 @@ function fill(byteHex String, count Count) returns ByteArray
 end 'fill'
 
 function sealTls13(suite Tls13CipherSuite, keyHex String, ivHex String, sequenceNumber TlsSequenceNumber, contentType TlsContentType, plaintext ByteArray, paddingLength TlsPaddingLength) returns ByteArray throws TlsRecordError
-	var protection = try Tls13RecordProtection.create(suite, key: fromHex(keyHex), iv: fromHex(ivHex), sequenceNumber: sequenceNumber)
+	let protection = try Tls13RecordProtection.create(suite, key: fromHex(keyHex), iv: fromHex(ivHex), sequenceNumber: sequenceNumber)
 
 	return try protection.seal(contentType, plaintext: plaintext, paddingLength: paddingLength)
 end 'sealTls13'
@@ -756,7 +756,7 @@ function digit(symbol Byte) returns Byte
 end 'digit'
 
 function fromHex(hex String) returns ByteArray
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 	var high = 0 as Byte
 	var isHigh = true
 
@@ -785,7 +785,7 @@ end 'toHex'
 
 function fill(byteHex String, count Count) returns ByteArray
 	let byte = try fromHex(byteHex).get(0) otherwise panic("a fill byte")
-	var bytes = ByteArray.create(0)
+	let bytes = ByteArray.create(0)
 
 	for _ in 0 upto count 'eachCopy'
 		bytes.push(byte)
@@ -795,7 +795,7 @@ function fill(byteHex String, count Count) returns ByteArray
 end 'fill'
 
 function sealTls12(suite Tls12CipherSuite, keyHex String, ivHex String, sequenceNumber TlsSequenceNumber, contentType TlsContentType, plaintext ByteArray) returns ByteArray throws TlsRecordError
-	var protection = try Tls12RecordProtection.create(suite, key: fromHex(keyHex), iv: fromHex(ivHex), sequenceNumber: sequenceNumber)
+	let protection = try Tls12RecordProtection.create(suite, key: fromHex(keyHex), iv: fromHex(ivHex), sequenceNumber: sequenceNumber)
 
 	return try protection.seal(contentType, plaintext: plaintext)
 end 'sealTls12'
@@ -872,36 +872,36 @@ function sealed(label String, protection Tls13RecordProtection, contentType TlsC
 end 'sealed'
 
 function main() returns ExitCode
-	var key = ByteArray.create(0)
+	let key = ByteArray.create(0)
 	key.resize(16)
-	var iv = ByteArray.create(0)
+	let iv = ByteArray.create(0)
 	iv.resize(12)
 	let suite = Tls13CipherSuite.aes128GcmSha256
 	let message = "ping".toByteArray()
 
-	var writer = try Tls13RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
+	let writer = try Tls13RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
 	let first = try writer.seal(TlsContentType.applicationData, plaintext: message) otherwise return 1
 	let second = try writer.seal(TlsContentType.applicationData, plaintext: message) otherwise return 1
 
-	var atOne = try Tls13RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 1) otherwise return 1
+	let atOne = try Tls13RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 1) otherwise return 1
 	let numbered = try atOne.seal(TlsContentType.applicationData, plaintext: message) otherwise return 1
 	print("second is number one: {toHex(second) == toHex(numbered)}\n")
 	print("first and second differ: {toHex(first) != toHex(second)}\n")
 
-	var refusing = try Tls13RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
+	let refusing = try Tls13RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
 
 	sealed("seal", protection: refusing, contentType: TlsContentType.changeCipherSpec, message: message)
 
 	let afterRefusal = try refusing.seal(TlsContentType.applicationData, plaintext: message) otherwise return 1
 	print("a refused seal keeps the number: {toHex(afterRefusal) == toHex(first)}\n")
 
-	var reader = try Tls13RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
+	let reader = try Tls13RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
 	opened("second first", protection: reader, record: second)
 	opened("first", protection: reader, record: first)
 	opened("second", protection: reader, record: second)
 	opened("first again", protection: reader, record: first)
 
-	var last = try Tls13RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 18446744073709551615) otherwise return 1
+	let last = try Tls13RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 18446744073709551615) otherwise return 1
 	let final = try last.seal(TlsContentType.applicationData, plaintext: message) otherwise return 1
 	print("final {final.count()}\n")
 
@@ -909,7 +909,7 @@ function main() returns ExitCode
 
 	opened("open", protection: last, record: final)
 
-	var lastReader = try Tls13RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 18446744073709551615) otherwise return 1
+	let lastReader = try Tls13RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 18446744073709551615) otherwise return 1
 	opened("last", protection: lastReader, record: final)
 	opened("beyond", protection: lastReader, record: final)
 	return 0
@@ -964,36 +964,36 @@ function sealed(label String, protection Tls12RecordProtection, contentType TlsC
 end 'sealed'
 
 function main() returns ExitCode
-	var key = ByteArray.create(0)
+	let key = ByteArray.create(0)
 	key.resize(16)
-	var iv = ByteArray.create(0)
+	let iv = ByteArray.create(0)
 	iv.resize(4)
 	let suite = Tls12CipherSuite.ecdheRsaAes128GcmSha256
 	let message = "ping".toByteArray()
 
-	var writer = try Tls12RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
+	let writer = try Tls12RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
 	let first = try writer.seal(TlsContentType.applicationData, plaintext: message) otherwise return 1
 	let second = try writer.seal(TlsContentType.applicationData, plaintext: message) otherwise return 1
 
-	var atOne = try Tls12RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 1) otherwise return 1
+	let atOne = try Tls12RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 1) otherwise return 1
 	let numbered = try atOne.seal(TlsContentType.applicationData, plaintext: message) otherwise return 1
 	print("second is number one: {toHex(second) == toHex(numbered)}\n")
 	print("first and second differ: {toHex(first) != toHex(second)}\n")
 
-	var refusing = try Tls12RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
+	let refusing = try Tls12RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
 
 	sealed("seal", protection: refusing, contentType: TlsContentType.changeCipherSpec, message: message)
 
 	let afterRefusal = try refusing.seal(TlsContentType.applicationData, plaintext: message) otherwise return 1
 	print("a refused seal keeps the number: {toHex(afterRefusal) == toHex(first)}\n")
 
-	var reader = try Tls12RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
+	let reader = try Tls12RecordProtection.create(suite, key: key, iv: iv) otherwise return 1
 	opened("second first", protection: reader, record: second)
 	opened("first", protection: reader, record: first)
 	opened("second", protection: reader, record: second)
 	opened("first again", protection: reader, record: first)
 
-	var last = try Tls12RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 18446744073709551615) otherwise return 1
+	let last = try Tls12RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 18446744073709551615) otherwise return 1
 	let final = try last.seal(TlsContentType.applicationData, plaintext: message) otherwise return 1
 	print("final {final.count()}\n")
 
@@ -1001,7 +1001,7 @@ function main() returns ExitCode
 
 	opened("open", protection: last, record: final)
 
-	var lastReader = try Tls12RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 18446744073709551615) otherwise return 1
+	let lastReader = try Tls12RecordProtection.create(suite, key: key, iv: iv, sequenceNumber: 18446744073709551615) otherwise return 1
 	opened("last", protection: lastReader, record: final)
 	opened("beyond", protection: lastReader, record: final)
 	return 0

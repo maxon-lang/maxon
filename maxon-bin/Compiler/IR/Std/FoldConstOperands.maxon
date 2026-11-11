@@ -372,7 +372,7 @@ module function foldConstOperandsInFunc(module StdModule, func IrFunction)
 
 	// ONE classification record for all three walks below — refilled per op, never re-created. See
 	// `StdFoldableDef`'s header for why it is a record and not a returned union.
-	var def = StdFoldableDef.create()
+	let def = StdFoldableDef.create()
 
 	let constMap = collectConstValues(module, opIndices: opIndices, def: def)
 	rewriteBinAndCmpOps(module, opIndices: opIndices, constMap: constMap)
@@ -392,7 +392,7 @@ end 'foldConstOperandsInFunc'
 // second answer to "which values in this function are constants", over the same shared
 // `classifyFoldableDef` roster, and the two would be free to drift about which ops count.
 export function collectConstValues(module StdModule, opIndices OpIndexArray, def StdFoldableDef) returns ConstValueMap
-	var constMap = ConstValueMap.create()
+	let constMap = ConstValueMap.create()
 
 	for opIdx in opIndices 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
@@ -418,10 +418,10 @@ function rewriteBinAndCmpOps(module StdModule, opIndices OpIndexArray, constMap 
 	// ONE classification record for the whole walk, refilled per op and never re-created — see
 	// `StdArithOperands`' header for why the answer is written into a caller-owned record rather than
 	// returned as a union.
-	var operands = StdArithOperands.create()
+	let operands = StdArithOperands.create()
 
 	for opIdx in opIndices 'eachOp'
-		var op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
+		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
 		try module.ops.set(opIdx, value: tryFold(op, constMap: constMap, operands: operands)) otherwise panic("foldConstOperands: ops.set OOB at {opIdx}")
 	end 'eachOp'
 end 'rewriteBinAndCmpOps'
@@ -446,10 +446,10 @@ end 'rewriteBinAndCmpOps'
 // (`elimTrivialBlockArgs` DOES carry a union-find for its chains. It has to: its chains are built by a
 // WORKLIST, in trigger order, so "record time" there has no order to lean on at all.)
 function substituteIdentityImmediates(module StdModule, func IrFunction, opIndices OpIndexArray, def StdFoldableDef)
-	var subst = ValueIdArray.create(0)
+	let subst = ValueIdArray.create(0)
 
 	for opIdx in opIndices 'eachOp'
-		view op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
+		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
 		classifyFoldableDef(op, def: def)
 
 		if def.isIdentityDef() 'isIdentity'
@@ -745,9 +745,9 @@ function retiredDefs(module StdModule, func IrFunction, opIndices OpIndexArray, 
 	// The reachability roots this prune keeps a def alive for. `collectFunctionValueUses` (StdDialect)
 	// is the one statement of "every value this function reads" — it walks the same ops `opIndices`
 	// names, and it is what keeps the branch-edge half from being forgotten at one of its two callers.
-	var referenced = StdValueUseSet.create()
+	let referenced = StdValueUseSet.create()
 	collectFunctionValueUses(module, func: func, referenced: referenced)
-	var doomed = StdValueUseSet.create()
+	let doomed = StdValueUseSet.create()
 
 	for opIdx in opIndices 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: opIdx {opIdx} not in module.ops")

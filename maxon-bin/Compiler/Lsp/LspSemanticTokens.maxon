@@ -52,7 +52,7 @@ let DataKey = "data"
 let NoTokenModifiers = 0 as LspSemanticTokenValue
 
 module function semanticTokensServedMethods() returns LspMethodArray
-	var served = LspMethodArray.create(0)
+	let served = LspMethodArray.create(0)
 	served.push(LspMethod.semanticTokensFull)
 	return served
 end 'semanticTokensServedMethods'
@@ -60,11 +60,11 @@ end 'semanticTokensServedMethods'
 // This server's `SemanticTokensOptions`. `full` is the only request form it answers; a `range` form would
 // be a second classifier over the same document, and this one is a walk of an already-lexed file.
 module function semanticTokensCapabilityOptions(doc JsonDoc) returns JsonNodeId
-	var legend = LspJsonObject.create(doc)
+	let legend = LspJsonObject.create(doc)
 	legend.putNode(TokenTypesKey, value: stringArrayNode(doc, values: legendTokenTypeNames()))
 	legend.putNode(TokenModifiersKey, value: stringArrayNode(doc, values: StringArray.create(0)))
 
-	var options = LspJsonObject.create(doc)
+	let options = LspJsonObject.create(doc)
 	options.putNode(LegendKey, value: legend.finish())
 	options.put(FullKey, value: JsonNode.boolNode(true))
 	return options.finish()
@@ -75,15 +75,15 @@ module function semanticTokensAnswer(request LspRequest) returns LspAnswer
 		panic("semanticTokensAnswer: {lspMethodSpelling(request.method).wireName} is not this area's — `semanticTokensServedMethods` names the one method it answers")
 	end 'notThisArea'
 
-	var doc = JsonDoc.create()
+	let doc = JsonDoc.create()
 	let encoded = encodedTokensOf(request.text, keywords: request.keywords, corpus: lspDocumentCorpus(request.workspace, uri: request.uri))
-	var values = JsonNodeIdArray.create(encoded.count(), zeroed: false)
+	let values = JsonNodeIdArray.create(encoded.count(), zeroed: false)
 
 	for value in encoded 'eachValue'
 		values.push(doc.add(JsonNode.numberNode(value as JsonFloat)))
 	end 'eachValue'
 
-	var result = LspJsonObject.create(doc)
+	let result = LspJsonObject.create(doc)
 	result.putNode(DataKey, value: doc.add(JsonNode.arrayNode(values)))
 	return LspAnswer.of(doc, result: result.finish())
 end 'semanticTokensAnswer'
@@ -121,7 +121,7 @@ function requireLegendPosition(names StringArray, index LspSemanticTokenType, na
 end 'requireLegendPosition'
 
 function stringArrayNode(doc JsonDoc, values StringArray) returns JsonNodeId
-	var nodes = JsonNodeIdArray.create(values.count(), zeroed: false)
+	let nodes = JsonNodeIdArray.create(values.count(), zeroed: false)
 
 	for value in values 'eachValue'
 		nodes.push(doc.add(JsonNode.stringNode(value)))
@@ -146,7 +146,7 @@ function encodedTokensOf(source String, keywords KeywordTable, corpus LspCorpus)
 	let typeNames = SemanticTypeNames.of(tokens, corpus: corpus)
 	let qualifiers = TypeQualifierPositions.over(tokens)
 
-	var data = LspSemanticTokenValueArray.create(0)
+	let data = LspSemanticTokenValueArray.create(0)
 	var previousLine = 0 as LspLineNumber
 	var previousCharacter = 0 as LspCharacter
 	var lineOfPreviousToken = PreviousTokenLine.none
@@ -222,7 +222,6 @@ function tokenTypeOf(tokens TokenArray, at ElementIndex, token Token, firstOnLin
 	end 'text'
 
 	match typeQualifier 'qualifier'
-		readonlyQualifier then return KeywordTokenType
 		capabilityQualifier then return CapabilityTokenType
 		plainName then break
 	end 'qualifier'
@@ -282,8 +281,8 @@ type SemanticTypeNames
 	let corpus as LspCorpus
 
 	static function of(tokens TokenArray, corpus LspCorpus) returns SemanticTypeNames
-		var declared = DeclaredTypeNameSet.create()
-		var bound = LocalNameSet.create()
+		let declared = DeclaredTypeNameSet.create()
+		let bound = LocalNameSet.create()
 
 		for (position, token) in tokens.withIterator() 'eachToken'
 			let following = position.index() + 1

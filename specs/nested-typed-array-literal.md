@@ -188,7 +188,7 @@ type Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var holder = Holder.create(3)
+	let holder = Holder.create(3)
 	var seen = 0 as Integer
 
 	for group in holder.groups 'eachCreated'
@@ -381,11 +381,11 @@ function width(rows Rows) returns Integer
 end 'width'
 
 function main() returns ExitCode
-	var first = A.create(0)
+	let first = A.create(0)
 	first.push(1)
-	var second = A.create(0)
+	let second = A.create(0)
 	second.push(2)
-	var third = A.create(0)
+	let third = A.create(0)
 	third.push(3)
 	let headed = Rows from [first]
 	print("{headed.count()} {width([second, third])}\n")
@@ -460,13 +460,13 @@ function make(first Ints) returns Rows
 end 'make'
 
 function main() returns ExitCode
-	var branded = Ints.create(0)
+	let branded = Ints.create(0)
 	branded.push(1)
 	let plain = Ints from [2]
 	let holder = Holder.create(branded, second: plain)
-	var again = Ints.create(0)
+	let again = Ints.create(0)
 	again.push(3)
-	var third = Ints.create(0)
+	let third = Ints.create(0)
 	third.push(4)
 	print("{holder.rows.count()} {width([again, third])} {make(plain).count()}\n")
 	return 0

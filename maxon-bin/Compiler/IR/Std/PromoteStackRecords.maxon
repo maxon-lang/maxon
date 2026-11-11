@@ -185,8 +185,8 @@ type PointerScan
 	export var forwardedPositions as ParamCountArray
 
 	static function create(valueBound ValueId) returns PointerScan
-		var escapedLocally = FixedBoolArray.create(valueBound)
-		var dropSites = FixedValueIdArray.create(valueBound)
+		let escapedLocally = FixedBoolArray.create(valueBound)
+		let dropSites = FixedValueIdArray.create(valueBound)
 		return Self{escapedLocally: escapedLocally, dropSites: dropSites, forwardedPointers: ValueIdArray.create(0), forwardedCallees: FuncIndexArray.create(0), forwardedPositions: ParamCountArray.create(0)}
 	end 'create'
 
@@ -318,8 +318,8 @@ function promoteWithNameIndex(module StdModule, byName FunctionNameIndex)
 	// declares no record constructor can promote nothing whatever its call sites look like, and the
 	// parameter-escape summary — one scan and five columns per function that HAS parameters — is then pure
 	// dead work. Most programs in the corpus are exactly that module.
-	var constructors = buildRecordConstructors(module)
-	var frameAllocs = FrameAllocTable.create(module.funcCount(), zeroed: false)
+	let constructors = buildRecordConstructors(module)
+	let frameAllocs = FrameAllocTable.create(module.funcCount(), zeroed: false)
 	var anyFrameAlloc = false
 
 	for funcIndex in 0 upto module.funcCount() 'eachFuncAllocating'
@@ -358,7 +358,7 @@ function anyConstructor(constructors RecordConstructorArray) returns bool
 end 'anyConstructor'
 
 function buildRecordConstructors(module StdModule) returns RecordConstructorArray
-	var table = RecordConstructorArray.create(module.funcCount(), zeroed: false)
+	let table = RecordConstructorArray.create(module.funcCount(), zeroed: false)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		table.push(recognizeRecordConstructor(module, func: module.getFunc(funcIndex)))
@@ -409,7 +409,7 @@ function recognizeRecordConstructor(module StdModule, func IrFunction) returns R
 end 'recognizeRecordConstructor'
 
 function scanConstructorBody(module StdModule, func IrFunction, block IrBlock, box ValueId) returns RecordConstructor
-	var scan = ConstructorScan.create(func.paramCount)
+	let scan = ConstructorScan.create(func.paramCount)
 
 	for opIdx in block.bodyOps() 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("scanConstructorBody: opIdx {opIdx} not in module.ops")
@@ -852,7 +852,7 @@ type ParamNodeSpace
 	export var nodeCount as CsrIndex
 
 	static function create(module StdModule) returns ParamNodeSpace
-		var base = CsrColumn.create(module.funcCount(), zeroed: false)
+		let base = CsrColumn.create(module.funcCount(), zeroed: false)
 		var next = 0 as CsrIndex
 
 		for funcIndex in 0 upto module.funcCount() 'eachFunc'
@@ -887,12 +887,12 @@ end 'ParamNodeSpace'
 function buildParamEscapeMasks(module StdModule, byName FunctionNameIndex) returns ParamPositionMaskArray
 	let nodes = ParamNodeSpace.create(module)
 
-	var seeds = BoolArray.create(nodes.nodeCount)
+	let seeds = BoolArray.create(nodes.nodeCount)
 
 	// Edges point from the CALLEE's parameter to the CALLER's, so the mark propagates BACKWARD from a real
 	// escape site to every parameter that can reach one — the direction `reverseReachabilityMark` walks.
-	var edgeFrom = CsrColumn.create(0)
-	var edgeTo = CsrColumn.create(0)
+	let edgeFrom = CsrColumn.create(0)
+	let edgeTo = CsrColumn.create(0)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
@@ -947,7 +947,7 @@ function collectParamForwardEdges(edgeFrom CsrColumn, edgeTo CsrColumn, nodes Pa
 end 'collectParamForwardEdges'
 
 function publishParamMasks(module StdModule, nodes ParamNodeSpace, marked BoolArray) returns ParamPositionMaskArray
-	var masks = ParamPositionMaskArray.create(module.funcCount(), zeroed: false)
+	let masks = ParamPositionMaskArray.create(module.funcCount(), zeroed: false)
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIndex)
@@ -970,7 +970,7 @@ end 'publishParamMasks'
 // The tracked column for a parameter scan: which of `func`'s parameter values were found, through the
 // `param` ops that define them.
 function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction) returns FixedBoolArray
-	var tracked = FixedBoolArray.create(func.paramCount)
+	let tracked = FixedBoolArray.create(func.paramCount)
 
 	for opIdx in liveOps 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("parameterValues: live op index {opIdx} not in module.ops")
@@ -1018,8 +1018,8 @@ end 'markParameterValue'
 // The accumulating `StdValueUseSet` is not a shortcut: "some non-admitted op read this value" is exactly
 // what one set accumulated across the whole walk means, which is why the walk allocates nothing per op.
 function scanPointerUses(module StdModule, func IrFunction, liveOps OpIndexArray, tracked FixedBoolArray, byName FunctionNameIndex) returns PointerScan
-	var scan = PointerScan.create(tracked.count() as ValueId)
-	var readByOtherOps = StdValueUseSet.create()
+	let scan = PointerScan.create(tracked.count() as ValueId)
+	let readByOtherOps = StdValueUseSet.create()
 
 	// ⚠⚠ **THE OPS COME FROM `liveOpIndices`, THE SAME WALK EVERY OTHER PHASE OF THIS PASS USES, AND THAT
 	// IS A CORRECTNESS REQUIREMENT RATHER THAN TIDINESS.** The CANDIDATE set is derived from that walk and
@@ -1281,14 +1281,14 @@ function promoteInFunction(module StdModule, func IrFunction, byName FunctionNam
 	end 'nothingToPromote'
 
 	let valueBound = nextFreeValueId(module, func: func)
-	var candidates = collectConstructorResults(module, liveOps: liveOps, valueBound: valueBound, byName: byName, constructors: constructors)
+	let candidates = collectConstructorResults(module, liveOps: liveOps, valueBound: valueBound, byName: byName, constructors: constructors)
 
 	for site in frameAllocs 'eachFrameAlloc'
 		try candidates.set(site.resultId, value: true) otherwise panic("promoteInFunction: candidates.set OOB at {site.resultId} — the column is sized to the function's value space")
 	end 'eachFrameAlloc'
 
 	let scan = scanPointerUses(module, func: func, liveOps: liveOps, tracked: candidates, byName: byName)
-	var plans = planPromotions(module, func: func, valueBound: valueBound, scan: scan, byName: byName, constructors: constructors, escapingParams: escapingParams, frameAllocs: frameAllocs)
+	let plans = planPromotions(module, func: func, valueBound: valueBound, scan: scan, byName: byName, constructors: constructors, escapingParams: escapingParams, frameAllocs: frameAllocs)
 
 	if plans.count() == 0 'nothingProvable'
 		return
@@ -1300,7 +1300,7 @@ end 'promoteInFunction'
 
 // The tracked column for a call-site scan: every value defined by a call to a record constructor.
 function collectConstructorResults(module StdModule, liveOps OpIndexArray, valueBound ValueId, byName FunctionNameIndex, constructors RecordConstructorArray) returns FixedBoolArray
-	var candidates = FixedBoolArray.create(valueBound)
+	let candidates = FixedBoolArray.create(valueBound)
 
 	for opIdx in liveOps 'eachOp'
 		match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
@@ -1498,8 +1498,8 @@ function planPromotions(module StdModule, func IrFunction, valueBound ValueId, s
 	// reach would be the one shape that FAILS OPEN here: the constructor call would survive while its
 	// `__mm_decref` was deleted, which is a leak or a double free rather than a missed optimization. Walking
 	// the very set that will be rewritten makes that unreachable by construction rather than by that panic.
-	var plans = RecordPromotionArray.create(0)
-	var allocAtOp = PlanIndexByOpIndex.create()
+	let plans = RecordPromotionArray.create(0)
+	let allocAtOp = PlanIndexByOpIndex.create()
 
 	for siteIndex in 0 upto frameAllocs.count() 'eachFrameAlloc'
 		let site = try frameAllocs.get(siteIndex) otherwise panic("planPromotions: frameAllocs.get OOB at {siteIndex}")
@@ -1527,7 +1527,7 @@ function planPromotions(module StdModule, func IrFunction, valueBound ValueId, s
 end 'planPromotions'
 
 function frameAllocSitesIn(module StdModule, func IrFunction, liveOps OpIndexArray) returns FrameAllocSiteArray
-	var sites = FrameAllocSiteArray.create(0)
+	let sites = FrameAllocSiteArray.create(0)
 
 	if not func.allocatesParameterCells 'noParameterCell'
 		return sites
@@ -1539,7 +1539,7 @@ function frameAllocSitesIn(module StdModule, func IrFunction, liveOps OpIndexArr
 		return sites
 	end 'allocatesNothing'
 
-	var call = StdCallOperands.create()
+	let call = StdCallOperands.create()
 
 	for opIdx in liveOps 'eachOp'
 		classifyCallOperands(try module.ops.get(opIdx) otherwise panic("frameAllocSitesIn: live op index {opIdx} not in module.ops"), call: call)
@@ -1581,7 +1581,7 @@ end 'frameAllocVerdictOf'
 
 function zeroedRecordFields(sizeBytes ByteOffset) returns RecordFieldArray
 	let slotCount = (sizeBytes as StackSize) / SpillSlotBytes
-	var fields = RecordFieldArray.create(slotCount as ElementIndex, zeroed: false)
+	let fields = RecordFieldArray.create(slotCount as ElementIndex, zeroed: false)
 
 	for slot in 0 upto slotCount 'eachSlot'
 		fields.push(RecordField.create((slot * SpillSlotBytes) as ByteOffset, storeType: StdType.i64, source: RecordFieldSource.fromConstant(0, constType: StdType.i64)))
@@ -1592,7 +1592,7 @@ end 'zeroedRecordFields'
 
 // Which tracked pointers were handed to a callee that RETAINS the position they filled.
 function retainedByACallee(valueBound ValueId, scan PointerScan, escapingParams ParamPositionMaskArray) returns FixedBoolArray
-	var retained = FixedBoolArray.create(valueBound)
+	let retained = FixedBoolArray.create(valueBound)
 
 	for edge in 0 upto scan.forwardedPointers.count() 'eachForward'
 		let callee = try scan.forwardedCallees.get(edge) otherwise panic("retainedByACallee: forwardedCallees.get OOB at {edge}")
@@ -1634,7 +1634,7 @@ function assignFrameSlots(func IrFunction, plans RecordPromotionArray)
 	var reserved = 0 as StackSize
 
 	for planIndex in 0 upto plans.count() 'eachPlan'
-		var plan = try plans.get(planIndex) otherwise panic("assignFrameSlots: plans.get OOB at {planIndex}")
+		let plan = try plans.get(planIndex) otherwise panic("assignFrameSlots: plans.get OOB at {planIndex}")
 		plan.slot = (reserved / SpillSlotBytes) as SpillSlot
 		reserved = reserved + (plan.sizeBytes as StackSize)
 	end 'eachPlan'
@@ -1667,17 +1667,17 @@ end 'recordIsFrameLocal'
 // allocation to free, and `__mm_decref` on a frame address would hand live stack memory to the slab's free
 // (and fill it, in a `--poison-freed` build).
 function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, plans RecordPromotionArray)
-	var mint = ValueMinter.resuming(valueBound)
+	let mint = ValueMinter.resuming(valueBound)
 
 	// ⚠ THE PLANS ARE KEYED BY OP INDEX, not scanned per op. Walked as a list inside the rebuild, the
 	// rewrite is Θ(ops × promotions) — and a function that builds many records is exactly the one with many
 	// promotions, so the two factors grow together.
-	var planAtOp = PlanIndexByOpIndex.create()
+	let planAtOp = PlanIndexByOpIndex.create()
 
 	// A dense column over the function's value space, NOT a `StdValueUseSet`: that type's whole contract is
 	// "the ids a function's ops READ" (it is `collectStdOpUses`' output), and this is a different question —
 	// which records this pass is promoting. Same representation, and `valueBound` is already in hand.
-	var promoted = FixedBoolArray.create(valueBound)
+	let promoted = FixedBoolArray.create(valueBound)
 
 	for planIndex in 0 upto plans.count() 'eachPlan'
 		let plan = try plans.get(planIndex) otherwise panic("applyPromotions: plans.get OOB at {planIndex}")
@@ -1686,8 +1686,8 @@ function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, 
 	end 'eachPlan'
 
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("applyPromotions: blockRef from func.blockRefs not in module.blocks")
-		var rebuilt = OpIndexArray.create(0)
+		let block = try module.blocks.get(blockRef) otherwise panic("applyPromotions: blockRef from func.blockRefs not in module.blocks")
+		let rebuilt = OpIndexArray.create(0)
 
 		for opIdx in block.bodyOps() 'eachRef'
 			appendRewrittenOp(module, opIdx: opIdx, plans: plans, planAtOp: planAtOp, promoted: promoted, mint: mint, rebuilt: rebuilt)

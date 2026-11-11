@@ -24,7 +24,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(0, value: 11)
 	v.set(1, value: 22)
 	let seen = try v.managed.slice(0, 3) otherwise panic("slice: 0..3 of a three-element fixed array")
@@ -54,7 +54,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 
 function main() returns ExitCode
-	var v = Vec3.create()
+	let v = Vec3.create()
 	v.set(0, value: 1)
 	let seen = try v.managed.slice(0, 3) otherwise panic("slice: 0..3 of a three-element fixed array")
 	v.set(1, value: 2)
@@ -82,7 +82,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray from [11, 22, 33]
+	let arr = IntArray from [11, 22, 33]
 	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
 	try arr.set(0, value: 99) otherwise panic("set: index 0 of a length-3 array")
 	try arr.set(1, value: 98) otherwise panic("set: index 1 of a length-3 array")
@@ -109,8 +109,8 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray from [11, 22, 33]
-	var sub = try arr.slice(1, endIndex: 3) otherwise panic("slice: 1..3 of a length-3 array")
+	let arr = IntArray from [11, 22, 33]
+	let sub = try arr.slice(1, endIndex: 3) otherwise panic("slice: 1..3 of a length-3 array")
 	try sub.set(0, value: 77) otherwise panic("set: index 0 of a length-2 view")
 	try sub.set(1, value: 78) otherwise panic("set: index 1 of a length-2 view")
 
@@ -134,7 +134,7 @@ A byte string literal is an immortal image, written only through its `.clone()`.
 reads the copy back, so a write that reached the image would show on the second call (or fault).
 ```maxon
 function bumped() returns Byte
-	var text = b"abc".clone()
+	let text = b"abc".clone()
 	let before = try text.get(0) otherwise panic("get: index 0 of a three-byte literal")
 	try text.set(0, value: 90) otherwise panic("set: index 0 of a three-byte literal")
 	let after = try text.get(0) otherwise panic("get: index 0 of a three-byte literal")
@@ -162,14 +162,14 @@ end 'main'
 ```
 
 <!-- test: a-proven-store-into-a-literal-fixed-array-never-reaches-its-image -->
-A fixed array built from a literal may be an immortal image. The proven store gives it a private buffer,
-and a second call over the same literal still reads the original.
+A fixed array built from a literal may be an immortal image. The clone has a private buffer that the proven
+stores write, and a second call over the same literal still reads the original.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = FixedArray with 3 Int
 
 function bumped() returns Int
-	var v = Vec3 from [1, 2, 3]
+	let v = (Vec3 from [1, 2, 3]).clone()
 	let before = v.get(0)
 	v.set(0, value: 10)
 	v.set(1, value: 20)
@@ -204,7 +204,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	var refused = false
 
 	try arr.set(0, value: 5) otherwise 'outOfRange'
@@ -230,7 +230,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray from [11, 22, 33]
+	let arr = IntArray from [11, 22, 33]
 	let sub = try arr.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
 	let before = arr.capacity()
 	var refused = false
@@ -259,7 +259,7 @@ overwrites. A leak is exit 101.
 typealias NameArray = Array with String
 
 function main() returns ExitCode
-	var names = NameArray from ["alpha", "beta", "gamma"]
+	let names = NameArray from ["alpha", "beta", "gamma"]
 	try names.set(0, value: "one") otherwise panic("set: index 0 of a length-3 array")
 	try names.set(1, value: "two") otherwise panic("set: index 1 of a length-3 array")
 	try names.set(0, value: "three") otherwise panic("set: index 0 of a length-3 array")
@@ -284,7 +284,7 @@ The same, with the owner viewed: the runtime detaches and releases the occupant 
 typealias NameArray = Array with String
 
 function main() returns ExitCode
-	var names = NameArray from ["alpha", "beta", "gamma"]
+	let names = NameArray from ["alpha", "beta", "gamma"]
 	let sub = try names.slice(0, endIndex: 2) otherwise panic("slice: 0..2 of a length-3 array")
 	try names.set(0, value: "one") otherwise panic("set: index 0 of a length-3 array")
 
@@ -330,7 +330,7 @@ function mix(planes Planes)
 end 'mix'
 
 function main() returns ExitCode
-	var planes = Planes.create()
+	let planes = Planes.create()
 	planes.set(0, value: 1)
 	planes.set(1, value: 2)
 	planes.set(2, value: 4)
@@ -357,7 +357,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
+	let arr = IntArray.create(0)
 	var refused = false
 
 	try arr.managed.set(0, value: 5) otherwise 'outOfRange'
@@ -384,8 +384,8 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.create(0)
-	var sub = try arr.slice(0, endIndex: 0) otherwise panic("slice: 0..0 of an empty array")
+	let arr = IntArray.create(0)
+	let sub = try arr.slice(0, endIndex: 0) otherwise panic("slice: 0..0 of an empty array")
 	var refused = false
 
 	try sub.managed.set(0, value: 5) otherwise 'outOfRange'

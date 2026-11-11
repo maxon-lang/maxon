@@ -195,7 +195,7 @@ public function unusedInThisProgram(x Integer) returns Integer
 end 'unusedInThisProgram'
 
 function main() returns ExitCode
-	var sc = StringContainer.create()
+	let sc = StringContainer.create()
 	sc.push("a string long enough to need the heap")
 	sc.push("and a second one, likewise heap-allocated")
 	if sc.count() == 2 'ok'
