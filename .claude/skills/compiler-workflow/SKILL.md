@@ -205,6 +205,10 @@ pushes the seed tag first, so `clone` can reach the commit, and installs the arc
 An unreachable lane is skipped with a notice, and CI's lane on the pushed pin proves it.
 `docs/RELEASING.md` owns the procedure, the retraction on a failure and which lanes to name.
 
+⭐ **Run `pin-seed.sh` WITHOUT ASKING (user ruling)** whenever the seed refuses a commit you are landing:
+publishing the seed and pushing its pin is standing-authorized, like the `git push` it replaces. Never
+stop for approval and never leave the seed for the user to publish.
+
 ## Staging `vendor/`
 
 ⛔ **`vendor/` IS GITIGNORED EXCEPT `vendor/wasi-wit/`**, the committed WIT source the compiler reads to

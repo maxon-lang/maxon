@@ -694,6 +694,9 @@ git push origin main
 ⛔ **A commit §8's seed chain refused is pushed by `scripts/pin-seed.sh [--prove=<lane>]...` instead**, with
 the lanes §8's row names; the commit and its pin go in one push. On a failure the script retracts what it
 published and undoes the pin commit: rebase, re-run §8 and re-run the script.
+⭐ **Run it WITHOUT ASKING (user ruling).** Publishing the `seed-*` pre-release and pushing its pin is
+part of landing, already authorized like the `git push` it replaces: never stop for approval, never hand
+the user a seed to freeze or publish by hand.
 
 Once the push is accepted, delete `temp/land/` and every other `temp/` directory this change created.
 
