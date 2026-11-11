@@ -229,18 +229,18 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 		throw unidentifiablePathFailure(e)
 	end 'unidentifiableImage'
 
-	let imagePath = stagedImagePath(outputPath)
-	try requireOutputStageable(project, staged: imagePath, outputPath: outputPath, rebuildsItself: rebuildsItself)
+	let staging = StagingDirectory.beside(outputPath)
+	try requireOutputStageable(project, staging: staging, outputPath: outputPath, rebuildsItself: rebuildsItself)
 
 	recordPhase(project, phase: CompilePhase.prepareOutput, probe: outputProbe)
 
-	let built = try buildStagedImage(project, tools: writerTools, staged: imagePath, outputPath: outputPath, emitIr: emitIr, debugInfo: debugInfo) otherwise (e) 'buildFailed'
-		abandonStagedBuild(imagePath, outputPath: outputPath, rebuildsItself: rebuildsItself)
+	let built = try buildStagedImage(project, tools: writerTools, staged: staging.image, outputPath: outputPath, emitIr: emitIr, debugInfo: debugInfo) otherwise (e) 'buildFailed'
+		abandonStagedBuild(staging, outputPath: outputPath, rebuildsItself: rebuildsItself)
 		throw e
 	end 'buildFailed'
 
 	let publishProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
-	let sidecar = try publishStagedImage(project, staged: imagePath, outputPath: outputPath, rebuildsItself: rebuildsItself, stagedSidecar: built.sidecar)
+	let sidecar = try publishStagedImage(project, staging: staging, outputPath: outputPath, rebuildsItself: rebuildsItself, stagedSidecar: built.sidecar)
 	recordPhaseWithItsLog(project, phase: CompilePhase.prepareOutput, probe: publishProbe)
 
 	// Stamp the totals BEFORE anything reads them (every share divides by them, and both
@@ -429,17 +429,17 @@ union VacatedOutput
 	movedTo(location FilePath)
 end 'VacatedOutput'
 
-function publishStagedImage(project Project, staged FilePath, outputPath FilePath, rebuildsItself bool, stagedSidecar SidecarOutcome) returns SidecarOutcome throws CompileError
+function publishStagedImage(project Project, staging StagingDirectory, outputPath FilePath, rebuildsItself bool, stagedSidecar SidecarOutcome) returns SidecarOutcome throws CompileError
 	// Only a compiler's slot is swept: an ordinary output never lists its directory, and spec-test and the
 	// run cache publish many outputs into one.
 	if rebuildsItself or File.exists(siblingImagePath(outputPath, infix: PreviousImageSuffix)) 'aSlot'
 		sweepRetiredImages(outputPath.anchoredAt(Directory.currentPath()), numberedSpelling: rebuildsItself)
 	end 'aSlot'
 
-	let vacated = try vacateOutput(project, staged: staged, outputPath: outputPath, rebuildsItself: rebuildsItself)
+	let vacated = try vacateOutput(project, staging: staging, outputPath: outputPath, rebuildsItself: rebuildsItself)
 
-	try File.rename(staged, to: outputPath) otherwise 'unplaceable'
-		try refuseUnplaceableImage(project, staged: staged, outputPath: outputPath, vacated: vacated)
+	try File.rename(staging.image, to: outputPath) otherwise 'unplaceable'
+		try refuseUnplaceableImage(project, staging: staging, outputPath: outputPath, vacated: vacated)
 	end 'unplaceable'
 
 	if rebuildsItself 'keepThePreviousSidecar'
@@ -449,9 +449,9 @@ function publishStagedImage(project Project, staged FilePath, outputPath FilePat
 		compilerLogger(CompilerLogGroup.compiler).info("rebuilding this compiler: moved the running image to {previous.toString()}")
 	end 'keepThePreviousSidecar'
 
-	let sidecar = publishDebugSidecar(staged, outputPath: outputPath, stagedSidecar: stagedSidecar)
+	let sidecar = publishDebugSidecar(staging.image, outputPath: outputPath, stagedSidecar: stagedSidecar)
 	discardStaleSideOutputs(outputPath)
-	discardStagingDirectory(staged)
+	discardStagingDirectory(staging)
 
 	return sidecar
 end 'publishStagedImage'
@@ -473,18 +473,18 @@ function publishDebugSidecar(staged FilePath, outputPath FilePath, stagedSidecar
 	return SidecarOutcome.written
 end 'publishDebugSidecar'
 
-function vacateOutput(project Project, staged FilePath, outputPath FilePath, rebuildsItself bool) returns VacatedOutput throws CompileError
+function vacateOutput(project Project, staging StagingDirectory, outputPath FilePath, rebuildsItself bool) returns VacatedOutput throws CompileError
 	if rebuildsItself 'running'
 		try vacateRunningImage(project, outputPath: outputPath) otherwise (e) 'unvacated'
-			discardStagingDirectory(staged)
+			discardStagingDirectory(staging)
 			throw e
 		end 'unvacated'
 
 		return VacatedOutput.movedTo(siblingImagePath(outputPath, infix: PreviousImageSuffix))
 	end 'running'
 
-	return try moveOutputAside(staged, outputPath: outputPath) otherwise 'unmovable'
-		discardStagingDirectory(staged)
+	return try moveOutputAside(staging, outputPath: outputPath) otherwise 'unmovable'
+		discardStagingDirectory(staging)
 
 		reportUnreplaceableOutput(project, outputPath: outputPath, reason: "it could not be moved aside to make way for the new build", likelyCause: MovedAsideRefusedCause)
 		try refuseCompile(project)
@@ -494,29 +494,28 @@ end 'vacateOutput'
 // A rename rather than a delete: Windows lets a running executable be renamed, so an output that is
 // still running does not refuse the build. The aside image stays in the staging directory until
 // nothing runs it, and a later build's sweep removes it.
-function moveOutputAside(staged FilePath, outputPath FilePath) returns VacatedOutput throws FileRenameError
+function moveOutputAside(staging StagingDirectory, outputPath FilePath) returns VacatedOutput throws FileRenameError
 	if not File.exists(outputPath) 'nothingThere'
 		return VacatedOutput.nothingThere
 	end 'nothingThere'
 
-	let stagingDirectory = try staged.parent() otherwise panic("moveOutputAside: a staged image path always has a directory")
-	let aside = stagingDirectory.join(siblingImagePath(outputPath, infix: scratchNameFor(RetiredImageInfix)).filename())
+	let aside = staging.directory().join(siblingImagePath(outputPath, infix: scratchNameFor(RetiredImageInfix)).filename())
 
 	try File.rename(outputPath, to: aside)
 
 	return VacatedOutput.movedTo(aside)
 end 'moveOutputAside'
 
-function refuseUnplaceableImage(project Project, staged FilePath, outputPath FilePath, vacated VacatedOutput) throws CompileError
+function refuseUnplaceableImage(project Project, staging StagingDirectory, outputPath FilePath, vacated VacatedOutput) throws CompileError
 	if restoreVacatedImage(outputPath, vacated: vacated) 'restored'
-		discardStagingDirectory(staged)
+		discardStagingDirectory(staging)
 
 		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "the new build could not be moved into place", likelyCause: PlacementRefusedCause)
 	end 'restored'
 
 	match vacated 'where'
 		nothingThere then panic("refuseUnplaceableImage: a restore that has nothing to move back always succeeds")
-		movedTo(location) then try refuseOutputLeftAside(project, staged: staged, outputPath: outputPath, location: location)
+		movedTo(location) then try refuseOutputLeftAside(project, staged: staging.image, outputPath: outputPath, location: location)
 	end 'where'
 end 'refuseUnplaceableImage'
 
@@ -558,23 +557,58 @@ function stagedImagePath(outputPath FilePath) returns FilePath
 	return beside.join(stagingName).join(name)
 end 'stagedImagePath'
 
-function requireOutputStageable(project Project, staged FilePath, outputPath FilePath, rebuildsItself bool) throws CompileError
-	let stagingDirectory = try staged.parent() otherwise panic("requireOutputStageable: a staged image path always has a directory")
+enum LeftoverReport
+	inUse
+	deniedRemoval
+	unremovable
+end 'LeftoverReport'
+
+typealias LeftoverReportMap = Map with (FilePath, LeftoverReport)
+
+// A `type`, so every sweep of one build shares `reported` and names a refused leftover once. It lives
+// per build, never on `Project`, so a later build names the leftover again.
+type StagingDirectory
+	module let image as FilePath
+	// Holds the kind of report, not only the path: a leftover first noted in use at debug level still
+	// gets its warning when a later sweep finds its removal denied.
+	var reported as LeftoverReportMap
+
+	static function beside(outputPath FilePath) returns StagingDirectory
+		return Self{image: stagedImagePath(outputPath), reported: LeftoverReportMap.create()}
+	end 'beside'
+
+	function directory() returns FilePath
+		return try self.image.parent() otherwise panic("StagingDirectory.directory: a staged image path always has a directory")
+	end 'directory'
+
+	function reportsAnew(leftover FilePath, report LeftoverReport) returns bool
+		if self.reported.contains(leftover) and (try self.reported.get(leftover) otherwise panic("StagingDirectory.reportsAnew: a contained leftover has a report")) == report 'alreadyReported'
+			return false
+		end 'alreadyReported'
+
+		self.reported.upsert(leftover, value: report)
+
+		return true
+	end 'reportsAnew'
+end 'StagingDirectory'
+
+function requireOutputStageable(project Project, staging StagingDirectory, outputPath FilePath, rebuildsItself bool) throws CompileError
+	let stagingDirectory = staging.directory()
 
 	if not rebuildsItself and fileIsReadOnly(outputPath) 'readOnly'
 		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "it is read-only", likelyCause: ReadOnlyOutputCause)
 	end 'readOnly'
 
 	if Directory.exists(stagingDirectory) 'leftover'
-		discardStagingDirectory(staged)
+		discardStagingDirectory(staging)
 	end 'leftover'
 
 	if not Directory.create(stagingDirectory) 'uncreatable'
 		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "the directory {stagingDirectory.toString()} that stages its replacement could not be created", likelyCause: StagingDirectoryCause)
 	end 'uncreatable'
 
-	if File.exists(staged) 'stagedImageStays'
-		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "the image {staged.toString()} an interrupted build left could not be removed", likelyCause: StagingDirectoryCause)
+	if File.exists(staging.image) 'stagedImageStays'
+		try refuseUnreplaceableOutput(project, outputPath: outputPath, reason: "the image {staging.image.toString()} an interrupted build left could not be removed", likelyCause: StagingDirectoryCause)
 	end 'stagedImageStays'
 end 'requireOutputStageable'
 
@@ -595,66 +629,74 @@ function hostRefusesToDeleteRunningImages() returns bool
 	end 'os'
 end 'hostRefusesToDeleteRunningImages'
 
-function abandonStagedBuild(staged FilePath, outputPath FilePath, rebuildsItself bool)
+function abandonStagedBuild(staging StagingDirectory, outputPath FilePath, rebuildsItself bool)
 	if not rebuildsItself 'previousProgramIsStale'
-		discardPreviousOutput(staged, outputPath: outputPath)
+		discardPreviousOutput(staging, outputPath: outputPath)
 	end 'previousProgramIsStale'
 
-	discardStagingDirectory(staged)
+	discardStagingDirectory(staging)
 end 'abandonStagedBuild'
 
-function discardStagingDirectory(staged FilePath)
-	let stagingDirectory = try staged.parent() otherwise panic("discardStagingDirectory: a staged image path always has a directory")
-
-	for leftover in Directory.removeTree(stagingDirectory) 'eachLeftover'
-		reportLeftoverInStaging(leftover, staged: staged)
+function discardStagingDirectory(staging StagingDirectory)
+	for leftover in Directory.removeTree(staging.directory()) 'eachLeftover'
+		reportLeftoverInStaging(leftover, staging: staging)
 	end 'eachLeftover'
 end 'discardStagingDirectory'
 
-function reportLeftoverInStaging(leftover FilePath, staged FilePath)
+function reportLeftoverInStaging(leftover FilePath, staging StagingDirectory)
 	try File.delete(leftover) otherwise (why) 'stays'
-		reportLeftoverThatStays(leftover, why: why, staged: staged)
+		if why == FileDeleteError.notFound 'gone'
+			return
+		end 'gone'
+
+		let report = leftoverReport(leftover, why: why, staging: staging)
+
+		if staging.reportsAnew(leftover, report: report) 'unreported'
+			logLeftoverReport(leftover, report: report)
+		end 'unreported'
 	end 'stays'
 end 'reportLeftoverInStaging'
 
-function reportLeftoverThatStays(leftover FilePath, why FileDeleteError, staged FilePath)
+function leftoverReport(leftover FilePath, why FileDeleteError, staging StagingDirectory) returns LeftoverReport
 	match why 'why'
-		notFound then return
-		busy then reportLeftoverInUse(leftover)
-		accessDenied then reportLeftoverDeniedRemoval(leftover, staged: staged)
-		failed then compilerLogger(CompilerLogGroup.compiler).warn("{leftover.toString()} could not be removed from the staging directory: remove it by hand")
+		notFound then panic("leftoverReport: a leftover that is already gone has nothing to report")
+		busy then return LeftoverReport.inUse
+		accessDenied then return deniedRemovalReport(leftover, staging: staging)
+		failed then return LeftoverReport.unremovable
 	end 'why'
-end 'reportLeftoverThatStays'
+end 'leftoverReport'
 
-function isAsideImage(leftover FilePath, staged FilePath) returns bool
-	let stagingDirectory = try staged.parent() otherwise panic("isAsideImage: a staged image path always has a directory")
+function isAsideImage(leftover FilePath, staging StagingDirectory) returns bool
 	let directory = try leftover.parent() otherwise panic("isAsideImage: a leftover of the staging directory always has a directory")
 	let name = leftover.filename()
 
-	if not directory.equals(stagingDirectory) 'nested'
+	if not directory.equals(staging.directory()) 'nested'
 		return false
 	end 'nested'
 
-	match parsedScratchName(name, family: retiredImageFamily(staged.stem())) 'parsed'
-		minted(retiredStem, _) then return name.replaceFirst(retiredStem, with: "") == staged.fileExtension()
+	match parsedScratchName(name, family: retiredImageFamily(staging.image.stem())) 'parsed'
+		minted(retiredStem, _) then return name.replaceFirst(retiredStem, with: "") == staging.image.fileExtension()
 		unminted then return false
 	end 'parsed'
 end 'isAsideImage'
 
 // Windows denies deleting a running image and a read-only file alike; the read-only test keeps the
 // second from being reported as in use and so never named to the user.
-function reportLeftoverDeniedRemoval(leftover FilePath, staged FilePath)
-	if hostRefusesToDeleteRunningImages() and isAsideImage(leftover, staged: staged) and not fileIsReadOnly(leftover) 'runningImage'
-		reportLeftoverInUse(leftover)
-		return
+function deniedRemovalReport(leftover FilePath, staging StagingDirectory) returns LeftoverReport
+	if hostRefusesToDeleteRunningImages() and isAsideImage(leftover, staging: staging) and not fileIsReadOnly(leftover) 'runningImage'
+		return LeftoverReport.inUse
 	end 'runningImage'
 
-	compilerLogger(CompilerLogGroup.compiler).warn("{leftover.toString()} could not be removed from the staging directory and is no output this build moved aside: remove it by hand, and clear its read-only flag or the directory's permissions first if they forbid it")
-end 'reportLeftoverDeniedRemoval'
+	return LeftoverReport.deniedRemoval
+end 'deniedRemovalReport'
 
-function reportLeftoverInUse(leftover FilePath)
-	compilerLogger(CompilerLogGroup.compiler).debug("{leftover.toString()} is still in use; the next build of this output removes it")
-end 'reportLeftoverInUse'
+function logLeftoverReport(leftover FilePath, report LeftoverReport)
+	match report 'report'
+		inUse then compilerLogger(CompilerLogGroup.compiler).debug("{leftover.toString()} is still in use; the next build of this output removes it")
+		deniedRemoval then compilerLogger(CompilerLogGroup.compiler).warn("{leftover.toString()} could not be removed from the staging directory and is no output this build moved aside: remove it by hand, and clear its read-only flag or the directory's permissions first if they forbid it")
+		unremovable then compilerLogger(CompilerLogGroup.compiler).warn("{leftover.toString()} could not be removed from the staging directory: remove it by hand")
+	end 'report'
+end 'logLeftoverReport'
 
 function retireHeldImage(project Project, held FilePath, outputPath FilePath) throws CompileError
 	let retired = siblingImagePath(outputPath, infix: scratchNameFor(RetiredImageInfix))
@@ -753,11 +795,11 @@ end 'moveDebugSidecar'
 // A failed compile takes the previous output out of the slot. Anything that checks the BINARY rather
 // than the build's exit code would otherwise get a confident wrong answer from stale code, which is the
 // one thing this compiler must never hand anybody.
-function discardPreviousOutput(staged FilePath, outputPath FilePath)
+function discardPreviousOutput(staging StagingDirectory, outputPath FilePath)
 	discardStaleSideOutputs(outputPath)
 	discardDebugInfoSidecar(outputPath)
 
-	_ = try moveOutputAside(staged, outputPath: outputPath) otherwise 'stays'
+	_ = try moveOutputAside(staging, outputPath: outputPath) otherwise 'stays'
 		compilerLogger(CompilerLogGroup.compiler).error("the build failed and the previous output {outputPath.toString()} could not be moved out of the way, so it is stale and will answer anything you run next")
 		return
 	end 'stays'
