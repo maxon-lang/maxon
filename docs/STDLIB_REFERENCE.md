@@ -1954,8 +1954,9 @@ ended even when the child itself has already exited. A process started with `run
 process in another session, and everything such a process starts are outside the tree, as is a process
 already reparented to init, as one that double-forked is. On Windows the tree is the child's job object,
 which a process started with `runDetached()` leaves. When the tree cannot be fully ended (on Linux `/proc`
-cannot be read or listed, on macOS `proc_listchildpids` fails, an allocation fails, or the kill of an exited
-child's process group is refused), the deadline throws `treeNotEnded`, after the child itself is reaped. It
+cannot be read or listed, on macOS `proc_listchildpids` fails or a process never confirms its stop, an
+allocation fails, a process in the tree refuses its stop or kill, as one running as another user does, or the
+kill of an exited child's process group is refused), the deadline throws `treeNotEnded`, after the child itself is reaped. It
 carries the output `timeout` carries on the same path and the error code of the step that failed as an
 [`OsErrorCode`](#names-a-library-signature-asks-for), and its reason is
 `timed out after 5000ms, but the child's process tree could not be fully ended: os error <n>`. `deadlineFired()`

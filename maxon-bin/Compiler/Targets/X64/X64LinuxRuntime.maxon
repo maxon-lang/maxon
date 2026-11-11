@@ -3641,6 +3641,20 @@ function x64LinuxEmitStateStoreImm(asm X64RuntimeAsm, stateDisp Imm32, field Imm
 	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: field, reg: X64Register.rax)
 end 'x64LinuxEmitStateStoreImm'
 
+function x64LinuxEmitTreeStop(asm X64RuntimeAsm, errnoHome LinuxErrnoHome)
+	let stopped = asm.newLabel()
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: posixStopSignalNumber(Os.linux))
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: stopped)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: stopped)
+	x64LinuxEmitStashErrno(asm, errnoHome: errnoHome)
+
+	asm.placeLabel(stopped)
+end 'x64LinuxEmitTreeStop'
+
 function x64LinuxEmitTreeMembership(asm X64RuntimeAsm, stateDisp Imm32, found BlockId, missing BlockId)
 	let walk = asm.newLabel()
 
@@ -3768,7 +3782,6 @@ function x64LinuxEmitProcWalk(asm X64RuntimeAsm, kind PosixProcWalkKind, errnoHo
 	let direntDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotDirents, slotCount: ProcWalkDirentSlots)
 	let statDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotStat, slotCount: ProcWalkStatSlots)
 	let pathDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotPath, slotCount: ProcWalkPathSlots)
-	let stopSignal = posixStopSignalNumber(Os.linux)
 	let round = asm.newLabel()
 	let nextEntry = asm.newLabel()
 	let haveEntry = asm.newLabel()
@@ -3942,8 +3955,7 @@ function x64LinuxEmitProcWalk(asm X64RuntimeAsm, kind PosixProcWalkKind, errnoHo
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdi, wide: false, index: X64Register.r8, indexScale: MemoryIndexScale.byFour)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r8, imm: 1)
 	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateCount, reg: X64Register.r8)
-	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: stopSignal)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
+	x64LinuxEmitTreeStop(asm, errnoHome: errnoHome)
 
 	if kind == PosixProcWalkKind.descendants 'recordName'
 		x64LinuxEmitRecordComm(asm, stateDisp: stateDisp, statDisp: statDisp)
@@ -4188,7 +4200,6 @@ end 'buildX64LinuxProcAwaitEndedChunk'
 function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(ProcWalkSlotsEnd)
 	let stateDisp = x64LinuxBufferDisp(asm, firstSlot: ProcWalkSlotState, slotCount: PosixTreeStateWords)
-	let stopSignal = posixStopSignalNumber(Os.linux)
 
 	let procUnreadable = asm.newLabel()
 	let sessionUnknown = asm.newLabel()
@@ -4213,8 +4224,7 @@ function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns Functi
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdi, wide: false)
 	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateCount, value: 1)
 	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateCapacity, value: PosixTreeInitialEntries as MachineWord)
-	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: stopSignal)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
+	x64LinuxEmitTreeStop(asm, errnoHome: errnoHome)
 
 	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: ProcWalkSlotRoot)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetsid)

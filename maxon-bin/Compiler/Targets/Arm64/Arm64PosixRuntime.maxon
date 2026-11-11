@@ -1521,10 +1521,28 @@ function posixTreeStopSignal(lane PosixTreeLane) returns MachineWord
 	end 'lane'
 end 'posixTreeStopSignal'
 
-export function arm64PosixEmitTreeStop(asm Arm64RuntimeAsm, kill PosixHostCall, lane PosixTreeLane, pidSlot StackSize)
+export function arm64PosixEmitTreeStopOrBranchIfRefused(asm Arm64RuntimeAsm, kill PosixHostCall, lane PosixTreeLane, pidSlot StackSize, refused BlockId)
+	let stopped = asm.newLabel()
+
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: pidSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: posixTreeStopSignal(lane))
-	arm64PosixEmitHostCall(asm, call: kill)
+	arm64PosixEmitHostCallUnstashedErrno(asm, call: kill)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: stopped)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: stopped)
+	arm64PosixEmitStashUnstashedFailure(asm, call: kill)
+	arm64EmitBranchTo(asm, label: refused)
+
+	asm.placeLabel(stopped)
+end 'arm64PosixEmitTreeStopOrBranchIfRefused'
+
+export function arm64PosixEmitTreeStop(asm Arm64RuntimeAsm, kill PosixHostCall, lane PosixTreeLane, pidSlot StackSize)
+	let continued = asm.newLabel()
+
+	arm64PosixEmitTreeStopOrBranchIfRefused(asm, kill: kill, lane: lane, pidSlot: pidSlot, refused: continued)
+
+	asm.placeLabel(continued)
 end 'arm64PosixEmitTreeStop'
 
 function arm64PosixEmitSessionOf(asm Arm64RuntimeAsm, lane PosixTreeLane, pidSlot StackSize)
@@ -1593,6 +1611,11 @@ export function arm64PosixEmitTreeMarkFailed(asm Arm64RuntimeAsm, stateSlot Stac
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusFailed as MachineWord)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x4, byteOffset: PosixTreeStateStatus as MachineWord)
 end 'arm64PosixEmitTreeMarkFailed'
+
+function arm64PosixEmitInlineTreeMarkFailed(asm Arm64RuntimeAsm, stateSlot StackSize)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusFailed as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: stateSlot + PosixTreeFieldStatus)
+end 'arm64PosixEmitInlineTreeMarkFailed'
 
 export function arm64PosixEmitTreeAppend(asm Arm64RuntimeAsm, lane PosixTreeLane, kind PosixProcWalkKind, stateSlot StackSize, pidSlot StackSize, refused BlockId)
 	let hasRoom = asm.newLabel()
@@ -1688,8 +1711,7 @@ function arm64PosixEmitTreeKillThenAwaitEnded(asm Arm64RuntimeAsm, kill PosixHos
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: -1)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcAwaitEndedName)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: release)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusFailed as MachineWord)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: stateSlot + PosixTreeFieldStatus)
+	arm64PosixEmitInlineTreeMarkFailed(asm, stateSlot: stateSlot)
 	arm64EmitBranchTo(asm, label: release)
 end 'arm64PosixEmitTreeKillThenAwaitEnded'
 
@@ -1809,7 +1831,11 @@ end 'buildArm64PosixProcAwaitEndedChunk'
 //
 // The table grows instead of capping: a cap would turn an ordinary wide tree into a failed
 // deadline. A failed listing or allocation marks the walk failed, stashing the failing step's
-// errno, and the answer is `TerminateTreeIncomplete`.
+// errno, and the answer is `TerminateTreeIncomplete`. A member that refuses its stop (`EPERM`) has
+// its errno stashed and the walk goes on, so the rest of the tree still ends; the member's survival
+// is `mrt_host_proc_await_ended`'s to report. On macOS a member that never confirms its stop marks
+// the walk failed once the pass is done: it may have forked a child the walk missed, which nothing
+// later would see.
 export function buildArm64PosixProcTreeKillChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
 	let SlotState = 0
 	let SlotRoot = SlotState + PosixTreeStateWords
@@ -1867,13 +1893,11 @@ export function buildArm64PosixProcTreeKillChunk(kill PosixHostCall, lane PosixT
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(sessionUnreadable)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusFailed as MachineWord)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotState + PosixTreeFieldStatus)
+	arm64PosixEmitInlineTreeMarkFailed(asm, stateSlot: SlotState)
 	arm64EmitBranchTo(asm, label: finish)
 
 	asm.placeLabel(allocationFailed)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusFailed as MachineWord)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotState + PosixTreeFieldStatus)
+	arm64PosixEmitInlineTreeMarkFailed(asm, stateSlot: SlotState)
 
 	asm.placeLabel(answered)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotState + PosixTreeFieldStatus)
@@ -2103,8 +2127,7 @@ export function buildArm64PosixProcDescendantsChunk(kill PosixHostCall, lane Pos
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(allocationFailed)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixTreeStatusFailed as MachineWord)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotState + PosixTreeFieldStatus)
+	arm64PosixEmitInlineTreeMarkFailed(asm, stateSlot: SlotState)
 
 	asm.placeLabel(answered)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotState + PosixTreeFieldStatus)

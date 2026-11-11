@@ -1469,10 +1469,7 @@ function buildArm64PreemptMachineChunk(os Os) returns FunctionCodeChunk
 	return asm.finishFunction(PreemptMachineName)
 end 'buildArm64PreemptMachineChunk'
 
-let DarwinProcPidtShortBsdInfo = 13
-let DarwinProcBsdShortInfoBytes = 64
 let DarwinProcBsdShortInfoSlots = (DarwinProcBsdShortInfoBytes + SpillSlotBytes - 1) / SpillSlotBytes
-let DarwinProcBsdShortInfoFlagsOffset = 32
 let DarwinProcFlagTraced = 2
 let PreemptFrameSlots = 2
 
@@ -1506,12 +1503,7 @@ function emitArm64DarwinDeclineWhileTraced(asm Arm64RuntimeAsm, infoSlot StackSi
 	let untraced = asm.newLabel()
 
 	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.getpid)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinProcPidtShortBsdInfo)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
-	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: infoSlot)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: DarwinProcBsdShortInfoBytes as MachineWord)
-	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.procPidinfo)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: DarwinProcBsdShortInfoBytes as Imm32)
+	arm64DarwinEmitProcPidinfo(asm, flavor: DarwinProcPidtShortBsdInfo, argument: 0, infoSlot: infoSlot, bytes: DarwinProcBsdShortInfoBytes)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: untraced)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: infoSlot)
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x1, byteOffset: DarwinProcBsdShortInfoFlagsOffset)
