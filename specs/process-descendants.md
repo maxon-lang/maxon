@@ -192,6 +192,64 @@ end 'main'
 armed=0 ran=true found=0
 ```
 
+<!-- test: process-descendants.a-child-that-has-signalled-is-a-descendant-until-it-ends -->
+<!-- process: own -->
+<!-- unsupported-targets: wasm32-wasi -->
+A child that removes a flag file and only then lingers has signalled, not ended: it is still running and still
+a descendant. `Process.endDescendants()` lists it and answers once it has ended.
+```maxon
+let FlagName = "process-descendants-signalled-child.flag"
+
+function main() returns ExitCode
+	let flag = try FilePath.from(FlagName) otherwise return 2
+
+	try File.writeText(flag, content: "go") otherwise return 3
+
+	#if os(Windows)
+	var config = Configuration.create(Executable.name("cmd"))
+	config.arguments.push("/c")
+	config.arguments.push("del")
+	config.arguments.push(FlagName)
+	config.arguments.push("&")
+	config.arguments.push("ping")
+	config.arguments.push("-n")
+	config.arguments.push("30")
+	config.arguments.push("127.0.0.1")
+	config.arguments.push(">nul")
+	#else
+	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise return 4))
+	config.arguments.push("-c")
+	config.arguments.push("rm -f {FlagName}; sleep 30")
+	#endif
+
+	let armed = Process.endDescendants()
+	let pid = try config.runDetached() otherwise return 5
+
+	while File.exists(flag) 'childRemovesFlag'
+		sleep(20)
+	end 'childRemovesFlag'
+
+	let aliveAtSignal = Process.isAlive(pid)
+	let found = Process.endDescendants()
+	var listed = false
+
+	for entry in found 'eachEntry'
+		if entry.pid == pid 'ours'
+			listed = true
+		end 'ours'
+	end 'eachEntry'
+
+	print("armed={armed.count()} aliveAtSignal={aliveAtSignal} listed={listed} ended={not Process.isAlive(pid)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+armed=0 aliveAtSignal=true listed=true ended=true
+```
+
 <!-- test: process-descendants.an-ended-detached-child-is-not-listed -->
 <!-- process: own -->
 <!-- unsupported-targets: wasm32-wasi -->

@@ -296,7 +296,8 @@ creates the flag only after `parkAndDrop` has returned and dropped `s`. Scope ex
 the `waiting` arm takes it off that source and RENOUNCES it, so the thread resumes, gives the source back,
 closes the child's handle (abandon the WAIT, do not kill the child) and unwinds its own frame. The abandoned
 child runs to completion independently, deleting the flag as it leaves; the program exits promptly with 42 and
-the live count balances to zero.
+the live count balances to zero. `main` ends by calling `Process.endDescendants()`: the flag's removal is the
+child's last signal and not its end, and a case that abandoned its child holds no pid to poll `Process.isAlive` with.
 
 ⚠ **`s` MUST BE BOUND.** `_ = async slowProc()` discards the promise at its own statement, before `main`
 ever parks: `__gt_spawn` → `__gt_ready` → `__gt_promise_drop` run back to back, so `slowProc` never runs,
@@ -347,6 +348,8 @@ function main() returns ExitCode
 		sleep(20)
 	end 'childRemovesFlag'
 
+	_ = Process.endDescendants()
+
 	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -361,7 +364,9 @@ typealias Integer = int(i64.min to i64.max)
 `parked-subprocess-drop-cancel` on the POSIX lanes, where the child is a `/bin/sh -c` loop that exits only once a
 flag file exists, and so really does outlive the `await` however slow the host is: `main` creates the flag only
 after `parkAndDrop` has returned and dropped `s`. The road is the same one: a child park is a poll source here
-too, so the `waiting` arm renounces rather than freeing the stack under a suspended thread.
+too, so the `waiting` arm renounces rather than freeing the stack under a suspended thread. `main` ends by calling
+`Process.endDescendants()`: the flag's removal is the child's last signal and not its end, and a case that abandoned
+its child holds no pid to poll `Process.isAlive` with.
 ```maxon
 
 let flagName = "async-promise-drop-posix-subprocess-drop.flag"
@@ -403,6 +408,8 @@ function main() returns ExitCode
 		sleep(20)
 	end 'childRemovesFlag'
 
+	_ = Process.endDescendants()
+
 	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -424,6 +431,9 @@ not a wrong answer, which is why the symptom is an exit code no arithmetic in th
 ⚠ **`parked-subprocess-drop-cancel` DOES NOT COVER THIS, AND THE ONE INTERPOLATED `String` IS THE WHOLE
 DIFFERENCE.** Its coroutine holds nothing, so a drop that frees the parked stack and a drop that unwinds it
 answer 42 alike — there is nothing on that stack to strand.
+
+`main` ends by calling `Process.endDescendants()`: the flag's removal is the child's last signal and not its end,
+and a case that abandoned its child holds no pid to poll `Process.isAlive` with.
 `posix-parked-subprocess-drop-reclaims-the-frames-heap` is this case on the POSIX lane.
 ```maxon
 
@@ -468,6 +478,8 @@ function main() returns ExitCode
 		sleep(20)
 	end 'childRemovesFlag'
 
+	_ = Process.endDescendants()
+
 	return code as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -485,7 +497,9 @@ anything can park — so this is the case that actually holds a coroutine parked
 
 A child park is a poll source on this lane too, so the `waiting` arm renounces the thread and it unwinds its
 own frame, releasing the interpolated `String`. A drop that freed the stack the suspended thread sits on would
-strand that `String`, and the leak gate would report **exit 101**.
+strand that `String`, and the leak gate would report **exit 101**. `main` ends by calling
+`Process.endDescendants()`: the flag's removal is the child's last signal and not its end, and a case that abandoned
+its child holds no pid to poll `Process.isAlive` with.
 ```maxon
 
 let flagName = "async-promise-drop-posix-subprocess-heap.flag"
@@ -528,6 +542,8 @@ function main() returns ExitCode
 	while File.exists(flagPath()) 'childRemovesFlag'
 		sleep(20)
 	end 'childRemovesFlag'
+
+	_ = Process.endDescendants()
 
 	return code as ExitCode
 end 'main'

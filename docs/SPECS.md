@@ -504,7 +504,8 @@ the program with `MAXON_TRACK_DESCENDANTS=A<token>` and hands a generated batch 
 that carry its own token; every other line, a child's echoed frame included, is output the case is compared
 on, and the count the program ends with must equal the frames taken out. A process the case waited for has
 ended by then; a case that
-starts a detached child polls `Process.isAlive` until it answers `false`. A host that refuses the tracking
+starts a detached child polls `Process.isAlive` until it answers `false`; a case that holds no pid ends its
+children with `Process.endDescendants()`. A host that refuses the tracking
 ends the program with the fatal `the host refused to track this process's descendants`. On macOS a
 descendant is found through the process tree, through the token in its environment, and through the
 spawns the program recorded; an Apple platform binary two or more generations below a recorded spawn,
