@@ -94,10 +94,26 @@ export type PhaseDelta
 	export function add(other PhaseDelta)
 		self.nanos = self.nanos + other.nanos
 		self.cpuTicks = self.cpuTicks + other.cpuTicks
+		self.addMemory(other)
+	end 'add'
+
+	export function addMemory(other PhaseDelta)
 		self.allocs = self.allocs + other.allocs
 		self.frees = self.frees + other.frees
 		self.bytes = self.bytes + other.bytes
-	end 'add'
+	end 'addMemory'
+
+	export function subtract(inner PhaseDelta)
+		self.nanos = self.nanos - inner.nanos
+		self.cpuTicks = self.cpuTicks - inner.cpuTicks
+		self.subtractMemory(inner)
+	end 'subtract'
+
+	export function subtractMemory(inner PhaseDelta)
+		self.allocs = self.allocs - inner.allocs
+		self.frees = self.frees - inner.frees
+		self.bytes = self.bytes - inner.bytes
+	end 'subtractMemory'
 
 	// This delta MINUS an inner one — the "subtract the inner delta" discipline, applied
 	// to every quantity at once (see `PoolPhaseCosts.recordExcluding`).
@@ -108,13 +124,9 @@ export type PhaseDelta
 	// double-counting, which is the exact defect CompileTimings' header describes. A trap
 	// is the loudest available way to say so.
 	export function minus(inner PhaseDelta) returns PhaseDelta
-		return Self{
-			nanos: self.nanos - inner.nanos,
-			cpuTicks: self.cpuTicks - inner.cpuTicks,
-			allocs: self.allocs - inner.allocs,
-			frees: self.frees - inner.frees,
-			bytes: self.bytes - inner.bytes
-		}
+		var difference = self.clone()
+		difference.subtract(inner)
+		return difference
 	end 'minus'
 end 'PhaseDelta'
 
@@ -164,6 +176,8 @@ export type PhaseProbe
 	export var outerOpen as bool
 	export var outer as CompilePhase
 
+	module let upkeepMark as PhaseDelta
+
 	// Open a bracket, and open the matching TRACE SPAN.
 	//
 	// The span and the counters are opened by the SAME call for the same reason time and memory
@@ -177,7 +191,7 @@ export type PhaseProbe
 	// `elapsed()` has closed the counters, for the same reason. `elapsed()` stays PURE, which is
 	// what lets `compile` reuse one probe as both the `load` bracket and the whole-compile total
 	// without emitting a second, unpaired END.)
-	export static function begin(name TraceName, unit TraceUnit, spans TraceNameArray) returns PhaseProbe
+	export static function begin(name TraceName, unit TraceUnit, spans TraceNameArray, treeLock LockHold) returns PhaseProbe
 		__DebugStream.phaseBegin(name, unit)
 
 		// Recorded OUTSIDE the counters, beside the emission it pairs with, so the span the stack knows
@@ -186,7 +200,10 @@ export type PhaseProbe
 
 		// ⭐ THE PROCESS-WIDE COLUMNS, DELIBERATELY. A trace span is the MAIN THREAD's — the pool's workers
 		// open none (see `beginCounters`) — so this bracket is the one that must agree with the run total.
-		return Self.openOn(CounterSource.processWide, opensSpan: true)
+		var probe = Self.openOn(CounterSource.processWide, opensSpan: true)
+		treeLock.markUpkeep(probe.upkeepMark)
+
+		return probe
 	end 'begin'
 
 	// ⭐ **THE COUNTERS ALONE — no trace span, and therefore no `Project` and no span stack.**
@@ -208,7 +225,7 @@ export type PhaseProbe
 	end 'beginProcessWideCounters'
 
 	static function openOn(source CounterSource, opensSpan bool) returns PhaseProbe
-		var probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source, opensSpan: opensSpan, outerOpen: false, outer: CompilePhase.load}
+		var probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source, opensSpan: opensSpan, outerOpen: false, outer: CompilePhase.load, upkeepMark: PhaseDelta.zero()}
 		probe.readCounters()
 		return probe
 	end 'openOn'
@@ -244,7 +261,7 @@ export type PhaseProbe
 	// trace shows and the row the timing table shows can never disagree about which phase it is.
 	export static function beginPhase(project Project, phase CompilePhase) returns PhaseProbe
 		if not project.allocationsByTag 'untallied'
-			return Self.begin(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans)
+			return Self.begin(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans, treeLock: project.session.treeLock)
 		end 'untallied'
 
 		project.memory.allocTally.settleInnermost()
@@ -253,7 +270,7 @@ export type PhaseProbe
 		let outer = project.memory.allocTally.innermost
 		project.memory.allocTally.enter(phase)
 
-		var probe = Self.begin(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans)
+		var probe = Self.begin(compilePhaseName(phase), unit: project.traceUnit, spans: project.openPhaseSpans, treeLock: project.session.treeLock)
 		probe.outerOpen = outerOpen
 		probe.outer = outer
 
@@ -350,6 +367,7 @@ export function recordPhaseExcluding(project Project, phase CompilePhase, probe 
 end 'recordPhaseExcluding'
 
 function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta, probe PhaseProbe)
+	project.session.treeLock.excludeUpkeepSince(probe.upkeepMark, delta: delta)
 	project.timings.addPhaseCost(phase, nanos: delta.nanos, cpuTicks: delta.cpuTicks)
 	project.memory.addPhase(phase, delta: delta)
 
@@ -372,8 +390,7 @@ function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta,
 	// anywhere, which is exactly what a second command must be allowed to conclude — and the write
 	// itself is throttled to one every few seconds, so the per-phase call costs a clock read (see
 	// `LockHold.touch`). The register allocator's own per-FUNCTION probes deliberately do not ride
-	// this: they go through `addRegAllocDelta`, and one heartbeat per compile phase is already
-	// twelve times finer than the window it feeds.
+	// this: they go through `addRegAllocDelta`, which touches nothing.
 	project.session.treeLock.touch()
 end 'recordPhaseDelta'
 

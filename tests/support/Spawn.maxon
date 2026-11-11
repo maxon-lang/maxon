@@ -25,20 +25,34 @@ let PosixYear2000Stamp = "200001010000"
 public let NoTimeoutMs = 0 as DurationMs
 public let CompilerUnderTestName = "the compiler under test"
 
-public function spawnIn(executable Executable, arguments StringArray, staged FilePath, what String, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput
+public function runIn(executable Executable, arguments StringArray, staged FilePath, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput throws SubprocessError
 	var config = Configuration.create(executable, workingDirectory: staged)
 	config.arguments = arguments.clone()
 	config.environment = environment
 	config.standardInput = standardInput
 	config.timeoutMs = timeoutMs
 
-	return try config.run() otherwise (e) 'spawnFailed'
-		panic("the gate could not run — could not spawn {what} ({e.displayReason()}).")
+	return try config.run()
+end 'runIn'
+
+public function spawnFailureMessage(what String, failure SubprocessError) returns String
+	return "the gate could not run — could not spawn {what} ({failure.displayReason()})."
+end 'spawnFailureMessage'
+
+public function spawnIn(executable Executable, arguments StringArray, staged FilePath, what String, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput
+	return try runIn(executable, arguments: arguments, staged: staged, environment: environment, standardInput: standardInput, timeoutMs: timeoutMs) otherwise (e) 'spawnFailed'
+		panic("{spawnFailureMessage(what, failure: e)}")
 	end 'spawnFailed'
 end 'spawnIn'
 
+public function runCompiler(arguments StringArray, staged FilePath = Directory.currentPath(), binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput throws SubprocessError
+	return try runIn(Executable.path(binary), arguments: arguments, staged: staged, environment: environment, standardInput: standardInput, timeoutMs: timeoutMs)
+end 'runCompiler'
+
 public function spawnCompiler(arguments StringArray, staged FilePath = Directory.currentPath(), what String = CompilerUnderTestName, binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit, standardInput InputSource = InputSource.none, timeoutMs DurationMs = NoTimeoutMs) returns CollectedOutput
-	return spawnIn(Executable.path(binary), arguments: arguments, staged: staged, what: what, environment: environment, standardInput: standardInput, timeoutMs: timeoutMs)
+	return try runCompiler(arguments, staged: staged, binary: binary, environment: environment, standardInput: standardInput, timeoutMs: timeoutMs) otherwise (e) 'spawnFailed'
+		panic("{spawnFailureMessage(what, failure: e)}")
+	end 'spawnFailed'
 end 'spawnCompiler'
 
 public function runSystemTool(tool String, arguments StringArray, what String) returns CollectedOutput

@@ -12909,7 +12909,7 @@ export type Project
 	// folds and the initializer parses. A real parse builds its own (`ParseStaging.parseFile`).
 	export var readerAnchors as ParserAnchors
 
-	export static function create(db QueryDatabase, rootPath FilePath, rootIdentity FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, stdlibBodies LibraryBodies, debugStream bool, session CompileSession, entryFunction ByteArray, defines DefineArray, productVersion VersionComponentArray) returns Project
+	export static function create(db QueryDatabase, rootPath FilePath, rootIdentity FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, stdlibBodies LibraryBodies, debugStream bool, session CompileSession, entryFunction ByteArray, defines DefineArray, productVersion VersionComponentArray, openPhaseSpans TraceNameArray) returns Project
 		let interfaces = IrInterfaceMap.create()
 
 		return Self{
@@ -13008,7 +13008,7 @@ export type Project
 			memory: CompileMemory.create(),
 			retiredWorkers: RetiredWorkers.create(),
 			traceUnit: traceUnitOf(rootPath),
-			openPhaseSpans: TraceNameArray.create(0),
+			openPhaseSpans: openPhaseSpans,
 			session: session,
 			keywords: KeywordTable.create(),
 			readerAnchors: ParserAnchors.create()
@@ -13025,13 +13025,13 @@ end 'Project'
 // Every root is made physical here (`identityOfPath`) and the project holds only the physical
 // forms, so the tiers and the root compare under one spelling. Throws when a root cannot be
 // identified.
-export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, debugStream bool, session CompileSession, entryFunction immutable ByteArray = MainFunctionName, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), stdlibBodies LibraryBodies = LibraryBodies.onDemand) returns Project throws CompileError
+export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, debugStream bool, session CompileSession, entryFunction immutable ByteArray = MainFunctionName, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), stdlibBodies LibraryBodies = LibraryBodies.onDemand, openPhaseSpans TraceNameArray = TraceNameArray.create(0)) returns Project throws CompileError
 	let rootIdentity = try identityOfPath(rootPath)
 	let physicalStdlibDir = try identityOfPath(stdlibDir)
 	let physicalRuntimeDir = try identityOfPath(runtimeDir)
 	let physicalScriptlib = try scriptlib.physical()
 
-	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, rootIdentity: rootIdentity, target: target, stdlibDir: physicalStdlibDir, runtimeDir: physicalRuntimeDir, scriptlib: physicalScriptlib, stdlibBodies: stdlibBodies, debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
+	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, rootIdentity: rootIdentity, target: target, stdlibDir: physicalStdlibDir, runtimeDir: physicalRuntimeDir, scriptlib: physicalScriptlib, stdlibBodies: stdlibBodies, debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion, openPhaseSpans: openPhaseSpans)
 end 'createProject'
 
 // Asking a `whileCurrent` interest is a round trip to the stdout writer's service, and the checkpoints

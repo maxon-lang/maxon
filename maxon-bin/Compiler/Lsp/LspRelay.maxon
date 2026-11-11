@@ -132,14 +132,15 @@ module type LspInFlightRequest
 	end 'isShutdown'
 end 'LspInFlightRequest'
 
+// Size and modification time only: `createdTime` is `st_ctime` on Linux, which a chmod moves, and a
+// mode change must not read as a rebuilt compiler.
 module type LspSlotStamp
 	module let exists as bool
 	let size as FileSize
 	let modifiedTime as Timestamp
-	let createdTime as Timestamp
 
 	module static function absent() returns LspSlotStamp
-		return Self{exists: false, size: 0, modifiedTime: 0, createdTime: 0}
+		return Self{exists: false, size: 0, modifiedTime: 0}
 	end 'absent'
 
 	module static function of(slot FilePath) returns LspSlotStamp throws FileInfoError
@@ -156,11 +157,11 @@ module type LspSlotStamp
 			return Self.absent()
 		end 'notAFile'
 
-		return Self{exists: true, size: info.size, modifiedTime: info.modifiedTime, createdTime: info.createdTime}
+		return Self{exists: true, size: info.size, modifiedTime: info.modifiedTime}
 	end 'of'
 
 	module function agrees(other LspSlotStamp) returns bool
-		return self.exists == other.exists and self.size == other.size and self.modifiedTime == other.modifiedTime and self.createdTime == other.createdTime
+		return self.exists == other.exists and self.size == other.size and self.modifiedTime == other.modifiedTime
 	end 'agrees'
 end 'LspSlotStamp'
 

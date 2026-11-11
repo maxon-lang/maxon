@@ -559,6 +559,125 @@ end 'main'
 42
 ```
 
+<!-- test: delete-refuses-an-existing-file-as-failed-and-leaves-it -->
+```maxon
+function main() returns ExitCode
+	let file = FilePath from "test_delete_file_8a4f.txt"
+	try File.writeText(file, content: "x") otherwise return 1
+
+	var answeredAsExpected = false
+
+	try Directory.delete(file) otherwise (refusal) 'refused'
+		if refusal == DirectoryDeleteError.deleteFailed 'asFailed'
+			answeredAsExpected = true
+		end 'asFailed'
+	end 'refused'
+
+	let survived = File.exists(file)
+
+	try File.delete(file) otherwise ignore
+
+	if not survived 'removedAFile'
+		return 2
+	end 'removedAFile'
+
+	if not answeredAsExpected 'wrongAnswer'
+		return 3
+	end 'wrongAnswer'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: delete-answers-not-found-for-a-path-through-a-file -->
+```maxon
+function main() returns ExitCode
+	let file = FilePath from "test_delete_through_file_c93b.txt"
+	try File.writeText(file, content: "x") otherwise return 1
+
+	var answeredAsExpected = false
+
+	try Directory.delete(file.join("below")) otherwise (refusal) 'refused'
+		if refusal == DirectoryDeleteError.notFound 'asNotFound'
+			answeredAsExpected = true
+		end 'asNotFound'
+	end 'refused'
+
+	try File.delete(file) otherwise ignore
+
+	if not answeredAsExpected 'wrongAnswer'
+		return 2
+	end 'wrongAnswer'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: delete-refuses-a-dangling-link-as-failed-and-leaves-it -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A symbolic link whose target is gone is still an entry at its path, so `Directory.delete` of it is `deleteFailed`
+and the link stays: nothing resolves through it, and only a lookup that does not follow links finds it.
+```maxon
+let linkToolTimeoutMs = 30000
+
+function plantLink(link FilePath, target FilePath) returns bool
+	var arguments = StringArray.create(0)
+	arguments.push("-s")
+	arguments.push(target.toString())
+	arguments.push(link.toString())
+
+	let result = try Subprocess.run(Executable.name("ln"), arguments: arguments, timeoutMs: linkToolTimeoutMs) otherwise return false
+
+	return result.succeeded()
+end 'plantLink'
+
+function main() returns ExitCode
+	let base = Directory.currentPath().join("test_delete_dangling_link_6d2e")
+	let link = base.join("dangling")
+
+	if not Directory.create(base) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	if not plantLink(link, target: base.join("nothing-here")) 'couldNotLink'
+		return 2
+	end 'couldNotLink'
+
+	var answeredAsExpected = false
+
+	try Directory.delete(link) otherwise (refusal) 'refused'
+		if refusal == DirectoryDeleteError.deleteFailed 'asFailed'
+			answeredAsExpected = true
+		end 'asFailed'
+	end 'refused'
+
+	let entries = try Directory.list(base) otherwise return 7
+	let kept = entries.count()
+
+	try File.delete(link) otherwise return 3
+	try Directory.delete(base) otherwise return 4
+
+	if not answeredAsExpected 'wrongAnswer'
+		return 5
+	end 'wrongAnswer'
+
+	if kept != 1 'removedTheLink'
+		return 6
+	end 'removedTheLink'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
 ### Removing a tree
 
 `Directory.removeTree` and `Directory.removeContents` answer the paths they could not remove. Each case
@@ -902,6 +1021,127 @@ end 'main'
 ```stdout
 removeTree reported what the host refused true
 a denial that did not bind is a privileged token's true
+```
+
+<!-- test: remove-tree-reports-a-dangling-link-it-cannot-remove -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A symbolic link whose target is gone is an entry like any other: when the directory holding it denies the process
+the right to remove entries, `removeTree` reports the link by its own path. It never reads the link as already gone
+because nothing resolves through it. The case drops the directory's write permission, asks the host whether the
+denial binds this process, then restores access and removes what it made. A denial that does not bind must be uid 0's.
+```maxon
+let accessToolTimeoutMs = 30000
+
+function runAccessTool(tool String, arguments StringArray) returns bool
+	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise return false
+
+	return result.succeeded()
+end 'runAccessTool'
+
+function plantLink(link FilePath, target FilePath) returns bool
+	var arguments = StringArray.create(0)
+	arguments.push("-s")
+	arguments.push(target.toString())
+	arguments.push(link.toString())
+
+	return runAccessTool("ln", arguments: arguments)
+end 'plantLink'
+
+function setMode(mode String, directory FilePath) returns bool
+	var arguments = StringArray.create(0)
+	arguments.push(mode)
+	arguments.push(directory.toString())
+
+	return runAccessTool("chmod", arguments: arguments)
+end 'setMode'
+
+function hostRefusesWriting(directory FilePath) returns bool
+	var arguments = StringArray.create(0)
+	arguments.push("-w")
+	arguments.push(directory.toString())
+
+	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's access test did not run")
+
+	if result.succeeded() 'writable'
+		return false
+	end 'writable'
+
+	if result.exitCode() != 1 'unanswered'
+		panic("the host's access test answered {result.exitCode()}, neither writable nor refusing")
+	end 'unanswered'
+
+	return true
+end 'hostRefusesWriting'
+
+function isRoot() returns bool
+	var arguments = StringArray.create(0)
+	arguments.push("-u")
+
+	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's identity report did not run")
+
+	return result.succeeded() and result.stdout.trim() == "0"
+end 'isRoot'
+
+function main() returns ExitCode
+	let base = Directory.currentPath().join("test_remove_tree_dangling_link_b41c")
+	let held = base.join("held")
+	let link = held.join("dangling")
+
+	if not Directory.create(held) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	if not plantLink(link, target: base.join("nothing-here")) 'couldNotLink'
+		return 2
+	end 'couldNotLink'
+
+	if not setMode("555", directory: held) 'denied'
+		return 3
+	end 'denied'
+
+	let hostRefuses = hostRefusesWriting(held)
+	let unremoved = Directory.removeTree(base)
+	var reportedTheLink = false
+
+	for stuck in unremoved 'eachStuck'
+		reportedTheLink = reportedTheLink or stuck.toString() == link.toString()
+	end 'eachStuck'
+
+	let expectedUnremoved = 1 if hostRefuses else 0
+	let matches = unremoved.count() == expectedUnremoved and reportedTheLink == hostRefuses and Directory.exists(base) == hostRefuses
+
+	let denialExplained = hostRefuses or isRoot()
+
+	print("removeTree reported what the host refused {matches}\n")
+	print("a denial that did not bind is uid 0's {denialExplained}\n")
+
+	if not matches 'disagreed'
+		print("the host refuses writing {hostRefuses}, unremoved {unremoved.count()}, link reported {reportedTheLink}\n")
+	end 'disagreed'
+
+	if Directory.exists(held) 'stillDenied'
+		if not setMode("755", directory: held) 'restored'
+			return 4
+		end 'restored'
+	end 'stillDenied'
+
+	if not Directory.removeTree(base).isEmpty() 'stillStuck'
+		return 5
+	end 'stillStuck'
+
+	if Directory.exists(base) 'stillThere'
+		return 6
+	end 'stillThere'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+removeTree reported what the host refused true
+a denial that did not bind is uid 0's true
 ```
 
 <!-- test: a-path-holding-a-nul-names-no-directory-not-its-prefix -->

@@ -172,12 +172,11 @@ end 'compileToProduct'
 // measures. It is a separate function for the single reason its caller states: one failure path to hang
 // the trace-span drain on, rather than one per `try` in this body.
 function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride StatedText, emitIr bool, metrics StatedText, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, poisonFreed bool, debugInfo bool, coverage bool, censusByTag bool, censusPhase TagCensusPhases, allocationsByTag bool, allocationsPhase TagCensusPhases, stdlibDirOverride StatedText, runtimeDirOverride StatedText, scriptlib ScriptlibLoad, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion VersionComponentArray, defines DefineArray, unit TraceUnit, spans TraceNameArray, session CompileSession) returns CompileProduct throws CompileError
-	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit, spans: spans)
+	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit, spans: spans, treeLock: session.treeLock)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
-	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream, session: session, defines: defines, productVersion: productVersion, tallied: allocationsByTag, tallyPhases: allocationsPhase)
-	project.openPhaseSpans = spans
+	var project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream, session: session, defines: defines, productVersion: productVersion, tallied: allocationsByTag, tallyPhases: allocationsPhase, openPhaseSpans: spans)
 	project.asyncTrace = asyncTrace
 	project.poisonFreed = poisonFreed
 	project.debugInfo = debugInfo
@@ -252,7 +251,9 @@ function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputO
 
 	let total = whole.elapsed()
 	project.timings.total = PhaseCost.create(total.nanos, cpuTicks: total.cpuTicks)
-	project.memory.total = total.minus(project.session.treeLock.upkeep())
+	project.memory.upkeep = project.session.treeLock.upkeepSince(whole.upkeepMark)
+	total.subtractMemory(project.memory.upkeep)
+	project.memory.total = total
 	project.retiredWorkers.release()
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
@@ -991,9 +992,9 @@ end 'writeTargetIr'
 //
 // File and IO errors (`fileNotFound`, `noSourceFiles`, `readError`, raised by `loadSourceFiles`)
 // carry no diagnostics and propagate straight to the caller, which prints a specific message.
-export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), tallied bool = false, tallyPhases TagCensusPhases = TagCensusPhases.everyPhase) returns Project throws CompileError
+export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), tallied bool = false, tallyPhases TagCensusPhases = TagCensusPhases.everyPhase, openPhaseSpans TraceNameArray = TraceNameArray.create(0)) returns Project throws CompileError
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
-	var project = try createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
+	var project = try createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion, openPhaseSpans: openPhaseSpans)
 
 	if tallied 'tallied'
 		armAllocTally(project, phases: tallyPhases)

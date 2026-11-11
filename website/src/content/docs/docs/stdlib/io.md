@@ -189,7 +189,7 @@ Output: `main.maxon main .maxon src`, `true true false true`, `main.txt`.
 | `Directory.exists(path FilePath)` | `bool` | — | True when `path` is an existing directory. |
 | `Directory.isDirectory(path FilePath)` | `bool` | — | The same as `exists`. |
 | `Directory.create(path FilePath)` | `bool` | — | Create the directory and any missing parents. True when the directory exists afterwards. |
-| `Directory.delete(path FilePath)` | — | `DirectoryDeleteError` | Remove an empty directory. A directory that still holds an entry is refused, not emptied. |
+| `Directory.delete(path FilePath)` | — | `DirectoryDeleteError` | Remove an empty directory. A directory that still holds an entry throws `notEmpty`. A file or a link at `path`, a dangling link included, throws `deleteFailed`; `notFound` means nothing is at `path`. |
 | `Directory.removeTree(path FilePath)` | `FilePathArray` | — | Remove `path` and everything below it, and answer the entries that could not be removed; an empty answer means nothing is left, and a path that does not exist answers empty. A symbolic link or junction is removed as one entry, and what it points at stays as it was. |
 | `Directory.removeContents(path FilePath)` | `FilePathArray` | — | Remove everything inside the directory `path` and keep the directory, answering what could not be removed as `removeTree` does. |
 | `Directory.currentPath()` | `FilePath` | — | The working directory. |
@@ -214,7 +214,7 @@ end 'DirectoryDeleteError'
 |------------|------|-------------|
 | `DirectoryDeleteError` | `notFound` | Nothing exists at `path` |
 | `DirectoryDeleteError` | `notEmpty` | The directory still holds an entry |
-| `DirectoryDeleteError` | `deleteFailed` | The removal fails for any other reason |
+| `DirectoryDeleteError` | `deleteFailed` | `path` holds a file or a link (a dangling one included), or the removal fails for any other reason |
 
 On every target a path holding a NUL byte is a missing directory: `Directory.create` answers false, and the
 other methods answer as they do for a directory that is not there.

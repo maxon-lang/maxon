@@ -150,7 +150,7 @@ document at the version the client last sent. Each request still waiting for an 
 error `-32801` (ContentModified), so the client asks again, and a `shutdown` with `null`. While no compiler
 is built into the checkout, requests are answered `-32801` too, and the server answers `initialize`
 itself. A compiler that cannot be started is reported once, in a `window/logMessage`, and started again
-when the binary changes; what the relayed compiler writes to its stderr is passed on the same way. A
+when the binary's size or modification time changes, the two things the server compares; what the relayed compiler writes to its stderr is passed on the same way. A
 message from it longer than 64 MiB ends it.
 
 **Documents.** Text synchronization is **full**: every `textDocument/didChange` carries the whole

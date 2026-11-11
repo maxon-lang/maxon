@@ -652,6 +652,10 @@ release's version as its heading when the release is cut.
   alias.
   Fix: bind the associated type to a concrete type that implements the interface (for an `Iterable`
   conformer, a concrete element type), or take the container out of your own extension.
+- `Directory.delete` throws `deleteFailed`, not `notFound`, for a path that holds a file or a link, a dangling
+  link included. `notFound` means nothing is at the path.
+  Fix: where a handler treats `notFound` as "already gone" for a path that may hold a file or a link, handle
+  `deleteFailed` the same way, or remove a file with `File.delete`.
 
 ## 0.5.0 — 2026-10-08
 

@@ -4,6 +4,7 @@ public let HeldPipeFixturesDirName = "tests/support/fixtures"
 public let HeldPipeFixtureName = "heldpipe"
 public let HeldPipeOutputLine = "heldpipe: the program's own output"
 public let HeldPipeExitStatus = 7
+public let HeldPipeLingerArgument = "linger"
 
 // Under the fixture's `HolderLifeMs`, so a run that waited for the holder to end overruns it.
 public let HeldPipePromptMs = 15000 as DurationMs
@@ -47,9 +48,15 @@ function heldPipeHolderIn(forwarded String) returns Pid throws ParseError
 	throw ParseError.invalidFormat
 end 'heldPipeHolderIn'
 
-public function endHeldPipeHolder(staged FilePath, forwarded String)
-	let holder = try heldPipeHolderIn(forwarded) otherwise return
+public function endHeldPipeHolder(staged FilePath, forwarded String, forwardedBy String) throws TestFailure
+	if let holder = try heldPipeHolderIn(forwarded) 'holderKnown'
+		stopHeldPipeHolder(staged, holder: holder)
+	end 'holderKnown' else 'holderUnknown'
+		try Expect.fail("{forwardedBy} did not forward the `{HeldPipeHolderLinePrefix}<pid>` line the process the held-pipe program started writes, so that process cannot be told to stop. It forwarded: {forwarded}")
+	end 'holderUnknown'
+end 'endHeldPipeHolder'
 
+function stopHeldPipeHolder(staged FilePath, holder Pid)
 	writeStagedFile(staged.join(HeldPipeStopFileName), content: "stop")
 
 	let begun = Clock.nowMs()
@@ -61,4 +68,4 @@ public function endHeldPipeHolder(staged FilePath, forwarded String)
 	if Process.isAlive(holder) 'stillThere'
 		panic("the gate could not clean up — the process the held-pipe program started ({holder}) is still alive {HeldPipeHolderEndMs} ms after it was told to stop, and a later run cannot clear the staging directory it runs in.")
 	end 'stillThere'
-end 'endHeldPipeHolder'
+end 'stopHeldPipeHolder'

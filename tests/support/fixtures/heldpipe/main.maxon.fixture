@@ -4,10 +4,12 @@ typealias Tally = int(0 to 1000)
 	let HolderShell = "cmd"
 #else
 	let HolderShell = "sh"
+	let SessionLauncher = "setsid "
 #endif
 
 let ModeArgument = 1
 let HolderMode = "hold"
+let LingerMode = "linger"
 let HolderTitle = "heldpipe holder"
 let OwnOutputLine = "heldpipe: the program's own output"
 let HolderLinePrefix = "heldpipe: holder "
@@ -18,13 +20,19 @@ let TickMs = 400
 let HolderLifeMs = 25000
 let HolderPollMs = 100
 let SettleMs = 400
+// Longer than the profiler deadline the linger case sets, so the deadline's kill ends the run.
+let LingerMs = 60000
 let ProgramExitStatus = 7
 
-function startHolder(me FilePath)
+function startHolder(me FilePath, ownSession bool)
 	var config = Configuration.create(Executable.name(HolderShell))
 	var arguments = StringArray.create(0)
 
 	#if os(Windows)
+		if ownSession 'sessionsExist'
+			panic("a holder in a session of its own is started with `setsid`, which this host has no spelling for")
+		end 'sessionsExist'
+
 		arguments.push("/c")
 		arguments.push("start")
 		arguments.push(HolderTitle)
@@ -33,7 +41,9 @@ function startHolder(me FilePath)
 		arguments.push(HolderMode)
 	#else
 		arguments.push("-c")
-		arguments.push("\"$0\" {HolderMode} &")
+		let launcher = SessionLauncher if ownSession else ""
+
+		arguments.push("{launcher}\"$0\" {HolderMode} &")
 		arguments.push(me.toString())
 	#endif
 
@@ -73,7 +83,14 @@ function main() returns ExitCode
 		return runHolder(me)
 	end 'asTheHolder'
 
-	startHolder(me)
+	if mode == LingerMode 'lingering'
+		startHolder(me, ownSession: true)
+		sleep(LingerMs)
+
+		return 0
+	end 'lingering'
+
+	startHolder(me, ownSession: false)
 	print("{OwnOutputLine}\n")
 	sleep(SettleMs)
 

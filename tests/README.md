@@ -88,10 +88,10 @@ tests/
   support/                       not a corpus: the helpers every corpus shares, all `public`, listed by each `<corpus>.maxproj`
     Host.maxon                   the compiler under test (`TestedCompilerStem`, `testedCompilerPath`), the host's suffix and temp area
     Staging.maxon                `stagingDir`, `clearStagedTree`, `discardStagedDir`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`, `filesUnderEndingWith`
-    Spawn.maxon                  `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `requireTreeEnded`, `endedProcessId`, `backdatedToTheYear2000`
+    Spawn.maxon                  `runIn`, `runCompiler` (both throw `SubprocessError`), `spawnFailureMessage`, `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `requireTreeEnded`, `endedProcessId`, `backdatedToTheYear2000`
     FedProcess.maxon             `runFedAfterLine`, `FedRun`, `StagedRunEnd`: a child fed after it prints a line, pumped without blocking, its exit followed by a tail drain bounded by silence and by a cap
-    HeldPipe.maxon               `stagedHeldPipe`, `heldPipeLinesMissingFrom`, `endHeldPipeHolder`: the program that exits while a process it started holds its output, and the cleanup of that process
-    fixtures/heldpipe/main.maxon.fixture   the held-pipe program: it prints a line, starts a holder that prints eight lines 400 ms apart and then holds the pipe until told to stop - stored name only, see rule 1
+    HeldPipe.maxon               `stagedHeldPipe`, `heldPipeLinesMissingFrom`, `endHeldPipeHolder`: the program that exits while a process it started holds its output, and the cleanup of that process, which throws a `TestFailure` naming the product when the output it forwarded names no holder
+    fixtures/heldpipe/main.maxon.fixture   the held-pipe program: it prints a line, starts a holder that prints eight lines 400 ms apart and then holds the pipe until told to stop; given the argument `linger` (Linux) it instead starts that holder in a session of its own with `setsid` and sleeps past any deadline - stored name only, see rule 1
     ScratchNames.maxon           `scratchNameProbe`, `mintedScratchName`, `debugStreamSegmentPrefix`: the scratch-name probe below, built from the checkout's `maxon-bin/Run/ScratchName.maxon`
     scratch-name/main.maxon.fixture   the probe program: `mint` prints a name for given fields, any other word runs one check - stored name only, see rule 1
     OutsideCheckout.maxon        `testScratchDir`, `projectScratchDir`: the process's two `maxon test` scratch directories, and `freshOutsideCheckoutDir` in the first
@@ -558,7 +558,6 @@ tests/
     fixtures/greenthreads/main.maxon.fixture   stored name only - see rule 1
     fixtures/selfcopy/main.maxon.fixture    stored name only - see rule 1
     fixtures/endsatonce/main.maxon.fixture  stored name only - see rule 1
-    fixtures/heldpipe/main.maxon.fixture    stored name only - see rule 1
     fixtures/unterminatedtail/main.maxon.fixture   stored name only - see rule 1
   execute/
     ExecuteHarness.maxon                        the shared half: the staging, the private cache, the spawn, the slot readers

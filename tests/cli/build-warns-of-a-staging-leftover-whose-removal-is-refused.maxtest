@@ -27,9 +27,13 @@ test 'a build warns of a staging leftover whose removal is refused when it is no
 	Expect.isTrue(Directory.create(staging), message: "could not create {staging.toString()} to stand for an interrupted build's.")
 	Expect.isTrue(Directory.create(held), message: "could not create {held.toString()}.")
 	writeStagedFile(stray, content: RefusedLeftoverContent)
+
 	refuseRemovalOf(stray)
 
-	let build = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"])
+	let build = try runCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"]) otherwise (failure) 'notSpawned'
+		allowRemovalOf(stray)
+		panic("{spawnFailureMessage(CompilerUnderTestName, failure: failure)}")
+	end 'notSpawned'
 
 	allowRemovalOf(stray)
 

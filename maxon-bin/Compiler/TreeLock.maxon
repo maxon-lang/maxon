@@ -198,6 +198,10 @@ type HeldLock
 		total.add(self.upkeep)
 	end 'addUpkeepTo'
 
+	function removeUpkeepMemoryFrom(delta PhaseDelta)
+		delta.subtractMemory(self.upkeep)
+	end 'removeUpkeepMemoryFrom'
+
 	// ⭐ Say the holder is still working. Cheap enough to call from anywhere that runs regularly — the
 	// write is throttled to one every `TouchIntervalMs`.
 	//
@@ -348,7 +352,7 @@ export type LockHold
 		self.output.touch()
 	end 'touch'
 
-	export function upkeep() returns PhaseDelta
+	function upkeep() returns PhaseDelta
 		var total = PhaseDelta.zero()
 		self.checkout.addUpkeepTo(total)
 		self.output.addUpkeepTo(total)
@@ -359,6 +363,23 @@ export type LockHold
 		self.output.release()
 		self.checkout.release()
 	end 'release'
+
+	module function markUpkeep(mark PhaseDelta)
+		self.checkout.addUpkeepTo(mark)
+		self.output.addUpkeepTo(mark)
+	end 'markUpkeep'
+
+	module function upkeepSince(mark PhaseDelta) returns PhaseDelta
+		return self.upkeep().minus(mark)
+	end 'upkeepSince'
+
+	// Memory only: a phase's time keeps its upkeep, because `recordPhaseExcluding` subtracts an inner
+	// delta whose time still holds its own, and excluding it here too would subtract it twice.
+	module function excludeUpkeepSince(mark PhaseDelta, delta PhaseDelta)
+		delta.addMemory(mark)
+		self.checkout.removeUpkeepMemoryFrom(delta)
+		self.output.removeUpkeepMemoryFrom(delta)
+	end 'excludeUpkeepSince'
 
 	function take(lock OwnedLock)
 		match lock.kind 'kind'
