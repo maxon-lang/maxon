@@ -4274,23 +4274,37 @@ type Execution
 	export let stdin as SpecStdin
 	export let traceCapture as SpecTraceCapture
 	export let label as String
+	// Only a generated entry program reads `--descendant-token`; an ordinary case's arguments are
+	// its own.
+	export let reportsLeftProcesses as bool
 
-	static function create(exePath FilePath, key String, arguments ProgramArgArray, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, traceCapture SpecTraceCapture, label String) returns Execution
-		return Self{exePath: exePath, key: key, arguments: arguments, procs: procs, preempt: preempt, stdin: stdin, traceCapture: traceCapture, label: label}
+	static function create(exePath FilePath, key String, arguments ProgramArgArray, procs SpecProcs, preempt SpecPreempt, stdin SpecStdin, traceCapture SpecTraceCapture, label String, reportsLeftProcesses bool) returns Execution
+		return Self{exePath: exePath, key: key, arguments: arguments, procs: procs, preempt: preempt, stdin: stdin, traceCapture: traceCapture, label: label, reportsLeftProcesses: reportsLeftProcesses}
 	end 'create'
+
+	function programArguments(serial ElementIndex, tracksDescendants bool) returns ProgramArgArray
+		if not self.reportsLeftProcesses or not tracksDescendants 'asGiven'
+			return self.arguments
+		end 'asGiven'
+
+		var withToken = self.arguments.clone()
+		withToken.push(descendantTokenArgument(serial))
+
+		return withToken
+	end 'programArguments'
 end 'Execution'
 
 typealias ExecutionArray = Array with Execution
 
 function caseExecution(pending PendingRun, specName String) returns Execution
 	let test = pending.compiled.test
-	return Execution.create(pending.compiled.exePath, key: pending.compiled.exePath.filename(), arguments: test.programArgs, procs: test.procs, preempt: test.preempt, stdin: test.stdin, traceCapture: test.traceCapture, label: testLabel(specName, testName: test.name))
+	return Execution.create(pending.compiled.exePath, key: pending.compiled.exePath.filename(), arguments: test.programArgs, procs: test.procs, preempt: test.preempt, stdin: test.stdin, traceCapture: test.traceCapture, label: testLabel(specName, testName: test.name), reportsLeftProcesses: false)
 end 'caseExecution'
 
 function selectedExecution(program BatchProgram, indices TestRunIndexArray, key String, label String) returns Execution
 	var arguments = ProgramArgArray.create(1, zeroed: false)
 	arguments.push("{testSelectFlag()}{formatTestSelection(indices)}")
-	return Execution.create(program.exePath, key: key, arguments: arguments, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, traceCapture: SpecTraceCapture.off, label: label)
+	return Execution.create(program.exePath, key: key, arguments: arguments, procs: SpecProcs.unset, preempt: SpecPreempt.unset, stdin: SpecStdin.closed, traceCapture: SpecTraceCapture.off, label: label, reportsLeftProcesses: true)
 end 'selectedExecution'
 
 type RunLane
@@ -4546,7 +4560,7 @@ function spawnExecution(execution Execution, runWorkingDir FilePath, effectiveTa
 	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned by
 	// the host, so it goes behind the vendored wasmtime instead — what is checked afterwards is
 	// IDENTICAL either way.
-	let runCommand = buildRunCommand(execution.exePath, effectiveTarget: effectiveTarget, programArgs: execution.arguments, traceCapture: execution.traceCapture)
+	let runCommand = buildRunCommand(execution.exePath, effectiveTarget: effectiveTarget, programArgs: execution.programArguments(serial, tracksDescendants: targetProvidesFacility(effectiveTarget, facility: HostFacility.processDescendants)), traceCapture: execution.traceCapture)
 
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
@@ -5095,7 +5109,7 @@ function batchCallLine(execution Execution, serial ElementIndex, tracksDescendan
 	line.append(" ")
 	line.append(shQuoted(descendantTrackingValue(serial) if tracksDescendants else ""))
 
-	for arg in execution.arguments 'eachArg'
+	for arg in execution.programArguments(serial, tracksDescendants: tracksDescendants) 'eachArg'
 		line.append(" ")
 		line.append(shQuoted(arg))
 	end 'eachArg'

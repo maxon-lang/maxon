@@ -122,6 +122,7 @@ tests/
     no-debug-info.maxtest        `--list --build --json --no-debug-info` builds the binary with no sidecar beside it
     a-test-project-compiles-the-sources-its-project-lists.maxtest      `maxon test` of a project whose `.maxproj` lists `.` and `../shared` compiles the sibling, and its test passes
     a-test-and-a-build-of-one-project-compile-the-same-files.maxtest   a `.maxproj` listing only `src`: `maxon test` and `maxon build` both leave out a `stray/` that does not compile
+    a-quoted-frame-is-output-and-a-real-leak-is-not.maxtest   a descendant frame quoted mid-line, echoed from another run or carrying no token is test output; a frame forging the run's own token fails on the count the binary ended with; a leak after unterminated stderr is still named; a test binary given no `--descendant-token` stops naming the option
   test-fixtures/<case>/
     <name>.maxtest               a LIVE source: `maxon test` is what compiles it
     expected.txt  expected-exit.txt  argv.txt?

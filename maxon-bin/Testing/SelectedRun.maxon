@@ -88,13 +88,19 @@ end 'SelectedLaunch'
 
 module function launchSelected(exe Executable, leadingArguments StringArray, indices TestRunIndexArray, timeoutMs DurationMs, workingDirectory FilePath, projectScratchRoot FilePath, tracksDescendants bool) returns SelectedLaunch
 	var argv = leadingArguments.clone()
+	let serial = Clock.nowMs() as ElementIndex
+
 	argv.push("{testSelectFlag()}{formatTestSelection(indices)}")
+
+	if tracksDescendants 'carriesTheToken'
+		argv.push(descendantTokenArgument(serial))
+	end 'carriesTheToken'
 
 	let scratch = try TestProcessScratch.create(projectScratchRoot) otherwise (refusal) 'noScratch'
 		return SelectedLaunch.couldNotStart(stagingRefusalReason(refusal))
 	end 'noScratch'
 
-	let run = try runProcess(exe, argv: argv, workingDirectory: workingDirectory, timeoutMs: timeoutMs, environment: scratch.environment(tracksDescendants)) otherwise (e) 'didNotRun'
+	let run = try runProcess(exe, argv: argv, workingDirectory: workingDirectory, timeoutMs: timeoutMs, environment: scratch.environment(tracksDescendants, serial: serial)) otherwise (e) 'didNotRun'
 		_ = scratch.discard()
 		return launchFailureOf(e)
 	end 'didNotRun'

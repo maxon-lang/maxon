@@ -22,13 +22,13 @@ module type TestProcessScratch
 		return Self{outside: outside, inProject: inProject}
 	end 'create'
 
-	module function environment(tracksDescendants bool) returns Environment
+	module function environment(tracksDescendants bool, serial ElementIndex) returns Environment
 		var overrides = EnvMap.create()
 		overrides.upsert(TestScratch.outsideCheckoutVariable, value: self.outside.toString())
 		overrides.upsert(TestScratch.insideProjectVariable, value: self.inProject.toString())
 
 		if tracksDescendants 'armed'
-			overrides.upsert(String.from(DescendantsEnvName), value: descendantTrackingValue(Clock.nowMs() as ElementIndex))
+			overrides.upsert(String.from(DescendantsEnvName), value: descendantTrackingValue(serial))
 		end 'armed'
 
 		return Environment.inheritUpdating(overrides)

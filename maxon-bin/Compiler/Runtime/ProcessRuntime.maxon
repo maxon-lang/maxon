@@ -70,6 +70,7 @@ export let ProcessEndDescendantsTextName = b"__proc_end_descendants_text"
 export let DescendantsEnvName = b"MAXON_TRACK_DESCENDANTS"
 export let SpecMarkerWrapper = "@@maxon-spec@@"
 export let DescendantsFrameTag = "!"
+export let DescendantsFrameTokenSeparator = "\t"
 export let ProcessDescendantGateName = b"__proc_descendant_gate"
 
 let DescendantsEnvValueUnits = 32
@@ -84,6 +85,9 @@ export let DescendantsNameLastPrintable = 0x7E
 export let DescendantsNameReplacement = 0x3F
 let DescendantGateReportBytes = 65536
 let DescendantGateLineEnd = 10
+let DescendantTokenLengthOffset = 0
+let DescendantTokenBytesOffset = 8
+let DescendantTokenMarkOffset = DescendantTokenBytesOffset - 1
 
 // `__proc_exe_path() -> arrRec`: a fresh owned `__ManagedMemory` holding the running image's
 // absolute path, which the caller frees.
@@ -198,10 +202,11 @@ export function emitArmDescendantTracking(module StdModule, func IrFunction, cur
 	let marked = emitCompareWithConstant(module, block: readFirst, value: first, pred: StdCmpPred.eq, against: DescendantsArmedMark, ids: ids)
 	module.setTerminator(readFirst, op: StdOp.condBranch(marked, thenBlockId: armed.id, elseBlockId: unmarked.id))
 
-	emitArmAction(module, func: func, cur: armed, target: target, name: name, value: value, release: release, sealsToken: true, ids: ids)
+	let capture = emitCaptureArmedToken(module, cur: armed, name: name, units: written, ids: ids)
+	emitArmAction(module, func: func, cur: armed, target: target, name: name, value: value, release: release, token: ArmingToken.captured(capture), ids: ids)
 
 	match arming 'withoutToken'
-		trackedFromStart then emitArmAction(module, func: func, cur: unmarked, target: target, name: name, value: value, release: release, sealsToken: false, ids: ids)
+		trackedFromStart then emitArmAction(module, func: func, cur: unmarked, target: target, name: name, value: value, release: release, token: ArmingToken.absent, ids: ids)
 		trackedOnToken then module.setTerminator(unmarked, op: StdOp.branch(release.id))
 		untracked then panic("emitArmDescendantTracking: an untracked program emits no arming")
 	end 'withoutToken'
@@ -212,7 +217,32 @@ export function emitArmDescendantTracking(module StdModule, func IrFunction, cur
 	return release
 end 'emitArmDescendantTracking'
 
-function emitArmAction(module StdModule, func IrFunction, cur IrBlock, target Target, name ValueId, value ValueId, release IrBlock, sealsToken bool, ids ValueMinter)
+union ArmingToken
+	absent
+	captured(copy ValueId)
+end 'ArmingToken'
+
+// The record holds a length word at `DescendantTokenLengthOffset` and the token bytes from
+// `DescendantTokenBytesOffset`. The read starts one byte early, so the length store overwrites the
+// `A` mark and the token follows it. The capture precedes `emitArmAction` because the Track verb
+// rewrites the variable to `D<pid>` on macOS, after which the harness's token can no longer be read.
+function emitCaptureArmedToken(module StdModule, cur IrBlock, name ValueId, units ValueId, ids ValueMinter) returns ValueId
+	let header = emitConst(module, block: cur, value: DescendantTokenBytesOffset, ids: ids)
+	let total = emitBin(module, block: cur, a: units, b: header, opcode: StdBinOpcode.add, ids: ids)
+	let capture = emitSlabAlloc(module, block: cur, bytes: total, kind: SlabBufferKind.environmentValue, ids: ids)
+	let one = emitConst(module, block: cur, value: 1, ids: ids)
+	let markOffset = emitConst(module, block: cur, value: DescendantTokenMarkOffset, ids: ids)
+	let markAddress = emitBin(module, block: cur, a: capture, b: markOffset, opcode: StdBinOpcode.add, ids: ids)
+	let readCapacity = emitBin(module, block: cur, a: units, b: one, opcode: StdBinOpcode.add, ids: ids)
+	_ = emitHostEnvReadAscii(module, block: cur, name: name, valueBuf: markAddress, capacity: readCapacity, ids: ids)
+	let tokenLength = emitBin(module, block: cur, a: units, b: one, opcode: StdBinOpcode.sub, ids: ids)
+
+	emitStoreField(module, block: cur, record: capture, offset: DescendantTokenLengthOffset, value: tokenLength)
+
+	return capture
+end 'emitCaptureArmedToken'
+
+function emitArmAction(module StdModule, func IrFunction, cur IrBlock, target Target, name ValueId, value ValueId, release IrBlock, token ArmingToken, ids ValueMinter)
 	if not targetProvidesFacility(target, facility: HostFacility.processDescendants) 'noFacility'
 		emitRuntimeFatal(module, func: func, block: cur, fatal: RuntimeFatal.descendantTrackingUnavailable, ids: ids)
 		return
@@ -228,11 +258,13 @@ function emitArmAction(module StdModule, func IrFunction, cur IrBlock, target Ta
 	emitBranchOnCompare(module, block: cur, value: answer, pred: StdCmpPred.ne, against: 0, whenTrue: trackRefused, whenFalse: tracked, ids: ids)
 	emitRuntimeFatal(module, func: func, block: trackRefused, fatal: RuntimeFatal.descendantTrackingUnavailable, ids: ids)
 
-	if not sealsToken 'noTokenToSeal'
-		module.setTerminator(tracked, op: StdOp.branch(release.id))
-		return
-	end 'noTokenToSeal'
+	match token 'token'
+		absent then module.setTerminator(tracked, op: StdOp.branch(release.id))
+		captured(copy) then emitSealAndPublishToken(module, func: func, tracked: tracked, target: target, name: name, value: value, release: release, copy: copy, ids: ids)
+	end 'token'
+end 'emitArmAction'
 
+function emitSealAndPublishToken(module StdModule, func IrFunction, tracked IrBlock, target Target, name ValueId, value ValueId, release IrBlock, copy ValueId, ids ValueMinter)
 	var sealed = module.addBlock(func, label: b"descsealed", heat: BlockHeat.normal)
 
 	match environmentSnapshotShape(target) 'seal'
@@ -241,10 +273,9 @@ function emitArmAction(module StdModule, func IrFunction, cur IrBlock, target Ta
 		hostEntryList then panic("emitArmAction: a lane that receives its environment as a host list provides no descendant tracking, so it has no token to seal")
 	end 'seal'
 
-	let armedWord = emitConst(module, block: sealed, value: 1, ids: ids)
-	emitStoreGlobalWord(module, block: sealed, label: SchedDescendantsArmedLabel, value: armedWord, ids: ids)
+	emitStoreGlobalWord(module, block: sealed, label: SchedDescendantsArmedLabel, value: copy, ids: ids)
 	module.setTerminator(sealed, op: StdOp.branch(release.id))
-end 'emitArmAction'
+end 'emitSealAndPublishToken'
 
 function emitSealThroughHostCall(module StdModule, func IrFunction, cur IrBlock, name ValueId, value ValueId, sealed IrBlock, ids ValueMinter)
 	var refused = module.addBlock(func, label: b"descsealrefused", heat: BlockHeat.cold)
@@ -312,7 +343,8 @@ end 'descendantsFramePrefix'
 
 // The exit code passes through untouched; the verdict is the framed lines on stderr, which the spec and
 // test harnesses read (`StderrAudit`). The audit follows `gtQuiesce`, so a child a green thread is
-// still awaiting has ended and is not reported.
+// still awaiting has ended and is not reported. Each frame is assembled whole and written in one
+// stderr write, so a live child writing to the same stream cannot split it.
 function buildProcessDescendantGate(module StdModule)
 	var func = IrFunction.createFromStd(ProcessDescendantGateName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
 	var ids = ValueMinter.create(1)
@@ -342,6 +374,8 @@ function buildProcessDescendantGate(module StdModule)
 	let report = emitSlabAlloc(module, block: audit, bytes: capacity, kind: SlabBufferKind.hostText, ids: ids)
 	let framePrefix = descendantsFramePrefix().toByteArray()
 	let prefix = emitLiteralCString(module, block: audit, ids: ids, text: framePrefix)
+	let separatorBytes = DescendantsFrameTokenSeparator.toByteArray()
+	let separatorByte = try separatorBytes.get(0) otherwise panic("buildProcessDescendantGate: the frame token separator is not empty")
 	let verb = emitConst(module, block: audit, value: ProcessDescendantsVerbEnd, ids: ids)
 	let needed = ids.mint()
 	module.appendOp(audit, op: StdOp.osDescendants(needed, verbId: verb, bufId: report, capId: capacity))
@@ -350,6 +384,10 @@ function buildProcessDescendantGate(module StdModule)
 
 	emitBranchOnCompareValues(module, block: listed, a: needed, pred: StdCmpPred.gt, b: capacity, whenTrue: capped, whenFalse: scanStart, ids: ids)
 	emitRuntimeFatal(module, func: func, block: capped, fatal: RuntimeFatal.descendantReportTruncated, ids: ids)
+
+	let tokenLength = emitLoadField(module, block: scanStart, record: armed, offset: DescendantTokenLengthOffset, ids: ids)
+	let tokenOffset = emitConst(module, block: scanStart, value: DescendantTokenBytesOffset, ids: ids)
+	let token = emitBin(module, block: scanStart, a: armed, b: tokenOffset, opcode: StdBinOpcode.add, ids: ids)
 
 	let index = ids.mint()
 	let lineStart = ids.mint()
@@ -364,13 +402,33 @@ function buildProcessDescendantGate(module StdModule)
 	emitBranchOnCompare(module, block: scanByte, value: byte, pred: StdCmpPred.eq, against: DescendantGateLineEnd, whenTrue: scanLine, whenFalse: scanStep, ids: ids)
 
 	let prefixLength = emitConst(module, block: scanLine, value: framePrefix.count() as FullRangeInt, ids: ids)
-	module.appendOp(scanLine, op: StdOp.osWriteStderr(ids.mint(), bufId: prefix, lenId: prefixLength))
 	let one = emitConst(module, block: scanLine, value: 1, ids: ids)
 	let lineEnd = emitBin(module, block: scanLine, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let lineAddress = emitBin(module, block: scanLine, a: report, b: lineStart, opcode: StdBinOpcode.add, ids: ids)
-	let lineLength = emitBin(module, block: scanLine, a: lineEnd, b: lineStart, opcode: StdBinOpcode.sub, ids: ids)
-	module.appendOp(scanLine, op: StdOp.osWriteStderr(ids.mint(), bufId: lineAddress, lenId: lineLength))
-	emitBranchCarrying(module, from: scanLine, to: scanHeader, values: twoArgs(lineEnd, second: lineEnd))
+	let lineLength = emitBin(module, block: scanLine, a: index, b: lineStart, opcode: StdBinOpcode.sub, ids: ids)
+
+	let beforeToken = emitBin(module, block: scanLine, a: prefixLength, b: lineLength, opcode: StdBinOpcode.add, ids: ids)
+	let throughSeparator = emitBin(module, block: scanLine, a: beforeToken, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let throughToken = emitBin(module, block: scanLine, a: throughSeparator, b: tokenLength, opcode: StdBinOpcode.add, ids: ids)
+	let frameLength = emitBin(module, block: scanLine, a: throughToken, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let frame = emitSlabAlloc(module, block: scanLine, bytes: frameLength, kind: SlabBufferKind.hostText, ids: ids)
+	let nameAddress = emitBin(module, block: scanLine, a: frame, b: prefixLength, opcode: StdBinOpcode.add, ids: ids)
+	let separatorAddress = emitBin(module, block: scanLine, a: frame, b: beforeToken, opcode: StdBinOpcode.add, ids: ids)
+	let tokenAddress = emitBin(module, block: scanLine, a: frame, b: throughSeparator, opcode: StdBinOpcode.add, ids: ids)
+	let terminatorAddress = emitBin(module, block: scanLine, a: frame, b: throughToken, opcode: StdBinOpcode.add, ids: ids)
+	let zero = emitConst(module, block: scanLine, value: 0, ids: ids)
+	let separator = emitConst(module, block: scanLine, value: separatorByte as FullRangeInt, ids: ids)
+	let lineFeed = emitConst(module, block: scanLine, value: DescendantGateLineEnd, ids: ids)
+
+	let prefixCopied = emitForwardCopy(module, func: func, cur: scanLine, dest: frame, src: prefix, byteCount: prefixLength, ids: ids)
+	let nameCopied = emitForwardCopy(module, func: func, cur: prefixCopied, dest: nameAddress, src: lineAddress, byteCount: lineLength, ids: ids)
+	emitStoreByte(module, block: nameCopied, base: separatorAddress, index: zero, value: separator, ids: ids)
+
+	let tokenCopied = emitForwardCopy(module, func: func, cur: nameCopied, dest: tokenAddress, src: token, byteCount: tokenLength, ids: ids)
+	emitStoreByte(module, block: tokenCopied, base: terminatorAddress, index: zero, value: lineFeed, ids: ids)
+	module.appendOp(tokenCopied, op: StdOp.osWriteStderr(ids.mint(), bufId: frame, lenId: frameLength))
+	emitSlabFree(module, block: tokenCopied, ptr: frame, kind: SlabBufferKind.hostText, ids: ids)
+	emitBranchCarrying(module, from: tokenCopied, to: scanHeader, values: twoArgs(lineEnd, second: lineEnd))
 
 	let stepOne = emitConst(module, block: scanStep, value: 1, ids: ids)
 	let nextIndex = emitBin(module, block: scanStep, a: index, b: stepOne, opcode: StdBinOpcode.add, ids: ids)
@@ -378,6 +436,7 @@ function buildProcessDescendantGate(module StdModule)
 
 	emitSlabFree(module, block: finished, ptr: report, kind: SlabBufferKind.hostText, ids: ids)
 	emitSlabFree(module, block: finished, ptr: prefix, kind: SlabBufferKind.hostText, ids: ids)
+	emitSlabFree(module, block: finished, ptr: armed, kind: SlabBufferKind.environmentValue, ids: ids)
 	module.setTerminator(finished, op: StdOp.ret(code))
 
 	module.functions.push(func)

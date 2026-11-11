@@ -1,0 +1,48 @@
+let SleeperSeconds = 60
+let MidLineQuote = "the child said: @@maxon-spec@@!4242 sleeper\tD1-1\n"
+let OwnLineQuoteOfAnotherRun = "the child's stderr was:\n@@maxon-spec@@!4242 sleeper\tD1-1\n"
+let OwnLineQuoteWithNoToken = "the child's stderr was:\n@@maxon-spec@@!4242 sleeper\n"
+let UnterminatedLine = "no newline at the end of this"
+
+function sleeperConfiguration() returns Configuration
+	#if os(Windows)
+		var config = Configuration.create(Executable.name("ping"))
+		config.arguments.push("-n")
+		config.arguments.push("{SleeperSeconds}")
+		config.arguments.push("127.0.0.1")
+	#else
+		var config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise panic("/bin/sleep is not a path")))
+		config.arguments.push("{SleeperSeconds}")
+	#endif
+
+	return config
+end 'sleeperConfiguration'
+
+test 'a test that quotes a descendant frame mid-line leaves nothing running'
+	printError(MidLineQuote)
+	Expect.equal(1 + 1, expected: 2)
+end 'a test that quotes a descendant frame mid-line leaves nothing running'
+
+test 'a test that echoes a child frame of another run on a line of its own leaves nothing running'
+	printError(OwnLineQuoteOfAnotherRun)
+	Expect.equal(1 + 1, expected: 2)
+end 'a test that echoes a child frame of another run on a line of its own leaves nothing running'
+
+test 'a test that echoes a frame with no token on a line of its own leaves nothing running'
+	printError(OwnLineQuoteWithNoToken)
+	Expect.equal(1 + 1, expected: 2)
+end 'a test that echoes a frame with no token on a line of its own leaves nothing running'
+
+test 'a test that forges a frame carrying the token it was given is refused by the count check'
+	let token = CommandLine.getOptionValue("descendant-token")
+
+	printError("@@maxon-spec@@!4242 forged\t{token}\n")
+	Expect.equal(1 + 1, expected: 2)
+end 'a test that forges a frame carrying the token it was given is refused by the count check'
+
+test 'a test that leaves a sleeper after unterminated stderr still leaves it running'
+	let pid = sleeperConfiguration().runDetached()
+
+	printError(UnterminatedLine)
+	Expect.isTrue(Process.isAlive(pid))
+end 'a test that leaves a sleeper after unterminated stderr still leaves it running'

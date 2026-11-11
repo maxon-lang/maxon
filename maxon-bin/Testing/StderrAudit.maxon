@@ -1,36 +1,45 @@
 let DescendantEntrySeparator = ", "
 let DescendantEntryEnd = "\n"
 let LeakVerdictAdvice = "wait for every process it starts before it ends"
-let CaseSubject = "case"
+module let CaseSubject = "case"
 module let TestReportSubject = "test"
+let TabSource = "\\t"
+let DescendantTokenOptionName = "descendant-token"
+let NoDescendants = 0
+
+export typealias DescendantCount = int(0 to u64.max)
+
+module union FieldSplit
+	read(text String, rest String)
+	unterminated
+end 'FieldSplit'
+
+module function splitAtFirst(text String, separator String) returns FieldSplit
+	let at = try text.findFirst(separator) otherwise return FieldSplit.unterminated
+	let after = try text.indexAfter(at) otherwise return FieldSplit.unterminated
+
+	return FieldSplit.read(text.slice(text.startIndex(), endIndex: at), rest: text.slice(after, endIndex: text.endIndex()))
+end 'splitAtFirst'
 
 module type StderrAudit
 	export let text as String
 	export let leaked as StringArray
 
 	module static function separating(stderr String) returns StderrAudit
-		let pieces = stderr.split(descendantsFramePrefix())
+		let prefix = descendantsFramePrefix()
 		var kept = StringBuilder.create()
 		var leaked = StringArray.create(0)
 
-		for (iter, piece) in pieces.withIterator() 'eachPiece'
+		for (iter, piece) in stderr.split(prefix).withIterator() 'eachPiece'
 			if iter.index() == 0 'beforeTheFirstFrame'
 				kept.append(piece)
 				continue
 			end 'beforeTheFirstFrame'
 
-			let lineEnd = try piece.findFirst(DescendantEntryEnd) otherwise 'unterminated'
-				leaked.push(piece.trim())
-				continue
-			end 'unterminated'
-
-			leaked.push(piece.slice(piece.startIndex(), endIndex: lineEnd).trim())
-
-			let after = try piece.indexAfter(lineEnd) otherwise 'nothingAfter'
-				continue
-			end 'nothingAfter'
-
-			kept.append(piece.slice(after, endIndex: piece.endIndex()))
+			match frameReadFrom(piece) 'frame'
+				owned(entry, rest) then noteOwnedFrame(leaked, kept: kept, entry: entry, rest: rest)
+				foreign then kept.append("{prefix}{piece}")
+			end 'frame'
 		end 'eachPiece'
 
 		return Self{text: kept.build(), leaked: leaked}
@@ -52,6 +61,59 @@ module type StderrAudit
 	end 'verdictOver'
 end 'StderrAudit'
 
+union FrameRead
+	owned(entry String, rest String)
+	foreign
+end 'FrameRead'
+
+function noteOwnedFrame(leaked StringArray, kept StringBuilder, entry String, rest String)
+	leaked.push(entry)
+	kept.append(rest)
+end 'noteOwnedFrame'
+
+function frameReadFrom(piece String) returns FrameRead
+	return match splitAtFirst(piece, separator: DescendantEntryEnd) 'line'
+		read(line, rest) gives frameOfLine(line, rest: rest)
+		unterminated gives frameOfLine(piece, rest: "")
+	end 'line'
+end 'frameReadFrom'
+
+function frameOfLine(line String, rest String) returns FrameRead
+	return match splitAtFirst(line, separator: DescendantsFrameTokenSeparator) 'token'
+		read(entry, token) gives frameRead(entry.trim(), token: token.trim(), rest: rest)
+		unterminated gives FrameRead.foreign
+	end 'token'
+end 'frameOfLine'
+
+// A frame without this harness's token is a child's stderr that the test echoed, so it stays output.
+function frameRead(entry String, token String, rest String) returns FrameRead
+	if not tokenIsOurs(token) 'someoneElsesFrame'
+		return FrameRead.foreign
+	end 'someoneElsesFrame'
+
+	return FrameRead.owned(entry, rest: rest)
+end 'frameRead'
+
+function trackingTokenOwner() returns String
+	return "{Process.id()}-"
+end 'trackingTokenOwner'
+
+function trackingToken(serial ElementIndex) returns String
+	return "{trackingTokenOwner()}{serial}"
+end 'trackingToken'
+
+function tokenIsOurs(token String) returns bool
+	return token.startsWith(trackingTokenOwner())
+end 'tokenIsOurs'
+
+module function descendantTrackingValue(serial ElementIndex) returns String
+	return armedDescendantsValue(trackingToken(serial))
+end 'descendantTrackingValue'
+
+module function descendantTokenArgument(serial ElementIndex) returns String
+	return "--{DescendantTokenOptionName}={trackingToken(serial)}"
+end 'descendantTokenArgument'
+
 module function leftRunningReport(subject String, entries StringArray) returns String
 	let count = entries.count()
 	let noun = "process" if count == 1 else "processes"
@@ -59,10 +121,42 @@ module function leftRunningReport(subject String, entries StringArray) returns S
 	return "the {subject} left {count} {noun} running: {joinedWith(entries, separator: DescendantEntrySeparator)}; {LeakVerdictAdvice}"
 end 'leftRunningReport'
 
-module function descendantFramePrintSource() returns String
-	return "printError(\"{descendantsFramePrefix()}\{entry.pid\} \{entry.name\}\\n\")"
-end 'descendantFramePrintSource'
+module union DescendantCountCheck
+	agrees
+	disagrees(report String)
+end 'DescendantCountCheck'
 
-module function descendantTrackingValue(serial ElementIndex) returns String
-	return armedDescendantsValue("{Process.id()}-{serial}")
-end 'descendantTrackingValue'
+// A test can print a frame carrying the harness's token, so the binary's own count is what the frames
+// found in its stderr must agree with.
+module function checkDescendantCount(program String, subject String, counted DescendantCount, named DescendantCount) returns DescendantCountCheck
+	if counted == named 'agree'
+		return DescendantCountCheck.agrees
+	end 'agree'
+
+	return DescendantCountCheck.disagrees("{program} counted {counted} process(es) left running by this {subject}, and its error output names {named}")
+end 'checkDescendantCount'
+
+module function descendantTokenMemberSource() returns String
+	var source = "\texport static function descendantToken() returns String\n"
+
+	source.append("\t\treturn try CommandLine.getOptionValue(\"{DescendantTokenOptionName}\") otherwise panic(\"the harness passed no --{DescendantTokenOptionName}, so a process left running could not be reported in a form the harness trusts\")\n")
+	source.append("\tend 'descendantToken'\n\n")
+
+	return source
+end 'descendantTokenMemberSource'
+
+module function descendantReportSource(tracksDescendants bool, helperType String) returns String
+	if not tracksDescendants 'nothingToEnd'
+		return "\t\tlet descendants = {NoDescendants}\n"
+	end 'nothingToEnd'
+
+	let separator = DescendantsFrameTokenSeparator.replace("\t", with: TabSource)
+	var source = "\t\tlet found = Process.endDescendants()\n\n"
+
+	source.append("\t\tfor entry in found 'eachDescendant'\n")
+	source.append("\t\t\tprintError(\"{descendantsFramePrefix()}\{entry.pid\} \{entry.name\}{separator}\{{helperType}.descendantToken()\}\\n\")\n")
+	source.append("\t\tend 'eachDescendant'\n\n")
+	source.append("\t\tlet descendants = found.count()\n")
+
+	return source
+end 'descendantReportSource'

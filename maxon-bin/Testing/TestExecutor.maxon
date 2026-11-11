@@ -186,9 +186,10 @@ type ObservedTest
 	export let output as String
 	export let wroteOutput as bool
 	export let leftRunning as StringArray
+	export let countedLeft as DescendantCount
 
-	static function create(index ElementIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output String, wroteOutput bool, leftRunning StringArray) returns ObservedTest
-		return Self{index: index, ended: ended, passed: passed, nanos: nanos, thrown: thrown, output: output, wroteOutput: wroteOutput, leftRunning: leftRunning}
+	static function create(index ElementIndex, ended bool, passed bool, nanos DurationNanos, thrown ThrownReport, output String, wroteOutput bool, leftRunning StringArray, countedLeft DescendantCount) returns ObservedTest
+		return Self{index: index, ended: ended, passed: passed, nanos: nanos, thrown: thrown, output: output, wroteOutput: wroteOutput, leftRunning: leftRunning, countedLeft: countedLeft}
 	end 'create'
 end 'ObservedTest'
 
@@ -214,11 +215,12 @@ type TestStreamWalk
 	var inFlightThrown as ThrownReport
 	var inFlightOutput as StreamLines
 	var inFlightLeft as StringArray
+	var inFlightCounted as DescendantCount
 
 	var leftAtExit as StringArray
 
 	static function create() returns TestStreamWalk
-		return Self{stray: StreamLines.create(), inFlight: false, inFlightIndex: 0, inFlightEnded: false, inFlightPassed: false, inFlightNanos: 0, inFlightThrown: ThrownReport.absent, inFlightOutput: StreamLines.create(), inFlightLeft: StringArray.create(0), leftAtExit: StringArray.create(0)}
+		return Self{stray: StreamLines.create(), inFlight: false, inFlightIndex: 0, inFlightEnded: false, inFlightPassed: false, inFlightNanos: 0, inFlightThrown: ThrownReport.absent, inFlightOutput: StreamLines.create(), inFlightLeft: StringArray.create(0), inFlightCounted: 0, leftAtExit: StringArray.create(0)}
 	end 'create'
 
 	// A begin marker. Whatever was already running is closed first — a begin with no matching end is
@@ -234,12 +236,13 @@ type TestStreamWalk
 		inFlightThrown = ThrownReport.absent
 		inFlightOutput = StreamLines.create()
 		inFlightLeft = StringArray.create(0)
+		inFlightCounted = 0
 	end 'began'
 
 	// An end marker. One for a test that did not begin — or for the wrong one — is IGNORED: the
 	// dispatcher cannot emit that, so the stream is damaged, and leaving the running test open reports
 	// it as crashed, which is the loud outcome that deserves.
-	function ended(index ElementIndex, passed bool, nanos DurationNanos, observed ObservedTestArray)
+	function ended(index ElementIndex, passed bool, nanos DurationNanos, descendants DescendantCount, observed ObservedTestArray)
 		if not inFlight or inFlightIndex != index 'notTheTestThatIsRunning'
 			return
 		end 'notTheTestThatIsRunning'
@@ -247,6 +250,7 @@ type TestStreamWalk
 		inFlightEnded = true
 		inFlightPassed = passed
 		inFlightNanos = nanos
+		inFlightCounted = descendants
 		closeInFlight(observed)
 	end 'ended'
 
@@ -295,7 +299,7 @@ type TestStreamWalk
 			return
 		end 'nothingRunning'
 
-		observed.push(ObservedTest.create(inFlightIndex, ended: inFlightEnded, passed: inFlightPassed, nanos: inFlightNanos, thrown: inFlightThrown, output: inFlightOutput.text(), wroteOutput: inFlightOutput.wroteAny(), leftRunning: inFlightLeft))
+		observed.push(ObservedTest.create(inFlightIndex, ended: inFlightEnded, passed: inFlightPassed, nanos: inFlightNanos, thrown: inFlightThrown, output: inFlightOutput.text(), wroteOutput: inFlightOutput.wroteAny(), leftRunning: inFlightLeft, countedLeft: inFlightCounted))
 		inFlight = false
 	end 'closeInFlight'
 end 'TestStreamWalk'
@@ -379,7 +383,7 @@ function attributeLaunch(plan TestLaunchPlan, group TestFileGroup, expected Test
 	for event in parseTestEvents(attributable.stderr) 'eachEvent'
 		match event 'shape'
 			began(index) then walk.began(index, observed: reportedTests)
-			ended(index, passed, nanos) then walk.ended(index, passed: passed, nanos: nanos, observed: reportedTests)
+			ended(index, passed, nanos, descendants) then walk.ended(index, passed: passed, nanos: nanos, descendants: descendants, observed: reportedTests)
 			threw(errorType, errorCase, file, line) then walk.threw(errorType, errorCase: errorCase, file: file, line: line)
 			outputLine(text) then walk.wrote(text)
 		end 'shape'
@@ -417,6 +421,11 @@ function resultFor(group TestFileGroup, observation ObservedTest, stray String) 
 	let test = testOf(group, index: observation.index)
 
 	if observation.ended 'finishedUnderItsOwnPower'
+		match checkDescendantCount("the test binary", subject: TestReportSubject, counted: observation.countedLeft, named: observation.leftRunning.count() as DescendantCount) 'count'
+			disagrees(report) then return UnitTestResult.create(observation.index, test: test, outcome: UnitTestOutcome.failed, nanos: observation.nanos, thrown: observation.thrown, output: report)
+			agrees then break
+		end 'count'
+
 		let outcome = UnitTestOutcome.passed if observation.passed else UnitTestOutcome.failed
 
 		if not observation.leftRunning.isEmpty() 'itLeftProcesses'

@@ -814,7 +814,10 @@ left.
 it ends FAILS, naming each one as `<pid> <name>`, and the process is ended. A process the test waited for
 has ended by then; a test that starts a detached child polls `Process.isAlive` until it answers `false`.
 The check is the one [`spec-test`](#maxon-spec-test) makes, and `MAXON_TRACK_DESCENDANTS`
-arms it.
+arms it. The test binary names each process in a stderr frame ending with the token `maxon test` armed it
+with, passed to the binary as `--descendant-token=<token>`, and its `ended` line for the test carries the
+count; `maxon test` takes out the frames bearing its token, and a count that differs from them fails the
+test. A frame a test prints with any other token, or none, is test output.
 
 **Isolation.** By default each test **file** runs in its own process. If a test crashes the process, the
 harness re-runs the remaining tests of that file so one crash does not hide the others' results, and a
@@ -860,7 +863,9 @@ itself, such as a debugger. Run from the directory `maxon test` would run it in,
 | `101` | A test leaked (see [The leak check](#the-leak-check)) |
 | `1` | A panic |
 
-The VS Code extension's **Debug Test** runs it this way.
+The VS Code extension's **Debug Test** runs it this way. A binary that finds a process a test left running
+panics, naming `--descendant-token`, unless it was given `--descendant-token=<token>`, which `maxon test`
+passes.
 
 **Example.** A failing expectation, then the fix:
 
@@ -1146,7 +1151,7 @@ driver's own. `maxon monitor`, `maxon coverage` and `maxon profile` have their o
 |----------|--------|
 | `MAXON_MAX_PROCS` | The number of processors the green-thread scheduler runs on. Default: the machine's processor count. A decimal number from 1 to 2147483647, optionally led by `+`, sets it exactly, above the machine's count as well as below it; any other value is ignored. `Scheduler.processorCount()` answers the resulting count. |
 | `MAXON_PREEMPT` | `off` stops the scheduler from preempting a green thread that holds a processor, for a deliberate, reproducible run. Unset, empty or `on` is normal preemption. Any other value aborts the program at start. |
-| `MAXON_TRACK_DESCENDANTS` | Set by `maxon test` and `spec-test` for every program they run on a native target. A value starting `A` arms descendant tracking when the program starts, so [`Process.endDescendants()`](STDLIB_REFERENCE.md#process) finds every process it started; the program then rewrites the `A` to `D`, so the processes it starts inherit the variable without arming. A host that refuses the tracking ends the program at start with a fatal naming it. With any other value, or unset, a program that calls `Process.endDescendants()` tracks its descendants from startup, for that call alone; every other program runs untracked. |
+| `MAXON_TRACK_DESCENDANTS` | Set by `maxon test` and `spec-test` for every program they run on a native target. A value starting `A` arms descendant tracking when the program starts, so [`Process.endDescendants()`](STDLIB_REFERENCE.md#process) finds every process it started; the text after the `A` is the token the program ends each stderr frame with, naming a process left running (`@@maxon-spec@@!<pid> <name>`, a tab, the token); the program then rewrites the `A` to `D`, so the processes it starts inherit the variable without arming. A host that refuses the tracking ends the program at start with a fatal naming it. With any other value, or unset, a program that calls `Process.endDescendants()` tracks its descendants from startup, for that call alone; every other program runs untracked. |
 
 `MAXON_DEBUGSTREAM` is set by `maxon monitor`, and by `maxon debug --trace`, to attach a `--debugstream`
 program to the ring the driver created. You do not set it yourself.

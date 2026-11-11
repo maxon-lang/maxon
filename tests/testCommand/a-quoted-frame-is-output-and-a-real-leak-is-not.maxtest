@@ -1,0 +1,33 @@
+let FramesCase = "a-quoted-frame-is-output-and-a-real-leak-is-not"
+let MidLineTestName = "a test that quotes a descendant frame mid-line leaves nothing running"
+let OtherRunTestName = "a test that echoes a child frame of another run on a line of its own leaves nothing running"
+let NoTokenTestName = "a test that echoes a frame with no token on a line of its own leaves nothing running"
+let ForgedTestName = "a test that forges a frame carrying the token it was given is refused by the count check"
+let UnterminatedLeakTestName = "a test that leaves a sleeper after unterminated stderr still leaves it running"
+let UnterminatedLeakHeadline = "the test left 1 process running: "
+let ForgedCountReport = "counted 0 process(es) left running by this test, and its error output names 1"
+let TokenOptionName = "--descendant-token"
+
+test 'a frame quoted mid-line or on its own line is output, a forged one is refused, and a leak after unterminated stderr is still named'
+	let run = runFixture(FramesCase)
+	let report = withoutCarriageReturns("{run.stdout}{run.stderr}")
+
+	Expect.equal(run.exitCode(), expected: 1, message: "the fixture's last two tests fail, so its run exits 1. It printed: {report}")
+	Expect.contains(report, needle: "✓ {MidLineTestName}", message: "a frame quoted inside a line of the test's own output is not a leak. It printed: {report}")
+	Expect.contains(report, needle: "✓ {OtherRunTestName}", message: "a frame carrying another run's token, echoed on a line of its own, is not a leak. It printed: {report}")
+	Expect.contains(report, needle: "✓ {NoTokenTestName}", message: "a frame carrying no token, echoed on a line of its own, is not a leak. It printed: {report}")
+	Expect.contains(report, needle: "✗ {ForgedTestName}", message: "a frame that carries the run's own token but that the binary never counted fails the test. It printed: {report}")
+	Expect.contains(report, needle: ForgedCountReport, message: "the failure says the binary counted none and the error output names one. It printed: {report}")
+	Expect.contains(report, needle: "✗ {UnterminatedLeakTestName}", message: "the test that leaves a sleeper after stderr with no trailing newline fails. It printed: {report}")
+	Expect.contains(report, needle: UnterminatedLeakHeadline, message: "the failure names the process the test left. It printed: {report}")
+	Expect.contains(report, needle: " 3 pass\n 2 fail\n", message: "exactly the forging test and the leaking test fail. It printed: {report}")
+
+	let listed = runFixture(FramesCase, extraArguments: [ListFlag, BuildFlag, JsonFlag])
+	let document = Json.parse(listed.stdout)
+	let binary = FilePath.from(document.getString(document.root, key: BinaryKey))
+	let bare = Subprocess.run(Executable.path(binary), arguments: StringArray.create(0))
+	let bareReport = withoutCarriageReturns("{bare.stdout}{bare.stderr}")
+
+	Expect.notEqual(bare.exitCode(), expected: 0, message: "a binary that finds a process left running and was given no token has nothing it may report, and stops. It printed: {bareReport}")
+	Expect.contains(bareReport, needle: TokenOptionName, message: "the stop names the option that was missing. It printed: {bareReport}")
+end 'a frame quoted mid-line or on its own line is output, a forged one is refused, and a leak after unterminated stderr is still named'

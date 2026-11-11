@@ -20,7 +20,7 @@ export union TestEvent
 	began(index ElementIndex)
 
 	// A test finished under its own power, passing or failing.
-	ended(index ElementIndex, passed bool, nanos DurationNanos)
+	ended(index ElementIndex, passed bool, nanos DurationNanos, descendants DescendantCount)
 
 	// An error reached the end of a test body unhandled, reported by the handler the compiler
 	// substitutes. It arrives BEFORE the `ended` of the test it belongs to.
@@ -39,7 +39,7 @@ let WrappedLineParts = 3
 
 // Field counts per shape, so a malformed line is DETECTED rather than indexed into.
 let BeganFieldCount = 2
-let EndedFieldCount = 4
+let EndedFieldCount = 5
 let ThrewFieldCount = 4
 
 // ⭐⭐ **READ A TEST BINARY'S STDERR AS ONE ORDERED STREAM** — protocol lines and the program's own
@@ -144,6 +144,7 @@ function parseEndedLine(fields StringArray) returns ProtocolLineParse
 	let indexField = try fields.get(1) otherwise panic("parseEndedLine: field 1 exists — the count was checked above")
 	let outcome = try fields.get(2) otherwise panic("parseEndedLine: field 2 exists — the count was checked above")
 	let nanosField = try fields.get(3) otherwise panic("parseEndedLine: field 3 exists — the count was checked above")
+	let descendantsField = try fields.get(4) otherwise panic("parseEndedLine: field 4 exists — the count was checked above")
 
 	if outcome != TestProtocolOutcomePass and outcome != TestProtocolOutcomeFail 'notAnOutcomeThisProtocolDefines'
 		return ProtocolLineParse.notProtocol
@@ -151,19 +152,26 @@ function parseEndedLine(fields StringArray) returns ProtocolLineParse
 
 	match parseProtocolNumber(indexField) 'theIndex'
 		invalid then return ProtocolLineParse.notProtocol
-		value(index) then return endedEventFor(index, outcome: outcome, nanosField: nanosField)
+		value(index) then return endedEventFor(index, outcome: outcome, nanosField: nanosField, descendantsField: descendantsField)
 	end 'theIndex'
 end 'parseEndedLine'
 
 // The rest of an end marker, once its index has parsed. A second function rather than a second `match`
 // nested inside the first, because a `match` arm is one statement — the shape every two-field parse in
 // this file takes.
-function endedEventFor(index ProtocolNumber, outcome String, nanosField String) returns ProtocolLineParse
+function endedEventFor(index ProtocolNumber, outcome String, nanosField String, descendantsField String) returns ProtocolLineParse
 	match parseProtocolNumber(nanosField) 'theDuration'
 		invalid then return ProtocolLineParse.notProtocol
-		value(nanos) then return ProtocolLineParse.event(TestEvent.ended(index as ElementIndex, passed: outcome == TestProtocolOutcomePass, nanos: nanos as DurationNanos))
+		value(nanos) then return endedWithDescendants(index, outcome: outcome, nanos: nanos, descendantsField: descendantsField)
 	end 'theDuration'
 end 'endedEventFor'
+
+function endedWithDescendants(index ProtocolNumber, outcome String, nanos ProtocolNumber, descendantsField String) returns ProtocolLineParse
+	match parseProtocolNumber(descendantsField) 'theCount'
+		invalid then return ProtocolLineParse.notProtocol
+		value(count) then return ProtocolLineParse.event(TestEvent.ended(index as ElementIndex, passed: outcome == TestProtocolOutcomePass, nanos: nanos as DurationNanos, descendants: count as DescendantCount))
+	end 'theCount'
+end 'endedWithDescendants'
 
 function parseThrewLine(fields StringArray) returns ProtocolLineParse
 	if fields.count() != ThrewFieldCount 'wrongShape'

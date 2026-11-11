@@ -497,8 +497,13 @@ from an empty one of its own. Every entry still in it when the run ends is repor
 On every native lane a case that leaves a process running FAILS, naming each one as `<pid> <name>`, and
 the process is ended. The harness sets `MAXON_TRACK_DESCENDANTS` for every execution; the program's runtime
 arms itself from it, and at the end of the case, after `main` returns and its green threads have finished,
-ends each descendant still running and names it on a stderr line of its own, which the harness takes out of
-the stderr the case is compared against. A process the case waited for has ended by then; a case that
+ends each descendant still running and names it on a stderr line of its own, written in one write as
+`@@maxon-spec@@!<pid> <name>`, a tab and the token. The token is `<harness pid>-<serial>`; the harness arms
+the program with `MAXON_TRACK_DESCENDANTS=A<token>` and hands a generated batch program the same token as
+`--descendant-token=<token>`. The harness takes out of the stderr the case is compared against the frames
+that carry its own token; every other line, a child's echoed frame included, is output the case is compared
+on, and the count the program ends with must equal the frames taken out. A process the case waited for has
+ended by then; a case that
 starts a detached child polls `Process.isAlive` until it answers `false`. A host that refuses the tracking
 ends the program with the fatal `the host refused to track this process's descendants`. On macOS a
 descendant is found through the process tree, through the token in its environment, and through the

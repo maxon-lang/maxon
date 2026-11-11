@@ -415,15 +415,17 @@ exit=0 found=2 direct=true orphan=true ended=true
 <!-- process: own -->
 <!-- unsupported-targets: wasm32-wasi -->
 The program runs itself as a child with `MAXON_TRACK_DESCENDANTS=A<token>`. The child detaches a long sleeper
-and returns 0. Its exit gate finds the sleeper, ends it, and writes one framed line to its stderr naming it;
-the exit code stays 0.
+and returns 0. Its exit gate finds the sleeper, ends it, and writes one framed line to its stderr naming it and
+ending with a tab and the token the child was armed with; the exit code stays 0.
 ```maxon
 let EndsWithinMs = 30000
 let PollMs = 50
 let SleeperLabel = "sleeper="
 let TrackVariable = "MAXON_TRACK_DESCENDANTS"
 let ArmedValue = "A4242"
+let ArmedToken = "4242"
 let FramePrefix = "@@maxon-spec@@!"
+let TokenSeparator = "\t"
 
 typealias PidArray = Array with Pid
 
@@ -460,6 +462,24 @@ function framedPids(text String) returns PidArray
 	return found
 end 'framedPids'
 
+function framedTokens(text String) returns StringArray
+	var found = StringArray.create(0)
+
+	for line in text.split("\n") 'eachLine'
+		if line.startsWith(FramePrefix) 'framed'
+			let fields = line.split(TokenSeparator)
+
+			if fields.count() == 2 'carriesAToken'
+				let token = try fields.get(1) otherwise continue
+
+				found.push(token.trim())
+			end 'carriesAToken'
+		end 'framed'
+	end 'eachLine'
+
+	return found
+end 'framedTokens'
+
 function main() returns ExitCode
 	if CommandLine.args().count() > 1 'asTheChild'
 		return detachSleeper()
@@ -478,7 +498,15 @@ function main() returns ExitCode
 	let child = try config.run() otherwise return 3
 	let sleeper = try int.fromString(child.stdout.trim().replace(SleeperLabel, with: "")) otherwise return 4
 	let framed = framedPids(child.stderr)
+	let tokens = framedTokens(child.stderr)
 	var listed = false
+	var tokened = false
+
+	if tokens.count() == 1 'oneToken'
+		let only = try tokens.get(0) otherwise return 5
+
+		tokened = only == ArmedToken
+	end 'oneToken'
 
 	for pid in framed 'eachFrame'
 		if pid == (sleeper as Pid) 'ours'
@@ -493,7 +521,7 @@ function main() returns ExitCode
 		waitedMs = waitedMs + PollMs
 	end 'untilEnded'
 
-	print("exit={child.status.code()} framed={framed.count()} listed={listed} ended={not Process.isAlive(sleeper as Pid)}\n")
+	print("exit={child.status.code()} framed={framed.count()} listed={listed} tokened={tokened} ended={not Process.isAlive(sleeper as Pid)}\n")
 	return 0
 end 'main'
 ```
@@ -501,7 +529,7 @@ end 'main'
 0
 ```
 ```stdout
-exit=0 framed=1 listed=true ended=true
+exit=0 framed=1 listed=true tokened=true ended=true
 ```
 
 <!-- test: process-descendants.an-armed-case-that-waits-for-its-child-reports-nothing -->
