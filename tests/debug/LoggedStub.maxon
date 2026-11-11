@@ -4,7 +4,6 @@ export let StubLogTailLines = 150
 let LoggedStubLogStem = "stub-"
 let LoggedStubLogExtension = ".log"
 let LoggedStubDirectoryName = "logged-stub"
-let LoggedStubName = "debugserver"
 let LoggedStubLogOption = "--log-file="
 let LoggedStubFlagsOption = "--log-flags=0xffffffff"
 let LoggedStubPidSuffix = ".pid"
@@ -46,7 +45,7 @@ export function loggedStubEnvironment(staged FilePath, log FilePath) returns Env
 
 	let script = "#!/bin/sh\ncase \" $* \" in *\" -R \"*) echo $$ > {loggedStubPidFile(log).toString()}; exec {LoggedStubPath} \"$@\" {LoggedStubLogOption}{log.toString()} {LoggedStubFlagsOption};; esac\nexec {LoggedStubPath} \"$@\"\n"
 
-	try File.writeBinary(directory.join(LoggedStubName), content: script.toByteArray(), mode: FilePermission.executable) otherwise panic("the gate could not run — the logging stub could not be written.")
+	try File.writeBinary(directory.join(DebugServerName), content: script.toByteArray(), mode: FilePermission.executable) otherwise panic("the gate could not run — the logging stub could not be written.")
 
 	let inherited = try Process.environmentVariable(LoggedStubPathVariable) otherwise ""
 	var overrides = EnvMap.create()

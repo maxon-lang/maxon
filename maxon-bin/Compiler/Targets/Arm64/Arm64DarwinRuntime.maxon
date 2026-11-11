@@ -1141,67 +1141,141 @@ let DarwinSearchAllocFailedMessage = b"panic: out of memory opening a directory 
 // mrt_darwin_last_error() -> x0 = the Win32 code the Std tier classifies
 // ==========================================================================
 
-// ⭐⭐ **`GetLastError()` ON THIS LANE: FETCH THE ERRNO AND HAND IT TO THE SHARED TRANSLATOR.** The
-// MAPPING is `Arm64PosixRuntime.arm64EmitErrnoToWin32`'s; the two numbers the OSes disagree about are passed
-// in, and every other errno it tests is the same on both POSIX lanes. What is Darwin's beyond those is only
-// the FETCH: on a green thread, the word its failure arms stashed (`GtRuntime.GtOffLastError`);
-// elsewhere libc's thread-local `__error()`. The Linux lane has no libc and reads the word its own
-// chunks stashed.
-function buildArm64DarwinLastErrorChunk(greenThreads bool) returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+// Where a failure arm keeps its errno, fixed per program at emit time. libc's live errno cannot be the
+// home: any libc call after the failure (a `free`, the errno clear before each `proc_list*` call)
+// overwrites the reason `lastOsErrorCode()` reports. A program without green threads runs one OS thread
+// (`osThreadCreate` is emitted only from `SchedRuntime`, installed behind `usesGt`), so one process-wide
+// word is its errno.
+enum DarwinErrnoHome
+	greenThread
+	dataWord
+	unread
+end 'DarwinErrnoHome'
 
+let DarwinErrnoLabel = b"__mrt_darwin_errno"
+
+function darwinUsesFilesystem(usage RuntimeUsage) returns bool
+	return usage.usesManagedFile or usage.usesManagedDirectory
+end 'darwinUsesFilesystem'
+
+function darwinCarriesLastError(usage RuntimeUsage) returns bool
+	return darwinUsesFilesystem(usage) or usage.usesChildPipes
+end 'darwinCarriesLastError'
+
+function darwinErrnoHome(usage RuntimeUsage) returns DarwinErrnoHome
+	if usage.usesGt 'perGreenThread'
+		return DarwinErrnoHome.greenThread
+	end 'perGreenThread'
+
+	if darwinCarriesLastError(usage) 'processWide'
+		return DarwinErrnoHome.dataWord
+	end 'processWide'
+
+	return DarwinErrnoHome.unread
+end 'darwinErrnoHome'
+
+// `darwinErrnoHome` is the one predicate deciding the word's layout, its writer and its reader: a store
+// or load gated on anything else can name a `.data` slot nothing laid out.
+
+export function arm64DarwinRuntimeGlobals(usage RuntimeUsage, target Target) returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create(0)
+
+	if target.cpu != CpuArch.arm64 or target.os != Os.macos 'notThisLane'
+		return out
+	end 'notThisLane'
+
+	if darwinErrnoHome(usage) != DarwinErrnoHome.dataWord 'noDataWord'
+		return out
+	end 'noDataWord'
+
+	pushRuntimeGlobal(out, label: DarwinErrnoLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
+	return out
+end 'arm64DarwinRuntimeGlobals'
+
+function arm64DarwinEmitLoadGreenThreadErrno(asm Arm64RuntimeAsm)
 	let libcErrno = asm.newLabel()
 	let fetched = asm.newLabel()
 
-	if greenThreads 'mayRunOnAGreenThread'
-		emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm, bail: libcErrno)
-		arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64DoorGtReg, byteOffset: GtOffLastError as MachineWord)
-		arm64EmitBranchTo(asm, label: fetched)
-	end 'mayRunOnAGreenThread'
+	emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm, bail: libcErrno)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64DoorGtReg, byteOffset: GtOffLastError as MachineWord)
+	arm64EmitBranchTo(asm, label: fetched)
 
 	asm.placeLabel(libcErrno)
 	arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x0)
 
 	asm.placeLabel(fetched)
+end 'arm64DarwinEmitLoadGreenThreadErrno'
+
+function arm64DarwinEmitLoadErrnoDataWord(asm Arm64RuntimeAsm)
+	arm64EmitDataAddr(asm, dest: Arm64Register.x0, label: DarwinErrnoLabel)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: 0)
+end 'arm64DarwinEmitLoadErrnoDataWord'
+
+function arm64DarwinEmitStoreGreenThreadErrno(asm Arm64RuntimeAsm, finished BlockId)
+	emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm, bail: finished)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x0, base: Arm64DoorGtReg, byteOffset: GtOffLastError as MachineWord)
+end 'arm64DarwinEmitStoreGreenThreadErrno'
+
+function arm64DarwinEmitStoreErrnoDataWord(asm Arm64RuntimeAsm)
+	arm64EmitDataAddr(asm, dest: Arm64DoorGtReg, label: DarwinErrnoLabel)
+	arm64EmitStoreWord32At(asm, src: Arm64Register.x0, base: Arm64DoorGtReg, byteOffset: 0)
+end 'arm64DarwinEmitStoreErrnoDataWord'
+
+// ⭐⭐ **`GetLastError()` ON THIS LANE: FETCH THE ERRNO AND HAND IT TO THE SHARED TRANSLATOR.** The
+// MAPPING is `Arm64PosixRuntime.arm64EmitErrnoToWin32`'s; the two numbers the OSes disagree about are passed
+// in, and every other errno it tests is the same on both POSIX lanes. What is Darwin's beyond those is only
+// the FETCH, from the program's `DarwinErrnoHome`: on a green thread, the word its failure arms stashed
+// (`GtRuntime.GtOffLastError`), and off one libc's thread-local `__error()`; in a program without green
+// threads, `__mrt_darwin_errno`. The Linux lane has no libc and reads the word its own chunks stashed.
+
+function buildArm64DarwinLastErrorChunk(errnoHome DarwinErrnoHome) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	match errnoHome 'home'
+		greenThread then arm64DarwinEmitLoadGreenThreadErrno(asm)
+		dataWord then arm64DarwinEmitLoadErrnoDataWord(asm)
+		unread then panic("buildArm64DarwinLastErrorChunk: the program has a last-error reader but its errno home says nothing is kept")
+	end 'home'
+
 	arm64EmitErrnoToWin32(asm, wouldBlock: DarwinErrno.wouldBlock.rawValue, dirNotEmpty: DarwinErrno.directoryNotEmpty.rawValue)
 
 	return asm.finishFunction(HostLastErrorName)
 end 'buildArm64DarwinLastErrorChunk'
 
-// Stash libc's `errno`, or the errno in x0, in the running green thread
-// (`GtRuntime.GtOffLastError`). A failure arm that calls neither reports, on a green thread,
-// whatever reason was stashed last. Both leave x0 and x1 as they found them, so an arm stashes
+// Stash libc's `errno`, or the errno in x0, in the program's `DarwinErrnoHome`. A failure arm that
+// calls neither reports whatever reason was stashed last. Both leave x0 and x1 as they found them, so an arm stashes
 // without disturbing the answer it is about to give or the errno it goes on testing.
 let DarwinStashErrnoName = b"mrt_darwin_stash_errno"
 
 let DarwinStashErrnoValueName = b"mrt_darwin_stash_errno_value"
 
-function buildArm64DarwinStashErrnoChunk(greenThreads bool) returns FunctionCodeChunk
+function buildArm64DarwinStashErrnoChunk(errnoHome DarwinErrnoHome) returns FunctionCodeChunk
 	let SlotAnswer = 0
 	let SlotSecondAnswer = 1
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
-	if greenThreads 'mayRunOnAGreenThread'
+	if errnoHome != DarwinErrnoHome.unread 'keepsTheReason'
 		arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotAnswer)
 		arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotSecondAnswer)
 		arm64DarwinEmitLoadErrno(asm, dest: Arm64Register.x0)
 		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoValueName)
 		arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotAnswer)
 		arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotSecondAnswer)
-	end 'mayRunOnAGreenThread'
+	end 'keepsTheReason'
 
 	return asm.finishFunction(DarwinStashErrnoName)
 end 'buildArm64DarwinStashErrnoChunk'
 
-function buildArm64DarwinStashErrnoValueChunk(greenThreads bool) returns FunctionCodeChunk
+function buildArm64DarwinStashErrnoValueChunk(errnoHome DarwinErrnoHome) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	let finished = asm.newLabel()
 
-	if greenThreads 'mayRunOnAGreenThread'
-		emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm, bail: finished)
-		arm64EmitStoreWord32At(asm, src: Arm64Register.x0, base: Arm64DoorGtReg, byteOffset: GtOffLastError as MachineWord)
-	end 'mayRunOnAGreenThread'
+	match errnoHome 'home'
+		greenThread then arm64DarwinEmitStoreGreenThreadErrno(asm, finished: finished)
+		dataWord then arm64DarwinEmitStoreErrnoDataWord(asm)
+		unread then break
+	end 'home'
 
 	asm.placeLabel(finished)
 	return asm.finishFunction(DarwinStashErrnoValueName)
@@ -2339,6 +2413,9 @@ end 'arm64DarwinCaptureDescriptor'
 // different questions is how a `bl` to an absent symbol happens, and an unresolved `bl` is a link failure
 // rather than a diagnostic.
 export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
+	let errnoHome = darwinErrnoHome(usage)
+	let kill = PosixHostCall.importCall(OsImportSlot.kill)
+
 	// Unconditional: every hand-assembled chunk's libSystem call goes through it, and so does a compiled
 	// function's in a green-thread program.
 	chunks.push(buildArm64DarwinLibcCallChunk(usage.usesGt))
@@ -2348,8 +2425,8 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	end 'doorFatal'
 
 	chunks.push(buildArm64DarwinStatusOrErrnoChunk())
-	chunks.push(buildArm64DarwinStashErrnoChunk(usage.usesGt))
-	chunks.push(buildArm64DarwinStashErrnoValueChunk(usage.usesGt))
+	chunks.push(buildArm64DarwinStashErrnoChunk(errnoHome))
+	chunks.push(buildArm64DarwinStashErrnoValueChunk(errnoHome))
 
 	if usage.usesWallClock 'wallClock'
 		chunks.push(buildArm64DarwinWallClockChunk())
@@ -2383,12 +2460,10 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	end 'terminalDetection'
 
 	if usage.usesProcessLiveness 'processLiveness'
-		chunks.push(buildArm64PosixProcProbeChunk(PosixHostCall.importCall(OsImportSlot.kill), lane: PosixTreeLane.macos))
+		chunks.push(buildArm64PosixProcProbeChunk(kill, lane: PosixTreeLane.macos))
 	end 'processLiveness'
 
 	if usage.usesProcessDescendants 'processDescendants'
-		let kill = PosixHostCall.importCall(OsImportSlot.kill)
-
 		chunks.push(buildArm64PosixProcDescendantsChunk(kill, lane: PosixTreeLane.macos))
 		chunks.push(buildArm64DarwinProcTreeAdoptChunk(kill, kind: PosixProcWalkKind.descendants))
 		chunks.push(buildArm64DarwinDescendantsSweepChunk(kill))
@@ -2399,8 +2474,8 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	end 'processDescendants'
 
 	if posixUsesProcessEndWait(usage) 'processEndWait'
-		chunks.push(buildArm64PosixProcAwaitEndedChunk(PosixTreeLane.macos))
-		chunks.push(buildArm64DarwinStopConfirmChunk())
+		chunks.push(buildArm64PosixProcAwaitEndedChunk(kill, lane: PosixTreeLane.macos))
+		chunks.push(buildArm64DarwinStopConfirmChunk(kill))
 	end 'processEndWait'
 
 	if posixReadsEnvironment(usage) 'envRead'
@@ -2466,9 +2541,9 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.importCall(OsImportSlot.pipe), flags: DarwinPipeNoFlags))
 		chunks.push(buildArm64DarwinNetpollArmPipeChunk())
 		chunks.push(buildArm64PosixPipePeekChunk(PosixPollCall.pollImport(OsImportSlot.poll)))
-		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.importCall(OsImportSlot.kill), lane: PosixTreeLane.macos))
-		chunks.push(buildArm64PosixProcTreeKillChunk(PosixHostCall.importCall(OsImportSlot.kill), lane: PosixTreeLane.macos))
-		chunks.push(buildArm64DarwinProcTreeAdoptChunk(PosixHostCall.importCall(OsImportSlot.kill), kind: PosixProcWalkKind.sessionTree))
+		chunks.push(buildArm64PosixProcTerminateChunk(kill, lane: PosixTreeLane.macos))
+		chunks.push(buildArm64PosixProcTreeKillChunk(kill, lane: PosixTreeLane.macos))
+		chunks.push(buildArm64DarwinProcTreeAdoptChunk(kill, kind: PosixProcWalkKind.sessionTree))
 	end 'childPipes'
 
 	if arm64PosixReadsTickClock(usage) 'clocks'
@@ -2495,14 +2570,14 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 	// so a gate that admitted one and not another would be a `CallFixup` naming a symbol nothing laid out.
 	// BOTH families reach it: `__mf_exists`/`__mf_stat` open a search on a bare path exactly as
 	// `__md_open_search` opens one on a glob.
-	let usesFilesystem = usage.usesManagedFile or usage.usesManagedDirectory
+	let usesFilesystem = darwinUsesFilesystem(usage)
 
 	// ⚠ **`GetLastError` HAS A PRODUCER OUTSIDE THE FILESYSTEM**, so it is gated one bit wider
 	// than the cluster below it: `__gt_subp_yield_read` classifies a failed read with it and every spawn
 	// failure publishes through it. Splitting it out of the cluster is what keeps the cluster's own
 	// "these call each other, so gate them as one" argument intact.
-	if usesFilesystem or usage.usesChildPipes 'lastError'
-		chunks.push(buildArm64DarwinLastErrorChunk(usage.usesGt))
+	if darwinCarriesLastError(usage) 'lastError'
+		chunks.push(buildArm64DarwinLastErrorChunk(errnoHome))
 	end 'lastError'
 
 	if usesFilesystem 'filesystem'
@@ -3270,7 +3345,7 @@ end 'arm64DarwinEmitSessionAdmission'
 // goes on to the rest of the tree. The status is read through `PROC_PIDT_SHORTBSDINFO` because XNU
 // refuses `PROC_PIDTBSDINFO` for another user's process, the member a stop is likeliest refused for:
 // that refusal would come before the stop was ever tried.
-function buildArm64DarwinStopConfirmChunk() returns FunctionCodeChunk
+function buildArm64DarwinStopConfirmChunk(kill PosixHostCall) returns FunctionCodeChunk
 	let SlotPid = 0
 	let SlotDeadline = 1
 	let SlotInfo = 2
@@ -3305,7 +3380,7 @@ function buildArm64DarwinStopConfirmChunk() returns FunctionCodeChunk
 	arm64EmitBranchTo(asm, label: stopPending)
 
 	asm.placeLabel(notStopped)
-	arm64PosixEmitTreeStopOrBranchIfRefused(asm, kill: PosixHostCall.importCall(OsImportSlot.kill), lane: PosixTreeLane.macos, pidSlot: SlotPid, refused: settled)
+	arm64PosixEmitTreeStopOrBranchIfRefused(asm, kill: kill, lane: PosixTreeLane.macos, pidSlot: SlotPid, refused: settled)
 
 	asm.placeLabel(stopPending)
 	arm64PosixEmitSleepUnlessPast(asm, deadlineSlot: SlotDeadline, past: timedOut)

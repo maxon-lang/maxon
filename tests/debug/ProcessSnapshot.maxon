@@ -2,7 +2,6 @@ let ProcessListingTool = "ps"
 let ProcessListingMs = 10000
 let ProcessListingColumns = "pid,ppid,pgid,stat,etime,args"
 let ProcessListingOption = "-axo"
-let StubProcessName = "debugserver"
 let StubAttachOption = "--attach="
 let ProcessIdColumn = 0
 let ParentColumn = 1
@@ -32,7 +31,7 @@ type ListedProcess
 	end 'create'
 
 	function isStub() returns bool
-		return self.line.contains(StubProcessName)
+		return self.line.contains(DebugServerName)
 	end 'isStub'
 
 	function stateColumns() returns String
@@ -189,7 +188,7 @@ export function processSnapshot(matching String) returns String
 
 		let family = ListedProcess.familyOf(matching, listed: listed)
 
-		return "{family.count()} process(es) name {matching}, descend from or share a process group with one that does, or are a {StubProcessName} attached to one:{LineFeed}{listedLines(family)}"
+		return "{family.count()} process(es) name {matching}, descend from or share a process group with one that does, or are a {DebugServerName} attached to one:{LineFeed}{listedLines(family)}"
 	#endif
 end 'processSnapshot'
 

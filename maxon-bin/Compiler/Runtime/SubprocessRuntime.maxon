@@ -1877,16 +1877,20 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let hProcessF = emitLoadField(module, block: reap, record: slotF, offset: SubpSlotHProcess, ids: ids)
 	let resSize = emitConst(module, block: reap, value: ResBytes, ids: ids)
 	let result = emitRawAlloc(module, block: reap, byteCount: resSize, ids: ids)
+	let waitedStatus = emitLoadField(module, block: reap, record: state, offset: WcStatus, ids: ids)
+	let exitedNormally = emitCompareWithConstant(module, block: reap, value: waitedStatus, pred: StdCmpPred.eq, against: SubpStatusExited, ids: ids)
 	emitSubpBranchOnTakenStatus(module, block: reap, hProcess: hProcessF, whenLost: statusLost, whenTaken: statusTaken, ids: ids)
 
-	emitStoreField(module, block: statusLost, record: result, offset: ResStatus, value: emitConst(module, block: statusLost, value: SubpStatusReapedElsewhere, ids: ids))
+	// A deadline that fired is the cause even when another process then took the child's status, so a
+	// timed-out status stands, as `__gt_subp_wait_exit` answers it; `reapedElsewhere` is only for a run
+	// no deadline ended.
+	let lostStatus = emitSelectWord(module, block: statusLost, cond: exitedNormally, whenSet: emitConst(module, block: statusLost, value: SubpStatusReapedElsewhere, ids: ids), whenClear: waitedStatus, ids: ids)
+	emitStoreField(module, block: statusLost, record: result, offset: ResStatus, value: lostStatus)
 	emitStoreField(module, block: statusLost, record: result, offset: ResCode, value: emitConst(module, block: statusLost, value: SubpUnreadExitCode, ids: ids))
 	module.setTerminator(statusLost, op: StdOp.branch(packed.id))
 
 	let reportedCode = emitSubpReportedExitCode(module, block: statusTaken, slot: slotF, hProcess: hProcessF, ids: ids)
 	let exitSignal = emitSubpExitSignalOf(module, block: statusTaken, hProcess: hProcessF, ids: ids)
-	let waitedStatus = emitLoadField(module, block: statusTaken, record: state, offset: WcStatus, ids: ids)
-	let exitedNormally = emitCompareWithConstant(module, block: statusTaken, value: waitedStatus, pred: StdCmpPred.eq, against: SubpStatusExited, ids: ids)
 	let hasASignal = emitCompareWithConstant(module, block: statusTaken, value: exitSignal, pred: StdCmpPred.ne, against: SubpNoExitSignal, ids: ids)
 	let killedBySignal = emitBin(module, block: statusTaken, a: exitedNormally, b: hasASignal, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let exitCode = emitSelectWord(module, block: statusTaken, cond: killedBySignal, whenSet: exitSignal, whenClear: reportedCode, ids: ids)

@@ -1955,10 +1955,13 @@ process in another session, and everything such a process starts are outside the
 already reparented to init, as one that double-forked is. On Windows the tree is the child's job object,
 which a process started with `runDetached()` leaves. When the tree cannot be fully ended (on Linux `/proc`
 cannot be read or listed, on macOS `proc_listchildpids` fails or a process never confirms its stop, an
-allocation fails, a process in the tree refuses its stop or kill, as one running as another user does, or the
+allocation fails, a process in the tree refuses its stop or kill, as one running as another user does, a
+killed process is still running five seconds later, or the
 kill of an exited child's process group is refused), the deadline throws `treeNotEnded`, after the child itself is reaped. It
 carries the output `timeout` carries on the same path and the error code of the step that failed as an
-[`OsErrorCode`](#names-a-library-signature-asks-for), and its reason is
+[`OsErrorCode`](#names-a-library-signature-asks-for). On Linux and macOS a process still running after those
+five seconds is sent one more kill, and the code is that kill's refusal (`EPERM`) or, when it is accepted,
+`ETIMEDOUT`. Its reason is
 `timed out after 5000ms, but the child's process tree could not be fully ended: os error <n>`. `deadlineFired()`
 is true for it and `timedOut()` false.
 
@@ -1969,7 +1972,8 @@ breakaway on it.
 `endOfStream` is what a `StreamingSubprocess` line reader throws when the stream it reads has ended.
 
 `statusLost(stdout, stderr)` is what `Subprocess.run` and `StreamingSubprocess.wait()` / `waitWithTimeout()` throw for a
-child that has ended while another process took its exit status, so the status is unavailable. It carries the
+child that has ended while another process took its exit status, so the status is unavailable, before any
+deadline fired; once a deadline has fired the answer is `timeout` or `treeNotEnded` wherever the status went. It carries the
 output `run` collected; `wait()` and `waitWithTimeout()` throw empty fields. Whether the status is available
 depends on whether the child finished dying before the process holding it, such as a debugger's stub, let it go.
 
@@ -2036,7 +2040,7 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
 | `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
 | `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes, or `treeNotEnded` when that tree cannot be fully ended; `0` waits forever. A child whose exit status went to another process throws `statusLost`. Both deadline errors carry empty output fields — a streaming child's bytes belong to the caller draining the streams. |
-| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no wait to expire, and returns once every process it killed has ended, waiting at most five seconds for them. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended or had not ended within those five seconds, and `unconfirmed(reason)` when the kill was refused and no wait saw the child end within those five seconds, or the handle is released. |
+| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no wait to expire, and returns once every process it killed has ended, waiting at most five seconds for them. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended or had not ended within those five seconds (its code as `treeNotEnded`'s, [SubprocessError](#subprocesserror)), and `unconfirmed(reason)` when the kill was refused and no wait saw the child end within those five seconds, or the handle is released. |
 | `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader` or the stderr side with a `StderrReader`: `reclaimStdout()` or `reclaimStderr()` first. |
 | `handle`, `released` | fields | — | The raw handle and whether it has been released. |
 

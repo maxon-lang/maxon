@@ -3644,16 +3644,26 @@ function x64LinuxEmitStateStoreImm(asm X64RuntimeAsm, stateDisp Imm32, field Imm
 	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: field, reg: X64Register.rax)
 end 'x64LinuxEmitStateStoreImm'
 
-function x64LinuxEmitTreeStop(asm X64RuntimeAsm, errnoHome LinuxErrnoHome)
-	let stopped = asm.newLabel()
+function x64LinuxEmitSignalMember(asm X64RuntimeAsm, errnoHome LinuxErrnoHome, signal MachineWord, pidSlot StackSize, gone BlockId, refused BlockId)
+	let accepted = asm.newLabel()
 
-	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: posixStopSignalNumber(Os.linux))
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: pidSlot)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: signal)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallKill)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: stopped)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: accepted)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: stopped)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: gone)
 	x64LinuxEmitStashErrno(asm, errnoHome: errnoHome)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: refused)
+
+	asm.placeLabel(accepted)
+end 'x64LinuxEmitSignalMember'
+
+function x64LinuxEmitTreeStop(asm X64RuntimeAsm, errnoHome LinuxErrnoHome, pidSlot StackSize)
+	let stopped = asm.newLabel()
+
+	x64LinuxEmitSignalMember(asm, errnoHome: errnoHome, signal: posixStopSignalNumber(Os.linux), pidSlot: pidSlot, gone: stopped, refused: stopped)
 
 	asm.placeLabel(stopped)
 end 'x64LinuxEmitTreeStop'
@@ -3958,7 +3968,7 @@ function x64LinuxEmitProcWalk(asm X64RuntimeAsm, kind PosixProcWalkKind, errnoHo
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdi, wide: false, index: X64Register.r8, indexScale: MemoryIndexScale.byFour)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.r8, imm: 1)
 	x64LinuxEmitStateStore(asm, stateDisp: stateDisp, field: PosixTreeStateCount, reg: X64Register.r8)
-	x64LinuxEmitTreeStop(asm, errnoHome: errnoHome)
+	x64LinuxEmitTreeStop(asm, errnoHome: errnoHome, pidSlot: ProcWalkSlotPid)
 
 	if kind == PosixProcWalkKind.descendants 'recordName'
 		x64LinuxEmitRecordComm(asm, stateDisp: stateDisp, statDisp: statDisp)
@@ -4154,12 +4164,13 @@ function x64LinuxEmitPollSleep(asm X64RuntimeAsm, timespecSlot StackSize)
 	x64LinuxEmitClockNanosleep(asm, timespecSlot: timespecSlot)
 end 'x64LinuxEmitPollSleep'
 
-function buildX64LinuxProcAwaitEndedChunk() returns FunctionCodeChunk
+function buildX64LinuxProcAwaitEndedChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(AwaitEndedSlotsEnd)
 
 	let nextPid = asm.newLabel()
 	let check = asm.newLabel()
 	let giveUp = asm.newLabel()
+	let late = asm.newLabel()
 	let ended = asm.newLabel()
 	let done = asm.newLabel()
 
@@ -4186,6 +4197,10 @@ function buildX64LinuxProcAwaitEndedChunk() returns FunctionCodeChunk
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: check)
 
 	asm.placeLabel(giveUp)
+	x64LinuxEmitSignalMember(asm, errnoHome: errnoHome, signal: PosixSigKill, pidSlot: AwaitEndedSlotPid, gone: ended, refused: late)
+	x64LinuxEmitPublishErrno(asm, value: LinuxErrno.timedOut.rawValue, errnoHome: errnoHome)
+
+	asm.placeLabel(late)
 	x64LinuxEmitSlotStoreImm(asm, slot: AwaitEndedSlotLate, value: 1)
 
 	asm.placeLabel(ended)
@@ -4227,7 +4242,7 @@ function buildX64LinuxProcTreeKillChunk(errnoHome LinuxErrnoHome) returns Functi
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rax, disp: 0, srcReg: X64Register.rdi, wide: false)
 	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateCount, value: 1)
 	x64LinuxEmitStateStoreImm(asm, stateDisp: stateDisp, field: PosixTreeStateCapacity, value: PosixTreeInitialEntries as MachineWord)
-	x64LinuxEmitTreeStop(asm, errnoHome: errnoHome)
+	x64LinuxEmitTreeStop(asm, errnoHome: errnoHome, pidSlot: ProcWalkSlotRoot)
 
 	x64LinuxEmitSlotLoad(asm, reg: X64Register.rdi, slot: ProcWalkSlotRoot)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallGetsid)
@@ -5444,7 +5459,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	end 'processDescendants'
 
 	if posixUsesProcessEndWait(usage) 'processEndWait'
-		chunks.push(buildX64LinuxProcAwaitEndedChunk())
+		chunks.push(buildX64LinuxProcAwaitEndedChunk(errnoHome))
 	end 'processEndWait'
 
 	if posixReadsMonotonicClock(usage) 'clocks'

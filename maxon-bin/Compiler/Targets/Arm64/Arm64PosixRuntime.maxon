@@ -1524,18 +1524,33 @@ function posixTreeStopSignal(lane PosixTreeLane) returns MachineWord
 	end 'lane'
 end 'posixTreeStopSignal'
 
+function posixTimedOutErrno(lane PosixTreeLane) returns FullRangeInt
+	return match lane 'lane'
+		linux gives LinuxErrno.timedOut.rawValue
+		macos gives DarwinErrno.timedOut.rawValue
+	end 'lane'
+end 'posixTimedOutErrno'
+
+function arm64PosixEmitSignalMember(asm Arm64RuntimeAsm, kill PosixHostCall, signal MachineWord, pidSlot StackSize, gone BlockId, refused BlockId)
+	let accepted = asm.newLabel()
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: pidSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: signal)
+	arm64PosixEmitHostCallUnstashedErrno(asm, call: kill)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: accepted)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: gone)
+	arm64PosixEmitStashUnstashedFailure(asm, call: kill)
+	arm64EmitBranchTo(asm, label: refused)
+
+	asm.placeLabel(accepted)
+end 'arm64PosixEmitSignalMember'
+
 export function arm64PosixEmitTreeStopOrBranchIfRefused(asm Arm64RuntimeAsm, kill PosixHostCall, lane PosixTreeLane, pidSlot StackSize, refused BlockId)
 	let stopped = asm.newLabel()
 
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: pidSlot)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: posixTreeStopSignal(lane))
-	arm64PosixEmitHostCallUnstashedErrno(asm, call: kill)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: stopped)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: stopped)
-	arm64PosixEmitStashUnstashedFailure(asm, call: kill)
-	arm64EmitBranchTo(asm, label: refused)
+	arm64PosixEmitSignalMember(asm, kill: kill, signal: posixTreeStopSignal(lane), pidSlot: pidSlot, gone: stopped, refused: refused)
 
 	asm.placeLabel(stopped)
 end 'arm64PosixEmitTreeStopOrBranchIfRefused'
@@ -1762,7 +1777,7 @@ function arm64PosixEmitBranchIfPidEnded(asm Arm64RuntimeAsm, lane PosixTreeLane,
 	end 'lane'
 end 'arm64PosixEmitBranchIfPidEnded'
 
-export function buildArm64PosixProcAwaitEndedChunk(lane PosixTreeLane) returns FunctionCodeChunk
+export function buildArm64PosixProcAwaitEndedChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk
 	let SlotList = 0
 	let SlotCount = 1
 	let SlotIndex = 2
@@ -1774,6 +1789,7 @@ export function buildArm64PosixProcAwaitEndedChunk(lane PosixTreeLane) returns F
 	let nextPid = asm.newLabel()
 	let check = asm.newLabel()
 	let giveUp = asm.newLabel()
+	let late = asm.newLabel()
 	let ended = asm.newLabel()
 	let done = asm.newLabel()
 
@@ -1801,6 +1817,10 @@ export function buildArm64PosixProcAwaitEndedChunk(lane PosixTreeLane) returns F
 	arm64EmitBranchTo(asm, label: check)
 
 	asm.placeLabel(giveUp)
+	arm64PosixEmitSignalMember(asm, kill: kill, signal: PosixSigKill, pidSlot: SlotPid, gone: ended, refused: late)
+	arm64PosixEmitPublishErrno(asm, call: kill, value: posixTimedOutErrno(lane))
+
+	asm.placeLabel(late)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 1)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotLate)
 
@@ -1836,7 +1856,10 @@ end 'buildArm64PosixProcAwaitEndedChunk'
 // deadline. A failed listing or allocation marks the walk failed, stashing the failing step's
 // errno, and the answer is `TerminateTreeIncomplete`. A member that refuses its stop (`EPERM`) has
 // its errno stashed and the walk goes on, so the rest of the tree still ends; the member's survival
-// is `mrt_host_proc_await_ended`'s to report. On macOS a member that never confirms its stop marks
+// is `mrt_host_proc_await_ended`'s to report, on every POSIX lane: at the bound it sends the survivor
+// SIGKILL once more and reports that answer, a refusal by its own errno and an accepted kill as
+// `ETIMEDOUT`, while `ESRCH` counts the member as ended. Without it the reason would be whatever was
+// stashed last. On macOS a member that never confirms its stop marks
 // the walk failed once the pass is done: it may have forked a child the walk missed, which nothing
 // later would see.
 export function buildArm64PosixProcTreeKillChunk(kill PosixHostCall, lane PosixTreeLane) returns FunctionCodeChunk

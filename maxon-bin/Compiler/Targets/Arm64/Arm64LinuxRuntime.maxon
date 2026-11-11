@@ -3125,6 +3125,8 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	assertLinuxSearchGeometry()
 
 	let errnoHome = linuxErrnoHome(usage)
+	let kill = PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome)
+	let treeLane = PosixTreeLane.linux(errnoHome)
 	let usesFilesystem = usage.usesManagedFile or usage.usesManagedDirectory
 
 	// ⭐ **FOUR CHUNKS ON FOUR INDEPENDENT GATES, EACH THE Std TIER'S OWN.** `usesWallClock` says the
@@ -3181,7 +3183,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	end 'processTrace'
 
 	if usage.usesProcessLiveness 'processLiveness'
-		chunks.push(buildArm64PosixProcProbeChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), lane: PosixTreeLane.linux(errnoHome)))
+		chunks.push(buildArm64PosixProcProbeChunk(kill, lane: treeLane))
 	end 'processLiveness'
 
 	if linuxReadsEnvironment(usage) 'envRead'
@@ -3262,18 +3264,18 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.syscall(Arm64LinuxSyscallPipe2, errnoHome: errnoHome), flags: LinuxOpenCloseOnExec))
 		chunks.push(buildArm64LinuxNetpollArmPipeChunk())
 		chunks.push(buildArm64PosixPipePeekChunk(PosixPollCall.ppollSyscall(Arm64LinuxSyscallPpoll, sigsetBytes: LinuxSigsetBytes)))
-		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), lane: PosixTreeLane.linux(errnoHome)))
-		chunks.push(buildArm64PosixProcTreeKillChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), lane: PosixTreeLane.linux(errnoHome)))
-		chunks.push(buildArm64LinuxProcTreeAdoptChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), errnoHome: errnoHome, kind: PosixProcWalkKind.sessionTree))
+		chunks.push(buildArm64PosixProcTerminateChunk(kill, lane: treeLane))
+		chunks.push(buildArm64PosixProcTreeKillChunk(kill, lane: treeLane))
+		chunks.push(buildArm64LinuxProcTreeAdoptChunk(kill, errnoHome: errnoHome, kind: PosixProcWalkKind.sessionTree))
 	end 'childPipes'
 
 	if usage.usesProcessDescendants 'processDescendants'
-		chunks.push(buildArm64PosixProcDescendantsChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), lane: PosixTreeLane.linux(errnoHome)))
-		chunks.push(buildArm64LinuxProcTreeAdoptChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome), errnoHome: errnoHome, kind: PosixProcWalkKind.descendants))
+		chunks.push(buildArm64PosixProcDescendantsChunk(kill, lane: treeLane))
+		chunks.push(buildArm64LinuxProcTreeAdoptChunk(kill, errnoHome: errnoHome, kind: PosixProcWalkKind.descendants))
 	end 'processDescendants'
 
 	if posixUsesProcessEndWait(usage) 'processEndWait'
-		chunks.push(buildArm64PosixProcAwaitEndedChunk(PosixTreeLane.linux(errnoHome)))
+		chunks.push(buildArm64PosixProcAwaitEndedChunk(kill, lane: treeLane))
 	end 'processEndWait'
 
 	if arm64PosixReadsTickClock(usage) or linuxUsesTraceBand(usage) 'clocks'
