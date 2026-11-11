@@ -10,7 +10,7 @@
 
 # ⭐ A COMMIT THAT TOUCHES NOTHING THIS WORKFLOW READS DOES NOT RUN IT. The build reads `maxon-bin/`,
 # `stdlib/`, `runtime/`, `vendor/`, `project.maxon` and the scripts re-included below; the jobs read
-# `specs/` and every `tests/` corpus, because `scripts/build-test-corpora.sh` builds each one and a
+# `specs/` and every `tests/` corpus, because `scripts/run-test-corpora.sh` runs each one and a
 # corpus that stops compiling must fail the run that changed it. Everything excluded below is read by
 # none of them — prose, editor and agent config, and projects with workflows of their own. `scripts/`
 # is excluded because no job here runs the rest of it, so a run on its change reports on code it never
@@ -52,7 +52,7 @@ on:
       - '!bench/**'
       - '!tests/README.md'
       - '!scripts/**'
-      - 'scripts/build-test-corpora.sh'
+      - 'scripts/run-test-corpora.sh'
       - 'scripts/build-script-programs.sh'
       - 'scripts/fetch-seed.sh'
       - 'scripts/seed-tag'
@@ -307,22 +307,9 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./scripts/fetch-vendor.sh ${{ matrix.target }}
 
-      - name: Ladder index
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/ladders
-
-      # These are tree-level gates `spec-test` does not run.
-      - name: Formatter corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/fmt
-
       - name: Targets table is generated and agrees with the compiler
         if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
         run: ./scripts/targets/generate.sh --check
-
-      - name: Targets corpus
-        if: steps.seed.outputs.seeded == 'yes' && contains(format(',{0},', matrix.roles), ',targets-gate,')
-        run: ./maxon-bin/.maxon/maxon test tests/targets
 
       # A step with a timeout: a compile that hangs would otherwise run to the job's six-hour
       # default and end cancelled, not failed.
@@ -339,14 +326,6 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon check-stdlib
 
-      - name: Emitted runtime corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/emittedRuntime
-
-      - name: Examples corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/examples
-
       # The emitted-code cases, in their own directory: every case pins the Target IR its program compiles
       # to on this lane, and a pin the compiler no longer renders fails its case.
       - name: IR suite
@@ -358,10 +337,6 @@ jobs:
         env:
           MAXON_SOURCE_ORDER: reversed
         run: ./maxon-bin/.maxon/maxon spec-test ir-specs
-
-      - name: Spec harness corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/specHarness
 
       # Tags exist only in a `--debugstream` compiler. This builds one and fails when an allocation
       # report names no real tag.
@@ -393,15 +368,10 @@ jobs:
 
           exit "$failed"
 
-      # Every tracked directory under `tests/` holding a `.maxtest` is built and nothing is run, so a
-      # corpus no job here runs still has to compile; the script derives the set rather than listing it.
-      - name: Every test corpus builds
+      - name: Test corpora
         if: steps.seed.outputs.seeded == 'yes'
-        run: ./scripts/build-test-corpora.sh
-
-      - name: Build manifest corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/buildManifest
+        timeout-minutes: 240
+        run: bash scripts/run-test-corpora.sh corpora
 
       - &evidence
         name: Resource evidence
@@ -450,12 +420,6 @@ jobs:
       - *vendorcache
       - *vendor
 
-      # ⭐ THE ONLY DEBUGGER CODE CI RUNS. `spec-test` covers the language; the debugger's driver, its
-      # DAP server and its MCP tools are exercised by these three corpora and by nothing else, so a lane
-      # without them reports a green suite over a debugger that does not start. `matrix.debugger` is the
-      # lane's own answer to `BackendChoice.backendForHost`, written once beside the runner rather than
-      # three times as a list of triples.
-      #
       # ⛔ **THE macOS LANE DEBUGS THROUGH APPLE'S `debugserver`, WHICH IS AUTHORIZED PER MACHINE AND NOT PER
       # PROCESS.** Without developer mode enabled every debug case on that lane is refused for want of
       # authorization, and the Xcode command line tools are where the stub itself comes from.
@@ -467,23 +431,12 @@ jobs:
           sudo /usr/sbin/DevToolsSecurity -enable
           /usr/sbin/DevToolsSecurity -status
 
-      # The debugger corpora's timeouts turn a hang into a failed step, so the evidence steps after them run.
-      - name: Debugger corpus
-        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
-        timeout-minutes: 20
-        run: ./maxon-bin/.maxon/maxon test tests/debug
+      - name: Test corpora
+        if: steps.seed.outputs.seeded == 'yes'
+        timeout-minutes: 240
+        run: bash scripts/run-test-corpora.sh tools
 
-      - name: DAP corpus
-        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
-        timeout-minutes: 6
-        run: ./maxon-bin/.maxon/maxon test tests/dap
-
-      - name: MCP corpus
-        if: steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
-        timeout-minutes: 10
-        run: ./maxon-bin/.maxon/maxon test tests/mcp
-
-      - name: Processes the debugger corpora left running
+      - name: Processes the test corpora left running
         if: always() && steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
         run: |
           case "$RUNNER_OS" in
@@ -497,18 +450,6 @@ jobs:
               echo "no process listing for $RUNNER_OS"
               ;;
           esac
-
-      - name: CLI corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/cli
-
-      # ⭐ IN THE MATRIX RATHER THAN IN A JOB OF ITS OWN, because this area is host-specific where
-      # almost nothing else is: percent-decoding a uri, un-rooting a drive letter, and
-      # `FilePath.equals` being case-insensitive on Windows alone. A single-host lane would leave
-      # three hosts' path handling unexercised, and what it misses are wrong ANSWERS, not breaks.
-      - name: LSP corpus
-        if: steps.seed.outputs.seeded == 'yes'
-        run: ./maxon-bin/.maxon/maxon test tests/lsp
 
       - *evidence
       - *upload-samples

@@ -10,12 +10,35 @@ Twenty-two corpora live here, one directory each, every path into one spelled fr
 ROOT — the working directory every driver inherits, and the contract
 `SpecTestRunner.specRunWorkingDir` states, along with why it is deliberately not `specDir.parent()`.
 
-⭐ **CI BUILDS EVERY CORPUS AND RUNS THE LISTED ONES.** `scripts/build-test-corpora.sh` runs
-`maxon test tests/<corpus> --list --build` for each tracked directory directly under `tests/` that holds a
-`.maxtest` file, stops at the first that fails, and names it. The set is derived, never listed, so a new
-corpus is built from the day it is added. `support/` holds none and `test-fixtures/` keeps its `.maxtest`
-sources one level down, so neither is a corpus to it. The corpora a CI step runs are named in
-`maxon-bin/AGENTS.md`; every other one is built there and run only when someone names it. A change under
+⭐ **CI RUNS EVERY CORPUS, AND NO WORKFLOW LISTS ONE.** A corpus is a tracked directory directly under
+`tests/` that holds a `.maxtest` file (`test_corpora_discover` in `scripts/lib/test-corpora.sh`, the one
+place the rule is written). `support/` holds none and `test-fixtures/` keeps its `.maxtest` sources one
+level down, so neither is a corpus. `ci.yml`'s `corpora` and `tools` jobs each have one step,
+`scripts/run-test-corpora.sh <job>`, which runs `maxon test tests/<corpus>` for every corpus assigned to
+that job, one `::group::` per corpus, and goes on past a red one so a run names every red. It ends with a
+table of each corpus's verdict, pass count, fail count and seconds (also written to the step summary) and
+fails when any corpus is red. A corpus is red when `maxon test` exits non-zero, when it reports a failure,
+when it overruns its `timeout-minutes`, and when it exits 0 without reporting a pass count: a runner
+that ran nothing cannot report itself. A new corpus runs on every lane from the day it is added.
+
+A corpus states what it needs in `tests/<corpus>/ci.txt`, one declaration per line; a missing file means
+"the `corpora` job, every lane, 60 minutes". A key the file does not know, a repeated key and a job that
+does not exist fail every run of the script, so a typo cannot read as "runs everywhere".
+
+| declaration | meaning |
+|---|---|
+| `job <name>` | the job that runs it: `corpora` (the default) or `tools`, which has the macOS debug-stub authorization before it; `cli/`, `lsp/`, `profile/` and the debugger corpora are in `tools` |
+| `requires <column>=<value>` | a selector over `maxon-bin/targets.tsv`, as `scripts/targets/matrix.sh` reads them (a cell that is a comma list holds the value); repeatable, and every one must hold for the lane. A lane that does not satisfy one BUILDS the corpus (`maxon test tests/<corpus> --list --build`) and runs none of it, so a corpus that stops compiling still fails the run on every lane |
+| `timeout-minutes <n>` | how long `maxon test` may take before it is stopped and the corpus is red (needs `timeout` or `gtimeout` on the host; the step's own `timeout-minutes` bounds the job where neither exists) |
+
+`debug/`, `dap/` and `mcp/` declare `requires debugger=yes` and a timeout that turns a hang into a red
+corpus, and `targets/` declares `requires roles=targets-gate`, the one lane that runs it. The debugger's
+driver, its DAP server and its MCP tools are exercised by those three corpora and by nothing else, and
+`debugger` is the `targets.tsv` column that generates `debuggerTargets()`, which
+`BackendChoice.backendForHost` reads, so the lanes that debug are declared once. `lsp/` declares no
+`requires`, so it runs on every lane: its area is host-specific (percent-decoding a uri, un-rooting a
+drive letter, `FilePath.equals` being case-insensitive on Windows alone), and what a host gets wrong
+there is a wrong answer that only its own lane shows. A change under
 `tests/` other than this file triggers `ci.yml`.
 
 The last column names the constant each corpus is reached through. Two are not one constant
@@ -191,7 +214,7 @@ tests/
     DebugHarness.maxon                      the shared half: the spawn, the staging, the folds, the event reader
     ImageIdentity.maxon                     the byte-identity half: one source and one output path built repeatedly, each image kept aside and compared
     ImageHeaders.maxon                      the image-format half: where an ELF, a PE or a Mach-O puts `.text`, read from the file's own headers
-    ProcessSnapshot.maxon                   `processSnapshot`: the `ps` rows that name a program or its `debugserver` or are defunct, and `sampledStack` and `sampledStubs`: `sample` reports of a hung process and of the debug stubs, for a failure message
+    ProcessSnapshot.maxon                   `processSnapshot`: the `ps` rows that name a program or its `debugserver` or are defunct, `stateRowOf` and `GoneStateRow`: a process's leading `ps` columns and each debug stub's, or `GoneStateRow` once the process has ended (`alive` where the host has no `ps`), for a case that watches a program until it ends, and `sampledStack` and `sampledStubs`: `sample` reports of a hung process and of the debug stubs, for a failure message
     StubProxy.maxon                         the scripted-stub half: `fixtures/stubproxy` built as an executable named `debugserver`, and the environments that put it first on `PATH` for one session
     ReplSession.maxon                       `ReplSession`: a `debug` REPL spawned over a program, fed commands one at a time, whose transcript is read until a wording appears; a REPL that outlives its deadline is sampled before it is ended, and `evidence` carries the reports
     ThreadBurst.maxon                       `fixtures/threadburst` helpers: `burstProcessId` reads the program's recorded process id, `killedOutright` kills it

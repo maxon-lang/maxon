@@ -1058,6 +1058,8 @@ end 'reportWarmFail'
 
 // --- Property 5: library parses reused across programs ---
 
+// The probe's function is `public` because nothing in the program it is appended to calls it, and a
+// file-private function nothing live names is E3219.
 let LibraryReuseProbeText = "enum LibraryReuseProbeKind\n\tfirst\n\tsecond\nend 'LibraryReuseProbeKind'\n\ninterface LibraryReuseProbeShape\n\tfunction isFirst() returns bool\nend 'LibraryReuseProbeShape'\n\ntype LibraryReuseProbeRecord implements LibraryReuseProbeShape\n\tlet kind as LibraryReuseProbeKind\n\n\tstatic function create(kind LibraryReuseProbeKind) returns LibraryReuseProbeRecord\n\t\treturn Self\{kind: kind\}\n\tend 'create'\n\n\tfunction isFirst() returns bool\n\t\treturn self.kind == LibraryReuseProbeKind.first\n\tend 'isFirst'\nend 'LibraryReuseProbeRecord'\n\ntypealias LibraryReuseProbeRecords = Array with LibraryReuseProbeRecord\n\npublic function libraryReuseProbe() returns bool\n\tvar records = LibraryReuseProbeRecords.create(0)\n\trecords.push(LibraryReuseProbeRecord.create(LibraryReuseProbeKind.first))\n\tlet held = try records.get(0) otherwise return false\n\treturn held.isFirst()\nend 'libraryReuseProbe'"
 let LibraryReusedClause = "library parses reused across programs"
 
