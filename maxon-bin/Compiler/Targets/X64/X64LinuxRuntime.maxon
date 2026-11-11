@@ -735,9 +735,9 @@ let X64LinuxTimespecNsecOffset = SpillSlotBytes as Imm32
 // `clockid_t` (`EINVAL`) or an unreadable buffer (`EFAULT`); the id is a compile-time constant this file owns
 // and the buffer is this frame. Neither is reachable, and an out-param-shaped op with no failure channel
 // would have nothing to report if they were.
-function x64LinuxReadClockTimespec(asm X64RuntimeAsm, clockId MachineWord)
+function x64LinuxReadClockTimespec(asm X64RuntimeAsm, clockId MachineWord, firstSlot StackSize = X64LinuxTimespecFirstSlot)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: clockId)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm))
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecSecOffset))
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClockGettime)
 end 'x64LinuxReadClockTimespec'
 
@@ -757,13 +757,18 @@ end 'x64LinuxTimespecFieldDisp'
 // `rax = sec * 1e9 + nsec` — the two halves of the frame's `timespec` combined into the ONE scalar both
 // scheduler-facing clock chunks answer with. The WALL clock does not use it: a FILETIME converts each half
 // separately, and recombining first would cost five centuries of range for an identical answer.
-function x64LinuxEmitTimespecToNanos(asm X64RuntimeAsm)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: X64LinuxTimespecSecOffset), wide: true)
+function x64LinuxEmitTimespecToNanos(asm X64RuntimeAsm, firstSlot StackSize = X64LinuxTimespecFirstSlot)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecSecOffset), wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.rcx, value: PosixNanosPerSecond as MachineWord)
 	encodeImulRegReg(asm.code, dest: X64Register.rax, src: X64Register.rcx)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: x64LinuxTimespecDisp(asm, byteOffset: X64LinuxTimespecNsecOffset), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: firstSlot, byteOffset: X64LinuxTimespecNsecOffset), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
 end 'x64LinuxEmitTimespecToNanos'
+
+function x64LinuxEmitMonotonicNanos(asm X64RuntimeAsm, firstSlot StackSize = X64LinuxTimespecFirstSlot)
+	x64LinuxReadClockTimespec(asm, clockId: LinuxClockMonotonic, firstSlot: firstSlot)
+	x64LinuxEmitTimespecToNanos(asm, firstSlot: firstSlot)
+end 'x64LinuxEmitMonotonicNanos'
 
 // ==========================================================================
 // mrt_host_wall_clock(rcx = ftPtr)
@@ -2324,8 +2329,7 @@ function buildX64LinuxMonotonicClockChunk() returns FunctionCodeChunk
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTicksPtr), srcReg: X64Register.rcx, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFreqPtr), srcReg: X64Register.rdx, wide: true)
 
-	x64LinuxReadClockTimespec(asm, clockId: LinuxClockMonotonic)
-	x64LinuxEmitTimespecToNanos(asm)
+	x64LinuxEmitMonotonicNanos(asm)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTicksPtr), wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: 0, srcReg: X64Register.rax, wide: true)
@@ -2369,11 +2373,7 @@ function buildX64LinuxSleepChunk(name ByteArray, unit PosixTimeUnit) returns Fun
 
 	x64LinuxEmitToTimespec(asm, amount: X64Register.rcx, unit: unit, firstSlot: SlotTimespec)
 
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxClockMonotonic)
-	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxSleepIsRelative)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecSecOffset))
-	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSleepDiscardsRemainder)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallClockNanosleep)
+	x64LinuxEmitClockNanosleep(asm, timespecSlot: SlotTimespec)
 
 	return asm.finishFunction(name)
 end 'buildX64LinuxSleepChunk'
@@ -3507,9 +3507,9 @@ end 'buildX64LinuxProcProbeChunk'
 // `TerminateProcess(h, exitCode)` as `kill(-pgid, SIGKILL)`. The code the caller named is recorded
 // in the object once the kill was delivered (0) or found the group gone (`-ESRCH`), for the reap to
 // report on a SIGKILL status (see `PosixSignalExitCodeBase`); a refused kill records nothing and
-// answers FALSE. A child already reaped (its signal word set) still has its group killed, and a
-// TRUE answer carries `TerminateTreeIncomplete`, both for the reasons
-// `buildArm64PosixProcTerminateChunk` gives.
+// answers FALSE, with `TerminateTreeIncomplete` unless the tree walk completed. A child already
+// reaped (its signal word set) still has its group killed, and a TRUE answer carries
+// `TerminateTreeIncomplete`, both for the reasons `buildArm64PosixProcTerminateChunk` gives.
 //
 // The pid is negated: a negative pid names a process group, and every child this runtime spawns
 // leads one (`X64LinuxSyscallSetpgid`, or `X64LinuxSyscallSetsid` for a detached child), so the
@@ -3528,6 +3528,7 @@ function buildX64LinuxProcTerminateChunk(errnoHome LinuxErrnoHome) returns Funct
 	let delivered = asm.newLabel()
 	let nothingLeftToKill = asm.newLabel()
 	let reapedGroup = asm.newLabel()
+	let reapedGone = asm.newLabel()
 	let reapedKill = asm.newLabel()
 	let reapedRefused = asm.newLabel()
 	let answered = asm.newLabel()
@@ -3536,7 +3537,7 @@ function buildX64LinuxProcTerminateChunk(errnoHome LinuxErrnoHome) returns Funct
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotObj), srcReg: X64Register.rcx, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCode), srcReg: X64Register.rdx, wide: true)
-	x64LinuxEmitSlotStoreImm(asm, slot: SlotTreeBit, value: 0)
+	x64LinuxEmitSlotStoreImm(asm, slot: SlotTreeBit, value: TerminateTreeIncomplete as MachineWord)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rdi, src: X64Register.rdi, wide: true)
@@ -3563,12 +3564,16 @@ function buildX64LinuxProcTerminateChunk(errnoHome LinuxErrnoHome) returns Funct
 
 	asm.placeLabel(reapedGroup)
 	x64LinuxEmitGroupSignal(asm, objSlot: SlotObj, signal: posixStopSignalNumber(Os.linux))
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: reapedKill)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: reapedGone)
 	x64LinuxEmitSlotLoad(asm, reg: X64Register.rcx, slot: SlotObj)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rcx, disp: PosixWaitOffChildPid as Imm32, wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostProcTreeKillName)
 	x64LinuxEmitSlotStore(asm, slot: SlotTreeBit, reg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: reapedKill)
+
+	asm.placeLabel(reapedGone)
+	x64LinuxEmitSlotStoreImm(asm, slot: SlotTreeBit, value: 0)
 
 	asm.placeLabel(reapedKill)
 	x64LinuxEmitGroupKillVerdict(asm, errnoHome: errnoHome, objSlot: SlotObj, groupGone: nothingLeftToKill, refusedTo: reapedRefused)
@@ -3581,10 +3586,9 @@ function buildX64LinuxProcTerminateChunk(errnoHome LinuxErrnoHome) returns Funct
 	asm.placeLabel(noChild)
 	x64LinuxEmitPublishErrno(asm, value: PosixErrno.noSuchProcess.rawValue, errnoHome: errnoHome)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32False as MachineWord)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: refused)
 
 	asm.placeLabel(answered)
-	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: refused)
 	x64LinuxEmitSlotLoad(asm, reg: X64Register.rcx, slot: SlotTreeBit)
 	encodeRmRegDirect(asm.code, opcode: OpcodeOrRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
 
@@ -3685,6 +3689,7 @@ let ProcWalkSlotPid = ProcWalkSlotRoot + 5
 let ProcWalkSlotFd = ProcWalkSlotRoot + 6
 let ProcWalkSlotRead = ProcWalkSlotRoot + 7
 let ProcWalkSlotIndex = ProcWalkSlotRoot + 8
+
 // Shares the fd's slot, which is free once the stat line is read: this frame lies on the
 // `__gt_io_read → terminate → tree_kill → await_ended` chain, which has no room left under the
 // green-thread stack guard (E5004) for another slot. The arm64 adopt chunk aliases its `SlotGroup` alike.
@@ -4093,12 +4098,46 @@ end 'x64LinuxEmitBranchIfPidEnded'
 let AwaitEndedSlotList = 0
 let AwaitEndedSlotCount = 1
 let AwaitEndedSlotIndex = 2
-let AwaitEndedSlotBudget = 3
+let AwaitEndedSlotDeadline = 3
 let AwaitEndedSlotLate = 4
 let AwaitEndedSlotPid = 5
 let AwaitEndedSlotTimespec = 6
 let AwaitEndedSlotProbe = AwaitEndedSlotTimespec + LinuxTimespecSlots
 let AwaitEndedSlotsEnd = AwaitEndedSlotProbe + EndedProbeSlots
+
+// The await loops hold an absolute deadline in nanoseconds because a signal cuts a sleep short;
+// `buildArm64DarwinSleepChunk` owns that argument. The clock is read inline from `CLOCK_MONOTONIC`,
+// which `mrt_host_monotonic_clock` answers from, rather than through `mrt_host_tick_ms`:
+// `await_ended` lies on the `__gt_io_read → terminate → tree_kill` chain, which has no room under
+// the green-thread stack guard (E5004) for another frame.
+function x64LinuxEmitDeadlineFromBudgetMs(asm X64RuntimeAsm, budgetSlot StackSize, timespecSlot StackSize)
+	x64LinuxEmitMonotonicNanos(asm, firstSlot: timespecSlot)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rcx, slot: budgetSlot)
+	encodeImulRegRegImm32(asm.code, dest: X64Register.rcx, src: X64Register.rcx, imm: posixNanosPerUnit(PosixTimeUnit.milliseconds) as Imm32)
+	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	x64LinuxEmitSlotStore(asm, slot: budgetSlot, reg: X64Register.rax)
+end 'x64LinuxEmitDeadlineFromBudgetMs'
+
+function x64LinuxEmitBranchIfPastDeadline(asm X64RuntimeAsm, deadlineSlot StackSize, timespecSlot StackSize, past BlockId)
+	x64LinuxEmitMonotonicNanos(asm, firstSlot: timespecSlot)
+	x64LinuxEmitSlotLoad(asm, reg: X64Register.rcx, slot: deadlineSlot)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: past)
+end 'x64LinuxEmitBranchIfPastDeadline'
+
+function x64LinuxEmitClockNanosleep(asm X64RuntimeAsm, timespecSlot StackSize)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxClockMonotonic)
+	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxSleepIsRelative)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: timespecSlot, byteOffset: X64LinuxTimespecSecOffset))
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSleepDiscardsRemainder)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallClockNanosleep)
+end 'x64LinuxEmitClockNanosleep'
+
+function x64LinuxEmitPollSleep(asm X64RuntimeAsm, timespecSlot StackSize)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixChildPollMs)
+	x64LinuxEmitToTimespec(asm, amount: X64Register.rcx, unit: PosixTimeUnit.milliseconds, firstSlot: timespecSlot)
+	x64LinuxEmitClockNanosleep(asm, timespecSlot: timespecSlot)
+end 'x64LinuxEmitPollSleep'
 
 function buildX64LinuxProcAwaitEndedChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(AwaitEndedSlotsEnd)
@@ -4112,10 +4151,9 @@ function buildX64LinuxProcAwaitEndedChunk() returns FunctionCodeChunk
 	x64LinuxEmitSlotStore(asm, slot: AwaitEndedSlotList, reg: X64Register.rcx)
 	x64LinuxEmitSlotStore(asm, slot: AwaitEndedSlotCount, reg: X64Register.rdx)
 	x64LinuxEmitSlotStoreImm(asm, slot: AwaitEndedSlotIndex, value: 0)
-	x64LinuxEmitSlotStoreImm(asm, slot: AwaitEndedSlotBudget, value: PosixEndedPolls as MachineWord)
 	x64LinuxEmitSlotStoreImm(asm, slot: AwaitEndedSlotLate, value: 0)
-	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PosixChildPollMs)
-	x64LinuxEmitToTimespec(asm, amount: X64Register.rcx, unit: PosixTimeUnit.milliseconds, firstSlot: AwaitEndedSlotTimespec)
+	x64LinuxEmitSlotStoreImm(asm, slot: AwaitEndedSlotDeadline, value: ProcessEndBoundMs as MachineWord)
+	x64LinuxEmitDeadlineFromBudgetMs(asm, budgetSlot: AwaitEndedSlotDeadline, timespecSlot: AwaitEndedSlotTimespec)
 
 	asm.placeLabel(nextPid)
 	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: AwaitEndedSlotIndex)
@@ -4128,16 +4166,8 @@ function buildX64LinuxProcAwaitEndedChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(check)
 	x64LinuxEmitBranchIfPidEnded(asm, pidSlot: AwaitEndedSlotPid, probeSlot: AwaitEndedSlotProbe, ended: ended)
-	x64LinuxEmitSlotLoad(asm, reg: X64Register.rax, slot: AwaitEndedSlotBudget)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: giveUp)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: 1)
-	x64LinuxEmitSlotStore(asm, slot: AwaitEndedSlotBudget, reg: X64Register.rax)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxClockMonotonic)
-	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxSleepIsRelative)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: AwaitEndedSlotTimespec, byteOffset: X64LinuxTimespecSecOffset))
-	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSleepDiscardsRemainder)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallClockNanosleep)
+	x64LinuxEmitBranchIfPastDeadline(asm, deadlineSlot: AwaitEndedSlotDeadline, timespecSlot: AwaitEndedSlotTimespec, past: giveUp)
+	x64LinuxEmitPollSleep(asm, timespecSlot: AwaitEndedSlotTimespec)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: check)
 
 	asm.placeLabel(giveUp)
@@ -4478,7 +4508,7 @@ end 'buildX64LinuxTraceeReadChunk'
 
 function buildX64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotStatusOut = 0
-	let SlotBudget = 1
+	let SlotDeadline = 1
 	let SlotPid = 2
 	let SlotTimespec = 3
 	var asm = X64RuntimeAsm.beginFunction(SlotTimespec + LinuxTimespecSlots)
@@ -4487,14 +4517,13 @@ function buildX64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Functio
 	let anyChild = asm.newLabel()
 	let selected = asm.newLabel()
 	let waitFailed = asm.newLabel()
+	let timedOut = asm.newLabel()
 	let answered = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStatusOut), srcReg: X64Register.rcx, wide: true)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBudget), srcReg: X64Register.rdx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDeadline), srcReg: X64Register.rdx, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), srcReg: X64Register.r8, wide: true)
-
-	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: LinuxAwaitOneSliceMs)
-	x64LinuxEmitToTimespec(asm, amount: X64Register.rcx, unit: PosixTimeUnit.milliseconds, firstSlot: SlotTimespec)
+	x64LinuxEmitDeadlineFromBudgetMs(asm, budgetSlot: SlotDeadline, timespecSlot: SlotTimespec)
 
 	asm.placeLabel(poll)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotPid), wide: true)
@@ -4515,21 +4544,14 @@ function buildX64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Functio
 	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: answered)
 
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBudget), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: answered)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: LinuxAwaitOneSliceMs as Imm32)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBudget), srcReg: X64Register.rax, wide: true)
-
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxClockMonotonic)
-	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: LinuxSleepIsRelative)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: x64LinuxTimespecFieldDisp(asm, firstSlot: SlotTimespec, byteOffset: X64LinuxTimespecSecOffset))
-	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxSleepDiscardsRemainder)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallClockNanosleep)
+	x64LinuxEmitBranchIfPastDeadline(asm, deadlineSlot: SlotDeadline, timespecSlot: SlotTimespec, past: timedOut)
+	x64LinuxEmitPollSleep(asm, timespecSlot: SlotTimespec)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: poll)
 
 	asm.placeLabel(waitFailed)
 	x64LinuxEmitStashErrno(asm, errnoHome: errnoHome)
+
+	asm.placeLabel(timedOut)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
 
 	asm.placeLabel(answered)

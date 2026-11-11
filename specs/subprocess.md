@@ -732,6 +732,87 @@ end 'main'
 armed=0 laps=100 timedOut=100 leaked=0
 ```
 
+<!-- test: subprocess-a-tree-end-stops-a-shell-waiting-on-its-sleep-before-it-ends-the-sleep -->
+<!-- process: own -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+A shell that has forked its `sleep` and waits on it runs its next command the moment that `sleep` dies,
+unless the tree end has stopped the shell first. The case ends the tree of two hundred such shells at every
+stage of their start, while busy shells keep every core taken. A shell whose next command records that it
+ran must not have run, and every end answers `ended`: a shell found already exiting is awaited and reported
+ended, never `unconfirmed` or `survived`.
+```maxon
+let Laps = 200
+let BusyShells = 12
+let StartSpanMs = 7
+
+typealias ChildArray = Array with StreamingSubprocess
+
+function spawnShell(script String) returns StreamingSubprocess throws SubprocessError
+	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise panic("/bin/sh is a path"))
+	var argv = StringArray.create(0)
+
+	argv.push("-c")
+	argv.push(script)
+	return try StreamingSubprocess.spawn(exe, arguments: argv)
+end 'spawnShell'
+
+function main() returns ExitCode
+	let armed = Process.endDescendants()
+	let busy = ChildArray.create(0)
+	var ended = 0 as Count
+	var ranOn = 0 as Count
+	var lap = 0 as Count
+
+	for _ in 0 upto BusyShells 'load'
+		busy.push(try spawnShell("while :; do :; done") otherwise return 3)
+	end 'load'
+
+	while lap < Laps 'laps'
+		let markerName = "shell-ran-after-its-sleep-{lap}"
+		let marker = try FilePath.from(markerName) otherwise return 5
+		var child = try spawnShell("echo hello; sleep 60; : > {markerName}") otherwise return 4
+		let delayMs = (lap mod StartSpanMs) as Milliseconds
+
+		lap = lap + 1
+
+		if delayMs > 0 'staggered'
+			sleep(delayMs)
+		end 'staggered'
+
+		let found = child.endTree()
+
+		match found 'seen'
+			ended then ended = ended + 1
+			survived or
+			unconfirmed then print("lap {lap}: {found.displayReason()}\n")
+		end 'seen'
+
+		child.release()
+
+		if File.exists(marker) 'ran'
+			ranOn = ranOn + 1
+			try File.delete(marker) otherwise return 6
+		end 'ran'
+	end 'laps'
+
+	for shell in busy 'unload'
+		_ = shell.endTree()
+		shell.release()
+	end 'unload'
+
+	let leaked = Process.endDescendants().count()
+
+	print("armed={armed.count()} laps={lap} ended={ended} ranOn={ranOn} leaked={leaked}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+armed=0 laps=200 ended=200 ranOn=0 leaked=0
+```
+
 <!-- test: subprocess-the-tree-end-awaits-a-process-the-shell-left-in-its-group -->
 <!-- process: own -->
 <!-- unsupported-targets: x64-windows, wasm32-wasi -->

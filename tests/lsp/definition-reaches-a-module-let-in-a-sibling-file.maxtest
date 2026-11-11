@@ -1,4 +1,4 @@
-let ModuleLetSiblingDirName = "temp/lsp/definition-reaches-a-module-let-in-a-sibling-file"
+let ModuleLetSiblingDirName = "definition-reaches-a-module-let-in-a-sibling-file"
 let ModuleLetSiblingHelperFileName = "helper.maxon"
 let ModuleLetSiblingMainFileName = "main.maxon"
 let ModuleLetSiblingHelperTail = "definition-reaches-a-module-let-in-a-sibling-file/helper.maxon"
@@ -11,6 +11,8 @@ test 'definition reaches a module-level let in a sibling file'
 	writeCorpusFile(directory, fileName: ModuleLetSiblingHelperFileName, content: moduleLetSiblingHelperSource())
 
 	let probe = probeCorpusDefinition(directory, fileName: ModuleLetSiblingMainFileName, content: moduleLetSiblingMainSource(), line: ModuleLetSiblingUseLine, character: ModuleLetSiblingUseCharacter)
+
+	discardStagedDir(directory)
 
 	expectDefinitionInFile(probe, fileTail: ModuleLetSiblingHelperTail, startLine: ModuleLetSiblingDeclarationLine, note: "a bare `reading` naming an `export let` of a sibling file did not resolve to that `let`. The sibling also declares a type with a field of the same name above it, which is not what a bare name can mean outside the type.")
 end 'definition reaches a module-level let in a sibling file'

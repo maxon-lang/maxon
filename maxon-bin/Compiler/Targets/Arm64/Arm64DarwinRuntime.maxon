@@ -254,18 +254,18 @@ end 'buildArm64DarwinThreadYieldChunk'
 // minutes would silently wrap into a short one. The `timespec` is two adjacent frame slots — see
 // `DarwinTimespecSecSlot` — so the request is `&slot0` with no packing step.
 //
-// ⚠ **A SIGNAL CAN CUT A `nanosleep` SHORT (EINTR) AND THIS DOES NOT RESTART IT** — `nanosleep` is one of
-// the three calls POSIX never restarts, whatever `SA_RESTART` says, and on a lane that installs the
-// preemption signal a monitor lap really does cut one short. Both callers survive it because BOTH of their
-// conditions are re-tested from a source a short sleep cannot move: the child is re-reaped, and the
-// deadline is re-read from `mrt_host_tick_ms`.
+// ⚠ **A SIGNAL CAN CUT A `nanosleep` SHORT (EINTR) AND THIS DOES NOT RESTART IT** — `nanosleep` is
+// one of the three calls POSIX never restarts, whatever `SA_RESTART` says, and on a lane that
+// installs the preemption signal a monitor lap really does cut one short. Every caller survives it
+// because its conditions are re-tested from a source a short sleep cannot move: the child's state
+// is re-read, and the deadline is re-read from `mrt_host_tick_ms`.
 //
-// ⛔⛔ **THAT ARGUMENT IS ONLY SOUND BECAUSE THE WAITS HOLD AN ABSOLUTE DEADLINE.** While they counted
-// LAPS — crediting `PosixChildPollMs` per step whatever the step cost — a cut-short sleep credited a full
-// millisecond for almost no time at all, `elapsed` ran ahead of the clock, and
-// `Subprocess.waitWithTimeout` took its timed-out arm against a healthy child and TERMINATED it. A restart
-// loop here would be a second place that fact could be got wrong; the deadline is the one place it is
-// right.
+// ⛔⛔ **THAT ARGUMENT IS ONLY SOUND BECAUSE THE WAITS HOLD AN ABSOLUTE DEADLINE**
+// (`arm64PosixEmitSleepUnlessPast`). A wait crediting `PosixChildPollMs` per step whatever the step
+// cost would credit a full millisecond for a cut-short sleep, so `elapsed` would run ahead of the
+// clock and `Subprocess.waitWithTimeout` would take its timed-out arm against a healthy child and
+// TERMINATE it. A restart loop here would be a second place that fact could be got wrong; the
+// deadline is the one place it is right.
 function buildArm64DarwinSleepChunk(name ByteArray, unit PosixTimeUnit) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
@@ -2462,7 +2462,7 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 		chunks.push(buildArm64DarwinProcTreeAdoptChunk(PosixHostCall.importCall(OsImportSlot.kill), kind: PosixProcWalkKind.sessionTree))
 	end 'childPipes'
 
-	if posixReadsMonotonicClock(usage) 'clocks'
+	if arm64PosixReadsTickClock(usage) 'clocks'
 		chunks.push(buildArm64PosixTickMsChunk())
 		chunks.push(buildArm64DarwinMonotonicClockChunk())
 	end 'clocks'
@@ -3230,26 +3230,41 @@ function arm64DarwinEmitSessionAdmission(asm Arm64RuntimeAsm, pidSlot StackSize,
 	arm64PosixEmitTreeAdoptSession(asm, sessionReg: Arm64Register.x0, stateSlot: stateSlot)
 end 'arm64DarwinEmitSessionAdmission'
 
-// XNU marks a process stopped when SIGSTOP is posted, before its threads have stopped, so a fork in
-// flight can complete after the process's children were listed and the child would be missed. A
-// member's children are listed only once `pti_numrunning` reads zero; one that has ended (`ESRCH`)
-// counts as settled.
+// A member's children are listed only once it has settled, because a fork in flight can complete
+// after the children were listed and the child would be missed. Settled is a zombie, an ended
+// process (`ESRCH`), or status `SSTOP` with `pti_numrunning` zero. A member in any other status has
+// its stop posted again, because a stop posted to a process sleeping in `wait4` can be dropped.
 function buildArm64DarwinStopConfirmChunk() returns FunctionCodeChunk
 	let SlotPid = 0
-	let SlotBudget = 1
+	let SlotDeadline = 1
 	let SlotInfo = 2
-	var asm = Arm64RuntimeAsm.beginFunction(SlotInfo + runtimeFrameSlots(DarwinProcTaskInfoBytes))
+	var asm = Arm64RuntimeAsm.beginFunction(SlotInfo + darwinProcBsdInfoSlots())
 	let poll = asm.newLabel()
+	let notStopped = asm.newLabel()
+	let stopPending = asm.newLabel()
 	let unreadable = asm.newLabel()
 	let settled = asm.newLabel()
 	let timedOut = asm.newLabel()
 	let answered = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPid)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: PosixEndedPolls as MachineWord)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBudget)
+	arm64PosixEmitEndedDeadline(asm, deadlineSlot: SlotDeadline)
 
 	asm.placeLabel(poll)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPid)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinProcPidTBsdInfo as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: SlotInfo)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: DarwinProcBsdInfoBytes as MachineWord)
+	arm64DarwinCallImportAnswering(asm, slot: OsImportSlot.procPidinfo)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: DarwinProcBsdInfoBytes as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: unreadable)
+	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: SlotInfo)
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x5, base: Arm64Register.x3, byteOffset: DarwinProcBsdInfoStatusOffset as MachineWord)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x5, imm: DarwinProcStatusZombie as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: settled)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x5, imm: DarwinProcStatusStopped as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: notStopped)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPid)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: DarwinProcPidTTaskInfo as MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
@@ -3261,13 +3276,13 @@ function buildArm64DarwinStopConfirmChunk() returns FunctionCodeChunk
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x3, slot: SlotInfo)
 	arm64EmitLoadWord32At(asm, dest: Arm64Register.x5, base: Arm64Register.x3, byteOffset: DarwinProcTaskInfoRunningOffset as MachineWord)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x5, label: settled)
+	arm64EmitBranchTo(asm, label: stopPending)
 
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBudget)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: timedOut)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x0, imm: -1)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBudget)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildPollMs)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
+	asm.placeLabel(notStopped)
+	arm64PosixEmitTreeStop(asm, kill: PosixHostCall.importCall(OsImportSlot.kill), lane: PosixTreeLane.macos, pidSlot: SlotPid)
+
+	asm.placeLabel(stopPending)
+	arm64PosixEmitSleepUnlessPast(asm, deadlineSlot: SlotDeadline, past: timedOut)
 	arm64EmitBranchTo(asm, label: poll)
 
 	asm.placeLabel(unreadable)
@@ -3299,6 +3314,7 @@ let DarwinProcBsdInfoBytes = 136
 let DarwinProcBsdInfoStatusOffset = 4
 let DarwinProcBsdInfoCommOffset = 48
 let DarwinProcBsdInfoNameOffset = 64
+let DarwinProcStatusStopped = 4
 let DarwinProcStatusZombie = 5
 let DarwinCtlKern = 1
 let DarwinKernProcArgs2 = 49

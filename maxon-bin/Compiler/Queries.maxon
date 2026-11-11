@@ -673,14 +673,13 @@ function adoptProgramFacts(project Project, signatures ProgramSignatures)
 end 'adoptProgramFacts'
 
 function projectRootModuleDirectoryOf(project Project) returns String
-	let cwd = Directory.currentPath()
-	var root = project.rootPath.resolve(cwd)
+	var root = project.rootIdentity
 
 	if not Directory.isDirectory(root) 'aSingleFileBuild'
-		root = try root.parent() otherwise panic("projectRootModuleDirectoryOf: '{root.toString()}' has no parent — a single-file build's root is an absolute FILE path, resolved against the cwd on the line above")
+		root = try root.parent() otherwise panic("projectRootModuleDirectoryOf: '{root.toString()}' has no parent — a single-file build's root is an absolute FILE path, its identity")
 	end 'aSingleFileBuild'
 
-	return moduleDirectoryOfRootPath(root, anchor: libraryConeAnchor(project.stdlibDir, cwd: cwd))
+	return moduleDirectoryOfRootPath(root, anchor: libraryConeAnchor(project.stdlibDir, cwd: Directory.currentPath()))
 end 'projectRootModuleDirectoryOf'
 
 function newProgramSignatures(project Project) returns ProgramSignatures
@@ -689,7 +688,7 @@ function newProgramSignatures(project Project) returns ProgramSignatures
 
 	// Set before any file is swept, so every reader below (and every `Parser.create` in every later
 	// query) sees the answer rather than the seeded `false`. See `livesUnderStdlibDirectory`.
-	signatures.rootIsUnderStdlibDirectory = rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: Directory.currentPath())
+	signatures.rootIsUnderStdlibDirectory = rootIsUnder(project, libraryRoot: project.stdlibDir)
 
 	if signatures.rootIsUnderStdlibDirectory 'aProjectInsideTheLibraryCone'
 		signatures.projectRootModuleDirectory = projectRootModuleDirectoryOf(project)
@@ -880,7 +879,7 @@ function foldedProgramDeclarations(project Project) returns ProgramSignatures th
 end 'foldedProgramDeclarations'
 
 function declarationsFoldedOntoTheLibraryBaseline(project Project) returns BaselineFold throws CompileError
-	if rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: Directory.currentPath()) 'theProjectIsTheLibrary'
+	if rootIsUnder(project, libraryRoot: project.stdlibDir) 'theProjectIsTheLibrary'
 		noteLibraryCacheTrouble("no baseline: the program is rooted inside the library")
 		return BaselineFold.declined(DiscoveredTokenFacts.none())
 	end 'theProjectIsTheLibrary'
@@ -1206,10 +1205,12 @@ end 'producerMaskFor'
 //   • a SINGLE-FILE build is anchored at the file's own directory: the one file compiled is at the
 //     root of its own program, so it is in the root module.
 //
-// ⚠ Both sides are resolved against the cwd, because `rootPath` is the raw CLI spelling and
-// `relativeTo` compares SPELLINGS. Resolving only the anchor would be worse than resolving neither
-// — every file would miss its own root and fall to `deriveModuleDirectory`'s parent-name arm, which
-// produces a plausible directory and the wrong one.
+// ⚠ File and anchor must be the same kind of path, because `relativeTo` compares SPELLINGS: an
+// author's file and anchor are both resolved against the cwd (`rootPath` is the raw CLI spelling),
+// a library file is its physical `FileProvenance.identity` against an anchor of the physical
+// library root. Mixing the two would be worse than either — every file would miss its own root and
+// fall to `deriveModuleDirectory`'s parent-name arm, which produces a plausible directory and the
+// wrong one.
 //
 // ⚠ The predicate is `livesUnderStdlibDirectory` — a PATH fact — and not `isStdlibSource`, which is
 // a VISIBILITY fact: a project rooted under `stdlib/` keeps its own files as the user's (so their
@@ -1225,8 +1226,18 @@ end 'producerMaskFor'
 // the two doors cannot drift apart on it.
 function moduleDirectoryForFile(project Project, path FilePath, tier SourceTier) returns String
 	let cwd = Directory.currentPath()
-	return deriveModuleDirectory(path.resolve(cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, tier: tier))
+
+	return deriveModuleDirectory(namespaceLocationOf(project, path: path, tier: tier, cwd: cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, tier: tier))
 end 'moduleDirectoryForFile'
+
+function namespaceLocationOf(project Project, path FilePath, tier SourceTier, cwd FilePath) returns FilePath
+	return match tier 'tier'
+		author gives path.resolve(cwd)
+		stdlib or
+		runtime or
+		scriptlib gives fileProvenanceOf(project, path: path).identity
+	end 'tier'
+end 'namespaceLocationOf'
 
 function namespaceConeOf(project Project, path FilePath, livesUnderStdlibDirectory bool) returns SourceTier
 	if livesUnderStdlibDirectory 'thestdlibsOwnCone'
@@ -1667,7 +1678,6 @@ function reportUnnameableNamespaceDirectories(project Project, signatures Progra
 	var checked = NamespaceDirectorySet.create()
 	var refusals = DiagnosticArray.create(0)
 	let reservedHeads = reservedNamespaceHeads()
-	let cwd = Directory.currentPath()
 
 	for path in project.db.sourcePaths 'eachFile'
 		if isLibrarySourceFile(project, path: path) 'aLibraryFile'
@@ -1682,7 +1692,7 @@ function reportUnnameableNamespaceDirectories(project Project, signatures Progra
 
 		checked.insert(moduleDirectory)
 
-		let anchoredAtTheLibraryCone = signatures.rootIsUnderStdlibDirectory and path.resolve(cwd).isInside(project.stdlibDir)
+		let anchoredAtTheLibraryCone = signatures.rootIsUnderStdlibDirectory and fileProvenanceOf(project, path: path).identity.isInside(project.stdlibDir)
 
 		match namespaceDirectoryFault(namespaceForModuleDirectory(moduleDirectory), keywords: project.keywords, reservedHeads: reservedHeads, anchoredAtTheLibraryCone: anchoredAtTheLibraryCone) 'fault'
 			nameable then continue
@@ -2671,9 +2681,9 @@ function sourceTierOf(project Project, path FilePath) returns SourceTier
 end 'sourceTierOf'
 
 function emissionComponentsOf(project Project, path FilePath, tier SourceTier, cwd FilePath) returns NameRoster
-	let resolved = path.resolve(cwd)
+	let located = namespaceLocationOf(project, path: path, tier: tier, cwd: cwd)
 	let anchor = namespaceAnchorFor(project, cwd: cwd, tier: tier)
-	let relative = try resolved.relativeTo(anchor) otherwise resolved
+	let relative = try located.relativeTo(anchor) otherwise located
 	let pieces = relative.toString().replace(FilePath.separator(), with: PortablePathSeparator).split(PortablePathSeparator)
 	var components = NameRoster.create(pieces.count(), zeroed: false)
 
@@ -3365,9 +3375,6 @@ end 'probeOnePathCacheHits'
 //
 // ⚠ The derivation asks the DIRECTORIES and not `project.librarySourcePaths`, whose membership test
 // would be a linear scan over that array, growing with every file added to a library root.
-//
-// ⚠ Resolve both sides first: `isInside` compares SPELLINGS, not files, so an unresolved path can
-// read the same file as the user's or as stdlib depending only on how the command line named it.
 export function isStdlibSourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isStdlibSource
 end 'isStdlibSourceFile'
@@ -3376,32 +3383,35 @@ export function isRuntimeSourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isRuntimeSource
 end 'isRuntimeSourceFile'
 
-// Memoized once per spelling per compile (`QueryDatabase.fileProvenance`): resolving a path
-// allocates a String per component, and each file asks more than once. The key is the spelling the
-// caller passed, which is what `isInside` compares, so the memo saves work and decides nothing.
-//
-// Never invalidated: the answer is a function of that spelling, `project.rootPath` and the library
-// roots, and a compile moves none of them.
 function fileProvenanceOf(project Project, path FilePath) returns FileProvenance
+	return try requireFileProvenanceOf(project, path: path) otherwise panic("fileProvenanceOf: '{path.toString()}' cannot be resolved to its physical path — the loaders identify every file they register through `requireFileProvenanceOf` before a reader asks, so a file reaching here unidentified was registered some other way")
+end 'fileProvenanceOf'
+
+// Memoized once per spelling per compile (`QueryDatabase.fileProvenance`): identifying a path is a
+// filesystem lookup, and each file asks more than once. The key is the spelling the caller passed;
+// every test inside runs on its physical `identity`, so the memo saves work and decides nothing.
+//
+// Never invalidated: the answer is a function of that identity, `project.rootIdentity` and the
+// library roots, and a compile moves none of them.
+export function requireFileProvenanceOf(project Project, path FilePath) returns FileProvenance throws CompileError
 	if let memoized = try project.db.fileProvenance.get(path) 'alreadyDerived'
 		return memoized
 	end 'alreadyDerived'
 
-	let cwd = Directory.currentPath()
-	let resolvedPath = path.resolve(cwd)
-	let isStdlibSource = isStdlibRootFile(project, resolvedPath: resolvedPath, cwd: cwd)
+	let identity = try identityOfPath(path)
+	let isStdlibSource = isStdlibRootFile(project, identity: identity)
 
 	// Containment alone, whatever the project root: every rule the runtime bit gates (the `__`
 	// exemption from E2051, E3004 and E3155, E3152, E3153, E3154, the tier's module anchor) is a fact
 	// about the file.
-	let isRuntimeSource = resolvedPath.isInside(project.runtimeDir)
-	let isScriptlibSource = not isStdlibSource and not isRuntimeSource and isScriptlibRootFile(project, resolvedPath: resolvedPath, cwd: cwd)
-	var derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource)
+	let isRuntimeSource = identity.isInside(project.runtimeDir)
+	let isScriptlibSource = not isStdlibSource and not isRuntimeSource and isScriptlibRootFile(project, identity: identity)
+	var derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, identity: identity)
 
 	project.db.fileProvenance.upsert(path, value: derived)
 
 	return derived
-end 'fileProvenanceOf'
+end 'requireFileProvenanceOf'
 
 export function isScriptlibSourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isScriptlibSource
@@ -3431,12 +3441,12 @@ end 'isStdlibTierSourceFile'
 
 // A program rooted inside `scriptlib/` (a package file the language server checks) keeps its own
 // files as the user's, as `isStdlibRootFile` does for `stdlib/`; the other packages stay the tier.
-function isScriptlibRootFile(project Project, resolvedPath FilePath, cwd FilePath) returns bool
-	if not project.scriptlib.holds(resolvedPath) 'outsideThisRoot'
+function isScriptlibRootFile(project Project, identity FilePath) returns bool
+	if not project.scriptlib.holds(identity) 'outsideThisRoot'
 		return false
 	end 'outsideThisRoot'
 
-	return not rootIsUnderScriptlib(project, cwd: cwd) or not resolvedPath.isInside(project.rootPath.resolve(cwd))
+	return not rootIsUnderScriptlib(project) or not identity.isInside(project.rootIdentity)
 end 'isScriptlibRootFile'
 
 // ⭐ **"IS THIS FILE THE LIBRARY'S, AS OPPOSED TO THE AUTHOR'S?"** — the question every gate about
@@ -3448,22 +3458,23 @@ export function isLibrarySourceFile(project Project, path FilePath) returns bool
 	return fileProvenanceOf(project, path: path).isLibrary()
 end 'isLibrarySourceFile'
 
-// The path arrives resolved, because `isInside` compares spellings. Containment in `stdlib/` is
-// asked first and the project root only subtracts from it: asked the other way round, a project
-// rooted under `stdlib/` would answer true for every file outside that root, `runtime/`'s included.
-function isStdlibRootFile(project Project, resolvedPath FilePath, cwd FilePath) returns bool
-	if not resolvedPath.isInside(project.stdlibDir) 'outsideThisRoot'
+// The identity arrives physical and `project.stdlibDir` is physical, because `isInside` compares
+// spellings. Containment in `stdlib/` is asked first and the project root only subtracts from it:
+// asked the other way round, a project rooted under `stdlib/` would answer true for every file
+// outside that root, `runtime/`'s included.
+function isStdlibRootFile(project Project, identity FilePath) returns bool
+	if not identity.isInside(project.stdlibDir) 'outsideThisRoot'
 		return false
 	end 'outsideThisRoot'
 
-	if not rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: cwd) 'theUsersProjectIsElsewhere'
+	if not rootIsUnder(project, libraryRoot: project.stdlibDir) 'theUsersProjectIsElsewhere'
 		return true
 	end 'theUsersProjectIsElsewhere'
 
 	// A project rooted under `stdlib/` keeps its own files as the user's for visibility: their
 	// functions are user source and a diagnostic in them belongs at their own lines. The runtime bit
 	// has no such subtraction; see `fileProvenanceOf`.
-	return not resolvedPath.isInside(project.rootPath.resolve(cwd))
+	return not identity.isInside(project.rootIdentity)
 end 'isStdlibRootFile'
 
 // A library line may not be blamed for a library line. The gate that produces a blame knows the
@@ -3502,7 +3513,7 @@ end 'programSignaturesIn'
 // answers differ in exactly one situation, a property of the COMPILE rather than of the file: when
 // the project root is itself under `stdlib/`, every source the compile loads is under `stdlib/`
 // too. Off that path the two coincide, because `isStdlibSourceFile` is then literally
-// `path.isInside(stdlibDir)`. So:
+// `identity.isInside(stdlibDir)` over the file's physical identity. So:
 //
 //     livesUnderStdlibDirectory(path) == isStdlibSource(path) OR rootIsUnderStdlibDirectory
 //
@@ -3565,13 +3576,14 @@ let TestReportDeclaringModule = "Testing.maxon"
 // own tier field and two probes of one path are two chances to classify one file two ways inside one
 // compile. Each identity test below it is guarded by a basename compare: asked twice per file (the
 // declaration sweep and the real parse), that compare allocates nothing and is false for every file in
-// any real program, so the path resolve + `FilePath.equals` beneath it runs only for a file actually
+// any real program, so the identity compare beneath it runs only for a file actually
 // SPELLED `Builtins.maxon` or `Testing.maxon`. The prefilter is not the answer — a user's own
 // `src/Builtins.maxon` passes it and is then refused by the path compare.
 //
 // ⚠ None of the three is `isStdlibSourceFile`'s answer: that function decides VISIBILITY and
-// deliberately hands a project rooted under `stdlib/` its own files back as the user's. Both sides are
-// resolved before comparing, because `FilePath.equals` and `FilePath.isInside` compare SPELLINGS.
+// deliberately hands a project rooted under `stdlib/` its own files back as the user's. Both sides
+// are physical (the file's `identity`, `project.stdlibDir`), because `FilePath.equals` and
+// `FilePath.isInside` compare SPELLINGS.
 function declaresCompilerInternalNames(project Project, path FilePath, isRuntimeSource bool) returns bool
 	return isRuntimeSource or declaresReservedNamesAs(project, path: path, relative: CompilerInternalDeclaringModule) or declaresReservedNamesAs(project, path: path, relative: TestReportDeclaringModule)
 end 'declaresCompilerInternalNames'
@@ -3581,7 +3593,7 @@ function declaresReservedNamesAs(project Project, path FilePath, relative String
 		return false
 	end 'notEvenTheName'
 
-	return path.resolve(Directory.currentPath()).equals(project.stdlibDir.join("{relative}"))
+	return fileProvenanceOf(project, path: path).identity.equals(project.stdlibDir.join("{relative}"))
 end 'declaresReservedNamesAs'
 
 module function isCompilerWrittenDeclaration(project Project, path FilePath, name ByteArray) returns bool

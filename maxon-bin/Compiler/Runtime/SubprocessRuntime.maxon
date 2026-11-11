@@ -160,7 +160,6 @@ let SpawnFlagTracedShift = 3
 // (`__gt_sleep`), so the whole scheduler runs while it waits. One millisecond is the smallest value a Win32
 // timer resolves at all.
 let SubpPollMs = 1
-let SubpNoWaitMs = 0
 let SubpTracedChildRepollMs = 20
 
 // The initial size of each collected stream's buffer, and the growth policy. It doubles past what a pass
@@ -1350,9 +1349,9 @@ end 'buildSubpReadBytes'
 // A timeout, or `endTree`, terminates the child's whole tree, as their doc comments promise;
 // otherwise live processes hold the write ends of pipes nobody drains. Terminating only starts the
 // teardown, so the wait holds the caller until the child is gone, and an exit code read afterwards
-// is the kill's. A refused terminate is confirmed by a wait that does not block, so a child the
-// terminate never reached goes to `unconfirmed` rather than hanging the caller. A tree the kill
-// could not fully end goes to `treeUnended`, once the child itself is gone.
+// is the kill's. A refused terminate is confirmed by a wait bounded by `ProcessEndBoundMs`, so a
+// child the terminate never reached goes to `unconfirmed` rather than hanging the caller. A tree
+// the kill could not fully end goes to `treeUnended`, once the child itself is gone.
 function emitSubpTerminateChild(module StdModule, func IrFunction, cur IrBlock, ids ValueMinter, handle ValueId, unconfirmed IrBlock, treeUnended IrBlock) returns IrBlock
 	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
 	let tree = emitLoadField(module, block: cur, record: slot, offset: SubpSlotProcessTree, ids: ids)
@@ -1369,10 +1368,15 @@ export function emitSubpTerminateTree(module StdModule, func IrFunction, cur IrB
 	let killCode = emitConst(module, block: cur, value: SubpKilledExitCode, ids: ids)
 	let delivered = ids.mint()
 	module.appendOp(cur, op: StdOp.osProcessTerminate(delivered, handleId: tree, exitCodeId: killCode))
-	emitBranchOnCompare(module, block: cur, value: delivered, pred: StdCmpPred.eq, against: Win32False, whenTrue: endedAlready, whenFalse: awaitTheEnd, ids: ids)
+	// A refused terminate answers FALSE with or without the tree bit; OR-ing the bit in makes both one
+	// value. Comparing `delivered` with `Win32False` alone would send a refusal that carries the bit
+	// to the infinite wait.
+	let treeBit = emitConst(module, block: cur, value: TerminateTreeIncomplete, ids: ids)
+	let answerWithTree = emitBin(module, block: cur, a: delivered, b: treeBit, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: answerWithTree, pred: StdCmpPred.eq, against: TerminateTreeIncomplete, whenTrue: endedAlready, whenFalse: awaitTheEnd, ids: ids)
 
 	emitSubpWaitForTheChild(module, block: awaitTheEnd, hProcess: hProcess, timeoutMs: SubpWaitInfinite, ended: gone, stillRunning: unconfirmed, ids: ids)
-	emitSubpWaitForTheChild(module, block: endedAlready, hProcess: hProcess, timeoutMs: SubpNoWaitMs, ended: gone, stillRunning: unconfirmed, ids: ids)
+	emitSubpWaitForTheChild(module, block: endedAlready, hProcess: hProcess, timeoutMs: ProcessEndBoundMs, ended: gone, stillRunning: unconfirmed, ids: ids)
 
 	return emitSubpBranchOnTreeBit(module, func: func, gone: gone, delivered: delivered, treeUnended: treeUnended, ids: ids)
 end 'emitSubpTerminateTree'

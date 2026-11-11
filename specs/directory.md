@@ -267,15 +267,68 @@ Directory not found
 <!-- unsupported-targets: wasm32-wasi -->
 A directory the process may not list is `accessDenied`, never `notFound`: a caller that cannot tell a missing directory from
 one it may not read cannot report the reason. The case denies itself the listing (a deny entry for Everyone on Windows,
-mode 000 elsewhere), lists the directory, then restores access and removes what it made.
+mode 000 elsewhere), asks the host's own lister whether the denial binds this process, lists the directory, then restores
+access and removes what it made. Whether a denial binds is the host's to say: a process holding the backup privilege lists
+a directory whatever its ACL says, so `Directory.list` must answer what the host's lister answered, and a denial that
+does not bind must be one the process's own token (the backup or restore privilege on Windows, uid 0 elsewhere) explains.
 ```maxon
 let toolTimeoutMs = 30000
 let directoryName = "directory-unreadable-listed"
+
+#if os(Windows)
+let listerRefusedExit = 5
+#else
+let listerRefusedExit = 1
+#endif
 
 function runTool(tool String, arguments StringArray) returns bool
 	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise return false
 	return result.succeeded()
 end 'runTool'
+
+function hostRefusesListing(directory FilePath) returns bool
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push("-NoProfile")
+	arguments.push("-Command")
+	arguments.push("try \{ [void][System.IO.Directory]::GetFileSystemEntries('{directory.toString()}'); exit 0 \} catch [System.UnauthorizedAccessException] \{ exit {listerRefusedExit} \}")
+	let result = try Subprocess.run(Executable.name("powershell"), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise panic("the host's lister did not run")
+	#else
+	arguments.push("-r")
+	arguments.push(directory.toString())
+	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise panic("the host's lister did not run")
+	#endif
+
+	if result.succeeded() 'listable'
+		return false
+	end 'listable'
+
+	if result.exitCode() != listerRefusedExit 'unanswered'
+		panic("the host's lister answered {result.exitCode()}, neither listing nor refusing")
+	end 'unanswered'
+
+	return true
+end 'hostRefusesListing'
+
+function tokenBypassesDenial() returns bool
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push("/priv")
+	arguments.push("/fo")
+	arguments.push("csv")
+	arguments.push("/nh")
+	let result = try Subprocess.run(Executable.name("whoami"), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise panic("the host's privilege report did not run")
+
+	return result.succeeded() and (result.stdout.contains("SeBackupPrivilege") or result.stdout.contains("SeRestorePrivilege"))
+	#else
+	arguments.push("-u")
+	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, timeoutMs: toolTimeoutMs) otherwise panic("the host's privilege report did not run")
+
+	return result.succeeded() and result.stdout.trim() == "0"
+	#endif
+end 'tokenBypassesDenial'
 
 function denyListing(directory FilePath) returns bool
 	var arguments = StringArray.create(0)
@@ -319,6 +372,7 @@ function main() returns ExitCode
 		return 3
 	end 'denied'
 
+	let hostRefuses = hostRefusesListing(directory)
 	var verdict = "listed"
 
 	if let entries = try Directory.list(directory) 'listed'
@@ -333,7 +387,17 @@ function main() returns ExitCode
 
 	try Directory.delete(directory) otherwise return 5
 
-	print("{verdict}\n")
+	let expected = "accessDenied" if hostRefuses else "listed 0 entries"
+
+	let denialExplained = hostRefuses or tokenBypassesDenial()
+
+	print("list answered what the host's lister did {verdict == expected}\n")
+	print("a denial that did not bind is a privileged token's {denialExplained}\n")
+
+	if verdict != expected 'disagreed'
+		print("the host refuses listing {hostRefuses}, Directory.list answered {verdict}\n")
+	end 'disagreed'
+
 	return 0
 end 'main'
 ```
@@ -341,7 +405,8 @@ end 'main'
 0
 ```
 ```stdout
-accessDenied
+list answered what the host's lister did true
+a denial that did not bind is a privileged token's true
 ```
 
 <!-- test: directory-exists -->
@@ -683,15 +748,69 @@ end 'main'
 <!-- unsupported-targets: wasm32-wasi -->
 A directory the process may not list cannot be emptied. `removeTree` reports it, removes what it can around it,
 and leaves the directories above it standing. The case denies itself the listing (a deny entry for Everyone on
-Windows, mode 000 elsewhere), then restores access and removes what it made.
+Windows, mode 000 elsewhere), asks the host's own lister whether the denial binds this process, then restores access
+and removes what it made. Whether a denial binds is the host's to say: a process holding the backup privilege lists
+and removes a directory whatever its ACL says, so `removeTree` must report exactly what the host's lister refused, and a
+denial that does not bind must be one the process's own token (the backup or restore privilege on Windows, uid 0
+elsewhere) explains.
 ```maxon
 let accessToolTimeoutMs = 30000
+
+#if os(Windows)
+let listerRefusedExit = 5
+#else
+let listerRefusedExit = 1
+#endif
 
 function runAccessTool(tool String, arguments StringArray) returns bool
 	let result = try Subprocess.run(Executable.name(tool), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise return false
 
 	return result.succeeded()
 end 'runAccessTool'
+
+function hostRefusesListing(directory FilePath) returns bool
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push("-NoProfile")
+	arguments.push("-Command")
+	arguments.push("try \{ [void][System.IO.Directory]::GetFileSystemEntries('{directory.toString()}'); exit 0 \} catch [System.UnauthorizedAccessException] \{ exit {listerRefusedExit} \}")
+	let result = try Subprocess.run(Executable.name("powershell"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's lister did not run")
+	#else
+	arguments.push("-r")
+	arguments.push(directory.toString())
+	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's lister did not run")
+	#endif
+
+	if result.succeeded() 'listable'
+		return false
+	end 'listable'
+
+	if result.exitCode() != listerRefusedExit 'unanswered'
+		panic("the host's lister answered {result.exitCode()}, neither listing nor refusing")
+	end 'unanswered'
+
+	return true
+end 'hostRefusesListing'
+
+function tokenBypassesDenial() returns bool
+	var arguments = StringArray.create(0)
+
+	#if os(Windows)
+	arguments.push("/priv")
+	arguments.push("/fo")
+	arguments.push("csv")
+	arguments.push("/nh")
+	let result = try Subprocess.run(Executable.name("whoami"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's privilege report did not run")
+
+	return result.succeeded() and (result.stdout.contains("SeBackupPrivilege") or result.stdout.contains("SeRestorePrivilege"))
+	#else
+	arguments.push("-u")
+	let result = try Subprocess.run(Executable.name("id"), arguments: arguments, timeoutMs: accessToolTimeoutMs) otherwise panic("the host's privilege report did not run")
+
+	return result.succeeded() and result.stdout.trim() == "0"
+	#endif
+end 'tokenBypassesDenial'
 
 function denyListing(directory FilePath) returns bool
 	var arguments = StringArray.create(0)
@@ -738,19 +857,33 @@ function main() returns ExitCode
 		return 4
 	end 'denied'
 
+	let hostRefuses = hostRefusesListing(locked)
 	let unremoved = Directory.removeTree(base)
-	print("unremoved {unremoved.count()}\n")
+	var reportedLocked = false
 
 	for stuck in unremoved 'eachStuck'
-		print("{stuck.filename()}\n")
+		reportedLocked = reportedLocked or stuck.filename() == "locked"
 	end 'eachStuck'
 
-	print("loose.txt gone {not File.exists(base.join("loose.txt"))}\n")
-	print("base stands {Directory.exists(base)}\n")
+	let looseGone = not File.exists(base.join("loose.txt"))
+	let baseStands = Directory.exists(base)
+	let expectedUnremoved = 1 if hostRefuses else 0
+	let matches = unremoved.count() == expectedUnremoved and reportedLocked == hostRefuses and looseGone and baseStands == hostRefuses
 
-	if not restoreListing(locked) 'restored'
-		return 5
-	end 'restored'
+	let denialExplained = hostRefuses or tokenBypassesDenial()
+
+	print("removeTree reported what the host refused {matches}\n")
+	print("a denial that did not bind is a privileged token's {denialExplained}\n")
+
+	if not matches 'disagreed'
+		print("the host refuses listing {hostRefuses}, unremoved {unremoved.count()}, locked reported {reportedLocked}, loose.txt gone {looseGone}, base stands {baseStands}\n")
+	end 'disagreed'
+
+	if Directory.exists(locked) 'stillDenied'
+		if not restoreListing(locked) 'restored'
+			return 5
+		end 'restored'
+	end 'stillDenied'
 
 	if not Directory.removeTree(base).isEmpty() 'stillStuck'
 		return 6
@@ -767,10 +900,8 @@ end 'main'
 0
 ```
 ```stdout
-unremoved 1
-locked
-loose.txt gone true
-base stands true
+removeTree reported what the host refused true
+a denial that did not bind is a privileged token's true
 ```
 
 <!-- test: a-path-holding-a-nul-names-no-directory-not-its-prefix -->

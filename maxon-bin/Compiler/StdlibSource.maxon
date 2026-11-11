@@ -63,7 +63,11 @@ export let RuntimeDirName = "runtime"
 export function locateStdlibDir() returns FilePath throws CompileError
 	let exePath = try Process.executablePath() otherwise throw CompileError.stdlibNotFound
 	let exeDir = try exePath.parent() otherwise throw CompileError.stdlibNotFound
-	return try stdlibDirAbove(exeDir)
+	let exeIdentity = try projectIdentityPathOf(exeDir) otherwise (cause) 'unidentifiable'
+		throw unidentifiablePathFailure(cause)
+	end 'unidentifiable'
+
+	return try stdlibDirAbove(exeIdentity)
 end 'locateStdlibDir'
 
 // ⭐⭐ **`runtime/` IS DERIVED FROM `stdlib/`'s LOCATION AND NEVER WALKED FOR ON ITS OWN.** An
@@ -122,6 +126,13 @@ export union ScriptlibTier
 			at(root, _) then return root
 		end 'tier'
 	end 'packagesRoot'
+
+	export function physical() returns ScriptlibTier throws CompileError
+		return match self 'tier'
+			absent gives ScriptlibTier.absent
+			at(root, bodies) gives ScriptlibTier.at(try identityOfPath(root), bodies: bodies)
+		end 'tier'
+	end 'physical'
 
 	export function holds(resolvedPath FilePath) returns bool
 		let root = try self.packagesRoot() otherwise return false

@@ -918,7 +918,7 @@ export function stdlibCheckOf(target Target, session CompileSession) returns Lib
 end 'stdlibCheckOf'
 
 function libraryCheckOf(program FilePath, target Target, stdlibDir FilePath, scriptlib ScriptlibLoad, stdlibBodies LibraryBodies, session CompileSession) returns LibraryCheck throws CompileError
-	var project = createProject(program, target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirBeside(stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: false, session: session, stdlibBodies: stdlibBodies)
+	var project = try createProject(program, target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirBeside(stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: false, session: session, stdlibBodies: stdlibBodies)
 	fileChanged(project, path: program, content: LibraryCheckProgramSource)
 	try loadLibrarySources(project)
 
@@ -987,7 +987,7 @@ end 'writeTargetIr'
 // carry no diagnostics and propagate straight to the caller, which prints a specific message.
 export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), debugStream bool = false, session CompileSession = CompileSession.printing(), library LibraryLoad = LibraryLoad.included, defines DefineArray = DefineArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), tallied bool = false, tallyPhases TagCensusPhases = TagCensusPhases.everyPhase) returns Project throws CompileError
 	let stdlibDir = try stdlibDirFor(stdlibDirOverride)
-	var project = createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
+	var project = try createProject(try commonAncestorOf(inputPaths), target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirFor(runtimeDirOverride, stdlibDir: stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
 
 	if tallied 'tallied'
 		armAllocTally(project, phases: tallyPhases)
@@ -999,7 +999,7 @@ export function loadProject(inputPaths MaxonSourcePathArray, target Target, stdl
 		reversed then break
 	end 'order'
 
-	if rootIsUnder(project, libraryRoot: project.runtimeDir, cwd: Directory.currentPath()) 'aRuntimeTierRoot'
+	if rootIsUnder(project, libraryRoot: project.runtimeDir) 'aRuntimeTierRoot'
 		throw CompileError.runtimeTierIsNotAProgram(project.rootPath)
 	end 'aRuntimeTierRoot'
 
@@ -1060,14 +1060,12 @@ end 'userFilesProjectOf'
 // instead of by a COPY OF THE COMPILER BINARY planted beside the overlay so that the walk-up would
 // land on it.
 //
-// ⚠⚠ **THE OVERRIDE IS RESOLVED AGAINST THE WORKING DIRECTORY, AND IT MUST BE — `Project.stdlibDir`
-// IS AN ABSOLUTE PATH BY CONTRACT, AND ITS READERS DO NOT RESOLVE IT.** `Queries.isStdlibSourceFile`
-// asks `resolvedPath.isInside(project.stdlibDir)`: it resolves the FILE and compares SPELLINGS, so a
-// relative `stdlibDir` matches nothing and every staged stdlib file reads as USER code — promoting
-// `module`-private declarations to global visibility and dropping the diagnostics they are owed. That
-// is the exact defect `isStdlibSourceFile`'s own header records from the other side of the same
-// comparison, and the walk-up cannot hit it because `Process.executablePath()` is absolute. So this
-// is the one place an override could introduce it, and the one place it is prevented.
+// ⚠⚠ **THE OVERRIDE IS RESOLVED AGAINST THE WORKING DIRECTORY, AND `createProject` THEN MAKES IT
+// PHYSICAL — `Project.stdlibDir` IS A PHYSICAL ABSOLUTE PATH BY CONTRACT, AND ITS READERS DO NOT
+// RESOLVE IT.** `Queries.isStdlibRootFile` asks `identity.isInside(project.stdlibDir)`: it compares
+// the file's physical identity with the root's SPELLING, so a root held in any other spelling
+// matches nothing and every staged stdlib file reads as USER code — promoting `module`-private
+// declarations to global visibility and dropping the diagnostics they are owed.
 //
 // ⚠ An unspellable override PANICS rather than falling back to the walk-up. The path comes from a
 // directory the caller just created, so a bad one is a caller bug — and a silent fall-back would
@@ -1087,12 +1085,13 @@ end 'stdlibDirFor'
 // compile built from two halves of two installs is wrong in a way nothing downstream could detect —
 // deriving makes that pairing unrepresentable rather than checked.
 //
-// ⚠ The override carries `stdlibDirFor`'s contract unchanged: resolved against the working directory,
-// because `Project.runtimeDir` is an ABSOLUTE path by contract and `Queries.isRuntimeSourceFile` compares
-// SPELLINGS — a relative one matches nothing and every staged runtime file reads as USER code. And an
-// unspellable override PANICS rather than falling back to the derivation: the path comes from a directory
-// the caller just created, so a bad one is a caller bug, and a silent fall-back would compile the case
-// against the CHECKOUT's runtime and report a confident wrong verdict.
+// ⚠ The override carries `stdlibDirFor`'s contract unchanged: resolved against the working
+// directory and made physical by `createProject`, because `Queries.isRuntimeSourceFile` compares
+// the file's physical identity with `Project.runtimeDir`'s SPELLING — any other spelling matches
+// nothing and every staged runtime file reads as USER code. And an unspellable override PANICS
+// rather than falling back to the derivation: the path comes from a directory the caller just
+// created, so a bad one is a caller bug, and a silent fall-back would compile the case against the
+// CHECKOUT's runtime and report a confident wrong verdict.
 function runtimeDirFor(runtimeDirOverride StatedText, stdlibDir FilePath) returns FilePath throws CompileError
 	match runtimeDirOverride 'override'
 		unstated then return try runtimeDirBeside(stdlibDir)
@@ -2294,22 +2293,22 @@ end 'unidentifiablePathFailure'
 // re-anchors namespaces silently rather than failing.
 //
 // ⚠ **ONE PATH IS ITS OWN ANCESTOR, and that identity is what leaves a single-path build's root
-// untouched.** The narrowing loop's first comparison is `first` against itself, which `isInside` answers
-// true for, so a lone `build <file>` or `build <directory>` keeps the spelling the caller TYPED,
-// unresolved. Every downstream reader resolves it against the cwd for itself (`namespaceAnchorFor`,
-// `rootIsUnder`), and `resolveOutputPath` derives a default output name from it, so
-// resolving it here would silently rewrite that name for every single-file build in the tree.
+// untouched.** The narrowing loop's first comparison is `first` against itself, which `isInside`
+// answers true for, so a lone `build <file>` or `build <directory>` keeps the spelling the caller
+// TYPED, unresolved. Every downstream reader resolves it against the cwd for itself
+// (`namespaceAnchorFor`) or takes its physical identity (`createProject`'s `rootIdentity`), and
+// `resolveOutputPath` derives a default output name from it, so resolving it here would silently
+// rewrite that name for every single-file build in the tree.
 //
-// ⚠ **THE COMPARISON IS BETWEEN RESOLVED SPELLINGS, because `isInside` compares TEXT** — the same
-// trap `Queries.isStdlibSourceFile` records: an absolute path and a relative one naming one file are
-// two different strings, and a root that misses its own members would narrow all the way to the
-// filesystem root.
+// ⚠ **THE COMPARISON IS BETWEEN RESOLVED SPELLINGS, because `isInside` compares TEXT**: an absolute
+// path and a relative one naming one file are two different strings, and a root that misses its own
+// members would narrow all the way to the filesystem root.
 //
-// ⛔⛔ **AND WHEN IT DOES NARROW ALL THE WAY TO THE ROOT, IT REFUSES.** `FilePath.parent()` answers the
-// root itself for a path directly under one and throws for a root, so the narrowing walk runs out at the
-// top and reports `noCommonRoot` there. Every `resolvedRoot` it publishes is therefore an absolute
-// directory — which is what the downstream `.resolve(cwd)` readers (`namespaceAnchorFor`,
-// `rootIsUnder`) need, since a relative one would be joined onto the working directory.
+// ⛔⛔ **AND WHEN IT DOES NARROW ALL THE WAY TO THE ROOT, IT REFUSES.** `FilePath.parent()` answers
+// the root itself for a path directly under one and throws for a root, so the narrowing walk runs
+// out at the top and reports `noCommonRoot` there. Every `resolvedRoot` it publishes is therefore
+// an absolute directory — which is what the downstream `.resolve(cwd)` reader
+// (`namespaceAnchorFor`) needs, since a relative one would be joined onto the working directory.
 //
 // ⚠ **THE RESIDUAL IS THAT A ROOT-ROOTED BUILD IS REFUSED RATHER THAN ROOTED, and it is REFUSED
 // rather than left wrong on purpose.** `C:\` really is the common directory of `C:\a\x` and `C:\b\y`,
@@ -2620,6 +2619,10 @@ end 'holdsIgnoreMarker'
 export function loadOneSourceFile(project Project, path FilePath) throws CompileError
 	let content = try File.readText(path) otherwise throw CompileError.readError(path)
 	fileChanged(project, path: path, content: content)
+
+	// `fileProvenanceOf` panics on a path no loader identified, so the file is identified here, where
+	// the failure can still be thrown.
+	_ = try requireFileProvenanceOf(project, path: path)
 end 'loadOneSourceFile'
 
 // Read a file into a project it may already hold, skipping the read when the stamp still describes

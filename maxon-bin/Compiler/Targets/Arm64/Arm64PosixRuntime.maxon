@@ -1298,12 +1298,7 @@ export function buildArm64PosixProcAwaitChunk() returns FunctionCodeChunk
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: PosixChildReapedElsewhere as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: reapedElsewhere)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: signalled)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotDeadline)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: notSignalled)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildPollMs)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
+	arm64PosixEmitSleepUnlessPast(asm, deadlineSlot: SlotDeadline, past: notSignalled)
 	arm64EmitBranchTo(asm, label: boundedStep)
 
 	asm.placeLabel(signalled)
@@ -1381,9 +1376,11 @@ end 'arm64PosixEmitReapedField'
 // left. A refused kill answers TRUE with `TerminateTreeIncomplete`, so the
 // caller reports `treeNotEnded` rather than a clean timeout.
 //
-// A TRUE answer carries `TerminateTreeIncomplete` when `mrt_host_proc_tree_kill` could not
-// end the whole tree. The caller reads FALSE as nothing left to kill and polls rather than waits,
-// so a tree failure must never turn a delivered kill's answer FALSE.
+// The tree bit starts as `TerminateTreeIncomplete`; only a completed `mrt_host_proc_tree_kill`
+// walk, or for a reaped child a stop that returned `ESRCH`, clears it. A TRUE answer carries it
+// when the whole tree was not ended, and a refused kill answers FALSE with it. The caller reads
+// FALSE as a refused kill and confirms the child's end with a wait bounded by `ProcessEndBoundMs`
+// rather than waiting for it, so a tree failure must never turn a delivered kill's answer FALSE.
 //
 // The pid is negated: a negative pid names a process group, and every child this runtime spawns
 // leads one — a detached child through `setsid`, every other through `setpgid(0, 0)` in the Linux
@@ -1402,6 +1399,7 @@ export function buildArm64PosixProcTerminateChunk(kill PosixHostCall, lane Posix
 	let delivered = asm.newLabel()
 	let nothingLeftToKill = asm.newLabel()
 	let reapedGroup = asm.newLabel()
+	let reapedGone = asm.newLabel()
 	let reapedKill = asm.newLabel()
 	let reapedRefused = asm.newLabel()
 	let answered = asm.newLabel()
@@ -1410,7 +1408,7 @@ export function buildArm64PosixProcTerminateChunk(kill PosixHostCall, lane Posix
 	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotCode)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: TerminateTreeIncomplete as MachineWord)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotTreeBit)
 
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
@@ -1421,7 +1419,7 @@ export function buildArm64PosixProcTerminateChunk(kill PosixHostCall, lane Posix
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: Arm64Register.x2)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcTreeKillName)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotTreeBit)
-	arm64PosixEmitGroupKillVerdict(asm, kill: kill, objSlot: SlotObj, groupGone: delivered, refusedTo: answered)
+	arm64PosixEmitGroupKillVerdict(asm, kill: kill, permissionEndsGroup: false, objSlot: SlotObj, treeBitSlot: SlotTreeBit, groupGone: delivered, refusedTo: answered)
 
 	asm.placeLabel(delivered)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
@@ -1436,14 +1434,20 @@ export function buildArm64PosixProcTerminateChunk(kill PosixHostCall, lane Posix
 
 	asm.placeLabel(reapedGroup)
 	arm64PosixEmitGroupSignal(asm, kill: kill, objSlot: SlotObj, signal: posixTreeStopSignal(lane))
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: reapedKill)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: reapedGone)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotObj)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x0, byteOffset: PosixWaitOffChildPid)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostProcTreeKillName)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotTreeBit)
+	arm64EmitBranchTo(asm, label: reapedKill)
+
+	asm.placeLabel(reapedGone)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotTreeBit)
 
 	asm.placeLabel(reapedKill)
-	arm64PosixEmitGroupKillVerdict(asm, kill: kill, objSlot: SlotObj, groupGone: nothingLeftToKill, refusedTo: reapedRefused)
+	arm64PosixEmitGroupKillVerdict(asm, kill: kill, permissionEndsGroup: posixAnswersZombieGroupWithPermission(lane), objSlot: SlotObj, treeBitSlot: SlotTreeBit, groupGone: nothingLeftToKill, refusedTo: reapedRefused)
 
 	asm.placeLabel(reapedRefused)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: TerminateTreeIncomplete as MachineWord)
@@ -1454,9 +1458,9 @@ export function buildArm64PosixProcTerminateChunk(kill PosixHostCall, lane Posix
 	asm.placeLabel(noChild)
 	arm64PosixEmitPublishErrno(asm, call: kill, value: PosixErrno.noSuchProcess.rawValue)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32False as MachineWord)
+	arm64EmitBranchTo(asm, label: refused)
 
 	asm.placeLabel(answered)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: refused)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTreeBit)
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
 
@@ -1473,7 +1477,9 @@ function arm64PosixEmitGroupSignal(asm Arm64RuntimeAsm, kill PosixHostCall, objS
 	arm64PosixEmitHostCallUnstashedErrno(asm, call: kill)
 end 'arm64PosixEmitGroupSignal'
 
-function arm64PosixEmitGroupKillVerdict(asm Arm64RuntimeAsm, kill PosixHostCall, objSlot StackSize, groupGone BlockId, refusedTo BlockId)
+function arm64PosixEmitGroupKillVerdict(asm Arm64RuntimeAsm, kill PosixHostCall, permissionEndsGroup bool, objSlot StackSize, treeBitSlot StackSize, groupGone BlockId, refusedTo BlockId)
+	let refused = asm.newLabel()
+
 	// The `ESRCH` compare precedes any `GtOffLastError` store: a stashed `ESRCH` from an already-empty
 	// group would overwrite the error a failed tree walk recorded, and `treeNotEnded` would report it.
 	arm64PosixEmitGroupSignal(asm, kill: kill, objSlot: objSlot, signal: PosixSigKill)
@@ -1481,6 +1487,15 @@ function arm64PosixEmitGroupKillVerdict(asm Arm64RuntimeAsm, kill PosixHostCall,
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.noSuchProcess.rawValue) as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: groupGone)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: groupGone)
+
+	if permissionEndsGroup 'zombieGroup'
+		arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: (0 - PosixErrno.operationNotPermitted.rawValue) as Imm32)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: refused)
+		arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: treeBitSlot)
+		arm64EmitCbzTo(asm, reg: Arm64Register.x2, label: groupGone)
+	end 'zombieGroup'
+
+	asm.placeLabel(refused)
 	arm64PosixEmitStashUnstashedFailure(asm, call: kill)
 	arm64EmitWin32BoolFromZeroStatus(asm)
 	arm64EmitBranchTo(asm, label: refusedTo)
@@ -1490,6 +1505,14 @@ export union PosixTreeLane
 	linux(errnoHome LinuxErrnoHome)
 	macos
 end 'PosixTreeLane'
+
+// XNU answers kill(-pgid) with EPERM, not ESRCH, while every member of the group is an unreaped zombie.
+function posixAnswersZombieGroupWithPermission(lane PosixTreeLane) returns bool
+	return match lane 'lane'
+		linux gives false
+		macos gives true
+	end 'lane'
+end 'posixAnswersZombieGroupWithPermission'
 
 function posixTreeStopSignal(lane PosixTreeLane) returns MachineWord
 	return match lane 'lane'
@@ -1670,6 +1693,36 @@ function arm64PosixEmitTreeKillThenAwaitEnded(asm Arm64RuntimeAsm, kill PosixHos
 	arm64EmitBranchTo(asm, label: release)
 end 'arm64PosixEmitTreeKillThenAwaitEnded'
 
+export function arm64PosixReadsTickClock(usage RuntimeUsage) returns bool
+	return posixReadsMonotonicClock(usage) or posixUsesProcessEndWait(usage)
+end 'arm64PosixReadsTickClock'
+
+export function arm64PosixEmitDeadlineFromBudget(asm Arm64RuntimeAsm, budgetSlot StackSize)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: budgetSlot)
+	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: budgetSlot)
+end 'arm64PosixEmitDeadlineFromBudget'
+
+export function arm64PosixEmitEndedDeadline(asm Arm64RuntimeAsm, deadlineSlot StackSize)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: ProcessEndBoundMs as MachineWord)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: deadlineSlot)
+	arm64PosixEmitDeadlineFromBudget(asm, budgetSlot: deadlineSlot)
+end 'arm64PosixEmitEndedDeadline'
+
+export function arm64PosixEmitBranchIfPastDeadline(asm Arm64RuntimeAsm, deadlineSlot StackSize, past BlockId)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostTickMsName)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: deadlineSlot)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: past)
+end 'arm64PosixEmitBranchIfPastDeadline'
+
+export function arm64PosixEmitSleepUnlessPast(asm Arm64RuntimeAsm, deadlineSlot StackSize, past BlockId)
+	arm64PosixEmitBranchIfPastDeadline(asm, deadlineSlot: deadlineSlot, past: past)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildPollMs)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
+end 'arm64PosixEmitSleepUnlessPast'
+
 function posixEndedProbeSlots(lane PosixTreeLane) returns StackSize
 	return match lane 'lane'
 		linux gives arm64LinuxEndedProbeSlots()
@@ -1688,7 +1741,7 @@ export function buildArm64PosixProcAwaitEndedChunk(lane PosixTreeLane) returns F
 	let SlotList = 0
 	let SlotCount = 1
 	let SlotIndex = 2
-	let SlotBudget = 3
+	let SlotDeadline = 3
 	let SlotLate = 4
 	let SlotPid = 5
 	let SlotProbe = 6
@@ -1704,8 +1757,7 @@ export function buildArm64PosixProcAwaitEndedChunk(lane PosixTreeLane) returns F
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotIndex)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotLate)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixEndedPolls as MachineWord)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotBudget)
+	arm64PosixEmitEndedDeadline(asm, deadlineSlot: SlotDeadline)
 
 	asm.placeLabel(nextPid)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotIndex)
@@ -1720,12 +1772,7 @@ export function buildArm64PosixProcAwaitEndedChunk(lane PosixTreeLane) returns F
 
 	asm.placeLabel(check)
 	arm64PosixEmitBranchIfPidEnded(asm, lane: lane, pidSlot: SlotPid, probeSlot: SlotProbe, ended: ended)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBudget)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: giveUp)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x0, imm: -1)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBudget)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildPollMs)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostSleepMsName)
+	arm64PosixEmitSleepUnlessPast(asm, deadlineSlot: SlotDeadline, past: giveUp)
 	arm64EmitBranchTo(asm, label: check)
 
 	asm.placeLabel(giveUp)

@@ -196,7 +196,10 @@ function scriptlibDirSpelling(caseLabel String) returns String
 end 'scriptlibDirSpelling'
 
 export function shadowingScriptSource(shadowedType String, packageFunction String) returns String
-	return "type {shadowedType}\n\texport var y as Count\nend '{shadowedType}'\n\n{printingMainSource(packageFunction)}"
+	let usingTheShadow = "\tlet own = {shadowedType}.zero()\n"
+	let exitingFromTheShadow = "0 if own == 0 else 1"
+
+	return "type {shadowedType}\n\tstatic function zero() returns Count\n\t\treturn 0\n\tend 'zero'\nend '{shadowedType}'\n\n{mainSource(packageFunction, opening: usingTheShadow, result: exitingFromTheShadow)}"
 end 'shadowingScriptSource'
 
 export function greetingScriptSource() returns String
@@ -204,8 +207,12 @@ export function greetingScriptSource() returns String
 end 'greetingScriptSource'
 
 export function printingMainSource(packageFunction String) returns String
-	return "function main() returns ExitCode\n\tprint(\"\{{packageFunction}()\}\\n\")\n\treturn 0\nend 'main'\n"
+	return mainSource(packageFunction, opening: "", result: "0")
 end 'printingMainSource'
+
+function mainSource(packageFunction String, opening String, result String) returns String
+	return "function main() returns ExitCode\n{opening}\tprint(\"\{{packageFunction}()\}\\n\")\n\treturn {result}\nend 'main'\n"
+end 'mainSource'
 
 // The staged program's entry file, which is what a FILE case hands the driver.
 export function stagedMain(staged StagedCase) returns FilePath

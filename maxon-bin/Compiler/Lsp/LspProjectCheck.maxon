@@ -76,7 +76,10 @@ module type LspProjectChecker
 
 	function buildCold(request LspProjectCheckRequest)
 		let sources = self.sourcesFor(request)
-		var project = createProject(sources.root, target: detectHostTarget(), stdlibDir: self.stdlibDir, runtimeDir: self.runtimeDir, scriptlib: ScriptlibTier.absent, debugStream: false, session: CompileSession.discarding())
+		var project = try createProject(sources.root, target: detectHostTarget(), stdlibDir: self.stdlibDir, runtimeDir: self.runtimeDir, scriptlib: ScriptlibTier.absent, debugStream: false, session: CompileSession.discarding()) otherwise (e) 'noProject'
+			self.publish(request, check: projectCheckFailedWith(e))
+			return
+		end 'noProject'
 
 		try loadLibrarySources(project) otherwise (e) 'noLibrary'
 			self.publish(request, check: projectCheckFailedWith(e))

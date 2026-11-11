@@ -2033,7 +2033,7 @@ request after request. A read or a wait parks the calling green thread, so its s
 | `closeStdin()` | — | — | Close the child's stdin so it sees end of input. Idempotent. |
 | `wait()` | exit code | `SubprocessError` | Park the calling green thread until the child exits. |
 | `waitWithTimeout(timeoutMs DurationMs)` | exit code | `SubprocessError` | Parks the calling green thread until the child exits. Throws `timeout` and kills the child's whole process tree ([SubprocessError](#subprocesserror)) when the deadline passes, or `treeNotEnded` when that tree cannot be fully ended; `0` waits forever. A child whose exit status went to another process throws `statusLost`. Both deadline errors carry empty output fields — a streaming child's bytes belong to the caller draining the streams. |
-| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no wait to expire, and returns once every process it killed has ended, waiting at most five seconds for them. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended or had not ended within those five seconds, and `unconfirmed(reason)` when no kill was confirmed or the handle is released. |
+| `endTree()` | `TreeEnd` | — | Ends the child's whole process tree at once, the kill a `waitWithTimeout` deadline sends but with no wait to expire, and returns once every process it killed has ended, waiting at most five seconds for them. The child may already have exited: what it left running is the tree. The answer is `ended` when the tree is gone, `survived(osError)` when the child is gone but part of its tree could not be ended or had not ended within those five seconds, and `unconfirmed(reason)` when the kill was refused and the child had not ended within those five seconds, or the handle is released. |
 | `release()` | — | — | Free the OS handle. Idempotent. Forgetting it leaks the handle and a process slot. Panics while the stdout side is out with a `StdoutReader` or the stderr side with a `StderrReader`: `reclaimStdout()` or `reclaimStderr()` first. |
 | `handle`, `released` | fields | — | The raw handle and whether it has been released. |
 
@@ -4643,7 +4643,8 @@ reported as a failure naming the error and the line of the operation that threw 
 
 `TestScratch` names the two directories `maxon test` makes for each test process, empty when the process
 starts ([Scratch directories](CLI_REFERENCE.md#maxon-test)). The runner removes both when the process ends,
-and a process that passes but leaves an entry in either fails, naming the entry.
+and a process that passes but leaves an entry in either fails, naming the entry. Each directory is named by
+its physical path, every symbolic link along it resolved.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|

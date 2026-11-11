@@ -1,0 +1,35 @@
+let NamedLibraryLinkCaseDirName = "build-naming-a-stdlib-file-through-a-link-beside-a-program"
+let NamedLibraryLinkName = "alias"
+let NamedLibraryFileName = "Clock.maxon"
+let NamedLibraryProgramDirName = "app"
+let NamedLibraryViaLinkDirName = "via-link"
+let NamedLibraryDirectDirName = "direct"
+let NamedLibraryProgramSource = "function main() returns ExitCode\n\tlet started = WallClock.nowUnixSeconds()\n\n\treturn 0 if started > 0 else 1\nend 'main'\n"
+
+test 'a stdlib file named through a link beside a program emits the same bytes as the file named directly'
+	requireHeldInAnInstallOutsideCheckout(NamedLibraryLinkCaseDirName, check: StdlibFileNamedThroughALink.create())
+end 'a stdlib file named through a link beside a program emits the same bytes as the file named directly'
+
+type StdlibFileNamedThroughALink implements OutsideCheckoutCase
+	static function create() returns StdlibFileNamedThroughALink
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let program = stagingDir(dir.join(NamedLibraryProgramDirName).toString())
+
+		writeStagedFile(program.join(StagedProgramFileName), content: NamedLibraryProgramSource)
+		plantedDirectoryLink(dir.join(NamedLibraryLinkName), target: dir.join(StdlibDirName).toString())
+
+		let viaLink = runRecordedBuild(dir, program: "{NamedLibraryProgramDirName}/{StagedProgramFileName}", output: "{NamedLibraryViaLinkDirName}/{OutputStem}", options: ["{NamedLibraryLinkName}/{NamedLibraryFileName}"], binary: installedCompilerIn(dir))
+		let direct = runRecordedBuild(dir, program: "{NamedLibraryProgramDirName}/{StagedProgramFileName}", output: "{NamedLibraryDirectDirName}/{OutputStem}", options: ["{StdlibDirName}/{NamedLibraryFileName}"], binary: installedCompilerIn(dir))
+
+		try Expect.equal(viaLink.exitCode(), expected: 0, message: "the build naming `{NamedLibraryLinkName}/{NamedLibraryFileName}` did not succeed. It wrote to stdout: {viaLink.stdout} and to stderr: {viaLink.stderr}")
+		try Expect.equal(direct.exitCode(), expected: 0, message: "the build naming `{StdlibDirName}/{NamedLibraryFileName}` did not succeed. It wrote to stdout: {direct.stdout} and to stderr: {direct.stderr}")
+
+		let viaLinkBuilt = dir.join(NamedLibraryViaLinkDirName).join("{OutputStem}{executableSuffix()}")
+		let directBuilt = dir.join(NamedLibraryDirectDirName).join("{OutputStem}{executableSuffix()}")
+
+		try Expect.isTrue(fileBytes(viaLinkBuilt).equals(fileBytes(directBuilt)), message: "⭐ THE BYTES ARE A FUNCTION OF THE PROGRAM, NOT OF THE SPELLING THAT NAMED A LIBRARY FILE. `{StdlibDirName}/{NamedLibraryFileName}` named through the link `{NamedLibraryLinkName}` emitted a different executable than the same file named directly.")
+	end 'requireHeldIn'
+end 'StdlibFileNamedThroughALink'

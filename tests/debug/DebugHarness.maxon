@@ -1432,10 +1432,15 @@ export type TracedChild
 		return Self{child: child, trace: trace, pid: pid, threads: threads, staged: staged}
 	end 'create'
 
+	// The tree is ended first because `endTree` answers `unconfirmed` once the child is released, and
+	// the verdict is required last so a survivor still leaves the staging removed and the trace
+	// closed.
 	export function release()
+		let treeEnd = self.child.endTree()
 		self.child.release()
 		self.trace.close()
 		discardStagedDir(self.staged)
+		requireTreeEnd(treeEnd, what: "the traced program, process {self.pid}")
 	end 'release'
 end 'TracedChild'
 

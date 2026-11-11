@@ -7,13 +7,9 @@ let RefusedLeftoverContent = "a file whose removal the host refuses\n"
 let RefusedLeftoverWarning = "could not be removed from the staging directory"
 
 #if os(Windows)
-	let EveryoneSid = "*S-1-1-0"
-	let AclDenyFlag = "/deny"
-	let AclResetFlag = "/reset"
-	let AclRecurseFlag = "/T"
-	let AclContinueFlag = "/C"
-	let AclDenyDeleteChild = "{EveryoneSid}:(DC)"
-	let AclDenyDelete = "{EveryoneSid}:(D)"
+	let AttribToolName = "attrib"
+	let AttribSetReadOnly = "+R"
+	let AttribClearReadOnly = "-R"
 #else
 	let RemoveWriteWords = "a-w"
 	let RestoreWriteWords = "u+w"
@@ -31,11 +27,11 @@ test 'a build warns of a staging leftover whose removal is refused when it is no
 	Expect.isTrue(Directory.create(staging), message: "could not create {staging.toString()} to stand for an interrupted build's.")
 	Expect.isTrue(Directory.create(held), message: "could not create {held.toString()}.")
 	writeStagedFile(stray, content: RefusedLeftoverContent)
-	refuseRemovalOf(stray, inside: held)
+	refuseRemovalOf(stray)
 
 	let build = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{output.toString()}"])
 
-	allowRemovalOf(held)
+	allowRemovalOf(stray)
 
 	Expect.equal(build.exitCode(), expected: 0, message: "a build beside a staging leftover whose removal the host refuses did not succeed. It said: {build.stdout}{build.stderr}")
 	Expect.contains(build.stderr, needle: RefusedLeftoverWarning, message: "the build did not warn that a staging leftover could not be removed. It said: {build.stdout}{build.stderr}")
@@ -44,19 +40,22 @@ test 'a build warns of a staging leftover whose removal is refused when it is no
 	discardStagedDir(dir)
 end 'a build warns of a staging leftover whose removal is refused when it is no image the build moved aside'
 
-function refuseRemovalOf(stray FilePath, inside FilePath)
+function refuseRemovalOf(stray FilePath)
 	#if os(Windows)
-		_ = runSystemTool("icacls", arguments: [inside.toString(), AclDenyFlag, AclDenyDeleteChild], what: "denying the removal of the entries of {inside.toString()}")
-		_ = runSystemTool("icacls", arguments: [stray.toString(), AclDenyFlag, AclDenyDelete], what: "denying the removal of {stray.toString()}")
+		_ = runSystemTool(AttribToolName, arguments: [AttribSetReadOnly, stray.toString()], what: "making {stray.toString()} read-only")
 	#else
+		let inside = try stray.parent() otherwise panic("a staged leftover always has a directory")
+
 		_ = runSystemTool("chmod", arguments: [RemoveWriteWords, inside.toString()], what: "making {inside.toString()} unwritable")
 	#endif
 end 'refuseRemovalOf'
 
-function allowRemovalOf(held FilePath)
+function allowRemovalOf(stray FilePath)
 	#if os(Windows)
-		_ = runSystemTool("icacls", arguments: [held.toString(), AclResetFlag, AclRecurseFlag, AclContinueFlag], what: "restoring the access to {held.toString()}")
+		_ = runSystemTool(AttribToolName, arguments: [AttribClearReadOnly, stray.toString()], what: "making {stray.toString()} writable")
 	#else
-		_ = runSystemTool("chmod", arguments: [RestoreWriteWords, held.toString()], what: "making {held.toString()} writable")
+		let inside = try stray.parent() otherwise panic("a staged leftover always has a directory")
+
+		_ = runSystemTool("chmod", arguments: [RestoreWriteWords, inside.toString()], what: "making {inside.toString()} writable")
 	#endif
 end 'allowRemovalOf'

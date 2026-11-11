@@ -85,14 +85,16 @@ public function spawnBuild(source FilePath, staged FilePath, output FilePath, la
 end 'spawnBuild'
 
 public function requireTreeEnded(child StreamingSubprocess, what String)
-	let treeEnd = child.endTree()
+	requireTreeEnd(child.endTree(), what: what)
+end 'requireTreeEnded'
 
+public function requireTreeEnd(treeEnd TreeEnd, what String)
 	match treeEnd 'tree'
 		ended then return
 		survived or
 		unconfirmed then panic("the gate could not run — the process tree of {what} could not be ended ({treeEnd.displayReason()}).")
 	end 'tree'
-end 'requireTreeEnded'
+end 'requireTreeEnd'
 
 public function requireDeadlineKill(failure SubprocessError, what String)
 	if not failure.timedOut() 'notAKill'

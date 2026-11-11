@@ -1,0 +1,42 @@
+let LinkedTierCaseDirName = "build-a-library-tier-project-named-through-a-link"
+let LinkedTierLinkName = "alias"
+let LinkedTierProjectDirName = "__fixture__"
+let DirectOutputDirName = "direct"
+let LinkedTierProgramSource = "function main() returns ExitCode\n\t__Builtins.forceSegfault()\n\n\treturn 0\nend 'main'\n"
+
+test 'a project inside stdlib named through a link to it reads each file once and keeps the library tier'
+	requireHeldInAnInstallOutsideCheckout(LinkedTierCaseDirName, check: LibraryTierProjectNamedThroughALink.create())
+end 'a project inside stdlib named through a link to it reads each file once and keeps the library tier'
+
+type LibraryTierProjectNamedThroughALink implements OutsideCheckoutCase
+	static function create() returns LibraryTierProjectNamedThroughALink
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let stdlib = dir.join(StdlibDirName)
+		let project = stagingDir(stdlib.join(LinkedTierProjectDirName).toString())
+
+		writeStagedFile(project.join(StagedProgramFileName), content: LinkedTierProgramSource)
+
+		let link = dir.join(LinkedTierLinkName)
+		plantedDirectoryLink(link, target: stdlib.toString())
+
+		let build = runRecordedBuild(dir, program: "{LinkedTierLinkName}/{LinkedTierProjectDirName}", output: OutputStem, options: StringArray.create(0), binary: installedCompilerIn(dir))
+
+		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
+
+		try Expect.equal(build.exitCode(), expected: 0, message: "⭐ A FILE IS ONE FILE WHICHEVER LINK NAMES IT. The project `{LinkedTierProjectDirName}/` lies physically inside `stdlib/` and was named through a link to that directory, so the compiler loaded `main.maxon` under two spellings, once as library source and once as the author's, which makes `main` a duplicate and the raw intrinsic it calls a refusal outside the library tiers. {said}")
+
+		let built = dir.join("{OutputStem}{executableSuffix()}")
+		try Expect.isTrue(File.exists(built), message: "the build exited 0 and wrote no {built.toString()}. {said}")
+
+		let direct = runRecordedBuild(dir, program: "{StdlibDirName}/{LinkedTierProjectDirName}", output: "{DirectOutputDirName}/{OutputStem}", options: StringArray.create(0), binary: installedCompilerIn(dir))
+		let directSaid = "It wrote to stdout: {direct.stdout} and to stderr: {direct.stderr}"
+
+		try Expect.equal(direct.exitCode(), expected: 0, message: "the same project named by its physical path did not build. {directSaid}")
+
+		let directBuilt = dir.join(DirectOutputDirName).join("{OutputStem}{executableSuffix()}")
+		try Expect.isTrue(fileBytes(built).equals(fileBytes(directBuilt)), message: "⭐ THE BYTES ARE A FUNCTION OF THE PROGRAM, NOT OF THE SPELLING THAT NAMED IT. The project built through the link `{LinkedTierLinkName}` and by its physical path `{StdlibDirName}` emitted different executables.")
+	end 'requireHeldIn'
+end 'LibraryTierProjectNamedThroughALink'

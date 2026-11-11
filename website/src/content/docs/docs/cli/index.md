@@ -160,7 +160,7 @@ compile, in any process, starts from what that one wrote:
 - **A program folds its own declarations on top of the library's.** A program that shadows a library
   type, declares a name the library uses, or lives inside `stdlib/` has its names settled first: it
   sweeps the library's declarations itself, from the cached tokens, and its parses of library files are
-  its own.
+  its own. A program lives inside `stdlib/` by its physical path, so one named through a symbolic link counts.
 - **An entry is checked when it is read.** One that is damaged, was written under another entry format, or
   holds a number outside the range it is read into is deleted and written again, and the compile goes on
   as a cold one. Entries are written under a temporary name and renamed into place, so concurrent compiles
@@ -806,9 +806,10 @@ its generated sources out of every ordinary build.
 environment: `MAXON_TEST_SCRATCH`, in the system temp area (`maxon-test-<pid>`, the pid of the process
 that runs the tests), for anything that must sit outside every checkout, a staged project included; and
 `MAXON_TEST_PROJECT_SCRATCH`, `<project>/.maxon/test/[<file name>/]scratch-<pid>`, for what must sit inside
-the tree, such as a copy of a compiler that finds `stdlib/` by walking up from itself. A test reads them
-through [`TestScratch`](/docs/stdlib/testing/#testscratch). Both are removed when the process ends, and a
-process that passes but leaves an entry in either FAILS, each entry named as
+the tree, such as a copy of a compiler that finds `stdlib/` by walking up from itself. Each is named by its
+physical path, every symbolic link along it resolved, so a path a test prints from inside it is the path the
+variable holds. A test reads them through [`TestScratch`](/docs/stdlib/testing/#testscratch). Both are removed
+when the process ends, and a process that passes but leaves an entry in either FAILS, each entry named as
 `left MAXON_TEST_SCRATCH/<name>`. A run removes the scratch directories that runs whose process has ended
 left.
 

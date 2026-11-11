@@ -215,7 +215,7 @@
 // under this directory as library source" is one question, and two copies of the answer would be free to
 // drift on the walk, on the double-load guard and on the memo admission.
 export function loadLibrarySources(project Project) throws CompileError
-	let usersOwn = setAsideTheUsersOwnLibraryFiles(project)
+	let usersOwn = try setAsideTheUsersOwnLibraryFiles(project)
 
 	if not try loadLibraryRoot(project, root: project.stdlibDir, usersOwn: usersOwn) 'stdlibContributedNothing'
 		throw CompileError.stdlibNotFound
@@ -349,33 +349,34 @@ end 'loadLibraryRoot'
 // A library file the project already registered is not loaded a second time by the library walk.
 // The user registers one by naming it on the command line or in a manifest's `sources` beside a
 // program, or by rooting the project under `stdlib/` or `scriptlib/`. The query database keys a
-// source on its `FilePath`, whose equality compares text, so the set holds each registered path
-// resolved: a second load of a `runtime/` file is E3006 against itself, and of a `stdlib/` file a
-// silent shadow.
+// source on its `FilePath`, whose equality compares text, so the set holds each registered path's
+// physical identity: the walk enumerates the physical library roots, so it meets a library file
+// under its identity, and a second load of a `runtime/` file is E3006 against itself, and of a
+// `stdlib/` file a silent shadow.
 //
 // A registered file whose provenance is library is recorded as library source too, so the file has
 // one classification: parsed as tier but absent from `LibraryFacts.runtimeTier`, it would be
 // classified two ways. Under a `stdlib/` or `scriptlib/` root the project's own files stay the user's
 // and are not recorded.
-function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePathSet
+function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePathSet throws CompileError
 	var setAside = MaxonSourcePathSet.create()
 	var libraryFiles = MaxonSourcePathArray.create(0)
 
-	// ⚠ `Project.rootIsUnder`, not another spelling of the same `resolve` + `isInside`:
+	// ⚠ `Project.rootIsUnder`, not another copy of the same containment test:
 	// `Queries.livesUnderStdlibDirectory`'s soundness proof is a claim about this exact predicate holding
 	// the same way here and in `isStdlibSourceFile`, so it is asked in one place. See its header.
-	let cwd = Directory.currentPath()
-	let rootIsUnderALibraryTree = rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: cwd) or rootIsUnderScriptlib(project, cwd: cwd)
+	let rootIsUnderALibraryTree = rootIsUnder(project, libraryRoot: project.stdlibDir) or rootIsUnderScriptlib(project)
 
 	for path in project.db.sourcePaths 'each'
-		let isTheLibrarys = isLibrarySourceFile(project, path: path)
+		let provenance = try requireFileProvenanceOf(project, path: path)
+		let isTheLibrarys = provenance.isLibrary()
 
 		if isTheLibrarys 'theLibrarysOwnFile'
 			libraryFiles.push(path)
 		end 'theLibrarysOwnFile'
 
 		if isTheLibrarys or rootIsUnderALibraryTree 'aLibraryModuleTheUserNamed'
-			setAside.insert(path.resolve(cwd))
+			setAside.insert(provenance.identity)
 		end 'aLibraryModuleTheUserNamed'
 	end 'each'
 

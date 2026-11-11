@@ -79,7 +79,8 @@ reported as a failure naming the error and the line of the operation that threw 
 
 `TestScratch` names the two directories `maxon test` makes for each test process, empty when the process
 starts ([Scratch directories](/docs/cli/#maxon-test)). The runner removes both when the process ends,
-and a process that passes but leaves an entry in either fails, naming the entry.
+and a process that passes but leaves an entry in either fails, naming the entry. Each directory is named by
+its physical path, every symbolic link along it resolved.
 
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|

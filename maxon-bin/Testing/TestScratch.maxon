@@ -16,13 +16,7 @@ module type TestProcessScratch
 		let outside = try freshScratchDirectory(area.join(runnerScratchName(OutsideScratchDirPrefix)))
 
 		let inProject = try freshScratchDirectory(projectScratchRoot.anchoredAt(Directory.currentPath()).join(runnerScratchName(ProjectScratchDirPrefix))) otherwise (refusal) 'noProjectScratch'
-			let stuck = Directory.removeTree(outside)
-
-			if not stuck.isEmpty() 'outsideStays'
-				throw TestStagingError.refused("{stagingRefusalReason(refusal)}; {outside.toString()} could not be removed either: {joinedWith(spelledOut(stuck), separator: ListSeparator)}")
-			end 'outsideStays'
-
-			throw TestStagingError.refused(stagingRefusalReason(refusal))
+			throw refusalAfterRemoving(outside, reason: stagingRefusalReason(refusal))
 		end 'noProjectScratch'
 
 		return Self{outside: outside, inProject: inProject}
@@ -110,8 +104,20 @@ function freshScratchDirectory(directory FilePath) returns FilePath throws TestS
 		throw TestStagingError.refused("could not create the scratch directory {directory.toString()}")
 	end 'noScratch'
 
-	return directory
+	return try directory.resolvedPhysically() otherwise 'unresolvable'
+		throw refusalAfterRemoving(directory, reason: "could not resolve the scratch directory {directory.toString()} to its physical path")
+	end 'unresolvable'
 end 'freshScratchDirectory'
+
+function refusalAfterRemoving(directory FilePath, reason String) returns TestStagingError
+	let stuck = Directory.removeTree(directory)
+
+	if stuck.isEmpty() 'removed'
+		return TestStagingError.refused(reason)
+	end 'removed'
+
+	return TestStagingError.refused("{reason}; {directory.toString()} could not be removed either: {joinedWith(spelledOut(stuck), separator: ListSeparator)}")
+end 'refusalAfterRemoving'
 
 function discardScratchDirectory(directory FilePath, variable String, left StringArray)
 	for leftover in leftoversIn(directory, label: variable) 'eachLeftover'

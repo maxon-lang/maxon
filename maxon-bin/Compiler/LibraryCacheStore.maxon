@@ -24,9 +24,13 @@ union InstalledTiers
 	absent
 end 'InstalledTiers'
 
+// Physical, as `Project.stdlibDir` and `runtimeDir` are: `entryClassOf` compares them by text, so a
+// spelling that differed would class an installed project's entries as staged.
 function resolvedInstalledTiers() returns InstalledTiers
-	let stdlib = try locateStdlibDir() otherwise return InstalledTiers.absent
-	let runtime = try runtimeDirBeside(stdlib) otherwise return InstalledTiers.absent
+	let walked = try locateStdlibDir() otherwise return InstalledTiers.absent
+	let stdlib = try identityOfPath(walked) otherwise return InstalledTiers.absent
+	let walkedRuntime = try runtimeDirBeside(walked) otherwise return InstalledTiers.absent
+	let runtime = try identityOfPath(walkedRuntime) otherwise return InstalledTiers.absent
 
 	return InstalledTiers.found(stdlib, runtime: runtime)
 end 'resolvedInstalledTiers'
@@ -206,7 +210,7 @@ export type LibraryCache
 			unavailable gives false
 		end 'directory'
 
-		return diskTierServes and not rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: Directory.currentPath())
+		return diskTierServes and not rootIsUnder(project, libraryRoot: project.stdlibDir)
 	end 'persistsFor'
 
 	export function holds(target Target, name String) returns bool

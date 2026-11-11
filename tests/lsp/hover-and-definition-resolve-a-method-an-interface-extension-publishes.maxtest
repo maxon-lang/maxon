@@ -1,4 +1,4 @@
-let PublishedRootName = "temp/lsp/hover-and-definition-resolve-a-method-an-interface-extension-publishes"
+let PublishedRootName = "hover-and-definition-resolve-a-method-an-interface-extension-publishes"
 let PublishedShelfFileName = "shelf.maxon"
 let PublishedMainFileName = "main.maxon"
 let PublishedShelfTail = "hover-and-definition-resolve-a-method-an-interface-extension-publishes/shelf.maxon"
@@ -13,6 +13,8 @@ test 'hover renders a method an interface extension publishes onto its receiver 
 
 	let rendering = hoverRenderingAtUri(fileUriOf(root.join(PublishedMainFileName)), source: publishedMainSource(), line: PublishedCallLine, character: PublishedCallCharacter)
 
+	discardStagedDir(root)
+
 	Expect.contains(rendering, needle: "describe() returns ExitCode", message: "`bin.describe()` did not hover as the `describe` that `extension Weighed` publishes onto `Bin`. `Crate` declares a `describe` first in the same sibling file, and a method belongs to the type of its receiver.")
 end 'hover renders a method an interface extension publishes onto its receiver in a sibling file'
 
@@ -21,6 +23,8 @@ test 'definition resolves a method an interface extension publishes onto its rec
 	writeCorpusFile(root, fileName: PublishedShelfFileName, content: publishedShelfSource())
 
 	let probe = probeCorpusDefinition(root, fileName: PublishedMainFileName, content: publishedMainSource(), line: PublishedCallLine, character: PublishedCallCharacter)
+
+	discardStagedDir(root)
 
 	expectDefinitionInFile(probe, fileTail: PublishedShelfTail, startLine: PublishedDeclarationLine, note: "`bin.describe()` did not resolve to the `describe` that `extension Weighed` publishes onto `Bin`. `Crate` declares a `describe` first in the same sibling file, and a method belongs to the type of its receiver.")
 end 'definition resolves a method an interface extension publishes onto its receiver in a sibling file'

@@ -3,19 +3,138 @@ let OutlivesDetachFixtureName = "outlivesdetach"
 
 let WaitRoundAnchorName = "wait-round"
 let FinishedMarkerName = "outlived-the-detach.txt"
+let OutlivesPidFileName = "outlivesdetach-pid.txt"
 let ShortStopTimeout = "0.05"
 let CommandsAfterTheDetach = 2
-let MarkerLooks = 60
-let MarkerLookGapMs = 500
 
-typealias MarkerLook = int(0 to 60)
+let WatchLookGapMs = 50
+let WatchDeadlineMs = 40000
+let TrackDescendantsVariable = "MAXON_TRACK_DESCENDANTS"
+let ArmedMark = "A"
+let DescendantFrameWord = "maxon-spec"
+let DescendantFrameEdge = "@@"
+let DescendantFrameTag = "!"
+let SystemEvidenceLines = 80
+
+union RecordedPid
+	unwritten
+	written(pid Pid)
+end 'RecordedPid'
+
+function recordedPid(pidFile FilePath) returns RecordedPid
+	if not File.exists(pidFile) 'notYet'
+		return RecordedPid.unwritten
+	end 'notYet'
+
+	let text = try File.readText(pidFile) otherwise return RecordedPid.unwritten
+
+	if not text.endsWith(LineFeed) 'stillBeingWritten'
+		return RecordedPid.unwritten
+	end 'stillBeingWritten'
+
+	let id = try int.fromString(text.trim()) otherwise return RecordedPid.unwritten
+
+	return RecordedPid.written(id as Pid)
+end 'recordedPid'
+
+function watchedUntilItEnds(pid Pid, marker FilePath, started InstantMs) returns String
+	var trail = ""
+	var lastRow = ""
+
+	while Clock.elapsedMs(started) < WatchDeadlineMs 'looking'
+		let row = stateRowOf(pid)
+		let wrote = File.exists(marker)
+		let gone = row == GoneStateRow
+
+		if row != lastRow 'moved'
+			trail.append("{LineFeed}  +{Clock.elapsedMs(started)} ms  {row}")
+			lastRow = row
+		end 'moved'
+
+		if wrote 'markerWritten'
+			return "{trail}{LineFeed}  +{Clock.elapsedMs(started)} ms  the marker is there"
+		end 'markerWritten'
+
+		if gone 'programGone'
+			return "{trail}{LineFeed}  +{Clock.elapsedMs(started)} ms  the program is gone and left no marker"
+		end 'programGone'
+
+		sleep(WatchLookGapMs)
+	end 'looking'
+
+	return "{trail}{LineFeed}  +{Clock.elapsedMs(started)} ms  the deadline passed with the program still `{lastRow}` and no marker"
+end 'watchedUntilItEnds'
+
+function watchedProgram(staged FilePath, marker FilePath) returns String
+	let started = Clock.nowMs()
+
+	while Clock.elapsedMs(started) < WatchDeadlineMs 'untilItStarts'
+		match recordedPid(staged.join(OutlivesPidFileName)) 'recorded'
+			written(pid) then return watchedUntilItEnds(pid, marker: marker, started: started)
+			unwritten then sleep(WatchLookGapMs)
+		end 'recorded'
+	end 'untilItStarts'
+
+	return "{LineFeed}  the program recorded no process id in {OutlivesPidFileName} within {WatchDeadlineMs} ms"
+end 'watchedProgram'
+
+function firstLinesOf(text String, limit ElementIndex) returns String
+	let lines = outputLines(text)
+	var kept = StringArray.create(0)
+
+	for line in lines 'eachLine'
+		if kept.count() >= limit 'enough'
+			break
+		end 'enough'
+
+		kept.push(line)
+	end 'eachLine'
+
+	return "{kept.count()} of {lines.count()} lines:{listedLines(kept)}"
+end 'firstLinesOf'
+
+#if os(Macos)
+	let SystemLogTool = "log"
+	let SystemLogWindowSeconds = 120
+	let SystemLogMs = 60000
+	let CrashReportScript = "for report in \"$HOME\"/Library/Logs/DiagnosticReports/* /Library/Logs/DiagnosticReports/*; do if [ -f \"$report\" ] && grep -q -F -e \"$1\" \"$report\"; then echo \"== $report\"; head -n 40 \"$report\"; fi; done"
+	let CrashReportScriptName = "crash-reports"
+	let CrashReportsMs = 30000
+
+	function systemEvidence(pid Pid, staged FilePath) returns String
+		let predicate = "eventMessage CONTAINS \"{pid}\""
+		let shown = try Subprocess.run(Executable.name(SystemLogTool), arguments: ["show", "--last", "{SystemLogWindowSeconds}s", "--style", "compact", "--predicate", predicate], timeoutMs: SystemLogMs) otherwise (e) 'noLog'
+			return "(`{SystemLogTool} show` could not run: {e.displayReason()})"
+		end 'noLog'
+
+		let reports = try Subprocess.run(Executable.path(try FilePath.from(PosixShellPath) otherwise panic("{PosixShellPath} is a spellable path")), arguments: ["-c", CrashReportScript, CrashReportScriptName, staged.toString()], timeoutMs: CrashReportsMs) otherwise (e) 'noReports'
+			return "(the crash reports could not be searched: {e.displayReason()})"
+		end 'noReports'
+
+		return "The system log lines naming process {pid} in the last {SystemLogWindowSeconds} s, `{SystemLogTool} show` exiting {shown.exitCode()}, {firstLinesOf(shown.stdout, limit: SystemEvidenceLines)}{LineFeed}The crash reports naming {staged.toString()}: {firstLinesOf(reports.stdout, limit: SystemEvidenceLines)}"
+	end 'systemEvidence'
+#else
+	function systemEvidence(pid Pid, staged FilePath) returns String
+		return "(this host's system log and crash reports are not searched for process {pid} of {staged.toString()})"
+	end 'systemEvidence'
+#endif
+
+function trackingNote(session CollectedOutput) returns String
+	let inherited = try Process.environmentVariable(TrackDescendantsVariable) otherwise "(unset)"
+	let armed = inherited.startsWith(ArmedMark)
+	let gated = session.stderr.contains("{DescendantFrameEdge}{DescendantFrameWord}{DescendantFrameEdge}{DescendantFrameTag}")
+
+	return "The session was started with this process's environment, in which {TrackDescendantsVariable} is `{inherited}` ({"ARMED" if armed else "not armed"}: a session that ran armed ends its descendants at its exit and reports each on stderr in a framed `{DescendantFrameWord}` line, and its stderr {"DID" if gated else "did not"} carry one)."
+end 'trackingNote'
 
 test 'a command that needs the program held is refused once the session has detached from it, and the program runs on to its own end'
 	let staged = builtFixture(ReleasedRefusesCaseLabel, fixture: OutlivesDetachFixtureName)
 	let marker = staged.join(FinishedMarkerName)
 	let waitLine = anchorLine(staged.join(StagedProgramFileName), anchor: WaitRoundAnchorName)
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(waitLine)}", RunCommand, DetachCommand, PauseCommand, BacktraceCommand])
+	let watching = async watchedProgram(staged, marker: marker)
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: ["{DebugStopTimeoutOptionPrefix}{ShortStopTimeout}"])
+	let timeline = await watching
 	let events = batchEvents(session.stdout)
 	let kinds = eventKinds(events)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
@@ -32,15 +151,13 @@ test 'a command that needs the program held is refused once the session has deta
 
 	Expect.equal(eventsOfKind(events, kind: BacktraceEventName).count(), expected: 0, message: "`{BacktraceCommand}` after the detach answered frames of a program the session no longer holds. {said}")
 
-	var looks = 0 as MarkerLook
-
-	while not File.exists(marker) and looks < MarkerLooks 'untilTheProgramEnds'
-		sleep(MarkerLookGapMs)
-		looks = looks + 1
-	end 'untilTheProgramEnds'
-
 	if not File.exists(marker) 'neverAppeared'
-		Expect.fail("⭐ A DETACHED PROGRAM RUNS TO ITS OWN END. The fixture writes {FinishedMarkerName} as its last act, and it never appeared after {MarkerLooks * MarkerLookGapMs} ms: something the session did after letting the program go, a command or its close, ended it, or left it stopped. The session ran {session.durationMs} ms and exited {session.exitCode()}. Its events were: {listedLines(kinds)}. The processes naming the program or its debug stub now: {processSnapshot(staged.toString())}. {said}")
+		let program = match recordedPid(staged.join(OutlivesPidFileName)) 'recorded'
+			written(pid) gives "process {pid}. The system's account of it: {systemEvidence(pid, staged: staged)}"
+			unwritten gives "no process, for it never recorded its id"
+		end 'recorded'
+
+		Expect.fail("⭐ A DETACHED PROGRAM RUNS TO ITS OWN END. The fixture writes {FinishedMarkerName} as its last act, and it never appeared: something the session did after letting the program go, a command or its close, ended it, or left it stopped. The session ran {session.durationMs} ms from the moment it was started and exited {session.exitCode()}. The program's state and any debug stub's, one listing every {WatchLookGapMs} ms plus the time the listing takes, from before the session started, as the changes of `pid ppid pgid stat`:{timeline}{LineFeed}{trackingNote(session)}{LineFeed}The program was {program}{LineFeed}Its events were: {listedLines(kinds)}. The processes naming the program or its debug stub now: {processSnapshot(staged.toString())}. {said}")
 	end 'neverAppeared'
 
 	discardStagedDir(staged)

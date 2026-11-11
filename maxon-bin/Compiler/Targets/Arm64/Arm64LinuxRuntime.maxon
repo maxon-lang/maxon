@@ -3006,7 +3006,7 @@ end 'buildArm64LinuxTraceeReadChunk'
 
 function buildArm64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotStatusOut = 0
-	let SlotBudget = 1
+	let SlotDeadline = 1
 	let SlotPid = 2
 	let SlotTsSec = 3
 	let SlotTsNsec = 4
@@ -3016,13 +3016,15 @@ function buildArm64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Funct
 	let anyChild = asm.newLabel()
 	let selected = asm.newLabel()
 	let waitFailed = asm.newLabel()
+	let timedOut = asm.newLabel()
 	let answered = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotStatusOut)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotBudget)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotDeadline)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotPid)
+	arm64PosixEmitDeadlineFromBudget(asm, budgetSlot: SlotDeadline)
 
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxAwaitOneSliceMs as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: PosixChildPollMs as MachineWord)
 	arm64PosixToTimespec(asm, amount: Arm64Register.x0, unit: PosixTimeUnit.milliseconds, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
 
 	asm.placeLabel(poll)
@@ -3042,11 +3044,7 @@ function buildArm64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Funct
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: waitFailed)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: answered)
 
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotBudget)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: answered)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxAwaitOneSliceMs as MachineWord)
-	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotBudget)
+	arm64PosixEmitBranchIfPastDeadline(asm, deadlineSlot: SlotDeadline, past: timedOut)
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxClockMonotonic as MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxSleepIsRelative as MachineWord)
@@ -3057,6 +3055,8 @@ function buildArm64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Funct
 
 	asm.placeLabel(waitFailed)
 	arm64LinuxEmitStashErrno(asm, errnoHome: errnoHome)
+
+	asm.placeLabel(timedOut)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 
 	asm.placeLabel(answered)
@@ -3276,7 +3276,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64PosixProcAwaitEndedChunk(PosixTreeLane.linux(errnoHome)))
 	end 'processEndWait'
 
-	if posixReadsMonotonicClock(usage) 'clocks'
+	if arm64PosixReadsTickClock(usage) or linuxUsesTraceBand(usage) 'clocks'
 		chunks.push(buildArm64PosixTickMsChunk())
 		chunks.push(buildArm64LinuxMonotonicClockChunk())
 	end 'clocks'
@@ -3834,6 +3834,7 @@ function buildArm64LinuxProcTreeAdoptChunk(kill PosixHostCall, errnoHome LinuxEr
 	let SlotStat = SlotDirents + runtimeFrameSlots(LinuxProcDirentBytes)
 	let SlotPath = SlotStat + runtimeFrameSlots(LinuxProcStatBytes)
 	let SlotParen = SlotPath + runtimeFrameSlots(LinuxProcPathBytes)
+
 	// The fd's slot, free once the stat line is read, for `X64LinuxRuntime.ProcWalkSlotGroup`'s reason.
 	let SlotGroup = SlotFd
 	var asm = Arm64RuntimeAsm.beginFunction(SlotParen + 1)
