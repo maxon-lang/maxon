@@ -649,7 +649,8 @@ function pathQueryOutgoingArgBytes(verb PathQueryVerb) returns StackSize
 		systemDirectory or
 		windowsDirectory or
 		fullPath or
-		finalPath gives 0
+		finalPath or
+		entryAttributes gives 0
 	end 'v'
 end 'pathQueryOutgoingArgBytes'
 
@@ -3970,6 +3971,7 @@ export type StdToX64Lowering
 			fullPath then self.lowerOsFullPathWin64(resultId, pathPtrId: a0Id, bufLenId: a1Id, bufPtrId: a2Id, dstBlock: dstBlock)
 			openForResolve then self.emitWin64CreateFile(resultId, pathPtrId: a0Id, access: NoDesiredAccess, disposition: OpenExisting, attributes: FileFlagBackupSemantics, dstBlock: dstBlock)
 			finalPath then self.lowerOsFinalPathWin64(resultId, handleId: a0Id, bufLenId: a1Id, bufPtrId: a2Id, dstBlock: dstBlock)
+			entryAttributes then self.lowerOsFileAttributes(resultId, pathPtrId: a0Id, dstBlock: dstBlock)
 		end 'v'
 	end 'lowerOsPathQueryWin64'
 
@@ -3977,6 +3979,7 @@ export type StdToX64Lowering
 		match verb 'v'
 			openForResolve then self.emitLinuxFileOpen(resultId, pathPtrId: a0Id, flags: LinuxOpenResolveFlags, mode: PosixNoFileMode as MachineWord, dstBlock: dstBlock)
 			finalPath then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostFdPathName), args: threeArgs(a0Id, second: a2Id, third: a1Id), dstBlock: dstBlock)
+			entryAttributes then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostEntryAttributesName), args: argsOf(a0Id), dstBlock: dstBlock)
 			systemDirectory or
 			windowsDirectory or
 			fullPath then panic("lowerOsPathQuery: `osPathQuery` asks Win32 for a system directory or a full path, and a raw-syscall lane has no such call — `SubprocessRuntime.PathSearchShape.posix` searches `PATH` alone and emits none")

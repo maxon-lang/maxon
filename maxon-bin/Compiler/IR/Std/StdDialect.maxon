@@ -1328,6 +1328,13 @@ export enum PathQueryVerb
 	// the link `/proc/self/fd/<fd>` on Linux, which fails where `/proc` is not mounted, and
 	// `GetFinalPathNameByHandleW` on Windows, which answers the `\\?\` spelling.
 	finalPath
+
+	// `(path, unused, unused)`, answering `osFileAttributes`'s mask or `INVALID_FILE_ATTRIBUTES`, with
+	// the reason left for `osLastError`, but for the entry itself: a final link is not followed, so a
+	// dangling link answers its own attributes. `fstatat` with `AT_SYMLINK_NOFOLLOW` on a POSIX lane,
+	// `GetFileAttributesW` on Windows, which reports a link's own attributes. `osFileAttributes` stays
+	// the following variant because `Directory.exists` and `File` rely on it following.
+	entryAttributes
 end 'PathQueryVerb'
 
 export union StdOp
@@ -3227,10 +3234,11 @@ export union StdOp
 	// would read the block before it was filled.
 	osSocketServe(resultId ValueId, verb SocketServeVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// A path query answering the count `ManagedDirectoryRuntime.emitFilledBufferVerdict` classifies.
+	// A path query; each `PathQueryVerb` states its operands and its answer, and a buffer-filling verb
+	// answers the count `ManagedDirectoryRuntime.emitFilledBufferVerdict` classifies.
 	// `systemDirectory`, `windowsDirectory` and `fullPath` are x64-windows only, produced by the Windows
 	// executable search in `SubprocessRuntime`; `openForResolve` and `finalPath` are `__md_resolve_path`'s
-	// on every native lane.
+	// and `entryAttributes` is `__md_delete`'s, on every native lane.
 	osPathQuery(resultId ValueId, verb PathQueryVerb, a0Id ValueId, a1Id ValueId, a2Id ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
 	// `osDescendants(result, verb, buf, cap)`, one host chunk per lane (`mrt_host_proc_descendants` on

@@ -462,13 +462,13 @@ function arm64LinuxEmitAtFdCwd(asm Arm64RuntimeAsm, dest Arm64Register)
 	arm64EmitMovRuntimeImm(asm, dest: dest, value: LinuxAtFdCwd)
 end 'arm64LinuxEmitAtFdCwd'
 
-// `newfstatat(dirFd, path, statBuf, 0)` with the path already in `pathReg` — the three sites that describe a
+// `newfstatat(dirFd, path, statBuf, flags)` with the path already in `pathReg` — the three sites that describe a
 // path (the attribute read, the single-`stat` search and the walk's per-entry describe) differ only in which
 // register holds the path and which descriptor it is relative to.
-function arm64LinuxEmitFstatat(asm Arm64RuntimeAsm, dirFd Arm64Register, pathReg Arm64Register, statSlot StackSize)
+function arm64LinuxEmitFstatat(asm Arm64RuntimeAsm, dirFd Arm64Register, pathReg Arm64Register, statSlot StackSize, flags MachineWord)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: pathReg)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x2, slot: statSlot)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixFollowSymlinks as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: flags)
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x0, src: dirFd)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallNewfstatat)
 end 'arm64LinuxEmitFstatat'
@@ -1017,13 +1017,13 @@ function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Functi
 end 'buildArm64LinuxFileRenameChunk'
 
 // ==========================================================================
-// mrt_host_file_attributes(x0 = pathPtr) -> x0 = dwFileAttributes
+// mrt_host_file_attributes, mrt_host_entry_attributes(x0 = pathPtr) -> x0 = dwFileAttributes
 // ==========================================================================
 
-// `GetFileAttributesW` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a `stat`
-// and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit `__mf_stat`
+// `GetFileAttributesW` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is an
+// `fstatat` and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit `__mf_stat`
 // publishes derived from ONE reading of `st_mode`.
-function buildArm64LinuxFileAttributesChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
+function buildArm64LinuxFileAttributesChunk(name ByteArray, statFlags MachineWord, errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotStat = 0
 	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 
@@ -1031,7 +1031,7 @@ function buildArm64LinuxFileAttributesChunk(errnoHome LinuxErrnoHome) returns Fu
 	let answered = asm.newLabel()
 
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x9)
-	arm64LinuxEmitFstatat(asm, dirFd: Arm64Register.x9, pathReg: Arm64Register.x0, statSlot: SlotStat)
+	arm64LinuxEmitFstatat(asm, dirFd: Arm64Register.x9, pathReg: Arm64Register.x0, statSlot: SlotStat, flags: statFlags)
 	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: described)
@@ -1044,7 +1044,7 @@ function buildArm64LinuxFileAttributesChunk(errnoHome LinuxErrnoHome) returns Fu
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: HostAttrsFromModeName)
 
 	asm.placeLabel(answered)
-	return asm.finishFunction(HostFileAttributesName)
+	return asm.finishFunction(name)
 end 'buildArm64LinuxFileAttributesChunk'
 
 // ==========================================================================
@@ -1362,7 +1362,7 @@ function buildArm64LinuxDirFindNextChunk(errnoHome LinuxErrnoHome) returns Funct
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x11, base: Arm64Register.x10, byteOffset: LinuxSearchDirFdOffset as MachineWord)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x14, slot: SlotName)
-	arm64LinuxEmitFstatat(asm, dirFd: Arm64Register.x11, pathReg: Arm64Register.x14, statSlot: SlotStat)
+	arm64LinuxEmitFstatat(asm, dirFd: Arm64Register.x11, pathReg: Arm64Register.x14, statSlot: SlotStat, flags: PosixFollowSymlinks as MachineWord)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFindData)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
@@ -1425,7 +1425,7 @@ function buildArm64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns Func
 	// One path: `stat` it, and hand back a search that is already exhausted.
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x14, slot: SlotPattern)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x9)
-	arm64LinuxEmitFstatat(asm, dirFd: Arm64Register.x9, pathReg: Arm64Register.x14, statSlot: SlotStat)
+	arm64LinuxEmitFstatat(asm, dirFd: Arm64Register.x9, pathReg: Arm64Register.x14, statSlot: SlotStat, flags: PosixFollowSymlinks as MachineWord)
 	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: refused)
@@ -3340,6 +3340,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	if usage.usesManagedDirectory 'managedDirectory'
 		chunks.push(buildArm64LinuxPathOpChunk(HostDirCreateName, syscallNumber: Arm64LinuxSyscallMkdirat, thirdArgument: PosixDirectoryMode as MachineWord, errnoHome: errnoHome))
 		chunks.push(buildArm64LinuxPathOpChunk(HostDirRemoveName, syscallNumber: Arm64LinuxSyscallUnlinkat, thirdArgument: LinuxRemoveDirectoryFlags, errnoHome: errnoHome))
+		chunks.push(buildArm64LinuxFileAttributesChunk(HostEntryAttributesName, statFlags: LinuxAtSymlinkNoFollow, errnoHome: errnoHome))
 		chunks.push(buildArm64LinuxDirCurrentPathChunk(errnoHome))
 		chunks.push(buildArm64LinuxFdPathChunk(globalData))
 	end 'managedDirectory'
@@ -3354,7 +3355,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// `__gt_subp_resolve_path` walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the
 	// executable lookup needs this chunk with no `Directory` call anywhere in the program.
 	if usage.usesManagedDirectory or usage.usesChildPipes 'fileAttributes'
-		chunks.push(buildArm64LinuxFileAttributesChunk(errnoHome))
+		chunks.push(buildArm64LinuxFileAttributesChunk(HostFileAttributesName, statFlags: PosixFollowSymlinks as MachineWord, errnoHome: errnoHome))
 	end 'fileAttributes'
 end 'appendArm64LinuxRuntimeChunks'
 

@@ -85,41 +85,12 @@ public type Directory
 	public static function delete(path FilePath) throws DirectoryDeleteError
 		try __ManagedDirectory.delete(path.path.addressableBytes()) otherwise (e) 'failed'
 			match e 'classify'
-				notFound then throw Directory.refusalForUnresolvedPath(path)
+				notFound then throw DirectoryDeleteError.notFound
 				deleteNotEmpty then throw DirectoryDeleteError.notEmpty
 				default throws DirectoryDeleteError.deleteFailed
 			end 'classify'
 		end 'failed'
 	end 'delete'
-
-	// POSIX reports a file or link given to the directory delete as ENOTDIR, which arrives as `notFound`.
-	// The parent's listing decides instead: `Directory.list` does not follow links, so a dangling link
-	// is listed, and any entry listed under the name is `deleteFailed`.
-	static function refusalForUnresolvedPath(path FilePath) returns DirectoryDeleteError
-		let parent = try path.parent() otherwise Directory.currentPath()
-
-		if not Directory.exists(parent) 'noParentDirectory'
-			return DirectoryDeleteError.notFound
-		end 'noParentDirectory'
-
-		let siblings = try Directory.list(parent) otherwise (listing) 'unlistable'
-			match listing 'why'
-				notFound then return DirectoryDeleteError.notFound
-				accessDenied or
-				listFailed then return DirectoryDeleteError.deleteFailed
-			end 'why'
-		end 'unlistable'
-
-		let name = path.filename()
-
-		for sibling in siblings 'eachSibling'
-			if sibling.filename() == name 'named'
-				return DirectoryDeleteError.deleteFailed
-			end 'named'
-		end 'eachSibling'
-
-		return DirectoryDeleteError.notFound
-	end 'refusalForUnresolvedPath'
 
 	/// Remove `path` and everything below it, and answer the entries that could not be removed; an empty
 	/// answer means nothing is left. A path that does not exist answers empty. A link is removed as one

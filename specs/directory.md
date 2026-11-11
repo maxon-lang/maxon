@@ -678,6 +678,68 @@ end 'main'
 42
 ```
 
+<!-- test: delete-refuses-a-differently-cased-spelling-of-an-existing-file -->
+<!-- unsupported-targets: x64-windows, wasm32-wasi -->
+Whether a path names an entry is the file system's answer, not a comparison of spellings: on a volume that
+folds case, a spelling of an existing file in other letters names that file, so `Directory.delete` of it is
+`deleteFailed` and the file stays. On a volume that does not fold case the spelling names nothing, and the
+answer is `notFound`.
+```maxon
+let testToolTimeoutMs = 30000
+
+function hostFindsAnEntryAt(path FilePath) returns bool
+	var arguments = StringArray.create(0)
+	arguments.push("-e")
+	arguments.push(path.toString())
+
+	let result = try Subprocess.run(Executable.name("test"), arguments: arguments, timeoutMs: testToolTimeoutMs) otherwise panic("the host's existence test could not run")
+
+	if result.succeeded() 'found'
+		return true
+	end 'found'
+
+	if result.exitCode() != 1 'neither'
+		panic("the host's existence test answered {result.exitCode()}, neither found nor absent")
+	end 'neither'
+
+	return false
+end 'hostFindsAnEntryAt'
+
+function main() returns ExitCode
+	let base = Directory.currentPath().join("test_delete_other_case_3f7a")
+	let file = base.join("entry.txt")
+	let otherCase = base.join("ENTRY.TXT")
+
+	if not Directory.create(base) 'couldNotCreate'
+		return 1
+	end 'couldNotCreate'
+
+	try File.writeText(file, content: "x") otherwise return 2
+
+	let foldsCase = hostFindsAnEntryAt(otherCase)
+	let expected = DirectoryDeleteError.deleteFailed if foldsCase else DirectoryDeleteError.notFound
+	var answeredAsExpected = false
+
+	try Directory.delete(otherCase) otherwise (refusal) 'refused'
+		answeredAsExpected = refusal == expected
+	end 'refused'
+
+	let survived = File.exists(file)
+
+	try File.delete(file) otherwise return 3
+	try Directory.delete(base) otherwise return 4
+
+	print("the answer is the file system's {answeredAsExpected}\n")
+	print("the file stays {survived}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+the answer is the file system's true
+the file stays true
+```
+
 ### Removing a tree
 
 `Directory.removeTree` and `Directory.removeContents` answer the paths they could not remove. Each case

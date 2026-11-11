@@ -548,14 +548,14 @@ function x64LinuxEmitFailureSentinel(asm X64RuntimeAsm, sentinel MachineWord)
 	asm.placeLabel(kept)
 end 'x64LinuxEmitFailureSentinel'
 
-// `newfstatat(dirFd, path, statBuf, PosixFollowSymlinks)` WITH THE PATH ALREADY IN r8 AND THE DIRECTORY
+// `newfstatat(dirFd, path, statBuf, flags)` WITH THE PATH ALREADY IN r8 AND THE DIRECTORY
 // DESCRIPTOR IN r9 — a fixed entry contract rather than two register parameters, because the three sites
 // that describe a path all have their operands somewhere else anyway and a parameterised version would
 // carry an aliasing rule (`r8`/`r9` must not be a syscall argument register) that nothing could check.
-function x64LinuxEmitFstatat(asm X64RuntimeAsm, statDisp Imm32)
+function x64LinuxEmitFstatat(asm X64RuntimeAsm, statDisp Imm32, flags MachineWord)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.r8, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: statDisp)
-	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixFollowSymlinks as MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: flags)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.r9, wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallNewfstatat)
 end 'x64LinuxEmitFstatat'
@@ -1452,13 +1452,13 @@ function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Function
 end 'buildX64LinuxFileRenameChunk'
 
 // ==========================================================================
-// mrt_host_file_attributes(rcx = pathPtr) -> rax = dwFileAttributes
+// mrt_host_file_attributes, mrt_host_entry_attributes(rcx = pathPtr) -> rax = dwFileAttributes
 // ==========================================================================
 
-// `GetFileAttributesW` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a
-// `stat` and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit
+// `GetFileAttributesW` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is an
+// `fstatat` and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit
 // `__mf_stat` publishes derived from ONE reading of `st_mode`.
-function buildX64LinuxFileAttributesChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
+function buildX64LinuxFileAttributesChunk(name ByteArray, statFlags MachineWord, errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotStat = 0
 	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
 	var asm = X64RuntimeAsm.beginFunction(statSlots)
@@ -1469,7 +1469,7 @@ function buildX64LinuxFileAttributesChunk(errnoHome LinuxErrnoHome) returns Func
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rcx, wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.r9, value: LinuxAtFdCwd)
-	x64LinuxEmitFstatat(asm, statDisp: statDisp)
+	x64LinuxEmitFstatat(asm, statDisp: statDisp, flags: statFlags)
 	x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: described)
@@ -1482,7 +1482,7 @@ function buildX64LinuxFileAttributesChunk(errnoHome LinuxErrnoHome) returns Func
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: HostAttrsFromModeName)
 
 	asm.placeLabel(answered)
-	return asm.finishFunction(HostFileAttributesName)
+	return asm.finishFunction(name)
 end 'buildX64LinuxFileAttributesChunk'
 
 // ==========================================================================
@@ -1793,7 +1793,7 @@ function buildX64LinuxDirFindNextChunk(errnoHome LinuxErrnoHome) returns Functio
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.r9, disp: LinuxSearchDirFdOffset, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotName), wide: true)
-	x64LinuxEmitFstatat(asm, statDisp: statDisp)
+	x64LinuxEmitFstatat(asm, statDisp: statDisp, flags: PosixFollowSymlinks as MachineWord)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: statDisp)
@@ -1853,7 +1853,7 @@ function buildX64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns Functi
 	// One path: `stat` it, and hand back a search that is already exhausted.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotPattern), wide: true)
 	encodeMovRegImm64(asm.code, dest: X64Register.r9, value: LinuxAtFdCwd)
-	x64LinuxEmitFstatat(asm, statDisp: statDisp)
+	x64LinuxEmitFstatat(asm, statDisp: statDisp, flags: PosixFollowSymlinks as MachineWord)
 	x64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: refused)
@@ -5501,6 +5501,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	if usage.usesManagedDirectory 'managedDirectory'
 		chunks.push(buildX64LinuxPathOpChunk(HostDirCreateName, syscallNumber: X64LinuxSyscallMkdirat, thirdArgument: PosixDirectoryMode as MachineWord, errnoHome: errnoHome))
 		chunks.push(buildX64LinuxPathOpChunk(HostDirRemoveName, syscallNumber: X64LinuxSyscallUnlinkat, thirdArgument: LinuxRemoveDirectoryFlags, errnoHome: errnoHome))
+		chunks.push(buildX64LinuxFileAttributesChunk(HostEntryAttributesName, statFlags: LinuxAtSymlinkNoFollow, errnoHome: errnoHome))
 		chunks.push(buildX64LinuxDirCurrentPathChunk(errnoHome))
 		chunks.push(buildX64LinuxFdPathChunk())
 	end 'managedDirectory'
@@ -5516,7 +5517,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	// walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the executable lookup needs this
 	// chunk with no `Directory` call anywhere in the program.
 	if usage.usesManagedDirectory or usage.usesChildPipes 'fileAttributes'
-		chunks.push(buildX64LinuxFileAttributesChunk(errnoHome))
+		chunks.push(buildX64LinuxFileAttributesChunk(HostFileAttributesName, statFlags: PosixFollowSymlinks as MachineWord, errnoHome: errnoHome))
 	end 'fileAttributes'
 end 'appendX64LinuxHostSurfaceChunks'
 

@@ -725,9 +725,14 @@ end 'buildManagedDirectoryCreate'
 // ⭐⭐ **THE OCCUPIED CASE IS CLASSIFIED HERE AND NOT IN THE SHARED errno MAPPING.** That mapping knows three
 // codes — not-found, path-not-found, denied — and a refusal to remove a directory that still holds an entry
 // is none of them, so it would arrive as this operation's catch-all and be indistinguishable from a disk
-// failure. `ERROR_DIR_NOT_EMPTY` is therefore tested FIRST, and only what it does not claim reaches the
-// shared three-way classification. That split is what gives a caller three tellable answers: the path is not
-// there, the directory is occupied, anything else.
+// failure. `ERROR_DIR_NOT_EMPTY` is therefore tested FIRST. That split is what gives a caller three tellable
+// answers: the path is not there, the directory is occupied, anything else.
+//
+// A not-found refusal is confirmed before it is reported: POSIX `rmdir` of a file or link fails `ENOTDIR`,
+// which arrives as path-not-found. `PathQueryVerb.entryAttributes` asks the volume whether an entry is
+// there, because case and normalization folding are per volume and no comparison of spellings can answer.
+// An entry, a dangling link included, is `deleteFailed`; the probe's own refusal goes through the shared
+// classification, because a path the OS could not describe is not a path with nothing at it.
 function buildManagedDirectoryDelete(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDirectoryDeleteName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), throwsTypeName: managedDirectoryThrows())
 	var ids = ValueMinter.create(1)
@@ -736,7 +741,12 @@ function buildManagedDirectoryDelete(module StdModule)
 	var afterCopy = module.addBlock(func, label: b"mdterm", heat: BlockHeat.normal)
 	var failed = module.addBlock(func, label: b"mdfail", heat: BlockHeat.normal)
 	var occupied = module.addBlock(func, label: b"mdfull", heat: BlockHeat.normal)
-	var otherFailure = module.addBlock(func, label: b"mdrmerr", heat: BlockHeat.normal)
+	var checkFileMissing = module.addBlock(func, label: b"mdrmerr", heat: BlockHeat.normal)
+	var checkPathMissing = module.addBlock(func, label: b"mdrmpath", heat: BlockHeat.normal)
+	var unresolved = module.addBlock(func, label: b"mdrmother", heat: BlockHeat.normal)
+	var probe = module.addBlock(func, label: b"mdprobe", heat: BlockHeat.normal)
+	var probeRefused = module.addBlock(func, label: b"mdprobefail", heat: BlockHeat.normal)
+	var entryThere = module.addBlock(func, label: b"mdthere", heat: BlockHeat.normal)
 	var ok = module.addBlock(func, label: b"mdok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
@@ -750,14 +760,33 @@ function buildManagedDirectoryDelete(module StdModule)
 	// The last error is captured IMMEDIATELY after the call, for the ordering `__md_open_search` states.
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))
-	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
 	emitBranchOnCompare(module, block: afterCopy, value: verdict, pred: StdCmpPred.eq, against: Win32False, whenTrue: failed, whenFalse: ok, ids: ids)
 
-	emitBranchOnCompare(module, block: failed, value: err, pred: StdCmpPred.eq, against: ErrorDirNotEmpty, whenTrue: occupied, whenFalse: otherFailure, ids: ids)
-
-	emitErrorReturn(module, block: occupied, flag: ManagedDirectoryDeleteNotEmptyFlag, ids: ids)
-	emitDirectoryErrnoClassifiedThrow(module, func: func, block: otherFailure, err: err, fallbackFlag: ManagedDirectoryDeleteFailedFlag, ids: ids)
+	emitRawFree(module, block: ok, ptr: scratch, ids: ids)
 	emitVoidOkReturn(module, block: ok, ids: ids)
+
+	emitBranchOnCompare(module, block: failed, value: err, pred: StdCmpPred.eq, against: ErrorDirNotEmpty, whenTrue: occupied, whenFalse: checkFileMissing, ids: ids)
+
+	emitRawFree(module, block: occupied, ptr: scratch, ids: ids)
+	emitErrorReturn(module, block: occupied, flag: ManagedDirectoryDeleteNotEmptyFlag, ids: ids)
+
+	emitBranchOnCompare(module, block: checkFileMissing, value: err, pred: StdCmpPred.eq, against: ErrorFileNotFound, whenTrue: probe, whenFalse: checkPathMissing, ids: ids)
+	emitBranchOnCompare(module, block: checkPathMissing, value: err, pred: StdCmpPred.eq, against: ErrorPathNotFound, whenTrue: probe, whenFalse: unresolved, ids: ids)
+
+	emitRawFree(module, block: unresolved, ptr: scratch, ids: ids)
+	emitDirectoryErrnoClassifiedThrow(module, func: func, block: unresolved, err: err, fallbackFlag: ManagedDirectoryDeleteFailedFlag, ids: ids)
+
+	let unusedOperand = emitConst(module, block: probe, value: 0, ids: ids)
+	let attributes = ids.mint()
+	emitIoPark(module, block: probe, operation: GtIoOperation.fileExists, ids: ids)
+	module.appendOp(probe, op: StdOp.osPathQuery(attributes, verb: PathQueryVerb.entryAttributes, a0Id: scratch, a1Id: unusedOperand, a2Id: unusedOperand))
+	let probeErr = ids.mint()
+	module.appendOp(probe, op: StdOp.osLastError(probeErr))
+	emitRawFree(module, block: probe, ptr: scratch, ids: ids)
+	emitBranchOnCompare(module, block: probe, value: attributes, pred: StdCmpPred.eq, against: InvalidFileAttributes, whenTrue: probeRefused, whenFalse: entryThere, ids: ids)
+
+	emitDirectoryErrnoClassifiedThrow(module, func: func, block: probeRefused, err: probeErr, fallbackFlag: ManagedDirectoryDeleteFailedFlag, ids: ids)
+	emitErrorReturn(module, block: entryThere, flag: ManagedDirectoryDeleteFailedFlag, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedDirectoryDelete'

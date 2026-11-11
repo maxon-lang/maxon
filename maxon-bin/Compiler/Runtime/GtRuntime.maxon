@@ -8233,18 +8233,15 @@ end 'buildGtIoPark'
 //     TCP handshake, either of which can be the slow one, and one park for both would leave the trace unable to
 //     say which a hung connect is hung in.
 //
-// ⭐ So every filesystem site and `send`/`recv`/`close` parks exactly once; `__ms_tcp_connect` parks twice
-// for a name and once for a literal; `__ml_bind` parks once for a name and not at all for a literal.
+// ⭐ So every filesystem site and `send`/`recv`/`close` parks exactly once, except that `__md_delete` parks
+// again for the probe that confirms a not-found removal; `__ms_tcp_connect` parks twice for a name and once
+// for a literal; `__ml_bind` parks once for a name and not at all for a literal.
 //
-// ⚠ **THE COUNT IS TWENTY CALL SITES AND TWENTY-THREE EMITTED ENTRY POINTS, AND THOSE ARE DIFFERENT
-// NUMBERS.** Eight sites in `ManagedFileRuntime`, six in `ManagedDirectoryRuntime`, five in
-// `ManagedSocketRuntime` (the name road's resolve, the dial, and one each in send/recv/close — `__ms_destruct`
-// parks through `__ms_close` and has none of its own) and one in `ManagedListenerRuntime` (the accept — its
-// close and its drop are the socket band's). The resolve site serves two entry points, `__ms_tcp_connect` and
-// `__ml_bind`. Two of the filesystem builders are parameterised (`buildManagedFileOpen` is invoked for
-// read/write/writeExecutable, `buildManagedFilePathOperation` for delete/rename), so the emitted
-// `__mf_*`/`__md_*` band is three larger than its fourteen sites. Say which noun is being counted wherever
-// either number is quoted.
+// ⚠ **CALL SITES AND EMITTED ENTRY POINTS ARE DIFFERENT COUNTS.** `__ms_destruct` parks through `__ms_close`
+// and has no site of its own, and the listener's close and drop are the socket band's. The resolve site
+// serves two entry points, `__ms_tcp_connect` and `__ml_bind`, and `buildManagedFileOpen` and
+// `buildManagedFilePathOperation` are each invoked for several entry points. Say which noun is being counted
+// wherever either number is quoted.
 export function emitIoPark(module StdModule, block IrBlock, operation GtIoOperation, ids ValueMinter)
 	// ⭐ **A TARGET WITH NO SCHEDULER EMITS NO PARK.** The park exists to let OTHER green threads run while
 	// this one waits; a lane `targetProvidesFacility` denies `greenThreads` has exactly one thread of
