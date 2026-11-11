@@ -157,6 +157,12 @@ maxon verify-recheck <file|dir>
   reports (the same file, code and message, as many times), since a file that cannot be read declares
   nothing, and its miss counts are then the same whatever its key.
 
+  A property whose probes cannot be compiled prints `FAIL <property>: could not be checked, <reason>` on
+  stderr, where `<property>` is `determinism`, `cache`, `invalidation`, `warm` or `library reuse`. The
+  remaining properties still run, and the command exits 1. A program that declares
+  `LibraryReuseProbeKind`, a name the library-reuse probe declares, prints
+  `FAIL library reuse: could not be checked, a program it compiles was refused (the diagnostics are above)`.
+
   The invalidation and warm-equals-cold properties need at least two source files of the project's own, and
   report `FAIL` on a project of one file, where they would hold for any parse key; give the command a
   directory of two or more files.

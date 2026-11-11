@@ -1,0 +1,14 @@
+let UncheckedLibraryReuseLine = "FAIL library reuse: could not be checked"
+let DuplicateProbeKindLine = "LibraryReuseProbeKind"
+
+test 'a program that declares a name the library-reuse probe declares has that property reported as not checkable'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "a-program-declaring-a-probe-name-reports-the-property-it-could-not-check", fixture: "probe-name-declared")
+	let run = spawnVerifyOnly(staged)
+
+	Expect.contains(run.stderr, needle: DuplicateProbeKindLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not report the duplicate declaration of the probe's enum, so the fixture is not the program this case is about. It wrote to stderr: {run.stderr}")
+	Expect.contains(run.stderr, needle: UncheckedLibraryReuseLine, message: "`{TestedCompilerStem} {VerifyCommandName}` did not name library reuse as the property it could not check when the probe program it compiles was refused. It wrote to stderr: {run.stderr}")
+	Expect.isFalse(run.stdout.contains(VerdictPassLine), message: "`{TestedCompilerStem} {VerifyCommandName}` passed a program whose library-reuse probe did not compile. It printed: {run.stdout}")
+	Expect.notEqual(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {VerifyCommandName}` exited 0 over a property it could not check. It wrote to stderr: {run.stderr}")
+
+	discardStagedDir(staged)
+end 'a program that declares a name the library-reuse probe declares has that property reported as not checkable'

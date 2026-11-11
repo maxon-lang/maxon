@@ -65,8 +65,10 @@ end 'DeterminismOutcome'
 
 // Run every property, printing a PASS/FAIL line for each and a final verdict. Returns whether ALL
 // held (the driver maps that to the process exit code). Each runs on its OWN fresh Project, so no
-// property can be contaminated by another's mutations. A file/IO CompileError
-// (fileNotFound/noSourceFiles/readError) propagates to the caller, which prints a specific message.
+// property can be contaminated by another's mutations. A file/IO CompileError from the initial cold
+// compile (fileNotFound/noSourceFiles/readError) propagates to the caller, which prints a specific
+// message. A CompileError from a property's probes is caught by `checkProperty`, which prints that
+// property's FAIL line and lets the remaining properties run.
 //
 // A program that does not compile runs only the properties that need no compile and prints NOT RUN
 // for the rest, and the gate fails: a property that did not run has not held.
@@ -74,17 +76,86 @@ export function verifyWarmRebuild(inputPath FilePath, target Target) returns boo
 	print("verify-warm-rebuild {inputPath}\n")
 
 	match try compileColdOnce(inputPath, target: target) 'cold'
-		compiled(first) then return try verifyEveryProperty(inputPath, target: target, first: first)
-		refused then return try verifyWhatNeedsNoCompile(inputPath, target: target)
+		compiled(first) then return verifyEveryProperty(inputPath, target: target, first: first)
+		refused then return verifyWhatNeedsNoCompile(inputPath, target: target)
 	end 'cold'
 end 'verifyWarmRebuild'
 
 let NotRunReason = "the program does not compile"
-let PropertiesNeedingACompile = ["determinism", "warm", "library reuse"]
+let DeterminismLabel = "determinism"
+let CacheLabel = "cache"
+let InvalidationLabel = "invalidation"
+let WarmLabel = "warm"
+let LibraryReuseLabel = "library reuse"
+let PropertiesNeedingACompile = [DeterminismLabel, WarmLabel, LibraryReuseLabel]
 
-function verifyWhatNeedsNoCompile(inputPath FilePath, target Target) returns bool throws CompileError
-	_ = try verifyCacheHit(inputPath, target: target)
-	_ = try verifyInvalidation(inputPath, target: target)
+let WarmClause = "warm equals cold"
+let ClauseSeparator = " + "
+
+union WarmRebuildProperty
+	determinism(first CodeResult)
+	cache
+	invalidation
+	warm
+	libraryReuse
+
+	function label() returns String
+		return match self 'which'
+			determinism gives DeterminismLabel
+			cache gives CacheLabel
+			invalidation gives InvalidationLabel
+			warm gives WarmLabel
+			libraryReuse gives LibraryReuseLabel
+		end 'which'
+	end 'label'
+end 'WarmRebuildProperty'
+
+union PropertyVerdict
+	held(clause String)
+	failed
+end 'PropertyVerdict'
+
+typealias PropertyVerdictArray = Array with PropertyVerdict
+typealias ClauseArray = Array with String
+
+function verifyProperty(property WarmRebuildProperty, inputPath FilePath, target Target) returns PropertyVerdict throws CompileError
+	match property 'which'
+		determinism(first) then return verdictOf(try verifyDeterminism(inputPath, target: target, first: first), clause: DeterminismLabel)
+		cache then return verdictOf(try verifyCacheHit(inputPath, target: target), clause: CacheLabel)
+		invalidation then return verdictOf(try verifyInvalidation(inputPath, target: target), clause: InvalidationLabel)
+		warm then return verdictOf(try verifyWarmCompileMatchesCold(inputPath, target: target), clause: WarmClause)
+		libraryReuse then return (try verifyLibraryParseReuse(inputPath, target: target)).verdict()
+	end 'which'
+end 'verifyProperty'
+
+function verdictOf(held bool, clause String) returns PropertyVerdict
+	if held 'holds'
+		return PropertyVerdict.held(clause)
+	end 'holds'
+
+	return PropertyVerdict.failed
+end 'verdictOf'
+
+function checkProperty(property WarmRebuildProperty, inputPath FilePath, target Target) returns PropertyVerdict
+	let verdict = try verifyProperty(property, inputPath: inputPath, target: target) otherwise (cause) 'unchecked'
+		printError("FAIL {property.label()}: could not be checked, {unavailabilityReason(cause)}\n")
+		return PropertyVerdict.failed
+	end 'unchecked'
+
+	return verdict
+end 'checkProperty'
+
+function unavailabilityReason(cause CompileError) returns String
+	return match cause.failure() 'failure'
+		reportedDiagnostics gives "a program it compiles was refused (the diagnostics are above)"
+		abandoned gives "the compile it needed was abandoned"
+		driverFailed gives driverErrorSentence(cause)
+	end 'failure'
+end 'unavailabilityReason'
+
+function verifyWhatNeedsNoCompile(inputPath FilePath, target Target) returns bool
+	_ = checkProperty(WarmRebuildProperty.cache, inputPath: inputPath, target: target)
+	_ = checkProperty(WarmRebuildProperty.invalidation, inputPath: inputPath, target: target)
 
 	for property in PropertiesNeedingACompile 'eachProperty'
 		print("NOT RUN {property}: {NotRunReason}\n")
@@ -94,23 +165,46 @@ function verifyWhatNeedsNoCompile(inputPath FilePath, target Target) returns boo
 	return false
 end 'verifyWhatNeedsNoCompile'
 
-function verifyEveryProperty(inputPath FilePath, target Target, first CodeResult) returns bool throws CompileError
-	let determinismOk = try verifyDeterminism(inputPath, target: target, first: first)
-	let cacheOk = try verifyCacheHit(inputPath, target: target)
-	let invalidationOk = try verifyInvalidation(inputPath, target: target)
-	let warmOk = try verifyWarmCompileMatchesCold(inputPath, target: target)
-	let libraryReuse = try verifyLibraryParseReuse(inputPath, target: target)
+function verifyEveryProperty(inputPath FilePath, target Target, first CodeResult) returns bool
+	var verdicts = PropertyVerdictArray.create(0)
+	verdicts.push(checkProperty(WarmRebuildProperty.determinism(first), inputPath: inputPath, target: target))
+	verdicts.push(checkProperty(WarmRebuildProperty.cache, inputPath: inputPath, target: target))
+	verdicts.push(checkProperty(WarmRebuildProperty.invalidation, inputPath: inputPath, target: target))
+	verdicts.push(checkProperty(WarmRebuildProperty.warm, inputPath: inputPath, target: target))
+	verdicts.push(checkProperty(WarmRebuildProperty.libraryReuse, inputPath: inputPath, target: target))
 
-	let allOk = determinismOk and cacheOk and invalidationOk and warmOk and libraryReuse.held()
+	var clauses = ClauseArray.create(0)
+	var allOk = true
+
+	for verdict in verdicts 'eachVerdict'
+		match verdict 'outcome'
+			held(clause) then clauses.push(clause)
+			failed then allOk = false
+		end 'outcome'
+	end 'eachVerdict'
 
 	if allOk 'passed'
-		print("verify-warm-rebuild: PASS (determinism + cache + invalidation + warm equals cold + {libraryReuse.clause()})\n")
+		print("verify-warm-rebuild: PASS ({joinedClauses(clauses)})\n")
 		return true
 	end 'passed'
 
 	printError("verify-warm-rebuild: FAIL\n")
 	return false
 end 'verifyEveryProperty'
+
+function joinedClauses(clauses ClauseArray) returns String
+	var joined = ""
+
+	for clause in clauses 'eachClause'
+		if not joined.isEmpty() 'aClauseBefore'
+			joined.append(ClauseSeparator)
+		end 'aClauseBefore'
+
+		joined.append(clause)
+	end 'eachClause'
+
+	return joined
+end 'joinedClauses'
 
 // --- Property 1: determinism (byte-identity across two independent cold compiles) ---
 
@@ -1068,13 +1162,13 @@ union LibraryReuseOutcome
 	reused
 	parsedCold(verdict LibraryParseSharing)
 
-	function held() returns bool
+	function verdict() returns PropertyVerdict
 		return match self 'outcome'
-			failed gives false
+			failed gives PropertyVerdict.failed
 			reused or
-			parsedCold gives true
+			parsedCold gives PropertyVerdict.held(clause())
 		end 'outcome'
-	end 'held'
+	end 'verdict'
 
 	function clause() returns String
 		return match self 'outcome'
