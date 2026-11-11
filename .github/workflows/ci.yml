@@ -16,7 +16,7 @@
 # is excluded because no job here runs the rest of it, so a run on its change reports on code it never
 # touched; the scripts a job does run are re-included, and so are the website pages whose snippets
 # `tests/examples` compiles and the workflows and installers `tests/targets` reads. A step that starts
-# running another script needs that script re-included here.
+# running another script needs that script, and any file it reads, re-included here.
 #
 # ⛔ THE LIST IS EXCLUSIONS, AND A RE-INCLUSION IS WRITTEN ONLY FOR A PATH A JOB READS. A new
 # directory therefore runs CI until someone decides it need not, rather than being skipped silently
@@ -65,6 +65,8 @@ on:
       - 'scripts/targets/**'
       - 'scripts/bench_common.py'
       - 'scripts/test-bench-common.py'
+      - 'scripts/check-ignored-files.py'
+      - 'scripts/allowed-ignored-paths.txt'
       - 'installer/docker/Dockerfile'
       - 'installer/homebrew/generate.sh'
       - '!.github/**'
@@ -373,6 +375,15 @@ jobs:
         timeout-minutes: 240
         run: bash scripts/run-test-corpora.sh corpora
 
+      - &leftovers
+        name: No file left behind
+        if: steps.seed.outputs.seeded == 'yes'
+        run: |
+          set -euo pipefail
+          python=python3
+          [ "$RUNNER_OS" != "Windows" ] || python=python
+          "$python" scripts/check-ignored-files.py
+
       - &evidence
         name: Resource evidence
         if: failure() && steps.seed.outputs.seeded == 'yes'
@@ -435,6 +446,8 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         timeout-minutes: 240
         run: bash scripts/run-test-corpora.sh tools
+
+      - *leftovers
 
       - name: Processes the test corpora left running
         if: always() && steps.seed.outputs.seeded == 'yes' && matrix.debugger == 'yes'
@@ -538,6 +551,8 @@ jobs:
           --filter=where-clauses/
           --filter=witness-by-reference/
 
+      - *leftovers
+
       - *evidence
       - *upload-samples
 
@@ -568,6 +583,8 @@ jobs:
           for target in $targets; do
             ./maxon-bin/.maxon/maxon spec-test --target="$target" --shard="${{ matrix.shard }}/$SUITE_SHARDS"
           done
+
+      - *leftovers
 
       - *evidence
       - *upload-samples

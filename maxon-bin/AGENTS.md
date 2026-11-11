@@ -77,8 +77,9 @@ not discard a declared callee's result; a new unprefixed tier entry owes the dec
 > `.mxdbg` sidecars, the compiler-minted `maxon.retired.<block>` images, `.staging-<hex>/`, and the
 > `maxon-<cpu>-linux` guest compilers `spec-test` builds on a macOS host — the names
 > `scripts/allowed-ignored-paths.txt` lists under `closed-directory: maxon-bin/.maxon`. The `/land` "No leftovers"
-> gate (`scripts/check-ignored-files.py`) fails any other name there. A compiler image you want to keep goes in
-> `temp/<task>/` (`--output=temp/<task>/maxon.exe`); never rename the slot's own image to keep it.
+> gate and CI's "No file left behind" step (both `scripts/check-ignored-files.py`) fail any other name there.
+> A compiler image you want to keep goes in `temp/<task>/` (`--output=temp/<task>/maxon.exe`); never
+> rename the slot's own image to keep it.
 >
 >
 > ⛔ **A CHANGE TO EMITTED RUNTIME — `Compiler/Runtime/` OR `Compiler/Targets/*/*Runtime*.maxon` — NEEDS
