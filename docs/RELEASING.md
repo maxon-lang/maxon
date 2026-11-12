@@ -212,7 +212,7 @@ empty cell, and a cell that holds several values is a comma list. Readers find a
 | `docker` | its Docker platform architecture |
 | `shell` | the login shell `install-script.yml` runs `install.sh` under |
 | `roles` | the single-lane CI work it hosts: the steps `cpu-probe`, `codecs` and `targets-gate`, and the `cross-suite` job |
-| `suite-shards` | how many jobs `ci.yml` splits that lane's spec suite into; on a `cross-suite` row, the cross-target suites too. macOS has fewer, so one run's macOS jobs fit the five GitHub Free runs at once |
+| `suite-shards` | how many jobs `ci.yml` splits that lane's spec suite into; on a `cross-suite` row, the cross-target suites too. The counts keep one run's test jobs within what GitHub Free runs at once (20 jobs, 5 of them on macOS) at similar lengths: a job past the limit waits for a runner, and the run lasts as long as its longest job |
 
 Workflows build their matrices with `scripts/targets/matrix.sh`, which selects rows by `native`, `cross`
 or `COLUMN=VALUE`. `--with NAME=A,B` crosses every row with a list, and `--count NAME=COLUMN` expands each
