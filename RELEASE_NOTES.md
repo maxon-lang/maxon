@@ -717,6 +717,11 @@ release's version as its heading when the release is cut.
   server already closed returns `closed`.
   Fix: read the value before the `async`, or after the await or cancel; stop a server with `.cancel()` on its
   promise, then call `close()`.
+- A `throw` inside a `modify` block, or in the statement that opens an `isolated` value, is E3202 when its
+  payload holds mutable data of the open region, as `return` is. A `throw` caught by a `try` block opened inside
+  the `modify` stays legal.
+  Fix: copy the value out (for example `.clone()`) before it goes into the payload, or throw only values,
+  `immutable` data or fresh `isolated` data.
 
 ## 0.5.0 — 2026-10-08
 

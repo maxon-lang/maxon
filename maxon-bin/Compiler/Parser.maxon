@@ -43476,6 +43476,7 @@ export type Parser
 		// block owns.
 		let routed = self.bodyState.tryBlocks.count() > 0
 		let thrownValueFloor = func.valueTags.count()
+		let thrownStart = self.pos
 		var errValue = try self.parseExpression(func, block: self.bodyState.currentBlock)
 		let errorType = self.typeOf(errValue)
 
@@ -43493,6 +43494,10 @@ export type Parser
 		// enclosing function's declared clause (`tryErrorEnumType`). This check is what makes the two
 		// derivations agree, as E3059 does for the propagate form.
 		try self.requireThrownTypeFitsEnclosing(func, errorType: errorType, routed: routed, anchor: anchor)
+
+		if self.throwLeavesAWindow(routed) 'leavesAWindow'
+			try self.requireValueMayLeaveWindows(errValue, startIndex: thrownStart)
+		end 'leavesAWindow'
 
 		let errorIsBoxed = self.throwsTypeIsBoxedUnion(errorType)
 
@@ -43532,6 +43537,22 @@ export type Parser
 
 		self.emitHandoffExit(thrownExit(errValue, errorIsBoxed: errorIsBoxed), anchor: anchor)
 	end 'emitThrowError'
+
+	// A routed throw leaves a window only if one opened since its `try` block. `windowFloor` counts only
+	// `modify` windows, so a throw while a one-statement window is innermost always leaves it.
+	function throwLeavesAWindow(routed bool) returns bool
+		let windows = self.regionFactsForRead().windows
+
+		if not windowIsOpen(windows) 'noWindow'
+			return false
+		end 'noWindow'
+
+		if not routed or (innermostWindowOf(windows)).kind == WindowKind.oneStatement 'leavesTheInnermost'
+			return true
+		end 'leavesTheInnermost'
+
+		return self.openWindowCount() > self.innermostTryBlock().windowFloor
+	end 'throwLeavesAWindow'
 
 	function endADeferredThrow(errValue ValueId, routed bool, anchor Token)
 		if not routed 'outOfTheFunction'
@@ -90751,6 +90772,14 @@ export type Parser
 		throw self.valueLeavesWindowRefusal(window, subject: self.operandSubject(rhsStart, alone: self.statementEndsAt(rhsStart + 1), spelled: self.pathTextOf(rhsStart)), at: self.tokenAt(rhsStart))
 	end 'requireBindingMayLeaveItsStatementWindow'
 
+	function requireValueMayLeaveWindows(value ValueId, startIndex ElementIndex) throws SourceParseError
+		let windows = self.regionFactsForRead().windows
+
+		if windowIsOpen(windows) and not self.valueIsCleanInput(value) 'leavesAWindow'
+			throw self.valueLeavesWindowRefusal(innermostWindowOf(windows), subject: self.returnedSubject(startIndex), at: self.tokenAt(startIndex))
+		end 'leavesAWindow'
+	end 'requireValueMayLeaveWindows'
+
 	function valueLeavesWindowRefusal(window OpenWindow, subject String, at Token) returns SourceParseError
 		let label = String.from(window.label)
 
@@ -91255,7 +91284,6 @@ export type Parser
 		try self.requireNotAnIsolatedSlotRead(value, startIndex: retStart)
 		let declared = self.bodyState.declaredReturnCapability
 		let retTok = self.tokenAt(retStart)
-		let windows = self.regionFactsForRead().windows
 
 		if declared == ResultCapability.immutable 'aFrozenResult'
 			self.regionFactsForWrite().paramSources.adoptJoinedParameters(value)
@@ -91265,9 +91293,7 @@ export type Parser
 		let fromParameters = self.paramSourcesOf(func, value: value) or heldByTheLiteral
 		let alsoLocalData = self.valueHasOtherPath(value) or heldByTheLiteral != NoParamPositions or literalHoldsAResult
 
-		if windowIsOpen(windows) and not self.valueIsCleanInput(value) 'leavesAWindow'
-			throw self.valueLeavesWindowRefusal(innermostWindowOf(windows), subject: self.returnedSubject(retStart), at: retTok)
-		end 'leavesAWindow'
+		try self.requireValueMayLeaveWindows(value, startIndex: retStart)
 
 		if declared == ResultCapability.isolated 'declaredIsolated'
 			try self.recoverIsolated(value, startIndex: retStart, forFreeze: false)

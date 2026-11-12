@@ -859,7 +859,7 @@ One call or statement opens a second region, or mixes in mutable data of the cur
 
 ### E3202 — `semanticValueLeavesWindow`
 
-A mutable value leaves the region a `modify` block, or the one statement that opens an isolated value, has open. What leaves by `return`, or into an outer variable, must be a value, immutable data, or a fresh isolated value. A `mutable isolated` parameter is by reference: the callee may open, swap or replace it, and lend it on to another `mutable isolated` parameter (its own method's recursion included), but never move it out, alias it, store it or pass it to an `isolated` parameter, because the caller's variable would then name a region another owner holds.
+A mutable value leaves the region a `modify` block, or the one statement that opens an isolated value, has open. What leaves by `return`, by `throw` or into an outer variable must be a value, immutable data, or a fresh isolated value. A `mutable isolated` parameter is by reference: the callee may open, swap or replace it, and lend it on to another `mutable isolated` parameter (its own method's recursion included), but never move it out, alias it, store it or pass it to an `isolated` parameter, because the caller's variable would then name a region another owner holds.
 
 ### E3203 — `semanticOpenedSlotReassigned`
 

@@ -6428,8 +6428,8 @@ Inside a block:
 
 - Only the region's contents are writable. The slot holding `x` cannot be reassigned or passed by reference
   in its own block (**E3203**), and an outer `var` that holds a record cannot be reassigned (**E3204**).
-- A mutable value cannot leave the block by `return` or by an outer variable (**E3202**): what leaves is a
-  value, `immutable` data or a fresh `isolated` region.
+- A mutable value cannot leave the block by `return`, by `throw` or by an outer variable (**E3202**): what
+  leaves is a value, `immutable` data or a fresh `isolated` region.
 - A nested `modify` leaves the root of every enclosing block read-only.
 - Waiting on another party and running a coroutine are refused: `await` and a call that may wait or may
   yield are **E3205** ([Waiting and Yielding](#waiting-and-yielding)). A statement that needs a writable

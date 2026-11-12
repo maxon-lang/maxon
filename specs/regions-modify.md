@@ -16,7 +16,7 @@ reads or writes through one, opens it for that one call or statement under the s
 
 The window is checked locally. Only the region's contents are writable, so the slot holding `x` cannot be
 reassigned inside its own block. An outer `var` holding a record cannot be reassigned there, and a mutable
-value cannot leave the block by `return` or by an outer variable. Nothing inside waits on another party:
+value cannot leave the block by `return`, by `throw` or by an outer variable. Nothing inside waits on another party:
 `await` is refused. `swap path with value` takes a region out of an `isolated` slot, and `freeze` turns a
 filled region into frozen data.
 
@@ -433,6 +433,348 @@ end 'main'
 ```
 ```maxoncstderr
 error E3202: <fragment>:11:10: the closure at <fragment>:11:10 is mutable and cannot leave 'fill'; a value leaving a modify block must be a value, immutable or a fresh isolated
+```
+
+<!-- test: thrown-region-contents-leaving-window-refused -->
+An error carries its payload out of the function, so a payload that holds the region's array leaves the block exactly as a returned view does.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias NameArray = Array with String
+
+type Bag
+	export var names as NameArray
+	export var count as Tally
+
+	static function create(first String) returns Self
+		let names = NameArray.create(0)
+		names.push(first)
+
+		return Self{names: names, count: 0}
+	end 'create'
+
+	export function bump()
+		self.count = self.count + 1
+	end 'bump'
+end 'Bag'
+
+union BagFault implements Error
+	named(names NameArray)
+end 'BagFault'
+
+function run(bag isolated Bag) throws BagFault
+	modify bag 'open'
+		bag.bump()
+
+		throw BagFault.named(bag.names)
+	end 'open'
+end 'run'
+
+function main() returns ExitCode
+	let bag = Bag.create("alpha") as isolated Bag
+
+	try run(bag) otherwise (fault) 'failed'
+		match fault 'which'
+			named(names) then print("{names.count()}\n")
+		end 'which'
+	end 'failed'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3202: <fragment>:29:9: 'BagFault.named(bag.names)' is mutable and cannot leave 'open'; a value leaving a modify block must be a value, immutable or a fresh isolated
+```
+
+<!-- test: thrown-record-read-inside-window-refused -->
+A record an element read bound inside the block is region data too, and naming it in the payload does not make it a value.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias RowArray = Array with Row
+
+type Row
+	export var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Row'
+
+type Table
+	export var rows as RowArray
+	export var count as Tally
+
+	static function create(first String) returns Self
+		let rows = RowArray.create(0)
+		rows.push(Row.create(first))
+
+		return Self{rows: rows, count: 0}
+	end 'create'
+
+	export function bump()
+		self.count = self.count + 1
+	end 'bump'
+end 'Table'
+
+union RowFault implements Error
+	named(row Row)
+	empty
+end 'RowFault'
+
+function run(table isolated Table) throws RowFault
+	modify table 'open'
+		table.bump()
+
+		let first = try table.rows.get(0) otherwise throw RowFault.empty
+
+		throw RowFault.named(first)
+	end 'open'
+end 'run'
+
+function main() returns ExitCode
+	let table = Table.create("alpha") as isolated Table
+
+	try run(table) otherwise (fault) 'failed'
+		match fault 'which'
+			named(row) then print("{row.text}\n")
+			empty then print("empty\n")
+		end 'which'
+	end 'failed'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3202: <fragment>:40:9: 'RowFault.named(first)' is mutable and cannot leave 'open'; a value leaving a modify block must be a value, immutable or a fresh isolated
+```
+
+<!-- test: thrown-values-read-inside-window-run -->
+A `String` is a value, so a payload built from the block's text, or from a string an element read produced, may leave through the error.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias NameArray = Array with String
+
+type Bag
+	export var name as String
+	export var names as NameArray
+	export var count as Tally
+
+	static function create(name String) returns Self
+		let names = NameArray.create(0)
+		names.push(name)
+
+		return Self{name: name, names: names, count: 0}
+	end 'create'
+
+	export function bump()
+		self.count = self.count + 1
+	end 'bump'
+end 'Bag'
+
+union BagFault implements Error
+	named(text String)
+	empty
+end 'BagFault'
+
+function fromName(bag isolated Bag) throws BagFault
+	modify bag 'open'
+		bag.bump()
+
+		throw BagFault.named(bag.name)
+	end 'open'
+end 'fromName'
+
+function fromElement(bag isolated Bag) throws BagFault
+	modify bag 'open'
+		bag.bump()
+
+		let first = try bag.names.get(0) otherwise throw BagFault.empty
+
+		throw BagFault.named(first)
+	end 'open'
+end 'fromElement'
+
+function main() returns ExitCode
+	let first = Bag.create("alpha") as isolated Bag
+	let second = Bag.create("alpha") as isolated Bag
+
+	try fromName(first) otherwise (fault) 'nameFailed'
+		match fault 'nameWhich'
+			named(text) then print("{text}\n")
+			empty then print("empty\n")
+		end 'nameWhich'
+	end 'nameFailed'
+
+	try fromElement(second) otherwise (fault) 'elementFailed'
+		match fault 'elementWhich'
+			named(text) then print("{text}\n")
+			empty then print("empty\n")
+		end 'elementWhich'
+	end 'elementFailed'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+alpha
+alpha
+```
+
+<!-- test: thrown-region-contents-leaving-an-enclosing-try-refused -->
+A block-form `try` around the `modify` carries the thrown payload out of the window to its handler.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias NameArray = Array with String
+
+type Bag
+	export var names as NameArray
+	export var count as Tally
+
+	static function create(first String) returns Self
+		let names = NameArray.create(0)
+		names.push(first)
+
+		return Self{names: names, count: 0}
+	end 'create'
+
+	export function bump()
+		self.count = self.count + 1
+	end 'bump'
+end 'Bag'
+
+union BagFault implements Error
+	named(names NameArray)
+end 'BagFault'
+
+function main() returns ExitCode
+	let bag = Bag.create("alpha") as isolated Bag
+
+	try 'guard'
+		modify bag 'open'
+			bag.bump()
+
+			throw BagFault.named(bag.names)
+		end 'open'
+	end 'guard'
+	otherwise (fault) 'failed'
+		match fault 'which'
+			named(names) then print("{names.count()}\n")
+		end 'which'
+	end 'failed'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3202: <fragment>:32:10: 'BagFault.named(bag.names)' is mutable and cannot leave 'open'; a value leaving a modify block must be a value, immutable or a fresh isolated
+```
+
+<!-- test: thrown-region-contents-caught-inside-the-window-runs -->
+A block-form `try` written inside the `modify` hands the payload to a handler that is still inside the window, so nothing leaves it.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias NameArray = Array with String
+
+type Bag
+	export var names as NameArray
+	export var count as Tally
+
+	static function create(first String) returns Self
+		let names = NameArray.create(0)
+		names.push(first)
+
+		return Self{names: names, count: 0}
+	end 'create'
+
+	export function bump()
+		self.count = self.count + 1
+	end 'bump'
+end 'Bag'
+
+union BagFault implements Error
+	named(names NameArray)
+end 'BagFault'
+
+function run(bag isolated Bag)
+	modify bag 'open'
+		bag.bump()
+
+		try 'guard'
+			throw BagFault.named(bag.names)
+		end 'guard'
+		otherwise (fault) 'failed'
+			match fault 'which'
+				named(names) then print("{names.count()}\n")
+			end 'which'
+		end 'failed'
+	end 'open'
+end 'run'
+
+function main() returns ExitCode
+	let bag = Bag.create("alpha") as isolated Bag
+	run(bag)
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: thrown-region-contents-leaving-the-statement-that-opens-refused -->
+A payload built from the one-statement open's region data leaves with the error just as a returned one does.
+
+```maxon
+typealias LineArray = Array with String
+
+type Page
+	export var lines as LineArray
+
+	static function create() returns Self
+		return Self{lines: LineArray.create(0)}
+	end 'create'
+end 'Page'
+
+type Holder
+	export var page as isolated Page
+
+	static function create() returns Self
+		return Self{page: Page.create()}
+	end 'create'
+end 'Holder'
+
+union PageFault implements Error
+	named(lines LineArray)
+end 'PageFault'
+
+function check(holder Holder) throws PageFault
+	throw PageFault.named(holder.page.lines)
+end 'check'
+
+function main() returns ExitCode
+	let holder = Holder.create()
+
+	try check(holder) otherwise (fault) 'failed'
+		match fault 'which'
+			named(lines) then print("{lines.count()}\n")
+		end 'which'
+	end 'failed'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3202: <fragment>:25:8: 'PageFault.named(holder.page.lines)' is mutable and cannot leave the statement that opens 'page'; a value leaving a one-statement open must be a value, immutable or a fresh isolated
 ```
 
 <!-- test: opened-slot-reassigned-inside-window -->
