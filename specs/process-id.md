@@ -138,7 +138,7 @@ function main() returns ExitCode
 	argv.push("0")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 20)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("exit 0")
 	#endif

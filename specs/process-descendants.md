@@ -49,7 +49,7 @@ function main() returns ExitCode
 	config.arguments.push("30")
 	config.arguments.push("127.0.0.1")
 	#else
-	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
+	let config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
 	config.arguments.push("30")
 	#endif
 
@@ -101,7 +101,7 @@ let RemoveScript = "rm -f \"$(printf 'nl\\nself')\""
 let ChildMode = "child"
 
 function runShell(script String, exePath FilePath) returns ExitCode
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 
 	argv.push("-c")
 	argv.push(script)
@@ -126,7 +126,7 @@ function main() returns ExitCode
 		return 4
 	end 'copyFailed'
 
-	var config = Configuration.create(Executable.path(try FilePath.from("./{CopyName}") otherwise return 5))
+	let config = Configuration.create(Executable.path(try FilePath.from("./{CopyName}") otherwise return 5))
 
 	config.arguments.push(ChildMode)
 
@@ -172,7 +172,7 @@ function main() returns ExitCode
 	argv.push("0")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("exit 0")
 	#endif
@@ -217,7 +217,7 @@ function main() returns ExitCode
 	config.arguments.push("127.0.0.1")
 	config.arguments.push(">nul")
 	#else
-	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise return 4))
+	let config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise return 4))
 	config.arguments.push("-c")
 	config.arguments.push("rm -f {FlagName}; sleep 30")
 	#endif
@@ -266,7 +266,7 @@ function main() returns ExitCode
 	config.arguments.push("exit")
 	config.arguments.push("0")
 	#else
-	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise return 2))
+	let config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise return 2))
 	config.arguments.push("-c")
 	config.arguments.push("exit 0")
 	#endif
@@ -312,7 +312,7 @@ function detachSleeper() returns ExitCode
 	config.arguments.push("30")
 	config.arguments.push("127.0.0.1")
 	#else
-	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
+	let config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
 	config.arguments.push("30")
 	#endif
 
@@ -389,7 +389,7 @@ function startSleeper() returns Pid
 	config.arguments.push("30")
 	config.arguments.push("127.0.0.1")
 	#else
-	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise panic("/bin/sleep is a valid path")))
+	let config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise panic("/bin/sleep is a valid path")))
 	config.arguments.push("30")
 	#endif
 
@@ -494,7 +494,7 @@ function detachSleeper() returns ExitCode
 	config.arguments.push("30")
 	config.arguments.push("127.0.0.1")
 	#else
-	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
+	let config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
 	config.arguments.push("30")
 	#endif
 
@@ -610,7 +610,7 @@ function waitForShortChild() returns ExitCode
 	config.arguments.push("2")
 	config.arguments.push("127.0.0.1")
 	#else
-	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
+	let config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
 	config.arguments.push("1")
 	#endif
 
@@ -682,7 +682,7 @@ function detachSleeper() returns ExitCode
 	config.arguments.push("30")
 	config.arguments.push("127.0.0.1")
 	#else
-	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
+	let config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
 	config.arguments.push("30")
 	#endif
 
@@ -798,7 +798,7 @@ function main() returns ExitCode
 	var lap = 0 as Count
 
 	while lap < Laps 'laps'
-		var config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise return 2))
+		let config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise return 2))
 
 		config.arguments.push("-c")
 		config.arguments.push("sleep 60; true")

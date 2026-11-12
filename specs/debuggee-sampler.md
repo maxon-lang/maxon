@@ -837,9 +837,9 @@ function main() returns ExitCode
 end 'main'
 
 function seizeAndDrop(pid Pid) returns ExitCode
-	var pin = MachinePin.acquire()
-	var trace = ProcessTrace.create()
-	var seized = SeizedThreads.open(pid, pin: pin)
+	let pin = MachinePin.acquire()
+	let trace = ProcessTrace.create()
+	let seized = SeizedThreads.open(pid, pin: pin)
 	let thread = pid as DebuggeeThreadId
 
 	if not trace.seize(thread) 'refused'
@@ -904,12 +904,12 @@ function main() returns ExitCode
 	end 'asTheTarget'
 
 	let me = try Process.executablePath() otherwise return 1
-	var targetArguments = StringArray.create(0)
+	let targetArguments = StringArray.create(0)
 	targetArguments.push("target")
-	var target = try StreamingSubprocess.spawn(Executable.path(me), arguments: targetArguments) otherwise return 2
+	let target = try StreamingSubprocess.spawn(Executable.path(me), arguments: targetArguments) otherwise return 2
 	_ = try target.readStdoutLine() otherwise return 7
 	let pid = try target.processId() otherwise return 3
-	var samplerArguments = StringArray.create(0)
+	let samplerArguments = StringArray.create(0)
 	samplerArguments.push("sampler")
 	samplerArguments.push("{pid}")
 	let sampler = try Subprocess.run(Executable.path(me), arguments: samplerArguments) otherwise return 4
@@ -923,8 +923,8 @@ function main() returns ExitCode
 end 'main'
 
 function holdAndDrop(pid Pid)
-	var pin = MachinePin.acquire()
-	var seized = SeizedThreads.open(pid, pin: pin)
+	let pin = MachinePin.acquire()
+	let seized = SeizedThreads.open(pid, pin: pin)
 	seized.add(pid as DebuggeeThreadId)
 end 'holdAndDrop'
 ```

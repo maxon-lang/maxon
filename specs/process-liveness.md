@@ -134,7 +134,7 @@ function main() returns ExitCode
 	argv.push("0")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("exit 0")
 	#endif
@@ -165,7 +165,7 @@ function main() returns ExitCode
 	config.arguments.push("3")
 	config.arguments.push("127.0.0.1")
 	#else
-	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
+	let config = Configuration.create(Executable.path(try FilePath.from("/bin/sleep") otherwise return 2))
 	config.arguments.push("2")
 	#endif
 	let pid = try config.runDetached() otherwise return 2
@@ -202,7 +202,7 @@ function main() returns ExitCode
 	config.arguments.push("exit")
 	config.arguments.push("0")
 	#else
-	var config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise return 2))
+	let config = Configuration.create(Executable.path(try FilePath.from("/bin/sh") otherwise return 2))
 	config.arguments.push("-c")
 	config.arguments.push("exit 0")
 	#endif

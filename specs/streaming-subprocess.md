@@ -251,7 +251,7 @@ function dropAParkedSleeper() returns Integer
 end 'dropAParkedSleeper'
 
 function main() returns ExitCode
-	var sleepers = SleeperPromiseArray.create(0)
+	let sleepers = SleeperPromiseArray.create(0)
 
 	for _ in 0 upto 8 'parkEach'
 		sleepers.push(async sleeper())

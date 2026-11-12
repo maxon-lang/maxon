@@ -73,7 +73,7 @@ function main() returns ExitCode
 	argv.push("hello")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("hello")
 	#endif
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 2
@@ -112,7 +112,7 @@ function main() returns ExitCode
 	argv.push("via-path")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("via-path")
 	#endif
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 3
@@ -141,7 +141,7 @@ function main() returns ExitCode
 	argv.push("cd")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/pwd") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	#endif
 	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: WorkingDirectory.at(cwd)) otherwise return 2
 	if not result.succeeded() 'check-success'
@@ -173,7 +173,7 @@ function main() returns ExitCode
 	#if os(Windows)
 	let c = Configuration.create(Executable.name("findstr"))
 	#else
-	var c = Configuration.create(Executable.path(try FilePath.from("/usr/bin/grep") otherwise return 2))
+	let c = Configuration.create(Executable.path(try FilePath.from("/usr/bin/grep") otherwise return 2))
 	#endif
 	let argv = StringArray.create(0)
 	argv.push(".")
@@ -222,7 +222,7 @@ function main() returns ExitCode
 	argv.push("x*")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	#endif
 
 	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
@@ -284,7 +284,7 @@ function main() returns ExitCode
 	argv.push("x*")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	#endif
 
 	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
@@ -346,7 +346,7 @@ function echoFromGreenThread() returns StepCode
 	argv.push("x*")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	#endif
 
 	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
@@ -401,7 +401,7 @@ function main() returns ExitCode
 	argv.push("30")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sleep") otherwise return 1)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("30")
 	#endif
 	let cwd = Directory.currentPath()
@@ -455,7 +455,7 @@ function main() returns ExitCode
 	argv.push("30")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 1)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("echo alpha; sleep 30")
 	#endif
@@ -706,7 +706,7 @@ function main() returns ExitCode
 	var lap = 0 as Count
 
 	while lap < Laps 'laps'
-		var argv = StringArray.create(0)
+		let argv = StringArray.create(0)
 
 		argv.push("-c")
 		argv.push("echo hello; sleep 60")
@@ -749,7 +749,7 @@ typealias ChildArray = Array with StreamingSubprocess
 
 function spawnShell(script String) returns StreamingSubprocess throws SubprocessError
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise panic("/bin/sh is a path"))
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 
 	argv.push("-c")
 	argv.push(script)
@@ -770,7 +770,7 @@ function main() returns ExitCode
 	while lap < Laps 'laps'
 		let markerName = "shell-ran-after-its-sleep-{lap}"
 		let marker = try FilePath.from(markerName) otherwise return 5
-		var child = try spawnShell("echo hello; sleep 60; : > {markerName}") otherwise return 4
+		let child = try spawnShell("echo hello; sleep 60; : > {markerName}") otherwise return 4
 		let delayMs = (lap mod StartSpanMs) as Milliseconds
 
 		lap = lap + 1
@@ -839,12 +839,12 @@ function main() returns ExitCode
 	var lap = 0 as Count
 
 	while lap < Laps 'laps'
-		var argv = StringArray.create(0)
+		let argv = StringArray.create(0)
 
 		argv.push("-c")
 		argv.push("sleep 60 </dev/null >/dev/null 2>&1 & exit 0")
 
-		var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+		let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
 
 		sleep(ShellExitsWithinMs)
 
@@ -894,12 +894,12 @@ function main() returns ExitCode
 	var lap = 0 as Count
 
 	while lap < Laps 'laps'
-		var argv = StringArray.create(0)
+		let argv = StringArray.create(0)
 
 		argv.push("-c")
 		argv.push("sleep 60 </dev/null >/dev/null 2>&1 & exit 0")
 
-		var child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
+		let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
 
 		_ = try child.wait() otherwise return 4
 
@@ -942,7 +942,7 @@ function treeEndedCleanly(found TreeEnd) returns bool
 end 'treeEndedCleanly'
 
 function argumentsFor(mode String) returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push(mode)
 	return argv
 end 'argumentsFor'
@@ -958,7 +958,7 @@ function main() returns ExitCode
 	end 'sleeper'
 
 	if mode == "member" 'member'
-		var sleeper = try StreamingSubprocess.spawn(me, arguments: argumentsFor("sleeper")) otherwise return 3
+		let sleeper = try StreamingSubprocess.spawn(me, arguments: argumentsFor("sleeper")) otherwise return 3
 		print("ready\n")
 		sleep(SleeperLifeMs)
 		sleeper.release()
@@ -967,13 +967,13 @@ function main() returns ExitCode
 
 	let armed = Process.endDescendants()
 	let sh = Executable.path(try FilePath.from("/bin/sh") otherwise return 4)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 
 	argv.push("-c")
 	argv.push("\"$0\" member & exit 0")
 	argv.push(exePath.toString())
 
-	var shell = try StreamingSubprocess.spawn(sh, arguments: argv) otherwise return 5
+	let shell = try StreamingSubprocess.spawn(sh, arguments: argv) otherwise return 5
 	let ready = try shell.readStdoutLine() otherwise return 6
 
 	_ = try shell.wait() otherwise return 7
@@ -1214,7 +1214,7 @@ function main() returns ExitCode
 	argv.push("7")
 	#else
 	let exe = Executable.name("sh")
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("exit 7")
 	#endif
@@ -1686,7 +1686,7 @@ function main() returns ExitCode
 	try File.writeBinary(tool, content: image) otherwise panic("the application directory is writable")
 	let exe = Executable.name("maxon-spec-app-dir-tool")
 	#else
-	var exe = Executable.name("sh")
+	let exe = Executable.name("sh")
 	#endif
 
 	let control = Configuration.create(exe)
@@ -1816,7 +1816,7 @@ function main() returns ExitCode
 	argv.push("exit 0")
 	#else
 	let exe = Executable.name("sh")
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("exit 0")
 	#endif
@@ -1887,7 +1887,7 @@ function main() returns ExitCode
 	argv.push("exit 42")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("exit 42")
 	#endif
@@ -1920,7 +1920,7 @@ reported only exit codes answers `exited 137` here.
 ```maxon
 function main() returns ExitCode
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("kill -9 $$")
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 3
@@ -1968,7 +1968,7 @@ function main() returns ExitCode
 	let expected = "exited 42"
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("kill -9 $$")
 	let expected = "signalled 9"
@@ -2007,7 +2007,7 @@ function main() returns ExitCode
 	argv.push("echo err 1>&2")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("echo err 1>&2")
 	#endif
@@ -2050,7 +2050,7 @@ function main() returns ExitCode
 	argv.push("(for /L %i in (1,1,1100) do @echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789) & echo stdout-tail & (for /L %j in (1,1,1100) do @echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789 1>&2) & echo stderr-tail 1>&2")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/sh") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("i=1; while [ $i -le 1100 ]; do echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789; echo 0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789 1>&2; i=$((i+1)); done; echo stdout-tail; echo stderr-tail 1>&2")
 	#endif
@@ -2093,7 +2093,7 @@ function main() returns ExitCode
 	argv.push("ok")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("ok")
 	#endif
 	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: WorkingDirectory.at(Directory.currentPath()), timeoutMs: 5000) otherwise return 3
@@ -2127,7 +2127,7 @@ function main() returns ExitCode
 	argv.push("hello")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/echo") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("hello")
 	#endif
 	let p = async Subprocess.run(exe, arguments: argv)
@@ -2786,17 +2786,17 @@ function attempt(label String, config Configuration)
 end 'attempt'
 
 function spawnWithoutDescriptors(exe Executable)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("grandchild")
 
-	var fed = Configuration.create(exe)
+	let fed = Configuration.create(exe)
 	fed.arguments = argv.clone()
 	fed.standardInput = InputSource.bytes("x")
 	fed.standardOutput = OutputDestination.inherit
 	fed.standardError = OutputDestination.inherit
 	attempt("stdin pipe", config: fed)
 
-	var collected = Configuration.create(exe)
+	let collected = Configuration.create(exe)
 	collected.arguments = argv
 	collected.standardInput = InputSource.inherit
 	collected.standardError = OutputDestination.inherit
@@ -2804,7 +2804,7 @@ function spawnWithoutDescriptors(exe Executable)
 end 'spawnWithoutDescriptors'
 
 function exhaustThenSpawn(me FilePath)
-	var held = try __ManagedFile.openRead(me.path.toByteArray().managed) otherwise 'exhausted'
+	let held = try __ManagedFile.openRead(me.path.toByteArray().managed) otherwise 'exhausted'
 		print("exhausted\n")
 		spawnWithoutDescriptors(Executable.path(me))
 		return
@@ -2828,7 +2828,7 @@ function main() returns ExitCode
 		return 0
 	end 'childMode'
 
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("ulimit -n 64; exec \"$0\" child")
 	argv.push(me.path)
@@ -2905,9 +2905,9 @@ feeding its stdin, then runs `/bin/cat` with stdin inherited: on the null device
 and exits 0 having written nothing to either stream.
 ```maxon
 function spawnWithStdinClosed(exe Executable)
-	var fedArgv = StringArray.create(0)
+	let fedArgv = StringArray.create(0)
 	fedArgv.push("fed")
-	var fed = Configuration.create(exe)
+	let fed = Configuration.create(exe)
 	fed.arguments = fedArgv
 	fed.standardInput = InputSource.bytes("xyz")
 
@@ -2917,7 +2917,7 @@ function spawnWithStdinClosed(exe Executable)
 		print("fed: refused {e.displayReason()}\n")
 	end 'refused'
 
-	var inherited = Configuration.create(Executable.path(try FilePath.from("/bin/cat") otherwise panic("/bin/cat is a valid path")))
+	let inherited = Configuration.create(Executable.path(try FilePath.from("/bin/cat") otherwise panic("/bin/cat is a valid path")))
 	inherited.standardInput = InputSource.inherit
 
 	if let result = try inherited.run() 'catRan'
@@ -2935,8 +2935,8 @@ function main() returns ExitCode
 		let mode = try args.get(1) otherwise ""
 
 		if mode == "fed" 'readFed'
-			var received = ByteArray.create(0)
-			var stdin = Console.stdin()
+			let received = ByteArray.create(0)
+			let stdin = Console.stdin()
 
 			while true 'drain'
 				let chunk = stdin.readBytes(4096)
@@ -2956,7 +2956,7 @@ function main() returns ExitCode
 		return 0
 	end 'childMode'
 
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("exec \"$0\" child <&-")
 	argv.push(me.path)
@@ -3175,7 +3175,7 @@ function main() returns ExitCode
 	argv.push("x*")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	#endif
 
 	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
@@ -3220,7 +3220,7 @@ function main() returns ExitCode
 	argv.push("x*")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	#endif
 
 	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
@@ -3277,7 +3277,7 @@ function main() returns ExitCode
 	argv.push("x*")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	#endif
 
 	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3
@@ -3344,7 +3344,7 @@ function main() returns ExitCode
 	argv.push("x*")
 	#else
 	let exe = Executable.path(try FilePath.from("/bin/cat") otherwise return 2)
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	#endif
 
 	let child = try StreamingSubprocess.spawn(exe, arguments: argv) otherwise return 3

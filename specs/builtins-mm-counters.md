@@ -841,7 +841,7 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var buf = ByteArray.create(0)
+	let buf = ByteArray.create(0)
 	buf.push(1)
 	var score = 0 as Count
 	if __Builtins.mmAllocTotal() > 0 'total'

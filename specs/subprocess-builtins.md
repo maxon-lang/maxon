@@ -229,7 +229,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/echo")
 	appendToken(argv, token: "hello")
 	let empty = ""
@@ -293,7 +293,7 @@ end 'appendToken'
 
 // One attached run, collected: whether the child exited 0 having written a line.
 function collectOne() returns bool
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	#if os(Macos)
 	appendToken(argv, token: "/usr/bin/git")
 	appendToken(argv, token: "--version")
@@ -360,7 +360,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "printf '[%s]' \"$@\"")
@@ -590,7 +590,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/cat")
 	let empty = ""
 	let payload = "fed-in\n"
@@ -635,7 +635,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "printf sout; printf err 1>&2")
@@ -683,7 +683,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "exit 7")
@@ -776,7 +776,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sleep")
 	appendToken(argv, token: "5")
 	let empty = ""
@@ -891,7 +891,7 @@ function main() returns ExitCode
 		try File.delete(marker) otherwise panic("a marker left by an earlier run must not decide this case")
 	end 'stale'
 
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "/bin/sh -c 'sleep 3; echo x > {markerName}'")
@@ -1018,7 +1018,7 @@ function memberEndsWithinGrace(pid Pid) returns bool
 end 'memberEndsWithinGrace'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "sleep 30 & echo $!; exit 3")
@@ -1073,7 +1073,7 @@ end 'appendToken'
 
 function isZombie(pid Pid) returns bool
 	let ps = Executable.path(try FilePath.from("/bin/ps") otherwise panic("/bin/ps is a valid path"))
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-o")
 	argv.push("stat=")
 	argv.push("-p")
@@ -1116,7 +1116,7 @@ function memberEndsWithinGrace(pid Pid) returns bool
 end 'memberEndsWithinGrace'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "sleep 30 & echo $!; exit 3")
@@ -1475,13 +1475,13 @@ function allEnded(pids PidArray) returns bool
 end 'allEnded'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/usr/bin/true")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 	print("positive={pid > 0}")
-	var pids = PidArray.create(0)
+	let pids = PidArray.create(0)
 
 	if pid > 0 'started'
 		pids.push(pid as Pid)
@@ -1637,13 +1637,13 @@ function allEnded(pids PidArray) returns bool
 end 'allEnded'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/usr/bin/true")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	var spawned = 0 as Count
 	var firstFailure = -1 as FullRangeInt
-	var pids = PidArray.create(0)
+	let pids = PidArray.create(0)
 	for i in 0 upto 65 'detachLoop'
 		let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 		if pid > 0 'counted'
@@ -1738,7 +1738,7 @@ function main() returns ExitCode
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 
-	var cleanup = ByteArray.create(0)
+	let cleanup = ByteArray.create(0)
 	appendToken(cleanup, token: "/bin/sh")
 	appendToken(cleanup, token: "-c")
 	appendToken(cleanup, token: "rm -f posix-detach-session-probe.txt")
@@ -1747,13 +1747,13 @@ function main() returns ExitCode
 	__Builtins.subprocessResultRelease(cleanupResult)
 	__Builtins.subprocessReleaseHandle(cleanupHandle)
 
-	var probe = ByteArray.create(0)
+	let probe = ByteArray.create(0)
 	appendToken(probe, token: "/bin/sh")
 	appendToken(probe, token: "-c")
 	appendToken(probe, token: "mine=$(python3 -c 'import os;print(os.getsid(0))'); theirs=$(python3 -c 'import os,sys;print(os.getsid(int(sys.argv[1])))' $PPID); if [ x$mine != x ] && [ x$mine != x$theirs ]; then echo differs; else echo same; fi > posix-detach-session-probe.txt")
 	let pid = __Builtins.subprocessDetach(probe, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 
-	var reader = ByteArray.create(0)
+	let reader = ByteArray.create(0)
 	appendToken(reader, token: "/bin/sh")
 	appendToken(reader, token: "-c")
 	appendToken(reader, token: "i=0; while [ $i -lt 100 ]; do if [ -s posix-detach-session-probe.txt ]; then cat posix-detach-session-probe.txt; rm -f posix-detach-session-probe.txt; exit 0; fi; sleep 0.1; i=$((i+1)); done; echo timeout")
@@ -1764,7 +1764,7 @@ function main() returns ExitCode
 	print("detached={pid > 0} newSession={newSession}\n")
 	__Builtins.subprocessResultRelease(readerResult)
 	__Builtins.subprocessReleaseHandle(readerHandle)
-	var pids = PidArray.create(0)
+	let pids = PidArray.create(0)
 
 	if pid > 0 'started'
 		pids.push(pid as Pid)
@@ -1870,7 +1870,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function runEcho(word String, outKind Integer) returns Integer
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/echo")
 	appendToken(argv, token: "-n")
 	appendToken(argv, token: word)
@@ -2022,7 +2022,7 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "i=0; while [ $i -lt 1200 ]; do echo 0123456789012345678901234567890123456789012345678; echo 0123456789012345678901234567890123456789012345678 1>&2; i=$((i+1)); done")
@@ -2622,12 +2622,12 @@ function appendToken(out ByteArray, token String)
 end 'appendToken'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "echo probe=$MAXON_ENV_PROBE home=$HOME")
 
-	var env = ByteArray.create(0)
+	let env = ByteArray.create(0)
 	appendToken(env, token: "MAXON_ENV_PROBE=seen")
 	env.push(0)
 
@@ -2734,7 +2734,7 @@ arm64-macOS the harness reports it COMPILED but NOT RUN, which is still the whol
 panic would make impossible.
 ```maxon
 function main() returns ExitCode
-	var config = Configuration.create(Executable.name("/bin/sh"))
+	let config = Configuration.create(Executable.name("/bin/sh"))
 	config.arguments = ["-c", "printf ok"]
 	config.workingDirectory = WorkingDirectory.inherit
 	let r = try Subprocess.runConfiguration(config) otherwise return 2
@@ -2805,7 +2805,7 @@ type FifoReader
 	end 'create'
 
 	export function catFrom(fifo String)
-		var argv = ByteArray.create(0)
+		let argv = ByteArray.create(0)
 		appendToken(argv, token: "/bin/cat")
 		let empty = ""
 		let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
@@ -2823,7 +2823,7 @@ type FifoReader
 end 'FifoReader'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "d=$(mktemp -d) && mkfifo \"$d/f\" && printf %s \"$d\"")
@@ -2887,7 +2887,7 @@ type FifoReader
 	end 'create'
 
 	export function countFrom(fifo String)
-		var argv = ByteArray.create(0)
+		let argv = ByteArray.create(0)
 		appendToken(argv, token: "/bin/sh")
 		appendToken(argv, token: "-c")
 		appendToken(argv, token: "head -c {payloadBytes} >/dev/null; t=$(readlink /proc/$$/fd/0); n=0; for f in /proc/$$/fd/*; do if [ \"$(readlink \"$f\")\" = \"$t\" ]; then n=$((n+1)); fi; done; echo $n")
@@ -2907,7 +2907,7 @@ type FifoReader
 end 'FifoReader'
 
 function main() returns ExitCode
-	var argv = ByteArray.create(0)
+	let argv = ByteArray.create(0)
 	appendToken(argv, token: "/bin/sh")
 	appendToken(argv, token: "-c")
 	appendToken(argv, token: "d=$(mktemp -d) && mkfifo \"$d/f\" && printf %s \"$d\"")
@@ -2920,7 +2920,7 @@ function main() returns ExitCode
 	__Builtins.subprocessReleaseHandle(first)
 	let fifo = "{dir}/f"
 
-	var payload = StringBuilder.create()
+	let payload = StringBuilder.create()
 	for _ in 0 upto payloadBytes 'fill'
 		payload.append("x")
 	end 'fill'

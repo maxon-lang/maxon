@@ -1621,7 +1621,7 @@ function main() returns ExitCode
 	end 'theChild'
 
 	let exe = try Process.executablePath() otherwise return 2
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push(DescriptorLimit)
 	argv.push(exe.path)

@@ -545,7 +545,7 @@ openAtStart=true seen=first|second|tail|
 `first`, `second` and an unterminated `tail`.
 ```maxon
 function linesArguments() returns StringArray
-	var argv = StringArray.create(0)
+	let argv = StringArray.create(0)
 	argv.push("-c")
 	argv.push("echo first; echo second; printf tail")
 	return argv
@@ -556,7 +556,7 @@ function bothEnded(child StreamingSubprocess) returns bool
 end 'bothEnded'
 
 function main() returns ExitCode
-	var child = try StreamingSubprocess.spawn(Executable.name("sh"), arguments: linesArguments()) otherwise return 3
+	let child = try StreamingSubprocess.spawn(Executable.name("sh"), arguments: linesArguments()) otherwise return 3
 	let openAtStart = not bothEnded(child)
 	var seen = ""
 
