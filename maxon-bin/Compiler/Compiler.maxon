@@ -1969,7 +1969,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// `usesManagedFile` bit. It must come AFTER the array install is decided but has no ordering dependency
 	// on it: it calls `__mm_alloc`/`__mm_free` (carried by the `usesHeap` bit it sets alongside its own) and
 	// `ManagedMemoryRuntime.emitForwardCopy`, which is a BUILDER it inlines rather than a callee it references.
-	installManagedFileRuntime(pipeline.stdModule, usage: usage)
+	installManagedFileRuntime(pipeline.stdModule, usage: usage, target: project.target)
 
 	// The directory runtime (`__md_open_search`/`__md_next`/…) — installed the same already-lowered
 	// way, on its own `usesManagedDirectory` bit. It sits beside the file install because the two share this
@@ -1977,7 +1977,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// ordering against the ARRAY install below even though `__md_filename` CALLS `__managed_create`, because the
 	// functions are appended to one module and the backend resolves calls by name — and the `usesManagedMemory` bit
 	// that makes the managed-memory runtime present was settled by `scanRuntimeUsage` before any install ran.
-	installManagedDirectoryRuntime(pipeline.stdModule, usage: usage)
+	installManagedDirectoryRuntime(pipeline.stdModule, usage: usage, target: project.target)
 
 	// The socket runtime (`__ms_tcp_connect`/`__ms_send_from`/…) — installed the same already-lowered way, on
 	// its own `usesManagedSocket` bit. It sits beside the two filesystem installs because it shares their

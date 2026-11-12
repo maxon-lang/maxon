@@ -749,6 +749,16 @@ function buildManagedFileDestruct(module StdModule)
 	module.functions.push(func)
 end 'buildManagedFileDestruct'
 
+export function buildInertHandleDestruct(module StdModule, name ByteArray)
+	let func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildInertHandleDestruct'
+
 // `__mf_size(box) -> (size, flag)` — `GetFileSizeEx`, or `sizeFailed`/an errno variant.
 //
 // The 64-bit answer arrives through an out-param (a size cannot share RAX with a success flag), so a
@@ -1286,7 +1296,7 @@ end 'claimManagedFileOrdinals'
 // the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places, and a
 // builder that gains or loses a clause without the predicate following is a `try` that silently stops
 // being required (or an E3057 on a call that cannot fail). Checked in BOTH directions.
-export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
+export function installManagedFileRuntime(module StdModule, usage RuntimeUsage, target Target)
 	if not usage.usesManagedFile 'noManagedFile'
 		return
 	end 'noManagedFile'
@@ -1296,7 +1306,6 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 	buildManagedFileOpen(module, name: ManagedFileOpenWriteExecutableName, mode: ManagedFileOpenMode.writeExecutable)
 	buildManagedFileOpen(module, name: ManagedFileOpenCreateNewName, mode: ManagedFileOpenMode.createNew)
 	buildManagedFileClose(module)
-	buildManagedFileDestruct(module)
 	buildManagedFileSize(module)
 	buildManagedFileRead(module, name: ManagedFileReadName, placement: ManagedFileReadPlacement.atStart)
 	buildManagedFileRead(module, name: ManagedFileReadAppendingName, placement: ManagedFileReadPlacement.appending)
@@ -1310,6 +1319,12 @@ export function installManagedFileRuntime(module StdModule, usage RuntimeUsage)
 	buildManagedFileStat(module)
 	buildManagedFileStatField(module)
 	buildManagedFileStatFree(module)
+
+	if targetProvidesFacility(target, facility: HostFacility.managedFile) 'aHandleCanExist'
+		buildManagedFileDestruct(module)
+	end 'aHandleCanExist' else 'noHandleCanExist'
+		buildInertHandleDestruct(module, name: ManagedFileDestructName)
+	end 'noHandleCanExist'
 
 	for func in module.functions 'eachFunc'
 		if not isManagedFileRuntimeCallee(func.name) 'notOurs'

@@ -632,6 +632,60 @@ a 1
 b 0
 ```
 
+<!-- test: an-array-of-directory-handle-holders-is-dropped-on-every-lane -->
+<!-- tier: stdlib -->
+A lane with no directory substrate refuses every call that opens a directory, so an array of structs holding a `__ManagedDirectory` is empty there and its drop closes nothing.
+```maxon
+type Holder
+	export var d as __ManagedDirectory
+
+	static function create(d __ManagedDirectory) returns Self
+		return Self{d: d}
+	end 'create'
+end 'Holder'
+
+typealias Holders = Array with Holder
+
+function main() returns ExitCode
+	let a = Holders.create(0)
+	print("{a.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: an-array-of-socket-handle-holders-is-dropped-on-every-lane -->
+<!-- tier: stdlib -->
+A lane with no socket substrate refuses every call that opens a socket, so an array of structs holding a `__ManagedSocket` is empty there and its drop closes nothing.
+```maxon
+type Holder
+	export var s as __ManagedSocket
+
+	static function create(s __ManagedSocket) returns Self
+		return Self{s: s}
+	end 'create'
+end 'Holder'
+
+typealias Holders = Array with Holder
+
+function main() returns ExitCode
+	let a = Holders.create(0)
+	print("{a.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
 <!-- test: a-write-through-a-cloned-arrays-record-element-leaves-the-source-alone -->
 ### A write through an element of the clone does not reach the source
 The clone deep-copies each record element, so `e` is the copy's own record and the source's element still reads `1`.

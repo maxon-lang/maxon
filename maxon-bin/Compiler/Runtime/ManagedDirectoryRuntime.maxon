@@ -898,7 +898,7 @@ function claimManagedDirectoryOrdinals(project Project, declaration EnumLayout)
 	directoryErrors.requireTotal()
 end 'claimManagedDirectoryOrdinals'
 
-export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUsage)
+export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUsage, target Target)
 	if not usage.usesManagedDirectory 'noManagedDirectory'
 		return
 	end 'noManagedDirectory'
@@ -907,12 +907,17 @@ export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUs
 	buildManagedDirectoryNext(module)
 	buildManagedDirectoryFilename(module)
 	buildManagedDirectoryClose(module)
-	buildManagedDirectoryDestruct(module)
 	buildManagedDirectoryExists(module)
 	buildManagedDirectoryCreate(module)
 	buildManagedDirectoryDelete(module)
 	buildManagedDirectoryCurrentPath(module)
 	buildManagedDirectoryResolvePath(module)
+
+	if targetProvidesFacility(target, facility: HostFacility.managedDirectory) 'aHandleCanExist'
+		buildManagedDirectoryDestruct(module)
+	end 'aHandleCanExist' else 'noHandleCanExist'
+		buildInertHandleDestruct(module, name: ManagedDirectoryDestructName)
+	end 'noHandleCanExist'
 
 	for func in module.functions 'eachFunc'
 		if not isManagedDirectoryRuntimeCallee(func.name) 'notOurs'
