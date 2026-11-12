@@ -131,18 +131,6 @@ export let ErrorDirNotEmpty = 145 as FullRangeInt
 // `stat` failure must be reported as it (`Arm64DarwinRuntime.buildArm64DarwinFileAttributesChunk`).
 export let InvalidFileAttributes = 0xFFFFFFFF as FullRangeInt
 
-// `MAX_PATH`, the first buffer `emitGrowingPathFill` offers every fill but `finalPath`. It fits every path a program is
-// normally installed at, so the common case is one call and one allocation; a larger start would
-// cost twice the allocation on every ordinary path to save one doubling on a long one.
-export let MaxPathBytes = 260 as FullRangeInt
-
-// The first buffer `__md_resolve_path` offers, and at least `DarwinFcntlGetPathBufferBytes`: below that
-// `mrt_host_fd_path` answers "too small" on macOS without asking, so a `MaxPathBytes` start would spend
-// two doublings on every resolution.
-let PhysicalPathFirstUnits = 4096 as FullRangeInt
-
-let PathGrowthShift = 1
-
 // ⭐ **THE `__ManagedDirectoryError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedFileRuntime` discipline, and the ordinals are positional facts about the case order of the
 // `__ManagedDirectoryError` DECLARED in `stdlib/Builtins.maxon`. `verifyManagedDirectoryOrdinals` below is
@@ -808,7 +796,7 @@ function buildManagedDirectoryCurrentPath(module StdModule)
 	let failed = module.addBlock(func, label: b"mdfail", heat: BlockHeat.normal)
 	let copyOut = module.addBlock(func, label: b"mdcopy", heat: BlockHeat.normal)
 
-	let (buffer, _) = emitGrowingPathFill(module, cur: entry, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.currentDirectory, whenRefused: failed, whenFits: copyOut, ids: ids)
+	let (buffer, _, _) = emitGrowingPathFill(module, cur: entry, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.currentDirectory, whenRefused: failed, whenFits: copyOut, ids: ids)
 
 	emitRawFree(module, block: failed, ptr: buffer, ids: ids)
 	emitErrorReturn(module, block: failed, flag: ManagedDirectoryCurrentPathFailedFlag, ids: ids)
@@ -853,7 +841,7 @@ function buildManagedDirectoryResolvePath(module StdModule)
 
 	emitDirectoryErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedDirectoryResolveFailedFlag, ids: ids)
 
-	let (buffer, _) = emitGrowingPathFill(module, cur: opened, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.finalPath(handle), whenRefused: refused, whenFits: copyOut, ids: ids)
+	let (buffer, _, _) = emitGrowingPathFill(module, cur: opened, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.finalPath(handle), whenRefused: refused, whenFits: copyOut, ids: ids)
 
 	emitRawFree(module, block: refused, ptr: buffer, ids: ids)
 	emitCloseResolvedHandle(module, block: refused, handle: handle, ids: ids)
@@ -872,87 +860,6 @@ function emitCloseResolvedHandle(module StdModule, block IrBlock, handle ValueId
 	emitIoPark(module, block: block, operation: GtIoOperation.fileExists, ids: ids)
 	module.appendOp(block, op: StdOp.osFileClose(handle))
 end 'emitCloseResolvedHandle'
-
-// One attempt's three-way verdict for a call that fills a caller's buffer and answers a count: `0`
-// is a failure, `< capacity` means the answer is in the buffer with its NUL, anything else means
-// the buffer was too small. ⚠ The `written == 0` test comes first because a 0 also satisfies
-// `< capacity`: the fit test alone would copy out a buffer the OS never wrote.
-function emitFilledBufferVerdict(module StdModule, block IrBlock, check IrBlock, written ValueId, capacity ValueId, whenRefused IrBlock, whenFits IrBlock, whenTooSmall IrBlock, ids ValueMinter)
-	emitBranchOnCompare(module, block: block, value: written, pred: StdCmpPred.eq, against: 0, whenTrue: whenRefused, whenFalse: check, ids: ids)
-
-	emitBranchOnCompareValues(module, block: check, a: written, pred: StdCmpPred.lt, b: capacity, whenTrue: whenFits, whenFalse: whenTooSmall, ids: ids)
-end 'emitFilledBufferVerdict'
-
-export union PathFill
-	executablePath
-	processNamespace
-	currentDirectory
-	systemDirectory
-	windowsDirectory
-	fullPath(source ValueId)
-	finalPath(handle ValueId)
-end 'PathFill'
-
-// The one grow-and-retry path fill. Each too-small attempt doubles the buffer, because two of the
-// fills name no size to retry at: `GetModuleFileNameW` answers the size it was given on truncation,
-// and `getcwd` answers NULL with `ERANGE`. The retry lives in Std so no backend owns a buffer
-// policy. The buffer is still allocated on both exits, the refused one included, and the caller
-// frees it.
-export function emitGrowingPathFill(module StdModule, cur IrBlock, attempt IrBlock, fitTest IrBlock, grow IrBlock, fill PathFill, whenRefused IrBlock, whenFits IrBlock, ids ValueMinter) returns (ValueId, ValueId)
-	let buffer = ids.mint()
-	let capacity = ids.mint()
-	pushI64BlockArgs(attempt, values: twoArgs(buffer, second: capacity))
-
-	let firstSize = emitConst(module, block: cur, value: pathFillFirstUnits(fill), ids: ids)
-	let encoding = pathFillEncoding(module, fill: fill)
-	let firstBuf = emitRawAlloc(module, block: cur, byteCount: emitByteCountOfUnits(module, block: cur, units: firstSize, encoding: encoding, ids: ids), ids: ids)
-	emitBranchCarrying(module, from: cur, to: attempt, values: twoArgs(firstBuf, second: firstSize))
-
-	let written = ids.mint()
-	emitPathFillOp(module, block: attempt, fill: fill, written: written, buffer: buffer, capacity: capacity, ids: ids)
-	emitFilledBufferVerdict(module, block: attempt, check: fitTest, written: written, capacity: capacity, whenRefused: whenRefused, whenFits: whenFits, whenTooSmall: grow, ids: ids)
-
-	emitRawFree(module, block: grow, ptr: buffer, ids: ids)
-	let shift = emitConst(module, block: grow, value: PathGrowthShift, ids: ids)
-	let grownCapacity = emitBin(module, block: grow, a: capacity, b: shift, opcode: StdBinOpcode.shl, ids: ids)
-	let grownBuf = emitRawAlloc(module, block: grow, byteCount: emitByteCountOfUnits(module, block: grow, units: grownCapacity, encoding: encoding, ids: ids), ids: ids)
-	emitBranchCarrying(module, from: grow, to: attempt, values: twoArgs(grownBuf, second: grownCapacity))
-	return (buffer, written)
-end 'emitGrowingPathFill'
-
-function emitPathFillOp(module StdModule, block IrBlock, fill PathFill, written ValueId, buffer ValueId, capacity ValueId, ids ValueMinter)
-	match fill 'fill'
-		executablePath then module.appendOp(block, op: StdOp.osExecutablePath(written, bufLenId: capacity, bufPtrId: buffer))
-		processNamespace then module.appendOp(block, op: StdOp.osProcessNamespace(written, bufLenId: capacity, bufPtrId: buffer))
-		currentDirectory then emitParkedCurrentDirectoryFill(module, block: block, written: written, buffer: buffer, capacity: capacity, ids: ids)
-		systemDirectory then emitDirectoryQuery(module, block: block, verb: PathQueryVerb.systemDirectory, written: written, buffer: buffer, capacity: capacity, ids: ids)
-		windowsDirectory then emitDirectoryQuery(module, block: block, verb: PathQueryVerb.windowsDirectory, written: written, buffer: buffer, capacity: capacity, ids: ids)
-		fullPath(source) then module.appendOp(block, op: StdOp.osPathQuery(written, verb: PathQueryVerb.fullPath, a0Id: source, a1Id: capacity, a2Id: buffer))
-		finalPath(handle) then module.appendOp(block, op: StdOp.osPathQuery(written, verb: PathQueryVerb.finalPath, a0Id: handle, a1Id: capacity, a2Id: buffer))
-	end 'fill'
-end 'emitPathFillOp'
-
-function pathFillFirstUnits(fill PathFill) returns FullRangeInt
-	return match fill 'fill'
-		finalPath gives PhysicalPathFirstUnits
-		executablePath or
-		processNamespace or
-		currentDirectory or
-		systemDirectory or
-		windowsDirectory or
-		fullPath gives MaxPathBytes
-	end 'fill'
-end 'pathFillFirstUnits'
-
-function emitParkedCurrentDirectoryFill(module StdModule, block IrBlock, written ValueId, buffer ValueId, capacity ValueId, ids ValueMinter)
-	emitIoPark(module, block: block, operation: GtIoOperation.fileExists, ids: ids)
-	module.appendOp(block, op: StdOp.osDirCurrentPath(written, bufLenId: capacity, bufPtrId: buffer))
-end 'emitParkedCurrentDirectoryFill'
-
-function emitDirectoryQuery(module StdModule, block IrBlock, verb PathQueryVerb, written ValueId, buffer ValueId, capacity ValueId, ids ValueMinter)
-	let unused = emitConst(module, block: block, value: 0, ids: ids)
-	module.appendOp(block, op: StdOp.osPathQuery(written, verb: verb, a0Id: buffer, a1Id: capacity, a2Id: unused))
-end 'emitDirectoryQuery'
 
 // ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installManagedFileRuntime` for its stated
 // reason: the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places,

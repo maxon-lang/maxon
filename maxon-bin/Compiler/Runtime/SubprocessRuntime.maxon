@@ -2734,11 +2734,11 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	let attrOk = module.addBlock(func, label: b"rpattr", heat: BlockHeat.normal)
 	let candT = emitLoadField(module, block: testCand, record: state, offset: RpCand, ids: ids)
 	let attrs = ids.mint()
-	let hostCandidate = emitHostCString(module, block: testCand, cstr: candT, encoding: module.hostText, ids: ids)
-	module.appendOp(testCand, op: StdOp.osFileAttributes(attrs, pathPtrId: hostCandidate))
-	emitReleaseHostCopy(module, block: testCand, copy: hostCandidate, encoding: module.hostText, ids: ids)
+	let hostCandidate = emitHostPath(module, func: func, cur: testCand, cstr: candT, encoding: module.hostText, ids: ids)
+	module.appendOp(hostCandidate.block, op: StdOp.osFileAttributes(attrs, pathPtrId: hostCandidate.text))
+	emitReleaseHostPath(module, block: hostCandidate.block, text: hostCandidate.text, encoding: module.hostText, ids: ids)
 
-	emitBranchOnCompare(module, block: testCand, value: attrs, pred: StdCmpPred.eq, against: InvalidFileAttributes, whenTrue: extNext, whenFalse: attrOk, ids: ids)
+	emitBranchOnCompare(module, block: hostCandidate.block, value: attrs, pred: StdCmpPred.eq, against: InvalidFileAttributes, whenTrue: extNext, whenFalse: attrOk, ids: ids)
 
 	// A directory of the right name is not an executable.
 	let dirBit = emitConst(module, block: attrOk, value: FileAttributeDirectory, ids: ids)
@@ -2811,7 +2811,7 @@ function emitSubpAnswerFullPath(module StdModule, func IrFunction, ids ValueMint
 
 	let cand = emitLoadField(module, block: hit, record: state, offset: RpCand, ids: ids)
 	let fillSource = emitHostCString(module, block: hit, cstr: cand, encoding: module.hostText, ids: ids)
-	let (fullPath, _) = emitGrowingPathFill(module, cur: hit, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.fullPath(fillSource), whenRefused: unresolved, whenFits: resolved, ids: ids)
+	let (fullPath, _, _) = emitGrowingPathFill(module, cur: hit, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.fullPath(fillSource), whenRefused: unresolved, whenFits: resolved, ids: ids)
 
 	let record = ids.mint()
 	let built = emitTextToManaged(module, func: func, cur: resolved, cstr: fullPath, record: record, encoding: module.hostText, ids: ids)
@@ -3093,7 +3093,7 @@ function emitSubpFillDirectory(module StdModule, func IrFunction, ids ValueMinte
 	let grow = module.addBlock(func, label: b"rpfillgrow", heat: BlockHeat.normal)
 	let filled = module.addBlock(func, label: b"rpfilled", heat: BlockHeat.normal)
 
-	let (buffer, written) = emitGrowingPathFill(module, cur: cur, attempt: attempt, fitTest: fitTest, grow: grow, fill: fill, whenRefused: filled, whenFits: filled, ids: ids)
+	let (buffer, written, _) = emitGrowingPathFill(module, cur: cur, attempt: attempt, fitTest: fitTest, grow: grow, fill: fill, whenRefused: filled, whenFits: filled, ids: ids)
 
 	if not hostTextIsWide(module) 'narrow'
 		emitStoreField(module, block: filled, record: state, offset: bufferOffset, value: buffer)

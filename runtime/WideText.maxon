@@ -34,6 +34,30 @@ module typealias WideTextWord = int(i64.min to i64.max)
 	let LowSurrogateCeiling = 0xDFFF
 	let SurrogatePayloadBits = 10
 	let SurrogatePayloadMask = 0x3FF
+	let ExtendedPathThresholdUnits = 248
+	let ExtendedPrefixUnits = 4
+	let ExtendedUncPrefixUnits = 8
+	let UncSkippedUnits = 2
+	let ExtendedPathSlackUnits = ExtendedUncPrefixUnits - UncSkippedUnits
+	let RootProbeUnits = 3
+	let BackslashUnit = 0x5C
+	let SlashUnit = 0x2F
+	let ColonUnit = 0x3A
+	let QuestionUnit = 0x3F
+	let DotUnit = 0x2E
+	let UpperCaseUnit = 0x55
+	let UpperCaseNUnit = 0x4E
+	let UpperCaseCUnit = 0x43
+	let AsciiCaseBit = 0x20
+	let AsciiLowerA = 0x61
+	let AsciiLowerZ = 0x7A
+
+	enum WidePathRoot
+		relative
+		drive
+		unc
+		device
+	end 'WidePathRoot'
 
 	function wideTextByte(src WideTextWord, index WideTextWord) returns WideTextWord
 		return __Raw.loadByte((src + index) as MachineWord, offset: 0) as WideTextWord
@@ -204,6 +228,135 @@ module typealias WideTextWord = int(i64.min to i64.max)
 
 		return written
 	end '__wt_widen'
+
+	function widePathIsSeparator(unit WideTextWord) returns bool
+		return unit == BackslashUnit or unit == SlashUnit
+	end 'widePathIsSeparator'
+
+	function widePathIsDriveLetter(unit WideTextWord) returns bool
+		let folded = unit or AsciiCaseBit
+
+		return folded >= AsciiLowerA and folded <= AsciiLowerZ
+	end 'widePathIsDriveLetter'
+
+	function widePathHasDevicePrefix(text WideTextWord, units WideTextWord) returns bool
+		if units < ExtendedPrefixUnits 'tooShort'
+			return false
+		end 'tooShort'
+
+		let marker = wideTextUnit(text, index: 2)
+
+		return wideTextUnit(text, index: 0) == BackslashUnit and wideTextUnit(text, index: 1) == BackslashUnit and (marker == QuestionUnit or marker == DotUnit) and wideTextUnit(text, index: 3) == BackslashUnit
+	end 'widePathHasDevicePrefix'
+
+	function widePathRootOf(text WideTextWord, units WideTextWord) returns WidePathRoot
+		if widePathHasDevicePrefix(text, units: units) 'device'
+			return WidePathRoot.device
+		end 'device'
+
+		if units < RootProbeUnits 'tooShort'
+			return WidePathRoot.relative
+		end 'tooShort'
+
+		let first = wideTextUnit(text, index: 0)
+		let second = wideTextUnit(text, index: 1)
+		let third = wideTextUnit(text, index: 2)
+
+		if widePathIsSeparator(first) and widePathIsSeparator(second) 'network'
+			return WidePathRoot.unc
+		end 'network'
+
+		if widePathIsDriveLetter(first) and second == ColonUnit and widePathIsSeparator(third) 'driveRoot'
+			return WidePathRoot.drive
+		end 'driveRoot'
+
+		return WidePathRoot.relative
+	end 'widePathRootOf'
+
+	function widePathStorePrefix(text WideTextWord, root WidePathRoot)
+		wideTextStoreUnit(text, index: 0, value: BackslashUnit)
+		wideTextStoreUnit(text, index: 1, value: BackslashUnit)
+		wideTextStoreUnit(text, index: 2, value: QuestionUnit)
+		wideTextStoreUnit(text, index: 3, value: BackslashUnit)
+
+		if root == WidePathRoot.unc 'uncSpelling'
+			wideTextStoreUnit(text, index: ExtendedPrefixUnits, value: UpperCaseUnit)
+			wideTextStoreUnit(text, index: ExtendedPrefixUnits + 1, value: UpperCaseNUnit)
+			wideTextStoreUnit(text, index: ExtendedPrefixUnits + 2, value: UpperCaseCUnit)
+			wideTextStoreUnit(text, index: ExtendedPrefixUnits + 3, value: BackslashUnit)
+		end 'uncSpelling'
+	end 'widePathStorePrefix'
+
+	function widePathSkippedUnits(root WidePathRoot) returns WideTextWord
+		if root == WidePathRoot.unc 'uncSpelling'
+			return UncSkippedUnits
+		end 'uncSpelling'
+
+		return 0
+	end 'widePathSkippedUnits'
+
+	function widePathExtensionShift(root WidePathRoot) returns WideTextWord
+		let prefixUnits = ExtendedUncPrefixUnits if root == WidePathRoot.unc else ExtendedPrefixUnits
+
+		return prefixUnits - widePathSkippedUnits(root)
+	end 'widePathExtensionShift'
+
+	function widePathExtend(text WideTextWord, units WideTextWord, root WidePathRoot)
+		let skipped = widePathSkippedUnits(root)
+		let shift = widePathExtensionShift(root)
+		var index = units
+
+		while index >= skipped 'eachUnitRightward'
+			wideTextStoreUnit(text, index: index + shift, value: wideTextUnit(text, index: index))
+			index = index - 1
+		end 'eachUnitRightward'
+
+		widePathStorePrefix(text, root: root)
+	end 'widePathExtend'
+
+	// A verbatim or device path is never resolved: `GetFullPathNameW` collapses `..` even inside
+	// `\\?\`, which would change the path's meaning.
+	module function __wt_path_needs_resolution(text WideTextWord, units WideTextWord) returns bool
+		let root = widePathRootOf(text, units: units)
+
+		if root == WidePathRoot.device 'verbatimOrDevice'
+			return false
+		end 'verbatimOrDevice'
+
+		return units >= ExtendedPathThresholdUnits or root == WidePathRoot.relative
+	end '__wt_path_needs_resolution'
+
+	module function __wt_path_extension_fits(written WideTextWord, capacity WideTextWord) returns bool
+		if written >= capacity 'tooSmall'
+			return false
+		end 'tooSmall'
+
+		return written < ExtendedPathThresholdUnits or written + ExtendedPathSlackUnits < capacity
+	end '__wt_path_extension_fits'
+
+	module function __wt_extend_resolved(text WideTextWord, units WideTextWord, capacity WideTextWord) returns bool
+		if units < ExtendedPathThresholdUnits 'short'
+			return true
+		end 'short'
+
+		let root = widePathRootOf(text, units: units)
+
+		if root == WidePathRoot.device 'alreadyExtended'
+			return true
+		end 'alreadyExtended'
+
+		if root == WidePathRoot.relative 'unresolved'
+			return false
+		end 'unresolved'
+
+		if units + widePathExtensionShift(root) >= capacity 'noRoom'
+			return false
+		end 'noRoom'
+
+		widePathExtend(text, units: units, root: root)
+
+		return true
+	end '__wt_extend_resolved'
 
 	module function __wt_narrow(src WideTextWord, units WideTextWord, dst WideTextWord) returns WideTextWord
 		var index = 0 as WideTextWord

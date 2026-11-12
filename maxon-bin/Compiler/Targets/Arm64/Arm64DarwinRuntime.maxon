@@ -72,7 +72,7 @@ let DarwinTimespecNsecSlot = 1
 
 // `char* realpath(const char* path, char* resolved)` — a NULL `resolved` makes it `malloc` a buffer of
 // exactly the right size, which is the ONLY safe spelling here: the alternative writes up to POSIX's
-// `PATH_MAX` (1024) and the caller's first buffer is `ManagedDirectoryRuntime.MaxPathBytes` (260, Win32's
+// `PATH_MAX` (1024) and the caller's first buffer is `PathFillRuntime.MaxPathBytes` (260, Win32's
 // `MAX_PATH`), so passing the caller's buffer would be a 764-byte overrun waiting for a long path.
 let RealpathAllocatesResult = 0
 
@@ -286,7 +286,7 @@ end 'buildArm64DarwinSleepChunk'
 // Fill the caller's buffer with the running image's CANONICAL absolute path and answer the byte count,
 // NOT counting the NUL — `GetModuleFileNameW`'s convention, which is `StdOp.osExecutablePath`'s contract
 // and which `ProcessRuntime.buildProcessFill` classifies through
-// `ManagedDirectoryRuntime.emitFilledBufferVerdict`: `0` is unavailable, `< capacity` fits, anything else
+// `PathFillRuntime.emitFilledBufferVerdict`: `0` is unavailable, `< capacity` fits, anything else
 // is truncation and the Std loop doubles. So this chunk answers `strlen` on success and `bufLen` on
 // too-small, and the retry loop above it is untouched.
 //
@@ -1670,7 +1670,7 @@ end 'buildArm64DarwinFileAttributesChunk'
 // ==========================================================================
 
 // ⭐⭐ **`GetCurrentDirectoryW`'s THREE-WAY ANSWER OVER A CALL THAT HAS TWO.** The op's contract
-// (`ManagedDirectoryRuntime.emitFilledBufferVerdict`) reads `0` as failure, `< capacity` as "it fits, NUL
+// (`PathFillRuntime.emitFilledBufferVerdict`) reads `0` as failure, `< capacity` as "it fits, NUL
 // included" and anything else as "too small". `getcwd` answers the buffer or NULL, and only `errno`
 // separates the two failures — so the classification is a compare against `ERANGE`.
 //

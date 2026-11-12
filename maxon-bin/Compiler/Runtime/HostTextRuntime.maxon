@@ -15,6 +15,9 @@ end 'hostTextEncodingOf'
 export let WideTextTierFileName = "WideText.maxon"
 
 let WidenName = b"__wt_widen"
+let PathNeedsResolutionName = b"__wt_path_needs_resolution"
+export let PathExtensionFitsName = b"__wt_path_extension_fits"
+let ExtendResolvedName = b"__wt_extend_resolved"
 let NarrowName = b"__wt_narrow"
 let NarrowAsciiName = b"__wt_narrow_ascii"
 let TextLengthName = b"__wt_text_length"
@@ -34,18 +37,6 @@ let ByteValueBits = 8 as FullRangeInt
 export function hostTextIsWide(module StdModule) returns bool
 	return module.hostText == HostTextEncoding.utf16
 end 'hostTextIsWide'
-
-export function pathFillEncoding(module StdModule, fill PathFill) returns HostTextEncoding
-	return match fill 'fill'
-		processNamespace gives HostTextEncoding.utf8
-		executablePath or
-		currentDirectory or
-		systemDirectory or
-		windowsDirectory or
-		fullPath or
-		finalPath gives module.hostText
-	end 'fill'
-end 'pathFillEncoding'
 
 export function emitByteCountOfUnits(module StdModule, block IrBlock, units ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
 	if encoding == HostTextEncoding.utf8 'narrow'
@@ -120,15 +111,17 @@ end 'emitTextAllocInto'
 
 // `byteLength + 1` units is always enough: UTF-16 never needs more units than UTF-8 has bytes, and
 // an invalid byte becomes one U+FFFD unit.
-function emitWidenUtf8(module StdModule, block IrBlock, source ValueId, byteLength ValueId, allocation TextAllocation, ids ValueMinter) returns ValueId
+function emitWidenUtf8(module StdModule, block IrBlock, source ValueId, byteLength ValueId, allocation TextAllocation, ids ValueMinter) returns (ValueId, ValueId)
 	let one = emitConst(module, block: block, value: 1, ids: ids)
 	let units = emitBin(module, block: block, a: byteLength, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let size = emitByteCountOfUnits(module, block: block, units: units, encoding: HostTextEncoding.utf16, ids: ids)
 	let wide = ids.mint()
 	emitTextAllocInto(module, block: block, result: wide, byteCount: size, allocation: allocation, ids: ids)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: WidenName, args: threeArgs(source, second: byteLength, third: wide)))
 
-	return wide
+	let widenedUnits = ids.mint()
+	module.appendOp(block, op: StdOp.call(widenedUnits, callee: WidenName, args: threeArgs(source, second: byteLength, third: wide)))
+
+	return (wide, widenedUnits)
 end 'emitWidenUtf8'
 
 export function emitUtf8ToWide(module StdModule, block IrBlock, source ValueId, extent Utf8Extent, ids ValueMinter) returns ValueId
@@ -137,7 +130,9 @@ export function emitUtf8ToWide(module StdModule, block IrBlock, source ValueId, 
 		block gives emitRuntimeCall(module, block: block, callee: BlockExtentName, args: argsOf(source), ids: ids)
 	end 'extent'
 
-	return emitWidenUtf8(module, block: block, source: source, byteLength: byteLength, allocation: TextAllocation.slab, ids: ids)
+	let (wide, _) = emitWidenUtf8(module, block: block, source: source, byteLength: byteLength, allocation: TextAllocation.slab, ids: ids)
+
+	return wide
 end 'emitUtf8ToWide'
 
 export function emitHostCString(module StdModule, block IrBlock, cstr ValueId, encoding HostTextEncoding, ids ValueMinter) returns ValueId
@@ -153,6 +148,35 @@ export function emitReleaseHostCopy(module StdModule, block IrBlock, copy ValueI
 		emitSlabFree(module, block: block, ptr: copy, kind: SlabBufferKind.hostText, ids: ids)
 	end 'owned'
 end 'emitReleaseHostCopy'
+
+export type HostPathText
+	export let block as IrBlock
+	export let text as ValueId
+
+	static function create(block IrBlock, text ValueId) returns HostPathText
+		return Self{block: block, text: text}
+	end 'create'
+end 'HostPathText'
+
+// A path copy is a raw allocation, not a slab one: release it with `emitReleaseHostPath`, never
+// `emitReleaseHostCopy`.
+export function emitHostPath(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, encoding HostTextEncoding, ids ValueMinter) returns HostPathText
+	if encoding == HostTextEncoding.utf8 'narrow'
+		return HostPathText.create(cur, text: cstr)
+	end 'narrow'
+
+	let join = module.addBlock(func, label: b"hpjoin", heat: BlockHeat.normal)
+	let byteLength = emitTextLength(module, block: cur, text: cstr, encoding: HostTextEncoding.utf8, ids: ids)
+	let text = emitWin32Path(module, func: func, cur: cur, join: join, source: cstr, byteLength: byteLength, ids: ids)
+
+	return HostPathText.create(join, text: text)
+end 'emitHostPath'
+
+export function emitReleaseHostPath(module StdModule, block IrBlock, text ValueId, encoding HostTextEncoding, ids ValueMinter)
+	if encoding == HostTextEncoding.utf16 'owned'
+		emitRawFree(module, block: block, ptr: text, ids: ids)
+	end 'owned'
+end 'emitReleaseHostPath'
 
 type NulRefusedExtent
 	export var block as IrBlock
@@ -196,11 +220,46 @@ export function emitPathToText(module StdModule, func IrFunction, cur IrBlock, j
 		return emitBytesToCString(module, func: func, cur: extent.block, join: join, buf: buf, len: extent.length, ids: ids)
 	end 'narrow'
 
-	let wide = emitWidenUtf8(module, block: extent.block, source: buf, byteLength: extent.length, allocation: TextAllocation.raw, ids: ids)
-	module.setTerminator(extent.block, op: StdOp.branch(join.id))
-
-	return wide
+	return emitWin32Path(module, func: func, cur: extent.block, join: join, source: buf, byteLength: extent.length, ids: ids)
 end 'emitPathToText'
+
+// A refused `GetFullPathNameW` falls back to the unresolved path so the OS reports its own error;
+// making it fatal would turn an ordinary missing-path failure into an abort.
+function emitWin32Path(module StdModule, func IrFunction, cur IrBlock, join IrBlock, source ValueId, byteLength ValueId, ids ValueMinter) returns ValueId
+	let resolve = module.addBlock(func, label: b"pfull", heat: BlockHeat.normal)
+	let attempt = module.addBlock(func, label: b"pfulla", heat: BlockHeat.normal)
+	let fitTest = module.addBlock(func, label: b"pfullf", heat: BlockHeat.normal)
+	let grow = module.addBlock(func, label: b"pfullg", heat: BlockHeat.normal)
+	let refused = module.addBlock(func, label: b"pfullr", heat: BlockHeat.cold)
+	let extend = module.addBlock(func, label: b"pfulle", heat: BlockHeat.normal)
+	let unextendable = module.addBlock(func, label: b"pfullu", heat: BlockHeat.cold)
+	let resolved = module.addBlock(func, label: b"pfullok", heat: BlockHeat.normal)
+	let direct = module.addBlock(func, label: b"pdirect", heat: BlockHeat.normal)
+
+	let text = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(text, argType: StdType.i64))
+
+	let (wide, units) = emitWidenUtf8(module, block: cur, source: source, byteLength: byteLength, allocation: TextAllocation.raw, ids: ids)
+	let needsResolution = emitRuntimeCall(module, block: cur, callee: PathNeedsResolutionName, args: twoArgs(wide, second: units), ids: ids)
+	emitBranchOnCompare(module, block: cur, value: needsResolution, pred: StdCmpPred.eq, against: 0, whenTrue: direct, whenFalse: resolve, ids: ids)
+
+	let (full, written, capacity) = emitGrowingPathFill(module, cur: resolve, attempt: attempt, fitTest: fitTest, grow: grow, fill: PathFill.extendablePath(wide), whenRefused: refused, whenFits: extend, ids: ids)
+
+	emitRawFree(module, block: refused, ptr: full, ids: ids)
+	module.setTerminator(refused, op: StdOp.branch(direct.id))
+
+	let extended = emitRuntimeCall(module, block: extend, callee: ExtendResolvedName, args: threeArgs(full, second: written, third: capacity), ids: ids)
+	emitBranchOnCompare(module, block: extend, value: extended, pred: StdCmpPred.eq, against: 0, whenTrue: unextendable, whenFalse: resolved, ids: ids)
+
+	emitRuntimeFatal(module, func: func, block: unextendable, fatal: RuntimeFatal.resolvedPathHasNoExtendedForm, ids: ids)
+
+	emitRawFree(module, block: resolved, ptr: wide, ids: ids)
+	emitBranchCarrying(module, from: resolved, to: join, values: argsOf(full))
+
+	emitBranchCarrying(module, from: direct, to: join, values: argsOf(wide))
+
+	return text
+end 'emitWin32Path'
 
 export function emitTextToManaged(module StdModule, func IrFunction, cur IrBlock, cstr ValueId, record ValueId, encoding HostTextEncoding, ids ValueMinter) returns IrBlock
 	if encoding == HostTextEncoding.utf8 'narrow'

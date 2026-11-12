@@ -10078,7 +10078,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 		let dropPath = module.addBlock(func, label: b"streamdrop", heat: BlockHeat.normal)
 		let failedPath = emitLoadField(module, block: streamFail, record: childScratch, offset: SubpChildFailedPathOff, ids: ids)
 		emitBranchOnCompare(module, block: streamFail, value: failedPath, pred: StdCmpPred.ne, against: 0, whenTrue: dropPath, whenFalse: spawnFail, ids: ids)
-		emitSlabFree(module, block: dropPath, ptr: failedPath, kind: SlabBufferKind.hostText, ids: ids)
+		emitRawFree(module, block: dropPath, ptr: failedPath, ids: ids)
 		module.setTerminator(dropPath, op: StdOp.branch(spawnFail.id))
 	end 'wideRedirect' else 'narrowRedirect'
 		module.setTerminator(streamFail, op: StdOp.branch(spawnFail.id))
@@ -10278,12 +10278,13 @@ function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids Value
 	let path = ids.mint()
 	openArm.blockArgs.push(IrBlockArg.create(path, argType: StdType.i64))
 	let opened = ids.mint()
-	let hostPath = emitHostCString(module, block: openArm, cstr: path, encoding: module.hostText, ids: ids)
+	let hostPath = emitHostPath(module, func: func, cur: openArm, cstr: path, encoding: module.hostText, ids: ids)
+	let opening = hostPath.block
 
 	if forWrite 'writeEnd'
-		module.appendOp(openArm, op: StdOp.osFileOpenWrite(opened, pathPtrId: hostPath))
+		module.appendOp(opening, op: StdOp.osFileOpenWrite(opened, pathPtrId: hostPath.text))
 	end 'writeEnd' else 'readEnd'
-		module.appendOp(openArm, op: StdOp.osFileOpenRead(opened, pathPtrId: hostPath))
+		module.appendOp(opening, op: StdOp.osFileOpenRead(opened, pathPtrId: hostPath.text))
 	end 'readEnd'
 
 	// ⚠⚠ **THE OPEN IS CHECKED, BECAUSE AN UNCHECKED FAILED OPEN IS A SILENT SUCCESS.** `CreateFileW`
@@ -10293,19 +10294,19 @@ function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids Value
 	// `OutputDestination.file` are public corpus surface, so `Configuration` alone reaches it. Failing HERE
 	// also means the reason a caller reads is `CreateFileW`'s — "the
 	// file is not there" — rather than whatever `CreateProcessW` would have said about it afterwards.
-	let openFailed = emitCompareWithConstant(module, block: openArm, value: opened, pred: StdCmpPred.eq, against: -1, ids: ids)
+	let openFailed = emitCompareWithConstant(module, block: opening, value: opened, pred: StdCmpPred.eq, against: -1, ids: ids)
 
 	if not hostTextIsWide(module) 'narrowOpen'
-		module.setTerminator(openArm, op: StdOp.condBranch(openFailed, thenBlockId: whenFailed.id, elseBlockId: openOk.id))
+		module.setTerminator(opening, op: StdOp.condBranch(openFailed, thenBlockId: whenFailed.id, elseBlockId: openOk.id))
 	end 'narrowOpen' else 'wideOpen'
 		let keepPath = module.addBlock(func, label: b"swidekeep", heat: BlockHeat.normal)
 		let dropPath = module.addBlock(func, label: b"swidedrop", heat: BlockHeat.normal)
-		module.setTerminator(openArm, op: StdOp.condBranch(openFailed, thenBlockId: keepPath.id, elseBlockId: dropPath.id))
+		module.setTerminator(opening, op: StdOp.condBranch(openFailed, thenBlockId: keepPath.id, elseBlockId: dropPath.id))
 
-		emitStoreField(module, block: keepPath, record: childScratch, offset: SubpChildFailedPathOff, value: hostPath)
+		emitStoreField(module, block: keepPath, record: childScratch, offset: SubpChildFailedPathOff, value: hostPath.text)
 		module.setTerminator(keepPath, op: StdOp.branch(whenFailed.id))
 
-		emitSlabFree(module, block: dropPath, ptr: hostPath, kind: SlabBufferKind.hostText, ids: ids)
+		emitRawFree(module, block: dropPath, ptr: hostPath.text, ids: ids)
 		module.setTerminator(dropPath, op: StdOp.branch(openOk.id))
 	end 'wideOpen'
 

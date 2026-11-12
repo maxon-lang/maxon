@@ -8,7 +8,7 @@ sidebar:
 ## File
 
 `File` reads, writes, renames, deletes and inspects files. Every method is static and takes a
-[FilePath](#filepath).
+[FilePath](#filepath). On Windows a path of any length works, past the legacy 260-unit limit included.
 
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
@@ -99,7 +99,11 @@ Output: `hello 5 false`, `false true`, `no such file`.
 elsewhere) and accepts `file://` URLs, which are converted to paths with their percent escapes decoded
 (`file:///tmp/a%20b` is `/tmp/a b`). It implements `Equatable`, `Hashable`,
 `Stringable` and `InitableFromStringLiteral`. Equality and hashing follow the host filesystem:
-case-insensitive on Windows, byte-exact elsewhere.
+case-insensitive on Windows, byte-exact elsewhere. A path of any length is a valid `FilePath`, and on
+Windows every `File` and `Directory` method takes it: the runtime resolves a relative path, or one of 248
+units or more, with the operating system and hands it the extended form (`\\?\`, or `\\?\UNC\` for a
+network path), so `.`, `..`, `/` and repeated separators name the same entry at every length. A path
+already spelled `\\?\` or `\\.\` is passed as written.
 
 ### Construction
 
@@ -182,6 +186,8 @@ end 'main'
 Output: `main.maxon main .maxon src`, `true true false true`, `main.txt`.
 
 ## Directory
+
+Every method takes a [FilePath](#filepath) of any length on Windows, as `File` does.
 
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|

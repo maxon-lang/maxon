@@ -4023,3 +4023,60 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: subprocess-a-redirect-file-path-past-the-legacy-windows-limit-is-opened -->
+<!-- unsupported-targets: wasm32-wasi -->
+A redirect file is opened by the parent before the child starts, and its path is held to the same rule as every other
+path: a layout past the legacy Windows limit opens. The child is this case's own executable; the parent redirects its
+standard output into a file at the end of a path past 260 units and reads it back through the same path.
+```maxon
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'childMode'
+		print("child ran\n")
+		return 0
+	end 'childMode'
+
+	let rootName = "subprocess-long-redirect"
+	let root = Directory.currentPath().join(rootName)
+	var deep = root
+
+	for i in 0 upto 12 'segments'
+		deep = deep.join("a-fairly-long-directory-segment-number-{i}")
+	end 'segments'
+
+	print("past the limit {deep.toString().byteLength() > 260}\n")
+	print("create {Directory.create(deep)}\n")
+
+	let target = deep.join("out.txt")
+	let exe = Executable.path(try Process.executablePath() otherwise return 3)
+	let argv = StringArray.create(0)
+	argv.push("child")
+
+	let config = Configuration.create(exe)
+	config.arguments = argv
+	config.standardOutput = OutputDestination.file(target)
+
+	if let result = try config.run() 'ran'
+		print("exit {result.exitCode()}\n")
+	end 'ran' else (e) 'refused'
+		print("refused {e.name}\n")
+		return 4
+	end 'refused'
+
+	let text = try File.readText(target) otherwise return 5
+	print("redirected {text}")
+	print("unremoved {Directory.removeTree(root).count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+past the limit true
+create true
+exit 0
+redirected child ran
+unremoved 0
+```

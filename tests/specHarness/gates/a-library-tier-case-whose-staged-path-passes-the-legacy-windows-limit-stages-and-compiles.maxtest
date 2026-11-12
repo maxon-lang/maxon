@@ -1,0 +1,20 @@
+let LongPathSpecName = "a-spec-whose-name-is-long-enough-that-the-private-source-tiers-of-its-cases-pass-the-legacy-windows-path-limit"
+let LongPathCaseName = "a-case-whose-name-is-long-enough-that-its-staged-copy-of-the-standard-library-has-files-past-two-hundred-and-sixty-characters"
+let LegacyWindowsPathLimit = 260
+
+test 'a library-tier case whose staged tier path passes the legacy Windows limit is staged and compiled'
+	let staged = stagedGateFixture()
+	let broken = StringArray.create(0)
+	let nameUnits = LongPathSpecName.byteLength() + LongPathCaseName.byteLength()
+
+	if nameUnits + staged.toString().byteLength() <= LegacyWindowsPathLimit 'notLongEnough'
+		broken.push("the gate's names and its staged directory total {nameUnits + staged.toString().byteLength()} units, so no staged file passes the {LegacyWindowsPathLimit}-unit limit and the gate proves nothing")
+	end 'notLongEnough'
+
+	let said = everythingSaid(runSpecTest(staged, includeNetwork: false))
+
+	discardStagedDir(staged)
+
+	collectNotPassed(said, specName: LongPathSpecName, testNames: [LongPathCaseName], broken: broken)
+	requireNothingBroken(broken, headline: "a library-tier case whose staged path passes the legacy Windows limit stages and compiles")
+end 'a library-tier case whose staged tier path passes the legacy Windows limit is staged and compiled'

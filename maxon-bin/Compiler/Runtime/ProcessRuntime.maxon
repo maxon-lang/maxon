@@ -38,7 +38,7 @@
 // measured) and answers a path that "may be a symbolic link and not the real file"; the third is a
 // symlink that must be `readlink`'d and is not NUL-terminated. The Std tier is target-neutral, so
 // each backend translates its own convention into `osExecutablePath`'s and the one retry loop,
-// `ManagedDirectoryRuntime.emitGrowingPathFill`, serves all three. wasm is refused for a stronger
+// `PathFillRuntime.emitGrowingPathFill`, serves all three. wasm is refused for a stronger
 // reason: WASI has no executable-path primitive at all. A component has no image path to report,
 // and `args_get[0]` is whatever the host chose to pass rather than a resolved path — so a lowering
 // there could only be a plausible wrong answer, which is worse than a refusal because `File.exists`
@@ -113,7 +113,7 @@ function buildProcessFill(module StdModule, name ByteArray, fill PathFill)
 	let unavailable = module.addBlock(func, label: b"pxnone", heat: BlockHeat.normal)
 	let copyOut = module.addBlock(func, label: b"pxcopy", heat: BlockHeat.normal)
 
-	let (buffer, _) = emitGrowingPathFill(module, cur: entry, attempt: attempt, fitTest: fitTest, grow: grow, fill: fill, whenRefused: unavailable, whenFits: copyOut, ids: ids)
+	let (buffer, _, _) = emitGrowingPathFill(module, cur: entry, attempt: attempt, fitTest: fitTest, grow: grow, fill: fill, whenRefused: unavailable, whenFits: copyOut, ids: ids)
 
 	// Unavailable: make the buffer the empty string and take the ordinary copy-out.
 	let encoding = pathFillEncoding(module, fill: fill)
