@@ -6551,13 +6551,29 @@ function layoutReceivingField(declared StructLayout, repeatsAField bool) returns
 	return StructLayout.create(declared.name, visibility: declared.visibility, declFilePath: declared.declFilePath)
 end 'layoutReceivingField'
 
-function baseNotGenericMessage(base ByteArray) returns String
+module function baseNotGenericMessage(base ByteArray) returns String
 	return "Type '{sourceSpelledAliasText(base)}' has no associated types"
 end 'baseNotGenericMessage'
 
-function genericArgumentCountCode(layout StructLayout) returns ErrorCode
+module function genericArgumentCountCode(layout StructLayout) returns ErrorCode
 	return ErrorCode.genericBaseNotGeneric if layout.typeParamCount() == 0 else ErrorCode.genericArityMismatch
 end 'genericArgumentCountCode'
+
+module function genericArityMismatchMessage(typeName ByteArray, expected String, supplied FieldIndex) returns String
+	return "generic type '{String.from(typeName)}' expects {expected} type argument(s), but {supplied} were supplied"
+end 'genericArityMismatchMessage'
+
+function genericArityPhrase(least FieldIndex, most FieldIndex) returns String
+	return "{most}" if least == most else "{least} or {most}"
+end 'genericArityPhrase'
+
+module function genericArgumentCountMessage(layout StructLayout, supplied FieldIndex) returns String
+	if layout.typeParamCount() == 0 'notGeneric'
+		return baseNotGenericMessage(layout.name)
+	end 'notGeneric'
+
+	return genericArityMismatchMessage(layout.name, expected: genericArityPhrase(layoutLeastTypeArguments(layout), most: layout.typeParamCount()), supplied: supplied)
+end 'genericArgumentCountMessage'
 
 function duplicateFieldMessage(member ByteArray, typeName ByteArray) returns String
 	return "Duplicate field '{String.from(member)}' in type '{String.from(typeName)}'"
@@ -19885,6 +19901,10 @@ export type Parser
 	// per declaration, so a real parse simply fills it and lets the next declaration drop it.
 	var interfaceAliasScratch as GenericAliasEntryArray
 
+	let readGenericWithSites as GenericWithSiteArray
+
+	var collectsWithSites as bool
+
 	// ⭐ **ARE THE ENCLOSING TYPE'S NESTED TYPEALIASES IN SCOPE THROUGH THE WHOLE-PROGRAM INDEX RATHER THAN
 	// THROUGH THE SET ABOVE?** True in exactly one place — inside a captured DEFAULT expression being
 	// drained (`restoreDeclaringTypeScope`), where the body walk that built that set finished long ago and
@@ -20334,6 +20354,8 @@ export type Parser
 			scannedFunctionAliases: noScannedAliasNames,
 			bodyAliasesScanned: false,
 			interfaceAliasScratch: anchors.interfaceAliases,
+			readGenericWithSites: GenericWithSiteArray.create(0),
+			collectsWithSites: false,
 			innerAliasesFromIndex: false,
 			descriptorScanSites: DescriptorScanSiteArray.create(0),
 			siblingReceivers: noSiblingReceivers,
@@ -20580,12 +20602,6 @@ export type Parser
 			salvaged.abandonedRegions.push(region)
 		end 'eachRegion'
 
-		for diagnostic in self.artifact.diagnostics 'eachDiagnostic'
-			if isGenericArgumentCountCode(diagnostic.code) 'aRefusedArgumentCount'
-				salvaged.diagnostics.push(diagnostic.clone())
-			end 'aRefusedArgumentCount'
-		end 'eachDiagnostic'
-
 		salvaged.adoptHiddenTypeNames(self.artifact)
 		salvaged.refusal = refusal
 		return salvaged
@@ -20704,6 +20720,7 @@ export type Parser
 	// recognize a declaration the parser accepts (see `CalleeReturn.undeclared`). It restores the
 	// cursor, so it is invisible to everything downstream.
 	export function foldDeclaredSignaturesInto(index ProgramSignatures, producers ProducerMask)
+		self.collectsWithSites = true
 		let entries = FuncReturnTypeEntryArray.create(0)
 
 		// ⭐ Every `test` this file declares, for the ROSTER rather than for the type system — see
@@ -21033,6 +21050,7 @@ export type Parser
 
 		index.foldFile(entries, aliases: aliases, implementsClauses: self.sweptImplementsClauses, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNames, testDecls: testDecls, moduleDirectory: index.moduleDirectoryOf(self.job.path), filePath: self.job.path, fileStream: DeclTokenStream.create(PreparedTokens.create(self.tokens, respelledStarts: self.respelledStarts), job: self.job), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.job.isStdlibSource)
 		self.sweptImplementsClauses = AliasImplementsClauseArray.create(0)
+		self.drainGenericWithSitesInto(index)
 
 		// ⭐⭐ **WHAT THIS FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — NOTED, NEVER PERFORMED.**
 		// Every one of these instances is one the COMPILER mints because the source names no type for it, so
@@ -25814,9 +25832,11 @@ export type Parser
 	// refuses the program. What such an interface costs meanwhile is one unresolvable `with`-arity default and
 	// one "not declared" reject at a dispatch — both on a build that is already failing.
 	export function foldInterfaceDeclarationInto(index ProgramSignatures, tokenPos ElementIndex, visibility Visibility)
+		self.collectsWithSites = true
 		self.pos = tokenPos
 		let iface = try self.readInterfaceDeclaration(false) otherwise 'malformed'
 			self.clearPendingRequirementParam()
+			self.drainGenericWithSitesInto(index)
 			return
 		end 'malformed'
 
@@ -25832,6 +25852,7 @@ export type Parser
 		// own interner is handed over with them: their right-hand sides carry `MaxonType`s minted against
 		// it, which only the index can remap into its own (`recordInterfaceAliases`).
 		index.recordInterfaceAliases(self.interfaceAliasScratch, interfaceName: interfaceName, fileTypeNames: self.artifact.typeNames)
+		self.drainGenericWithSitesInto(index)
 	end 'foldInterfaceDeclarationInto'
 
 	// ⭐⭐ **RE-READ THE `implements` CLAUSE OF THE DECLARATION AT `site.tokenPos`, NOW THAT THE ARITY THAT
@@ -26086,9 +26107,14 @@ export type Parser
 		self.scanBodyNestedAliases()
 		let functionAliasesOfTheBody = self.scannedFunctionAliases
 
+		// Either read alone loses arity errors: the conformer loop's publish gates skip aliases and it
+		// may run zero times, and this read fails an alias that resolves only in a conformer (`Self`).
+		self.noteExtensionBodyGenericSpellings(header, bodyStart: bodyStart, members: self.scannedPerInstanceAliases.declared(), functionAliases: functionAliasesOfTheBody, index: index)
+
 		// The whole `where` clause, rendered ONCE per declaration rather than per withheld method: it is a
 		// property of the extension, and every skip this fold files quotes the same sentence.
 		let clause = renderWhereConstraints(header.constraints, paramNames: extensionTargetParamNames(header.target))
+		self.collectsWithSites = true
 
 		for conformer in extensionTargetConformers(header.target) 'eachConformer'
 			self.pos = bodyStart
@@ -26267,6 +26293,7 @@ export type Parser
 
 		self.clearBodyAliasScan()
 		self.publishPendingBareAliases(functionAliasOut)
+		self.drainGenericWithSitesInto(index)
 
 		// Folded through `ProgramSignatures.foldFile` — the SAME door a file's own declarations go through, so
 		// there is one place that decides what a scanned signature means. Everything an extension does not
@@ -26274,6 +26301,58 @@ export type Parser
 		// per-file sweep passes its own.
 		index.foldFile(entries, aliases: RangedTypeAliasArray.create(0), implementsClauses: AliasImplementsClauseArray.create(0), functionAliases: functionAliasOut, structs: StructLayoutArray.create(0), enums: EnumLayoutArray.create(0), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(0), extensionSites: ExtensionDeclSiteArray.create(0), conformanceSites: ConformanceClauseDeclSiteArray.create(0), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(0), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNameOut, testDecls: DiscoveredTestArray.create(0), moduleDirectory: index.moduleDirectoryOf(self.job.path), filePath: self.job.path, fileStream: DeclTokenStream.create(PreparedTokens.create(self.tokens, respelledStarts: self.respelledStarts), job: self.job), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.job.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
+
+	function noteExtensionBodyGenericSpellings(header ExtensionHeader, bodyStart ElementIndex, members NameRoster, functionAliases ScannedAliasNames, index ProgramSignatures)
+		self.enterTypeScope(header.nameTok.value, isEnum: false)
+		self.scannedFunctionAliases = functionAliases
+
+		let associated = extensionTargetParamNames(header.target)
+
+		if associated.count() != 0 'hasAssociatedTypes'
+			self.enclosingTypeParams = associated
+		end 'hasAssociatedTypes'
+
+		for member in members 'eachMember'
+			self.recordInnerAliasName(member)
+		end 'eachMember'
+
+		self.pos = bodyStart
+		self.collectsWithSites = true
+		var depth = 1 as BlockDepth
+
+		while not self.isEof() 'walk'
+			if self.functionDeclarationAt(self.pos) 'opensAMethod'
+				depth = depth + 1
+				self.advance()
+				continue
+			end 'opensAMethod'
+
+			if depth == 1 and self.atTypeAliasDeclaration() 'aNestedAlias'
+				try self.readExtensionNestedAliasForSpellings() otherwise 'unreadable'
+					self.advance()
+					continue
+				end 'unreadable'
+
+				continue
+			end 'aNestedAlias'
+
+			let closes = self.closesBlockAt(self.pos)
+			depth = self.blockDepthAfterCursor(depth)
+			self.advance()
+
+			if closes and depth == 0 'closesTheDeclaration'
+				break
+			end 'closesTheDeclaration'
+		end 'walk'
+
+		self.closeTypeParamScope()
+		self.drainGenericWithSitesInto(index)
+	end 'noteExtensionBodyGenericSpellings'
+
+	function readExtensionNestedAliasForSpellings() throws SourceParseError
+		let visibility = try self.consumeOptionalVisibility()
+		_ = try self.readNestedTypeAlias(visibility, recordFunctionSignature: false, tupleOwner: TupleAliasOwner.unpublished)
+	end 'readExtensionNestedAliasForSpellings'
 
 	function consumeExtensionTargetName() returns Token throws SourceParseError
 		if self.dottedChainLengthAt(self.pos) > 0 'aQualifiedName'
@@ -27423,8 +27502,8 @@ export type Parser
 	// `requireAssignable` — but the DECLARED type may be a ranged-alias NAME, and a name reads as an
 	// INTEGER (`tagIsIntegral`) until the alias registry can resolve it.
 	//
-	// ⚠ **`allFilesFolded` IS THE GATE**, the same one `checkGenericArgType` and `checkGenericInstance` sit
-	// behind and for the identical reason: during the sweep this index is still being BUILT
+	// ⚠ **`allFilesFolded` IS THE GATE**, the same one `checkGenericArgType` sits behind and for the
+	// identical reason: during the sweep this index is still being BUILT
 	// (`Queries.queryProgramSignatures` hands the sweeper the index it is filling), so an alias that is
 	// genuinely a `float(low to high)` reads as undeclared and the verdict is not merely discarded, it is
 	// systematically WRONG — `as Weight = 2.5` would be refused as a lossy float→int conversion, which is
@@ -29269,7 +29348,7 @@ export type Parser
 	// keeps the two from drifting.
 	//
 	// ⚠ **ONLY A `type` BODY REACHES THIS — an `extension` body is deliberately left publishing the
-	// qualified key alone.** `foldExtensionDeclarationInto` reads a body once per CONFORMER
+	// qualified key alone.** `foldExtensionDeclarationInto` publishes a body once per CONFORMER
 	// (`extensionTargetConformers`), so a bare key filed from there is ONE name for N declarations that are
 	// allowed to disagree: `stdlib/Interfaces.maxon`'s `extension Iterable` would file `ElementArray` as
 	// `Array with Character` for `String` and `Array with Byte` for `ByteView`, from one file, which no
@@ -29354,24 +29433,7 @@ export type Parser
 
 	// ⭐ **A GENERIC-INSTANCE TYPEALIAS** — `typealias IntBox = Box with Integer`. The cursor
 	// sits on the base identifier. It RECORDS the instance into `genericOut` (which `foldFile` interns
-	// into the whole-program `GenericInstanceRegistry`) and THEN checks the instantiation.
-	//
-	// ⚠ **THE CHECK RECORDS A DIAGNOSTIC, IT DOES NOT THROW, AND THAT IS WHAT MAKES THE SWEEP TOLERANT
-	// FOR FREE.** A malformed instantiation (a non-generic base, wrong arity, a managed argument) is a
-	// WHOLE-PROGRAM SEMANTIC error, not a syntax error — it does not abort the file's parse, it gates the
-	// build like `SemanticCheck`'s errors do. This is why the diagnostic path, not a throw, is the correct
-	// tool: a throw would need the sweep to swallow it, and this needs no swallowing at all.
-	//
-	// ⭐ **AND IT DOES NOT RUN AT ALL DURING THE SWEEP — `signatures.allFilesFolded` IS THE GATE, read by
-	// both this check and `checkGenericArgType`.** The verdict is a function of the whole-program index,
-	// which is COMPLETE in the real parse and still BUILDING during the sweep, so the sweep's answer is a
-	// fact about how far the sweep has got and not about the program. SKIPPING it is invisible because the
-	// SWEEP's artifact is never merged (`queryProgramSignatures` uses a throwaway `Parser`) and the real parse
-	// re-reads every one of these declarations with the index complete, so every diagnostic a program earns is
-	// still recorded exactly once, at the same position, by the same check. Computing it anyway is not free:
-	// building a diagnostic is a positioned `Diagnostic` plus an interpolated message, ~6 allocations per
-	// generic type ARGUMENT and again per malformed-looking INSTANCE, linear in the program's generic
-	// declarations.
+	// into the whole-program `GenericInstanceRegistry`).
 	//
 	// ⚠ **IT RETURNS THE ENTRY RATHER THAN PUSHING IT** (spec-port `lazy-static`): the compiler-owned-name
 	// rule needs the alias's MEANING — its base and its arguments — and must be able to refuse the
@@ -29402,7 +29464,7 @@ export type Parser
 		let argsStart = self.pos
 		let (argCount, qualified) = try self.parseGenericArgNodes(args, baseName: baseName, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, slot: self.signatures.genericArgSlotOf(baseName))
 		let selfRef = self.selfNamingArgToken(aliasTok, argsStart: argsStart)
-		self.checkGenericInstance(base, argCount: argCount)
+		self.noteGenericSpelling(base, baseName: baseName, argCount: argCount)
 
 		return GenericAliasEntry.create(aliasTok.value, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, baseIsBuffer: baseIsBuffer, anchor: GenericAliasAnchor.declaredAt(aliasTok.line, nameColumn: aliasTok.column, selfRefLine: selfRef.line, selfRefColumn: selfRef.column), filePath: self.job.path, visibility: visibility, shape: qualified if qualified.qualifiesArgs() else shape)
 	end 'readGenericInstanceAlias'
@@ -29484,12 +29546,11 @@ export type Parser
 	// `InstanceShape.unsized` for every base that is not sized, which is every base but `FixedArray`, and
 	// for those the cursor does not move.
 	//
-	// ⚠ **A MISSING OR UNUSABLE COUNT IS RECORDED, NOT THROWN** — `checkGenericInstance`'s discipline, for its
-	// reason: this is a whole-program semantic verdict about a declaration, not a token the grammar cannot
-	// consume, so it must not abort the file's parse. `FixedArray with Int` goes on to parse `Int` as the element
+	// ⚠ **A MISSING OR UNUSABLE COUNT IS RECORDED, NOT THROWN**: this is a whole-program semantic verdict
+	// about a declaration, not a token the grammar cannot consume, so it must not abort the file's parse. `FixedArray with Int` goes on to parse `Int` as the element
 	// and interns an instance nothing can reach, because a recorded diagnostic gates the build.
 	//
-	// ⚠ **AND IT IS SILENT DURING THE SWEEP, exactly as `checkGenericInstance` is.** The sweep re-reads none
+	// ⚠ **AND IT IS SILENT DURING THE SWEEP.** The sweep re-reads none
 	// of its diagnostics (`queryProgramSignatures` throws its artifact away) and the real parse re-reads every
 	// one of these declarations, so recording here would build a positioned `Diagnostic` plus an interpolated
 	// message per sized alias for an answer nothing reads.
@@ -29646,13 +29707,6 @@ export type Parser
 		end 'standing'
 	end 'recordArtifactDiagnostic'
 
-	// The argument list of a `Base with Args` — a single arg (`Box with Integer`) or a
-	// parenthesized comma list (`Pair with (Integer, Bool)`). Each arg is an ordinary type reference,
-	// so `Box with Integer` binds `[Integer]` and `Pair with (A, B)` binds `[A, B]`.
-	// Parse a `Base with Args` argument LIST — `Box with Integer` (a single arg) or `Pair with (A, B)` (a
-	// parenthesized comma list) — appending its pre-order nodes to `nodes` and returning the number of
-	// TOP-LEVEL arguments (the arity `checkGenericInstance` validates).
-	//
 	// ⭐ **`inlineElement` SAYS THE ARGUMENT NAMES AN ELEMENT STORED INLINE IN A BUFFER, WHICH IS THE ONE
 	// THING THAT DECIDES WHETHER A FLOAT MAY BE IT** — see `checkGenericArgType`'s rule 1. It is a fact about
 	// the BASE, so it is passed down from the base that was read rather than re-derived per argument, and a
@@ -30009,11 +30063,10 @@ export type Parser
 	// ⭐ **ONE generic-instance argument** — a LEAF type reference (`Integer`, `Point`,
 	// `String`), or a NESTED instance `Inner with (…)`, since managed instances are owned and dropped. A
 	// nested instance's gid is not known at parse time (interning lives in `recordGenericAlias`), so it is
-	// FLATTENED pre-order: an `instanceHeader(base, k)` node followed by its `k` args' nodes. It is VALIDATED
-	// here, at its own `with`, so a malformed nested base (`Box with (Plain with Integer)`, wrong arity) is
-	// diagnosed with the tolerant sweep's index-complete answer, exactly as the outer instance is
-	// (`checkGenericInstance` records, never throws). The header is pushed BEFORE its sub-args (parsed into a
-	// temp so the header's count is known), preserving pre-order.
+	// FLATTENED pre-order: an `instanceHeader(base, k)` node followed by its `k` args' nodes. Its own `with`
+	// is noted here as the outer one is, so `checkGenericSpellings` judges a malformed nested base
+	// (`Box with (Plain with Integer)`, wrong arity) too. The header is pushed BEFORE its sub-args (parsed
+	// into a temp so the header's count is known), preserving pre-order.
 	function parseGenericArgNode(nodes GenericArgNodeArray, baseName ByteArray, inlineElement bool, slot GenericArgSlot, position FieldIndex) returns GenericArgQualifier throws SourceParseError
 		let qualifierTok = self.current()
 		let written = self.paramCapabilityAt(self.pos)
@@ -30052,7 +30105,7 @@ export type Parser
 			let subBaseName = self.canonicalGenericBaseNameInThisFile(base.denoted)
 			let subNodes = GenericArgNodeArray.create(0)
 			let (subCount, subQualified) = try self.parseGenericArgNodes(subNodes, baseName: subBaseName, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, slot: self.signatures.genericArgSlotOf(subBaseName))
-			self.checkGenericInstance(base, argCount: subCount)
+			self.noteGenericSpelling(base, baseName: subBaseName, argCount: subCount)
 			nodes.push(GenericArgNode.instanceHeader(subBaseName, argCount: subCount, shape: subQualified if subQualified.qualifiesArgs() else subSize))
 			nodes.append(subNodes)
 			return qualifier
@@ -30127,9 +30180,9 @@ export type Parser
 	// **2. It may not be a BARE NUMERIC KEYWORD (E2061).** A bare `int` is minted CONCRETE by
 	// `parseTypeReference`, so it too is answered before the `named` cascade it never enters.
 	//
-	// **3. If it NAMES something, that name must denote a type (E3011).** `checkGenericInstance` validated
-	// the BASE and the ARITY and nothing else, so `typealias BadArray = Array with UnknownType` COMPILED,
-	// RAN and returned an answer — a silent acceptance of a program naming a type the program does not have,
+	// **3. If it NAMES something, that name must denote a type (E3011).** `checkGenericSpellings` judges
+	// the BASE and the ARITY and nothing else, so without this rule `typealias BadArray = Array with
+	// UnknownType` compiles, runs and returns an answer — a silent acceptance of a program naming a type the program does not have,
 	// which is the one class of defect a suite cannot catch by being green. The runnable oracle rejects it,
 	// and so does this.
 	//
@@ -30142,10 +30195,9 @@ export type Parser
 	// refused. Which is precisely why rules 1 and 2 cannot be expressed as extra arms of that cascade — the
 	// tags they reject are ones the cascade is never reached for.
 	//
-	// ⚠ **RECORDED, NOT THROWN, AND NOT COMPUTED AT ALL UNTIL THE INDEX IS WHOLE-PROGRAM** — the same two
-	// rules `checkGenericInstance` states beside it, for the same reason and off the same gate
-	// (`signatures.allFilesFolded`); its header carries the argument. This check is the sharper case of it:
-	// a generic-instance or function alias declared later in the program — or anywhere in this file, whose
+	// ⚠ **RECORDED, NOT THROWN, AND NOT COMPUTED AT ALL UNTIL THE INDEX IS WHOLE-PROGRAM**
+	// (`signatures.allFilesFolded`). A throw would abort the file's parse over a semantic verdict. And a
+	// generic-instance or function alias declared later in the program — or anywhere in this file, whose
 	// own declarations fold only after its whole token walk — legitimately reads "undeclared" during the
 	// sweep, so the sweep's verdict is not merely discarded, it is systematically wrong.
 	//
@@ -30270,150 +30322,43 @@ export type Parser
 		return "Cannot use '{spelling}' as a type argument: a float type argument is not supported yet. A type parameter is an opaque 8-byte general-purpose slot under the compiler's dictionary-passing, and a float value travels in a floating-point register, so it has no way through"
 	end 'floatTypeArgMessage'
 
-	// ⭐ **CHECK A `Base with Args` INSTANTIATION** — reads the whole-program index (complete in
-	// the real parse). Two rejections, in the order the reader most wants to hear them, each RECORDED as a
-	// diagnostic (not thrown — see `readGenericInstanceAlias`):
-	//   1. `Base` is not a generic type — E2055 "has no associated types";
-	//   2. wrong arity — `Pair with Integer` for a two-parameter `Pair` (E2056).
-	// No managed-argument rejection (E2057) is made: a generic instance owns and drops managed type arguments, so a
-	// String / managed-struct / nested-instance argument is legal. A nested instance validates itself at
-	// its own `with` (`parseGenericArgNode`), so this checks ONE level.
-	function checkGenericInstance(base GenericBaseName, argCount FieldIndex)
+	// Pushed above the `allFilesFolded` gate because only sweep folds drain this sink, and every fold exit
+	// drains it whether or not it publishes: a site skipped either way is an arity error never reported.
+	function noteGenericSpelling(base GenericBaseName, baseName ByteArray, argCount FieldIndex)
+		if self.collectsWithSites 'aSweepReader'
+			self.readGenericWithSites.push(GenericWithSite.create(self.job.path, written: base.written, baseName: baseName, argCount: argCount, line: base.anchor.line, column: base.anchor.column))
+		end 'aSweepReader'
+
 		if not self.signatures.allFilesFolded 'indexStillBuilding'
 			return
 		end 'indexStillBuilding'
 
-		// ⭐ **A SYNTHESIZED BUILTIN GENERIC HAS NO DECLARATION TO READ AN ARITY OFF** — `Array with Element`,
-		// `Set with Element` and `Map with (Key, Value)` are all built by the compiler, so `structOf` finds
-		// nothing for any of them and the arity is validated against the index's own table instead. Their
-		// KEY/ELEMENT-type restrictions are not checked here: those need the RESOLVED argument type and are
-		// enforced where the container is materialized — `requireListElementType` for a chain's element, and a
-		// declared container's own `where` clause for a hash table's key (`checkWhereConstraints`).
-		//
-		// ⚠ One arm for all three, reading `builtinGenericTypeParamCount`: a per-builtin arm spelling the
-		// predicate and the count together is exactly what another builtin generic would leave half-updated.
-		// ⭐ **ASKED ABOUT THE CANONICAL BASE AND BLAMED ON THE WRITTEN ONE** — `__ManagedMemory with T`
-		// is an `Array` instance (`canonicalGenericBaseName`), so it must be checked against `Array`'s arity;
-		// the sentence still quotes the spelling the author actually wrote, because that is the word to change.
-		let baseName = self.canonicalGenericBaseNameInThisFile(base.denoted)
-
-		if self.signatures.isBuiltinGenericBaseName(baseName) 'builtinGeneric'
-			let expected = self.signatures.builtinGenericTypeParamCount(baseName)
-
-			if argCount != expected 'wrongArity'
-				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(base.written)}' expects {expected} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(base.anchor))
-			end 'wrongArity'
-
+		if self.signatures.isBuiltinGenericBaseName(baseName) or containsQualifier(base.written) 'noAliasCanBeMeant'
 			return
-		end 'builtinGeneric'
+		end 'noAliasCanBeMeant'
 
-		if not containsQualifier(base.written) and self.signatures.writtenNameMeansAnAliasHere(baseName, readerFilePath: self.job.path) 'anAliasIsMeantNotAGenericType'
+		if self.signatures.writtenNameMeansAnAliasHere(baseName, readerFilePath: self.job.path) 'anAliasIsMeantNotAGenericType'
 			self.recordTypeNameUse(base.written)
-			self.recordBaseNotGeneric(base, named: base.written)
-			return
 		end 'anAliasIsMeantNotAGenericType'
+	end 'noteGenericSpelling'
 
-		// ⭐⭐ **AN INTERFACE'S `uses` NAMES ARE ASSOCIATED TYPES, SO `Iterator with Element` IS A BASE THIS
-		// CHECK MUST ANSWER FOR — AND IT ASKED ONLY `structOf`, WHICH AN INTERFACE IS NEVER IN.** The verdict
-		// that followed was `recordBaseNotGeneric`'s "has no associated types", about the one kind of
-		// declaration whose type parameters ARE called associated types — the message contradicting itself at
-		// the exact name it was printed for.
-		//
-		// MEASURED on `stdlib/Array.maxon`, which cannot be listed without it: `typealias ElementIterator =
-		// Iterator with Element` and `typealias ElementIterable = Iterable with (Element, ElementIterator)`
-		// were **E2055** at `:121` and `:122`.
-		//
-		// It goes through `lookupInterface` rather than the raw map for `parseTypeReference`'s stated reason —
-		// that is the ONE lookup rule, and it is what puts the SYNTHESIZED protocols on the same footing as
-		// the user-declared ones. The arity is the interface's OWN `uses` list; an inherited `extends` parent
-		// contributes none, because a parent's associated types are bound by the child's own declaration.
-		match lookupInterface(self.signatures.interfaceMap(), name: baseName) 'interfaceBase'
-			found(iface) then self.checkInterfaceGenericArity(iface, base: base, argCount: argCount)
-			notFound then self.checkStructGenericInstance(baseName, base: base, argCount: argCount)
-		end 'interfaceBase'
-	end 'checkGenericInstance'
-
-	function declaredStructOfBase(baseName ByteArray, base GenericBaseName) returns DeclaredStruct
-		if containsQualifier(base.written) 'aQualifiedBaseNamesItsDeclaration'
-			return self.signatures.structInAnyFile(baseName)
-		end 'aQualifiedBaseNamesItsDeclaration'
-
-		return self.signatures.structFor(baseName, readerFilePath: self.job.path)
-	end 'declaredStructOfBase'
-
-	function checkStructGenericInstance(baseName ByteArray, base GenericBaseName, argCount FieldIndex)
-		match self.declaredStructOfBase(baseName, base: base) 'declaration'
-			undeclared then self.recordBaseNotGeneric(base, named: baseName)
-			declared(layout) then self.checkGenericInstanceAgainst(layout, base: base, argCount: argCount)
-		end 'declaration'
-	end 'checkStructGenericInstance'
-
-	// The interface half of `checkGenericInstance` — associated-types-at-all, then arity. It mirrors
-	// `checkGenericInstanceAgainst` rather than sharing it because the two read the count off different
-	// declarations (a `StructLayout`'s `uses` list against an `IrInterface`'s associated-type names) and
-	// there is no common handle to pass; both verdicts are the shared `recordBaseNotGeneric` /
-	// `genericArityMismatch` pair, which is where the sentences actually have to agree.
-	function checkInterfaceGenericArity(iface IrInterface, base GenericBaseName, argCount FieldIndex)
-		let expected = iface.associatedTypeNames.count()
-
-		if expected == 0 'notGeneric'
-			self.recordBaseNotGeneric(base, named: base.written)
-			return
-		end 'notGeneric'
-
-		if argCount != expected as FieldIndex 'wrongArity'
-			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(base.written)}' expects {expected} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(base.anchor))
-		end 'wrongArity'
-	end 'checkInterfaceGenericArity'
-
-	// The "has no associated types" verdict (E2055), from its ONE home. Reached by BOTH halves
-	// of the base check — a `Base` that is not a declared type at all (`structOf` undeclared) and a `Base`
-	// that is a declared type with an empty `uses` list (`typeParamCount() == 0`) — which are the same
-	// diagnostic. Bound here rather than spelled at each site so the two callers cannot drift the message.
-	function recordBaseNotGeneric(base GenericBaseName, named ByteArray)
-		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: baseNotGenericMessage(named), range: SourceRange.ofToken(base.anchor))
-	end 'recordBaseNotGeneric'
-
-	// The declared-base half of `checkGenericInstance` — base-is-generic, then arity. No per-argument managed
-	// rejection is made: a generic instance owns and drops its managed type arguments.
-	// ⭐ **A TRAILING TYPE ARGUMENT MAY BE OMITTED, AND FOR ONE BASE ITS OMISSION IS THE SPELLING OF A FACT**
-	//. `type Promise uses Element, ErrorType` is written with two parameters and
-	// `Promise with String` supplies one — that is not an under-application to be diagnosed, it is how the
-	// language says *"this thunk does not throw"*. The language has no syntax for an optional type
-	// parameter, so the rule cannot be read off the declaration: it is derived from the base NAME in
-	// `PromiseType.maxon`, which is the one place that has to learn a second such base if one ever appears.
-	function checkGenericInstanceAgainst(layout StructLayout, base GenericBaseName, argCount FieldIndex)
-		if layout.typeParamCount() == 0 or not layoutAdmitsTypeArgumentCount(layout, count: argCount) 'wrongArgumentCount'
-			self.recordArtifactDiagnostic(genericArgumentCountCode(layout), message: self.genericArgumentCountMessage(layout, supplied: argCount), range: SourceRange.ofToken(base.anchor))
-		end 'wrongArgumentCount'
-	end 'checkGenericInstanceAgainst'
-
-	// How E2056 spells the arity it wanted. A base with no optional parameters says one number, exactly as
-	// it always did — every existing pin on this message is over such a base — and only a base that admits a
-	// range says so.
-	function genericArityPhrase(least FieldIndex, most FieldIndex) returns String
-		return "{most}" if least == most else "{least} or {most}"
-	end 'genericArityPhrase'
-
-	function genericArgumentCountMessage(layout StructLayout, supplied FieldIndex) returns String
-		if layout.typeParamCount() == 0 'notGeneric'
-			return baseNotGenericMessage(layout.name)
-		end 'notGeneric'
-
-		return "generic type '{String.from(layout.name)}' expects {self.genericArityPhrase(layoutLeastTypeArguments(layout), most: layout.typeParamCount())} type argument(s), but {supplied} were supplied"
-	end 'genericArgumentCountMessage'
+	function drainGenericWithSitesInto(index ProgramSignatures)
+		index.recordGenericWithSites(self.readGenericWithSites)
+		self.readGenericWithSites.clear()
+		self.collectsWithSites = false
+	end 'drainGenericWithSitesInto'
 
 	function genericArgumentCountRefusal(layout StructLayout, supplied ElementIndex, baseTok Token) returns SourceParseError
-		return self.genericBaseRefusal(genericArgumentCountCode(layout), message: self.genericArgumentCountMessage(layout, supplied: supplied as FieldIndex), tok: baseTok)
+		return self.genericBaseRefusal(genericArgumentCountCode(layout), message: genericArgumentCountMessage(layout, supplied: supplied as FieldIndex), tok: baseTok)
 	end 'genericArgumentCountRefusal'
 
 	function undeclaredGenericBaseRefusal(typeName ByteArray, tok Token) returns SourceParseError
 		return self.genericBaseRefusal(ErrorCode.genericBaseNotGeneric, message: baseNotGenericMessage(typeName), tok: tok)
 	end 'undeclaredGenericBaseRefusal'
 
-	// The thrown twin of a recorded E2055 or E2056: `Queries.reportedArityMessages` drops it as a consequence
-	// only when its message equals the recorded one, so `message` must spell the base exactly as the
-	// recorded diagnostic does.
+	// The thrown twin of a reported E2055 or E2056: `Queries.reportedArityMessages` drops it as a consequence
+	// only when its message equals the reported one, so `message` must spell the base exactly as the
+	// reported diagnostic does.
 	function genericBaseRefusal(code ErrorCode, message String, tok Token) returns SourceParseError
 		return SourceParseError.genericArgumentCountRefused(code, explanation: message, line: tok.line, column: tok.column)
 	end 'genericBaseRefusal'
@@ -32021,7 +31966,8 @@ export type Parser
 	// visible in one spelling of it and invisible in the other.
 	//
 	// It reads a LEAF reference per argument rather than reaching for `parseGenericArgNodes`: that
-	// reader also VALIDATES what it reads (`checkGenericInstance` / `checkGenericArgType`), and a
+	// reader also VALIDATES what it reads (`checkGenericArgType`, and `checkGenericSpellings` over the
+	// `with` sites it notes), and a
 	// conformance argument is checked whole-program by `checkConformance` instead, which is the only
 	// place the interface it binds against is reachable.
 	//
@@ -32181,8 +32127,8 @@ export type Parser
 	// by `ConformanceUsesArity` rather than by the count-shaped default the unparenthesized arm takes, which
 	// is the whole reason the two arms do not share one number.
 	//
-	// ⚠ **IT RUNS ONLY ON THE FAR SIDE OF THE DECLARATION FOLD**, the same gate `checkGenericInstance`
-	// and `requireFieldDefaultType` sit behind: during the sweep this index is still being BUILT, so an
+	// ⚠ **IT RUNS ONLY ON THE FAR SIDE OF THE DECLARATION FOLD**, the same gate `requireFieldDefaultType`
+	// sits behind: during the sweep this index is still being BUILT, so an
 	// interface declared in a not-yet-swept file reads as unresolvable, and a diagnostic built there is
 	// allocation spent on a verdict the throwaway artifact discards.
 	function checkParenthesizedConformanceArgs(interfaceName ByteArray, written ElementIndex, openTok Token)
@@ -41363,7 +41309,7 @@ export type Parser
 	// where a requirement TAKES it, because there the table would have to come from the caller and no static
 	// slot can be right about it.
 	//
-	// ⚠ **THE ARITY GUARDS ARE `checkGenericInstance`'s AND E3016's, NOT THIS DOOR'S** — an argument past the
+	// ⚠ **THE ARITY GUARDS ARE `checkGenericSpellings`'s AND E3016's, NOT THIS DOOR'S** — an argument past the
 	// interface's `uses` names, and an interface no file declares readably, both ADMIT here and are reported
 	// where they belong. Refusing on them would report an arity mistake as an ABI one.
 	function requireCarryableGenericArg(argType MaxonType, slot GenericArgSlot, position FieldIndex, argTok Token) throws SourceParseError
@@ -68619,11 +68565,11 @@ export type Parser
 
 		if tag == ValueTypeTag.genericInstance 'instance'
 			// ⚠ **AN INSTANCE IS INTERNED FOR WHATEVER A `with` NAMED, SO THE BASE MAY BE NOTHING AT ALL**, and
-			// this fold runs at PARSE time while the E2055 `checkGenericInstance` recorded against that `with` is
-			// drained whole-program — so without a refusal here `sizeof(IntMap)` for `typealias IntMap =
+			// this fold runs at PARSE time while the E2055 `checkGenericSpellings` reports against that `with`
+			// comes whole-program, later — so without a refusal here `sizeof(IntMap)` for `typealias IntMap =
 			// Map with (Int, Int)` reaches `genericInstanceBoxSize` and dies with a stack trace and no
-			// `error E….` at all. The refusal is that E2055's own text, so the drain drops it once the recorded
-			// one is reported (`Parser.missingBaseLayout`). A BUILTIN base is NOT refused: its box is the fixed record
+			// `error E….` at all. The refusal is that E2055's own text, so the drain drops it once that E2055
+			// is reported (`Parser.missingBaseLayout`). A BUILTIN base is NOT refused: its box is the fixed record
 			// and `sizeof(Array with Int)` is 48 — which is why the gate is `genericInstanceBaseIsKnown` and not
 			// the field walks' `genericInstanceHasBaseLayout`.
 			if not self.signatures.genericInstanceBaseIsKnown(genericInstanceIdOf(t)) 'unknownBase'
@@ -90091,11 +90037,9 @@ export type Parser
 		end 'aRefusedArgumentCount'
 
 		// The base is not declared AT ALL, so it has no fields and never will under this spelling. The
-		// `with` that named it is the actual error and `checkGenericInstance` records E2055 against it. A
-		// thrown SourceParseError discards the artifact diagnostics its region recorded, or the whole file's
-		// when no region confines it (`abortedParseArtifact`), so this refusal carries that E2055's own text:
-		// `Queries.reportedArityMessages` drops it only when a reported message equals it, and otherwise it
-		// is the one the user sees.
+		// `with` that named it is the actual error and `checkGenericSpellings` reports E2055 against it. This
+		// refusal carries that E2055's own text: `Queries.reportedArityMessages` drops it only when a reported
+		// message equals it, and otherwise it is the one the user sees.
 		return self.undeclaredGenericBaseRefusal(typeName, tok: baseTok)
 	end 'missingBaseLayout'
 

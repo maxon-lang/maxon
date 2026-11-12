@@ -269,6 +269,23 @@ module function spelledTypeName(signatures ProgramSignatures, written ByteArray,
 	end 'lookup'
 end 'spelledTypeName'
 
+module union QualifiedBaseDenotation
+	denoted(name immutable ByteArray)
+	ambiguous
+end 'QualifiedBaseDenotation'
+
+module function denotationOfQualifiedBase(signatures ProgramSignatures, written immutable ByteArray, readerFilePath FilePath) returns QualifiedBaseDenotation
+	if not signatures.namesANamespace(leadingSegmentOf(written)) 'noDirectoryStartsHere'
+		return QualifiedBaseDenotation.denoted(written)
+	end 'noDirectoryStartsHere'
+
+	return match lookupQualifiedType(signatures, written: written, readerFilePath: readerFilePath) 'lookup'
+		found(declaration) gives QualifiedBaseDenotation.denoted(nominalNameOr(declaration.kind, name: declaration.name, spelling: written))
+		ambiguous gives QualifiedBaseDenotation.ambiguous
+		missing gives QualifiedBaseDenotation.denoted(written)
+	end 'lookup'
+end 'denotationOfQualifiedBase'
+
 module union QualifiedTypeSpan
 	outside
 	within(declaration ChainType, endIndex ElementIndex)

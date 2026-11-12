@@ -4579,6 +4579,121 @@ end 'main'
 error E2056: <fragment>:7:17: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
 ```
 
+<!-- test: error.a-wrong-arity-extension-alias-every-conformer-overrides-still-reports-the-arity-error -->
+An interface extension's alias is refused for its arity where it is written, even when every conformer declares its
+own member of that name and so the extension's alias is never what a conformer reads.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+interface Container uses Item
+	function only() returns Item
+end 'Container'
+
+extension Container
+	export typealias Pairs = Pair with Item
+end 'Container'
+
+type Bag implements Container with Integer
+	export typealias Pairs = Array with Integer
+	export var value as Integer
+
+	static function create(v Integer) returns Self
+		return Self{value: v}
+	end 'create'
+
+	function only() returns Integer
+		return self.value
+	end 'only'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Bag.create(3)
+
+	return (b.only() - 3) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2056: <fragment>:14:27: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
+```
+
+<!-- test: error.a-wrong-arity-alias-in-a-conditional-extension-no-conformer-meets-reports-the-arity-error -->
+The same refusal when the alias sits in a conditional extension whose `where` clause no conformer meets: the alias is
+judged where it is written, whether or not any conformer ever reads it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+interface Container uses Item
+	function only() returns Item
+end 'Container'
+
+extension Container where Item is Comparable
+	export typealias Pairs = Pair with Item
+end 'Container'
+
+type Thing
+	export var n as Integer
+
+	static function create(v Integer) returns Self
+		return Self{n: v}
+	end 'create'
+end 'Thing'
+
+type Bag implements Container with Thing
+	export var value as Thing
+
+	static function create(v Thing) returns Self
+		return Self{value: v}
+	end 'create'
+
+	function only() returns Thing
+		return self.value
+	end 'only'
+end 'Bag'
+
+function main() returns ExitCode
+	let b = Bag.create(Thing.create(3))
+
+	return (b.only().n - 3) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2056: <fragment>:14:27: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
+```
+
+<!-- test: error.a-wrong-arity-alias-in-an-extension-of-an-interface-nothing-implements-reports-the-arity-error -->
+The same refusal when nothing implements the extended interface at all.
+```maxon
+type Pair uses A, B
+	export var first as A
+	export var second as B
+end 'Pair'
+
+interface Container uses Item
+	function only() returns Item
+end 'Container'
+
+extension Container
+	export typealias Pairs = Pair with Item
+end 'Container'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2056: <fragment>:12:27: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
+```
+
 <!-- test: error.a-wrong-arity-top-level-alias-used-by-a-function-reports-the-arity-error-instead-of-panicking -->
 The same refusal for a top-level alias: the arity error is reported when a function returns the alias and `main` binds
 its result, exactly as when nothing names the alias.

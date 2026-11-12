@@ -2448,6 +2448,102 @@ export function checkGenericAliasCycles(project Project, signatures ProgramSigna
 	end 'cycle'
 end 'checkGenericAliasCycles'
 
+typealias ReportedSpellingSet = Set with String
+
+union GenericSpellingVerdict
+	admitted
+	refused(code ErrorCode, message String)
+end 'GenericSpellingVerdict'
+
+let AdmittedSpelling = GenericSpellingVerdict.admitted
+
+export function checkGenericSpellings(project Project, signatures ProgramSignatures)
+	let reported = ReportedSpellingSet.create()
+
+	for site in signatures.genericWithSites() 'eachSpelling'
+		match verdictOfGenericSpelling(signatures, site: site) 'verdict'
+			admitted then break
+			refused(code, message) then reportRefusedSpelling(project, site: site, code: code, message: message, reported: reported)
+		end 'verdict'
+	end 'eachSpelling'
+end 'checkGenericSpellings'
+
+function reportRefusedSpelling(project Project, site GenericWithSite, code ErrorCode, message String, reported ReportedSpellingSet)
+	let position = "{site.filePath.toString()}:{site.line}:{site.column}"
+
+	if reported.contains(position) 'alreadyReported'
+		return
+	end 'alreadyReported'
+
+	reported.insert(position)
+	let diagnostic = Diagnostic.create(code, message: message, line: site.line, column: site.column, filePath: site.filePath)
+	reportDiagnostic(project, diagnostic: diagnostic)
+	noteFactsLostTo(project, diagnostic: diagnostic)
+end 'reportRefusedSpelling'
+
+function verdictOfGenericSpelling(signatures ProgramSignatures, site GenericWithSite) returns GenericSpellingVerdict
+	if not containsQualifier(site.written) 'anUnqualifiedBase'
+		return verdictOfDenotedBase(signatures, site: site, baseName: site.baseName)
+	end 'anUnqualifiedBase'
+
+	return match denotationOfQualifiedBase(signatures, written: site.written, readerFilePath: site.filePath) 'denotation'
+		denoted(name) gives verdictOfDenotedBase(signatures, site: site, baseName: name)
+		ambiguous gives AdmittedSpelling
+	end 'denotation'
+end 'verdictOfGenericSpelling'
+
+function verdictOfDenotedBase(signatures ProgramSignatures, site GenericWithSite, baseName ByteArray) returns GenericSpellingVerdict
+	if signatures.isBuiltinGenericBaseName(baseName) 'builtinGeneric'
+		let expected = signatures.builtinGenericTypeParamCount(baseName)
+
+		if site.argCount == expected 'rightArity'
+			return AdmittedSpelling
+		end 'rightArity'
+
+		return GenericSpellingVerdict.refused(ErrorCode.genericArityMismatch, message: genericArityMismatchMessage(site.written, expected: "{expected}", supplied: site.argCount))
+	end 'builtinGeneric'
+
+	if not containsQualifier(site.written) and signatures.writtenNameMeansAnAliasHere(baseName, readerFilePath: site.filePath) 'anAliasIsMeantNotAGenericType'
+		return GenericSpellingVerdict.refused(ErrorCode.genericBaseNotGeneric, message: baseNotGenericMessage(site.written))
+	end 'anAliasIsMeantNotAGenericType'
+
+	return match lookupInterface(signatures.interfaceMap(), name: baseName) 'interfaceBase'
+		found(iface) gives verdictOfInterfaceBase(iface, site: site)
+		notFound gives verdictOfStructBase(signatures, site: site, baseName: baseName)
+	end 'interfaceBase'
+end 'verdictOfDenotedBase'
+
+function verdictOfInterfaceBase(iface IrInterface, site GenericWithSite) returns GenericSpellingVerdict
+	let expected = iface.associatedTypeNames.count()
+
+	if expected == 0 'notGeneric'
+		return GenericSpellingVerdict.refused(ErrorCode.genericBaseNotGeneric, message: baseNotGenericMessage(site.written))
+	end 'notGeneric'
+
+	if site.argCount == expected as FieldIndex 'rightArity'
+		return AdmittedSpelling
+	end 'rightArity'
+
+	return GenericSpellingVerdict.refused(ErrorCode.genericArityMismatch, message: genericArityMismatchMessage(site.written, expected: "{expected}", supplied: site.argCount))
+end 'verdictOfInterfaceBase'
+
+function verdictOfStructBase(signatures ProgramSignatures, site GenericWithSite, baseName ByteArray) returns GenericSpellingVerdict
+	let declaration = signatures.structInAnyFile(baseName) if containsQualifier(site.written) else signatures.structFor(baseName, readerFilePath: site.filePath)
+
+	return match declaration 'declaration'
+		undeclared gives GenericSpellingVerdict.refused(ErrorCode.genericBaseNotGeneric, message: baseNotGenericMessage(baseName))
+		declared(layout) gives verdictOfDeclaredLayout(layout, site: site)
+	end 'declaration'
+end 'verdictOfStructBase'
+
+function verdictOfDeclaredLayout(layout StructLayout, site GenericWithSite) returns GenericSpellingVerdict
+	if layout.typeParamCount() != 0 and layoutAdmitsTypeArgumentCount(layout, count: site.argCount) 'admitsTheCount'
+		return AdmittedSpelling
+	end 'admitsTheCount'
+
+	return GenericSpellingVerdict.refused(genericArgumentCountCode(layout), message: genericArgumentCountMessage(layout, supplied: site.argCount))
+end 'verdictOfDeclaredLayout'
+
 // ⭐⭐ **REPORT THE CYCLE — E2012 WITH THE DEPENDENCY PATH, WHICH IS `specs/type-checking.md`'s OWN SENTENCE.**
 // `Circular typealias dependency: A -> B -> A` names every alias the loop passes through, and that path is
 // the whole reason the canonical corpus carries two cases: a message naming only the alias it was reported
