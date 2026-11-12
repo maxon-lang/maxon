@@ -678,7 +678,7 @@ error E3207: <fragment>:36:11: 'g' builds a record from data it captured, and th
 ```
 
 <!-- test: error.a-wrapper-lending-read-only-data-to-a-generic-method-that-calls-a-function-value-is-refused-inside-modify -->
-Red team R2: `App.run` hands its `T` argument to a function value whose body is not visible, and `h` lends its parameter `p` to `run`. The position is a function-typed slot of a generic type and `h` is a wrapper, so the read-only `row` is refused at the call to `h`.
+Red team R2: `App.run` hands its `T` argument to a function value whose body is not visible, and `h` lends its parameter `p` to `run`. `x` is a `T` parameter of `App with Row`, whose element slot is writable, so `h` needs `p` writable and the read-only `row` is refused at the call to `h`.
 
 ```maxon
 typealias LineArray = Array with String
@@ -737,7 +737,71 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:50:16: 'h' builds a record that holds 'p', so it takes no read-only data; 'row' is read-only
+error E3207: <fragment>:50:16: 'h' needs a writable parameter 'p' (line 41: 'App.run' keeps a value read from it in a writable slot (its parameter 'x')); 'row' is read-only while 'fill' is open
+```
+
+<!-- test: error.a-wrapper-lending-read-only-data-to-a-generic-method-whose-parameter-is-not-a-type-parameter-is-refused-inside-modify -->
+Red team R2: `App.run` takes a `Row`, not a `T`, so no element slot is involved. It hands the `Row` to a function value whose body is not visible, and `h` lends its parameter `p` to `run`. The function value may build a record from `p`, so `h` takes no read-only data and the read-only `row` is refused at the call to `h`.
+
+```maxon
+typealias LineArray = Array with String
+
+type Row
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Row'
+
+type Reader
+	var row as Row
+
+	static function over(row Row) returns Self
+		return Self{row: row}
+	end 'over'
+
+	function size() returns Count
+		return row.n
+	end 'size'
+end 'Reader'
+
+type App uses T
+	typealias Step = function(Row) returns Count
+
+	var f as Step
+	var tag as T
+
+	static function make(f Step, tag T) returns Self
+		return Self{f: f, tag: tag}
+	end 'make'
+
+	function run(x Row) returns Count
+		return self.f(x)
+	end 'run'
+end 'App'
+
+typealias RowApp = App with Row
+
+function h(a RowApp, p Row) returns Count
+	return a.run(p)
+end 'h'
+
+function main() returns ExitCode
+	let row = Row.create(1)
+	let a = RowApp.make(function(r Row) gives Reader.over(r).size(), tag: Row.create(2))
+	var batch = LineArray.create(0) as isolated LineArray
+
+	modify batch 'fill'
+		let n = h(a, p: row)
+		batch.push("{n}")
+	end 'fill'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3207: <fragment>:51:16: 'h' builds a record that holds 'p', so it takes no read-only data; 'row' is read-only
 ```
 
 <!-- test: error.a-generic-method-calling-a-function-value-with-its-own-item-refuses-a-paused-receiver-inside-modify -->
