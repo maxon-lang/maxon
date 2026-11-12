@@ -1,0 +1,10 @@
+let StagedTierSpecName = "tier-respelling"
+let StagedTierCaseName = "tier-respelling.overlay-collision"
+let RespelledActualPrefix = "actual:   error E4015: <fragment>:5:17: declaration of '__write_stdout'"
+
+test 'a diagnostic raised inside a staged source tier is respelled as the fragment when the spec directory is reached through a link'
+	let said = everythingSaid(runGateFixtureThroughASymlink(StringArray.create(0)))
+
+	try Expect.isTrue(said.contains(failVerdictPrefix(testLabel(StagedTierSpecName, testName: StagedTierCaseName))), message: "the fixture's case did not FAIL on its planted message, so its actual text was never printed. It said:\n{said}")
+	try Expect.isTrue(said.contains(RespelledActualPrefix), message: "the harness did not respell the staged tier's file as <fragment>:5:17 in the diagnostic it printed as 'actual'. Expected a line starting '{RespelledActualPrefix}', and it said:\n{said}")
+end 'a diagnostic raised inside a staged source tier is respelled as the fragment when the spec directory is reached through a link'

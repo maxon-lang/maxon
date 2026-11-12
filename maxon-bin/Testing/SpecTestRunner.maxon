@@ -979,7 +979,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	end 'selectsNothing'
 
 	let results = SpecTestResultArray.create(tests.count(), zeroed: false)
-	let tempDir = specTempDirFor(specDir, specName: specName)
+	let tempDir = try specTempDirFor(specDir, specName: specName)
 
 	if not Directory.create(tempDir) 'noTempDir'
 		throw CompileError.directoryNotFound(tempDir.path)
@@ -1824,9 +1824,10 @@ end 'emitsTargetIr'
 // compiling and deleting the same `<testName>.maxon` at the same time — a race that shows up
 // as an unreproducible compile failure in whichever worker lost. One spec is only ever in
 // flight on one worker, so keying the directory by spec name makes the collision impossible by
-// construction, and needs no worker id on the wire to do it.
-function specTempDirFor(specDir FilePath, specName String) returns FilePath
-	return specTempRootDir(specDir).join(specName)
+// construction, and needs no worker id on the wire to do it. The directory is spelled physically
+// because the compiler names a file by its physical identity and diagnostics are respelled by text.
+function specTempDirFor(specDir FilePath, specName String) returns FilePath throws CompileError
+	return try identityOfPath(specTempRootDir(specDir).join(specName))
 end 'specTempDirFor'
 
 // The root the per-spec scratch directories hang off. The pool creates it once, in the parent,
@@ -4274,6 +4275,7 @@ type Execution
 	export let stdin as SpecStdin
 	export let traceCapture as SpecTraceCapture
 	export let label as String
+
 	// Only a generated entry program reads `--descendant-token`; an ordinary case's arguments are
 	// its own.
 	export let reportsLeftProcesses as bool

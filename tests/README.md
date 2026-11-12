@@ -925,7 +925,8 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   its program, a case staged below a `.maxonignore`d directory compiling its own files, a shared library
   parse served to a later program leaving that program's index at its baseline, a second run's workers
   starting from the library cache the first run wrote, a library diagnostic respelled by that warm run
-  exactly as the cold run respelled it, the two marker shapes the reference grammar reads, an
+  exactly as the cold run respelled it, a diagnostic raised inside a staged source tier respelled as
+  `<fragment>` when the spec directory is reached through a link, the two marker shapes the reference grammar reads, an
   `AsyncTrace` case passing on ids that differ from the run's but name the same threads and failing on a
   trace that names different ones, a `scriptlib/` package beside the compiler that does not parse leaving
   every case untouched, a run case whose marker leaves `wasm32-wasi` its only lane failing there on an

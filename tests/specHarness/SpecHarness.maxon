@@ -75,7 +75,11 @@ module function runGateFixtureThroughASymlink(extraArguments StringArray, caller
 	plantedDirectoryLink(link, target: staged.toString())
 
 	let run = runSpecTest(link, includeNetwork: false, extraArguments: extraArguments)
-	try File.delete(link) otherwise panic("spec-harness tests: the gate could not remove the link {link.toString()}")
+
+	if not Directory.removeTree(link).isEmpty() 'linkStays'
+		panic("spec-harness tests: the gate could not remove the link {link.toString()}")
+	end 'linkStays'
+
 	discardStagedDir(staged)
 
 	return run
