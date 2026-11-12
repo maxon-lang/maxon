@@ -17,7 +17,8 @@ statement that starts the coroutine. A tied promise is awaited or cancelled befo
 
 A `unique` value, local or parameter, passed to an `async` call is lent to the coroutine the same way: until the
 promise is awaited or cancelled, any read, `close()`, pass or move of it is E3102, and after the drain it is the
-caller's again.
+caller's again. An `isolated` local passed to an `isolated` parameter of the `async` callee is moved instead: the
+coroutine owns it, the promise is not tied, and the caller's binding is gone.
 
 ## Tests
 
@@ -854,6 +855,94 @@ end 'main'
 ```
 ```stdout
 11
+```
+```exitcode
+0
+```
+
+<!-- test: a-unique-isolated-value-moves-into-an-async-isolated-parameter-and-is-released-once -->
+<!-- unsupported-targets: wasm32-wasi -->
+An `isolated` parameter of an `async` callee takes the unique region by move, so the coroutine holds the one reference and the run ends with nothing left allocated.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+
+type Token is unique
+	var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function peek() returns Tally
+		return self.n
+	end 'peek'
+end 'Token'
+
+function inspect(token isolated Token) returns Tally
+	sleep(1)
+
+	return token.peek() + 1
+end 'inspect'
+
+function main() returns ExitCode
+	let token = Token.create(5) as isolated Token
+	let promise = async inspect(token)
+	let answer = await promise
+	print("{answer}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+6
+```
+```exitcode
+0
+```
+
+<!-- test: a-unique-isolated-value-moved-into-an-async-call-pushed-into-an-array-is-released-once -->
+<!-- unsupported-targets: wasm32-wasi -->
+The promise of the same call is pushed into an array and awaited in a loop.
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyPromise = Promise with Tally
+typealias TallyPromises = Array with TallyPromise
+
+type Token is unique
+	var n as Tally
+
+	static function create(n Tally) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function peek() returns Tally
+		return self.n
+	end 'peek'
+end 'Token'
+
+function inspect(token isolated Token) returns Tally
+	sleep(1)
+
+	return token.peek() + 1
+end 'inspect'
+
+function main() returns ExitCode
+	let inFlight = TallyPromises.create(0)
+	let token = Token.create(5) as isolated Token
+	inFlight.push(async inspect(token))
+
+	for promise in inFlight 'eachPromise'
+		let answer = await promise
+		print("{answer}\n")
+	end 'eachPromise'
+
+	return 0
+end 'main'
+```
+```stdout
+6
 ```
 ```exitcode
 0
