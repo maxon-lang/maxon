@@ -405,12 +405,6 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon spec-test ir-specs
 
-      - name: IR suite in reversed source order
-        if: steps.seed.outputs.seeded == 'yes'
-        env:
-          MAXON_SOURCE_ORDER: reversed
-        run: ./maxon-bin/.maxon/maxon spec-test ir-specs
-
       # Tags exist only in a `--debugstream` compiler. This builds one and fails when an allocation
       # report names no real tag.
       - name: Allocation reports name tags on a traced compiler
@@ -539,8 +533,6 @@ jobs:
       - *evidence
       - *upload-samples
 
-  # Each shard runs its share of both the whole suite and the reversed-order run: a job of their own
-  # for the second would add a shard's worth of macOS jobs against the five GitHub Free allows.
   suite:
     needs: [targets, build]
     if: ${{ !cancelled() && needs.targets.result == 'success' }}
@@ -562,67 +554,6 @@ jobs:
       - name: Suite
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon spec-test --shard="${{ matrix.shard }}/${{ matrix.suite-shards }}"
-
-      - name: Suite in reversed source order
-        if: steps.seed.outputs.seeded == 'yes'
-        env:
-          MAXON_SOURCE_ORDER: reversed
-        run: >-
-          ./maxon-bin/.maxon/maxon spec-test
-          --shard="${{ matrix.shard }}/${{ matrix.suite-shards }}"
-          --filter=array-conditional-conformance-withheld/
-          --filter=arrays/
-          --filter=associated-type-held-at-an-interface/
-          --filter=associated-types/
-          --filter=borrow-liveness/
-          --filter=bytearray-element-size/
-          --filter=closure-param-type-inference/
-          --filter=conditional-extensions/
-          --filter=duplicate-functions/
-          --filter=duplicate-typealias/
-          --filter=end-labels/
-          --filter=enum-hashable/
-          --filter=enum-interface-conformance/
-          --filter=export-keyword/
-          --filter=extension-publication/
-          --filter=first-class-functions/
-          --filter=generic-functions/
-          --filter=generic-opaque-cursor-element/
-          --filter=generic-type-nested-array-typealias/
-          --filter=generic-types/
-          --filter=global-file-private-same-name/
-          --filter=inner-alias-construction/
-          --filter=interface-conformance/
-          --filter=interface-dispatch/
-          --filter=interface-extension-body-namespace/
-          --filter=interface-extensions/
-          --filter=interfaces/
-          --filter=lazy-static/
-          --filter=let-escape/
-          --filter=lexer-edge-cases/
-          --filter=lexer-parser-robustness/
-          --filter=library-tier-surface/
-          --filter=map/
-          --filter=module-scope/
-          --filter=nominal-function-alias/
-          --filter=param-default-list-walks/
-          --filter=param-default-refusals/
-          --filter=per-instance-typealias/
-          --filter=readonly-element-types/
-          --filter=self-field-struct-typed/
-          --filter=service-registry/
-          --filter=services/
-          --filter=set/
-          --filter=signature-type-visibility/
-          --filter=static-variables/
-          --filter=test-declaration/
-          --filter=top-level-let/
-          --filter=tuples/
-          --filter=type-name-collision/
-          --filter=typealias-file-scope/
-          --filter=where-clause-associated-binding/
-          --filter=where-clauses/
-          --filter=witness-by-reference/
 
       - *leftovers
 

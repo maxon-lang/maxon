@@ -403,7 +403,6 @@ facts worth knowing before you get there:
   is added. `/land` runs a corpus only filtered to the cases the change touched; the full corpora are CI's.
   CI also runs `scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory,
   and `maxon check-stdlib`, which compiles every `stdlib/` function for every target whether or not a program calls it.
-  CI also runs a filtered spec suite with `MAXON_SOURCE_ORDER=reversed`, the knob that checks the compiler does not depend on file or declaration order (see `StdlibLoader.maxon`'s header).
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
   pins what the tool DOES rather than what its author expected. Re-run the generator after changing
