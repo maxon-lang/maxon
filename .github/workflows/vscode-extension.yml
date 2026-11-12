@@ -63,10 +63,10 @@ permissions:
   contents: read
   id-token: write
 
-# A pull request supersedes its own older runs; `main` and a release never cancel — `ci.yml` states why.
+# A pull request supersedes its own older runs; `main` batches as `ci.yml` does, and a release runs alone.
 concurrency:
-  group: vscode-extension-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: true
+  group: vscode-extension-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # The server under test is this tree's compiler, which is why this job builds one. The extension is

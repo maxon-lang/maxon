@@ -81,20 +81,12 @@ on:
     paths: *ci-inputs
   workflow_dispatch:
 
-# ⭐ A PULL REQUEST CANCELS ITS OWN OLDER RUNS; `main` NEVER CANCELS. Superseding is right on a
-# branch still being pushed to — the verdict anyone wants is about the commit that gets MERGED, and a
-# run for an intermediate commit spends runner time on code that will not exist. It is
-# wrong on `main`, where "which commit broke it" is the question this workflow is here to answer:
-# cancelling commit N's run because N+1 landed is how a break becomes unattributable.
-#
-# ⚠ THE `run_id` FALLBACK IS WHAT TURNS CANCELLING OFF, and `cancel-in-progress: false` would not.
-# A group is the thing that supersedes, and a group still discards a run while it is QUEUED — which a
-# `main` run often is, because GitHub Free allows five concurrent macOS jobs and one run's macOS
-# lane fills all five.
-# Giving each `main` run a group of its own is the only way it is left alone.
+# A pull request cancels its own older runs. `main` batches: a running run always finishes, and a push
+# replaces only the pending one, so each run covers every commit since the last and names them in its
+# summary. Overlapping runs would split GitHub Free's five macOS slots and all finish later.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -102,6 +94,9 @@ permissions:
 jobs:
   targets:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     outputs:
       native: ${{ steps.matrix.outputs.native }}
       shards: ${{ steps.matrix.outputs.shards }}
@@ -121,6 +116,42 @@ jobs:
           echo "native=$(./scripts/targets/matrix.sh json native)" >> "$GITHUB_OUTPUT"
           echo "shards=$(./scripts/targets/matrix.sh json --count shard=suite-shards native)" >> "$GITHUB_OUTPUT"
           echo "cross-shards=$(./scripts/targets/matrix.sh json --count shard=suite-shards native roles=cross-suite)" >> "$GITHUB_OUTPUT"
+
+      - name: Name the commits this run covers
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=$GITHUB_REF_NAME&event=push&status=completed&per_page=50" \
+            --jq "[.workflow_runs[] | select(.id != $GITHUB_RUN_ID and (.conclusion == \"success\" or .conclusion == \"failure\"))][0].head_sha // empty")
+
+          {
+            echo "## Commits this run covers"
+            echo
+
+            if [ -z "$base" ]; then
+              echo "No earlier completed run on \`$GITHUB_REF_NAME\` to measure from; this run tests \`$GITHUB_SHA\`."
+              exit 0
+            fi
+
+            status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" --jq .status)
+
+            case "$status" in
+              ahead|diverged)
+                echo "Since the last completed run (\`${base:0:10}\`):"
+                echo
+                gh api "repos/$GITHUB_REPOSITORY/compare/$base...$GITHUB_SHA" \
+                  --jq '.commits | reverse | .[] | "- `\(.sha[0:10])` \(.commit.message | split("\n")[0])"'
+                ;;
+              identical|behind)
+                echo "A re-run: \`${GITHUB_SHA:0:10}\` is not ahead of the last completed run (\`${base:0:10}\`), so it covers that commit alone."
+                ;;
+              *)
+                echo "::error::the compare API answered an unknown status '$status'"
+                exit 1
+                ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build:
     needs: targets
