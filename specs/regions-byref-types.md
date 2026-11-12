@@ -285,7 +285,6 @@ A generic body cannot rebind a `mutable T` parameter, and the instance's own for
 
 ```maxon
 typealias Wide = int(0 to 100)
-typealias Narrow = int(0 to 10) implements Wide
 
 function setTo(slot mutable T, value T) uses T
 	Scheduler.yield()
@@ -293,7 +292,7 @@ function setTo(slot mutable T, value T) uses T
 end 'setTo'
 
 function main() returns ExitCode
-	var x = 3 as Narrow
+	var x = 3 as Wide
 	let w = 90 as Wide
 	let p = async setTo(x, value: w)
 	await p
@@ -302,7 +301,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:7:2: 'slot' is a generic parameter and cannot be reassigned; return the new value
+error E2013: <fragment>:6:2: 'slot' is a generic parameter and cannot be reassigned; return the new value
 ```
 
 <!-- test: a-write-through-a-type-parameter-by-reference-is-refused-in-the-generic-body-sync -->
@@ -310,14 +309,13 @@ The direct call's twin of the coroutine above.
 
 ```maxon
 typealias Wide = int(0 to 100)
-typealias Narrow = int(0 to 10) implements Wide
 
 function setTo(slot mutable T, value T) uses T
 	slot = value
 end 'setTo'
 
 function main() returns ExitCode
-	var x = 3 as Narrow
+	var x = 3 as Wide
 	let w = 90 as Wide
 	setTo(x, value: w)
 	print("{x}\n")
@@ -325,7 +323,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:6:2: 'slot' is a generic parameter and cannot be reassigned; return the new value
+error E2013: <fragment>:5:2: 'slot' is a generic parameter and cannot be reassigned; return the new value
 ```
 
 <!-- test: a-narrow-variable-at-a-type-parameter-by-reference-of-a-wider-instance-is-refused-async -->

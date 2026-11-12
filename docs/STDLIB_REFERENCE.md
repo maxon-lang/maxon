@@ -1775,7 +1775,7 @@ With `git` on `PATH`, it prints `true 0 true`.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `Subprocess.run(executable Executable, arguments StringArray, workingDirectory FilePath = FilePath.empty(), timeoutMs DurationMs = 0)` | `CollectedOutput` | Inherit the environment, no stdin, collect stdout and stderr up to 16 MiB each. An empty `workingDirectory` inherits the parent's. A `timeoutMs` deadline kills the child's whole process tree ([SubprocessError](#subprocesserror)); `0` waits forever. |
+| `Subprocess.run(executable Executable, arguments StringArray, workingDirectory WorkingDirectory = WorkingDirectory.inherit, timeoutMs DurationMs = 0)` | `CollectedOutput` | Inherit the environment, no stdin, collect stdout and stderr up to 16 MiB each. A `timeoutMs` deadline kills the child's whole process tree ([SubprocessError](#subprocesserror)); `0` waits forever. |
 | `Subprocess.runConfiguration(config Configuration)` | `CollectedOutput` | Run a configuration; `config.run()` calls this. |
 | `Subprocess.runDetachedConfiguration(config Configuration)` | `Pid` | Start detached; `config.runDetached()` calls this. |
 
@@ -1791,7 +1791,7 @@ end 'Executable'
 ```
 
 `name` is searched for when the child is spawned; `path` is used as given. A relative `path` is relative
-to the child's `workingDirectory` on every OS, and to the parent's working directory when none is set. A
+to the child's `workingDirectory` on every OS, and to the parent's working directory under `WorkingDirectory.inherit`. A
 `name` that carries a directory part (`sub/tool`, `./tool`, or on Windows `C:tool`) is anchored the same
 way and looked for in that one directory.
 
@@ -1808,16 +1808,29 @@ one is tried with each `PATHEXT` extension in turn.
 
 `ExecutableError` has one case, `notFound`.
 
+### WorkingDirectory
+
+```maxon
+union WorkingDirectory
+	inherit
+	at(path FilePath)
+end 'WorkingDirectory'
+```
+
+Where the child starts. `inherit` is the parent's working directory; `at(path)` is `path`, and a relative
+`path` is relative to the parent's working directory. `at` with the empty path fails the spawn with
+`SubprocessError.spawnFailed`, whose reason names `WorkingDirectory.inherit`.
+
 ### Configuration
 
-Create one with `Configuration.create(executable)` (or `Configuration.create(executable, workingDirectory: dir)`;
-an empty path inherits the parent's working directory), assign the fields you need, then run it.
+Create one with `Configuration.create(executable)` (or `Configuration.create(executable, workingDirectory: WorkingDirectory.at(dir))`),
+assign the fields you need, then run it.
 
 | Field | Type | Default |
 |-------|------|---------|
 | `executable` | `Executable` | as given |
 | `arguments` | `StringArray` | empty |
-| `workingDirectory` | `FilePath` | empty, meaning the parent's |
+| `workingDirectory` | [`WorkingDirectory`](#workingdirectory) | `inherit` |
 | `environment` | `Environment` | `inherit` |
 | `standardInput` | `InputSource` | `none` |
 | `standardOutput` | `OutputDestination` | `collect` up to 16 MiB |
@@ -2017,9 +2030,9 @@ request after request. A read or a wait parks the calling green thread, so its s
 | Member | Returns | Throws | Description |
 |--------|---------|--------|-------------|
 | `StreamingSubprocess.spawn(executable, arguments:)` | `StreamingSubprocess` | `SubprocessError` | Spawn in the parent's working directory. |
-| `StreamingSubprocess.spawnWithCwd(executable, arguments:, workingDirectory:)` | `StreamingSubprocess` | `SubprocessError` | With a working directory. |
-| `StreamingSubprocess.spawnWithEnvironment(executable, arguments:, workingDirectory:, environment Environment)` | `StreamingSubprocess` | `SubprocessError` | With a working directory (empty for the parent's) and an environment. |
-| `StreamingSubprocess.spawnTraceable(executable, arguments:, workingDirectory:, environment Environment, traced bool)` | `StreamingSubprocess` | `SubprocessError` | As `spawnWithEnvironment`; with `traced`, the child is created for a debugger: on Windows and Linux this process becomes its debugger, and on macOS the child is created suspended, for a debugger to attach to by its `processId()`. |
+| `StreamingSubprocess.spawnWithCwd(executable, arguments:, workingDirectory WorkingDirectory)` | `StreamingSubprocess` | `SubprocessError` | With a working directory. |
+| `StreamingSubprocess.spawnWithEnvironment(executable, arguments:, workingDirectory WorkingDirectory, environment Environment)` | `StreamingSubprocess` | `SubprocessError` | With a working directory and an environment. |
+| `StreamingSubprocess.spawnTraceable(executable, arguments:, workingDirectory WorkingDirectory, environment Environment, traced bool)` | `StreamingSubprocess` | `SubprocessError` | As `spawnWithEnvironment`; with `traced`, the child is created for a debugger: on Windows and Linux this process becomes its debugger, and on macOS the child is created suspended, for a debugger to attach to by its `processId()`. |
 | `processId()` | `Pid` | `SubprocessError` | The child's operating-system process id. Throws once the handle is released. |
 | `writeStdinLine(line String)` | — | `SubprocessError` | Write `line` and a newline, NUL bytes included. Throws on a broken pipe. |
 | `takeStdout()` | `StdoutReader` | `SubprocessError` | Take the child's stdout side out as a `StdoutReader`, which a coroutine can drain beside the child's owner. While the reader is out, the child's own stdout reads (`readStdoutLine`, `readStdoutLineCapped`, `readStdoutBytes`, `tryReadStdoutLine`) throw `ioFailed`. Throws `ioFailed` when the stdout side is already out, and once the handle is released. |

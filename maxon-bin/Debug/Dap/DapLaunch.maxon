@@ -14,12 +14,12 @@ type DapLaunchRequest
 	export let program as String
 	export let arguments as StringArray
 	export let targetEnv as EnvMap
-	export let workingDirectory as FilePath
+	export let workingDirectory as WorkingDirectory
 	export let stopOnEntry as bool
 	export let traced as bool
 	export let stopTimeoutMs as StopTimeoutMs
 
-	static function create(program String, arguments StringArray, targetEnv EnvMap, workingDirectory FilePath, stopOnEntry bool, traced bool, stopTimeoutMs StopTimeoutMs) returns DapLaunchRequest
+	static function create(program String, arguments StringArray, targetEnv EnvMap, workingDirectory WorkingDirectory, stopOnEntry bool, traced bool, stopTimeoutMs StopTimeoutMs) returns DapLaunchRequest
 		return Self{program: program, arguments: arguments, targetEnv: targetEnv, workingDirectory: workingDirectory, stopOnEntry: stopOnEntry, traced: traced, stopTimeoutMs: stopTimeoutMs}
 	end 'create'
 end 'DapLaunchRequest'
@@ -47,12 +47,12 @@ function launchRequestIn(arguments DapObject) returns DapLaunchRead throws DapAr
 end 'launchRequestIn'
 
 function launchRequestWith(arguments DapObject, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs) returns DapLaunchRead throws DapArgumentError
-	var workingDirectory = inheritedWorkingDirectory()
+	var workingDirectory = WorkingDirectory.inherit
 
 	if arguments.has(CwdArgument) 'aWorkingDirectory'
 		let spelled = try arguments.text(CwdArgument)
 		let named = try FilePath.from(spelled) otherwise return DapLaunchRead.refused("`{CwdArgument}` names `{spelled}`, which is not a spellable path")
-		workingDirectory = named.resolve(Directory.currentPath())
+		workingDirectory = WorkingDirectory.at(named.resolve(Directory.currentPath()))
 	end 'aWorkingDirectory'
 
 	return DapLaunchRead.read(DapLaunchRequest.create(try arguments.text(ProgramArgument), arguments: try arguments.texts(ArgsArgument), targetEnv: targetEnv, workingDirectory: workingDirectory, stopOnEntry: try arguments.flagOr(StopOnEntryArgument, fallback: false), traced: try arguments.flagOr(TraceArgument, fallback: false), stopTimeoutMs: stopTimeoutMs))

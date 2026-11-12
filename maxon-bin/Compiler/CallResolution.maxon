@@ -518,15 +518,41 @@ let UnsummarizedLandingKey = 0 as ElementIndex
 
 typealias LandingDigestIndex = Map with (ParamPositionMaskArray, ElementIndex)
 typealias LandingSlotByKey = Map with (ElementIndex, ElementIndex)
+typealias LandingDigestRows = Array with immutable ParamPositionMaskArray
 
 module type LandingKeys
 	var keyOfDigest as LandingDigestIndex
+	var digests as LandingDigestRows
 	var internedCount as ElementIndex
 	var digest as ParamPositionMaskArray
 
 	module static function create() returns LandingKeys
-		return Self{keyOfDigest: LandingDigestIndex.create(), internedCount: UnsummarizedLandingKey + 1, digest: ParamPositionMaskArray.create(0)}
+		let digests = LandingDigestRows.create(0)
+		digests.push(freeze ParamPositionMaskArray.create(0))
+		return Self{keyOfDigest: LandingDigestIndex.create(), digests: digests, internedCount: UnsummarizedLandingKey + 1, digest: ParamPositionMaskArray.create(0)}
 	end 'create'
+
+	module function compare(first ElementIndex, second ElementIndex) returns Ordering
+		let left = self.digestOf(first)
+		let right = self.digestOf(second)
+		let shared = left.count() if left.count() < right.count() else right.count()
+
+		for position in 0 upto shared 'eachWord'
+			let leftWord = (try left.get(position) otherwise panic("LandingKeys.compare: left.get OOB at {position}")) as ElementIndex
+			let rightWord = (try right.get(position) otherwise panic("LandingKeys.compare: right.get OOB at {position}")) as ElementIndex
+			let byWord = leftWord.compare(rightWord)
+
+			if byWord != Ordering.equalTo 'wordsDiffer'
+				return byWord
+			end 'wordsDiffer'
+		end 'eachWord'
+
+		return left.count().compare(right.count())
+	end 'compare'
+
+	function digestOf(key ElementIndex) returns immutable ParamPositionMaskArray
+		return try self.digests.get(key) otherwise panic("LandingKeys.digestOf: key {key} is past the {self.digests.count()} interned")
+	end 'digestOf'
 
 	module function begin()
 		self.digest.clear()
@@ -566,7 +592,9 @@ module type LandingKeys
 
 		let key = self.internedCount
 		self.internedCount = key + 1
-		self.keyOfDigest.upsert(freeze self.digest.clone(), value: key)
+		let interned = freeze self.digest.clone()
+		self.digests.push(interned)
+		self.keyOfDigest.upsert(interned, value: key)
 		return key
 	end 'intern'
 end 'LandingKeys'
@@ -575,11 +603,14 @@ module type LandingClassList
 	var slots as FuncIndexArray
 	var keys as FuncIndexArray
 	var members as FuncIndexRows
+	// Ordered by summary-key content (`LandingKeys.compare`): ClosureCycleCheck names the first cycle per
+	// site, so an order by member position would tie E3183's record to declaration order.
 	module var order as FuncIndexArray
 	var slotOfKey as LandingSlotByKey
+	var interner as LandingKeys
 
-	module static function create() returns LandingClassList
-		return Self{slots: FuncIndexArray.create(0), keys: FuncIndexArray.create(0), members: FuncIndexRows.create(0), order: FuncIndexArray.create(0), slotOfKey: LandingSlotByKey.create()}
+	module static function create(interner LandingKeys) returns LandingClassList
+		return Self{slots: FuncIndexArray.create(0), keys: FuncIndexArray.create(0), members: FuncIndexRows.create(0), order: FuncIndexArray.create(0), slotOfKey: LandingSlotByKey.create(), interner: interner}
 	end 'create'
 
 	module function firstOf(slot ElementIndex) returns ElementIndex
@@ -632,13 +663,6 @@ module type LandingClassList
 		let row = self.membersOf(slot)
 		let at = self.memberIndexAtOrAfter(row, position: first)
 
-		if at == 0 'anEarlierMember'
-			self.takeOutOfOrder(slot)
-			row.insert(0, value: first)
-			self.placeInOrder(slot)
-			return slot
-		end 'anEarlierMember'
-
 		row.insert(at, value: first)
 		return slot
 	end 'joinClass'
@@ -662,30 +686,22 @@ module type LandingClassList
 			panic("LandingClassList.leaveClass: participant {position} is not in class {slot}")
 		end 'notInTheClass'
 
-		if at != 0 'notTheFirst'
-			_ = try row.remove(at) otherwise panic("LandingClassList.leaveClass: row.remove OOB at {at}")
-			return
-		end 'notTheFirst'
-
-		self.takeOutOfOrder(slot)
-		_ = try row.remove(0) otherwise panic("LandingClassList.leaveClass: row.remove OOB at 0")
+		_ = try row.remove(at) otherwise panic("LandingClassList.leaveClass: row.remove OOB at {at}")
 
 		if row.isEmpty() 'emptied'
+			self.takeOutOfOrder(slot)
 			_ = self.slotOfKey.remove(self.keyOf(slot))
-			return
 		end 'emptied'
-
-		self.placeInOrder(slot)
 	end 'leaveClass'
 
-	function orderIndexAtOrAfter(first ElementIndex) returns ElementIndex
+	function orderIndexAtOrAfter(key ElementIndex) returns ElementIndex
 		var low = 0 as ElementIndex
 		var high = self.order.count() as ElementIndex
 
 		while low < high 'narrowing'
 			let middle = (low + high) shr 1
 
-			if self.firstOf(try self.order.get(middle) otherwise panic("LandingClassList.orderIndexAtOrAfter: order.get OOB at {middle}")) < first 'beforeIt'
+			if self.interner.compare(self.keyOf(try self.order.get(middle) otherwise panic("LandingClassList.orderIndexAtOrAfter: order.get OOB at {middle}")), second: key) == Ordering.greaterThan 'beforeIt'
 				low = middle + 1
 			end 'beforeIt' else 'atOrAfterIt'
 				high = middle
@@ -696,11 +712,11 @@ module type LandingClassList
 	end 'orderIndexAtOrAfter'
 
 	function placeInOrder(slot ElementIndex)
-		self.order.insert(self.orderIndexAtOrAfter(self.firstOf(slot)), value: slot)
+		self.order.insert(self.orderIndexAtOrAfter(self.keyOf(slot)), value: slot)
 	end 'placeInOrder'
 
 	function takeOutOfOrder(slot ElementIndex)
-		let at = self.orderIndexAtOrAfter(self.firstOf(slot))
+		let at = self.orderIndexAtOrAfter(self.keyOf(slot))
 
 		if (try self.order.get(at) otherwise panic("LandingClassList.takeOutOfOrder: class {slot} is not live")) != slot 'notThatClass'
 			panic("LandingClassList.takeOutOfOrder: the class at {at} of the order is not {slot}")
@@ -762,7 +778,7 @@ module type LandingClasses
 			return built
 		end 'asked'
 
-		let classes = LandingClassList.create()
+		let classes = LandingClassList.create(self.interner)
 
 		for member in self.sets.factsOf(set).participants 'eachParticipant'
 			classes.append(self.keyOf(member))

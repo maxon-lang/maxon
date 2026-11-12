@@ -984,11 +984,10 @@ function emitSubpCreationFlags(module StdModule, block IrBlock, ids ValueMinter,
 end 'emitSubpCreationFlags'
 
 // ⭐ **AN EMPTY `cstring` MEANS "INHERIT", AND IT HAS TO BE TURNED INTO A NULL HERE.**
-// `stdlib/Subprocess.maxon` spells "inherit the parent's working directory" as an EMPTY `FilePath`
-// (`Configuration.create`: *"empty path is the sentinel for 'inherit cwd'"*), which reaches the boundary as a
-// `cstring` whose first byte is a NUL. `CreateProcessW` reads an empty `lpCurrentDirectory` as a real, and
-// invalid, directory name and fails; NULL is what means inherit. One test, at the one place the two
-// conventions meet.
+// `stdlib/Subprocess.maxon` hands `WorkingDirectory.inherit` to the boundary as an EMPTY `cstring`
+// (`SpawnOperands.workingDirectoryOperand`), whose first byte is a NUL. `CreateProcessW` reads an empty
+// `lpCurrentDirectory` as a real, and invalid, directory name and fails; NULL is what means inherit.
+// One test, at the one place the two conventions meet.
 function emitSubpCwdOrNull(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, cwd ValueId, req ValueId) returns IrBlock
 	let setCwd = module.addBlock(func, label: b"subpcwd", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"subpcwdd", heat: BlockHeat.normal)

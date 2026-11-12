@@ -57,7 +57,7 @@ export type DebugToolSession
 	export var conversation as DebugConversation
 	var image as DebugImage
 
-	export static function launch(image DebugImage, arguments StringArray, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, workingDirectory FilePath = inheritedWorkingDirectory(), delivery DebugStopDelivery = DebugStopDelivery.awaited) returns DebugToolLaunch
+	export static function launch(image DebugImage, arguments StringArray, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, workingDirectory WorkingDirectory = WorkingDirectory.inherit, delivery DebugStopDelivery = DebugStopDelivery.awaited) returns DebugToolLaunch
 		let launched = launchedToolSession(image, arguments: arguments, targetEnv: targetEnv, stopTimeoutMs: stopTimeoutMs, traced: traced, workingDirectory: workingDirectory, delivery: delivery)
 
 		match launched 'started'
@@ -107,7 +107,7 @@ export type DebugToolSession
 	end 'released'
 end 'DebugToolSession'
 
-function launchedToolSession(image DebugImage, arguments StringArray, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, workingDirectory FilePath, delivery DebugStopDelivery) returns DebugToolLaunch
+function launchedToolSession(image DebugImage, arguments StringArray, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, workingDirectory WorkingDirectory, delivery DebugStopDelivery) returns DebugToolLaunch
 	let program = image.program()
 
 	match debugImageCheckFor(program, spelled: program.path) 'checked'
@@ -116,7 +116,7 @@ function launchedToolSession(image DebugImage, arguments StringArray, targetEnv 
 	end 'checked'
 end 'launchedToolSession'
 
-function startedToolSession(image DebugImage, code ByteArray, reader MxdbgReader, arguments StringArray, workingDirectory FilePath, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, delivery DebugStopDelivery) returns DebugToolLaunch
+function startedToolSession(image DebugImage, code ByteArray, reader MxdbgReader, arguments StringArray, workingDirectory WorkingDirectory, targetEnv EnvMap, stopTimeoutMs StopTimeoutMs, traced bool, delivery DebugStopDelivery) returns DebugToolLaunch
 	let program = image.program()
 	let symbols = DebugSymbols.create(reader, code: code, executable: program)
 	let routing = ChildOutputRouting.collect(OutputSink.create())

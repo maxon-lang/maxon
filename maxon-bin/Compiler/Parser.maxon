@@ -9475,8 +9475,8 @@ end 'qualifierOperandStartsWith'
 // MEASUREMENT.** Two live declarations own the word and neither may be retokenized:
 // `specs/associated-types.md:3493,3500` declares `static function spawn() returns Self` — a
 // byte-identical port of `/specs/associated-types.md`, which the port rule forbids editing — and
-// `stdlib/Subprocess.maxon:658,664` declares `Subprocess.spawn` / `spawnWithCwd` in a module the loader
-// takes into EVERY compile. A `KeywordTable` row would break both on the day it landed, so
+// `stdlib/Subprocess.maxon` declares `StreamingSubprocess.spawn` / `spawnWithCwd` in a module the
+// loader takes into EVERY compile. A `KeywordTable` row would break both on the day it landed, so
 // `filter=associated-types` and `filter=subprocess` staying green IS this decision's gate.
 //
 // The recognition is EXACT rather than heuristic, exactly as `atModuleModifier`'s is: the word is
@@ -20534,7 +20534,7 @@ export type Parser
 	end 'readTopLevelDeclaration'
 
 	function recoversRegions() returns bool
-		return self.isTheReportingWalk and self.job.readsAuthorSource() and not self.genericInstanceName.isInstance()
+		return self.isTheReportingWalk and self.job.readsAuthorSource()
 	end 'recoversRegions'
 
 	function confine(kind RegionKind) returns Confinement throws AbsentError
@@ -33948,12 +33948,7 @@ export type Parser
 			func.bodyStatus = BodyStatus.skippedAsUnreached
 			self.skipUnreachedFunctionBody(entry, nameTok: nameTok)
 		end 'bodyNotReached' else 'bodyReached'
-			// A refusal in a generic instance's body is confined to no region, so it fails the whole file.
-			if self.genericInstanceName.isInstance() 'anInstanceBody'
-				_ = self.enterRegion(AbandonableRegion.none)
-			end 'anInstanceBody' else 'aRecoverableBody'
-				_ = self.enterRegion(AbandonableRegion.body(regionKey))
-			end 'aRecoverableBody'
+			_ = self.enterRegion(AbandonableRegion.body(regionKey))
 
 			// parseStatements threads a "current block" that control-flow statements can
 			// move forward (an `if` leaves subsequent statements in its continuation block),

@@ -778,7 +778,7 @@ export let SpecSpawnTimeoutMs = SpecSpawnTimeoutSeconds * MillisecondsPerSecond
 // value, so the one that differs is the one that states it: `runGuestBatch` for the deadline, since
 // it performs many executions in one spawn, and for the script it hands `orb` on standard input,
 // and the RUN step for the environment (`runEnvironmentFor`) and standard input (`runWithStdin`).
-export function runProcess(exe Executable, argv StringArray, workingDirectory FilePath, timeoutMs DurationMs = SpecSpawnTimeoutMs, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none) returns ProcessCapture throws SubprocessError
+export function runProcess(exe Executable, argv StringArray, workingDirectory WorkingDirectory, timeoutMs DurationMs = SpecSpawnTimeoutMs, environment Environment = Environment.inherit, standardInput InputSource = InputSource.none) returns ProcessCapture throws SubprocessError
 	let config = Configuration.create(exe)
 	config.arguments = argv
 	config.timeoutMs = timeoutMs
@@ -3817,7 +3817,7 @@ end 'GuestSettling'
 function settleOrbGuestView() returns GuestSettling
 	let argv = StringArray from [OrbRunSubcommand, OrbMachineFlag, OrbMachineName, OrbUserFlag, GuestRootUser, GuestShell, GuestShellCommandFlag, GuestDropCachesScript]
 
-	let dropped = try runProcess(Executable.name(OrbExecutableName), argv: argv, workingDirectory: inheritedWorkingDirectory(), timeoutMs: GuestSettleDeadlineMs) otherwise (e) 'unspawnable'
+	let dropped = try runProcess(Executable.name(OrbExecutableName), argv: argv, workingDirectory: WorkingDirectory.inherit, timeoutMs: GuestSettleDeadlineMs) otherwise (e) 'unspawnable'
 		return GuestSettling.unsettled("could not run '{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {OrbUserFlag} {GuestRootUser}' to refresh the machine's view of the host files: {e.displayReason()}")
 	end 'unspawnable'
 
@@ -3923,7 +3923,7 @@ function buildGuestCompiler(harnessExe FilePath, projectRoot FilePath, guestExe 
 	argv.push("{TargetFlagPrefix}{targetKey}")
 	argv.push("{OutputFlagPrefix}{guestExe.toString()}")
 
-	let built = try runProcess(Executable.path(harnessExe), argv: argv, workingDirectory: inheritedWorkingDirectory(), timeoutMs: GuestCompilerBuildDeadlineMs) otherwise (e) 'buildUnspawnable'
+	let built = try runProcess(Executable.path(harnessExe), argv: argv, workingDirectory: WorkingDirectory.inherit, timeoutMs: GuestCompilerBuildDeadlineMs) otherwise (e) 'buildUnspawnable'
 		return GuestCompiler.unavailable("could not run `{harnessExe.toString()} {BuildSubcommandName} {projectRoot.toString()}`: {e.displayReason()}")
 	end 'buildUnspawnable'
 
@@ -4567,7 +4567,7 @@ function spawnExecution(execution Execution, runWorkingDir FilePath, effectiveTa
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingDirPrefix`.
-	let spawned = try runWithStdin(runCommand.exe.clone(), argv: runCommand.argv.clone(), workingDirectory: runWorkingDir, environment: runEnvironmentFor(execution.procs, preempt: execution.preempt, effectiveTarget: effectiveTarget, serial: serial), stdin: execution.stdin) otherwise (e) 'runSpawnFailed'
+	let spawned = try runWithStdin(runCommand.exe.clone(), argv: runCommand.argv.clone(), workingDirectory: WorkingDirectory.at(runWorkingDir), environment: runEnvironmentFor(execution.procs, preempt: execution.preempt, effectiveTarget: effectiveTarget, serial: serial), stdin: execution.stdin) otherwise (e) 'runSpawnFailed'
 		return RunObservation.failed(runFailureReason(e))
 	end 'runSpawnFailed'
 
@@ -4671,7 +4671,7 @@ let SpecStdinFedWord = "hello"
 // reason one field over: that would make the answer a property of how the SUITE was invoked — a pipe
 // under CI, a terminal by hand, a closed descriptor under a daemon — and three invocations of the same
 // case would be asserting three different things.
-function runWithStdin(exe Executable, argv StringArray, workingDirectory FilePath, environment Environment, stdin SpecStdin) returns ProcessCapture throws SubprocessError
+function runWithStdin(exe Executable, argv StringArray, workingDirectory WorkingDirectory, environment Environment, stdin SpecStdin) returns ProcessCapture throws SubprocessError
 	return match stdin 's'
 		closed gives try runProcess(exe, argv: argv, workingDirectory: workingDirectory, environment: environment, standardInput: InputSource.none)
 		held gives try runProcess(exe, argv: argv, workingDirectory: workingDirectory, environment: environment, standardInput: InputSource.hold)
@@ -4808,7 +4808,7 @@ function launchBatch(executions ExecutionArray, launcher BatchLauncher, tempDir 
 		unsettled(reason) then return BatchLaunch.failed(reason)
 	end 'settling'
 
-	let batch = try runProcess(Executable.name(launcher.executableName()), argv: argv, workingDirectory: runWorkingDir, timeoutMs: batchDeadlineMs(executions.count() as TestTally), standardInput: batchScriptInput(launcher, script: script)) otherwise (e) 'batchSpawnFailed'
+	let batch = try runProcess(Executable.name(launcher.executableName()), argv: argv, workingDirectory: WorkingDirectory.at(runWorkingDir), timeoutMs: batchDeadlineMs(executions.count() as TestTally), standardInput: batchScriptInput(launcher, script: script)) otherwise (e) 'batchSpawnFailed'
 		return BatchLaunch.failed("the batched {launcher.executableName()} run failed: {e.displayReason()}")
 	end 'batchSpawnFailed'
 
@@ -5018,7 +5018,7 @@ function guestBasePrologue(launcher BatchLauncher, tempDir FilePath, runWorkingD
 end 'guestBasePrologue'
 
 function hostPhysicalDirectory(directory FilePath) returns FilePath
-	let resolved = try runProcess(Executable.name(PhysicalPwdCommand), argv: StringArray from [PhysicalPwdFlag], workingDirectory: directory) otherwise (e) 'noPwd'
+	let resolved = try runProcess(Executable.name(PhysicalPwdCommand), argv: StringArray from [PhysicalPwdFlag], workingDirectory: WorkingDirectory.at(directory)) otherwise (e) 'noPwd'
 		panic("SpecTestRunner: could not resolve {directory.toString()} to its physical path with `{PhysicalPwdCommand} {PhysicalPwdFlag}`: {e.displayReason()}")
 	end 'noPwd'
 
@@ -5194,7 +5194,7 @@ function requireOrbMachineReachable(effectiveTarget Target, probeScript String, 
 	// orb target (x64-linux under Rosetta) and could not be reached by a renaming.
 	let orbTargetKey = targetToString(effectiveTarget)
 
-	let probe = try runProcess(Executable.name(OrbExecutableName), argv: argv, workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'notInstalled'
+	let probe = try runProcess(Executable.name(OrbExecutableName), argv: argv, workingDirectory: WorkingDirectory.inherit) otherwise (e) 'notInstalled'
 		panic("SpecTestRunner: could not run '{OrbExecutableName}' ({e.displayReason()}) — running a {orbTargetKey} binary from a non-Linux host needs OrbStack (https://orbstack.dev); install it, or drop {TargetFlagPrefix}{orbTargetKey} and run the suite for this host")
 	end 'notInstalled'
 
@@ -5222,7 +5222,7 @@ function requireWslAvailable(effectiveTarget Target)
 	argv.push(GuestShellCommandFlag)
 	argv.push(guestBatchProbeScript())
 
-	let probe = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'notInstalled'
+	let probe = try runProcess(Executable.name(WslExecutableName), argv: argv, workingDirectory: WorkingDirectory.inherit) otherwise (e) 'notInstalled'
 		panic("SpecTestRunner: could not run '{WslExecutableName}' ({e.displayReason()}) — running a {wslTargetKey} binary from a Windows host needs WSL2 (`wsl --install`); install it, or drop {TargetFlagPrefix}{wslTargetKey} and run the suite for this host")
 	end 'notInstalled'
 

@@ -171,12 +171,12 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
-    x64.leaRegRdata rcx, [rip + __str_rec_78]  ; "-c"
+    x64.leaRegRdata rcx, [rip + __str_rec_79]  ; "-c"
     x64.callDirect __str_retain
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push
-    x64.leaRegRdata rcx, [rip + __str_rec_79]  ; "sleep 1; echo hi"
+    x64.leaRegRdata rcx, [rip + __str_rec_80]  ; "sleep 1; echo hi"
     x64.callDirect __str_retain
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
@@ -184,37 +184,30 @@ func @main {
     x64.callDirect Scheduler.counters
     x64.movRegReg r12, r8
     x64.storeSlotReg slot1, r12
-    x64.leaRegRdata rcx, [rip + __str_rec_80]  ; "/bin/sh"
+    x64.leaRegRdata rcx, [rip + __str_rec_81]  ; "/bin/sh"
     x64.callDirect __str_retain
     x64.movRegReg rcx, r8
     x64.callDirect __str_unshare
     x64.movRegReg r13, r8
     x64.orRegImm32 r13, r8, 1
-  __il_body#21:
-    x64.leaRegRdata r14, [rip + __str_rec_115]  ; ""
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r15, r8
-    x64.movRegReg rcx, r14
-    x64.callDirect __str_retain
-    x64.movRegReg rcx, r8
-    x64.callDirect __str_unshare
-    x64.storeBaseDispReg.word64 [r15 + 0], r8
-  __il_body#15:
+  __il_body#16:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect __uretain_WorkingDirectory
+    x64.movRegReg r14, r8
+  __il_body#17:
     x64.movRegImm32 r9, 0
   __il_cont#14:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, rbx
-    x64.movRegReg rax, r15
+    x64.movRegReg rax, r14
     x64.callDirect Subprocess.run
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot2, rbx
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
   tryok:
-    x64.movRegReg rcx, r15
-    x64.callDirect __destruct_FilePath
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_WorkingDirectory
     x64.movRegReg rcx, r13
     x64.callDirect __destruct_Executable
     x64.callDirect Scheduler.counters
@@ -234,15 +227,15 @@ func @main {
     x64.jcc below, __rc_panic#10
   __rc_ok#9:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
-  __il_body#23:
+  __il_body#21:
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.storeSlotReg slot4, r13
-  __il_cont#22:
-    x64.leaRegRdata rdx, [rip + __str_rec_81]  ; "hi"
+  __il_cont#20:
+    x64.leaRegRdata rdx, [rip + __str_rec_82]  ; "hi"
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.callDirect String.startsWith
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_82]  ; "timerpolls="
+    x64.leaRegRdata rax, [rip + __str_rec_83]  ; "timerpolls="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot16, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -258,7 +251,7 @@ func @main {
     x64.callDirect __bool_to_string
     x64.movRegReg r14, r8
     x64.storeSlotReg slot22, r14
-    x64.leaRegRdata rax, [rip + __str_rec_83]  ; " onpoller="
+    x64.leaRegRdata rax, [rip + __str_rec_84]  ; " onpoller="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot14, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -274,7 +267,7 @@ func @main {
     x64.callDirect __bool_to_string
     x64.movRegReg r12, r8
     x64.storeSlotReg slot20, r12
-    x64.leaRegRdata rax, [rip + __str_rec_84]  ; " outLen="
+    x64.leaRegRdata rax, [rip + __str_rec_85]  ; " outLen="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -288,7 +281,7 @@ func @main {
     x64.callDirect __uint_to_string
     x64.movRegReg r13, r8
     x64.storeSlotReg slot5, r13
-    x64.leaRegRdata rax, [rip + __str_rec_85]  ; " matches="
+    x64.leaRegRdata rax, [rip + __str_rec_86]  ; " matches="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot8, rcx
     x64.loadRegBaseDisp.word64 r15, [rax + 8]
@@ -301,7 +294,7 @@ func @main {
     x64.movRegReg rdx, r8
     x64.callDirect __bool_to_string
     x64.storeSlotReg slot24, r8
-    x64.leaRegRdata rax, [rip + __str_rec_86]  ; "\x0a"
+    x64.leaRegRdata rax, [rip + __str_rec_87]  ; "\x0a"
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot11, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -391,10 +384,10 @@ func @main {
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot9
     x64.callDirect __mm_decref
-  __il_body#17:
+  __il_body#19:
     x64.loadRegSlot rcx, slot17
     x64.callDirect __write_stdout
-  __il_cont#16:
+  __il_cont#18:
     x64.loadRegSlot rcx, slot17
     x64.callDirect __str_decref
     x64.loadRegSlot rax, slot4
@@ -427,7 +420,7 @@ func @main {
     x64.popReg rbp
     x64.retIndirect
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_87]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_88]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 232
@@ -439,7 +432,7 @@ func @main {
     x64.popReg rbp
     x64.retIndirect
   __rc_panic#8:
-    x64.leaRegRdata rcx, [rip + __str_blob_269]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_271]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 232
@@ -451,7 +444,7 @@ func @main {
     x64.popReg rbp
     x64.retIndirect
   __rc_panic#10:
-    x64.leaRegRdata rcx, [rip + __str_blob_270]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_272]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 232
@@ -463,7 +456,7 @@ func @main {
     x64.popReg rbp
     x64.retIndirect
   __rc_panic#12:
-    x64.leaRegRdata rcx, [rip + __str_blob_271]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_273]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 232
@@ -947,12 +940,12 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x0, __str_rec_78  ; "-c"
+    arm64.leaRdata x0, __str_rec_79  ; "-c"
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.leaRdata x0, __str_rec_79  ; "sleep 1; echo hi"
+    arm64.leaRdata x0, __str_rec_80  ; "sleep 1; echo hi"
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
@@ -960,34 +953,28 @@ func @main {
     arm64.bl Scheduler.counters
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot1, x20
-    arm64.leaRdata x0, __str_rec_80  ; "/bin/sh"
+    arm64.leaRdata x0, __str_rec_81  ; "/bin/sh"
     arm64.bl __str_retain
     arm64.bl __str_unshare
     arm64.orr x21, x0, 1
-  __il_body#21:
-    arm64.leaRdata x22, __str_rec_115  ; ""
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.movRegReg x0, x22
-    arm64.bl __str_retain
-    arm64.bl __str_unshare
-    arm64.storeBaseDispReg.word64 [x23 + 0], x0
-  __il_body#15:
+  __il_body#16:
+    arm64.movImm x0, 1
+    arm64.bl __uretain_WorkingDirectory
+    arm64.movRegReg x22, x0
+  __il_body#17:
     arm64.movImm x3, 0
   __il_cont#14:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x23
+    arm64.movRegReg x2, x22
     arm64.bl Subprocess.run
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot2, x19
     arm64.cmp x9, 0
     arm64.b.ne tryerr
   tryok:
-    arm64.movRegReg x0, x23
-    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_WorkingDirectory
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Executable
     arm64.bl Scheduler.counters
@@ -1005,15 +992,15 @@ func @main {
     arm64.b.lo __rc_panic#10
   __rc_ok#9:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-  __il_body#23:
+  __il_body#21:
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.storeSlotReg slot4, x22
-  __il_cont#22:
-    arm64.leaRdata x1, __str_rec_81  ; "hi"
+  __il_cont#20:
+    arm64.leaRdata x1, __str_rec_82  ; "hi"
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.bl String.startsWith
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_82  ; "timerpolls="
+    arm64.leaRdata x0, __str_rec_83  ; "timerpolls="
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.cmp x21, 16
@@ -1026,7 +1013,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __bool_to_string
     arm64.movRegReg x21, x0
-    arm64.leaRdata x0, __str_rec_83  ; " onpoller="
+    arm64.leaRdata x0, __str_rec_84  ; " onpoller="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot14, x1
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
@@ -1040,7 +1027,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __bool_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_84  ; " outLen="
+    arm64.leaRdata x0, __str_rec_85  ; " outLen="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot12, x1
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
@@ -1052,7 +1039,7 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __uint_to_string
     arm64.movRegReg x22, x0
-    arm64.leaRdata x0, __str_rec_85  ; " matches="
+    arm64.leaRdata x0, __str_rec_86  ; " matches="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot10, x1
     arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
@@ -1064,7 +1051,7 @@ func @main {
     arm64.movRegReg x1, x28
     arm64.bl __bool_to_string
     arm64.storeSlotReg slot9, x0
-    arm64.leaRdata x1, __str_rec_86  ; "\x0a"
+    arm64.leaRdata x1, __str_rec_87  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.storeSlotReg slot8, x2
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
@@ -1146,10 +1133,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-  __il_body#17:
+  __il_body#19:
     arm64.loadRegSlot x0, slot6
     arm64.bl __write_stdout
-  __il_cont#16:
+  __il_cont#18:
     arm64.loadRegSlot x0, slot6
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot4
@@ -1186,7 +1173,7 @@ func @main {
     arm64.epilogue 224
     arm64.retIndirect
   tryerr:
-    arm64.leaRdata x0, __str_blob_87  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
+    arm64.leaRdata x0, __str_blob_88  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -1202,7 +1189,7 @@ func @main {
     arm64.epilogue 224
     arm64.retIndirect
   __rc_panic#8:
-    arm64.leaRdata x0, __str_blob_269  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    arm64.leaRdata x0, __str_blob_271  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -1218,7 +1205,7 @@ func @main {
     arm64.epilogue 224
     arm64.retIndirect
   __rc_panic#10:
-    arm64.leaRdata x0, __str_blob_270  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    arm64.leaRdata x0, __str_blob_272  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -1234,7 +1221,7 @@ func @main {
     arm64.epilogue 224
     arm64.retIndirect
   __rc_panic#12:
-    arm64.leaRdata x0, __str_blob_271  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_273  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -1755,12 +1742,12 @@ func @main {
     arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
-    arm64.leaRdata x0, __str_rec_78  ; "-c"
+    arm64.leaRdata x0, __str_rec_79  ; "-c"
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
     arm64.bl __managed_push
-    arm64.leaRdata x0, __str_rec_79  ; "sleep 1; echo hi"
+    arm64.leaRdata x0, __str_rec_80  ; "sleep 1; echo hi"
     arm64.bl __str_retain
     arm64.movRegReg x1, x0
     arm64.movRegReg x0, x19
@@ -1768,34 +1755,28 @@ func @main {
     arm64.bl Scheduler.counters
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot1, x20
-    arm64.leaRdata x0, __str_rec_80  ; "/bin/sh"
+    arm64.leaRdata x0, __str_rec_81  ; "/bin/sh"
     arm64.bl __str_retain
     arm64.bl __str_unshare
     arm64.orr x21, x0, 1
-  __il_body#21:
-    arm64.leaRdata x22, __str_rec_115  ; ""
-    arm64.movImm x0, 8
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
-    arm64.movRegReg x23, x0
-    arm64.movRegReg x0, x22
-    arm64.bl __str_retain
-    arm64.bl __str_unshare
-    arm64.storeBaseDispReg.word64 [x23 + 0], x0
-  __il_body#15:
+  __il_body#16:
+    arm64.movImm x0, 1
+    arm64.bl __uretain_WorkingDirectory
+    arm64.movRegReg x22, x0
+  __il_body#17:
     arm64.movImm x3, 0
   __il_cont#14:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x19
-    arm64.movRegReg x2, x23
+    arm64.movRegReg x2, x22
     arm64.bl Subprocess.run
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot2, x19
     arm64.cmp x9, 0
     arm64.b.ne tryerr
   tryok:
-    arm64.movRegReg x0, x23
-    arm64.bl __destruct_FilePath
+    arm64.movRegReg x0, x22
+    arm64.bl __destruct_WorkingDirectory
     arm64.movRegReg x0, x21
     arm64.bl __destruct_Executable
     arm64.bl Scheduler.counters
@@ -1813,15 +1794,15 @@ func @main {
     arm64.b.lo __rc_panic#10
   __rc_ok#9:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
-  __il_body#23:
+  __il_body#21:
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
     arm64.storeSlotReg slot4, x22
-  __il_cont#22:
-    arm64.leaRdata x1, __str_rec_81  ; "hi"
+  __il_cont#20:
+    arm64.leaRdata x1, __str_rec_82  ; "hi"
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.bl String.startsWith
     arm64.movRegReg x19, x0
-    arm64.leaRdata x0, __str_rec_82  ; "timerpolls="
+    arm64.leaRdata x0, __str_rec_83  ; "timerpolls="
     arm64.loadRegBaseDisp.word64 x23, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x24, [x0 + 8]
     arm64.cmp x21, 16
@@ -1834,7 +1815,7 @@ func @main {
     arm64.movRegReg x0, x21
     arm64.bl __bool_to_string
     arm64.movRegReg x21, x0
-    arm64.leaRdata x0, __str_rec_83  ; " onpoller="
+    arm64.leaRdata x0, __str_rec_84  ; " onpoller="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot14, x1
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
@@ -1848,7 +1829,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __bool_to_string
     arm64.movRegReg x20, x0
-    arm64.leaRdata x0, __str_rec_84  ; " outLen="
+    arm64.leaRdata x0, __str_rec_85  ; " outLen="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot12, x1
     arm64.loadRegBaseDisp.word64 x26, [x0 + 8]
@@ -1860,7 +1841,7 @@ func @main {
     arm64.movRegReg x0, x22
     arm64.bl __uint_to_string
     arm64.movRegReg x22, x0
-    arm64.leaRdata x0, __str_rec_85  ; " matches="
+    arm64.leaRdata x0, __str_rec_86  ; " matches="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.storeSlotReg slot10, x1
     arm64.loadRegBaseDisp.word64 x27, [x0 + 8]
@@ -1872,7 +1853,7 @@ func @main {
     arm64.movRegReg x1, x28
     arm64.bl __bool_to_string
     arm64.storeSlotReg slot9, x0
-    arm64.leaRdata x1, __str_rec_86  ; "\x0a"
+    arm64.leaRdata x1, __str_rec_87  ; "\x0a"
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.storeSlotReg slot8, x2
     arm64.loadRegBaseDisp.word64 x1, [x1 + 8]
@@ -1954,10 +1935,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x28
     arm64.bl __mm_decref
-  __il_body#17:
+  __il_body#19:
     arm64.loadRegSlot x0, slot6
     arm64.bl __write_stdout
-  __il_cont#16:
+  __il_cont#18:
     arm64.loadRegSlot x0, slot6
     arm64.bl __str_decref
     arm64.loadRegSlot x0, slot4
@@ -1994,7 +1975,7 @@ func @main {
     arm64.epilogue 224
     arm64.retIndirect
   tryerr:
-    arm64.leaRdata x0, __str_blob_87  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
+    arm64.leaRdata x0, __str_blob_88  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -2010,7 +1991,7 @@ func @main {
     arm64.epilogue 224
     arm64.retIndirect
   __rc_panic#8:
-    arm64.leaRdata x0, __str_blob_269  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    arm64.leaRdata x0, __str_blob_271  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:13: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -2026,7 +2007,7 @@ func @main {
     arm64.epilogue 224
     arm64.retIndirect
   __rc_panic#10:
-    arm64.leaRdata x0, __str_blob_270  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
+    arm64.leaRdata x0, __str_blob_272  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:14: Range check failed: value outside typealias 'SchedulerEventCount'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16
@@ -2042,7 +2023,7 @@ func @main {
     arm64.epilogue 224
     arm64.retIndirect
   __rc_panic#12:
-    arm64.leaRdata x0, __str_blob_271  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_273  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot16

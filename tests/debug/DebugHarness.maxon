@@ -346,7 +346,7 @@ export union BoundedSession
 end 'BoundedSession'
 
 export function boundedDebugBatch(executable FilePath, staged FilePath, commands String, extraOptions StringArray, environment Environment, timeoutMs DurationMs) returns BoundedSession
-	let config = Configuration.create(Executable.path(testedCompilerPath()), workingDirectory: staged)
+	let config = Configuration.create(Executable.path(testedCompilerPath()), workingDirectory: WorkingDirectory.at(staged))
 	config.arguments = debugBatchArguments(executable, commands: commands, extraOptions: extraOptions)
 	config.environment = environment
 	config.timeoutMs = timeoutMs
@@ -1463,7 +1463,7 @@ end 'TracedChild'
 
 export function unservicedTracee(caseLabel String) returns TracedChild
 	let staged = builtFixture(caseLabel, fixture: TraceeFixtureName)
-	let child = try StreamingSubprocess.spawnTraceable(Executable.path(builtExecutable(staged)), arguments: StringArray.create(0), workingDirectory: staged, environment: Environment.inherit, traced: true) otherwise panic("tracee: the traced spawn of the built fixture was refused")
+	let child = try StreamingSubprocess.spawnTraceable(Executable.path(builtExecutable(staged)), arguments: StringArray.create(0), workingDirectory: WorkingDirectory.at(staged), environment: Environment.inherit, traced: true) otherwise panic("tracee: the traced spawn of the built fixture was refused")
 	let process = try child.processId() otherwise panic("tracee: the spawned child recorded no process id")
 
 	return TracedChild.create(child, trace: ProcessTrace.create(), pid: process, threads: StringArray.create(0), staged: staged)

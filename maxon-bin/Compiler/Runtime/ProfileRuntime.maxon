@@ -241,24 +241,6 @@ function buildProfileNextThread(module StdModule)
 	module.functions.push(func)
 end 'buildProfileNextThread'
 
-// `__prof_thread_id(threadHandle) -> DWORD` — which thread a walked handle names, so the profiler can tell
-// one it already tracks from one that has just appeared.
-function buildProfileThreadId(module StdModule)
-	let func = IrFunction.createFromStd(ProfileThreadIdName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	let ids = ValueMinter.create(1)
-
-	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: 1)
-	let handle = 0
-
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let id = emitHostSample(module, block: entry, service: HostProcessCall.threadId, a0: handle, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(id))
-
-	module.functions.push(func)
-end 'buildProfileThreadId'
-
 // ⭐⭐ **`__prof_thread_cycles(threadHandle) -> ticks` — WHAT MAKES THIS A CPU PROFILER RATHER THAN A
 // WALL-CLOCK ONE.** The sampler charges a thread one sample per tick's worth of the cycles this counts, so an
 // idle scheduler worker, parked in a timed wait and burning none, is charged nothing and never suspended —
@@ -507,45 +489,6 @@ function buildProfileModuleSnapshot(module StdModule)
 	module.functions.push(func)
 end 'buildProfileModuleSnapshot'
 
-// `__prof_module_first(snapshot, entryPtr) -> BOOL`. The `dwSize` the API refuses a record without is the
-// CALLER's to write, because the caller is what reserved the record and therefore is the one place its size
-// is stated (`stdlib/Sampler.maxon`'s `ModuleEntryBytes`).
-function buildProfileModuleFirst(module StdModule)
-	let func = IrFunction.createFromStd(ProfileModuleFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	let ids = ValueMinter.create(2)
-
-	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: 2)
-	let snapshot = 0
-	let entryPtr = 1
-
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let found = emitHostSample(module, block: entry, service: HostProcessCall.moduleFirst, a0: snapshot, a1: entryPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(found))
-
-	module.functions.push(func)
-end 'buildProfileModuleFirst'
-
-// `__prof_module_next(snapshot, entryPtr) -> BOOL` — the walk's later steps, over a record `Module32FirstW`
-// has already sized.
-function buildProfileModuleNext(module StdModule)
-	let func = IrFunction.createFromStd(ProfileModuleNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
-	let ids = ValueMinter.create(2)
-
-	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: 2)
-	let snapshot = 0
-	let entryPtr = 1
-
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let found = emitHostSample(module, block: entry, service: HostProcessCall.moduleNext, a0: snapshot, a1: entryPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(found))
-
-	module.functions.push(func)
-end 'buildProfileModuleNext'
-
 function emitProfileHandleClose(module StdModule, block IrBlock, handle ValueId, shape ProfileHostShape, ids ValueMinter)
 	match shape 'release'
 		win32 then module.appendOp(block, op: StdOp.osCloseHandle(handle))
@@ -792,15 +735,17 @@ end 'installProfileRuntime'
 function installWin32SamplingEntries(module StdModule, layout HostContextLayout)
 	buildProfileOpenTarget(module)
 	buildProfileNextThread(module)
-	buildProfileThreadId(module)
+	buildHostProcessEntry(module, name: ProfileThreadIdName, words: HostProcessOneWord, service: HostProcessCall.threadId)
 	buildProfileThreadCycles(module)
 	buildProfileSample(module, layout: layout)
 	buildProfileTimerCreate(module)
 	buildProfileTimerWait(module)
 	buildProfileTimerOpen(module)
 	buildProfileModuleSnapshot(module)
-	buildProfileModuleFirst(module)
-	buildProfileModuleNext(module)
+	// The entries leave MODULEENTRY32's `dwSize` to the caller, which reserved the record: an unsized
+	// record is refused (`stdlib/Sampler.maxon`'s `ModuleEntryBytes`).
+	buildHostProcessEntry(module, name: ProfileModuleFirstName, words: HostProcessTwoWords, service: HostProcessCall.moduleFirst)
+	buildHostProcessEntry(module, name: ProfileModuleNextName, words: HostProcessTwoWords, service: HostProcessCall.moduleNext)
 	buildHostProcessEntry(module, name: ProfileQueryProcessName, words: HostProcessFourWords, service: HostProcessCall.queryProcessInformation)
 	buildHostProcessEntry(module, name: ProfileReadRemoteName, words: HostProcessFourWords, service: HostProcessCall.readProcessMemory)
 end 'installWin32SamplingEntries'

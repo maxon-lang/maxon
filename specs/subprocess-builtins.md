@@ -2736,7 +2736,7 @@ panic would make impossible.
 function main() returns ExitCode
 	var config = Configuration.create(Executable.name("/bin/sh"))
 	config.arguments = ["-c", "printf ok"]
-	config.workingDirectory = try FilePath.from("") otherwise return 1
+	config.workingDirectory = WorkingDirectory.inherit
 	let r = try Subprocess.runConfiguration(config) otherwise return 2
 	print("exit={r.exitCode()} out={r.stdout}\n")
 	return 0
@@ -2759,7 +2759,7 @@ execute. Between them the stdlib's `Configuration` + `runConfiguration` path —
 function main() returns ExitCode
 	let config = Configuration.create(Executable.name("cmd"))
 	config.arguments = ["/c", "echo ok"]
-	config.workingDirectory = try FilePath.from("") otherwise return 1
+	config.workingDirectory = WorkingDirectory.inherit
 	let r = try Subprocess.runConfiguration(config) otherwise return 2
 	print("exit={r.exitCode()} out={r.stdout.trim()}\n")
 	return 0

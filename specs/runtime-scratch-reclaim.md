@@ -198,15 +198,14 @@ function executableMissing() returns bool
 end 'executableMissing'
 
 function workingDirectoryMissing() returns bool
-	_ = try Subprocess.run(shell(), arguments: exitZero(), workingDirectory: Directory.currentPath().join("maxon-spec-no-such-working-directory-xyzzy")) otherwise return true
+	_ = try Subprocess.run(shell(), arguments: exitZero(), workingDirectory: WorkingDirectory.at(Directory.currentPath().join("maxon-spec-no-such-working-directory-xyzzy"))) otherwise return true
 	return false
 end 'workingDirectoryMissing'
 
 function streamingWithEnvironment() returns bool
 	let overrides = EnvMap.create()
 	overrides.upsert("MAXON_SPEC_SCRATCH", value: "1")
-	let inheritCwd = try FilePath.from("") otherwise return false
-	let child = try StreamingSubprocess.spawnWithEnvironment(shell(), arguments: exitZero(), workingDirectory: inheritCwd, environment: Environment.inheritUpdating(overrides)) otherwise return false
+	let child = try StreamingSubprocess.spawnWithEnvironment(shell(), arguments: exitZero(), workingDirectory: WorkingDirectory.inherit, environment: Environment.inheritUpdating(overrides)) otherwise return false
 	let code = try child.wait() otherwise 1
 	child.release()
 	return code == 0

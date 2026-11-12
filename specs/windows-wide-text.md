@@ -542,7 +542,7 @@ function powershell(script String, workingDirectory FilePath) returns String
 	argv.push(script)
 	let config = Configuration.create(Executable.name("powershell"))
 	config.arguments = argv
-	config.workingDirectory = workingDirectory
+	config.workingDirectory = WorkingDirectory.at(workingDirectory)
 	var outcome = ""
 	if let result = try config.run() 'ran'
 		outcome = result.stdout

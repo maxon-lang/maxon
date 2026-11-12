@@ -154,14 +154,14 @@ export type ManifestVoice
 		end 'audience'
 	end 'adopt'
 
-	function runChild(executable FilePath, arguments StringArray, environment Environment, workingDirectory FilePath) returns ExitCode
+	function runChild(executable FilePath, arguments StringArray, environment Environment, workingDirectory WorkingDirectory) returns ExitCode
 		return match self.audience 'audience'
 			commandLine gives spawnForwarding(Executable.path(executable), arguments: arguments, environment: environment, standardInput: InputSource.inherit, workingDirectory: workingDirectory, speaker: self.speaker)
 			editor gives self.collectedChild(executable, arguments: arguments, environment: environment, workingDirectory: workingDirectory)
 		end 'audience'
 	end 'runChild'
 
-	function collectedChild(executable FilePath, arguments StringArray, environment Environment, workingDirectory FilePath) returns ExitCode
+	function collectedChild(executable FilePath, arguments StringArray, environment Environment, workingDirectory WorkingDirectory) returns ExitCode
 		let config = Configuration.create(Executable.path(executable))
 		config.arguments = arguments
 		config.environment = environment
@@ -556,10 +556,10 @@ function discardDescription(description FilePath)
 	try File.delete(description) otherwise ignore
 end 'discardDescription'
 
-function baseDirectory(base ManifestBase) returns FilePath
+function baseDirectory(base ManifestBase) returns WorkingDirectory
 	return match base 'base'
-		workingDirectory gives inheritedWorkingDirectory()
-		directory(dir) gives dir
+		workingDirectory gives WorkingDirectory.inherit
+		directory(dir) gives WorkingDirectory.at(dir)
 	end 'base'
 end 'baseDirectory'
 

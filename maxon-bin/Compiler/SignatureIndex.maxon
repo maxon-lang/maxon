@@ -44192,6 +44192,12 @@ export type ProgramSignatures
 			bySite.upsert(instance.siteKey, value: atSite)
 		end 'eachFiled'
 
+		// A template's instances share one body region in `Parser.readFunction`, and the first to refuse
+		// abandons it for the rest, so this order decides which instance reports.
+		for (_, atSite) in bySite 'eachSite'
+			atSite.sortBy(function(left GenericFunctionInstance, right GenericFunctionInstance) gives compareBytesOrdinally(left.instanceName, right: right.instanceName))
+		end 'eachSite'
+
 		let ownDeclarations = self.mainThreadSettled()
 		ownDeclarations.genericInstancesBySite = bySite
 		ownDeclarations.genericInstancesByName = byName

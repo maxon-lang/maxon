@@ -595,7 +595,7 @@ function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) return
 	argv.push("{OutputFlagPrefix}{outputBase.toString()}")
 	argv.push("{MetricsFlagPrefix}{metricsPath.toString()}")
 
-	let compile = try runProcess(Executable.path(compilerExe), argv: argv, workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'spawnFailed'
+	let compile = try runProcess(Executable.path(compilerExe), argv: argv, workingDirectory: WorkingDirectory.inherit) otherwise (e) 'spawnFailed'
 		throw ScaleError.reason("compiler spawn failed: {e.displayReason()}")
 	end 'spawnFailed'
 
@@ -631,7 +631,7 @@ end 'compileRung'
 function runRung(outputBase FilePath, rung ScaleRung) throws ScaleError
 	let executable = try FilePath.from("{outputBase.toString()}{hostExecutableExtension()}") otherwise throw ScaleError.reason("rung {rung.index}'s output path is not a valid executable path")
 
-	let run = try runProcess(Executable.path(executable), argv: StringArray.create(0), workingDirectory: inheritedWorkingDirectory()) otherwise (e) 'spawnFailed'
+	let run = try runProcess(Executable.path(executable), argv: StringArray.create(0), workingDirectory: WorkingDirectory.inherit) otherwise (e) 'spawnFailed'
 		throw ScaleError.reason("rung {rung.index} compiled but its binary {executable.toString()} could not be started: {e.displayReason()}")
 	end 'spawnFailed'
 

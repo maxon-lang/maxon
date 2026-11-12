@@ -15,6 +15,14 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- `Subprocess` takes its working directory as a `WorkingDirectory`, not a `FilePath`: a child that starts in the
+  parent's directory is `WorkingDirectory.inherit` and one that starts elsewhere is `WorkingDirectory.at(path)`, in
+  `Subprocess.run`, `Configuration.create`, `Configuration.workingDirectory`, `StreamingSubprocess.spawnWithCwd`,
+  `spawnWithEnvironment` and `spawnTraceable`. An empty path no longer means the parent's directory:
+  `at(FilePath.empty())` fails with `SubprocessError.spawnFailed`.
+  Fix: replace `workingDirectory: dir` with `workingDirectory: WorkingDirectory.at(dir)`, and an empty path
+  (`FilePath.empty()`, `FilePath.from("")`) with `WorkingDirectory.inherit`, or omit the argument where it defaults.
+
 - `SamplerError` has the case `signalTrampolineUnavailable`, which `SampledProcess.cycles` and `capture` throw
   on macOS, so a `match` over `SamplerError` that names every case no longer covers it.
   Fix: add a `signalTrampolineUnavailable` arm to each such `match`.

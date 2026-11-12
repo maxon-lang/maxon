@@ -471,11 +471,6 @@ function buildResolved(resolution DescriptionResolution, args MaxonArgs, voice M
 	end 'resolution'
 end 'buildResolved'
 
-// The empty path is `Subprocess.Configuration`'s sentinel for "inherit this process's directory".
-module function inheritedWorkingDirectory() returns FilePath
-	return try FilePath.from("") otherwise panic("inheritedWorkingDirectory: the empty path is the inherit-cwd sentinel and always parses")
-end 'inheritedWorkingDirectory'
-
 // A function rather than a reassignment, which would clone a `String` neither branch changes.
 function chosenOutput(fromManifest String, fromFlag StatedText) returns StatedText
 	return match fromFlag 'flag'
@@ -575,7 +570,7 @@ function repeatedWithOutput(written FilePath, target Target) returns ExitCode
 	let overrides = EnvMap.create()
 	overrides.upsert(SecondStageVariable, value: SecondStageValue)
 
-	return spawnForwarding(Executable.path(program), arguments: invocationArguments(), environment: Environment.inheritUpdating(overrides), standardInput: InputSource.inherit, workingDirectory: inheritedWorkingDirectory(), speaker: BuildSubcommandName)
+	return spawnForwarding(Executable.path(program), arguments: invocationArguments(), environment: Environment.inheritUpdating(overrides), standardInput: InputSource.inherit, workingDirectory: WorkingDirectory.inherit, speaker: BuildSubcommandName)
 end 'repeatedWithOutput'
 
 function inSecondStage() returns bool throws ProcessIntrospectionError
@@ -1494,7 +1489,7 @@ typealias SignalNumber = int(0 to u32.max)
 // configuration.
 //
 // `timeoutMs = 0`: a deadline would kill a long-running child the caller launched deliberately.
-module function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, workingDirectory FilePath, speaker String) returns ExitCode
+module function spawnForwarding(executable Executable, arguments StringArray, environment Environment, standardInput InputSource, workingDirectory WorkingDirectory, speaker String) returns ExitCode
 	let config = Configuration.create(executable)
 	config.arguments = arguments
 	config.environment = environment

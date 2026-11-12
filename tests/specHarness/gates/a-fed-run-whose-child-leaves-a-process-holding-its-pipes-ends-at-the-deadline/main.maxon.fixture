@@ -141,7 +141,7 @@ function holderVerdict(chatty bool) returns String
 
 	let begun = Clock.nowMs()
 
-	try runProcessFedAfter(holderExecutable(), argv: holderChild(chatty),workingDirectory: Directory.currentPath(), timeoutMs: HolderDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: FeedWord) otherwise (e) 'expired'
+	try runProcessFedAfter(holderExecutable(), argv: holderChild(chatty),workingDirectory: WorkingDirectory.at(Directory.currentPath()), timeoutMs: HolderDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: FeedWord) otherwise (e) 'expired'
 		timedOut = e.timedOut()
 		partial = match e 'kind'
 			timeout(_, out, _) gives out
@@ -170,7 +170,7 @@ end 'holderVerdict'
 function cleanVerdict(me FilePath) returns String
 	let begun = Clock.nowMs()
 
-	let capture = try runProcessFedAfter(Executable.path(me), argv: StringArray from [QuietChildMode], workingDirectory: Directory.currentPath(), timeoutMs: CleanDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: FeedWord) otherwise (e) 'failed'
+	let capture = try runProcessFedAfter(Executable.path(me), argv: StringArray from [QuietChildMode], workingDirectory: WorkingDirectory.at(Directory.currentPath()), timeoutMs: CleanDeadlineMs, environment: Environment.inherit, anchor: AnchorLine, feed: FeedWord) otherwise (e) 'failed'
 		return "the run threw: {e.displayReason()}"
 	end 'failed'
 

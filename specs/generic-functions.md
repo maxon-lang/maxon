@@ -1589,3 +1589,127 @@ end 'main'
 ```maxoncstderr
 error E3008: <fragment>:4:9: type 'Shade' is not exported
 ```
+
+<!-- test: error.a-template-refusing-in-every-instance-names-the-same-instance-in-any-declaration-order -->
+Every instance of `readIt` refuses its body, and the refusal reported is that of the instance first by name, `Kind1`, whatever
+order the calls that request the instances are declared in.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Kind1
+	export var f1 as Integer
+
+	static function create() returns Self
+		return Self{f1: 1}
+	end 'create'
+end 'Kind1'
+
+type Kind2
+	export var f2 as Integer
+
+	static function create() returns Self
+		return Self{f2: 2}
+	end 'create'
+end 'Kind2'
+
+type Kind3
+	export var f3 as Integer
+
+	static function create() returns Self
+		return Self{f3: 3}
+	end 'create'
+end 'Kind3'
+
+type Kind4
+	export var f4 as Integer
+
+	static function create() returns Self
+		return Self{f4: 4}
+	end 'create'
+end 'Kind4'
+
+type Kind5
+	export var f5 as Integer
+
+	static function create() returns Self
+		return Self{f5: 5}
+	end 'create'
+end 'Kind5'
+
+type Kind6
+	export var f6 as Integer
+
+	static function create() returns Self
+		return Self{f6: 6}
+	end 'create'
+end 'Kind6'
+
+type Kind7
+	export var f7 as Integer
+
+	static function create() returns Self
+		return Self{f7: 7}
+	end 'create'
+end 'Kind7'
+
+type Kind8
+	export var f8 as Integer
+
+	static function create() returns Self
+		return Self{f8: 8}
+	end 'create'
+end 'Kind8'
+
+function readIt(value T) uses T returns Integer
+	return value.missing
+end 'readIt'
+
+function use1() returns Integer
+	return readIt(Kind1.create())
+end 'use1'
+
+function use2() returns Integer
+	return readIt(Kind2.create())
+end 'use2'
+
+function use3() returns Integer
+	return readIt(Kind3.create())
+end 'use3'
+
+function use4() returns Integer
+	return readIt(Kind4.create())
+end 'use4'
+
+function use5() returns Integer
+	return readIt(Kind5.create())
+end 'use5'
+
+function use6() returns Integer
+	return readIt(Kind6.create())
+end 'use6'
+
+function use7() returns Integer
+	return readIt(Kind7.create())
+end 'use7'
+
+function use8() returns Integer
+	return readIt(Kind8.create())
+end 'use8'
+
+function main() returns ExitCode
+	var total = 0 as Integer
+	total = total + use1()
+	total = total + use2()
+	total = total + use3()
+	total = total + use4()
+	total = total + use5()
+	total = total + use6()
+	total = total + use7()
+	total = total + use8()
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3018: <fragment>:69:15: type 'Kind1' has no field named 'missing'
+```

@@ -147,6 +147,13 @@ public union Executable
 	end 'displayName'
 end 'Executable'
 
+/// Where the child starts: `inherit` is the parent's working directory, `at(path)` is `path`,
+/// relative to the parent's. An empty `path` fails the spawn with `SubprocessError.spawnFailed`.
+public union WorkingDirectory
+	inherit
+	at(path FilePath)
+end 'WorkingDirectory'
+
 // =============================================================================
 // Environment
 // =============================================================================
@@ -208,12 +215,20 @@ type SpawnOperands
 	export let argv as String
 	export let argc as ElementIndex
 	export let environment as SpawnEnvironment
+	export let workingDirectory as WorkingDirectory
 
-	static function prepare(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment) returns SpawnOperands throws SubprocessError
+	static function prepare(executable Executable, arguments StringArray, workingDirectory WorkingDirectory, environment Environment) returns SpawnOperands throws SubprocessError
 		try requireNulFreeSpawn(executable, arguments: arguments, workingDirectory: workingDirectory, environment: environment)
 		let exePath = try resolveExecutablePath(executable, workingDirectory: workingDirectory)
-		return SpawnOperands{executablePath: exePath, argv: buildArgvBlob(exePath, args: arguments), argc: arguments.count() + 1, environment: try spawnEnvironmentFor(environment)}
+		return SpawnOperands{executablePath: exePath, argv: buildArgvBlob(exePath, args: arguments), argc: arguments.count() + 1, environment: try spawnEnvironmentFor(environment), workingDirectory: workingDirectory}
 	end 'prepare'
+
+	function workingDirectoryOperand() returns cstring
+		return match self.workingDirectory 'directory'
+			inherit gives subprocessEmptyCString()
+			at(path) gives path.toString().cstr()
+		end 'directory'
+	end 'workingDirectoryOperand'
 end 'SpawnOperands'
 
 // =============================================================================
@@ -462,8 +477,7 @@ public type Configuration
 	public var executable as Executable
 	public var arguments as StringArray
 
-	/// Empty path means "inherit the parent's working directory".
-	public var workingDirectory as FilePath
+	public var workingDirectory as WorkingDirectory
 	public var environment as Environment
 	public var standardInput as InputSource
 	public var standardOutput as OutputDestination
@@ -475,10 +489,9 @@ public type Configuration
 	public var timeoutMs as DurationMs
 	public var platformOptions as PlatformOptions
 
-	/// Build a Configuration with sensible defaults: empty argv, the given
-	/// working directory (empty inherits the parent's), inherited env, no
-	/// stdin, both output streams collected up to 16 MiB, no timeout.
-	public static function create(executable Executable, workingDirectory FilePath = FilePath.empty()) returns Configuration
+	/// Build a Configuration with sensible defaults: empty argv, the given working directory, inherited
+	/// env, no stdin, both output streams collected up to 16 MiB, no timeout.
+	public static function create(executable Executable, workingDirectory WorkingDirectory = WorkingDirectory.inherit) returns Configuration
 		return Configuration{
 			executable: executable,
 			arguments: StringArray.create(0),
@@ -515,9 +528,8 @@ end 'Configuration'
 // =============================================================================
 
 public type Subprocess
-	/// Run `executable arguments...` and collect output. An empty working directory inherits the
-	/// parent's, and a timeout of 0 waits indefinitely.
-	public static function run(executable Executable, arguments StringArray, workingDirectory FilePath = FilePath.empty(), timeoutMs DurationMs = 0) returns CollectedOutput throws SubprocessError
+	/// Run `executable arguments...` and collect output. A timeout of 0 waits indefinitely.
+	public static function run(executable Executable, arguments StringArray, workingDirectory WorkingDirectory = WorkingDirectory.inherit, timeoutMs DurationMs = 0) returns CollectedOutput throws SubprocessError
 		let c = Configuration.create(executable, workingDirectory: workingDirectory)
 		c.arguments = arguments
 		c.timeoutMs = timeoutMs
@@ -535,7 +547,7 @@ public type Subprocess
 		let stderrTriple = outputTripleFromDestination(config.standardError)
 		let flags = attachedFlagsFor(config.platformOptions)
 
-		let handle = __Builtins.subprocessSpawn(operands.argv.addressableBytes(), operands.argc, config.workingDirectory.toString().cstr(), operands.environment.block.addressableBytes(), operands.environment.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
+		let handle = __Builtins.subprocessSpawn(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), operands.environment.block.addressableBytes(), operands.environment.source, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
 
 		if handle == -1 'spawnFailed'
 			throw spawnFailure(operands.executablePath)
@@ -580,7 +592,7 @@ public type Subprocess
 		let emptyCStr = subprocessEmptyCString()
 		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
 
-		let pid = __Builtins.subprocessDetach(operands.argv.addressableBytes(), operands.argc, config.workingDirectory.toString().cstr(), operands.environment.block.addressableBytes(), operands.environment.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
+		let pid = __Builtins.subprocessDetach(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), operands.environment.block.addressableBytes(), operands.environment.source, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
 
 		if pid < 0 'spawnFailed'
 			throw spawnFailure(operands.executablePath) if pid == -1 else SubprocessError.detachRefused(lastOsErrorCode())
@@ -624,7 +636,7 @@ public type StdioRuntimeTriple
 end 'StdioRuntimeTriple'
 
 /// Resolve `Executable.name(n)` to a launchable path, and `Executable.path(p)` to the path the child runs.
-function resolveExecutablePath(executable Executable, workingDirectory FilePath) returns String throws SubprocessError
+function resolveExecutablePath(executable Executable, workingDirectory WorkingDirectory) returns String throws SubprocessError
 	return match executable 'r'
 		name(n) gives try resolveByName(n, workingDirectory: workingDirectory)
 		path(p) gives launchPathInWorkingDirectory(p, workingDirectory: workingDirectory)
@@ -636,14 +648,16 @@ end 'resolveExecutablePath'
 // between hosts — `CreateProcessW` and macOS 15's `posix_spawn` read it first, `execve` after — so the launch
 // path is made ABSOLUTE here and reads the same either way. The directory is anchored to the parent's own
 // first, because a relative directory joined onto a relative path would be applied twice by a child that
-// has already entered it. An empty `workingDirectory` is the parent's, which the OS already resolves against.
-function launchPathInWorkingDirectory(executablePath FilePath, workingDirectory FilePath) returns String
-	if executablePath.isAbsolute() or workingDirectory.path.byteLength() == 0 'asGiven'
+// has already entered it. An inherited `workingDirectory` is the parent's, which the OS already resolves against.
+function launchPathInWorkingDirectory(executablePath FilePath, workingDirectory WorkingDirectory) returns String
+	if executablePath.isAbsolute() 'asGiven'
 		return executablePath.path
 	end 'asGiven'
 
-	let anchoredDirectory = workingDirectory.resolve(Directory.currentPath())
-	return executablePath.resolve(anchoredDirectory).path
+	return match workingDirectory 'directory'
+		inherit gives executablePath.path
+		at(path) gives executablePath.resolve(path.resolve(Directory.currentPath())).path
+	end 'directory'
 end 'launchPathInWorkingDirectory'
 
 // A name carrying a directory is anchored to the child's working directory, as `Executable.path`
@@ -653,7 +667,7 @@ end 'launchPathInWorkingDirectory'
 //
 // On POSIX a bare name the walk misses is not found: `execve` reads a slash-less path against the
 // working directory, and would run a file there that shadows the tool.
-function resolveByName(name String, workingDirectory FilePath) returns String throws SubprocessError
+function resolveByName(name String, workingDirectory WorkingDirectory) returns String throws SubprocessError
 	let asPath = try FilePath.from(name) otherwise throw SubprocessError.executableNotFound(name)
 	let carriesADirectory = asPath.rootByteLength() > 0 or asPath.filename() != asPath.path
 	let lookup = launchPathInWorkingDirectory(asPath, workingDirectory: workingDirectory) if carriesADirectory else name
@@ -709,13 +723,16 @@ function requireNulFree(text String, operand String) throws SubprocessError
 	end 'eachByte'
 end 'requireNulFree'
 
-function requireNulFreeSpawn(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment) throws SubprocessError
+function requireNulFreeSpawn(executable Executable, arguments StringArray, workingDirectory WorkingDirectory, environment Environment) throws SubprocessError
 	match executable 'program'
 		name(n) then try requireNulFree(n, operand: "the program name")
 		path(p) then try requireNulFree(p.path, operand: "the program path")
 	end 'program'
 
-	try requireNulFree(workingDirectory.path, operand: "the working directory")
+	match workingDirectory 'directory'
+		inherit then break
+		at(path) then try requireNamedWorkingDirectory(path)
+	end 'directory'
 
 	for (iter, argument) in arguments.withIterator() 'eachArgument'
 		try requireNulFree(argument, operand: "argument {iter.index() + 1}")
@@ -727,6 +744,14 @@ function requireNulFreeSpawn(executable Executable, arguments StringArray, worki
 		custom(vars) then try requireNulFreeEnvironment(vars)
 	end 'env'
 end 'requireNulFreeSpawn'
+
+function requireNamedWorkingDirectory(path FilePath) throws SubprocessError
+	if path.path.byteLength() == 0 'empty'
+		throw SubprocessError.spawnFailed("the working directory is the empty path, which names no directory; pass WorkingDirectory.inherit to start the child in the parent's working directory")
+	end 'empty'
+
+	try requireNulFree(path.path, operand: "the working directory")
+end 'requireNamedWorkingDirectory'
 
 function requireNulFreeEnvironment(vars EnvMap) throws SubprocessError
 	for (name, value) in vars 'eachVariable'
@@ -1071,12 +1096,11 @@ public type StreamingSubprocess is unique
 	/// caller drives. Working directory defaults to the parent's cwd; pass
 	/// `spawnWithCwd` if you need to set it.
 	public static function spawn(executable Executable, arguments StringArray) returns StreamingSubprocess throws SubprocessError
-		let inheritCwd = try FilePath.from("") otherwise panic("StreamingSubprocess.spawn: empty path is the sentinel for 'inherit cwd'")
-		return try Self.spawnWithCwd(executable, arguments: arguments, workingDirectory: inheritCwd)
+		return try Self.spawnWithCwd(executable, arguments: arguments, workingDirectory: WorkingDirectory.inherit)
 	end 'spawn'
 
 	/// Same as `spawn` with an explicit working directory.
-	public static function spawnWithCwd(executable Executable, arguments StringArray, workingDirectory FilePath) returns StreamingSubprocess throws SubprocessError
+	public static function spawnWithCwd(executable Executable, arguments StringArray, workingDirectory WorkingDirectory) returns StreamingSubprocess throws SubprocessError
 		return try Self.spawnWithEnvironment(executable, arguments: arguments, workingDirectory: workingDirectory, environment: Environment.inherit)
 	end 'spawnWithCwd'
 
@@ -1088,21 +1112,21 @@ public type StreamingSubprocess is unique
 	/// already being watched. `Environment` answers all three arms — `inherit`, `inheritUpdating` and
 	/// `custom` — and `spawnEnvironmentFor` turns any of them into the (block, source) pair the spawn
 	/// contract takes, exactly as the attached spawn does.
-	public static function spawnWithEnvironment(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment) returns StreamingSubprocess throws SubprocessError
+	public static function spawnWithEnvironment(executable Executable, arguments StringArray, workingDirectory WorkingDirectory, environment Environment) returns StreamingSubprocess throws SubprocessError
 		return try Self.spawnTraceable(executable, arguments: arguments, workingDirectory: workingDirectory, environment: environment, traced: false)
 	end 'spawnWithEnvironment'
 
 	/// Same as `spawnWithEnvironment`, with the child created for a debugger when `traced` is set. On
 	/// Windows and Linux this process becomes its debugger; on macOS the child is created suspended, for
 	/// a debugger to attach to by its `processId()` before its first instruction runs.
-	public static function spawnTraceable(executable Executable, arguments StringArray, workingDirectory FilePath, environment Environment, traced bool) returns StreamingSubprocess throws SubprocessError
+	public static function spawnTraceable(executable Executable, arguments StringArray, workingDirectory WorkingDirectory, environment Environment, traced bool) returns StreamingSubprocess throws SubprocessError
 		let operands = try SpawnOperands.prepare(executable, arguments: arguments, workingDirectory: workingDirectory, environment: environment)
 
 		// 4th arg is the spawn-flags bitfield. Streaming spawns never detach — the parent has to keep the
 		// pipes open — and don't take platform-options today, so `traced` is the only bit they ever carry.
 		// The environment block and its source flag follow it.
 		let flags = SpawnFlag.traced.rawValue if traced else 0
-		let rawHandle = __Builtins.subprocessSpawnStreaming(operands.argv.addressableBytes(), operands.argc, workingDirectory.toString().cstr(), flags, operands.environment.block.addressableBytes(), operands.environment.source)
+		let rawHandle = __Builtins.subprocessSpawnStreaming(operands.argv.addressableBytes(), operands.argc, operands.workingDirectoryOperand(), flags, operands.environment.block.addressableBytes(), operands.environment.source)
 
 		if rawHandle == -1 'spawnFailed'
 			throw spawnFailure(operands.executablePath)

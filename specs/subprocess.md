@@ -143,7 +143,7 @@ function main() returns ExitCode
 	let exe = Executable.path(try FilePath.from("/bin/pwd") otherwise return 2)
 	var argv = StringArray.create(0)
 	#endif
-	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: cwd) otherwise return 2
+	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: WorkingDirectory.at(cwd)) otherwise return 2
 	if not result.succeeded() 'check-success'
 		return 3
 	end 'check-success'
@@ -406,7 +406,7 @@ function main() returns ExitCode
 	#endif
 	let cwd = Directory.currentPath()
 	var sawTimeout = false
-	try Subprocess.run(exe, arguments: argv, workingDirectory: cwd, timeoutMs: 200) otherwise (e) 'handler'
+	try Subprocess.run(exe, arguments: argv, workingDirectory: WorkingDirectory.at(cwd), timeoutMs: 200) otherwise (e) 'handler'
 		match e 'kind'
 			timeout then sawTimeout = true
 			executableNotFound then sawTimeout = false
@@ -461,7 +461,7 @@ function main() returns ExitCode
 	#endif
 	let cwd = Directory.currentPath()
 	var partial = ""
-	try Subprocess.run(exe, arguments: argv, workingDirectory: cwd, timeoutMs: 2000) otherwise (e) 'handler'
+	try Subprocess.run(exe, arguments: argv, workingDirectory: WorkingDirectory.at(cwd), timeoutMs: 2000) otherwise (e) 'handler'
 		partial = match e 'kind'
 			timeout(_, out, _) gives out
 			executableNotFound or
@@ -1453,7 +1453,7 @@ function makeDirectory(dir FilePath, made FilePathArray)
 	made.push(dir)
 end 'makeDirectory'
 
-function exitOf(name String, workingDirectory FilePath) returns String
+function exitOf(name String, workingDirectory WorkingDirectory) returns String
 	let config = Configuration.create(Executable.name(name))
 	config.workingDirectory = workingDirectory
 	var outcome = ""
@@ -1470,7 +1470,7 @@ function report(pathDir FilePath) returns ExitCode
 	let workingDir = Directory.currentPath()
 	let windowsDir = try FilePath.from(try Process.environmentVariable("SystemRoot") otherwise return 3) otherwise return 3
 	let systemDir = windowsDir.join("System32")
-	let inherited = FilePath.empty()
+	let inherited = WorkingDirectory.inherit
 
 	print("first: {exitOf("maxon-spec-order-first", workingDirectory: inherited)}, application directory: {resolvesTo("maxon-spec-order-first", expected: appDir.join("maxon-spec-order-first.cmd"))}\n")
 	print("second: {exitOf("maxon-spec-order-second", workingDirectory: inherited)}, working directory: {resolvesTo("maxon-spec-order-second", expected: workingDir.join("maxon-spec-order-second.cmd"))}\n")
@@ -1478,9 +1478,9 @@ function report(pathDir FilePath) returns ExitCode
 	print("regedit: windows directory: {resolvesTo("regedit", expected: windowsDir.join("regedit.exe"))}\n")
 	print("third: {exitOf("maxon-spec-order-third", workingDirectory: inherited)}, PATH directory: {resolvesTo("maxon-spec-order-third", expected: pathDir.join("maxon-spec-order-third.cmd"))}\n")
 	print("relative: {exitOf("sub\\maxon-spec-order-relative", workingDirectory: inherited)}, working directory: {resolvesTo("sub\\maxon-spec-order-relative", expected: workingDir.join("sub").join("maxon-spec-order-relative.cmd"))}\n")
-	print("relative in a given working directory: {exitOf("sub\\maxon-spec-order-relative", workingDirectory: workingDir.join("elsewhere"))}\n")
+	print("relative in a given working directory: {exitOf("sub\\maxon-spec-order-relative", workingDirectory: WorkingDirectory.at(workingDir.join("elsewhere")))}\n")
 	let drive = try workingDir.path.split(":").get(0) otherwise return 2
-	print("drive-relative in a given working directory: {exitOf("{drive}:maxon-spec-order-drive", workingDirectory: workingDir.join("elsewhere"))}\n")
+	print("drive-relative in a given working directory: {exitOf("{drive}:maxon-spec-order-drive", workingDirectory: WorkingDirectory.at(workingDir.join("elsewhere")))}\n")
 	print("rooted: {exitOf("\\maxon-spec-order-rooted", workingDirectory: inherited)}\n")
 	return 0
 end 'report'
@@ -1547,7 +1547,7 @@ function main() returns ExitCode
 	let argv = StringArray.create(0)
 	argv.push(pathDir.path)
 	config.arguments = argv
-	config.workingDirectory = workingDir
+	config.workingDirectory = WorkingDirectory.at(workingDir)
 	config.environment = childEnvironment(pathDir)
 	let result = try config.run() otherwise return 5
 
@@ -1727,7 +1727,7 @@ line answers what the first does.
 ```maxon
 function verdictOf(executable Executable, workingDirectory FilePath) returns String
 	let config = Configuration.create(executable)
-	config.workingDirectory = workingDirectory
+	config.workingDirectory = WorkingDirectory.at(workingDirectory)
 	var verdict = "ran"
 	try config.run() otherwise (e) 'handler'
 		match e 'kind'
@@ -1822,7 +1822,7 @@ function main() returns ExitCode
 	#endif
 
 	var verdict = "ran"
-	try Subprocess.run(exe, arguments: argv, workingDirectory: Directory.currentPath().join("maxon-spec-no-such-working-directory-xyzzy")) otherwise (e) 'handler'
+	try Subprocess.run(exe, arguments: argv, workingDirectory: WorkingDirectory.at(Directory.currentPath().join("maxon-spec-no-such-working-directory-xyzzy"))) otherwise (e) 'handler'
 		match e 'kind'
 			executableNotFound then verdict = "executableNotFound"
 			spawnFailed then verdict = "spawnFailed"
@@ -1845,6 +1845,35 @@ end 'main'
 ```
 ```stdout
 spawnFailed
+```
+
+<!-- test: subprocess-an-empty-working-directory-is-spawn-failed-and-names-the-inherit-case -->
+<!-- unsupported-targets: wasm32-wasi -->
+An empty path names no directory, so `WorkingDirectory.at` of one is refused as `spawnFailed` before the spawn, and the
+message names `WorkingDirectory.inherit`, the way to start the child in the parent's working directory.
+```maxon
+function main() returns ExitCode
+	#if os(Windows)
+	let exe = Executable.name("cmd")
+	#else
+	let exe = Executable.name("sh")
+	#endif
+
+	try Subprocess.run(exe, arguments: StringArray.create(0), workingDirectory: WorkingDirectory.at(FilePath.empty())) otherwise (e) 'handler'
+		match e 'kind'
+			spawnFailed(reason) then print("spawnFailed names inherit {reason.contains("WorkingDirectory.inherit")}\n")
+			default panic("an empty working directory is refused as spawnFailed")
+		end 'kind'
+	end 'handler'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+spawnFailed names inherit true
 ```
 
 <!-- test: subprocess-exit-code -->
@@ -2067,7 +2096,7 @@ function main() returns ExitCode
 	var argv = StringArray.create(0)
 	argv.push("ok")
 	#endif
-	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: Directory.currentPath(), timeoutMs: 5000) otherwise return 3
+	let result = try Subprocess.run(exe, arguments: argv, workingDirectory: WorkingDirectory.at(Directory.currentPath()), timeoutMs: 5000) otherwise return 3
 	if result.succeeded() 'check'
 		return 0
 	end 'check'
@@ -2563,7 +2592,7 @@ function main() returns ExitCode
 	let argv = StringArray.create(0)
 	argv.push("child")
 
-	if let result = try Subprocess.run(exe, arguments: argv, workingDirectory: Directory.currentPath().join("subprocess-nul-working-directory\0x")) 'ran'
+	if let result = try Subprocess.run(exe, arguments: argv, workingDirectory: WorkingDirectory.at(Directory.currentPath().join("subprocess-nul-working-directory\0x"))) 'ran'
 		print("ran: {result.stdout}")
 	end 'ran' else (e) 'refused'
 		print("refused {e.name}\n")
@@ -3207,7 +3236,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1429: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+panic at Subprocess.maxon:1453: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
 Stack trace:
   in StreamingSubprocess.release
   in main
@@ -3672,7 +3701,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1433: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first
+panic at Subprocess.maxon:1457: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first
 Stack trace:
   in StreamingSubprocess.release
   in main
@@ -3857,7 +3886,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1429: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
+panic at Subprocess.maxon:1453: StreamingSubprocess.release: the stdout reader is still out; reclaimStdout first
 Stack trace:
   in StreamingSubprocess.release
   in main
@@ -3893,7 +3922,7 @@ end 'main'
 ```stdout
 ```
 ```stderr
-panic at Subprocess.maxon:1433: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first
+panic at Subprocess.maxon:1457: StreamingSubprocess.release: the stderr reader is still out; reclaimStderr first
 Stack trace:
   in StreamingSubprocess.release
   in main

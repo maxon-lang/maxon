@@ -702,7 +702,7 @@ function main() returns ExitCode
 	let directory = try me.parent() otherwise return 1
 	let childArguments = StringArray.create(0)
 	childArguments.push("child")
-	let child = try StreamingSubprocess.spawnTraceable(Executable.path(me), arguments: childArguments, workingDirectory: directory, environment: Environment.inherit, traced: true) otherwise return 2
+	let child = try StreamingSubprocess.spawnTraceable(Executable.path(me), arguments: childArguments, workingDirectory: WorkingDirectory.at(directory), environment: Environment.inherit, traced: true) otherwise return 2
 	let pid = try child.processId() otherwise return 3
 	let pin = MachinePin.acquire()
 	let port = DebugPort.create()
