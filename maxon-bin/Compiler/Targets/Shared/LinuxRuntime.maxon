@@ -426,13 +426,13 @@ export let LinuxGetPriorityBias = 20
 // The search object
 // ==========================================================================
 
-// ⭐⭐ **ONE `mmap`'d PAGE HOLDS THE WHOLE SEARCH, AND THAT IS THE ANSWER TO HAVING NO `malloc`.** Win32's
-// `HANDLE` carries the open directory and the pattern still to be matched; this page carries all four things
+// ⭐⭐ **ONE `mmap`'d REGION HOLDS THE WHOLE SEARCH, AND THAT IS THE ANSWER TO HAVING NO `malloc`.** Win32's
+// `HANDLE` carries the open directory and the pattern still to be matched; this region carries all four things
 // a walk needs — the descriptor, the cursor and filled count into the `getdents64` buffer, the pattern, and
 // the directory-prefix scratch — and one `munmap` releases all four.
 //
 // ⭐ **THE GEOMETRY IS THE BACKENDS' OWN INVENTION, NOT THE KERNEL'S**, which is why it is arch-neutral by
-// construction rather than by measurement: nothing outside these chunks ever reads this page.
+// construction rather than by measurement: nothing outside these chunks ever reads this region.
 //
 // ⚠ **A NEGATIVE `dirfd` IS THE EXHAUSTED SINGLE-`stat` SEARCH, NOT AN ERROR.** A pattern with no wildcard is
 // answered by one `stat` and has exactly one entry, which `FindFirstFileW` has already reported — so the
@@ -447,11 +447,14 @@ export let LinuxSearchDirFdOffset = 0x00 as Imm32
 export let LinuxSearchCursorOffset = 0x08 as Imm32
 export let LinuxSearchFilledOffset = 0x10 as Imm32
 export let LinuxSearchPatternOffset = 0x18 as Imm32
-export let LinuxSearchPrefixOffset = 0x200 as Imm32
-export let LinuxSearchEntriesOffset = 0x400 as Imm32
-export let LinuxSearchBytes = 0x1000
+export let LinuxSearchPrefixOffset = 0x1020 as Imm32
+export let LinuxSearchEntriesOffset = 0x2020 as Imm32
+export let LinuxSearchBytes = 0x4000
 
-// What the `getdents64` buffer may hold: the whole tail of the page above the two variable-length regions.
+export let LinuxPathBytes = 4096 as FullRangeInt
+export let LinuxPathStringCapacity = LinuxPathBytes - 1
+
+// What the `getdents64` buffer may hold: the whole tail of the region above the two variable-length regions.
 export let LinuxSearchEntriesBytes = LinuxSearchBytes - (LinuxSearchEntriesOffset as FullRangeInt)
 
 // The `dirfd` of a search that has no directory to walk. DERIVED from the handle sentinel rather than
@@ -502,22 +505,22 @@ export let LinuxProcStateDeadLegacy = 0x78
 // rather than to init, so the parent-link walk from this process still reaches it.
 export let LinuxPrSetChildSubreaper = 36
 
-// ⭐ **THE SEARCH PAGE'S THREE REGIONS MUST EACH HOLD WHAT IS WRITTEN INTO THEM, AND NOTHING ELSE CHECKS.**
-// The pattern copy and the directory prefix are bounded by `PosixPathStringCapacity` at their copy sites, and
+// ⭐ **THE SEARCH REGION'S THREE PARTS MUST EACH HOLD WHAT IS WRITTEN INTO THEM, AND NOTHING ELSE CHECKS.**
+// The pattern copy and the directory prefix are bounded by `LinuxPathStringCapacity` at their copy sites, and
 // each walk hands `getdents64` the whole tail — so the OFFSETS and the bounds are a pair, in different
 // functions, with a byte-for-byte overrun of a mapped page as the failure. Checked here rather than
 // commented, which is this project's cure ladder: an offset moved without its neighbour fails the build.
 export function assertLinuxSearchGeometry()
 	let patternBytes = (LinuxSearchPrefixOffset - LinuxSearchPatternOffset) as FullRangeInt
 
-	if patternBytes < MaxPathBytes 'patternRegion'
-		panic("LinuxRuntime: the search object's pattern region is {patternBytes} bytes and a pattern copy writes up to {MaxPathBytes} (`PosixPathStringCapacity` plus its terminator) — it would run into the directory-prefix scratch above it")
+	if patternBytes < LinuxPathBytes 'patternRegion'
+		panic("LinuxRuntime: the search object's pattern region is {patternBytes} bytes and a pattern copy writes up to {LinuxPathBytes} (`LinuxPathStringCapacity` plus its terminator) — it would run into the directory-prefix scratch above it")
 	end 'patternRegion'
 
 	let prefixBytes = (LinuxSearchEntriesOffset - LinuxSearchPrefixOffset) as FullRangeInt
 
-	if prefixBytes < MaxPathBytes 'prefixRegion'
-		panic("LinuxRuntime: the search object's directory-prefix scratch is {prefixBytes} bytes and `mrt_linux_dir_prefix` writes up to {MaxPathBytes} — it would run into the `getdents64` buffer above it")
+	if prefixBytes < LinuxPathBytes 'prefixRegion'
+		panic("LinuxRuntime: the search object's directory-prefix scratch is {prefixBytes} bytes and `mrt_linux_dir_prefix` writes up to {LinuxPathBytes} — it would run into the `getdents64` buffer above it")
 	end 'prefixRegion'
 
 	if LinuxSearchEntriesBytes < LinuxSearchMinimumEntriesBytes 'entriesRegion'

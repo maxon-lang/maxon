@@ -1401,12 +1401,11 @@ end 'buildX64LinuxPathOpChunk'
 function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotNewPath = 0
 	let SlotDirFd = 1
-	let SlotPrefix = 2
-	let prefixSlots = runtimeFrameSlots(MaxPathBytes)
-	let asm = X64RuntimeAsm.beginFunction(2 + prefixSlots)
-	let prefixDisp = x64LinuxBufferDisp(asm, firstSlot: SlotPrefix, slotCount: prefixSlots)
+	let SlotPrefixPage = 2
+	let asm = X64RuntimeAsm.beginFunction(3)
 
 	let renamed = asm.newLabel()
+	let unmap = asm.newLabel()
 	let released = asm.newLabel()
 	let answered = asm.newLabel()
 
@@ -1424,25 +1423,34 @@ function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Function
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
 	asm.placeLabel(renamed)
+	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxPathBytes as MachineWord))
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: released)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPrefixPage), srcReg: X64Register.rax, wide: true)
+
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotNewPath), wide: true)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: prefixDisp)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxDirPrefixName)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: released)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: unmap)
 
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: prefixDisp)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotPrefixPage), wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: PosixOpenReadOnly or LinuxOpenCloseOnExec)
 	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixNoFileMode as MachineWord)
 	encodeMovRegImm64(asm.code, dest: X64Register.rdi, value: LinuxAtFdCwd)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallOpenat)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotDirFd), srcReg: X64Register.rax, wide: true)
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: released)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: unmap)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: X64Register.rax, wide: true)
 	x64LinuxEmitSyscallRestartingOnEintr(asm, number: X64LinuxSyscallFsync)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotDirFd), wide: true)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallClose)
+
+	asm.placeLabel(unmap)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotPrefixPage), wide: true)
+	encodeX64MunmapBaseInRdi(asm.code, length: X64MapLength.fixed(LinuxPathBytes as MachineWord))
 
 	asm.placeLabel(released)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
@@ -1672,7 +1680,7 @@ function buildX64LinuxDirPrefixChunk() returns FunctionCodeChunk
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: 1)
 
 	asm.placeLabel(haveLength)
-	emitCmpRegImm(asm, reg: X64Register.rdx, imm: PosixPathStringCapacity as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: LinuxPathStringCapacity as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greater, targetBlockId: tooLong)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotPath), wide: true)
@@ -1867,7 +1875,7 @@ function buildX64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns Functi
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: answered)
 
-	// A glob: the page comes FIRST, because it is also where the directory prefix is built — this lane has
+	// A glob: the region comes FIRST, because it is also where the directory prefix is built — this lane has
 	// no `malloc` to borrow a scratch buffer from.
 	asm.placeLabel(walk)
 	x64LinuxEmitAllocateSearch(asm, searchSlot: SlotSearch, errnoHome: errnoHome)
@@ -1894,7 +1902,7 @@ function buildX64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns Functi
 	encodeStoreBaseDispReg(asm.code, base: X64Register.r8, disp: LinuxSearchDirFdOffset, srcReg: X64Register.rax, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotGlob), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdi, base: X64Register.r8, disp: LinuxSearchPatternOffset)
-	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: PosixPathStringCapacity as MachineWord)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxPathStringCapacity as MachineWord)
 	x64LinuxEmitCopyCStringBounded(asm, src: X64Register.rsi, dest: X64Register.rdi, limit: X64Register.r10, scratch: X64Register.rax)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotSearch), wide: true)
@@ -1931,7 +1939,7 @@ function buildX64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns Functi
 	return asm.finishFunction(HostDirFindFirstName)
 end 'buildX64LinuxDirFindFirstChunk'
 
-// Map one page for a search, leaving it in rax AND in `searchSlot`, or 0 in both. `MAP_ANON` zeroes it, so
+// Map the region for a search, leaving it in rax AND in `searchSlot`, or 0 in both. `MAP_ANON` zeroes it, so
 // the cursor, the filled count and the pattern's first byte are already right; only the descriptor is
 // written, and it is written to the "no directory" sentinel so that a caller which never opens one still
 // hands back an object `find_next` reads correctly.

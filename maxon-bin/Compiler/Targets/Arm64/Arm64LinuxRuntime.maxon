@@ -956,7 +956,7 @@ end 'buildArm64LinuxPathOpChunk'
 // destination atomically. The WRITE-THROUGH is not: Win32 promises the operation has reached the disk before
 // it returns, and POSIX records a rename's durability in the DESTINATION DIRECTORY's metadata — so keeping
 // the second promise means opening that directory and `fsync`ing it. (`Arm64DarwinRuntime`'s twin carries the
-// same two paragraphs; what differs here is that the prefix goes in a frame buffer rather than a `malloc`.)
+// same two paragraphs; what differs here is that the prefix goes in a scratch `mmap` rather than a `malloc`.)
 //
 // ⚠ **THE DURABILITY STEP IS BEST-EFFORT AND ITS FAILURES ARE DELIBERATELY NOT REPORTED.** The rename has
 // already happened and is already visible; a caller told "the rename failed" because the parent directory
@@ -970,10 +970,11 @@ end 'buildArm64LinuxPathOpChunk'
 function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotNewPath = 0
 	let SlotDirFd = 1
-	let SlotPrefix = 2
-	let asm = Arm64RuntimeAsm.beginFunction(2 + runtimeFrameSlots(MaxPathBytes))
+	let SlotPrefixPage = 2
+	let asm = Arm64RuntimeAsm.beginFunction(3)
 
 	let renamed = asm.newLabel()
+	let unmap = asm.newLabel()
 	let released = asm.newLabel()
 	let answered = asm.newLabel()
 
@@ -991,23 +992,39 @@ function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Functi
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(renamed)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotNewPath)
-	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPrefix)
-	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxDirPrefixName)
-	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: released)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: MmapKernelChoosesBase)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxPathBytes as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: MmapProtReadWrite)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: MmapAnonPrivateLinux)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: MmapAnonFd)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: MmapNoOffset)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMmap)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: released)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPrefixPage)
 
-	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotPrefix)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotNewPath)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxDirPrefixName)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: unmap)
+
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotPrefixPage)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PosixOpenReadOnly or LinuxOpenCloseOnExec)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoFileMode as MachineWord)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotDirFd)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: released)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: unmap)
 
 	arm64LinuxEmitSyscallRestartingOnEintr(asm, number: Arm64LinuxSyscallFsync)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotDirFd)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallClose)
+
+	asm.placeLabel(unmap)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPrefixPage)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxPathBytes as MachineWord)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMunmap)
 
 	asm.placeLabel(released)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
@@ -1242,7 +1259,7 @@ function buildArm64LinuxDirPrefixChunk() returns FunctionCodeChunk
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x0, rhs: Arm64Register.x1)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: 0)
 	arm64EmitCsel(asm.code, dest: arm64RuntimeReg(Arm64Register.x2), ifTrue: arm64RuntimeReg(Arm64Register.x1), ifFalse: arm64RuntimeReg(Arm64Register.x2), cond: Arm64CondCode.eq)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: PosixPathStringCapacity as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x2, imm: LinuxPathStringCapacity as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.gt, label: tooLong)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotLength)
 
@@ -1438,7 +1455,7 @@ function buildArm64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns Func
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
 	arm64EmitBranchTo(asm, label: answered)
 
-	// A glob: the page comes FIRST, because it is also where the directory prefix is built — this lane has no
+	// A glob: the region comes FIRST, because it is also where the directory prefix is built — this lane has no
 	// `malloc` to borrow a scratch buffer from.
 	asm.placeLabel(walk)
 	arm64LinuxEmitAllocateSearch(asm, searchSlot: SlotSearch, errnoHome: errnoHome)
@@ -1463,7 +1480,7 @@ function buildArm64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns Func
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x0, base: Arm64Register.x10, byteOffset: LinuxSearchDirFdOffset as MachineWord)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotGlob)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x2, base: Arm64Register.x10, imm: LinuxSearchPatternOffset)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixPathStringCapacity as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxPathStringCapacity as MachineWord)
 	arm64EmitCopyCStringBounded(asm, src: Arm64Register.x1, dest: Arm64Register.x2, limit: Arm64Register.x3, scratch: Arm64Register.x4)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
@@ -1499,7 +1516,7 @@ function buildArm64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns Func
 	return asm.finishFunction(HostDirFindFirstName)
 end 'buildArm64LinuxDirFindFirstChunk'
 
-// Map one page for a search, leaving it in x0 AND in `searchSlot`, or 0 in both. `MAP_ANON` zeroes it, so the
+// Map the region for a search, leaving it in x0 AND in `searchSlot`, or 0 in both. `MAP_ANON` zeroes it, so the
 // cursor, the filled count and the pattern's first byte are already right; only the descriptor is written,
 // and it is written to the "no directory" sentinel so that a caller which never opens one still hands back an
 // object `find_next` reads correctly.
