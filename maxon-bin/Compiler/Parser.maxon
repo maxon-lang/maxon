@@ -2739,18 +2739,28 @@ union EmittedCallOp
 	end 'opIndex'
 end 'EmittedCallOp'
 
-type AuthoredMemberCall
+type OpSpan
 	module let first as ElementIndex
 	module let pastEnd as ElementIndex
-	module let spelling as String
 
-	static function spanning(first ElementIndex, pastEnd ElementIndex, spelling String) returns AuthoredMemberCall
-		return Self{first: first, pastEnd: pastEnd, spelling: spelling}
-	end 'spanning'
+	static function between(first ElementIndex, pastEnd ElementIndex) returns OpSpan
+		return Self{first: first, pastEnd: pastEnd}
+	end 'between'
 
 	function holds(op ElementIndex) returns bool
 		return op >= self.first and op < self.pastEnd
 	end 'holds'
+end 'OpSpan'
+
+typealias OpSpanArray = Array with OpSpan
+
+type AuthoredMemberCall
+	module let span as OpSpan
+	module let spelling as String
+
+	static function spanning(first ElementIndex, pastEnd ElementIndex, spelling String) returns AuthoredMemberCall
+		return Self{span: OpSpan.between(first, pastEnd: pastEnd), spelling: spelling}
+	end 'spanning'
 end 'AuthoredMemberCall'
 
 typealias AuthoredMemberCallArray = Array with AuthoredMemberCall
@@ -18732,6 +18742,7 @@ type FunctionBodyState
 	export var emittedCall as EmittedCallOp
 	export var literalCallOps as FuncIndexArray
 	export var authoredMemberCalls as AuthoredMemberCallArray
+	export var liftedClosureBodies as OpSpanArray
 	export var declaredMutableParams as ParamPositionMask
 
 	// ⭐⭐ **THE `with` ARGUMENTS EACH EXISTENTIAL VALUE'S DECLARED TYPE NAMED** — see
@@ -19350,6 +19361,7 @@ type FunctionBodyState
 			emittedCall: EmittedCallOp.none,
 			literalCallOps: FuncIndexArray.create(0),
 			authoredMemberCalls: AuthoredMemberCallArray.create(0),
+			liftedClosureBodies: OpSpanArray.create(0),
 			declaredMutableParams: NoParamPositions,
 			valueExistentialInstance: noValueExistentialInstances,
 			valueExistentialScope: noValueExistentialScopes,
@@ -93836,6 +93848,7 @@ export type Parser
 		// function, so a column shared across the boundary would name unrelated values on the other side.
 		let savedBody = self.bodyState
 		let savedFuncIndex = self.artifact.currentFuncIndex
+		let bodyFirstOp = self.artifact.module.opCount()
 
 		// A closure body is a closure body whatever it was written inside (see `EnclosingBodyKind`): the
 		// `test` body relaxation must not follow the keyword into a nested function, whose errors go to
@@ -93985,6 +93998,7 @@ export type Parser
 		// --- Restore the enclosing function's parse context. ---
 		_ = try self.closureEnclosingFrames.pop() otherwise panic("parseClosureExpression: closureEnclosingFrames underflow — the enclosing frame pushed at entry is missing")
 		self.bodyState = savedBody
+		self.bodyState.liftedClosureBodies.push(OpSpan.between(bodyFirstOp, pastEnd: self.artifact.module.opCount()))
 
 		// A capture is a mention in the enclosing function. The captured binding itself is already
 		// excused by its `referenced` bit, which `emitCaptureRead` set through the enclosing object; this
@@ -94453,6 +94467,10 @@ export type Parser
 		end 'theScalarRulesAnswer'
 
 		for i in opFloor upto self.artifact.module.opCount() 'eachOp'
+			if self.opIsInAClosureBody(i) 'runsOnlyWhenTheClosureIsCalled'
+				continue
+			end 'runsOnlyWhenTheClosureIsCalled'
+
 			let op = self.maxonOpAt(i)
 
 			if maxonOpCalleeKind(op) != MaxonCalleeKind.direct 'notADirectCall'
@@ -94465,6 +94483,16 @@ export type Parser
 			end 'verdict'
 		end 'eachOp'
 	end 'requireInitializerCallsNothing'
+
+	function opIsInAClosureBody(op ElementIndex) returns bool
+		for body in self.bodyState.liftedClosureBodies 'eachClosureBody'
+			if body.holds(op) 'insideTheBody'
+				return true
+			end 'insideTheBody'
+		end 'eachClosureBody'
+
+		return false
+	end 'opIsInAClosureBody'
 
 	function moduleLetCallRefusal(decl TopLevelDecl, callee String) returns ConstEvalError
 		let first = self.tokenAt(decl.initStart)
@@ -94484,7 +94512,7 @@ export type Parser
 		// A member call the author wrote can lower to a compiler-internal callee (`__clone_<T>` for
 		// `Map.clone`) and is still the author's call. Pinned byte-for-byte by specs/top-level-let.md.
 		for member in self.bodyState.authoredMemberCalls 'eachMemberCall'
-			if member.holds(op) 'insideTheMemberCall'
+			if member.span.holds(op) 'insideTheMemberCall'
 				return InitializerCall.calls(member.spelling)
 			end 'insideTheMemberCall'
 		end 'eachMemberCall'

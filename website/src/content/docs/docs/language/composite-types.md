@@ -185,7 +185,8 @@ belongs in a local `var` passed to a `mutable` parameter, in a field of a value 
 - An initializer is a value known before the program runs, read as though written inside the type's body: a
   literal, an array or map literal, `Type from [...]`, another constant, or a struct literal of the enclosing
   type. It **calls nothing**: `static let shared = Cache.create()` is **E3220**, and a call in the initializer
-  of a scalar static is **E2045**. A struct literal of *another* type is **E3076**.
+  of a scalar static is **E2045**. A closure literal's body is not part of the initializer, since it runs only
+  when the closure is called. A struct literal of *another* type is **E3076**.
 - **A `static let` is image data, laid down before `main`.** Nothing runs to build it, whether or not the field is
   ever read, and an initializer that reads another static follows it in dependency order, whatever the
   declaration order. Initializers that depend on each other in a cycle, or one that reads its own field, are **E2012**. Its

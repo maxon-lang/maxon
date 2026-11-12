@@ -2781,6 +2781,58 @@ end 'main'
 42 107
 ```
 
+<!-- test: a-closure-bound-by-a-top-level-let-may-call-in-its-body -->
+A closure literal in a top-level initializer builds a function value, and its body runs only when the closure is
+called, so a call inside the body is not a call the initializer makes.
+```maxon
+typealias Tally = int(0 to 1000000)
+
+function doubled(n Tally) returns Tally
+	return n * 2
+end 'doubled'
+
+let addDoubled = function(n Tally) gives doubled(n) + 1
+let measure = function(label String) gives label.byteLength()
+
+function main() returns ExitCode
+	print("{addDoubled(20)} {measure("abcd")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+41 4
+```
+
+<!-- test: error.a-call-around-a-closure-in-a-top-level-let-is-still-refused -->
+The closure's body is not the initializer, but the call that receives the closure is: `wrap` runs while the
+initializer builds its value, so the initializer calls a function, and the refusal names `wrap`, not the `doubled` the
+closure's body calls.
+```maxon
+typealias Tally = int(0 to 1000000)
+typealias Step = function(Tally) returns Tally
+
+function doubled(n Tally) returns Tally
+	return n * 2
+end 'doubled'
+
+function wrap(step Step) returns Step
+	return step
+end 'wrap'
+
+let wrapped = wrap(function(n Tally) gives doubled(n))
+
+function main() returns ExitCode
+	print("{wrapped(1)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3220: <fragment>:13:15: the initializer of 'wrapped' calls 'wrap': a module-level or static `let` initializer calls nothing, so write a literal, or build the value where it is used
+```
+
 <!-- test: top-level-closures-of-different-shapes-keep-their-own-shapes -->
 Each top-level closure is its own function type: `weigh` takes two parameters and `describe` returns a
 `String`, beside `addSeven`, and every call and every hand-over is judged against its own closure's shape.

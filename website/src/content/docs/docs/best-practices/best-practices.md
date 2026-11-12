@@ -662,7 +662,7 @@ let conn = Connection.createSecure("example.com")
 
 ### Use Static Fields for Shared Precomputed Values
 
-A `static let` is image data laid down before `main`, and every read shares the one `immutable` copy. Use it for lookup tables and precomputed constants, which no call rebuilds. Its initializer calls nothing (E3220): write a literal, or build a value that needs a call in a function where it is used. `.clone()` gives a mutable copy.
+A `static let` is image data laid down before `main`, and every read shares the one `immutable` copy. Use it for lookup tables and precomputed constants, which no call rebuilds. Its initializer calls nothing (E3220): write a literal, or build a value that needs a call in a function where it is used. A closure literal's body is not part of the initializer, so a call inside it is not refused. `.clone()` gives a mutable copy.
 
 ```maxon
 type Classifier

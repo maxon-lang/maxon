@@ -931,7 +931,7 @@ A file-private top-level `function`, `let`, `type`, `enum`, `union` or `interfac
 
 ### E3220 — `semanticModuleLetCallsAFunction`
 
-The initializer of a module-level `let` or a `static let` calls a function. Such a `let` is image data: its value is decided by the program text, laid down before `main` runs, and read as one copy by every function and thread, so nothing runs to build it. Write a literal instead: a number, a string, a `b"…"` literal, an enum case, an array, map or tuple literal, `Type from [...]`, another constant `let`, or, in a `static let`, a record literal of the declaring type. A value that needs a call to build is built where it is used, by a function that returns it, and a copy that must be changed is `.clone()`d from the constant where it is used.
+The initializer of a module-level `let` or a `static let` calls a function. Such a `let` is image data: its value is decided by the program text, laid down before `main` runs, and read as one copy by every function and thread, so nothing runs to build it. Write a literal instead: a number, a string, a `b"…"` literal, an enum case, an array, map or tuple literal, `Type from [...]`, another constant `let`, or, in a `static let`, a record literal of the declaring type. A value that needs a call to build is built where it is used, by a function that returns it, and a copy that must be changed is `.clone()`d from the constant where it is used. The body of a closure literal is not part of the initializer, since it runs only when the closure is called; a call that receives the closure is.
 
 ## Intermediate Representation (E4xxx)
 

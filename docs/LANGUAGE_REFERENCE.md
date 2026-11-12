@@ -1357,7 +1357,8 @@ belongs in a local `var` passed to a `mutable` parameter, in a field of a value 
 - An initializer is a value known before the program runs, read as though written inside the type's body: a
   literal, an array or map literal, `Type from [...]`, another constant, or a struct literal of the enclosing
   type. It **calls nothing**: `static let shared = Cache.create()` is **E3220**, and a call in the initializer
-  of a scalar static is **E2045**. A struct literal of *another* type is **E3076**.
+  of a scalar static is **E2045**. A closure literal's body is not part of the initializer, since it runs only
+  when the closure is called. A struct literal of *another* type is **E3076**.
 - **A `static let` is image data, laid down before `main`.** Nothing runs to build it, whether or not the field is
   ever read, and an initializer that reads another static follows it in dependency order, whatever the
   declaration order. Initializers that depend on each other in a cycle, or one that reads its own field, are **E2012**. Its
@@ -3046,7 +3047,10 @@ end 'main'
   before or after it, in this file or one it can see (`let B = A`). A call is **E3220** (`the initializer of
   'shared' calls 'Cache.create': a module-level or static `let` initializer calls nothing, so write a literal,
   or build the value where it is used`), and a call in the initializer of a number, `bool` or enum binding is
-  **E2045** (`Function calls are not allowed in global variable initializers`).
+  **E2045** (`Function calls are not allowed in global variable initializers`). A closure literal's body is not
+  part of the initializer: `let total = function(n int) gives helper(n)` builds a function value, and `helper`
+  runs when `total` is called. A call that receives the closure, `wrap(function(n int) gives helper(n))`, is
+  still a call the initializer makes.
 - An initializer is outside every function, so a `return` in it is **E2080**, naming the binding.
 - A binding that holds a scalar — a number, a `bool` or an enum case — is a compile-time
   constant, inlined at every use. Its initializer must have a value known at compile time, as a body knows

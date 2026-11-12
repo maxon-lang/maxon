@@ -225,7 +225,10 @@ end 'main'
   before or after it, in this file or one it can see (`let B = A`). A call is **E3220** (`the initializer of
   'shared' calls 'Cache.create': a module-level or static `let` initializer calls nothing, so write a literal,
   or build the value where it is used`), and a call in the initializer of a number, `bool` or enum binding is
-  **E2045** (`Function calls are not allowed in global variable initializers`).
+  **E2045** (`Function calls are not allowed in global variable initializers`). A closure literal's body is not
+  part of the initializer: `let total = function(n int) gives helper(n)` builds a function value, and `helper`
+  runs when `total` is called. A call that receives the closure, `wrap(function(n int) gives helper(n))`, is
+  still a call the initializer makes.
 - An initializer is outside every function, so a `return` in it is **E2080**, naming the binding.
 - A binding that holds a scalar — a number, a `bool` or an enum case — is a compile-time
   constant, inlined at every use. Its initializer must have a value known at compile time, as a body knows
