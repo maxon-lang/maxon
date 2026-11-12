@@ -92,7 +92,7 @@ export function writeDebugInfoSidecar(project Project, codeResult CodeResult, ou
 
 	writeCoveragePoints(project, writer: writer, emitted: emittedPoints)
 	writeInlineFrames(project, writer: writer, codeResult: codeResult, provenance: provenance)
-	writeRuntimeContract(writer, codeResult: codeResult)
+	writeRuntimeContract(writer, codeResult: codeResult, target: project.target)
 
 	// The sidecar's build-id, and the `.mxcov`'s: one fold, so a driver joining the two cannot be handed
 	// two numbers for one build.
@@ -117,18 +117,18 @@ end 'writeDebugInfoSidecar'
 // The offsets are read back out of the LAID-OUT table rather than off the roster it was fed, because
 // `GlobalDataTable.layOut` sorts each segment by size class; and a name the roster carries that the layout
 // does not hold is a defect in the roster, not an absence to report, so it panics by name.
-function writeRuntimeContract(writer MxdbgWriter, codeResult CodeResult)
+function writeRuntimeContract(writer MxdbgWriter, codeResult CodeResult, target Target)
 	match codeResult.imagePlacement 'placed'
 		unplaced then return
-		placed(imageBase, textRva, dataRva) then writeGlobalsTable(writer, codeResult: codeResult, imageBase: imageBase, dataRva: dataRva, textRva: textRva)
+		placed(imageBase, textRva, dataRva) then writeGlobalsTable(writer, codeResult: codeResult, target: target, imageBase: imageBase, dataRva: dataRva, textRva: textRva)
 	end 'placed'
 
-	for figure in debuggerLayoutFigures() 'eachFigure'
+	for figure in debuggerLayoutFigures(target) 'eachFigure'
 		writer.addLayoutFigure(figure.name, figure: figure.figure)
 	end 'eachFigure'
 end 'writeRuntimeContract'
 
-function writeGlobalsTable(writer MxdbgWriter, codeResult CodeResult, imageBase MachineWord, dataRva ImageRva, textRva ImageRva)
+function writeGlobalsTable(writer MxdbgWriter, codeResult CodeResult, target Target, imageBase MachineWord, dataRva ImageRva, textRva ImageRva)
 	if textRva > MxdbgLargestImageRva or dataRva > MxdbgLargestImageRva 'pastTheFigureWidth'
 		panic("writeDebugInfoSidecar: this image places `.text` at RVA {textRva} and `.data` at {dataRva}, and a sidecar layout figure is a signed 32-bit word — the runtime contract cannot describe an image reaching past {MxdbgLargestImageRva}")
 	end 'pastTheFigureWidth'
@@ -136,12 +136,12 @@ function writeGlobalsTable(writer MxdbgWriter, codeResult CodeResult, imageBase 
 	writer.placeImageAt(imageBase)
 	writer.addLayoutFigure(ImageTextRvaFigureName, figure: textRva as MxdbgRecordFigure)
 
-	for name in debuggerReadableGlobals() 'eachGlobal'
+	for name in debuggerReadableGlobals(target) 'eachGlobal'
 		let slot = codeResult.globalData.dataSectionSlotOf(name)
 
 		match slot 'laidOut'
 			none then break
-			at(offset, bytes) then writer.addGlobal(name, imageOffset: (dataRva + (offset as ImageRva)) as MxdbgIndex, slotBytes: bytes as MxdbgIndex)
+			at(offset, bytes) then writer.addGlobal(name, imageOffset: (dataRva + (offset as ImageRva)) as MxdbgIndex, slotBytes: (bytes if bytes < MachineWordBytes else MachineWordBytes) as MxdbgIndex)
 		end 'laidOut'
 	end 'eachGlobal'
 end 'writeGlobalsTable'

@@ -144,6 +144,7 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// and refuses a run registered after it, and the point COUNT has been final since the merge.
 	let layoutProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.layOutGlobals)
 	reserveCoverageImage(project)
+	reserveFixedSavedFrame(globalData, usage: usage, target: target)
 	globalData.layOut(dataSection, referenced: survivors.referencedGlobals, userGlobalCount: userGlobalCount)
 	globalData.requireLaidOutCoversReferences(survivors.referencedGlobals)
 
@@ -335,6 +336,10 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	if usage.usesGt 'gtChunks'
 		appendX64GtRuntimeChunks(chunks, target: target, context: project.hostContext)
 	end 'gtChunks'
+
+	if x64OsCallKind(target.os) == X64OsCallKind.importCall 'importStubs'
+		appendX64ImportStubChunks(chunks, usesGt: usage.usesGt)
+	end 'importStubs'
 
 	recordPhase(project, phase: CompilePhase.encodeRuntime, probe: encodeProbe)
 

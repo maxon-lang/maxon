@@ -1211,7 +1211,8 @@ A thread is stopped through its thread handle on `x64-windows`, its Mach thread 
 | `release(thread SampledThread)` | — | — | Close one thread this sampler opened. |
 | `cycles(thread SampledThread)` | `SampleCycles` | `SamplerError.unknownThread`, `.signalTrampolineUnavailable` | CPU time the thread has consumed, in the unit `cyclesAreNanoseconds()` names. On macOS and Linux a running thread is stopped to read it, and the next `capture` of that thread answers from the same stop. `signalTrampolineUnavailable`: on macOS the stop needs `signalTrampoline()` and it is `unplaced`. |
 | `capture(thread SampledThread)` | `SampleCapture` | `SamplerError.unknownThread`, `.callingThread`, `.signalTrampolineUnavailable` | Sample one thread. `unknownThread` refuses a thread `threads()` did not hand out or `release` let go; `callingThread` refuses the thread making the call, which would stop itself; `signalTrampolineUnavailable` is thrown on macOS as by `cycles`. On Linux a thread in uninterruptible sleep answers `unreadable`. On macOS a thread stopped at the first instruction of the signal trampoline is captured with the registers of the code the signal interrupted, read from the signal's context, and its stack is copied from that code's stack pointer. |
-| `modules()` | `SampledModuleArray` | `SamplerError.moduleListUnavailable` | The modules loaded in the process: the module snapshot on Windows, retried until the loader has finished initialising the process, and the dyld image list on macOS, retried until dyld reports libSystem initialised; either throws `moduleListUnavailable` once the retries run out. On macOS the list therefore holds every image the loader maps before the program's entry point, and an image whose entry cannot be read is left out, so a process that is exiting can answer a partial list. On Linux, whose images are static, an empty array while the process lives. |
+| `modules()` | `SampledModuleArray` | `SamplerError.moduleListUnavailable` | The modules loaded in the process: the module snapshot on Windows, retried for up to 1.5 seconds until the loader has finished initialising the process (a never-run executable's loader can take about 380 ms), and the dyld image list on macOS, retried for up to 200 ms until dyld reports libSystem initialised; either throws `moduleListUnavailable` once its deadline passes. On macOS the list therefore holds every image the loader maps before the program's entry point, and an image whose entry cannot be read is left out, so a process that is exiting can answer a partial list. On Linux, whose images are static, an empty array while the process lives. |
+| `trackSavedFrames(location SavedFrameLocation)` | — | — | x64-windows only. Where the sampled program's runtime records its last Maxon frame around each call into a system DLL. Each later `capture` reads that record while the thread is stopped and copies a second stack window from it, answered as `SampledStack.savedFrame`. A new sampler is `untracked`. |
 | `signalTrampoline()` | `SignalTrampoline` | — | Where the code a thread runs while a signal is delivered to it lies. On macOS it is libsystem_platform's `_sigtramp`, found in that image's symbol table and ending at the next entry of its function starts; it is kept once located, and is `absent` until libSystem has initialised. `absent` on Windows and Linux. |
 | `close()` | — | — | Close every open thread, the process and the scratch regions. On Linux it detaches every thread it stopped, then unpins the calling green thread; call it on the green thread that opened the sampler. |
 | `clone()` | — | — | Panics: a sampler owns one process's handles, so it is held in one place. |
@@ -1229,10 +1230,24 @@ stopped, and stderr carries one line per process:
 A `SampledStack` has `programCounter`, `framePointer` and `stackPointer`; `linkRegister`, a `LinkRegister`
 that `holds(address)` on macOS and is `absent` on Windows and Linux; `reservation`, a
 `StackReservation`; `suspendedCycles`, the thread's CPU time read while it was stopped; and `window`, a
-`StackWindow` holding up to 64 KiB copied from the thread's stack. A `StackWindow` owns its bytes, so it stays
-readable after `close()` and after later captures: `byteCount()` is the bytes copied, and
-`word(offset StackWindowOffset)` is the word `offset` bytes in, throwing `SamplerError.outOfWindow` outside the
-copy.
+`StackWindow` holding up to 64 KiB copied from the thread's stack. On x64-windows it also has `savedFrame`, a
+`SavedFrame`. A `StackWindow` owns its bytes, so it stays readable after `close()` and after later captures:
+`byteCount()` is the bytes copied, and `word(offset StackWindowOffset)` is the word `offset` bytes in, throwing
+`SamplerError.outOfWindow` outside the copy.
+
+`SavedFrame` and `SavedFrameLocation` exist on x64-windows only. A `SavedFrame` is the last Maxon frame the
+sampled program's runtime recorded before a call into a system DLL, whose code keeps no frame-pointer chain.
+
+| `SavedFrame` case | Meaning |
+|-------------------|---------|
+| `saved(programCounter, framePointer, stackPointer, window)` | The thread was stopped outside the program's code inside a recorded call. `programCounter` is the return address into the Maxon caller, `stackPointer` and `framePointer` are the caller's, and `window` holds up to 64 KiB copied from `stackPointer`. |
+| `absent` | The sampler is `untracked`, the thread was stopped inside the program's code, or no call was recorded. |
+
+| `SavedFrameLocation` case | Meaning |
+|---------------------------|---------|
+| `recordedAt(codeBase, codeBytes, slotBase, recordField)` | A program with a scheduler: each thread's record is `recordField` bytes into its machine record, found through the thread-local slot whose offset is the word at `slotBase`. `[codeBase, codeBase + codeBytes)` is the program's code. |
+| `fixedAt(codeBase, codeBytes, record)` | A program without a scheduler, which has one Maxon thread: the record is the three words at `record`. |
+| `untracked` | No record is read. |
 
 | `StackReservation` case | Meaning |
 |-------------------------|---------|

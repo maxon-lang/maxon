@@ -733,11 +733,32 @@ let MOffGtLive = MOffHeldStrand + PointerSlotBytes
 
 let MOffPreemptOff = MOffGtLive + PointerSlotBytes
 
+export let MOffSavedFramePc = MOffPreemptOff + PointerSlotBytes
+export let MOffSavedFrameSp = MOffSavedFramePc + PointerSlotBytes
+export let MOffSavedFrameFp = MOffSavedFrameSp + PointerSlotBytes
+
 // The three head scalars, the inline GT, the idle tail, the syscall bracket's three, the idle
 // back-link, the wake count, the regain link, asynchronous preemption's four, the pinned thread's
-// three, the lock sleeper's three, the held strand, the live count and the monitor's preemption switch.
+// three, the lock sleeper's three, the held strand, the live count and the monitor's preemption switch;
+// `mStructSizeOf` adds the saved frame's three on x64-windows.
 // Derived, never written down as a number, for `PStructSize`'s reason.
-let MStructSize = ((MOffPreemptOff + PointerSlotBytes) as FullRangeInt)
+let MStructBaseSize = ((MOffPreemptOff + PointerSlotBytes) as FullRangeInt)
+
+let MSavedFrameBytes = ((MOffSavedFrameFp + PointerSlotBytes - MOffSavedFramePc) as FullRangeInt)
+
+export function reserveFixedSavedFrame(globalData GlobalDataTable, usage RuntimeUsage, target Target)
+	if targetBracketsInsideTheImportShim(target) and not usage.usesGt 'fixedSavedFrame'
+		globalData.registerDataBlob(String.from(SavedFrameLabel), bytes: ByteArray.create(MSavedFrameBytes as ElementIndex))
+	end 'fixedSavedFrame'
+end 'reserveFixedSavedFrame'
+
+function mStructSizeOf(target Target) returns FullRangeInt
+	if targetBracketsInsideTheImportShim(target) 'recordsTheSavedFrame'
+		return MStructBaseSize + MSavedFrameBytes
+	end 'recordsTheSavedFrame'
+
+	return MStructBaseSize
+end 'mStructSizeOf'
 
 // ==========================================================================
 // The ProcContext (P) struct
@@ -1125,6 +1146,8 @@ let SchedTlsIndexLabel = b"__sched_tls_index"
 // stack guard runs inside `main` before any spawn, so that is a reachable path and not a defensive one.
 export let SchedTlsTebOffsetLabel = b"__sched_tls_teb_offset"
 
+export let SavedFrameLabel = b"__saved_frame"
+
 // The base of the `P*` array — `numProcs` machine words, one pointer per processor.
 export let SchedProcsLabel = b"__sched_procs"
 
@@ -1503,10 +1526,10 @@ export function targetCallsTheSyscallBracket(target Target) returns bool
 	return targetBracketsBlockingSyscalls(target) and not targetBracketsInsideTheImportShim(target)
 end 'targetCallsTheSyscallBracket'
 
-// The lane whose bracket is emitted INLINE, inside `X64GtRuntime.emitGtShimmedIatCall`, rather than as a pair
+// The lane whose bracket is emitted INLINE, inside `X64GtRuntime.buildGtImportStubChunk`, rather than as a pair
 // of calls at the isel's dispatch door. There is exactly one, and it is named by the mechanism it has rather
 // than by its CPU so that a second x64 OS cannot inherit the answer by sharing an instruction set.
-function targetBracketsInsideTheImportShim(target Target) returns bool
+export function targetBracketsInsideTheImportShim(target Target) returns bool
 	return target.cpu == CpuArch.x64 and target.os == Os.windows
 end 'targetBracketsInsideTheImportShim'
 
@@ -3161,7 +3184,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	emitLockWordEnterBeforeMachine(module, block: adopt, label: SchedLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	let zeroIndex = emitConst(module, block: adopt, value: 0, ids: ids)
 	let p0 = emitLoadProc(module, block: adopt, index: zeroIndex, ids: ids)
-	let m0 = emitSchedAllocM(module, block: adopt, nextP: p0, caller: CallerMachine.notYetPublished, ids: ids)
+	let m0 = emitSchedAllocM(module, block: adopt, nextP: p0, caller: CallerMachine.notYetPublished, target: target, ids: ids)
 	emitSchedRegisterMLocked(module, block: adopt, m: m0, ids: ids)
 	emitStoreGlobalWord(module, block: adopt, label: SchedMainMLabel, value: m0, ids: ids)
 
@@ -3222,8 +3245,8 @@ end 'buildSchedInitProcs'
 // across `osThreadCreate` for exactly this reason, and `__sched_stop_workers` sets the shutdown flag inside
 // the same critical section — which is what makes *"no machine is created after the flag is set"* a fact
 // rather than a small window.
-function emitSchedAllocM(module StdModule, block IrBlock, nextP ValueId, caller CallerMachine, ids ValueMinter) returns ValueId
-	let m = emitSchedCarveLocked(module, block: block, bytes: MStructSize, caller: caller, ids: ids)
+function emitSchedAllocM(module StdModule, block IrBlock, nextP ValueId, caller CallerMachine, target Target, ids ValueMinter) returns ValueId
+	let m = emitSchedCarveLocked(module, block: block, bytes: mStructSizeOf(target), caller: caller, ids: ids)
 
 	// The park. AUTO-reset, so a `__sched_startm` that signals between this machine's lock release and its
 	// `osWaitHandle` leaves the event signalled and the wait returns at once — see `MOffParkEvent`, which is
@@ -6120,7 +6143,7 @@ function buildSchedStartM(module StdModule, target Target)
 	// ⭐⭐ **AND A RESERVED CREDIT IS HANDED TO THE NEW MACHINE BEFORE ITS THREAD EXISTS — Go's `newm` with
 	// `mspinning`.** The machine is born spinning, so the unit stays counted for the whole of its creation and
 	// `osThreadCreate` is the only place it can still go wrong: a failed creation gives it back at `smspawnfailed`.
-	let newMachine = emitSchedAllocM(module, block: spawnStart, nextP: chosenProc, caller: CallerMachine.published, ids: ids)
+	let newMachine = emitSchedAllocM(module, block: spawnStart, nextP: chosenProc, caller: CallerMachine.published, target: target, ids: ids)
 	emitBranchOnCompare(module, block: spawnStart, value: credit, pred: StdCmpPred.eq, against: SchedStartMCredit.unreserved.rawValue, whenTrue: spawnCreate, whenFalse: spawnSpin, ids: ids)
 
 	emitSchedHandOverCredit(module, func: func, cur: spawnSpin, m: newMachine, cont: spawnCreate, ids: ids)
@@ -8141,7 +8164,7 @@ export function emitSchedSysmonStart(module StdModule, func IrFunction, cur IrBl
 	switchKnown.blockArgs.push(IrBlockArg.create(preemptOff, argType: StdType.i64))
 	emitResolvePreemptSwitch(module, func: func, cur: cur, settled: switchKnown, ids: ids)
 
-	let monitorMachine = emitSchedCarveLocked(module, block: switchKnown, bytes: MStructSize, caller: CallerMachine.published, ids: ids)
+	let monitorMachine = emitSchedCarveLocked(module, block: switchKnown, bytes: mStructSizeOf(target), caller: CallerMachine.published, ids: ids)
 	emitStoreField(module, block: switchKnown, record: monitorMachine, offset: MOffPreemptOff, value: preemptOff)
 
 	let monitorEntry = ids.mint()

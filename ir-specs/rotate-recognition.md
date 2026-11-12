@@ -47,10 +47,10 @@ end 'main'
 
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -198,10 +198,10 @@ end 'main'
 
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {

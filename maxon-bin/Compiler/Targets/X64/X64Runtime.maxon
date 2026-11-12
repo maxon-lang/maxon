@@ -564,17 +564,17 @@ end 'emitFaultAddressesAndBacktrace'
 // code in ECX; the Linux syscall ABI passes `exit_group`'s in EDI. That is why the immediate load sits
 // inside each arm rather than above the match — exactly the split `lowerOsExit` makes, and for the
 // same reason.
-export function encodeX64ProcessExit(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, route X64OsCallKind, exitCode MachineWord, usesGt bool, target Target)
+export function encodeX64ProcessExit(code ByteArray, callFixups CallFixupArray, route X64OsCallKind, exitCode MachineWord, usesGt bool, target Target)
 	match route 'route'
-		importCall then encodeWin64ProcessExit(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, exitCode: exitCode, usesGt: usesGt, target: target)
+		importCall then encodeWin64ProcessExit(code, callFixups: callFixups, exitCode: exitCode, usesGt: usesGt, target: target)
 		syscall then encodeLinuxProcessExit(code, exitCode: exitCode)
 	end 'route'
 end 'encodeX64ProcessExit'
 
-// Windows: `ExitProcess(exitCode)` through the IAT, behind the green-thread shim in a program that has one. A
+// Windows: `ExitProcess(exitCode)` through its import stub, the green-thread one in a program that has one. A
 // diagnostic raised on a green thread runs on that thread's few-kilobyte stack, and `ExitProcess` outruns what
 // is left of it, faulting again inside the exit. Never returns, so nothing follows it.
-function encodeWin64ProcessExit(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, exitCode MachineWord, usesGt bool, target Target)
+function encodeWin64ProcessExit(code ByteArray, callFixups CallFixupArray, exitCode MachineWord, usesGt bool, target Target)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: exitCode)
 
 	// A diagnostic's exit goes through the same door every other exit does on a lane whose monitor suspends
@@ -585,7 +585,7 @@ function encodeWin64ProcessExit(code ByteArray, iatRelocs RelocationArray, rdata
 		return
 	end 'throughTheGate'
 
-	emitGtGatedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, slotIndex: iatSlotIndex(IatSlot.ExitProcess), usesGt: usesGt)
+	encodeImportStubCall(code, callFixups: callFixups, slotIndex: iatSlotIndex(IatSlot.ExitProcess), usesGt: usesGt)
 end 'encodeWin64ProcessExit'
 
 // Linux: `exit_group(exitCode)` via a raw syscall. `exit_group` and not `exit` for the reason
@@ -682,12 +682,14 @@ let ChunkEntryWordsBytes = 2 * StackWordBytes
 // costs `beginFunction`'s reservation plus `ChunkEntryWordsBytes`: 96 + 96 + 96 + 96 + 96 + 48 = 528. A fault
 // on a green thread runs that chain on the machine's system stack, whose headroom is sized from this number;
 // `mrt_panic` spends the same frames, less the thunk's, on the green thread's margin.
-// The green-thread syscall shim adds at most 56 more on the GT stack across a call (the pushed r10 and
-// `emitGtExitSyscall`'s slow frame), which no chunk's own frame accounts for.
+// An import stub adds `ImportStubStackBytes` more on the GT stack across a call (its return address,
+// `emitGtExitSyscall`'s slow frame, and `__sched_syscall_regain`'s frame and callees), which no chunk's
+// own frame accounts for.
 //
-// ⚠ **IT IS MEASURED FROM THOSE BUILDERS AND NOTHING RE-DERIVES IT**, so widening any un-guarded chunk's
-// frame leaves this number stale in the OPTIMISTIC direction. Re-measure it at the builder that grew.
-export let UnguardedDiagnosticChainBytes = 528 + 56
+// ⚠ **IT IS MEASURED FROM THOSE BUILDERS AND NOTHING RE-DERIVES IT** (only the stub's share is checked,
+// by `requireBracketedStubWithinAllowance`), so widening any un-guarded chunk's frame leaves this number
+// stale in the OPTIMISTIC direction. Re-measure it at the builder that grew.
+export let UnguardedDiagnosticChainBytes = 528 + (ImportStubStackBytes as FullRangeInt)
 
 // ⛔⛔ **THE CEILING ON `ConsoleWideBufferUnits`, AND IT IS THE GREEN-THREAD STACK RATHER THAN THE GUARD
 // PAGE.** This chunk is emitted with no stack-guard check, so it spends the margin the guard leaves below
@@ -738,11 +740,11 @@ function emitWriteStreamRawWrite(asm X64RuntimeAsm, usesGt bool)
 	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.r8, src: X64Register.r11, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord))
 
-	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.WriteFile), usesGt: usesGt)
+	encodeImportStubCall(asm.code, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.WriteFile), usesGt: usesGt)
 end 'emitWriteStreamRawWrite'
 
-// ⛔⛔ **EVERY IMPORT CALL HERE GOES THROUGH `emitGtGatedIatCall`, NOT `encodeIatCall`.** A hand-assembled
-// chunk is not routed through the green-thread shim by `emitFunctionChunk` the way a compiled function's
+// ⛔⛔ **EVERY IMPORT CALL HERE GOES THROUGH `encodeImportStubCall`, NOT `encodeIatCall`.** A hand-assembled
+// chunk is not routed through an import stub by `emitFunctionChunk` the way a compiled function's
 // `iatCall` is, so calling the IAT directly would run a Win32 call on a few-kilobyte green-thread stack and would
 // delete the `blocking` syscall bracket from the hottest slot there is — every `print` from a green thread.
 function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeChunk
@@ -786,7 +788,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	// handle at any point, so a cached one could name a stream the program has since redirected, and
 	// `GetStdHandle` is a read of a word the process already holds.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSelector), wide: true)
-	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetStdHandle), usesGt: usesGt)
+	encodeImportStubCall(asm.code, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetStdHandle), usesGt: usesGt)
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetStdHandle)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), srcReg: X64Register.rax, wide: true)
 
@@ -806,7 +808,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	// The mode word lands in the Win32 out-param slot and is never read: the CALL's verdict is the answer.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotHandle), wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord))
-	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetConsoleMode), usesGt: usesGt)
+	encodeImportStubCall(asm.code, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.GetConsoleMode), usesGt: usesGt)
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.GetConsoleMode)
 
 	encodeMovRegImm32(asm.code, dest: X64Register.r8, value: ConsoleVerdict.notConsole.rawValue)
@@ -887,7 +889,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r11, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOffset), wide: true)
 	encodeRmRegDirect(asm.code, opcode: OpcodeAddRmReg, dest: X64Register.r8, src: X64Register.r11, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotSlice), wide: true)
-	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.MultiByteToWideChar), usesGt: usesGt)
+	encodeImportStubCall(asm.code, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.MultiByteToWideChar), usesGt: usesGt)
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.MultiByteToWideChar)
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
@@ -913,7 +915,7 @@ function buildWriteStreamChunk(usesGt bool, target Target) returns FunctionCodeC
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord), srcReg: X64Register.rax, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(WriteConsoleReservedArgSlot), srcReg: X64Register.rax, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(WriteStreamSlotOutWord))
-	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.WriteConsoleW), usesGt: usesGt)
+	encodeImportStubCall(asm.code, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.WriteConsoleW), usesGt: usesGt)
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.WriteConsoleW)
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
@@ -1394,7 +1396,7 @@ function emitWalkStackBounds(asm X64RuntimeAsm, usesGt bool, os Os, lowSlot Stac
 	asm.placeLabel(greenThreadBounds)
 
 	if usesGt 'greenThreadBoundsArm'
-		emitLoadCurrentGtOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, mDest: X64Register.rax, gtDest: X64Register.rax, bail: windowed, os: os)
+		emitLoadCurrentGtOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, mDest: X64Register.rax, gtDest: X64Register.rax, bail: windowed, os: os, noGreenThread: windowed)
 		emitGtBailUnlessOnItsOwnStack(asm.code, fixups: asm.rel32Fixups, gt: X64Register.rax, scratch: X64Register.r8, addr: X64Register.rdx, onOsStack: windowed, below: windowed, above: windowed)
 	end 'greenThreadBoundsArm'
 
@@ -1537,7 +1539,7 @@ function emitClassifyDispatchStack(asm X64RuntimeAsm, leaveTheStackSlot StackSiz
 	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(leaveTheStackSlot), srcReg: X64Register.rax, wide: true)
 
-	emitLoadCurrentGtOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, mDest: X64Register.rax, gtDest: X64Register.r11, bail: inPlace, os: Os.windows)
+	emitLoadCurrentGtOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, mDest: X64Register.rax, gtDest: X64Register.r11, bail: inPlace, os: Os.windows, noGreenThread: inPlace)
 	emitBailUnlessOnTheSystemStack(asm.code, fixups: asm.rel32Fixups, m: X64Register.rax, scratch: X64Register.r8, addr: X64Register.rsp, outside: notOnTheSystemStack)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: inPlace)
 
@@ -1633,7 +1635,7 @@ function buildFaultThunkChunk(usesGt bool, target Target, context HostContextLay
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotFaultRip, rbpSlot: SlotFaultRbp, rspSlot: SlotFaultRsp)
 
 	// ExitProcess(1) — never returns. There is no `recover()`, so a converted fault is terminal.
-	encodeWin64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, exitCode: PanicExitCode, usesGt: usesGt, target: target)
+	encodeWin64ProcessExit(asm.code, callFixups: asm.callFixups, exitCode: PanicExitCode, usesGt: usesGt, target: target)
 
 	// Falls through: unreachable after ExitProcess, and the single `ret` every other code
 	// reaches directly.
@@ -1797,7 +1799,7 @@ function buildPanicChunk(exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool
 	emitCoverageAbortDump(asm, dumpCoverage: dumpCoverage)
 
 	// (5) exit(PanicExitCode) — the one step with an OS in it.
-	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: usesGt, target: target)
+	encodeX64ProcessExit(asm.code, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: usesGt, target: target)
 
 	let chunk = asm.finishFunction(PanicName, guarded: usesGt)
 	chunk.asyncUnsafePrefixBytes = guardBytes
@@ -2216,7 +2218,7 @@ function buildGtStackOverflowChunk(exitRoute X64OsCallKind, target Target) retur
 
 	emitPrintString(asm, bytes: faultPanicLinePrefix(HardwareFaultKind.stackOverflow))
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotPc, rbpSlot: SlotFp, rspSlot: SlotSp)
-	encodeX64ProcessExit(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: true, target: target)
+	encodeX64ProcessExit(asm.code, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: true, target: target)
 
 	return asm.finishFunction(GtStackOverflowName)
 end 'buildGtStackOverflowChunk'
@@ -2300,7 +2302,7 @@ function buildWindowsProcessNamespaceChunk(usesGt bool) returns FunctionCodeChun
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(RegistryDataOutArgSlot), srcReg: X64Register.rax, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBytes))
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: asm.outgoingArgDisp(RegistryBytesOutArgSlot), srcReg: X64Register.rax, wide: true)
-	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.RegGetValueW), usesGt: usesGt)
+	encodeImportStubCall(asm.code, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.RegGetValueW), usesGt: usesGt)
 	encodeImportAnswerWidth(asm.code, slot: IatSlot.RegGetValueW)
 
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
@@ -2400,7 +2402,7 @@ let WinDescSlotDeadline = WinDescSlotTemp + WinDescTempSlots
 let WinDescSlotsEnd = WinDescSlotDeadline + 1
 
 function emitWinDescImport(asm X64RuntimeAsm, slot IatSlot, usesGt bool)
-	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(slot), usesGt: usesGt)
+	encodeImportStubCall(asm.code, callFixups: asm.callFixups, slotIndex: iatSlotIndex(slot), usesGt: usesGt)
 	encodeImportAnswerWidth(asm.code, slot: slot)
 end 'emitWinDescImport'
 
@@ -2836,7 +2838,7 @@ function buildWindowsProcessDescendantsChunk(usesGt bool) returns FunctionCodeCh
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: listFailed)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: WinDescRoundSleepMs)
-	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.Sleep), usesGt: usesGt)
+	encodeImportStubCall(asm.code, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.Sleep), usesGt: usesGt)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: roundLoop)
 
 	asm.placeLabel(listFailed)
@@ -2938,7 +2940,7 @@ function buildWindowsProcessTerminateChunk(usesGt bool) returns FunctionCodeChun
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: straggler)
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: WinTermPollMs)
-	emitGtGatedIatCall(asm.code, iatRelocs: asm.iatRelocs, rdataRelocs: asm.rdataRelocs, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.Sleep), usesGt: usesGt)
+	encodeImportStubCall(asm.code, callFixups: asm.callFixups, slotIndex: iatSlotIndex(IatSlot.Sleep), usesGt: usesGt)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: poll)
 
 	asm.placeLabel(straggler)

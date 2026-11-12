@@ -49,13 +49,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @make {
@@ -402,13 +402,13 @@ __managed_create_sized
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @make {
@@ -1350,13 +1350,13 @@ __managed_create_fixed
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -2022,13 +2022,13 @@ __managed_mem_create
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -2436,13 +2436,13 @@ __managed_destroy_range
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -3516,13 +3516,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -5394,13 +5394,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @make {
@@ -5752,13 +5752,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @make {

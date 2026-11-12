@@ -50,11 +50,11 @@ u8[] 0, 1, 2
 
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @main {
@@ -225,11 +225,11 @@ u16[] 100, 1000, 10000
 
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @main {
@@ -449,11 +449,11 @@ u32[] 100, 100000, 1000000
 
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @main {
@@ -661,11 +661,11 @@ i8[] -1, 0, 1
 
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @main {
@@ -852,11 +852,11 @@ i16[] -200, 0, 200
 
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @main {
@@ -1090,11 +1090,11 @@ i32[] -100000, 0, 100000
 
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @main {

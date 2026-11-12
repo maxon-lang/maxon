@@ -73,10 +73,10 @@ __probe_wide_caller
 
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -468,10 +468,10 @@ __probe_chain_caller
 
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -789,10 +789,10 @@ __probe_tls_caller
 
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -1090,13 +1090,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -1574,13 +1574,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -1955,10 +1955,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @shiftRows {
@@ -2302,10 +2302,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -2409,10 +2409,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @opaque {
@@ -2973,13 +2973,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @walk {
@@ -4008,10 +4008,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -4218,13 +4218,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @tally {
@@ -5149,13 +5149,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @run {
@@ -5950,10 +5950,10 @@ picked
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @pick {
@@ -6146,13 +6146,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @guarded {
@@ -7139,13 +7139,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @Square.create {
@@ -8320,13 +8320,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @tally {
@@ -9598,13 +9598,13 @@ a1
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @route {
@@ -10714,13 +10714,13 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @run {
@@ -11590,13 +11590,13 @@ idle
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -12435,11 +12435,11 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @main {
@@ -12651,10 +12651,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -12879,11 +12879,11 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @pick {
@@ -13149,10 +13149,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -13478,11 +13478,11 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @churn {
@@ -13872,10 +13872,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @churn {
@@ -14539,10 +14539,10 @@ Stack trace:
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @churn {

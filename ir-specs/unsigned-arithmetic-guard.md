@@ -32,10 +32,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -201,10 +201,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @again {
@@ -466,10 +466,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @grow {
@@ -755,10 +755,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @shrink {
@@ -1020,10 +1020,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @climb {
@@ -1288,10 +1288,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @halve {
@@ -1595,10 +1595,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @drain {
@@ -1824,10 +1824,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @settle {
@@ -2085,10 +2085,10 @@ end 'main'
 ```
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @count {

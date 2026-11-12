@@ -214,8 +214,9 @@
 	// name. At the LEAF it means the sample landed in a library or the kernel. Where foreign code need not
 	// keep a frame pointer (`SampledProcess.foreignCodeKeepsTheFrameChain()` is false), the chain above it
 	// cannot be trusted at all: following RBP out of it would produce a return address that might well
-	// resolve to a real function of ours and attribute the sample to a caller that never called it. One
-	// unnamed frame is the honest answer; a plausible wrong one is not.
+	// resolve to a real function of ours and attribute the sample to a caller that never called it. There
+	// the walk resumes only from the frame the runtime saved around the import call (x64-windows), and
+	// otherwise stops at the one unnamed frame.
 	function profileForeignLeafFrame(image ProfileImage, address RegisterWord) returns String
 		let name = try image.modules.nameAt(address) otherwise return ProfileOutsideTextFrame
 		return "[{name}]"
@@ -245,7 +246,7 @@
 	// reads the CALLER's frame pointer, so that one sample attributes the leaf correctly and misses its
 	// immediate caller. It is a per-sample error of one frame over a window of one or two instructions per
 	// call, and it does not accumulate.
-	function walkProfileFrames(frames ProfileStringArray, image ProfileImage, leafPc RegisterWord, linkRegister LinkRegister, framePointer RegisterWord, stackPointer RegisterWord, window StackWindow) returns ProfileWalk
+	function walkProfileFrames(frames ProfileStringArray, image ProfileImage, stack SampledStack) returns ProfileWalk
 		frames.clear()
 
 		let signalTrampoline = image.modules.signalTrampoline
@@ -254,24 +255,52 @@
 		// `__prof_mach_sample`, so a pc still inside it is the runtime delivering a signal. The link
 		// register catches the `__sigreturn` stub, a leaf that pushes no frame and is called from the
 		// trampoline.
-		if signalTrampoline.contains(leafPc) or linkRegister.isWithin(signalTrampoline) 'insideSignalDelivery'
+		if signalTrampoline.contains(stack.programCounter) or stack.linkRegister.isWithin(signalTrampoline) 'insideSignalDelivery'
 			return ProfileWalk.signalDelivery()
 		end 'insideSignalDelivery'
 
-		var ranTheProgram = false
-		var sawOurCode = false
+		if profileAddressInText(image, address: stack.programCounter) 'ourLeaf'
+			let leafRanTheProgram = pushProfileFramesAt(frames, image: image, offset: (stack.programCounter - image.textBase) as MxdbgCodeOffset)
 
-		if profileAddressInText(image, address: leafPc) 'ourLeaf'
-			ranTheProgram = pushProfileFramesAt(frames, image: image, offset: (leafPc - image.textBase) as MxdbgCodeOffset)
-			sawOurCode = true
-		end 'ourLeaf' else 'foreignLeaf'
-			frames.push(profileForeignLeafFrame(image, address: leafPc))
+			return followProfileFrameChain(frames, image: image, framePointer: stack.framePointer, stackPointer: stack.stackPointer, window: stack.window, framesSoFar: 1, startedInOurCode: true, startedInTheProgram: leafRanTheProgram)
+		end 'ourLeaf'
 
-			if not SampledProcess.foreignCodeKeepsTheFrameChain() 'chainUntrusted'
-				return ProfileWalk.of(false, rootFrame: 0, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
-			end 'chainUntrusted'
-		end 'foreignLeaf'
+		frames.push(profileForeignLeafFrame(image, address: stack.programCounter))
 
+		if not SampledProcess.foreignCodeKeepsTheFrameChain() 'chainUntrusted'
+			#if os(Windows) and arch(x64)
+				return walkProfileFromSavedFrame(frames, image: image, savedFrame: stack.savedFrame)
+			#else
+				return ProfileWalk.of(false, rootFrame: 0, sawOurCode: false, ranTheProgram: false)
+			#endif
+		end 'chainUntrusted'
+
+		return followProfileFrameChain(frames, image: image, framePointer: stack.framePointer, stackPointer: stack.stackPointer, window: stack.window, framesSoFar: 1, startedInOurCode: false, startedInTheProgram: false)
+	end 'walkProfileFrames'
+
+	#if os(Windows) and arch(x64)
+		function walkProfileFromSavedFrame(frames ProfileStringArray, image ProfileImage, savedFrame SavedFrame) returns ProfileWalk
+			return match savedFrame 'saved'
+				absent gives ProfileWalk.of(false, rootFrame: 0, sawOurCode: false, ranTheProgram: false)
+				saved(programCounter, framePointer, stackPointer, window) gives walkProfileFromSavedCaller(frames, image: image, callerPc: programCounter, framePointer: framePointer, stackPointer: stackPointer, window: window)
+			end 'saved'
+		end 'walkProfileFromSavedFrame'
+
+		function walkProfileFromSavedCaller(frames ProfileStringArray, image ProfileImage, callerPc RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, window StackWindow) returns ProfileWalk
+			if not profileAddressInText(image, address: callerPc) 'notOurCode'
+				return ProfileWalk.of(false, rootFrame: 0, sawOurCode: false, ranTheProgram: false)
+			end 'notOurCode'
+
+			let callerRanTheProgram = pushProfileFramesAt(frames, image: image, offset: MxdbgReader.callSiteLookup((callerPc - image.textBase) as MxdbgCodeOffset))
+
+			return followProfileFrameChain(frames, image: image, framePointer: framePointer, stackPointer: stackPointer, window: window, framesSoFar: 2, startedInOurCode: true, startedInTheProgram: callerRanTheProgram)
+		end 'walkProfileFromSavedCaller'
+	#endif
+
+	function followProfileFrameChain(frames ProfileStringArray, image ProfileImage, framePointer RegisterWord, stackPointer RegisterWord, window StackWindow, framesSoFar ProfileFrameCount, startedInOurCode bool, startedInTheProgram bool) returns ProfileWalk
+		let signalTrampoline = image.modules.signalTrampoline
+		var sawOurCode = startedInOurCode
+		var ranTheProgram = startedInTheProgram
 		let windowBytes = window.byteCount()
 
 		if windowBytes < ProfileFrameLinkBytes 'nothingToWalk'
@@ -282,7 +311,7 @@
 		// link size from the bound rather than adding it to the pointer.
 		let lastFrameLinkOffset = windowBytes - ProfileFrameLinkBytes
 		var fp = framePointer
-		var walked = 1 as ProfileFrameCount
+		var walked = framesSoFar
 
 		while walked < ProfileMaxWalkFrames 'eachFrame'
 			if fp < stackPointer 'belowTheWindow'
@@ -333,7 +362,7 @@
 		end 'eachFrame'
 
 		return ProfileWalk.of(true, rootFrame: 0, sawOurCode: sawOurCode, ranTheProgram: ranTheProgram)
-	end 'walkProfileFrames'
+	end 'followProfileFrameChain'
 
 	// ========================================================================================
 	// ONE TICK OF CPU
@@ -399,7 +428,12 @@
 	// arrays — the threads, their cycle baselines and their uncharged credit — rather than one array of
 	// records, so the baseline and the credit written on every tick are plain word columns.
 	export type ProfileSession
-		var process as SampledProcess
+		#if os(Windows) and arch(x64)
+			module var process as SampledProcess
+		#else
+			var process as SampledProcess
+		#endif
+
 		var cyclesPerTick as ProfileCyclesPerTick
 		var threads as SampledThreadArray
 		var threadCycles as ProfileWordArray
@@ -552,7 +586,7 @@
 		// symbolizing needs the target held, and holding it would multiply the suspension by the stack's
 		// depth.
 		function chargedWithStack(stack SampledStack, thread SampledThread, charges ProfileCharges, accumulator ProfileAccumulator, image ProfileImage, frames ProfileStringArray) returns ProfileThreadSample
-			let walk = walkProfileFrames(frames, image: image, leafPc: stack.programCounter, linkRegister: stack.linkRegister, framePointer: stack.framePointer, stackPointer: stack.stackPointer, window: stack.window)
+			let walk = walkProfileFrames(frames, image: image, stack: stack)
 			let hadNoChain = stack.window.byteCount() == 0
 
 			if walk.runtimeOnly 'theRuntimesOwnMachinery'
@@ -621,10 +655,17 @@
 			return ProfileImageLoad.refused(profileModuleRefusalReason(e))
 		end 'unplaced'
 
-		return match executablePlacementOf(sidecar.target, location: modules.executableLocation(sidecar.target)) 'placed'
-			refused(reason) gives ProfileImageLoad.refused(reason)
-			ready(placement) gives ProfileImageLoad.loaded(profileImageAt(sidecar, textBytes: textBytes, placement: placement, modules: modules))
-		end 'placed'
+		#if os(Windows) and arch(x64)
+			return match executablePlacementOf(sidecar.target, location: modules.executableLocation(sidecar.target)) 'placed'
+				refused(reason) gives ProfileImageLoad.refused(reason)
+				ready(placement) gives ProfileImageLoad.loaded(profileImageAt(session, sidecar: sidecar, textBytes: textBytes, placement: placement, modules: modules))
+			end 'placed'
+		#else
+			return match executablePlacementOf(sidecar.target, location: modules.executableLocation(sidecar.target)) 'placed'
+				refused(reason) gives ProfileImageLoad.refused(reason)
+				ready(placement) gives ProfileImageLoad.loaded(profileImageAt(sidecar, textBytes: textBytes, placement: placement, modules: modules))
+			end 'placed'
+		#endif
 	end 'profileImageFor'
 
 	function profileModuleRefusalReason(failure SamplerError) returns String
@@ -641,11 +682,34 @@
 		end 'why'
 	end 'profileModuleRefusalReason'
 
-	function profileImageAt(sidecar MxdbgReader, textBytes DebugAddress, placement BackendImagePlacement, modules ProfileModuleMap) returns ProfileImage
-		let contract = DebugRuntimeContract.readFrom(sidecar, textBytes: textBytes, placement: placement)
+	#if os(Windows) and arch(x64)
+		function profileImageAt(session ProfileSession, sidecar MxdbgReader, textBytes DebugAddress, placement BackendImagePlacement, modules ProfileModuleMap) returns ProfileImage
+			let contract = DebugRuntimeContract.readFrom(sidecar, textBytes: textBytes, placement: placement)
+			session.process.trackSavedFrames(profileSavedFrameLocation(contract))
 
-		return ProfileImage.create(contract.textBase() as RegisterWord, textSize: contract.textSize() as RegisterWord, sidecar: sidecar, modules: modules)
-	end 'profileImageAt'
+			return ProfileImage.create(contract.textBase() as RegisterWord, textSize: contract.textSize() as RegisterWord, sidecar: sidecar, modules: modules)
+		end 'profileImageAt'
+
+		function profileSavedFrameLocation(contract DebugRuntimeContract) returns SavedFrameLocation
+			return match contract.globalAt(String.from(SchedTlsTebOffsetLabel)) 'slot'
+				none gives profileFixedSavedFrameLocation(contract)
+				at(address, _) gives SavedFrameLocation.recordedAt(contract.textBase() as RegisterWord, codeBytes: contract.textSize() as RegisterWord, slotBase: address as RegisterWord, recordField: contract.offset(MOffSavedFramePcFigureName) as RegisterWord)
+			end 'slot'
+		end 'profileSavedFrameLocation'
+
+		function profileFixedSavedFrameLocation(contract DebugRuntimeContract) returns SavedFrameLocation
+			return match contract.globalAt(String.from(SavedFrameLabel)) 'record'
+				none gives SavedFrameLocation.untracked
+				at(address, _) gives SavedFrameLocation.fixedAt(contract.textBase() as RegisterWord, codeBytes: contract.textSize() as RegisterWord, record: address as RegisterWord)
+			end 'record'
+		end 'profileFixedSavedFrameLocation'
+	#else
+		function profileImageAt(sidecar MxdbgReader, textBytes DebugAddress, placement BackendImagePlacement, modules ProfileModuleMap) returns ProfileImage
+			let contract = DebugRuntimeContract.readFrom(sidecar, textBytes: textBytes, placement: placement)
+
+			return ProfileImage.create(contract.textBase() as RegisterWord, textSize: contract.textSize() as RegisterWord, sidecar: sidecar, modules: modules)
+		end 'profileImageAt'
+	#endif
 
 	module union ProfileImageLoad
 		loaded(image ProfileImage)

@@ -15,6 +15,7 @@ export let MOffCurrentGtFigureName = "MOffCurrentGt"
 export let MOffAllNextFigureName = "MOffAllNext"
 export let MOffOsThreadIdFigureName = "MOffOsThreadId"
 export let MOffOsThreadUniqueIdFigureName = "MOffOsThreadUniqueId"
+export let MOffSavedFramePcFigureName = "MOffSavedFramePc"
 
 export let GtOffSpFigureName = "GtOffSp"
 export let GtOffFpFigureName = "GtOffFp"
@@ -34,7 +35,7 @@ export let GtHoldRequestedFigureName = "GtHoldRequested"
 
 export let DsOffWriteCursorFigureName = "DsOffWriteCursor"
 
-module function debuggerReadableGlobals() returns StringArray
+module function debuggerReadableGlobals(target Target) returns StringArray
 	let names = StringArray.create(0)
 	names.push(String.from(GtAllGLabel))
 	names.push(String.from(GtAllGLenLabel))
@@ -45,15 +46,24 @@ module function debuggerReadableGlobals() returns StringArray
 	names.push(String.from(DsBaseLabel))
 	names.push(String.from(ProgramStartedLabel))
 
+	if targetBracketsInsideTheImportShim(target) 'savedFrameWords'
+		names.push(String.from(SchedTlsTebOffsetLabel))
+		names.push(String.from(SavedFrameLabel))
+	end 'savedFrameWords'
+
 	return names
 end 'debuggerReadableGlobals'
 
-module function debuggerLayoutFigures() returns DebugLayoutFigureArray
+module function debuggerLayoutFigures(target Target) returns DebugLayoutFigureArray
 	let out = DebugLayoutFigureArray.create(0)
 	pushLayoutFigure(out, name: MOffCurrentGtFigureName, figure: MOffCurrentGt as MxdbgRecordFigure)
 	pushLayoutFigure(out, name: MOffAllNextFigureName, figure: MOffAllNext as MxdbgRecordFigure)
 	pushLayoutFigure(out, name: MOffOsThreadIdFigureName, figure: MOffOsThreadId as MxdbgRecordFigure)
 	pushLayoutFigure(out, name: MOffOsThreadUniqueIdFigureName, figure: MOffOsThreadUniqueId as MxdbgRecordFigure)
+
+	if targetBracketsInsideTheImportShim(target) 'savedFrameWords'
+		pushLayoutFigure(out, name: MOffSavedFramePcFigureName, figure: MOffSavedFramePc as MxdbgRecordFigure)
+	end 'savedFrameWords'
 
 	pushLayoutFigure(out, name: GtOffSpFigureName, figure: GtOffSp as MxdbgRecordFigure)
 	pushLayoutFigure(out, name: GtOffFpFigureName, figure: GtOffFp as MxdbgRecordFigure)

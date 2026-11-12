@@ -52,10 +52,10 @@ i8 0
 
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -71,7 +71,7 @@ func @main {
 <!-- test: a-reached-runtime-entry-still-earns-its-word -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
-⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes. On a lane without them the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The reachability this measures is a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
+⚠ **THE PROPERTY IS TARGET-NEUTRAL AND THE CHANNEL IS NOT.** `RequiredData` is a PREFIX compare, so it can only catch a word inserted where something still TRAILS it — and the only globals laid out after a program's own are the x64-windows console probes; the three zero words the pin opens with are the saved-frame record a scheduler-less x64-windows program lays out first. On a lane without the probes the pinned tail runs past the end of the section, and a shorter `.data` is all the gate can say. The reachability this measures is a target-neutral walk; what is missing elsewhere is an anchor, not the behaviour.
 ⭐⭐ **THE CONTROL ON THE CASE ABOVE, AND WITHOUT IT THE RULE COULD BE *"CREDIT NO TIER BODY, EVER"*.** That
 answer passes the unreached case and is the dangerous direction: a body left uncredited while it survives
 is the disagreement the panic below refuses. So the same `Probe.maxon` stands here unchanged and `main`
@@ -112,6 +112,9 @@ end 'main'
 0
 ```
 ```RequiredData
+i64 0
+i64 0
+i64 0
 i64 1
 i8 0
 i8 0
@@ -123,11 +126,11 @@ __sched_max_active_workers
 
 ```TargetIr:x64-windows
 data {
-  __sched_max_active_workers@0 = i64 1
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __sched_max_active_workers@24 = i64 1
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @main {
@@ -217,10 +220,10 @@ i8 0
 
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {

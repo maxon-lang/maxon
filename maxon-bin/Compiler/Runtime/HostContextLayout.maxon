@@ -15,6 +15,22 @@ let SampleContextRbpOffsetName = "SampleContextRbpOffset"
 let ProfileRegionRecordBytesName = "ProfileRegionRecordBytes"
 let ProfileRegionAllocationBaseOffsetName = "ProfileRegionAllocationBaseOffset"
 let ProfileRegionSuspendedCyclesOffsetName = "ProfileRegionSuspendedCyclesOffset"
+let ProfileSavedFrameCodeBaseOffsetName = "ProfileSavedFrameCodeBaseOffset"
+let ProfileSavedFrameCodeBytesOffsetName = "ProfileSavedFrameCodeBytesOffset"
+let ProfileSavedFrameSlotBaseOffsetName = "ProfileSavedFrameSlotBaseOffset"
+let ProfileSavedFrameRecordFieldOffsetName = "ProfileSavedFrameRecordFieldOffset"
+let ProfileSavedFrameCopyOffsetName = "ProfileSavedFrameCopyOffset"
+let ProfileSavedFrameRecordBytesName = "ProfileSavedFrameRecordBytes"
+let ProfileSavedFramePcWordName = "ProfileSavedFramePcWord"
+let ProfileSavedFrameSpWordName = "ProfileSavedFrameSpWord"
+let ProfileSavedFrameFpWordName = "ProfileSavedFrameFpWord"
+let ProfileSavedFrameWindowBytesOffsetName = "ProfileSavedFrameWindowBytesOffset"
+let ProfileSavedFrameThreadInfoOffsetName = "ProfileSavedFrameThreadInfoOffset"
+let ProfileSavedFrameWordsOffsetName = "ProfileSavedFrameWordsOffset"
+let ProfileSavedFrameRegionOffsetName = "ProfileSavedFrameRegionOffset"
+let ProfileSavedFrameFixedRecordOffsetName = "ProfileSavedFrameFixedRecordOffset"
+let ProfileSavedFrameRecordAddressOffsetName = "ProfileSavedFrameRecordAddressOffset"
+let ProfileSavedFrameWindowAddressOffsetName = "ProfileSavedFrameWindowAddressOffset"
 let ProfileSampleThreadGoneName = "ProfileSampleThreadGone"
 let ProfileSampleNoRegistersName = "ProfileSampleNoRegisters"
 let ProfileSampleCallingThreadName = "ProfileSampleCallingThread"
@@ -23,6 +39,7 @@ let MachSuccessName = "MachSuccess"
 let MachStateStackPointerOffsetName = "MachStateStackPointerOffset"
 let MachStateFramePointerOffsetName = "MachStateFramePointerOffset"
 let MachStateProgramCounterOffsetName = "MachStateProgramCounterOffset"
+
 // x4 of the thread state: the signal's ucontext argument, still in place at the trampoline's entry.
 let MachStateSignalContextOffset = 32
 let MachStateTrampolineOffsetName = "MachStateTrampolineOffset"
@@ -67,6 +84,21 @@ export type HostContextLayout
 	export var regionAllocationBaseOffset as FullRangeInt
 	export var mbiRegionSizeOffset as FullRangeInt
 	export var regionSuspendedCyclesOffset as FullRangeInt
+	export var savedFrameCodeBaseOffset as FullRangeInt
+	export var savedFrameCodeBytesOffset as FullRangeInt
+	export var savedFrameSlotBaseOffset as FullRangeInt
+	export var savedFrameRecordFieldOffset as FullRangeInt
+	export var savedFrameCopyOffset as FullRangeInt
+	export var savedFrameRecordBytes as FullRangeInt
+	export var savedFramePcWord as FullRangeInt
+	export var savedFrameSpWord as FullRangeInt
+	export var savedFrameWindowBytesOffset as FullRangeInt
+	export var savedFrameThreadInfoOffset as FullRangeInt
+	export var savedFrameWordsOffset as FullRangeInt
+	export var savedFrameRegionOffset as FullRangeInt
+	export var savedFrameFixedRecordOffset as FullRangeInt
+	export var savedFrameRecordAddressOffset as FullRangeInt
+	export var savedFrameWindowAddressOffset as FullRangeInt
 	export var sampleThreadGone as FullRangeInt
 	export var sampleNoRegisters as FullRangeInt
 	export var sampleCallingThread as FullRangeInt
@@ -137,6 +169,26 @@ export type HostContextLayout
 		self.regionAllocationBaseOffset = signatures.integerConstantIn(ProfileRegionAllocationBaseOffsetName, filePath: sampler)
 		self.mbiRegionSizeOffset = Win64MbiRegionSizeOffset
 		self.regionSuspendedCyclesOffset = signatures.integerConstantIn(ProfileRegionSuspendedCyclesOffsetName, filePath: sampler)
+		self.savedFrameCodeBaseOffset = signatures.integerConstantIn(ProfileSavedFrameCodeBaseOffsetName, filePath: sampler)
+		self.savedFrameCodeBytesOffset = signatures.integerConstantIn(ProfileSavedFrameCodeBytesOffsetName, filePath: sampler)
+		self.savedFrameSlotBaseOffset = signatures.integerConstantIn(ProfileSavedFrameSlotBaseOffsetName, filePath: sampler)
+		self.savedFrameRecordFieldOffset = signatures.integerConstantIn(ProfileSavedFrameRecordFieldOffsetName, filePath: sampler)
+		self.savedFrameCopyOffset = signatures.integerConstantIn(ProfileSavedFrameCopyOffsetName, filePath: sampler)
+		self.savedFrameRecordBytes = signatures.integerConstantIn(ProfileSavedFrameRecordBytesName, filePath: sampler)
+		self.savedFramePcWord = signatures.integerConstantIn(ProfileSavedFramePcWordName, filePath: sampler)
+		self.savedFrameSpWord = signatures.integerConstantIn(ProfileSavedFrameSpWordName, filePath: sampler)
+		self.savedFrameWindowBytesOffset = signatures.integerConstantIn(ProfileSavedFrameWindowBytesOffsetName, filePath: sampler)
+		self.savedFrameThreadInfoOffset = signatures.integerConstantIn(ProfileSavedFrameThreadInfoOffsetName, filePath: sampler)
+		self.savedFrameWordsOffset = signatures.integerConstantIn(ProfileSavedFrameWordsOffsetName, filePath: sampler)
+		self.savedFrameRegionOffset = signatures.integerConstantIn(ProfileSavedFrameRegionOffsetName, filePath: sampler)
+		self.savedFrameFixedRecordOffset = signatures.integerConstantIn(ProfileSavedFrameFixedRecordOffsetName, filePath: sampler)
+		self.savedFrameRecordAddressOffset = signatures.integerConstantIn(ProfileSavedFrameRecordAddressOffsetName, filePath: sampler)
+		self.savedFrameWindowAddressOffset = signatures.integerConstantIn(ProfileSavedFrameWindowAddressOffsetName, filePath: sampler)
+
+		if (MOffSavedFrameSp - MOffSavedFramePc) as FullRangeInt != self.savedFrameSpWord - self.savedFramePcWord or (MOffSavedFrameFp - MOffSavedFramePc) as FullRangeInt != signatures.integerConstantIn(ProfileSavedFrameFpWordName, filePath: sampler) - self.savedFramePcWord or self.savedFrameRecordBytes != (MOffSavedFrameFp - MOffSavedFramePc + MachineWordBytes) as FullRangeInt 'savedFrameDrifted'
+			panic("HostContextLayout.readWin32Sampler: {SamplerStdlibFileName} lays out the saved frame's program counter, stack pointer and frame pointer differently from the machine record in SchedRuntime — `__prof_sample` copies the record's words into its scratch as one block, so the two layouts must agree")
+		end 'savedFrameDrifted'
+
 		self.sampleThreadGone = signatures.integerConstantIn(ProfileSampleThreadGoneName, filePath: sampler)
 		self.sampleNoRegisters = signatures.integerConstantIn(ProfileSampleNoRegistersName, filePath: sampler)
 	end 'readWin32Sampler'
@@ -187,6 +239,6 @@ export type HostContextLayout
 	end 'readPtraceSampler'
 
 	export static function unread() returns HostContextLayout
-		return Self{contextFlagsOffset: 0, contextControl: 0, contextInteger: 0, contextRipOffset: 0, contextRspOffset: 0, contextRbpOffset: 0, suspendThreadFailed: 0, regionRecordBytes: 0, mbiBaseAddressOffset: 0, regionAllocationBaseOffset: 0, mbiRegionSizeOffset: 0, regionSuspendedCyclesOffset: 0, sampleThreadGone: 0, sampleNoRegisters: 0, sampleCallingThread: 0, machSuccess: 0, machThreadStateFlavor: 0, machThreadStateWords: 0, machStateStackPointerOffset: 0, machStateFramePointerOffset: 0, machStateProgramCounterOffset: 0, machStateSignalContextOffset: 0, machStateTrampolineOffset: 0, machContextPointerOffset: 0, machContextRegistersOffset: 0, machContextRegisterBytes: 0, machObjectTerminated: 0, machThreadInfoFlavor: 0, machThreadInfoWords: 0, machChunkBytes: 0, seizedTableBytes: 0, seizedPidOffset: 0, seizedCountOffset: 0, seizedPinOffset: 0, seizedKilledOffset: 0, seizedThreadsOffset: 0, seizedWordBytes: 0, traceKillSignal: 0, ptraceDetach: 0, ptraceInterrupt: 0, traceStopBudgetMillis: 0}
+		return Self{contextFlagsOffset: 0, contextControl: 0, contextInteger: 0, contextRipOffset: 0, contextRspOffset: 0, contextRbpOffset: 0, suspendThreadFailed: 0, regionRecordBytes: 0, mbiBaseAddressOffset: 0, regionAllocationBaseOffset: 0, mbiRegionSizeOffset: 0, regionSuspendedCyclesOffset: 0, savedFrameCodeBaseOffset: 0, savedFrameCodeBytesOffset: 0, savedFrameSlotBaseOffset: 0, savedFrameRecordFieldOffset: 0, savedFrameCopyOffset: 0, savedFrameRecordBytes: 0, savedFramePcWord: 0, savedFrameSpWord: 0, savedFrameWindowBytesOffset: 0, savedFrameThreadInfoOffset: 0, savedFrameWordsOffset: 0, savedFrameRegionOffset: 0, savedFrameFixedRecordOffset: 0, savedFrameRecordAddressOffset: 0, savedFrameWindowAddressOffset: 0, sampleThreadGone: 0, sampleNoRegisters: 0, sampleCallingThread: 0, machSuccess: 0, machThreadStateFlavor: 0, machThreadStateWords: 0, machStateStackPointerOffset: 0, machStateFramePointerOffset: 0, machStateProgramCounterOffset: 0, machStateSignalContextOffset: 0, machStateTrampolineOffset: 0, machContextPointerOffset: 0, machContextRegistersOffset: 0, machContextRegisterBytes: 0, machObjectTerminated: 0, machThreadInfoFlavor: 0, machThreadInfoWords: 0, machChunkBytes: 0, seizedTableBytes: 0, seizedPidOffset: 0, seizedCountOffset: 0, seizedPinOffset: 0, seizedKilledOffset: 0, seizedThreadsOffset: 0, seizedWordBytes: 0, traceKillSignal: 0, ptraceDetach: 0, ptraceInterrupt: 0, traceStopBudgetMillis: 0}
 	end 'unread'
 end 'HostContextLayout'

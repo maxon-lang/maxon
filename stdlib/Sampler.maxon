@@ -43,6 +43,36 @@
 		let SampleRegionAllocationBaseSlot = (SampleRegionSlot + ProfileRegionAllocationBaseOffset) as ScratchOffset
 		let SampleRegionSuspendedCyclesSlot = (SampleRegionSlot + ProfileRegionSuspendedCyclesOffset) as ScratchOffset
 
+		let ProfileSavedFrameCodeBaseOffset = 64
+		let ProfileSavedFrameCodeBytesOffset = 72
+		let ProfileSavedFrameSlotBaseOffset = 80
+		let ProfileSavedFrameRecordFieldOffset = 88
+		let ProfileSavedFrameCopyOffset = 96
+		let ProfileSavedFramePcWord = 0
+		let ProfileSavedFrameSpWord = 8
+		let ProfileSavedFrameFpWord = 16
+		let ProfileSavedFrameRecordBytes = 24
+		let ProfileSavedFrameWindowBytesOffset = 120
+		let ProfileSavedFrameThreadInfoOffset = 128
+		let ProfileSavedFrameWordsOffset = 176
+		let ProfileSavedFrameRegionOffset = 192
+		let ProfileSavedFrameFixedRecordOffset = 240
+		let ProfileSavedFrameRecordAddressOffset = 248
+		let ProfileSavedFrameWindowAddressOffset = 256
+		let NoSavedFrame = 0
+		let SampleWindowPagesBytes = SampleWindowBytes * 2
+
+		let SampleSavedFrameCodeBaseSlot = (SampleRegionSlot + ProfileSavedFrameCodeBaseOffset) as ScratchOffset
+		let SampleSavedFrameCodeBytesSlot = (SampleRegionSlot + ProfileSavedFrameCodeBytesOffset) as ScratchOffset
+		let SampleSavedFrameSlotBaseSlot = (SampleRegionSlot + ProfileSavedFrameSlotBaseOffset) as ScratchOffset
+		let SampleSavedFrameRecordFieldSlot = (SampleRegionSlot + ProfileSavedFrameRecordFieldOffset) as ScratchOffset
+		let SampleSavedFramePcSlot = (SampleRegionSlot + ProfileSavedFrameCopyOffset + ProfileSavedFramePcWord) as ScratchOffset
+		let SampleSavedFrameSpSlot = (SampleRegionSlot + ProfileSavedFrameCopyOffset + ProfileSavedFrameSpWord) as ScratchOffset
+		let SampleSavedFrameFpSlot = (SampleRegionSlot + ProfileSavedFrameCopyOffset + ProfileSavedFrameFpWord) as ScratchOffset
+		let SampleSavedFrameWindowBytesSlot = (SampleRegionSlot + ProfileSavedFrameWindowBytesOffset) as ScratchOffset
+		let SampleSavedFrameFixedRecordSlot = (SampleRegionSlot + ProfileSavedFrameFixedRecordOffset) as ScratchOffset
+		let SampleSavedFrameWindowAddressSlot = (SampleRegionSlot + ProfileSavedFrameWindowAddressOffset) as ScratchOffset
+
 		let ModuleEntryBytes = 1080
 		let ModuleEntrySizeSlot = 4096
 		let ModuleEntryBaseSlot = (4096 + 24) as ScratchOffset
@@ -65,7 +95,7 @@
 		let PebLoaderSlot = (SamplePebSlot + PebLoaderOffset) as ScratchOffset
 		let PebCrossProcessFlagsSlot = (SamplePebSlot + PebCrossProcessFlagsOffset) as ScratchOffset
 
-		let ModuleListAttempts = 20
+		let ModuleListDeadlineNanos = 1500000000
 		let ModuleListRetryMs = 5
 		let InvalidHandle = 0 - 1
 		let CurrentThreadPseudoHandle = 0 - 2
@@ -95,7 +125,7 @@
 		let MachThreadIdentifierInfoWords = 6
 		let MachTaskDyldInfo = 17
 		let MachTaskDyldInfoWords = 5
-		let ModuleListAttempts = 40
+		let ModuleListDeadlineNanos = 200000000
 		let ModuleListRetryMs = 5
 
 		let MachStateFramePointerOffset = 232
@@ -455,6 +485,12 @@
 			return Self{block: RegisterBlock.readFrom(pages, at: 0, length: copied as ScratchBytes), copied: copied}
 		end 'copyOf'
 
+		#if os(Windows) and arch(x64)
+			static function copyOfRegion(pages ScratchPages, copied RegisterWord, from ScratchOffset) returns StackWindow
+				return Self{block: RegisterBlock.readFrom(pages, at: from, length: copied as ScratchBytes), copied: copied}
+			end 'copyOfRegion'
+		#endif
+
 		public function byteCount() returns RegisterWord
 			return self.copied
 		end 'byteCount'
@@ -475,6 +511,19 @@
 		base(address RegisterWord)
 	end 'StackReservation'
 
+	#if os(Windows) and arch(x64)
+		public union SavedFrame
+			absent
+			saved(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, window StackWindow)
+		end 'SavedFrame'
+
+		public union SavedFrameLocation
+			untracked
+			recordedAt(codeBase RegisterWord, codeBytes RegisterWord, slotBase RegisterWord, recordField RegisterWord)
+			fixedAt(codeBase RegisterWord, codeBytes RegisterWord, record RegisterWord)
+		end 'SavedFrameLocation'
+	#endif
+
 	public type SampledStack
 		public let programCounter as RegisterWord
 		public let framePointer as RegisterWord
@@ -484,9 +533,17 @@
 		public let suspendedCycles as RegisterWord
 		public let window as StackWindow
 
-		static function of(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, linkRegister LinkRegister, reservation StackReservation, suspendedCycles RegisterWord, window StackWindow) returns SampledStack
-			return Self{programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: linkRegister, reservation: reservation, suspendedCycles: suspendedCycles, window: window}
-		end 'of'
+		#if os(Windows) and arch(x64)
+			public let savedFrame as SavedFrame
+
+			static function of(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, linkRegister LinkRegister, reservation StackReservation, suspendedCycles RegisterWord, window StackWindow, savedFrame SavedFrame) returns SampledStack
+				return Self{programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: linkRegister, reservation: reservation, suspendedCycles: suspendedCycles, window: window, savedFrame: savedFrame}
+			end 'of'
+		#else
+			static function of(programCounter RegisterWord, framePointer RegisterWord, stackPointer RegisterWord, linkRegister LinkRegister, reservation StackReservation, suspendedCycles RegisterWord, window StackWindow) returns SampledStack
+				return Self{programCounter: programCounter, framePointer: framePointer, stackPointer: stackPointer, linkRegister: linkRegister, reservation: reservation, suspendedCycles: suspendedCycles, window: window}
+			end 'of'
+		#endif
 	end 'SampledStack'
 
 	/// A sampled thread's link register: `holds` on macOS, `absent` on Windows and Linux.
@@ -577,6 +634,10 @@
 		var window as ScratchPages
 		var openThreads as OpenThreadArray
 
+		#if os(Windows) and arch(x64)
+			var savedFrames = SavedFrameLocation.untracked
+		#endif
+
 		#if not os(Windows)
 			var watches as ThreadWatchArray
 			var pending as PendingStop
@@ -611,6 +672,12 @@
 			#endif
 		end 'foreignCodeKeepsTheFrameChain'
 
+		#if os(Windows) and arch(x64)
+			public function trackSavedFrames(location SavedFrameLocation)
+				self.savedFrames = location
+			end 'trackSavedFrames'
+		#endif
+
 		/// libsystem_platform's `_sigtramp` on macOS, kept once located; `absent` until libSystem has
 		/// initialised, and always on Windows and Linux.
 		public function signalTrampoline() returns SignalTrampoline
@@ -632,7 +699,7 @@
 					throw SamplerError.noSuchProcess
 				end 'noSuchProcess'
 
-				let sampled = Self{process: process, pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowBytes as ScratchBytes), openThreads: OpenThreadArray.create(0)}
+				let sampled = Self{process: process, pid: pid as RegisterWord, scratch: ScratchPages.reserve(SampleProcessScratchBytes), window: ScratchPages.reserve(SampleWindowPagesBytes as ScratchBytes), openThreads: OpenThreadArray.create(0)}
 
 				if not sampled.scratch.held() or not sampled.window.held() 'noPages'
 					sampled.close()
@@ -907,6 +974,8 @@
 					throw SamplerError.callingThread
 				end 'suspendsItself'
 
+				self.publishSavedFrameLocation()
+
 				let windowBytes = __Builtins.profileSample(self.process.handle() as RegisterWord, thread.rawHandle(), self.scratch.addressOf(SampleContextSlot), self.scratch.addressOf(SampleRegionSlot), self.window.addressOf(0), SampleWindowBytes)
 
 				if windowBytes == ProfileSampleThreadGone 'exited'
@@ -922,7 +991,7 @@
 
 				let copiedStack = StackWindow.copyOf(self.window, copied: windowBytes as RegisterWord)
 
-				return SampleCapture.captured(SampledStack.of(self.scratch.word(SampleContextRipSlot), framePointer: self.scratch.word(SampleContextRbpSlot), stackPointer: self.scratch.word(SampleContextRspSlot), linkRegister: LinkRegister.absent, reservation: StackReservation.base(allocationBase), suspendedCycles: suspendedCycles, window: copiedStack))
+				return SampleCapture.captured(SampledStack.of(self.scratch.word(SampleContextRipSlot), framePointer: self.scratch.word(SampleContextRbpSlot), stackPointer: self.scratch.word(SampleContextRspSlot), linkRegister: LinkRegister.absent, reservation: StackReservation.base(allocationBase), suspendedCycles: suspendedCycles, window: copiedStack, savedFrame: self.savedFrameOfSample()))
 			#endif
 
 			#if not os(Windows)
@@ -1242,10 +1311,9 @@
 
 		public function modules() returns SampledModuleArray throws SamplerError
 			#if not os(Linux)
-				var attempt = 0 as Count
+				let started = Clock.nowNanos()
 
-				while attempt < ModuleListAttempts 'retry'
-					attempt = attempt + 1
+				while Clock.elapsedNanos(started) < ModuleListDeadlineNanos 'retry'
 					let listed = self.listedModules()
 
 					if listed.count() > 0 'listed'
@@ -1339,6 +1407,35 @@
 		#endif
 
 		#if os(Windows) and arch(x64)
+			function publishSavedFrameLocation()
+				match self.savedFrames 'location'
+					untracked then return
+					recordedAt(codeBase, codeBytes, slotBase, recordField) then self.writeSavedFrameLocation(codeBase, codeBytes: codeBytes, slotBase: slotBase, recordField: recordField, fixedRecord: NoSavedFrame)
+					fixedAt(codeBase, codeBytes, record) then self.writeSavedFrameLocation(codeBase, codeBytes: codeBytes, slotBase: NoSavedFrame, recordField: NoSavedFrame, fixedRecord: record)
+				end 'location'
+			end 'publishSavedFrameLocation'
+
+			function writeSavedFrameLocation(codeBase RegisterWord, codeBytes RegisterWord, slotBase RegisterWord, recordField RegisterWord, fixedRecord RegisterWord)
+				self.scratch.setWord(SampleSavedFrameCodeBaseSlot, value: codeBase)
+				self.scratch.setWord(SampleSavedFrameCodeBytesSlot, value: codeBytes)
+				self.scratch.setWord(SampleSavedFrameSlotBaseSlot, value: slotBase)
+				self.scratch.setWord(SampleSavedFrameRecordFieldSlot, value: recordField)
+				self.scratch.setWord(SampleSavedFrameFixedRecordSlot, value: fixedRecord)
+				self.scratch.setWord(SampleSavedFrameWindowAddressSlot, value: self.window.addressOf(SampleWindowBytes))
+			end 'writeSavedFrameLocation'
+
+			function savedFrameOfSample() returns SavedFrame
+				let programCounter = self.scratch.word(SampleSavedFramePcSlot)
+
+				if programCounter == NoSavedFrame 'nothingSaved'
+					return SavedFrame.absent
+				end 'nothingSaved'
+
+				let windowBytes = self.scratch.word(SampleSavedFrameWindowBytesSlot)
+
+				return SavedFrame.saved(programCounter, framePointer: self.scratch.word(SampleSavedFrameFpSlot), stackPointer: self.scratch.word(SampleSavedFrameSpSlot), window: StackWindow.copyOfRegion(self.window, copied: windowBytes, from: SampleWindowBytes))
+			end 'savedFrameOfSample'
+
 			// `PEB.Ldr` is non-null and `PEB_LDR_DATA.Initialized` is already 1 while the loader still maps the
 			// import closure; only `ProcessInitializingFlag` clearing marks it finished.
 			function loaderHasInitialized() returns bool

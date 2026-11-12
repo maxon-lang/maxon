@@ -1,0 +1,33 @@
+let OsWaitFixtureName = "oswait"
+
+test 'every stack of a scheduler-less program spending its time in OS calls is named by a frame of the program'
+	let staged = stagedFixtureTree(FixturesDirName, caseLabel: "profile-os-calls-without-a-scheduler", fixture: OsWaitFixtureName)
+	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: OsWaitFixtureName)
+
+	let arguments = StringArray.create(0)
+	arguments.push(FastestSamplingFlag)
+
+	let run = runProfiler(staged, extraArguments: arguments)
+	Expect.equal(run.exitCode(), expected: 0, message: "`{TestedCompilerStem} {ProfileSubcommandName} {ProfileRunVerb} {FastestSamplingFlag}` did not complete a measurement of the OS-wait fixture. It printed:{LineFeed}{run.stdout}{LineFeed}— and wrote to stderr: {run.stderr}")
+
+	let lines = outputLines(run.stdout)
+	Expect.isFalse(reportHasLineStartingWith(lines, prefix: TooFewSamplesPrefix), message: "the profiler reported too few samples to say anything about the program's OS calls. It printed:{LineFeed}{run.stdout}")
+	Expect.isTrue(reportHasLine(lines, wanted: StacksHeader), message: "the report carries no '{StacksHeader}' section. It printed:{LineFeed}{run.stdout}")
+
+	let synthetic = syntheticStackNames(rowNames(sectionRows(lines, header: StacksHeader)))
+	Expect.isTrue(synthetic.isEmpty(), message: "'{StacksHeader}' lists {synthetic.count()} stack(s) named by a frame the profile could not name. A program with no scheduler runs on one OS thread, and a sample landing inside a system library while that thread is in a call the program made belongs to the function that made the call. They were:{LineFeed}{terminatedLines(synthetic)}{LineFeed}The whole report was:{LineFeed}{run.stdout}")
+
+	discardStagedDir(staged)
+end 'every stack of a scheduler-less program spending its time in OS calls is named by a frame of the program'
+
+function syntheticStackNames(names StringArray) returns StringArray
+	let found = StringArray.create(0)
+
+	for name in names 'eachName'
+		if name.startsWith(SyntheticFramePrefix) 'synthetic'
+			found.push(name)
+		end 'synthetic'
+	end 'eachName'
+
+	return found
+end 'syntheticStackNames'

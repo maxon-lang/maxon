@@ -372,7 +372,7 @@ Every instruction is four bytes, and the classes are the same numbers; arm64 con
 | `lines` | The line table: code offset, source position and flags — `statement`, `coverage`, and `line-entry` on a row where control enters its source line: falling in from a different line, at the function's entry, or through a branch from another line |
 | `statements` | The same table, without the code offsets |
 | `inline` | Inlined call sites, each with the site it nests under, the position of its call and its `origin`, then the code ranges they occupy |
-| `globals` | The `.data` words a debugger reads out of the running program: each one's name, its offset from the image base and the width of its slot |
+| `globals` | The `.data` words a debugger reads out of the running program: each one's name, its offset from the image base and the width it is read at: its slot's, or a machine word for a run wider than one, which is published as its first word |
 | `layout` | The record geometry it reads them by: each figure's name and value |
 
 An `origin` says where a function or an inlined body came from: `authored` (the program's own source),
@@ -591,7 +591,11 @@ inlined is named as the body it came from, so a service's message handler, inlin
 loop the compiler synthesizes, has rows of its own. On macOS a thread stopped just as a signal reaches it,
 such as the runtime's preemption signal, is sampled as the code the signal interrupted; a sample anywhere
 else in the system's signal trampoline is the runtime delivering the signal and counts on the `runtime:`
-line. A thread that ends while it is being sampled is dropped without a sample for that tick.
+line. On x64-windows, whose system DLLs keep no frame-pointer chain, a sample inside a system DLL is
+walked from the last Maxon frame the runtime saved around the call, so its row carries its Maxon callers
+(`mrt_start;main;wait;[ntdll.dll]`) and a wait inside the runtime counts on the `runtime:` line; a bare
+`[ntdll.dll]` row is a sample in a DLL with no saved frame. A thread that ends while it is being sampled is
+dropped without a sample for that tick.
 
 The stacks section has one row per stack. Its name is the outermost frame the profile could name; when
 samples of one stack name different frames, the row takes a named frame over a bracketed one, then the

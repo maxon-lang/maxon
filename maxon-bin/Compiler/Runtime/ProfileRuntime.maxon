@@ -122,6 +122,13 @@ let ModuleSnapshotFlags = SnapModule or SnapModule32
 // `VirtualQueryEx` answers the number of bytes it wrote, so zero is its failure.
 let RegionQueryFailed = 0
 
+let ThreadBasicInformationClass = 0
+let ThreadBasicInformationBytes = 48
+let ThreadTebAddressOffset = 8
+let TlsWordBytes = 8
+let NoProgramCodeBytes = 0
+let NoThreadRecord = 0
+
 // `__prof_sample`'s own frame: the answer it is accumulating, the byte count it is about to ask for, and
 // `ReadProcessMemory`'s out-param. Three words, because the graph has no block arguments to carry them —
 // every failure edge converges on ONE resume block, and a value that crossed those edges would need a
@@ -272,6 +279,45 @@ function buildProfileThreadCycles(module StdModule)
 	module.functions.push(func)
 end 'buildProfileThreadCycles'
 
+function emitStackWindowCopy(module StdModule, func IrFunction, layout HostContextLayout, from IrBlock, proc ValueId, regionPtr ValueId, source ValueId, destination ValueId, cap ValueId, countPtr ValueId, wantPtr ValueId, readPtr ValueId, whenDone IrBlock, ids ValueMinter)
+	let measureWindow = module.addBlock(func, label: b"pfsm", heat: BlockHeat.normal)
+	let capWindow = module.addBlock(func, label: b"pfscap", heat: BlockHeat.normal)
+	let capped = module.addBlock(func, label: b"pfsclamp", heat: BlockHeat.normal)
+	let copyStack = module.addBlock(func, label: b"pfscopy", heat: BlockHeat.normal)
+	let partialCopy = module.addBlock(func, label: b"pfspart", heat: BlockHeat.normal)
+
+	let noOperand = emitConst(module, block: from, value: 0, ids: ids)
+	let regionBytes = emitConst(module, block: from, value: layout.regionRecordBytes, ids: ids)
+	let queried = emitHostSample(module, block: from, service: HostProcessCall.queryRegion, a0: proc, a1: source, a2: regionPtr, a3: regionBytes, a4: noOperand, a5: noOperand, ids: ids)
+	emitBranchOnCompare(module, block: from, value: queried, pred: StdCmpPred.eq, against: RegionQueryFailed, whenTrue: whenDone, whenFalse: measureWindow, ids: ids)
+
+	// Both comparisons are unsigned: these are addresses, and a signed `>` reads a high-half pointer
+	// as negative.
+	let regionBase = emitLoadField(module, block: measureWindow, record: regionPtr, offset: layout.mbiBaseAddressOffset as ByteOffset, ids: ids)
+	let regionSize = emitLoadField(module, block: measureWindow, record: regionPtr, offset: layout.mbiRegionSizeOffset as ByteOffset, ids: ids)
+	let regionEnd = emitBin(module, block: measureWindow, a: regionBase, b: regionSize, opcode: StdBinOpcode.add, ids: ids)
+	let available = emitBin(module, block: measureWindow, a: regionEnd, b: source, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: measureWindow, record: wantPtr, offset: 0, value: available)
+	emitBranchOnCompareValues(module, block: measureWindow, a: regionEnd, pred: StdCmpPred.gt, b: source, whenTrue: capWindow, whenFalse: whenDone, ids: ids, operandType: StdType.u64)
+
+	emitBranchOnCompareValues(module, block: capWindow, a: available, pred: StdCmpPred.gt, b: cap, whenTrue: capped, whenFalse: copyStack, ids: ids, operandType: StdType.u64)
+
+	emitStoreField(module, block: capped, record: wantPtr, offset: 0, value: cap)
+	module.setTerminator(capped, op: StdOp.branch(copyStack.id))
+
+	// A partial copy is still a walkable prefix, since a stack running into its guard page yields its
+	// readable frames, so the failure edge takes the byte count the API wrote.
+	let want = emitLoadField(module, block: copyStack, record: wantPtr, offset: 0, ids: ids)
+	emitStoreField(module, block: copyStack, record: readPtr, offset: 0, value: noOperand)
+	let copied = emitHostSample(module, block: copyStack, service: HostProcessCall.readProcessMemory, a0: proc, a1: source, a2: destination, a3: want, a4: readPtr, a5: noOperand, ids: ids)
+	emitStoreField(module, block: copyStack, record: countPtr, offset: 0, value: want)
+	emitBranchOnCompare(module, block: copyStack, value: copied, pred: StdCmpPred.eq, against: Win32False, whenTrue: partialCopy, whenFalse: whenDone, ids: ids)
+
+	let partial = emitLoadField(module, block: partialCopy, record: readPtr, offset: 0, ids: ids)
+	emitStoreField(module, block: partialCopy, record: countPtr, offset: 0, value: partial)
+	module.setTerminator(partialCopy, op: StdOp.branch(whenDone.id))
+end 'emitStackWindowCopy'
+
 // `__prof_sample(proc, thread, ctxPtr, mbiPtr, windowPtr, windowCap) -> bytesCopied | -1`: the
 // profiler's only suspension of a thread.
 //
@@ -298,11 +344,19 @@ function buildProfileSample(module StdModule, layout HostContextLayout)
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	let readContext = module.addBlock(func, label: b"pfsctx", heat: BlockHeat.normal)
 	let queryRegion = module.addBlock(func, label: b"pfsq", heat: BlockHeat.normal)
-	let measureWindow = module.addBlock(func, label: b"pfsm", heat: BlockHeat.normal)
-	let capWindow = module.addBlock(func, label: b"pfscap", heat: BlockHeat.normal)
-	let capped = module.addBlock(func, label: b"pfsclamp", heat: BlockHeat.normal)
-	let copyStack = module.addBlock(func, label: b"pfscopy", heat: BlockHeat.normal)
-	let partialCopy = module.addBlock(func, label: b"pfspart", heat: BlockHeat.normal)
+	let savedEntry = module.addBlock(func, label: b"pfssaved", heat: BlockHeat.normal)
+	let savedExtent = module.addBlock(func, label: b"pfssext", heat: BlockHeat.normal)
+	let savedRoute = module.addBlock(func, label: b"pfssroute", heat: BlockHeat.normal)
+	let savedFixed = module.addBlock(func, label: b"pfssfixed", heat: BlockHeat.normal)
+	let savedThread = module.addBlock(func, label: b"pfsstid", heat: BlockHeat.normal)
+	let savedSlotBase = module.addBlock(func, label: b"pfssslot", heat: BlockHeat.normal)
+	let savedSlotWord = module.addBlock(func, label: b"pfsstls", heat: BlockHeat.normal)
+	let savedMachine = module.addBlock(func, label: b"pfssm", heat: BlockHeat.normal)
+	let savedMachineWord = module.addBlock(func, label: b"pfssmw", heat: BlockHeat.normal)
+	let savedRecord = module.addBlock(func, label: b"pfssrec", heat: BlockHeat.normal)
+	let savedRecordFailed = module.addBlock(func, label: b"pfssfail", heat: BlockHeat.normal)
+	let savedWindow = module.addBlock(func, label: b"pfsswin", heat: BlockHeat.normal)
+	let savedCopy = module.addBlock(func, label: b"pfsscopy", heat: BlockHeat.normal)
 	let resume = module.addBlock(func, label: b"pfsres", heat: BlockHeat.normal)
 	let answer = module.addBlock(func, label: b"pfsret", heat: BlockHeat.normal)
 
@@ -326,6 +380,8 @@ function buildProfileSample(module StdModule, layout HostContextLayout)
 	let threadGone = emitConst(module, block: entry, value: layout.sampleThreadGone, ids: ids)
 	emitStoreField(module, block: entry, record: resultPtr, offset: 0, value: threadGone)
 	emitStoreField(module, block: entry, record: mbiPtr, offset: layout.regionAllocationBaseOffset as ByteOffset, value: zero)
+	emitStoreField(module, block: entry, record: mbiPtr, offset: (layout.savedFrameCopyOffset + layout.savedFramePcWord) as ByteOffset, value: zero)
+	emitStoreField(module, block: entry, record: mbiPtr, offset: layout.savedFrameWindowBytesOffset as ByteOffset, value: zero)
 
 	let suspended = emitHostSample(module, block: entry, service: HostProcessCall.suspendThread, a0: thread, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: suspended, pred: StdCmpPred.eq, against: layout.suspendThreadFailed, whenTrue: answer, whenFalse: readContext, ids: ids)
@@ -342,37 +398,72 @@ function buildProfileSample(module StdModule, layout HostContextLayout)
 	// The registers are read from here on, so the answer is a byte count, zero until a copy succeeds.
 	emitStoreField(module, block: queryRegion, record: resultPtr, offset: 0, value: zero)
 	let stackPointer = emitLoadField(module, block: queryRegion, record: ctxPtr, offset: layout.contextRspOffset as ByteOffset, ids: ids)
-	let mbiBytes = emitConst(module, block: queryRegion, value: layout.regionRecordBytes, ids: ids)
-	let queried = emitHostSample(module, block: queryRegion, service: HostProcessCall.queryRegion, a0: proc, a1: stackPointer, a2: mbiPtr, a3: mbiBytes, a4: zero, a5: zero, ids: ids)
-	emitBranchOnCompare(module, block: queryRegion, value: queried, pred: StdCmpPred.eq, against: RegionQueryFailed, whenTrue: resume, whenFalse: measureWindow, ids: ids)
+	emitStackWindowCopy(module, func: func, layout: layout, from: queryRegion, proc: proc, regionPtr: mbiPtr, source: stackPointer, destination: windowPtr, cap: windowCap, countPtr: resultPtr, wantPtr: wantPtr, readPtr: readPtr, whenDone: savedEntry, ids: ids)
 
-	// Both comparisons are unsigned: these are addresses, and a signed `>` reads a high-half pointer
-	// as negative.
-	let regionBase = emitLoadField(module, block: measureWindow, record: mbiPtr, offset: layout.mbiBaseAddressOffset as ByteOffset, ids: ids)
-	let regionSize = emitLoadField(module, block: measureWindow, record: mbiPtr, offset: layout.mbiRegionSizeOffset as ByteOffset, ids: ids)
-	let regionEnd = emitBin(module, block: measureWindow, a: regionBase, b: regionSize, opcode: StdBinOpcode.add, ids: ids)
-	let available = emitBin(module, block: measureWindow, a: regionEnd, b: stackPointer, opcode: StdBinOpcode.sub, ids: ids)
-	emitStoreField(module, block: measureWindow, record: wantPtr, offset: 0, value: available)
-	emitBranchOnCompareValues(module, block: measureWindow, a: regionEnd, pred: StdCmpPred.gt, b: stackPointer, whenTrue: capWindow, whenFalse: resume, ids: ids, operandType: StdType.u64)
+	let instructionPointer = emitLoadField(module, block: savedEntry, record: ctxPtr, offset: layout.contextRipOffset as ByteOffset, ids: ids)
+	let programCodeBytes = emitLoadField(module, block: savedEntry, record: mbiPtr, offset: layout.savedFrameCodeBytesOffset as ByteOffset, ids: ids)
+	emitBranchOnCompare(module, block: savedEntry, value: programCodeBytes, pred: StdCmpPred.eq, against: NoProgramCodeBytes, whenTrue: resume, whenFalse: savedExtent, ids: ids)
 
-	emitBranchOnCompareValues(module, block: capWindow, a: available, pred: StdCmpPred.gt, b: windowCap, whenTrue: capped, whenFalse: copyStack, ids: ids, operandType: StdType.u64)
+	let programCodeBase = emitLoadField(module, block: savedExtent, record: mbiPtr, offset: layout.savedFrameCodeBaseOffset as ByteOffset, ids: ids)
+	let codeDistance = emitBin(module, block: savedExtent, a: instructionPointer, b: programCodeBase, opcode: StdBinOpcode.sub, ids: ids)
+	emitBranchOnCompareValues(module, block: savedExtent, a: codeDistance, pred: StdCmpPred.lt, b: programCodeBytes, whenTrue: resume, whenFalse: savedRoute, ids: ids, operandType: StdType.u64)
 
-	emitStoreField(module, block: capped, record: wantPtr, offset: 0, value: windowCap)
-	module.setTerminator(capped, op: StdOp.branch(copyStack.id))
+	let recordAddressSlot = emitFieldAddr(module, block: savedRoute, record: mbiPtr, offset: layout.savedFrameRecordAddressOffset as ByteOffset, ids: ids)
+	let fixedRecord = emitLoadField(module, block: savedRoute, record: mbiPtr, offset: layout.savedFrameFixedRecordOffset as ByteOffset, ids: ids)
+	emitBranchOnCompare(module, block: savedRoute, value: fixedRecord, pred: StdCmpPred.eq, against: NoThreadRecord, whenTrue: savedThread, whenFalse: savedFixed, ids: ids)
 
-	// A partial copy is still a walkable prefix, since a stack running into its guard page yields its
-	// readable frames, so the failure edge takes the byte count the API wrote.
-	let want = emitLoadField(module, block: copyStack, record: wantPtr, offset: 0, ids: ids)
-	emitStoreField(module, block: copyStack, record: readPtr, offset: 0, value: zero)
-	let copied = emitHostSample(module, block: copyStack, service: HostProcessCall.readProcessMemory, a0: proc, a1: stackPointer, a2: windowPtr, a3: want, a4: readPtr, a5: zero, ids: ids)
-	emitStoreField(module, block: copyStack, record: resultPtr, offset: 0, value: want)
-	emitBranchOnCompare(module, block: copyStack, value: copied, pred: StdCmpPred.eq, against: Win32False, whenTrue: partialCopy, whenFalse: resume, ids: ids)
+	emitStoreField(module, block: savedFixed, record: recordAddressSlot, offset: 0, value: fixedRecord)
+	module.setTerminator(savedFixed, op: StdOp.branch(savedRecord.id))
 
-	let partial = emitLoadField(module, block: partialCopy, record: readPtr, offset: 0, ids: ids)
-	emitStoreField(module, block: partialCopy, record: resultPtr, offset: 0, value: partial)
-	module.setTerminator(partialCopy, op: StdOp.branch(resume.id))
+	let threadInfoPtr = emitFieldAddr(module, block: savedThread, record: mbiPtr, offset: layout.savedFrameThreadInfoOffset as ByteOffset, ids: ids)
+	let infoClass = emitConst(module, block: savedThread, value: ThreadBasicInformationClass, ids: ids)
+	let infoBytes = emitConst(module, block: savedThread, value: ThreadBasicInformationBytes, ids: ids)
+	let threadQueried = emitHostSample(module, block: savedThread, service: HostProcessCall.queryThreadInformation, a0: thread, a1: infoClass, a2: threadInfoPtr, a3: infoBytes, a4: zero, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: savedThread, value: threadQueried, pred: StdCmpPred.eq, against: NtStatusSuccess, whenTrue: savedSlotBase, whenFalse: resume, ids: ids)
 
-	let cyclesPtr = emitBin(module, block: resume, a: mbiPtr, b: emitConst(module, block: resume, value: layout.regionSuspendedCyclesOffset, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let tebAddress = emitLoadField(module, block: savedSlotBase, record: threadInfoPtr, offset: ThreadTebAddressOffset, ids: ids)
+	let slotBaseAddress = emitLoadField(module, block: savedSlotBase, record: mbiPtr, offset: layout.savedFrameSlotBaseOffset as ByteOffset, ids: ids)
+	let wordsPtr = emitFieldAddr(module, block: savedSlotBase, record: mbiPtr, offset: layout.savedFrameWordsOffset as ByteOffset, ids: ids)
+	let wordBytes = emitConst(module, block: savedSlotBase, value: TlsWordBytes, ids: ids)
+	emitStoreField(module, block: savedSlotBase, record: readPtr, offset: 0, value: zero)
+	let slotBaseRead = emitHostSample(module, block: savedSlotBase, service: HostProcessCall.readProcessMemory, a0: proc, a1: slotBaseAddress, a2: wordsPtr, a3: wordBytes, a4: readPtr, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: savedSlotBase, value: slotBaseRead, pred: StdCmpPred.eq, against: Win32False, whenTrue: resume, whenFalse: savedSlotWord, ids: ids)
+
+	let slotOffset = emitLoadField(module, block: savedSlotWord, record: wordsPtr, offset: 0, ids: ids)
+	emitBranchOnCompare(module, block: savedSlotWord, value: slotOffset, pred: StdCmpPred.eq, against: NoThreadRecord, whenTrue: resume, whenFalse: savedMachine, ids: ids)
+
+	let slotAddress = emitBin(module, block: savedMachine, a: tebAddress, b: slotOffset, opcode: StdBinOpcode.add, ids: ids)
+	let machineWordPtr = emitBin(module, block: savedMachine, a: wordsPtr, b: wordBytes, opcode: StdBinOpcode.add, ids: ids)
+	let machineRead = emitHostSample(module, block: savedMachine, service: HostProcessCall.readProcessMemory, a0: proc, a1: slotAddress, a2: machineWordPtr, a3: wordBytes, a4: readPtr, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: savedMachine, value: machineRead, pred: StdCmpPred.eq, against: Win32False, whenTrue: resume, whenFalse: savedMachineWord, ids: ids)
+
+	let machine = emitLoadField(module, block: savedMachineWord, record: machineWordPtr, offset: 0, ids: ids)
+	let recordField = emitLoadField(module, block: savedMachineWord, record: mbiPtr, offset: layout.savedFrameRecordFieldOffset as ByteOffset, ids: ids)
+	let machineRecord = emitBin(module, block: savedMachineWord, a: machine, b: recordField, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: savedMachineWord, record: recordAddressSlot, offset: 0, value: machineRecord)
+	emitBranchOnCompare(module, block: savedMachineWord, value: machine, pred: StdCmpPred.eq, against: NoThreadRecord, whenTrue: resume, whenFalse: savedRecord, ids: ids)
+
+	let recordAddress = emitLoadField(module, block: savedRecord, record: recordAddressSlot, offset: 0, ids: ids)
+	let copyPtr = emitFieldAddr(module, block: savedRecord, record: mbiPtr, offset: layout.savedFrameCopyOffset as ByteOffset, ids: ids)
+	let recordBytes = emitConst(module, block: savedRecord, value: layout.savedFrameRecordBytes, ids: ids)
+	let recordRead = emitHostSample(module, block: savedRecord, service: HostProcessCall.readProcessMemory, a0: proc, a1: recordAddress, a2: copyPtr, a3: recordBytes, a4: readPtr, a5: zero, ids: ids)
+	emitBranchOnCompare(module, block: savedRecord, value: recordRead, pred: StdCmpPred.eq, against: Win32False, whenTrue: savedRecordFailed, whenFalse: savedWindow, ids: ids)
+
+	emitStoreField(module, block: savedRecordFailed, record: mbiPtr, offset: (layout.savedFrameCopyOffset + layout.savedFramePcWord) as ByteOffset, value: zero)
+	module.setTerminator(savedRecordFailed, op: StdOp.branch(resume.id))
+
+	let savedPc = emitLoadField(module, block: savedWindow, record: copyPtr, offset: layout.savedFramePcWord as ByteOffset, ids: ids)
+	emitBranchOnCompare(module, block: savedWindow, value: savedPc, pred: StdCmpPred.eq, against: NoThreadRecord, whenTrue: resume, whenFalse: savedCopy, ids: ids)
+
+	// A second window, from the saved sp: a switched call's caller frame is on the green thread's stack,
+	// and the thread's rsp is on the system stack the first window was copied from.
+	let savedSp = emitLoadField(module, block: savedCopy, record: copyPtr, offset: layout.savedFrameSpWord as ByteOffset, ids: ids)
+	let savedWindowPtr = emitLoadField(module, block: savedCopy, record: mbiPtr, offset: layout.savedFrameWindowAddressOffset as ByteOffset, ids: ids)
+	let savedRegionPtr = emitFieldAddr(module, block: savedCopy, record: mbiPtr, offset: layout.savedFrameRegionOffset as ByteOffset, ids: ids)
+	let savedCountPtr = emitFieldAddr(module, block: savedCopy, record: mbiPtr, offset: layout.savedFrameWindowBytesOffset as ByteOffset, ids: ids)
+	emitStackWindowCopy(module, func: func, layout: layout, from: savedCopy, proc: proc, regionPtr: savedRegionPtr, source: savedSp, destination: savedWindowPtr, cap: windowCap, countPtr: savedCountPtr, wantPtr: wantPtr, readPtr: readPtr, whenDone: resume, ids: ids)
+
+	let cyclesPtr = emitFieldAddr(module, block: resume, record: mbiPtr, offset: layout.regionSuspendedCyclesOffset as ByteOffset, ids: ids)
 	module.appendOp(resume, op: StdOp.osThreadCpuTicks(thread, outPtrId: cyclesPtr))
 	let resumeZero = emitConst(module, block: resume, value: 0, ids: ids)
 	_ = emitHostSample(module, block: resume, service: HostProcessCall.resumeThread, a0: thread, a1: resumeZero, a2: resumeZero, a3: resumeZero, a4: resumeZero, a5: resumeZero, ids: ids)

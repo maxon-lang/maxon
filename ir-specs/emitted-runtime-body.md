@@ -117,14 +117,14 @@ __str_bytes_view
 
 ```TargetIr:x64-windows
 data {
-  __data_CharacterSet.whitespacesAndNewlines@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_console_probe_stdin@32 = i8 0
-  __mrt_console_probe_stdout@33 = i8 0
-  __mrt_console_probe_stderr@34 = i8 0
-  __mrt_program_started@35 = i8 0
+  __data_CharacterSet.whitespacesAndNewlines@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_console_probe_stdin@56 = i8 0
+  __mrt_console_probe_stdout@57 = i8 0
+  __mrt_console_probe_stderr@58 = i8 0
+  __mrt_program_started@59 = i8 0
 }
 
 func @main {
@@ -9883,13 +9883,13 @@ __mm_free
 
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -14726,13 +14726,13 @@ __slab_free_box
 
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -17193,13 +17193,13 @@ __managed_set
 
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -18353,10 +18353,10 @@ mrt_start
 
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @mrt_start {
@@ -18486,10 +18486,10 @@ mrt_panic
 
 ```TargetIr:x64-windows
 data {
-  __mrt_console_probe_stdin@0 = i8 0
-  __mrt_console_probe_stdout@1 = i8 0
-  __mrt_console_probe_stderr@2 = i8 0
-  __mrt_program_started@3 = i8 0
+  __mrt_console_probe_stdin@24 = i8 0
+  __mrt_console_probe_stdout@25 = i8 0
+  __mrt_console_probe_stderr@26 = i8 0
+  __mrt_program_started@27 = i8 0
 }
 
 func @main {
@@ -18503,10 +18503,10 @@ func @main {
 
 chunk @mrt_panic {
     0000: 55 48 89 e5 48 83 ec 20 e8 00 00 00 00 48 8d 0d
-    0010: 28 00 00 00 e8 00 00 00 00 48 89 e9 48 89 ea 41
-    0020: b8 64 00 00 00 e8 00 00 00 00 b9 01 00 00 00 ff
-    0030: 15 00 00 00 00 48 83 c4 20 5d c3 00 53 74 61 63
-    0040: 6b 20 74 72 61 63 65 3a 0a 00
+    0010: 26 00 00 00 e8 00 00 00 00 48 89 e9 48 89 ea 41
+    0020: b8 64 00 00 00 e8 00 00 00 00 b9 01 00 00 00 e8
+    0030: 00 00 00 00 48 83 c4 20 5d c3 53 74 61 63 6b 20
+    0040: 74 72 61 63 65 3a 0a 00
 }
 ```
 
@@ -23577,14 +23577,14 @@ String.trim
 
 ```TargetIr:x64-windows
 data {
-  __data_CharacterSet.whitespacesAndNewlines@0 = i64 0
-  __slab_arena_list@8 = i64 0
-  __slab_arena_map_l1@16 = i64 0
-  __slab_state@24 = i64 0
-  __mrt_console_probe_stdin@32 = i8 0
-  __mrt_console_probe_stdout@33 = i8 0
-  __mrt_console_probe_stderr@34 = i8 0
-  __mrt_program_started@35 = i8 0
+  __data_CharacterSet.whitespacesAndNewlines@24 = i64 0
+  __slab_arena_list@32 = i64 0
+  __slab_arena_map_l1@40 = i64 0
+  __slab_state@48 = i64 0
+  __mrt_console_probe_stdin@56 = i8 0
+  __mrt_console_probe_stdout@57 = i8 0
+  __mrt_console_probe_stderr@58 = i8 0
+  __mrt_program_started@59 = i8 0
 }
 
 func @main {
@@ -26434,11 +26434,11 @@ __managed_byte_at
 
 ```TargetIr:x64-windows
 data {
-  __slab_state@0 = i64 0
-  __mrt_console_probe_stdin@8 = i8 0
-  __mrt_console_probe_stdout@9 = i8 0
-  __mrt_console_probe_stderr@10 = i8 0
-  __mrt_program_started@11 = i8 0
+  __slab_state@24 = i64 0
+  __mrt_console_probe_stdin@32 = i8 0
+  __mrt_console_probe_stdout@33 = i8 0
+  __mrt_console_probe_stderr@34 = i8 0
+  __mrt_program_started@35 = i8 0
 }
 
 func @main {
@@ -29377,7 +29377,7 @@ func @__sched_init_procs {
   __rl_owned:
     x64.storeBaseDispReg.word64 [r13 + 8], rax
   __rl_cont#33:
-    x64.movRegImm32 rcx, 936
+    x64.movRegImm32 rcx, 960
     x64.callDirect __sched_arena_carve
     x64.movRegReg r14, r8
     x64.loadRegBaseDisp.word64 rax, [r13 + 16]
@@ -67047,13 +67047,13 @@ exit calls `__sched_syscall_regain`, whose lock road may create the machine's fi
 `LastErrorValue` (`gs:[0x68]`) into a frame slot beside the saved result before the call, and writes it back
 after the call.
 
-`mrt_write_stream` is the witness because its raw-byte road calls `WriteFile`, a `blocking` import, through
-the shim, so the shim's exit is emitted inside this one chunk. What the bytes show is a `mov ecx, gs:[0x68]`
-and a store to `[rsp + 0x28]` ahead of the `call`, and a load from `[rsp + 0x28]` and a `mov gs:[0x68], ecx`
-after it, around the `rax` result's own `[rsp + 0x20]` store and reload. A slow exit with neither is the one
-that lets a failed `FindNextFileW`'s `ERROR_NO_MORE_FILES` read as 0. The posix lanes keep their error in a
-word only the runtime's own failure arms write, which the regain road never reaches, so the case has no
-subject there.
+`__gt_import_WriteFile` is the witness: `mrt_write_stream`'s raw-byte road calls `WriteFile`, a `blocking`
+import, through this stub, and the shim's exit is emitted inside it. What the bytes show is a
+`mov ecx, gs:[0x68]` and a store to `[rsp + 0x28]` ahead of the `call`, and a load from `[rsp + 0x28]` and a
+`mov gs:[0x68], ecx` after it, around the `rax` result's own `[rsp + 0x20]` store and reload. A slow exit with
+neither is the one that lets a failed `FindNextFileW`'s `ERROR_NO_MORE_FILES` read as 0. The posix lanes keep
+their error in a word only the runtime's own failure arms write, which the regain road never reaches, so the
+case has no subject there.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -67087,7 +67087,7 @@ end 'main'
 done
 ```
 ```RequiredRuntime
-mrt_write_stream
+__gt_import_WriteFile
 ```
 ```TargetIr:x64-windows
 data {
@@ -67350,184 +67350,50 @@ func @Counter.__start_Counter.create {
     x64.ret
 }
 
-chunk @mrt_write_stream {
-    0000: 55 48 89 e5 48 81 ec c0 00 00 00 48 89 4d f8 48
-    0010: 89 55 e8 4c 89 45 e0 48 31 c0 48 89 45 d8 49 81
-    0020: f8 00 00 00 00 0f 84 d0 0a 00 00 48 8b 4d f8 48
-    0030: 8d 05 00 00 00 00 48 8b 00 48 85 c0 0f 84 0c 01
-    0040: 00 00 65 48 8b 00 48 85 c0 0f 84 ff 00 00 00 4c
-    0050: 8b 58 08 4d 85 db 0f 84 f2 00 00 00 49 8b 43 18
-    0060: 48 85 c0 0f 84 e5 00 00 00 48 39 c4 0f 82 b1 00
-    0070: 00 00 4d 8b 5b 20 4c 01 d8 48 39 c4 0f 83 a1 00
-    0080: 00 00 e8 00 00 00 00 41 52 49 89 e2 48 8b 60 10
+chunk @__gt_import_WriteFile {
+    0000: 48 8d 05 00 00 00 00 48 8b 00 48 85 c0 0f 84 eb
+    0010: 01 00 00 65 48 8b 00 48 85 c0 0f 84 de 01 00 00
+    0020: 4c 8b 58 08 4d 85 db 0f 84 f1 01 00 00 49 8b 43
+    0030: 18 48 85 c0 0f 84 c4 01 00 00 48 39 c4 0f 82 90
+    0040: 01 00 00 4d 8b 5b 20 4c 01 d8 48 39 c4 0f 83 80
+    0050: 01 00 00 e8 00 00 00 00 48 81 b8 a8 03 00 00 00
+    0060: 00 00 00 0f 85 1e 00 00 00 48 89 a8 b8 03 00 00
+    0070: 4c 8d 5c 24 08 4c 89 98 b0 03 00 00 4c 8b 1c 24
+    0080: 4c 89 98 a8 03 00 00 41 52 49 89 e2 48 8b 60 10
     0090: 48 81 80 38 03 00 00 ff ff ff ff 48 89 e0 41 52
-    00a0: 48 83 ec 28 65 48 89 04 25 08 00 00 00 48 81 e8
-    00b0: 00 00 01 00 65 48 89 04 25 10 00 00 00 65 48 89
-    00c0: 04 25 78 14 00 00 ff 15 00 00 00 00 4c 8d 1d 00
-    00d0: 00 00 00 4d 8b 1b 65 4d 8b 1b 4d 8b 5b 08 49 8b
-    00e0: 8b 78 01 00 00 65 48 89 0c 25 08 00 00 00 49 8b
-    00f0: 8b 80 01 00 00 65 48 89 0c 25 10 00 00 00 49 8b
-    0100: 8b a0 01 00 00 65 48 89 0c 25 78 14 00 00 48 83
-    0110: c4 28 41 5a 4c 89 d4 41 5a e9 36 00 00 00 e9 00
-    0120: 00 00 00 48 8d 05 00 00 00 00 48 8b 00 65 48 8b
-    0130: 00 4c 8b 58 10 4c 39 dc 0f 83 e0 ff ff ff 49 81
-    0140: eb 00 30 01 00 4c 39 dc 0f 82 d0 ff ff ff ff 15
-    0150: 00 00 00 00 48 89 45 f0 48 8b 45 f8 41 bb f6 ff
-    0160: ff ff 49 29 c3 4c 8d 15 00 00 00 00 4f 8d 14 1a
-    0170: 49 0f b6 02 48 81 f8 00 00 00 00 0f 85 64 01 00
-    0180: 00 48 8b 4d f0 48 8d 55 b8 48 8d 05 00 00 00 00
-    0190: 48 8b 00 48 85 c0 0f 84 0c 01 00 00 65 48 8b 00
-    01a0: 48 85 c0 0f 84 ff 00 00 00 4c 8b 58 08 4d 85 db
-    01b0: 0f 84 f2 00 00 00 49 8b 43 18 48 85 c0 0f 84 e5
-    01c0: 00 00 00 48 39 c4 0f 82 b1 00 00 00 4d 8b 5b 20
-    01d0: 4c 01 d8 48 39 c4 0f 83 a1 00 00 00 e8 00 00 00
-    01e0: 00 41 52 49 89 e2 48 8b 60 10 48 81 80 38 03 00
-    01f0: 00 ff ff ff ff 48 89 e0 41 52 48 83 ec 28 65 48
-    0200: 89 04 25 08 00 00 00 48 81 e8 00 00 01 00 65 48
-    0210: 89 04 25 10 00 00 00 65 48 89 04 25 78 14 00 00
-    0220: ff 15 00 00 00 00 4c 8d 1d 00 00 00 00 4d 8b 1b
-    0230: 65 4d 8b 1b 4d 8b 5b 08 49 8b 8b 78 01 00 00 65
-    0240: 48 89 0c 25 08 00 00 00 49 8b 8b 80 01 00 00 65
-    0250: 48 89 0c 25 10 00 00 00 49 8b 8b a0 01 00 00 65
-    0260: 48 89 0c 25 78 14 00 00 48 83 c4 28 41 5a 4c 89
-    0270: d4 41 5a e9 36 00 00 00 e9 00 00 00 00 48 8d 05
-    0280: 00 00 00 00 48 8b 00 65 48 8b 00 4c 8b 58 10 4c
-    0290: 39 dc 0f 83 e0 ff ff ff 49 81 eb 00 30 01 00 4c
-    02a0: 39 dc 0f 82 d0 ff ff ff ff 15 00 00 00 00 48 63
-    02b0: c0 41 b8 02 00 00 00 48 81 f8 00 00 00 00 0f 84
-    02c0: 06 00 00 00 41 b8 01 00 00 00 48 8b 45 f8 41 bb
-    02d0: f6 ff ff ff 49 29 c3 4c 8d 15 00 00 00 00 4f 8d
-    02e0: 14 1a 45 88 02 49 0f b6 02 48 81 f8 01 00 00 00
-    02f0: 0f 85 24 06 00 00 48 8b 45 e0 4c 8b 5d d8 4c 29
-    0300: d8 48 81 f8 00 00 00 00 0f 8e 03 06 00 00 48 81
-    0310: f8 20 00 00 00 0f 86 4e 00 00 00 b8 20 00 00 00
-    0320: 48 31 c9 48 81 f9 03 00 00 00 0f 83 39 00 00 00
-    0330: 4c 8b 5d e8 4c 8b 4d d8 4d 01 cb 49 01 c3 4d 0f
-    0340: b6 0b 49 81 e1 c0 00 00 00 49 81 f9 80 00 00 00
-    0350: 0f 85 13 00 00 00 48 81 e8 01 00 00 00 48 81 c1
-    0360: 01 00 00 00 e9 ba ff ff ff 48 89 45 d0 48 8d 85
-    0370: 78 ff ff ff 48 89 44 24 20 b8 20 00 00 00 48 89
-    0380: 44 24 28 b9 e9 fd 00 00 ba 00 00 00 00 4c 8b 45
-    0390: e8 4c 8b 5d d8 4d 01 d8 4c 8b 4d d0 48 8d 05 00
-    03a0: 00 00 00 48 8b 00 48 85 c0 0f 84 1e 01 00 00 65
-    03b0: 48 8b 00 48 85 c0 0f 84 11 01 00 00 4c 8b 58 08
-    03c0: 4d 85 db 0f 84 04 01 00 00 49 8b 43 18 48 85 c0
-    03d0: 0f 84 f7 00 00 00 48 39 c4 0f 82 c3 00 00 00 4d
-    03e0: 8b 5b 20 4c 01 d8 48 39 c4 0f 83 b3 00 00 00 e8
-    03f0: 00 00 00 00 41 52 49 89 e2 48 8b 60 10 48 81 80
-    0400: 38 03 00 00 ff ff ff ff 48 89 e0 41 52 48 83 ec
-    0410: 38 4d 8b 5a 28 4c 89 5c 24 20 4d 8b 5a 30 4c 89
-    0420: 5c 24 28 65 48 89 04 25 08 00 00 00 48 81 e8 00
-    0430: 00 01 00 65 48 89 04 25 10 00 00 00 65 48 89 04
-    0440: 25 78 14 00 00 ff 15 00 00 00 00 4c 8d 1d 00 00
-    0450: 00 00 4d 8b 1b 65 4d 8b 1b 4d 8b 5b 08 49 8b 8b
-    0460: 78 01 00 00 65 48 89 0c 25 08 00 00 00 49 8b 8b
-    0470: 80 01 00 00 65 48 89 0c 25 10 00 00 00 49 8b 8b
-    0480: a0 01 00 00 65 48 89 0c 25 78 14 00 00 48 83 c4
-    0490: 38 41 5a 4c 89 d4 41 5a e9 36 00 00 00 e9 00 00
-    04a0: 00 00 48 8d 05 00 00 00 00 48 8b 00 65 48 8b 00
-    04b0: 4c 8b 58 10 4c 39 dc 0f 83 e0 ff ff ff 49 81 eb
-    04c0: 00 30 01 00 4c 39 dc 0f 82 d0 ff ff ff ff 15 00
-    04d0: 00 00 00 48 63 c0 48 81 f8 00 00 00 00 0f 84 41
-    04e0: 02 00 00 48 89 45 c8 48 31 c0 48 89 45 c0 48 8b
-    04f0: 45 c8 4c 8b 5d c0 4c 29 d8 48 81 f8 00 00 00 00
-    0500: 0f 8e 0a 02 00 00 49 89 c0 48 8b 4d f0 48 8d 95
-    0510: 78 ff ff ff 4a 8d 14 5a 48 31 c0 48 89 45 b8 48
-    0520: 89 44 24 20 4c 8d 4d b8 48 8d 05 00 00 00 00 48
-    0530: 8b 00 48 85 c0 0f 84 9e 01 00 00 65 48 8b 00 48
-    0540: 85 c0 0f 84 91 01 00 00 4c 8b 58 08 4d 85 db 0f
-    0550: 84 84 01 00 00 49 8b 43 18 48 85 c0 0f 84 77 01
-    0560: 00 00 48 39 c4 0f 82 43 01 00 00 4d 8b 5b 20 4c
-    0570: 01 d8 48 39 c4 0f 83 33 01 00 00 e8 00 00 00 00
-    0580: 41 52 49 89 e2 48 8b 60 10 48 81 80 38 03 00 00
-    0590: ff ff ff ff 48 89 e0 41 52 48 83 ec 38 4d 8b 5a
-    05a0: 28 4c 89 5c 24 20 65 48 89 04 25 08 00 00 00 48
-    05b0: 81 e8 00 00 01 00 65 48 89 04 25 10 00 00 00 65
-    05c0: 48 89 04 25 78 14 00 00 48 8d 05 00 00 00 00 48
-    05d0: 8b 00 65 48 8b 00 4c 8b 18 49 81 83 d8 00 00 00
-    05e0: 01 00 00 00 41 bb 05 00 00 00 f0 4c 01 98 08 03
-    05f0: 00 00 ff 15 00 00 00 00 4c 8d 1d 00 00 00 00 4d
-    0600: 8b 1b 65 4d 8b 1b 4d 8b 5b 08 49 8b 8b 78 01 00
-    0610: 00 65 48 89 0c 25 08 00 00 00 49 8b 8b 80 01 00
-    0620: 00 65 48 89 0c 25 10 00 00 00 49 8b 8b a0 01 00
-    0630: 00 65 48 89 0c 25 78 14 00 00 48 83 c4 38 41 5a
-    0640: 4c 89 d4 41 5a 4c 8d 1d 00 00 00 00 4d 8b 1b 65
-    0650: 4d 8b 1b 48 b9 ff ff ff ff ff ff ff ff f0 49 0f
-    0660: c1 8b 08 03 00 00 48 81 e1 02 00 00 00 0f 84 6c
-    0670: 00 00 00 48 83 ec 30 48 89 44 24 20 65 8b 0c 25
-    0680: 68 00 00 00 48 89 4c 24 28 e8 00 00 00 00 48 8b
-    0690: 44 24 20 48 8b 4c 24 28 65 89 0c 25 68 00 00 00
-    06a0: 48 83 c4 30 e9 36 00 00 00 e9 00 00 00 00 48 8d
-    06b0: 05 00 00 00 00 48 8b 00 65 48 8b 00 4c 8b 58 10
-    06c0: 4c 39 dc 0f 83 e0 ff ff ff 49 81 eb 00 30 01 00
-    06d0: 4c 39 dc 0f 82 d0 ff ff ff ff 15 00 00 00 00 48
-    06e0: 63 c0 48 81 f8 00 00 00 00 0f 84 35 00 00 00 48
-    06f0: 8b 45 b8 48 81 f8 00 00 00 00 0f 84 24 00 00 00
-    0700: 4c 8b 5d c0 49 01 c3 4c 89 5d c0 e9 de fd ff ff
-    0710: 48 8b 45 d8 4c 8b 5d d0 4c 01 d8 48 89 45 d8 e9
-    0720: d2 fb ff ff 48 31 c0 48 89 45 b8 48 89 44 24 20
-    0730: 48 8b 4d f0 4c 8b 5d d8 48 8b 55 e8 4c 01 da 4c
-    0740: 8b 45 e0 4d 29 d8 4c 8d 4d b8 48 8d 05 00 00 00
-    0750: 00 48 8b 00 48 85 c0 0f 84 9e 01 00 00 65 48 8b
-    0760: 00 48 85 c0 0f 84 91 01 00 00 4c 8b 58 08 4d 85
-    0770: db 0f 84 84 01 00 00 49 8b 43 18 48 85 c0 0f 84
-    0780: 77 01 00 00 48 39 c4 0f 82 43 01 00 00 4d 8b 5b
-    0790: 20 4c 01 d8 48 39 c4 0f 83 33 01 00 00 e8 00 00
-    07a0: 00 00 41 52 49 89 e2 48 8b 60 10 48 81 80 38 03
-    07b0: 00 00 ff ff ff ff 48 89 e0 41 52 48 83 ec 38 4d
-    07c0: 8b 5a 28 4c 89 5c 24 20 65 48 89 04 25 08 00 00
-    07d0: 00 48 81 e8 00 00 01 00 65 48 89 04 25 10 00 00
-    07e0: 00 65 48 89 04 25 78 14 00 00 48 8d 05 00 00 00
-    07f0: 00 48 8b 00 65 48 8b 00 4c 8b 18 49 81 83 d8 00
-    0800: 00 00 01 00 00 00 41 bb 05 00 00 00 f0 4c 01 98
-    0810: 08 03 00 00 ff 15 00 00 00 00 4c 8d 1d 00 00 00
-    0820: 00 4d 8b 1b 65 4d 8b 1b 4d 8b 5b 08 49 8b 8b 78
-    0830: 01 00 00 65 48 89 0c 25 08 00 00 00 49 8b 8b 80
-    0840: 01 00 00 65 48 89 0c 25 10 00 00 00 49 8b 8b a0
-    0850: 01 00 00 65 48 89 0c 25 78 14 00 00 48 83 c4 38
-    0860: 41 5a 4c 89 d4 41 5a 4c 8d 1d 00 00 00 00 4d 8b
-    0870: 1b 65 4d 8b 1b 48 b9 ff ff ff ff ff ff ff ff f0
-    0880: 49 0f c1 8b 08 03 00 00 48 81 e1 02 00 00 00 0f
-    0890: 84 6c 00 00 00 48 83 ec 30 48 89 44 24 20 65 8b
-    08a0: 0c 25 68 00 00 00 48 89 4c 24 28 e8 00 00 00 00
-    08b0: 48 8b 44 24 20 48 8b 4c 24 28 65 89 0c 25 68 00
-    08c0: 00 00 48 83 c4 30 e9 36 00 00 00 e9 00 00 00 00
-    08d0: 48 8d 05 00 00 00 00 48 8b 00 65 48 8b 00 4c 8b
-    08e0: 58 10 4c 39 dc 0f 83 e0 ff ff ff 49 81 eb 00 30
-    08f0: 01 00 4c 39 dc 0f 82 d0 ff ff ff ff 15 00 00 00
-    0900: 00 48 8b 45 d8 4c 8b 5d b8 4c 01 d8 e9 ea 01 00
-    0910: 00 48 8b 45 e0 e9 e1 01 00 00 48 31 c0 48 89 45
-    0920: b8 48 89 44 24 20 48 8b 4d f0 4c 8b 5d d8 48 8b
-    0930: 55 e8 4c 01 da 4c 8b 45 e0 4d 29 d8 4c 8d 4d b8
-    0940: 48 8d 05 00 00 00 00 48 8b 00 48 85 c0 0f 84 9e
-    0950: 01 00 00 65 48 8b 00 48 85 c0 0f 84 91 01 00 00
-    0960: 4c 8b 58 08 4d 85 db 0f 84 84 01 00 00 49 8b 43
-    0970: 18 48 85 c0 0f 84 77 01 00 00 48 39 c4 0f 82 43
-    0980: 01 00 00 4d 8b 5b 20 4c 01 d8 48 39 c4 0f 83 33
-    0990: 01 00 00 e8 00 00 00 00 41 52 49 89 e2 48 8b 60
-    09a0: 10 48 81 80 38 03 00 00 ff ff ff ff 48 89 e0 41
-    09b0: 52 48 83 ec 38 4d 8b 5a 28 4c 89 5c 24 20 65 48
-    09c0: 89 04 25 08 00 00 00 48 81 e8 00 00 01 00 65 48
-    09d0: 89 04 25 10 00 00 00 65 48 89 04 25 78 14 00 00
-    09e0: 48 8d 05 00 00 00 00 48 8b 00 65 48 8b 00 4c 8b
-    09f0: 18 49 81 83 d8 00 00 00 01 00 00 00 41 bb 05 00
-    0a00: 00 00 f0 4c 01 98 08 03 00 00 ff 15 00 00 00 00
-    0a10: 4c 8d 1d 00 00 00 00 4d 8b 1b 65 4d 8b 1b 4d 8b
-    0a20: 5b 08 49 8b 8b 78 01 00 00 65 48 89 0c 25 08 00
-    0a30: 00 00 49 8b 8b 80 01 00 00 65 48 89 0c 25 10 00
-    0a40: 00 00 49 8b 8b a0 01 00 00 65 48 89 0c 25 78 14
-    0a50: 00 00 48 83 c4 38 41 5a 4c 89 d4 41 5a 4c 8d 1d
-    0a60: 00 00 00 00 4d 8b 1b 65 4d 8b 1b 48 b9 ff ff ff
-    0a70: ff ff ff ff ff f0 49 0f c1 8b 08 03 00 00 48 81
-    0a80: e1 02 00 00 00 0f 84 6c 00 00 00 48 83 ec 30 48
-    0a90: 89 44 24 20 65 8b 0c 25 68 00 00 00 48 89 4c 24
-    0aa0: 28 e8 00 00 00 00 48 8b 44 24 20 48 8b 4c 24 28
-    0ab0: 65 89 0c 25 68 00 00 00 48 83 c4 30 e9 36 00 00
-    0ac0: 00 e9 00 00 00 00 48 8d 05 00 00 00 00 48 8b 00
-    0ad0: 65 48 8b 00 4c 8b 58 10 4c 39 dc 0f 83 e0 ff ff
-    0ae0: ff 49 81 eb 00 30 01 00 4c 39 dc 0f 82 d0 ff ff
-    0af0: ff ff 15 00 00 00 00 48 8b 45 b8 48 81 c4 c0 00
-    0b00: 00 00 5d c3
+    00a0: 48 83 ec 38 4d 8b 5a 30 4c 89 5c 24 20 65 48 89
+    00b0: 04 25 08 00 00 00 48 81 e8 00 00 01 00 65 48 89
+    00c0: 04 25 10 00 00 00 65 48 89 04 25 78 14 00 00 48
+    00d0: 8d 05 00 00 00 00 48 8b 00 65 48 8b 00 4c 8b 18
+    00e0: 49 81 83 d8 00 00 00 01 00 00 00 41 bb 05 00 00
+    00f0: 00 f0 4c 01 98 08 03 00 00 ff 15 00 00 00 00 4c
+    0100: 8d 1d 00 00 00 00 4d 8b 1b 65 4d 8b 1b 48 8b 4c
+    0110: 24 38 48 8d 49 10 49 3b 8b b0 03 00 00 0f 85 0c
+    0120: 00 00 00 b9 00 00 00 00 49 89 8b a8 03 00 00 4d
+    0130: 8b 5b 08 49 8b 8b 78 01 00 00 65 48 89 0c 25 08
+    0140: 00 00 00 49 8b 8b 80 01 00 00 65 48 89 0c 25 10
+    0150: 00 00 00 49 8b 8b a0 01 00 00 65 48 89 0c 25 78
+    0160: 14 00 00 48 83 c4 38 41 5a 4c 89 d4 41 5a 4c 8d
+    0170: 1d 00 00 00 00 4d 8b 1b 65 4d 8b 1b 48 b9 ff ff
+    0180: ff ff ff ff ff ff f0 49 0f c1 8b 08 03 00 00 48
+    0190: 81 e1 02 00 00 00 0f 84 31 00 00 00 48 83 ec 38
+    01a0: 48 89 44 24 20 65 8b 0c 25 68 00 00 00 48 89 4c
+    01b0: 24 28 e8 00 00 00 00 48 8b 44 24 20 48 8b 4c 24
+    01c0: 28 65 89 0c 25 68 00 00 00 48 83 c4 38 c3 e9 00
+    01d0: 00 00 00 48 8d 05 00 00 00 00 48 8b 00 65 48 8b
+    01e0: 00 4c 8b 58 10 4c 39 dc 0f 83 e0 ff ff ff 49 81
+    01f0: eb 00 30 01 00 4c 39 dc 0f 82 d0 ff ff ff 48 8d
+    0200: 05 00 00 00 00 48 8b 00 48 85 c0 0f 84 3c 00 00
+    0210: 00 65 48 8b 00 48 85 c0 0f 84 2f 00 00 00 48 81
+    0220: b8 a8 03 00 00 00 00 00 00 0f 85 1e 00 00 00 48
+    0230: 89 a8 b8 03 00 00 4c 8d 5c 24 08 4c 89 98 b0 03
+    0240: 00 00 4c 8b 1c 24 4c 89 98 a8 03 00 00 48 83 ec
+    0250: 38 4c 8b 5c 24 60 4c 89 5c 24 20 ff 15 00 00 00
+    0260: 00 4c 8d 1d 00 00 00 00 4d 8b 1b 4d 85 db 0f 84
+    0270: 2b 00 00 00 65 4d 8b 1b 4d 85 db 0f 84 1e 00 00
+    0280: 00 48 8d 4c 24 40 49 3b 8b b0 03 00 00 0f 85 0c
+    0290: 00 00 00 b9 00 00 00 00 49 89 8b a8 03 00 00 48
+    02a0: 83 c4 38 c3
 }
 ```
 
@@ -67557,13 +67423,13 @@ __managed_move_elems
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {
@@ -69671,13 +69537,13 @@ __managed_mem_grow
 ```
 ```TargetIr:x64-windows
 data {
-  __slab_arena_list@0 = i64 0
-  __slab_arena_map_l1@8 = i64 0
-  __slab_state@16 = i64 0
-  __mrt_console_probe_stdin@24 = i8 0
-  __mrt_console_probe_stdout@25 = i8 0
-  __mrt_console_probe_stderr@26 = i8 0
-  __mrt_program_started@27 = i8 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_console_probe_stdin@48 = i8 0
+  __mrt_console_probe_stdout@49 = i8 0
+  __mrt_console_probe_stderr@50 = i8 0
+  __mrt_program_started@51 = i8 0
 }
 
 func @main {

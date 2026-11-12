@@ -14,11 +14,6 @@ enum ChainOverflow
 	pointerRecursion
 end 'ChainOverflow'
 
-export union UnguardedCallStep
-	callee(name immutable ByteArray, below StackSize)
-	fixed(bytes StackSize)
-end 'UnguardedCallStep'
-
 type ChunkNameList
 	var names as NameRoster
 
@@ -80,6 +75,10 @@ export function requireUnguardedChainsFitTheGuardMargin(project Project, module 
 
 	// After the stop tree, so a chunk only that tree reaches is held to a declared cost too.
 	walk.requireEverythingWasSized()
+
+	if target.cpu == CpuArch.x64 and target.os == Os.windows 'importStubsAreBracketed'
+		try walk.requireBracketedStubWithinAllowance(importStubName(IatSlot.WriteFile, usesGt: true), allowance: ImportStubStackBytes)
+	end 'importStubsAreBracketed'
 
 	if stopsThreads 'proveTheStop'
 		requireAsyncPreemptionFitsItsMargin(stoppedThreadTree, target: target)
@@ -450,47 +449,8 @@ type UnguardedChainWalk
 			edges.push(ChainEdge.throughCallee(below, callee: callee))
 		end 'eachCall'
 
-		try self.addImportEdges(chunk, into: edges)
 		return edges
 	end 'edgesOf'
-
-	function addImportEdges(chunk FunctionCodeChunk, into ChainEdgeArray) throws CompileError
-		if chunk.iatRelocs.isEmpty() 'noImports'
-			return
-		end 'noImports'
-
-		// An arm64 import goes through the libSystem door, a call `edgesOf` already prices
-		// (`Arm64GtRuntime.buildArm64DarwinLibcCallChunk`); an x64-windows one is an inline shimmed call.
-		match self.target.cpu 'cpu'
-			x64 then try self.addX64ImportEdges(chunk, into: into)
-			arm64 then return
-			wasm32 then panic("UnguardedChainWalk.addImportEdges: wasm32 lays out no native chunks")
-		end 'cpu'
-	end 'addImportEdges'
-
-	function addX64ImportEdges(chunk FunctionCodeChunk, into ChainEdgeArray) throws CompileError
-		if self.target.os != Os.windows 'notWindows'
-			panic("UnguardedChainWalk.addX64ImportEdges: '{String.from(chunk.funcName)}' carries import relocations on {targetToString(self.target)}, and only x64-windows imports go through the shim this walk prices")
-		end 'notWindows'
-
-		for reloc in chunk.iatRelocs 'eachImport'
-			let edge = try self.edgeOfStep(x64ShimmedImportStep(reloc.slotIndex))
-			into.push(edge)
-		end 'eachImport'
-	end 'addX64ImportEdges'
-
-	function edgeOfStep(step UnguardedCallStep) returns ChainEdge throws CompileError
-		match step 'step'
-			callee(name, below) then return try self.edgeThroughNamedCallee(name, below: below)
-			fixed(bytes) then return ChainEdge.fixedBytes(bytes)
-		end 'step'
-	end 'edgeOfStep'
-
-	function edgeThroughNamedCallee(name ByteArray, below StackSize) returns ChainEdge throws CompileError
-		let callee = self.indexOfName(name)
-		let under = try self.edgeBytes(callee)
-		return ChainEdge.throughCallee(below + under, callee: callee)
-	end 'edgeThroughNamedCallee'
 
 	function depthBelow(index ElementIndex) returns StackSize throws CompileError
 		match self.visitOf(index) 'visit'
@@ -694,6 +654,15 @@ type UnguardedChainWalk
 	function sourceFunctionOf(index ElementIndex) returns IrFunction
 		return try self.funcNames.funcNamed(self.chunkAt(index).funcName) otherwise panic("UnguardedChainWalk.sourceFunctionOf: '{String.from(self.chunkAt(index).funcName)}' was found a moment ago and is gone")
 	end 'sourceFunctionOf'
+
+	function requireBracketedStubWithinAllowance(stubName ByteArray, allowance StackSize) throws CompileError
+		let stub = try self.indexOf.get(stubName) otherwise return
+		let measured = try self.depthBelow(stub)
+
+		if measured > allowance 'underpriced'
+			panic("requireBracketedStubWithinAllowance: '{String.from(stubName)}' costs {measured} bytes of a green thread's stack across a call — its own frame and the `__sched_syscall_regain` tree under it — but the diagnostic chain was priced at {allowance} (`X64GtRuntime.ImportStubStackBytes`); a panic on a green thread that loses its processor in a console write would run past the margin it projected")
+		end 'underpriced'
+	end 'requireBracketedStubWithinAllowance'
 
 	function requireEverythingWasSized()
 		if self.unsized.count() == 0 'allSized'

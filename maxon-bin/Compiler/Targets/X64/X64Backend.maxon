@@ -2322,7 +2322,7 @@ end 'slotDisplacement'
 // every block's offset is known (see resolveChunkRel32Fixups). `spillBaseDisp` is the
 // function's spill-area base offset from rsp (see spillSlotBaseDisp), added to each
 // spill/reload slot displacement.
-function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, jumpSpans JumpTableSpans, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment)
+function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, jumpSpans JumpTableSpans, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment)
 	match op 'emit'
 		// `probeScratchIsFree` is certified here and NOWHERE ELSE. Both minters of this op stand at
 		// a function ENTRY — `insertPrologueAtEntry` (X64PrologueEpilogue) and `prependEntryStub`'s
@@ -2358,11 +2358,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		xchgRegReg(a, b) then emitRegRegSwap(code, a: resolvePhysical(a), b: resolvePhysical(b))
 		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
 
-		// In a GT-scheduler module every Win32 IAT call is wrapped in the system-stack shim: a GT
-		// stack is too small for the kernel's deep usage, so the call runs on the global system stack. The shim
-		// is a runtime no-op off a GT stack (`currentGt == 0 || stackBase == 0` → direct), so wrapping every call
-		// is correct; a non-GT module lays out no `__sched_tls_teb_offset` to reference, so it stays a bare `iatCall`.
-		iatCall(slotIndex) then emitGtGatedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, callFixups: callFixups, slotIndex: slotIndex, usesGt: usesGt)
+		iatCall(slotIndex) then encodeImportStubCall(code, callFixups: callFixups, slotIndex: slotIndex, usesGt: usesGt)
 		cqo then encodeCqo(code)
 
 		// The two group-3 divides differ in the /ext field and in nothing else — same F7 opcode, same
@@ -2762,15 +2758,13 @@ function branchWindowPadBytes(isJumpTable bool, spans JumpTableSpans, start Code
 	panic("branchWindowPadBytes: no pad up to a window clears the jump-table sequence's branches — a window-aligned start always does, so the sequence is wider than a window")
 end 'branchWindowPadBytes'
 
-// What the erratum makes of a TargetOp. `iatCall` is told apart from the other calls because under the GT
-// scheduler it is the system-stack shim rather than one `call`; a fusible ALU op is a unit only as the
-// front half of a pair with the `jcc` right after it.
+// What the erratum makes of a TargetOp. A fusible ALU op is a unit only as the front half of a pair with
+// the `jcc` right after it.
 enum BranchWindowRole
 	other
 	jump
 	condBranch
 	call
-	importCall
 	fusibleAlu
 	jumpTable
 end 'BranchWindowRole'
@@ -2784,8 +2778,8 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		jcc gives BranchWindowRole.condBranch
 		callDirect or
 		callReg or
-		callMem gives BranchWindowRole.call
-		iatCall gives BranchWindowRole.importCall
+		callMem or
+		iatCall gives BranchWindowRole.call
 		x64JumpTable gives BranchWindowRole.jumpTable
 		subRegReg or
 		cmpRegReg or
@@ -2938,26 +2932,24 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 end 'branchWindowRoleOf'
 
 // Whether an op of `role` is, on its own, one instruction the erratum is stated over.
-function isBranchWindowUnit(role BranchWindowRole, usesGt bool) returns bool
+function isBranchWindowUnit(role BranchWindowRole) returns bool
 	return match role 'unit'
 		jump or
 		condBranch or
 		call or
 		jumpTable gives true
-		importCall gives not usesGt
 		other or
 		fusibleAlu gives false
 	end 'unit'
 end 'isBranchWindowUnit'
 
 // The counts a unit's emission started from — its bytes and every record an op files against them.
-// Rolling a unit back truncates all seven, so its first attempt leaves nothing behind. One per chunk,
+// Rolling a unit back truncates every one, so its first attempt leaves nothing behind. One per chunk,
 // rewritten per unit, so a rollback allocates nothing.
 type EmitMark
 	var codeCount = 0 as ElementIndex
 	var covCount = 0 as ElementIndex
 	var callCount = 0 as ElementIndex
-	var iatCount = 0 as ElementIndex
 	var rdataCount = 0 as ElementIndex
 	var rel32Count = 0 as ElementIndex
 	var jumpTableCount = 0 as ElementIndex
@@ -2966,21 +2958,19 @@ type EmitMark
 		return Self{}
 	end 'create'
 
-	function take(code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray)
+	function take(code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray)
 		self.codeCount = code.count()
 		self.covCount = covOffsets.count()
 		self.callCount = callFixups.count()
-		self.iatCount = iatRelocs.count()
 		self.rdataCount = rdataRelocs.count()
 		self.rel32Count = rel32Fixups.count()
 		self.jumpTableCount = jumpTables.count()
 	end 'take'
 
-	function rollBack(code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray)
+	function rollBack(code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray)
 		code.truncate(self.codeCount)
 		covOffsets.truncate(self.covCount)
 		callFixups.truncate(self.callCount)
-		iatRelocs.truncate(self.iatCount)
 		rdataRelocs.truncate(self.rdataCount)
 		rel32Fixups.truncate(self.rel32Count)
 		jumpTables.truncate(self.jumpTableCount)
@@ -2996,13 +2986,13 @@ function opRefAt(block IrBlock, pos ElementIndex) returns ElementIndex
 end 'opRefAt'
 
 // Emit `first`, then `last` when it is a second op, returning where the unit's last op begins.
-function emitUnitOps(module TargetModule, first ElementIndex, last ElementIndex, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, jumpSpans JumpTableSpans, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment) returns CodeOffset
+function emitUnitOps(module TargetModule, first ElementIndex, last ElementIndex, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, jumpSpans JumpTableSpans, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment) returns CodeOffset
 	var lastStart = code.count()
-	emitTargetOp(opAt(module, opIdx: first), code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+	emitTargetOp(opAt(module, opIdx: first), code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 
 	if last != first 'pair'
 		lastStart = code.count()
-		emitTargetOp(opAt(module, opIdx: last), code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+		emitTargetOp(opAt(module, opIdx: last), code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 	end 'pair'
 
 	return lastStart
@@ -3013,17 +3003,17 @@ end 'emitUnitOps'
 // window is rolled back, padded and emitted again — to the next boundary, or for a jump table by the
 // smallest pad that clears both of its branches. A unit's line row starts at the pad
 // that aligns it: the pad is the unit's own code, and a step landing on it must read the unit's line.
-function emitUnit(module TargetModule, first ElementIndex, last ElementIndex, role BranchWindowRole, mark EmitMark, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, jumpSpans JumpTableSpans, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment, lineRows DebugLineRowBuilder, runOffsets DebugRunOffsets, captureSpans bool)
-	let covered = last != first or isBranchWindowUnit(role, usesGt: usesGt)
+function emitUnit(module TargetModule, first ElementIndex, last ElementIndex, role BranchWindowRole, mark EmitMark, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, jumpTables JumpTablePendingArray, jumpSpans JumpTableSpans, spillBaseDisp StackSize, usesGt bool, threadPointerSegment X64ThreadPointerSegment, lineRows DebugLineRowBuilder, runOffsets DebugRunOffsets, captureSpans bool)
+	let covered = last != first or isBranchWindowUnit(role)
 	let isJumpTable = role == BranchWindowRole.jumpTable
 
 	if covered 'markable'
-		mark.take(code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
+		mark.take(code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
 	end 'markable'
 
 	var firstStart = code.count()
 	let rowStart = firstStart
-	var lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+	var lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 
 	if covered and unitHitsBranchWindow(isJumpTable, spans: jumpSpans, start: firstStart as CodeOffset, unitEnd: codeHere(code)) 'straddles'
 		let width = code.count() - firstStart
@@ -3032,10 +3022,10 @@ function emitUnit(module TargetModule, first ElementIndex, last ElementIndex, ro
 			panic("emitUnit: a {width}-byte unit cannot sit inside a {BranchWindowBytes}-byte window — no jump, call, return or fused pair is that wide, and the jump-table sequence is at most {JumpTableSequenceMaxBytes} bytes (cmp 7, jae 6, lea 7, movsxd 4, lea 4, jmp 3), so an encoder grew by more than that or branchWindowRoleOf classified a macro-op sequence as one")
 		end 'tooWide'
 
-		mark.rollBack(code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
+		mark.rollBack(code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables)
 		encodeNopPad(code, bytes: branchWindowPadBytes(isJumpTable, spans: jumpSpans, start: firstStart as CodeOffset))
 		firstStart = code.count()
-		lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
+		lastStart = emitUnitOps(module, first: first, last: last, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment)
 
 		if unitHitsBranchWindow(isJumpTable, spans: jumpSpans, start: firstStart as CodeOffset, unitEnd: codeHere(code)) 'stillStraddles'
 			panic("emitUnit: a unit re-emitted on a window boundary still straddles it — an encoder emitted different bytes at a different offset")
@@ -3064,15 +3054,14 @@ end 'emitUnit'
 // Fixup offsets are chunk-local: concat shifts every inter-function fixup (call/IAT) by the chunk's
 // start. Block branches are resolved here, because a function's blocks are contiguous within its
 // one chunk. `usesGt` is `RuntimeUsage.usesGt`, read once by the caller rather than re-derived per
-// function; it gates the syscall shim on every `iatCall` (`emitGtGatedIatCall`) and the stack guard
+// function; it picks each `iatCall`'s import stub (`encodeImportStubCall`) and gates the stack guard
 // below.
 export function emitFunctionChunk(module TargetModule, func IrFunction, frame X64PrologueFrame, encoding FunctionEncodingFacts, usesGt bool, target Target) returns FunctionCodeChunk
 	let code = ByteArray.create(0)
 	let callFixups = CallFixupArray.create(0)
-	let iatRelocs = RelocationArray.create(0)
 
 	// The chunk's code -> .data references, filed by `encodeLeaRegGlobal` with CHUNK-LOCAL offsets;
-	// `concatX64FunctionChunks` rebases them exactly as it rebases `callFixups` and `iatRelocs`.
+	// `concatX64FunctionChunks` rebases them exactly as it rebases `callFixups`.
 	let rdataRelocs = RdataRelocationArray.create(0)
 	let rel32Fixups = ChunkRel32FixupArray.create(0)
 
@@ -3160,13 +3149,13 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 				end 'fuses'
 			end 'lookahead'
 
-			emitUnit(module, first: opIdx, last: last, role: role, mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
+			emitUnit(module, first: opIdx, last: last, role: role, mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
 			opPos = opPos + (2 if last != opIdx else 1)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termIdx = block.terminatorIndex()
-			emitUnit(module, first: termIdx, last: termIdx, role: branchWindowRoleOf(opAt(module, opIdx: termIdx)), mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
+			emitUnit(module, first: termIdx, last: termIdx, role: branchWindowRoleOf(opAt(module, opIdx: termIdx)), mark: mark, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, jumpTables: jumpTables, jumpSpans: jumpSpans, spillBaseDisp: spillBaseDisp, usesGt: usesGt, threadPointerSegment: threadPointerSegment, lineRows: lineRows, runOffsets: runOffsets, captureSpans: captureSpans)
 		end 'hasTerm'
 
 		chunkBlockEnds.place(block.id, value: codeHere(code))
@@ -3179,7 +3168,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, frame X6
 
 	resolveChunkRel32Fixups(code, labelOffsets: chunkLabelOffsets, rel32Fixups: rel32Fixups)
 
-	let chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs)
+	let chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create(0))
 	chunk.jumpTableRelocs = resolveJumpTableRelocs(jumpTables, blockOffsets: chunkLabelOffsets)
 
 	// Not `emitGuard`: see `asyncPreemptionCanStop`. The safe-point predicate tests the stack
