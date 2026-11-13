@@ -1,0 +1,129 @@
+module function functionDefersAReply(module MaxonModule, func IrFunction) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionDefersAReply: blockRef from func.blockRefs not in module.blocks")
+
+		for opIdx in block.bodyOps() 'eachOp'
+			let callee = try directCalleeOf(try module.ops.get(opIdx) otherwise panic("functionDefersAReply: opIdx {opIdx} not in module.ops")) otherwise continue
+
+			if callee.equals(GtReplyLaterName) 'defers'
+				return true
+			end 'defers'
+		end 'eachOp'
+	end 'eachBlock'
+
+	return false
+end 'functionDefersAReply'
+
+module function checkReplyDeferrals(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex)
+	let count = funcNames.functions.count()
+	let deferring = FixedBoolArray.create(count)
+	var anyDefers = false
+
+	for index in 0 upto count 'eachFunc'
+		let func = try funcNames.functions.get(index) otherwise panic("checkReplyDeferrals: functions.get OOB at {index} below its own count")
+
+		if bodyIsUnreadable(func) or project.libraryFacts.bodyIsSwept(func.name) 'nothingToJudge'
+			continue
+		end 'nothingToJudge'
+
+		if not functionDefersAReply(module, func: func) 'defersNothing'
+			continue
+		end 'defersNothing'
+
+		try deferring.set(index, value: true) otherwise panic("checkReplyDeferrals: deferring.set OOB at {index} below the count it was sized to")
+		anyDefers = true
+		checkDeferringMessage(project, module: module, signatures: signatures, func: func)
+	end 'eachFunc'
+
+	if not anyDefers 'nothingDefers'
+		return
+	end 'nothingDefers'
+
+	for func in module.functions 'eachClosure'
+		if isLiftedClosureName(func.name) 'aClosureLiteral'
+			checkClosureCapturesNoReply(project, signatures: signatures, closure: func)
+		end 'aClosureLiteral'
+	end 'eachClosure'
+
+	for index in 0 upto count 'eachCaller'
+		let caller = try funcNames.functions.get(index) otherwise panic("checkReplyDeferrals: functions.get OOB at {index} below its own count")
+
+		if bodyIsUnreadable(caller) or project.libraryFacts.bodyIsSwept(caller.name) or isAServiceBehave(caller) 'maySendIt'
+			continue
+		end 'maySendIt'
+
+		checkResultHoldsNoReply(project, signatures: signatures, func: caller)
+
+		for opIdx in module.liveOpIndices(caller) 'eachOp'
+			let edge = try callEdgeOf(try module.ops.get(opIdx) otherwise panic("checkReplyDeferrals: live op index not in module.ops")) otherwise continue
+
+			if edge.1 == CallEdgeKind.async and calleeTakesAReply(signatures, callee: edge.0) 'aCoroutineIsNoHolder'
+				let range = project.opRanges.get(opIdx)
+				reportPositioned(project, code: ErrorCode.semanticReplyDeferralRefused, message: "`async {String.from(edge.0)}(…)` takes a parameter that can hold a Reply: a Reply never leaves the service code that holds it, and a coroutine is not holding code — a coroutine awaiting a Reply while its starter awaits the coroutine would wait on each other for ever", line: range.line, column: range.column, filePath: caller.sourceFilePath)
+				continue
+			end 'aCoroutineIsNoHolder'
+
+			let calleeIndex = try funcNames.byName.get(edge.0) otherwise continue
+
+			if not (try deferring.get(calleeIndex) otherwise panic("checkReplyDeferrals: deferring.get OOB at {calleeIndex} below the count it was sized to")) 'notADeferrer'
+				continue
+			end 'notADeferrer'
+
+			let range = project.opRanges.get(opIdx)
+			reportPositioned(project, code: ErrorCode.semanticReplyDeferralRefused, message: "'{String.from(edge.0)}' defers its reply, so it cannot be called directly: only a send through the service's handle runs it", line: range.line, column: range.column, filePath: caller.sourceFilePath)
+		end 'eachOp'
+	end 'eachCaller'
+end 'checkReplyDeferrals'
+
+function checkClosureCapturesNoReply(project Project, signatures ProgramSignatures, closure IrFunction)
+	for field in closure.closureEnvFields 'eachCapture'
+		if signatures.valueHoldsAReply(field.declaredType, idsFrom: project.typeNames) 'capturesAReply'
+			reportAtFunctionName(project, func: closure, code: ErrorCode.semanticReplyDeferralRefused, message: "this closure captures '{displayParamName(field.name)}', which can hold a Reply: a closure travels to whatever code receives it, and a Reply never leaves the service code that holds it. Answer the Reply in the message that holds it, or pass what the answer needs as a message argument")
+		end 'capturesAReply'
+	end 'eachCapture'
+end 'checkClosureCapturesNoReply'
+
+function checkResultHoldsNoReply(project Project, signatures ProgramSignatures, func IrFunction)
+	let returned = try signatures.declaredReturnTypeOf(func.name, into: signatures.indexTypeNames()) otherwise return
+
+	match returned 'returned'
+		void then return
+		value(held) then checkValueHoldsNoReply(project, signatures: signatures, func: func, held: held)
+	end 'returned'
+end 'checkResultHoldsNoReply'
+
+function checkValueHoldsNoReply(project Project, signatures ProgramSignatures, func IrFunction, held MaxonType)
+	if not signatures.typeHoldsAReply(held) 'holdsNone'
+		return
+	end 'holdsNone'
+
+	reportAtFunctionName(project, func: func, code: ErrorCode.semanticReplyDeferralRefused, message: "{functionDisplay(project, func: func).memberQuoted()} returns a type that can hold a Reply: a Reply never leaves the service code that holds it, so no function returns one (a message's reply, a promise's payload and a helper's result all carry it to code that may wait). Keep it in state, a container or a message argument, and answer it where it is held")
+end 'checkValueHoldsNoReply'
+
+function calleeTakesAReply(signatures ProgramSignatures, callee ByteArray) returns bool
+	let declaration = try signatures.sweptDeclarationOf(callee) otherwise return false
+	let declaredIn = signatures.declaringFileOf(callee)
+
+	for declared in declaration.paramTypes 'eachParameter'
+		if signatures.declaredSlotHoldsAReply(declared, declFilePath: declaredIn) 'holdsOne'
+			return true
+		end 'holdsOne'
+	end 'eachParameter'
+
+	return false
+end 'calleeTakesAReply'
+
+function checkDeferringMessage(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction)
+	if not signatures.namesAServiceMessage(func.name) 'notAMessage'
+		reportAtFunctionName(project, func: func, code: ErrorCode.semanticReplyDeferralRefused, message: "`reply.later()` appears in {functionDisplay(project, func: func).memberQuoted()}, which is not a message of a service: only an `export` or `public` method of a type a `spawn` starts can defer its reply")
+		return
+	end 'notAMessage'
+
+	if functionCanThrow(module, func: func) 'throwsItself'
+		reportAtFunctionName(project, func: func, code: ErrorCode.semanticReplyDeferralRefused, message: "the message {functionDisplay(project, func: func).memberQuoted()} defers its reply and so throws nothing itself: its one error is `ReplyStopped`, which the caller's `await` receives when the Reply is dropped unanswered. Remove the `throw` or the propagating `try`")
+	end 'throwsItself'
+end 'checkDeferringMessage'
+
+function isAServiceBehave(func IrFunction) returns bool
+	return String.from(func.name).endsWith(".{String.from(ServiceBehaveMemberName)}")
+end 'isAServiceBehave'

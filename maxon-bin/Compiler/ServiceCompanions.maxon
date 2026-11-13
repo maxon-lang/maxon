@@ -348,6 +348,13 @@ export let RegistryPublishMemberName = b"publish"
 export let RegistryCreateMemberName = b"create"
 export let RegistryReplacingLabel = b"replacing"
 export let SharedValueTypeName = b"SharedValue"
+export let ReplyTypeName = b"Reply"
+export let ReplyStoppedTypeName = b"ReplyStopped"
+export let ReplyStoppedCaseName = b"serviceStopped"
+export let ReplyLaterBaseName = b"reply"
+export let ReplyLaterMemberName = b"later"
+export let ReplyAnswerMethodName = b"answer"
+export let ReplyLaterInitializerTokens = 4 as ElementIndex
 
 module function registryMemberIsNamed(member ByteArray) returns bool
 	return member.equals(RegistryCurrentMemberName) or member.equals(RegistryRegisterMemberName)
@@ -891,7 +898,7 @@ function typeNeedsACapabilityWord(signatures ProgramSignatures, resolved MaxonTy
 		cstring then return false
 
 		interfaceRef then return true
-		genericInstance then return not signatures.instanceBaseIsServiceHandle(genericInstanceIdOf(resolved)) and not signatures.instanceBaseIsSharedValue(genericInstanceIdOf(resolved)) and not signatures.genericInstanceIsImmutable(genericInstanceIdOf(resolved)) and ownsHeapDataOfItsRegion(signatures, resolved: resolved)
+		genericInstance then return not signatures.instanceBaseIsServiceHandle(genericInstanceIdOf(resolved)) and not signatures.instanceBaseIsSharedValue(genericInstanceIdOf(resolved)) and not signatures.instanceBaseIsReply(genericInstanceIdOf(resolved)) and not signatures.genericInstanceIsImmutable(genericInstanceIdOf(resolved)) and ownsHeapDataOfItsRegion(signatures, resolved: resolved)
 		structRef or
 		named then return recordNeedsACapabilityWord(signatures, resolved: resolved)
 	end 'tag'
@@ -995,6 +1002,10 @@ function replyTransferRefusal(signatures ProgramSignatures, returnType MaxonRetu
 	if typeIsFixedByAnInstantiation(signatures, t: resolved) 'deferredToTheInstantiation'
 		return ServiceCrossing.acceptable
 	end 'deferredToTheInstantiation'
+
+	if signatures.typeIsLinear(resolved) 'aLinearReply'
+		return ServiceCrossing.refused("a linear value, which {LinearValueResidence}")
+	end 'aLinearReply'
 
 	return transferRefusalOfType(signatures, resolved: resolved, declFilePath: declFilePath)
 end 'replyTransferRefusal'
@@ -1410,16 +1421,23 @@ end 'interfaceMessageWithheldRefusal'
 // export boundary left it off the handle. `declaresIt` is what lets the sentence tell those two apart — a
 // private helper the author can see in their own file, against a name nothing declares at all.
 //
-// ⚠ **THE PRIVATE-HELPER HALF IS WHY SELF-SEND DEADLOCK NEEDS NO DIAGNOSTIC**, and the message says so:
-// `self.record(…)` inside a message body can only ever be a direct call, because `record` is not on the
-// handle — so there is no way to spell a self-send at all.
+// ⚠ **THE PRIVATE-HELPER HALF SAYS WHERE THE CALL BELONGS**, and the message says so:
+// `self.record(…)` inside a message body is a direct call, because `record` is not on the handle.
 module function serviceNotAMessageRefusal(typeName ByteArray, handleName ByteArray, member ByteArray, declaresIt bool) returns String
 	if declaresIt 'aPrivateHelper'
-		return "`{String.from(member)}` is declared on `type {String.from(typeName)}` but is not a message: only its `export` INSTANCE methods are on `{String.from(handleName)}`. That is the isolation boundary, and it is what makes a self-send unspellable — a private helper can only ever be reached by a DIRECT call, from inside a message body or from a `{String.from(typeName)}` value. Export it to make it a message, or call it on a `{String.from(typeName)}` value"
+		return "`{String.from(member)}` is declared on `type {String.from(typeName)}` but is not a message: only its `export` INSTANCE methods are on `{String.from(handleName)}`. A handle reaches exactly those, so a private helper is reached by a DIRECT call, from inside a message body or from a `{String.from(typeName)}` value. Export it to make it a message, or call it on a `{String.from(typeName)}` value"
 	end 'aPrivateHelper'
 
 	return "`type {String.from(typeName)}` declares no `{String.from(member)}`, so `{String.from(handleName)}` has no such message. A handle's surface is exactly the service's `export` instance methods"
 end 'serviceNotAMessageRefusal'
+
+module function acquireNameNotAServiceHandleRefusal(name ByteArray, typeName String) returns String
+	return "`acquire` names service handles, and `{String.from(name)}` is a `{typeName}`. Bind a handle reached through an expression with `let` first, then name that binding"
+end 'acquireNameNotAServiceHandleRefusal'
+
+module function acquireInterfaceHandleRefusal(name ByteArray, handleName ByteArray) returns String
+	return "`acquire` takes the state of a service, and `{String.from(name)}` is a `{String.from(handleName)}`, which may reach any of several services. Name a handle of one service type"
+end 'acquireInterfaceHandleRefusal'
 
 module function serviceReplyDroppedRefusal(message ByteArray) returns String
 	return "`{String.from(message)}` returns or throws, so a send of it delivers a reply, and as a statement the reply is dropped — and with it the value and any error the handler throws. Await it with `try await <handle>.<message>(…)`, keep it with `let reply = try <handle>.<message>(…)`, or discard it on purpose with `_ = try <handle>.<message>(…)`"

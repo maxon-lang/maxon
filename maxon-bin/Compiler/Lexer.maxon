@@ -219,6 +219,7 @@ export enum TokenKind
 	returns = "returns"
 	var = "var"
 	modify = "modify"
+	acquire = "acquire"
 	type = "type"
 	union = "union"
 	enum = "enum"
@@ -346,7 +347,7 @@ export enum TokenKind
 end 'TokenKind'
 
 // @generated library-cache begin
-let CacheCasesTokenKind = [TokenKind.function, TokenKind.let, TokenKind.typealias, TokenKind.export, TokenKind.public, TokenKind.if, TokenKind.else, TokenKind.while, TokenKind.for, TokenKind.in, TokenKind.break, TokenKind.continue, TokenKind.return, TokenKind.panic, TokenKind.end, TokenKind.match, TokenKind.then, TokenKind.fallthrough, TokenKind.default, TokenKind.upto, TokenKind.gives, TokenKind.try, TokenKind.otherwise, TokenKind.throw, TokenKind.ignore, TokenKind.async, TokenKind.await, TokenKind.returns, TokenKind.var, TokenKind.modify, TokenKind.type, TokenKind.union, TokenKind.enum, TokenKind.static, TokenKind.interface, TokenKind.extension, TokenKind.extends, TokenKind.implements, TokenKind.uses, TokenKind.with, TokenKind.where, TokenKind.self, TokenKind.selfType, TokenKind.throws, TokenKind.from, TokenKind.to, TokenKind.mod, TokenKind.and, TokenKind.or, TokenKind.not, TokenKind.xor, TokenKind.shl, TokenKind.shr, TokenKind.as, TokenKind.is, TokenKind.sizeof, TokenKind.countof, TokenKind.true, TokenKind.false, TokenKind.int, TokenKind.float, TokenKind.bool, TokenKind.cstring, TokenKind.intLiteral, TokenKind.floatLiteral, TokenKind.charLiteral, TokenKind.stringLiteral, TokenKind.byteStringLiteral, TokenKind.stringInterpStart, TokenKind.stringInterpEnd, TokenKind.stringFormatSpec, TokenKind.identifier, TokenKind.leftParen, TokenKind.rightParen, TokenKind.leftBrace, TokenKind.rightBrace, TokenKind.leftBracket, TokenKind.rightBracket, TokenKind.equals, TokenKind.equalsEquals, TokenKind.bangEquals, TokenKind.lessThan, TokenKind.lessEquals, TokenKind.greaterThan, TokenKind.greaterEquals, TokenKind.plus, TokenKind.minus, TokenKind.star, TokenKind.slash, TokenKind.dot, TokenKind.colon, TokenKind.comma, TokenKind.at, TokenKind.hashIf, TokenKind.hashElse, TokenKind.hashEndif, TokenKind.docComment, TokenKind.newline, TokenKind.eof]
+let CacheCasesTokenKind = [TokenKind.function, TokenKind.let, TokenKind.typealias, TokenKind.export, TokenKind.public, TokenKind.if, TokenKind.else, TokenKind.while, TokenKind.for, TokenKind.in, TokenKind.break, TokenKind.continue, TokenKind.return, TokenKind.panic, TokenKind.end, TokenKind.match, TokenKind.then, TokenKind.fallthrough, TokenKind.default, TokenKind.upto, TokenKind.gives, TokenKind.try, TokenKind.otherwise, TokenKind.throw, TokenKind.ignore, TokenKind.async, TokenKind.await, TokenKind.returns, TokenKind.var, TokenKind.modify, TokenKind.acquire, TokenKind.type, TokenKind.union, TokenKind.enum, TokenKind.static, TokenKind.interface, TokenKind.extension, TokenKind.extends, TokenKind.implements, TokenKind.uses, TokenKind.with, TokenKind.where, TokenKind.self, TokenKind.selfType, TokenKind.throws, TokenKind.from, TokenKind.to, TokenKind.mod, TokenKind.and, TokenKind.or, TokenKind.not, TokenKind.xor, TokenKind.shl, TokenKind.shr, TokenKind.as, TokenKind.is, TokenKind.sizeof, TokenKind.countof, TokenKind.true, TokenKind.false, TokenKind.int, TokenKind.float, TokenKind.bool, TokenKind.cstring, TokenKind.intLiteral, TokenKind.floatLiteral, TokenKind.charLiteral, TokenKind.stringLiteral, TokenKind.byteStringLiteral, TokenKind.stringInterpStart, TokenKind.stringInterpEnd, TokenKind.stringFormatSpec, TokenKind.identifier, TokenKind.leftParen, TokenKind.rightParen, TokenKind.leftBrace, TokenKind.rightBrace, TokenKind.leftBracket, TokenKind.rightBracket, TokenKind.equals, TokenKind.equalsEquals, TokenKind.bangEquals, TokenKind.lessThan, TokenKind.lessEquals, TokenKind.greaterThan, TokenKind.greaterEquals, TokenKind.plus, TokenKind.minus, TokenKind.star, TokenKind.slash, TokenKind.dot, TokenKind.colon, TokenKind.comma, TokenKind.at, TokenKind.hashIf, TokenKind.hashElse, TokenKind.hashEndif, TokenKind.docComment, TokenKind.newline, TokenKind.eof]
 
 module function cacheReadTokenKind(reader LibraryCacheReader) returns TokenKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -754,10 +755,10 @@ function retagAs(tokens TokenArray, index ElementIndex, kind TokenKind)
 	try tokens.set(index, value: Token.create(kind, line: word.line, column: word.column, value: word.value, startByte: word.startByte, endByte: word.endByte)) otherwise panic("retagAs: tokens.set({index}) failed at an index the scan just read")
 end 'retagAs'
 
-function modifyOpensABlockAt(tokens TokenArray, index ElementIndex) returns bool
+function contextualBlockOpensAt(tokens TokenArray, index ElementIndex, spelling ByteArray) returns bool
 	let word = try tokens.get(index) otherwise return false
 
-	if word.kind != TokenKind.identifier or not word.value.equals(ModifyBlockWord) or kindBefore(tokens, index: index) != TokenKind.newline 'notABlockHead'
+	if word.kind != TokenKind.identifier or not word.value.equals(spelling) or kindBefore(tokens, index: index) != TokenKind.newline 'notABlockHead'
 		return false
 	end 'notABlockHead'
 
@@ -788,14 +789,46 @@ function modifyOpensABlockAt(tokens TokenArray, index ElementIndex) returns bool
 		at = at + 1
 	end 'toTheLineEnd'
 
-	panic("modifyOpensABlockAt: the scan to the end of the line only exits by returning at the newline or EOF")
-end 'modifyOpensABlockAt'
+	panic("contextualBlockOpensAt: the scan to the end of the line only exits by returning at the newline or EOF")
+end 'contextualBlockOpensAt'
+
+module function destructStatementAt(tokens TokenArray, index ElementIndex) returns bool
+	let word = try tokens.get(index) otherwise return false
+
+	if word.kind != TokenKind.identifier or not word.value.equals(DestructStatementWord) or tokenKindAt(tokens, index: index + 1) != TokenKind.self 'notADestruct'
+		return false
+	end 'notADestruct'
+
+	return kindBefore(tokens, index: index) != TokenKind.dot
+end 'destructStatementAt'
+
+module function typeBodyHoldsADestruct(tokens TokenArray, from ElementIndex) returns bool
+	for index in from upto tokens.count() 'eachToken'
+		let word = try tokens.get(index) otherwise return false
+
+		if word.kind == TokenKind.end and word.column == DeclarationHeadColumn and not tokenFollowsAMemberDot(tokens, index: index) 'theTypesOwnEnd'
+			return false
+		end 'theTypesOwnEnd'
+
+		if destructStatementAt(tokens, index: index) 'aFinalizer'
+			return true
+		end 'aFinalizer'
+	end 'eachToken'
+
+	return false
+end 'typeBodyHoldsADestruct'
 
 function markContextualHeads(tokens TokenArray)
 	for index in 0 upto tokens.count() 'eachToken'
-		if tokenKindAt(tokens, index: index) == TokenKind.identifier and modifyOpensABlockAt(tokens, index: index) 'aModifyBlock'
+		if tokenKindAt(tokens, index: index) != TokenKind.identifier 'notAWord'
+			continue
+		end 'notAWord'
+
+		if contextualBlockOpensAt(tokens, index: index, spelling: ModifyBlockWord) 'aModifyBlock'
 			retagAs(tokens, index: index, kind: TokenKind.modify)
-		end 'aModifyBlock'
+		end 'aModifyBlock' else if contextualBlockOpensAt(tokens, index: index, spelling: AcquireBlockWord) 'anAcquireBlock'
+			retagAs(tokens, index: index, kind: TokenKind.acquire)
+		end 'anAcquireBlock'
 	end 'eachToken'
 end 'markContextualHeads'
 
@@ -2635,7 +2668,7 @@ function opensAKeptBlock(tokens TokenArray, groups ParenGroups, index ElementInd
 		return false
 	end 'insideAnExpression'
 
-	if kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.modify 'aLoop'
+	if kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.modify or kind == TokenKind.acquire 'aLoop'
 		return true
 	end 'aLoop'
 

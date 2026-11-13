@@ -80,9 +80,10 @@ threads, so the guard calls are not emitted there.
 
 `tiedCarrierOwnersOf` collects, per function, the locals that hold the promise of an `async` call given
 mutable data. `checkTiedPromisesAreOnlyAwaited` refuses any other use of such a promise (E3212),
-`checkNoPromiseIsDropped` reports a promise that reaches an exit unconsumed (E3212 for a tied one, E3213 for any
-other), and the exits it considers are the function's returns, throws and propagating `try` edges. At a
-`.cancel()` of a tied promise the parser emits `__gt_promise_cancel_wait` instead of the plain renounce.
+`checkNoOwnedValueIsDropped` reports a promise or a linear value that reaches an exit unconsumed (E3212 for a
+tied promise, E3213 for any other promise, E3223 for a linear value), and the exits it considers are the
+function's returns, throws and propagating `try` edges. At a `.cancel()` of a tied promise the parser emits
+`__gt_promise_cancel_wait` instead of the plain renounce.
 
 ## By-reference order (E3186)
 

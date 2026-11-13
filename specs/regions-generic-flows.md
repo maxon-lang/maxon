@@ -2355,7 +2355,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:5:19: 'setLimits' writes 'caps' (line 270: `self.limits = caps`); 'limits' is immutable
+error E3207: <fragment>:5:19: 'setLimits' writes 'caps' (line 390: `self.limits = caps`); 'limits' is immutable
 ```
 
 <!-- test: a-factory-of-the-library-that-stores-its-record-parameter-refuses-frozen-data -->

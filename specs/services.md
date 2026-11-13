@@ -42,9 +42,9 @@ surface**. Three properties fall out:
    direct calls, a `Calc.handle` takes messages. Same spelling; that is location transparency.
 2. **Services are synchronously unit-testable.** Construct one directly and call its methods with no
    runtime, no mailbox and no green thread.
-3. **Self-send deadlock is structurally impossible.** A private helper is not on the handle, so
-   `self.record(…)` inside a message can only ever be a direct call. There is no way to spell a self-send,
-   so it needs no diagnostic.
+3. **A private helper is never a message.** It is not on the handle, so `self.record(…)` inside a message
+   can only ever be a direct call. A message reaches its own service as a handle only through a handle it was
+   given.
 
 `static function` is excluded from the roster structurally: it has no `self`, and `spawn Calc.create()`
 calls it DIRECTLY rather than through a handle.
@@ -130,7 +130,7 @@ reaches no scheduler at all.
 ⛔⛔ **THE DISCRIMINATOR IS *WHICH STAGE REACHES THE VERDICT*, NOT *IS THE RULE TARGET-NEUTRAL*.** E3104 is
 reported only for a program the Maxon tier otherwise accepts: `checkCalls` files one for every `spawn`, every
 send and every reply cell, and they are printed only when no other diagnostic was reported. A verdict from the
-parse or from a whole-program `SemanticCheck` pass — **E3139**'s cycle graph, **E3100**'s await linearity,
+parse or from a whole-program `SemanticCheck` pass — **E3221**'s may-wait verdict, **E3100**'s await linearity,
 **E3217**'s transferability verdict — therefore prints alone on `--target=wasm32-wasi`, exactly as it does on a native
 lane, and its case is unmarked. A ranged-literal **E3005** the parser defers to `InsertRangeChecks` is
 decided after lowering, which the E3104s stop, so on wasm it never prints at all. ⇒ **a case whose
@@ -854,8 +854,8 @@ type Sink
 	var n as Integer
 
 	static function create(p IntPromise) returns Self
-		let v = await p
-		return Self{n: v}
+		p.cancel()
+		return Self{n: 1}
 	end 'create'
 
 	export function total() returns Integer
@@ -1810,7 +1810,7 @@ total=3
 ```
 
 <!-- test: error.a-private-method-is-absent-from-the-handle -->
-A private helper is not on the handle, which is what makes a self-send unspellable.
+A private helper is not on the handle, so a call to it through the handle is not a message.
 ```maxon
 type Calc
 	var count as Integer
@@ -1832,7 +1832,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3136: <fragment>:16:4: `record` is declared on `type Calc` but is not a message: only its `export` INSTANCE methods are on `Calc.handle`. That is the isolation boundary, and it is what makes a self-send unspellable — a private helper can only ever be reached by a DIRECT call, from inside a message body or from a `Calc` value. Export it to make it a message, or call it on a `Calc` value
+error E3136: <fragment>:16:4: `record` is declared on `type Calc` but is not a message: only its `export` INSTANCE methods are on `Calc.handle`. A handle reaches exactly those, so a private helper is reached by a DIRECT call, from inside a message body or from a `Calc` value. Export it to make it a message, or call it on a `Calc` value
 ```
 
 <!-- test: shutdown-drains-what-is-queued -->
@@ -3645,99 +3645,6 @@ held
 kept s0
 ```
 
-<!-- test: a-receive-that-claims-a-timed-sender-ends-the-polling-machines-wait -->
-<!-- procs: 2 -->
-**A SENDER WOKEN BY A RECEIVE LEAVES NO TIMER FOR THE POLLER TO SLEEP TO.** `Sender.run` fills the one slot of
-`Store`'s mailbox and then sends a second message with a `sendTimeout` of a day, so it parks on the sender
-queue with a timer a day away, and the machine that ran it settles into the poller until that deadline. `hold`
-is the handler that keeps `Store` from receiving: it returns only once `Sender` has published that it is about to
-make the timed send and a processor has reported idle, then spins to give `Sender` the time to arm its timer
-and the poller the time to block. Its return lets `Store`'s next
-receive take the front sender, remove its timer and ready it, which leaves nothing pending. `main` has finished
-by then, so the break it makes on completing is past, and only the receive's own break can end the poller's wait.
-That machine counts as running in `__sched_checkdead`, so without the break the exit drain waits out the day and
-the runner reports the case TIMED OUT. No elapsed time is compared to a threshold.
-```maxon
-typealias Flag = SharedValue with bool
-typealias Integer = int(i64.min to i64.max)
-
-let farTimeoutMs = 86400000
-let settleReads = 2000000
-
-type Store
-	let started as Flag
-	let armed as Flag
-
-	static function create(started Flag, armed Flag) returns Self
-		return Self{started: started, armed: armed}
-	end 'create'
-
-	export function hold()
-		self.started.publish(true)
-
-		while not self.armed.current() 'untilArmed'
-			Scheduler.yield()
-		end 'untilArmed'
-
-		var idle = 0 as SchedulerEventCount
-
-		while idle == 0 'untilOtherIdles'
-			idle = Scheduler.counters().idleProcessors
-		end 'untilOtherIdles'
-
-		var reads = 0 as Integer
-
-		while reads < settleReads 'settle'
-			idle = Scheduler.counters().idleProcessors
-			reads = reads + 1
-		end 'settle'
-
-		print("held\n")
-	end 'hold'
-
-	export function keep(s String)
-		print("kept {s}\n")
-	end 'keep'
-end 'Store'
-
-type Sender
-	let armed as Flag
-
-	static function create(armed Flag) returns Self
-		return Self{armed: armed}
-	end 'create'
-
-	export function run(target Store.handle)
-		try target.keep("s0") otherwise panic("the service took hold, so its one slot is free")
-		self.armed.publish(true)
-		try target.keep("s1", sendTimeout: farTimeoutMs) otherwise panic("room appears when hold returns")
-	end 'run'
-end 'Sender'
-
-function main() returns ExitCode
-	let started = Flag.create(false)
-	let armed = Flag.create(false)
-	let h = spawn(capacity: 1) Store.create(started.clone(), armed: armed.clone())
-	let sender = spawn Sender.create(armed.clone())
-	try h.hold() otherwise panic("an empty mailbox takes the first send")
-
-	while not started.current() 'untilHeld'
-		Scheduler.yield()
-	end 'untilHeld'
-
-	try sender.run(h.clone()) otherwise panic("an empty mailbox takes the send")
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-held
-kept s0
-kept s1
-```
-
 <!-- test: a-zero-send-timeout-fails-at-once -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
@@ -3914,15 +3821,13 @@ kept s1
 sent s1
 ```
 
-<!-- test: a-sender-waiting-without-end-on-a-service-that-never-receives-is-a-deadlock -->
-<!-- procs: 1 -->
-<!-- preempt: off -->
-A send that waits without end arms no timer, so a sender parked on a mailbox nobody will ever receive from is a
-deadlock, as Go's blocking send on a channel nobody reads is: `RuntimeAbort.schedulerDeadlock`, **exit 92**.
-`stall` fills the service's own one slot with `fill` and then sends a second `fill` to the same full mailbox
-with `ForeverMs`, so the service parks as a sender on the mailbox it would have to receive from. `main` then
-sends to the same full mailbox and parks behind it. Every green thread is parked, no timer is pending and no
-read or child is outstanding, so the machine that goes idle last finds nothing that can wake any of them.
+<!-- test: error.a-message-that-sends-without-end-is-refused -->
+A send that waits without end on a mailbox nobody will ever receive from is a deadlock, as Go's blocking send on
+a channel nobody reads is. A message that makes one — `stall` fills its own service's one slot with `fill` and
+then sends a second `fill` to the same full mailbox with `ForeverMs`, so the service would park as a sender on
+the mailbox it has to receive from — is refused, because a message may not wait on a send: it holds its own
+service while it waits. Only `main` and its coroutines send with a timeout, and `main`'s own waits are pinned by
+`an-indefinite-send-waits-past-a-sleeping-handler-and-delivers` and the cases around it.
 ```maxon
 type Store
 	var n as Integer
@@ -3944,17 +3849,303 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn(capacity: 1) Store.create()
 	try h.stall(h.clone()) otherwise panic("an empty mailbox takes the first send")
-	Scheduler.yield()
-	try h.fill(sendTimeout: ForeverMs) otherwise panic("a send that waits without end returns only when it is delivered or the service stops")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
-```exitcode
-92
+```maxoncstderr
+error E3221: <fragment>:9:18: the message 'stall' may wait (it sends with a timeout, which waits for mailbox space, at line 11) while holding its own service; send with `sendTimeout: 0`, which fails `mailboxFull` instead of waiting
 ```
-```stderr
-fatal error: runtime abort 92 (schedulerDeadlock)
+
+<!-- test: error.a-message-that-sends-with-a-timeout-is-refused -->
+A send with a `sendTimeout:` of anything but a literal `0` waits for room in a full mailbox, so a message that
+makes one holds its own service while it waits and is refused. A `sendTimeout:` of `0` is the default spelled out:
+a full mailbox fails at once and nothing waits (see `a-message-may-send-with-a-literal-zero-timeout`).
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function fill()
+		self.n = self.n + 1
+	end 'fill'
+end 'Store'
+
+type Pusher
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function push(target Store.handle)
+		try target.fill(sendTimeout: 50) otherwise panic("room appears when the service takes the first fill")
+	end 'push'
+end 'Pusher'
+
+function main() returns ExitCode
+	let store = spawn(capacity: 1) Store.create()
+	let pusher = spawn Pusher.create()
+	try pusher.push(store.clone()) otherwise panic("an open mailbox with room takes the send")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3221: <fragment>:21:18: the message 'push' may wait (it sends with a timeout, which waits for mailbox space, at line 22) while holding its own service; send with `sendTimeout: 0`, which fails `mailboxFull` instead of waiting
+```
+
+<!-- test: error.a-message-that-awaits-a-promise-it-cannot-see-is-refused -->
+A promise a message did not start itself comes from a coroutine the compiler cannot see, so awaiting it may wait on
+anything and is refused like an await of a reply. An await of a coroutine the message started itself, and that
+the message can see finishes without waiting on another party, stays legal.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+
+function seven() returns Integer
+	Scheduler.yield()
+	return 7
+end 'seven'
+
+function begin() returns IntPromise
+	return async seven()
+end 'begin'
+
+type Sink
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function settle() returns Integer
+		let p = begin()
+		return await p
+	end 'settle'
+end 'Sink'
+
+function main() returns ExitCode
+	let sink = spawn Sink.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3221: <fragment>:21:18: the message 'settle' may wait (it awaits a promise whose coroutine it cannot see, at line 23) while holding its own service
+```
+
+<!-- test: error.a-message-that-sends-with-a-computed-timeout-is-refused -->
+Only a literal `sendTimeout: 0` is known not to wait. A timeout the compiler cannot read as that literal may be any
+duration, so a message that sends with one is refused even when every caller passes `0`.
+```maxon
+type Peer
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function note()
+		self.n = self.n + 1
+	end 'note'
+end 'Peer'
+
+type Probe
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function post(p Peer.handle, ms Milliseconds)
+		try p.note(sendTimeout: ms) otherwise ignore
+	end 'post'
+end 'Probe'
+
+function main() returns ExitCode
+	let probe = spawn Probe.create()
+	let peer = spawn Peer.create()
+	try probe.post(peer.clone(), ms: 0) otherwise panic("an open mailbox with room takes the send")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3221: <fragment>:21:18: the message 'post' may wait (it sends with a timeout, which waits for mailbox space, at line 22) while holding its own service; send with `sendTimeout: 0`, which fails `mailboxFull` instead of waiting
+```
+
+<!-- test: error.a-message-that-starts-a-waiting-coroutine-is-refused -->
+Starting a coroutine whose body waits is a wait: the message holds its own service while it awaits the coroutine,
+and the coroutine waits on another service's reply. The chain names the coroutine's function and the `await`
+inside it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Peer
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping() returns Integer
+		return 1
+	end 'ping'
+end 'Peer'
+
+function waitsOnPeer(p Peer.handle) returns Integer
+	return try await p.ping() otherwise 0
+end 'waitsOnPeer'
+
+type Probe
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function relay(p Peer.handle) returns Integer
+		let pending = async waitsOnPeer(p.clone())
+		return await pending
+	end 'relay'
+end 'Probe'
+
+function main() returns ExitCode
+	let probe = spawn Probe.create()
+	let peer = spawn Peer.create()
+	_ = probe
+	_ = peer
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3221: <fragment>:27:18: the message 'relay' may wait (it starts 'waitsOnPeer', which awaits a reply from 'Peer' at line 17) while holding its own service; send the request with this service's handle and handle the reply in another message
+```
+
+<!-- test: a-message-may-send-with-a-literal-zero-timeout -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A literal `sendTimeout: 0` is not a wait, so a message may make that send. `forward` posts three bumps to a
+counter whose mailbox holds one: the first lands and the other two fail `mailboxFull` at once, which `forward`
+counts, so the reply is the number of refusals. `main`'s own send of `total` waits for room, which is `main`'s
+to do.
+```maxon
+type Counter
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump(by Integer)
+		self.n = self.n + by
+	end 'bump'
+
+	export function total() returns Integer
+		return self.n
+	end 'total'
+end 'Counter'
+
+type Relay
+	var refused as Integer
+
+	static function create() returns Self
+		return Self{refused: 0}
+	end 'create'
+
+	export function forward(peer Counter.handle, times Integer) returns Integer
+		for _ in 0 upto times 'each'
+			try peer.bump(1, sendTimeout: 0) otherwise (e) 'full'
+				match e 'why'
+					mailboxFull then self.refused = self.refused + 1
+					serviceStopped then self.refused = self.refused + 1
+				end 'why'
+			end 'full'
+		end 'each'
+
+		return self.refused
+	end 'forward'
+end 'Relay'
+
+function main() returns ExitCode
+	let counter = spawn(capacity: 1) Counter.create()
+	let relay = spawn Relay.create()
+	let refused = try await relay.forward(counter.clone(), times: 3) otherwise 99
+	let total = try await counter.total(sendTimeout: ForeverMs) otherwise 0
+	print("refused={refused} total={total}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+refused=2 total=1
+```
+```exitcode
+0
+```
+
+<!-- test: a-request-and-its-reply-are-two-messages -->
+A service that needs another service's answer sends the request with its own handle and receives the answer as a
+message. `Asker.start` posts `Oracle.ask` with a clone of its own handle and returns at once; `Oracle.ask` posts
+`Asker.answer` back and returns; neither waits. `main` polls `Asker.result` until the answer has landed.
+```maxon
+type Oracle
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ask(back Asker.handle, question Integer)
+		try back.answer(question * 2) otherwise panic("an open mailbox with room takes the send")
+	end 'ask'
+end 'Oracle'
+
+type Asker
+	var got as Integer
+
+	static function create() returns Self
+		return Self{got: 0}
+	end 'create'
+
+	export function start(oracle Oracle.handle, me Asker.handle)
+		try oracle.ask(me.clone(), question: 21) otherwise panic("an open mailbox with room takes the send")
+	end 'start'
+
+	export function answer(value Integer)
+		self.got = value
+	end 'answer'
+
+	export function result() returns Integer
+		return self.got
+	end 'result'
+end 'Asker'
+
+function main() returns ExitCode
+	let oracle = spawn Oracle.create()
+	let asker = spawn Asker.create()
+	try asker.start(oracle, me: asker.clone()) otherwise panic("an open mailbox with room takes the send")
+
+	var answer = 0 as Integer
+
+	while answer == 0 'untilAnswered'
+		Scheduler.yield()
+		answer = try await asker.result() otherwise 0
+	end 'untilAnswered'
+
+	print("answer={answer}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+answer=42
+```
+```exitcode
+0
 ```
 
 <!-- test: error.a-message-may-not-declare-a-send-timeout-parameter -->
@@ -4428,9 +4619,9 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: fire-and-forget-cycle-is-legal -->
-⭐ The case that pins "only blocking edges count" — without it a later tightening would silently ban correct
-programs. `A` names `B`'s handle in a message and `B` names `A`'s, which is a cycle in the type graph and no
-cycle at all in the blocking one, because neither send waits.
+⭐ The case that pins that a post is not a wait — without it a later tightening would silently ban correct
+programs. `A` names `B`'s handle in a message and `B` names `A`'s, which is a ring of services and no wait at
+all, because neither send waits.
 ```maxon
 type A
 	var n as Integer
@@ -4472,17 +4663,14 @@ typealias Integer = int(i64.min to i64.max)
 0
 ```
 
-<!-- test: a-fire-and-forget-send-is-not-a-blocking-edge -->
-⭐⭐ **THE CASE THAT CAN ACTUALLY SEE "only blocking edges count", AND `fire-and-forget-cycle-is-legal` ABOVE
-CANNOT.** That one has no `await` anywhere, so `checkServiceCallCycles` short-circuits on an empty seed set
-before it ever consults the rule — it pins that a type-graph ring compiles and runs, and is silent about
-the blocking graph: with a `serviceSend` treated as a call-graph edge, it stays GREEN.
+<!-- test: a-ring-of-posts-answers-through-continuations -->
+⭐⭐ **A POST IS NOT A WAIT, SO A RING OF POSTS IS A REQUEST AND ITS REPLY.** `A.kick` posts `B.work` and answers
+at once; `B.work` posts `A.ack` with `B`'s own handle and returns; `A.ack` posts the answer back to `B.acked` and
+returns. The services name each other in a ring, and no message waits for anything, so `A` is free to serve `B`'s
+`ack` when it arrives. `main` polls `B.replies` until the answer has landed.
 
-This program is the shape that fails under that sabotage. `B.work` really does await a reply from `A`, so the
-blocking graph holds `B → A` — and `A.kick` merely POSTS to `B` and returns, which is what keeps the graph
-acyclic. Count the send as an edge and `A.kick` inherits `B.work`'s blocking, giving `A → A`: a self-edge, and
-a refusal of a program that cannot deadlock. It cannot deadlock because `A.kick` never waits — it answers
-immediately, so `A` is free to serve `B`'s `ack` when it arrives.
+⚠ `B.work` sends its own handle (`me`, a clone `A.kick` made of `peer`) so that the reply can come back as a
+message. A handle a message was given is borrowed and a send moves, so each forward is a `.clone()`.
 ```maxon
 type A
 	var n as Integer
@@ -4492,38 +4680,46 @@ type A
 	end 'create'
 
 	export function kick(peer B.handle, mine A.handle) returns Integer
-		try peer.work(mine.clone()) otherwise panic("an open mailbox with room takes the send")
+		try peer.work(mine.clone(), me: peer.clone()) otherwise panic("an open mailbox with room takes the send")
 		return 1
 	end 'kick'
 
-	export function ack() returns Integer
-		return 7
+	export function ack(to B.handle)
+		try to.acked(7) otherwise panic("an open mailbox with room takes the send")
 	end 'ack'
 end 'A'
 
 type B
-	var n as Integer
+	var heard as Integer
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{heard: 0}
 	end 'create'
 
-	export function work(back A.handle)
-		let v = try await back.ack() otherwise 0
-		print("acked {v}\n")
+	export function work(back A.handle, me B.handle)
+		try back.ack(me.clone()) otherwise panic("an open mailbox with room takes the send")
 	end 'work'
 
-	export function drain() returns Integer
-		return 5
-	end 'drain'
+	export function acked(v Integer)
+		print("acked {v}\n")
+		self.heard = self.heard + 1
+	end 'acked'
+
+	export function replies() returns Integer
+		return self.heard
+	end 'replies'
 end 'B'
 
 function main() returns ExitCode
 	let a = spawn A.create()
 	let b = spawn B.create()
 	let v = try await a.kick(b.clone(), mine: a.clone()) otherwise 0
-	let done = try await b.drain() otherwise 0
-	return (v + done) as ExitCode
+
+	while (try await b.replies() otherwise 0) < 1 'untilAcked'
+		Scheduler.yield()
+	end 'untilAcked'
+
+	return (v + 5) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -8258,8 +8454,9 @@ error E3200: <fragment>:28:27: 'holder' is not isolated: only a clean call, a `s
 
 <!-- test: borrow.a-sent-handle-may-be-kept-by-the-handler -->
 A service handle may be kept by the handler it is sent to: `Relay` keeps a clone of `counter` in its state and
-sends through it in a later message, while `main` goes on sending through its own binding. Each reply is awaited
-before the next line prints.
+sends through it in a later message, while `main` goes on sending through its own binding. `Relay` posts its
+send and answers without waiting for the counter's reply, and `relay.forward` is answered before `main`'s own
+send goes out, so the counter has `5` in its mailbox ahead of `main`'s `2` and `main`'s reply is `7`.
 ```maxon
 type Counter
 	var n as Integer
@@ -8288,11 +8485,12 @@ type Relay
 	end 'adopt'
 
 	export function forward(by Integer) returns Integer
-		var total = 0 as Integer
+		var sent = 0 as Integer
 		for peer in self.peers 'each'
-			total = total + (try await peer.bump(by) otherwise 0)
+			_ = try peer.bump(by) otherwise panic("an open mailbox with room takes the send")
+			sent = sent + 1
 		end 'each'
-		return total
+		return sent
 	end 'forward'
 end 'Relay'
 
@@ -8301,7 +8499,7 @@ function main() returns ExitCode
 	let relay = spawn Relay.create()
 	try relay.adopt(counter.clone()) otherwise panic("an open mailbox with room takes the send")
 	let viaRelay = try await relay.forward(5) otherwise 0
-	print("relay {viaRelay}\n")
+	print("relay sent {viaRelay}\n")
 	let direct = try await counter.bump(2) otherwise 0
 	print("direct {direct}\n")
 	return 0
@@ -8312,7 +8510,7 @@ typealias Integer = int(i64.min to i64.max)
 0
 ```
 ```stdout
-relay 5
+relay sent 1
 direct 7
 ```
 
@@ -9692,7 +9890,8 @@ shelf of 4
 ```
 
 <!-- test: error.two-services-that-await-each-other-are-refused -->
-Mutual reentrancy is made unrepresentable rather than diagnosed at run time.
+Mutual reentrancy is made unrepresentable rather than diagnosed at run time: a message never waits for another
+service's reply, so two services cannot wait on each other, and each message that awaits one is refused.
 ```maxon
 type A
 	var n as Integer
@@ -9734,10 +9933,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:
-    `A.ping` (<fragment>:10:14) awaits a reply from `B`
-    `B.pong` (<fragment>:26:14) awaits a reply from `A`
-    A message may not await a reply from a service that can await back. Break the ring by making one of these messages return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it — because a non-blocking send is not part of the graph
+error E3221: <fragment>:9:18: the message 'ping' may wait (it awaits a reply from 'B' at line 10) while holding its own service; send the request with this service's handle and handle the reply in another message
+error E3221: <fragment>:25:18: the message 'pong' may wait (it awaits a reply from 'A' at line 26) while holding its own service; send the request with this service's handle and handle the reply in another message
 ```
 
 <!-- test: a-reply-error-type-with-one-member-is-nameable -->
@@ -10068,13 +10265,11 @@ typealias Integer = int(i64.min to i64.max)
 8
 ```
 
-<!-- test: rpc-from-inside-a-service -->
-⭐⭐ **THE FIRST CROSS-GREEN-THREAD WAKE IN THE LANGUAGE.** `Outer`'s message awaits a reply from `Inner`, so a
-green thread — not the main one — is the awaiter: the await parks `Outer`, `Inner` runs on its own stack, and
-the reply that completes the cell readies `Outer`. The graph `Outer → Inner` is acyclic, which is what makes
-this legal.
-⚠ The peer's handle crosses as a message ARGUMENT rather than as `Outer`'s state, so the subject stays the
-cross-green-thread wake and not the walk `deepmove.a-record-with-managed-fields-crosses` pins.
+<!-- test: a-reply-completed-by-a-service-readies-a-waiting-coroutine -->
+⭐⭐ **A REPLY COMPLETED ON ANOTHER GREEN THREAD WAKES THE COROUTINE THAT AWAITS IT.** `doubled` is a coroutine of
+`main` that awaits a reply from `Inner`: the await parks the coroutine, `Inner` runs on its own stack, and the
+reply that completes the cell readies the awaiter. A message body never waits, so the awaiter is `main`'s
+coroutine and the service stays a leaf; the answer comes back through the coroutine's promise.
 ```maxon
 type Inner
 	var n as Integer
@@ -10088,23 +10283,15 @@ type Inner
 	end 'value'
 end 'Inner'
 
-type Outer
-	var n as Integer
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function doubled(inner Inner.handle) returns Integer
-		let v = try await inner.value() otherwise 0
-		return v * 2
-	end 'doubled'
-end 'Outer'
+function doubled(inner Inner.handle) returns Integer
+	let v = try await inner.value() otherwise 0
+	return v * 2
+end 'doubled'
 
 function main() returns ExitCode
 	let i = spawn Inner.create()
-	let o = spawn Outer.create()
-	let v = try await o.doubled(i) otherwise 0
+	let pending = async doubled(i)
+	let v = await pending
 	return v as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -10208,12 +10395,12 @@ typealias Integer = int(i64.min to i64.max)
 error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that throws `Trouble`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word holds an `ordinal + bias`, and a pointer is not an ordinal, and this `spawn` makes `Store` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry
 ```
 
-<!-- test: cycle-through-a-free-function-is-refused -->
-An edge is transitive through ordinary functions: `A.ping` calls `relay`, which awaits a `B.handle`, so the
-edge `A → B` exists even though `A`'s own body names no `B` message.
+<!-- test: error.a-message-that-waits-through-a-helper-is-refused -->
+A wait is transitive through ordinary functions: `A.ping` calls `relay`, which awaits a `B.handle`, so `A.ping`
+may wait even though its own body names no `B` message.
 
-⚠ The hop is anchored at `relay`'s `await` rather than at `A.ping` — that IS where the thread stops, and a
-message that blocks only through a helper has no await of its own to point at.
+⚠ The refusal is anchored at `A.ping` and its chain names `relay` and the line of the `await` — a message that
+waits only through a helper has no await of its own to point at.
 ```maxon
 function relay(b B.handle, peer A.handle) returns Integer
 	return try await b.pong(peer.clone()) otherwise 0
@@ -10255,16 +10442,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3139: <fragment>:3:13: service call cycle — these messages can deadlock waiting on each other:
-    `A.ping` (<fragment>:3:13) awaits a reply from `B`
-    `B.pong` (<fragment>:30:14) awaits a reply from `A`
-    A message may not await a reply from a service that can await back. Break the ring by making one of these messages return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it — because a non-blocking send is not part of the graph
+error E3221: <fragment>:13:18: the message 'ping' may wait (it calls 'relay', which awaits a reply from 'B' at line 3) while holding its own service; send the request with this service's handle and handle the reply in another message
+error E3221: <fragment>:29:18: the message 'pong' may wait (it awaits a reply from 'A' at line 30) while holding its own service; send the request with this service's handle and handle the reply in another message
 ```
 
-<!-- test: cycle-same-type-self-edge-is-refused -->
-⚠ **A SELF-EDGE IS A CYCLE, AND THIS IS THE ONE USERS WILL HIT.** Two instances of the same service could not
-actually deadlock, but edges are by TYPE — which is what makes them statically knowable at all — so the
-analysis cannot tell the instances apart and must be conservative. The message says the workaround.
+<!-- test: error.a-message-that-awaits-a-peer-of-its-own-type-is-refused -->
+⚠ **A MESSAGE THAT AWAITS A PEER OF ITS OWN TYPE IS REFUSED LIKE ANY OTHER AWAIT, AND THIS IS THE ONE USERS WILL
+HIT.** Two instances of the same service could not actually deadlock, but the refusal is a property of the message
+body — it holds its own service while it waits — and not of which instance answers. The message says the
+workaround: send the request with this service's handle and handle the reply in another message.
 ```maxon
 type Worker
 	var n as Integer
@@ -10290,19 +10476,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:
-    `Worker.ask` (<fragment>:10:14) awaits a reply from `Worker`
-    Two distinct instances of `Worker` would not deadlock — but edges are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the instances apart and must be conservative. Make the peer message return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it (have the peer reply with a separate message), or split the role into two types
+error E3221: <fragment>:9:18: the message 'ask' may wait (it awaits a reply from 'Worker' at line 10) while holding its own service; send the request with this service's handle and handle the reply in another message
 ```
 
-<!-- test: cycle-behind-a-second-await-is-still-refused -->
-⛔⛔ **ONE MESSAGE OWES AN EDGE PER SERVICE IT AWAITS, NOT ONE EDGE.** `A.ping` awaits `B` and then `C`; the
-`A → B` half is what closes the ring `A.ping → B.pong → A.ack`, and the `A → C` half is innocent. This case
-is `error.two-services-that-await-each-other-are-refused` with **one extra, unrelated `await` appended**; a
-graph that carries one site per FUNCTION and keeps whichever the op walk saw LAST compiles it clean — exit 0
-(see `ServiceCallCycleCheck.ServiceAwaitRoster`). A dropped edge is a MISSED refusal, which
-is the deadlock this rule exists to make unrepresentable. **Delete the `C` await and the case still refuses —
-which is the point: it must refuse WITH it.**
+<!-- test: error.a-message-with-two-awaits-is-refused-at-the-first -->
+⛔⛔ **A MESSAGE WITH TWO AWAITS IS REFUSED, AND THE FIRST WAIT IS THE ONE IT NAMES.** `A.ping` awaits `B` and then
+`C`. This case is `error.two-services-that-await-each-other-are-refused` with **one extra, unrelated `await`
+appended**: a refusal that kept only whichever wait it saw LAST would name the innocent `C` await, and one that
+looked only at the first would stop at the first. **Delete the `C` await and the case still refuses — which is
+the point: it must refuse WITH it, at the earliest wait.**
 ```maxon
 type A
 	var n as Integer
@@ -10360,36 +10542,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3139: <fragment>:10:15: service call cycle — these messages can deadlock waiting on each other:
-    `A.ping` (<fragment>:10:15) awaits a reply from `B`
-    `B.pong` (<fragment>:28:14) awaits a reply from `A`
-    A message may not await a reply from a service that can await back. Break the ring by making one of these messages return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it — because a non-blocking send is not part of the graph
+error E3221: <fragment>:9:18: the message 'ping' may wait (it awaits a reply from 'B' at line 10) while holding its own service; send the request with this service's handle and handle the reply in another message
+error E3221: <fragment>:27:18: the message 'pong' may wait (it awaits a reply from 'A' at line 28) while holding its own service; send the request with this service's handle and handle the reply in another message
 ```
 
-<!-- test: a-blocking-cycle-through-an-indirect-call-aborts -->
-<!-- procs: 4 -->
-⛔⛔ **THE HALF OF THE DEADLOCK RULE THAT IS A RUNTIME PROPERTY, BECAUSE E3139 CANNOT REACH IT.**
-`ServiceCallCycleCheck` walks a graph of NAMED callees, so every case above it can be refused at compile
-time. This program's `A → B` edge goes through a **closure value** — `kick` calls a local function value, whose
-body the roster does not follow, and what it holds is decided at the call site rather than at the callee's
-name — so the roster records `B → A` alone, which is not a ring, and the program **compiles clean**. The
-ring is real all the same: `main` awaits `A.kick`, `A.kick` awaits `B.work` through the closure, and
-`B.work` awaits `A.ack` — which `A` cannot serve, because `A` is inside `kick`.
-
-⇒ **the refusal a static check cannot make, the runtime must.** Every green thread in the program is
-parked and none of them can ever become ready — the scheduler's `checkdead` (Go's, at `mput`):
-`RuntimeAbort.schedulerDeadlock`, **exit 92**, silent on both streams. The answer is a diagnosis rather
-than a hang: a wedged process tells you nothing and costs a 120 s harness timeout; a 92 names the condition.
-
-⭐⭐ **THE DETECTOR DECIDES UNDER `__sched_lock`, SO THE ANSWER IS THE SAME AT EVERY PROCESSOR COUNT.** Every
-blocked party in this program is a PARKED green thread — an await parks its caller, it does not run anything
-on the caller's stack — so once the last runnable thread has parked, every machine goes idle. The last
-machine to join the idle list runs `checkdead` in the same hold of the lock: no machine running, no timer,
-child or read pending, and `main` not finished is exit 92 at once. `procs: 4` is what makes this case take
-that decision on the fourth idle machine rather than the only one.
-
-⚠ The closure clones the handle it forwards (`m.clone()`), so the handle crossing into `B.work` is one this
-frame owns and the send moves it; the subject of this case is the deadlock, not how the handle crosses.
+<!-- test: error.a-message-that-calls-a-waiting-closure-is-refused -->
+⛔⛔ **A WAIT BEHIND A CLOSURE VALUE IS A WAIT, AND THE REFUSAL FOLLOWS THE CLOSURE'S BODY.** `A.kick` calls a
+local function value, whose body is decided at the call site rather than at a callee's name; the closure awaits
+`B.work`'s reply, so `kick` may wait while it holds `A`, and the chain names the closure and the `await` inside
+it. `B.work` awaits `A.ack` directly and is refused too. No message of either service can wait, so a ring of
+services awaiting each other is unrepresentable even behind an indirect call.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -10429,6 +10591,52 @@ function main() returns ExitCode
 	return v as ExitCode
 end 'main'
 ```
+```maxoncstderr
+error E3221: <fragment>:11:18: the message 'kick' may wait (it calls the closure at line 12, which awaits a reply from 'B' at line 12) while holding its own service; send the request with this service's handle and handle the reply in another message
+error E3221: <fragment>:28:18: the message 'work' may wait (it awaits a reply from 'A' at line 29) while holding its own service; send the request with this service's handle and handle the reply in another message
+```
+
+<!-- test: a-scheduler-deadlock-decides-the-same-at-four-processors -->
+<!-- procs: 4 -->
+⛔⛔ **THE HALF OF THE DEADLOCK RULE THAT IS A RUNTIME PROPERTY.** No message of a service waits, so the only
+parked green thread a program can end up with is `main` or a coroutine of it, and a wait that nothing can end
+is the scheduler's `checkdead` (Go's, at `mput`): `RuntimeAbort.schedulerDeadlock`, **exit 92**, silent on both
+streams. The answer is a diagnosis rather than a hang: a wedged process tells you nothing and costs a 120 s
+harness timeout; a 92 names the condition.
+
+⭐⭐ **THE DETECTOR DECIDES UNDER `__sched_lock`, SO THE ANSWER IS THE SAME AT EVERY PROCESSOR COUNT.** `main`
+parks on a select over nothing while four idle services keep every other processor free to go idle. The last
+machine to join the idle list runs `checkdead` in the same hold of the lock: no machine running, no timer,
+child or read pending, and `main` not finished is exit 92 at once. `procs: 4` is what makes this case take that
+decision on the fourth idle machine rather than the only one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+type Idle
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function touch()
+		self.n = self.n + 1
+	end 'touch'
+end 'Idle'
+
+function main() returns ExitCode
+	let first = spawn Idle.create()
+	let second = spawn Idle.create()
+	try first.touch() otherwise panic("an open mailbox with room takes the send")
+	try second.touch() otherwise panic("an open mailbox with room takes the send")
+
+	let arr = IntPromiseArray.create(0)
+	let ready = arr.awaitAny()
+	return ready as ExitCode
+end 'main'
+```
 ```exitcode
 92
 ```
@@ -10436,14 +10644,38 @@ end 'main'
 fatal error: runtime abort 92 (schedulerDeadlock)
 ```
 
-<!-- test: deep-acyclic-chain-runs -->
-Three services in a chain, each awaiting the next. An acyclic graph has a topological order, so the service
-lowest in it awaits nobody and always makes progress — which is the induction the whole rule rests on, run.
+<!-- test: deep-chain-of-continuations-runs -->
+Three services in a chain, each handing the work to the next. A message never waits for another service's reply,
+so each one posts its request to the next with the handle it was given and answers at once; the replies the old
+shape awaited arrive as messages to `Sink`, which `main` polls until all three have landed. Nothing in the chain
+can deadlock, because no service ever waits.
 
-⚠ `A.value` forwards `last` with a `.clone()`: a message PARAMETER arrives borrowed, and a send MOVES — so the
-handle it forwards has to be one this frame owns. The original is dropped by the loop as an un-consumed
-payload, which is what shuts `C` down once the chain has answered.
+⚠ `A.value` forwards `last` and `sink` with a `.clone()`: a message PARAMETER arrives borrowed, and a send MOVES —
+so the handle it forwards has to be one this frame owns. The originals are dropped with the messages, which is
+what shuts `C` and `Sink` down once the chain has answered.
 ```maxon
+type Sink
+	var count as Integer
+	var sum as Integer
+
+	static function create() returns Self
+		return Self{count: 0, sum: 0}
+	end 'create'
+
+	export function add(by Integer)
+		self.count = self.count + 1
+		self.sum = self.sum + by
+	end 'add'
+
+	export function arrived() returns Integer
+		return self.count
+	end 'arrived'
+
+	export function total() returns Integer
+		return self.sum
+	end 'total'
+end 'Sink'
+
 type C
 	var n as Integer
 
@@ -10451,8 +10683,8 @@ type C
 		return Self{n: 1}
 	end 'create'
 
-	export function value() returns Integer
-		return self.n
+	export function value(sink Sink.handle)
+		try sink.add(self.n) otherwise panic("an open mailbox with room takes the send")
 	end 'value'
 end 'C'
 
@@ -10463,9 +10695,9 @@ type B
 		return Self{n: 0}
 	end 'create'
 
-	export function value(next C.handle) returns Integer
-		let v = try await next.value() otherwise 0
-		return v + 10
+	export function value(next C.handle, sink Sink.handle)
+		try next.value(sink.clone()) otherwise panic("an open mailbox with room takes the send")
+		try sink.add(10) otherwise panic("an open mailbox with room takes the send")
 	end 'value'
 end 'B'
 
@@ -10476,17 +10708,24 @@ type A
 		return Self{n: 0}
 	end 'create'
 
-	export function value(next B.handle, last C.handle) returns Integer
-		let v = try await next.value(last.clone()) otherwise 0
-		return v + 20
+	export function value(next B.handle, last C.handle, sink Sink.handle)
+		try next.value(last.clone(), sink: sink.clone()) otherwise panic("an open mailbox with room takes the send")
+		try sink.add(20) otherwise panic("an open mailbox with room takes the send")
 	end 'value'
 end 'A'
 
 function main() returns ExitCode
+	let sink = spawn Sink.create()
 	let c = spawn C.create()
 	let b = spawn B.create()
 	let a = spawn A.create()
-	let v = try await a.value(b, last: c) otherwise 0
+	try a.value(b, last: c, sink: sink.clone()) otherwise panic("an open mailbox with room takes the send")
+
+	while (try await sink.arrived() otherwise 0) < 3 'untilAllArrived'
+		Scheduler.yield()
+	end 'untilAllArrived'
+
+	let v = try await sink.total() otherwise 0
 	return v as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -12206,17 +12445,17 @@ end 'main'
 error E3216: <fragment>:31:10: `Svc.slot` is a `Holder` that can hold a Promise, which is a green-thread handle whose coroutine belongs to the strand that started it. `Svc` is a service, and a service's state is run by whichever green thread takes its next message, so a promise kept in it could be awaited or dropped by a strand that does not own its coroutine. `await` the promise (or `.cancel()` it) before the message or factory returns and keep its result in the field
 ```
 
-<!-- test: main-is-never-run-on-top-of-a-service-it-awaits -->
+<!-- test: main-is-never-run-on-top-of-a-coroutine-awaiting-a-service -->
 <!-- procs: 1 -->
-⛔⛔ **NOTHING RUNS ON TOP OF A PARKED GREEN THREAD, SO `main` MAY WAKE WHILE THE SERVICE IT AWAITS IS
-ITSELF WAITING.** `Middle.go` awaits `Slow.get`, which parks `Middle`. `Slow.get` publishes that it has begun and
-then waits for `main` to publish the release; `main`'s `sleep(1)` polls end while `Middle` is parked waiting out
-`Slow`, and `main` is readied like any other green thread and runs on its own stack, switched in from a machine's
-scheduler context — never on `Middle`'s. The release comes only after `main` has woken on seeing `Slow` begin, so
-no clock decides whether `main` woke while `Middle` was parked. An await that
-ran whatever it took off a run queue on the awaiter's own stack would run `main` on top of `Middle`, and
-`main`'s `await r1` — a reply only `Middle` can send — would wait on the frame it stands on: such a runtime
-exits **92** (`schedulerDeadlock`) on one processor. Here both replies arrive.
+⛔⛔ **NOTHING RUNS ON TOP OF A PARKED GREEN THREAD, SO `main` MAY WAKE WHILE ITS OWN COROUTINES ARE WAITING ON A
+SERVICE THAT IS ITSELF WAITING.** Two coroutines of `main` each await `Slow.get`, which parks them both.
+`Slow.get` publishes that it has begun and then waits for `main` to publish the release; `main`'s `sleep(1)` polls
+end while the coroutines are parked waiting out `Slow`, and `main` is readied like any other green thread and
+runs on its own stack, switched in from a machine's scheduler context — never on a coroutine's. The release comes
+only after `main` has woken on seeing `Slow` begin, so no clock decides whether `main` woke while the coroutines
+were parked. An await that ran whatever it took off a run queue on the awaiter's own stack would run `main` on top
+of the coroutine, and `main`'s `await r1` — a reply only that coroutine can finish — would wait on the frame it
+stands on: such a runtime exits **92** (`schedulerDeadlock`) on one processor. Here both replies arrive.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias FlagCell = SharedValue with bool
@@ -12242,30 +12481,21 @@ type Slow
 	end 'get'
 end 'Slow'
 
-type Middle
-	var s as Slow.handle
-
-	static function create(begun FlagCell, released FlagCell) returns Self
-		return Self{s: spawn Slow.create(begun.clone(), released: released.clone())}
-	end 'create'
-
-	export function go() returns Integer
-		let v = try await self.s.get() otherwise 0
-		return v
-	end 'go'
-end 'Middle'
+function askSlow(s Slow.handle) returns Integer
+	return try await s.get() otherwise 0
+end 'askSlow'
 
 function main() returns ExitCode
 	let begun = FlagCell.create(false)
 	let released = FlagCell.create(false)
-	let m = spawn Middle.create(begun.clone(), released: released.clone())
-	let r1 = try m.go() otherwise panic("a running service with room takes the send")
+	let s = spawn Slow.create(begun.clone(), released: released.clone())
+	let r1 = async askSlow(s.clone())
 
 	while not begun.current() 'untilSlowBegins'
 		sleep(pollMs)
 	end 'untilSlowBegins'
 
-	let r2 = try m.go() otherwise panic("a running service with room takes the send")
+	let r2 = async askSlow(s.clone())
 	released.publish(true)
 	let a = await r1
 	let b = await r2
@@ -13635,7 +13865,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:28:10: 'summarize(n)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted. Declare it `as isolated Report`, or pass a copy
+error E3200: <fragment>:28:10: 'summarize(n)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; use a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
 ```
 
 <!-- test: services.a-service-state-may-hold-a-value-at-an-interface-type -->
@@ -18020,10 +18250,11 @@ empty
 0
 ```
 
-<!-- test: services.a-service-spawns-a-throwing-factory-and-waits-for-its-start -->
-A message handler that spawns a throwing factory waits on its own green thread for the factory to run, and the wait
-is a blocking edge like any awaited reply: the handler receives the handle or the error, and the service it belongs to
-goes on serving.
+<!-- test: services.error.a-message-that-spawns-a-throwing-factory-is-refused -->
+A message handler that spawns a throwing factory waits on its own green thread for the factory to run, and that
+wait is a blocking wait like any awaited reply: the handler would hold its own service while it waits for the
+start, so the message is refused. The spawn belongs to `main` or to a coroutine of it, or the factory cannot
+throw.
 ```maxon
 typealias Whole = int(i64.min to i64.max)
 
@@ -18056,9 +18287,8 @@ type Manager
 
 	export function launch(ok bool) returns Whole
 		let worker = try spawn(capacity: 8) Worker.create(ok) otherwise return 0
-		let id = try await worker.ident() otherwise return 0
 		worker.shutdown()
-		self.launched = self.launched + id
+		self.launched = self.launched + 1
 		return self.launched
 	end 'launch'
 end 'Manager'
@@ -18066,15 +18296,60 @@ end 'Manager'
 function main() returns ExitCode
 	let manager = spawn Manager.create()
 	let first = try await manager.launch(true) otherwise return 1
-	let second = try await manager.launch(false) otherwise return 1
-	let third = try await manager.launch(true) otherwise return 1
-	print("{first} {second} {third}\n")
+	print("{first}\n")
+	manager.shutdown()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3221: <fragment>:31:18: the message 'launch' may wait (it awaits the start of a service at line 32) while holding its own service
+```
+
+<!-- test: services.a-service-spawns-a-service-and-hands-back-its-handle -->
+A message handler may spawn a service whose factory cannot throw: the spawn answers with the handle at once and
+nothing waits. The handler keeps no promise, hands the handle back in its reply, and the caller does the awaiting
+against the new service itself.
+```maxon
+typealias Whole = int(i64.min to i64.max)
+
+type Worker
+	var id as Whole
+
+	static function create(id Whole) returns Self
+		return Self{id: id}
+	end 'create'
+
+	export function ident() returns Whole
+		return self.id
+	end 'ident'
+end 'Worker'
+
+type Manager
+	var launched as Whole
+
+	static function create() returns Self
+		return Self{launched: 0}
+	end 'create'
+
+	export function launch(id Whole) returns Worker.handle
+		self.launched = self.launched + 1
+		return spawn(capacity: 8) Worker.create(id)
+	end 'launch'
+end 'Manager'
+
+function main() returns ExitCode
+	let manager = spawn Manager.create()
+	let first = try await manager.launch(7) otherwise return 1
+	let second = try await manager.launch(9) otherwise return 1
+	let a = try await first.ident() otherwise return 1
+	let b = try await second.ident() otherwise return 1
+	print("{a} {b}\n")
 	manager.shutdown()
 	return 0
 end 'main'
 ```
 ```stdout
-7 0 14
+7 9
 ```
 ```exitcode
 0

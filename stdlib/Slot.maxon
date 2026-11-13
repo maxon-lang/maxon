@@ -1,0 +1,54 @@
+/// A place that holds one `T` or none. `fill` and `replace` put a value in, `held` reads it, `take`
+/// moves it out; a misuse panics naming the slot.
+/// @category Collections
+public type Slot uses T
+	typealias CellArray = Array with T
+
+	let name as String
+	let cells = CellArray.create(0)
+
+	/// An empty slot named `name`.
+	public static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	/// Whether the slot holds nothing.
+	public function isEmpty() returns bool
+		return self.cells.count() == 0
+	end 'isEmpty'
+
+	/// Whether the slot holds a value.
+	public function isFull() returns bool
+		return self.cells.count() > 0
+	end 'isFull'
+
+	/// Puts `item` in the slot; panics when it is full.
+	public function fill(item T)
+		if self.cells.count() > 0 'alreadyFull'
+			panic("Slot '{self.name}' is already full")
+		end 'alreadyFull'
+
+		self.cells.push(item)
+	end 'fill'
+
+	/// Puts `item` in the slot whether or not it was full.
+	public function replace(item T)
+		self.cells.clear()
+		self.cells.push(item)
+	end 'replace'
+
+	/// Empties the slot.
+	public function clear()
+		self.cells.clear()
+	end 'clear'
+
+	/// Reads the value and leaves it in the slot; panics when it is empty.
+	public function held() returns T
+		return try self.cells.get(0) otherwise panic("Slot '{self.name}' is empty")
+	end 'held'
+
+	/// Moves the value out; panics when it is empty.
+	public function take() returns T
+		return try self.cells.pop() otherwise panic("Slot '{self.name}' is empty")
+	end 'take'
+end 'Slot'

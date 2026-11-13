@@ -315,10 +315,20 @@ Inside a block:
 - A mutable value cannot leave the block by `return`, by `throw` or by an outer variable (**E3202**): what
   leaves is a value, `immutable` data or a fresh `isolated` region.
 - A nested `modify` leaves the root of every enclosing block read-only.
-- Waiting on another party and running a coroutine are refused: `await` and a call that may wait or may
-  yield are **E3205** ([Waiting and Yielding](#waiting-and-yielding)). A statement that needs a writable
+- Waiting on another party and running a coroutine are refused: `await`, `awaitAny`, `acquire`, a runtime park
+  such as `Scheduler.quiesce()`, and a call that may wait or may yield are **E3205**
+  ([Waiting and Yielding](#waiting-and-yielding)). A statement that needs a writable
   argument or receiver of outer data is **E3207** (`'noteFile' needs a writable receiver; 'self' is
   read-only while 'fill' is open`).
+- An `isolated` value of a [linear type](#linear-types-and-finalizers) from outside the block cannot be moved
+  into a parameter the callee keeps and that is not `isolated`, because it would become part of the open region
+  (**E3201**): move it into an `isolated` parameter or slot, send it, or `merge` it. The receiver of a
+  `consuming self` method is such a parameter when the method stores, returns or passes `self` on; a finalizer that
+  only reads `self` and ends in `destruct self` is accepted. The value stays outside the block through every
+  rename inside it: a local it is moved into, the `isolated` result of a call it is moved into, and the value a
+  failed send hands back in `mailboxFull` or `serviceStopped`.
+- `merge x` moves an `isolated` region into the region the block writes, so `built.reader = merge reader` is
+  accepted inside `modify built`, and in a one-statement open as well.
 - A `for` over an array the loop drains makes the array read-only in the body (**E3197**).
 
 ### One-Call and One-Statement Opens
@@ -373,8 +383,8 @@ An `isolated` field filled in `modify`, written by a one-call open and taken out
 
 ## Unique Types
 
-`type Ticket is unique` declares values that are never cloned and never aliased. `let b = a` moves `a`
-(**E3102** on a later read of `a`); storing a unique value moves it; an argument is lent for the call, and a
+`type Ticket is unique` declares values that are never cloned and never aliased. `let b = a` moves `a`,
+whether `a` is a `let` or a `var` (**E3102** on a later read of `a`); storing a unique value moves it; an argument is lent for the call, and a
 callee that keeps its parameter takes the caller's variable. `clone()` is **E3214** (`'Ticket' is unique and
 cannot be cloned`):
 
@@ -392,13 +402,91 @@ A type with a unique field is unique too, with no declaration and no generated `
 ``'Wallet' is unique (its field 'ticket' holds a unique 'Ticket') and cannot be cloned``); so is a type that
 holds an array of unique values. A unique value cannot be frozen, and reading one out of a field or an element
 to bind, return or store it is **E3214**, and so is a `for` loop variable or a tuple destructure of one handed
-to a parameter that keeps it: move it out with `pop` or `remove`, or `swap` it out of an `isolated`
-field. Handing a unique value to a parameter the callee only reads leaves it
-readable. The standard library's `Promise` is unique, and so are the OS handle types (`TcpClient`,
+to a parameter that keeps it: move it out with `pop`, `remove`, `removeFirst` or `Slot.take`, or `swap` it out
+of an `isolated` field. Handing a unique value to a parameter the callee only reads leaves it
+readable, and an element a container call hands back is lent for the call in the same way:
+`show(items.get(0))` reads it, and `let ticket = items.get(0)` is **E3214**. The standard library's `Promise` is
+unique, so is `Reply`, and so are the OS handle types (`TcpClient`,
 `TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`) and every type
 that holds one: binding a handle with `let`, pushing it into a container or handing it to a `spawn` moves it, a
 later read of the name is **E3102**, and a handle is never cloned. One owner holds a handle and lends it to calls.
 The cases are in `specs/regions-unique.md`.
+
+## Linear Types and Finalizers
+
+A `destruct self` statement ends the life of the value a method is called on. A method that contains one is a
+**finalizer**, and it takes `consuming self`: a call to it moves the receiver, and reading the receiver
+afterwards is **E3102**. A type with at least one finalizer is **linear**, and a linear type is `unique`: never
+cloned, frozen or aliased (**E3214**).
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function peek() returns Code
+		return self.code
+	end 'peek'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function use(r Resp)
+	print("use {r.peek()}\n")
+	r.fin()
+end 'use'
+
+function main() returns ExitCode
+	let first = Resp.create(1)
+	print("peek {first.peek()}\n")
+	first.fin()
+
+	let second = Resp.create(2)
+	use(second)
+	return 0
+end 'main'
+```
+
+Output: `peek 1`, `fin 1`, `use 2` and `fin 2`. A finalizer belongs to a `type` that holds fields, and a method
+that takes `consuming self` contains `destruct self`; either one alone is **E3224**.
+
+- **A linear value is consumed exactly once on every path out of its scope**, throws, early returns and
+  propagating `try`s included. A finalizer call consumes it, and so does moving it on: to a function that takes
+  it (an argument at a linear position always moves, so a function that takes one consumes it), into a `return`,
+  a `throw` or a message. Dropping it, overwriting it, rebinding it while live, discarding it with `let _ = r`,
+  or leaving it in a temporary nobody consumes is
+  [E3223](/docs/cli/error-codes/#e3223--semanticlinearvaluenotconsumed):
+
+  ```text
+  error E3223: this drops 'dropped', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+  ```
+
+- **A linear value lives only in locals, parameters and message arguments.** A field, a container or other type
+  argument, a tuple item, a closure capture, a promise payload, a message reply, a union stored in a field, the
+  argument or result of an `async` call and an argument of an interface or function value call are
+  [E3224](/docs/cli/error-codes/#e3224--semanticlinearrefused): each would keep the value past the code that
+  must consume it. A value lent to code that does not own it, such as a parameter of a function that does not
+  take it, is consumed only by its owner.
+- **No linear value is live across a wait.** An `await`, a send with a `sendTimeout:` and a call that waits
+  may never end, so a linear value is consumed before one (E3223).
+- **A union with a linear payload is linear.** A `match` over one consumes it: every arm for a case with a
+  linear payload binds it to a name and consumes it, and a `default` arm cannot cover such a case (E3224). A
+  failed send hands a linear argument back in `mailboxFull` or `serviceStopped`, and the handler of the failure
+  consumes it.
+- **Cancellation consumes.** A coroutine that holds a linear value is cancelled
+  [cooperatively](/docs/language/async/#cancellation-and-dropped-promises), so its own code consumes the value on the path the
+  early return of its wait leads it down.
+
+The standard library's [`HttpResponder`](/docs/stdlib/network/#httpresponder) is linear: `respond`,
+`respondWith` and `abandon` are its finalizers.
 
 ## Region Bounds
 
@@ -477,15 +565,19 @@ requirement that wants to hand back data to store declares `returns isolated T` 
 ## Waiting and Yielding
 
 Two facts are inferred for every function, with no marker. A function **may wait** when it waits on another
-party: a service reply, a send with a timeout, a spawn of a factory that does either, or a call to a function
+party: a service reply, `awaitAny`, a send with a timeout, an `acquire`, a spawn of a factory that throws, a runtime park (`Scheduler.quiesce()`, `CownTorture.violations`), or a call to a function
 that may. A function **may yield** when it awaits a coroutine, or calls one that may yield or may wait. File,
-socket and process I/O are neither: they park the green thread, and while a `modify` block is open the
+socket and process I/O and `sleep` are neither: they park the green thread, and while a `modify` block is open the
 runtime does not switch to a sibling coroutine of the same green thread, so the thread waits for the block
 (`specs/regions-runtime.md`, `break-leaves-window-lets-sibling-run`).
 
-Inside a `modify` block or a one-call open, a coroutine `await`, a call that may wait or yield, the start of
-a coroutine that may wait and a `spawn` of a factory that may wait or yield are **E3205**, and the message
-names why:
+A message or a `spawn` factory that may wait is
+[E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait): [Holders Never Wait](/docs/language/async/#holders-never-wait).
+
+Inside a `modify` block, an `acquire` block or a one-call open (a call that passes an `isolated` value in an
+unmarked position, as receiver or argument), a coroutine `await`, `awaitAny`, a call that may wait or yield, the
+start of a coroutine that may wait and a `spawn` of a factory that may wait or yield are **E3205**, and the
+message names why. A callee that only reads, writes or sleeps is accepted:
 
 ```text
 error E3205: cannot call 'settle' inside 'fill'; it may yield (it awaits a coroutine at line 12). Call it before or after the block
@@ -519,11 +611,11 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3198](/docs/cli/error-codes/#e3198--semanticisolatedreadoutsideblock) | an `isolated` value read outside a block, `modify` or `swap` of a value that is not `isolated` |
 | [E3199](/docs/cli/error-codes/#e3199--semanticisolatedholdernotwritable) | opening, swapping, sending or freezing a region held by read-only data |
 | [E3200](/docs/cli/error-codes/#e3200--semanticisolatedrecoverneedscleaninputs) | ordinary mutable data where an `isolated` value is wanted, and `freeze` or `merge` of what they do not apply to |
-| [E3201](/docs/cli/error-codes/#e3201--semanticisolatedcallopenstworegions) | one statement reaching two isolated regions, or mutable outer data beside one |
-| [E3202](/docs/cli/error-codes/#e3202--semanticvalueleaveswindow) | a mutable value leaving a `modify` block, a `mutable isolated` parameter moved out |
+| [E3201](/docs/cli/error-codes/#e3201--semanticisolatedcallopenstworegions) | one statement reaching two isolated regions or two acquired states, mutable outer data beside one, or an outer `isolated` linear value moved into an open region |
+| [E3202](/docs/cli/error-codes/#e3202--semanticvalueleaveswindow) | a mutable value leaving a `modify` or `acquire` block, an acquired state leaving its block, a `mutable isolated` parameter moved out |
 | [E3203](/docs/cli/error-codes/#e3203--semanticopenedslotreassigned) | the slot of an open value reassigned in its own block |
 | [E3204](/docs/cli/error-codes/#e3204--semanticouterdatawritteninwindow) | an outer `var` holding a record reassigned in a block |
-| [E3205](/docs/cli/error-codes/#e3205--semanticwaitinsidewindow) | waiting or yielding inside a block |
+| [E3205](/docs/cli/error-codes/#e3205--semanticwaitinsidewindow) | waiting or yielding inside a `modify` or `acquire` block or a one-call open |
 | [E3206](/docs/cli/error-codes/#e3206--semanticparamneedsbothcapabilities) | a parameter the body needs both mutable and immutable |
 | [E3207](/docs/cli/error-codes/#e3207--semanticargumentcapabilityrefused) | an argument whose capability the parameter refuses |
 | [E3208](/docs/cli/error-codes/#e3208--semanticargumentclassesdisagree) | a result whose source arguments disagree |
@@ -536,3 +628,7 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3215](/docs/cli/error-codes/#e3215--semanticregionboundrefused) | a type argument that breaks a `where T is sendable` or `where T is isolated` bound |
 | [E3216](/docs/cli/error-codes/#e3216--semanticservicestateholdsapromise) | a service type whose state can hold a promise |
 | [E3217](/docs/cli/error-codes/#e3217--semanticmessageneedsacapability) | a service message or factory parameter, or a message reply, that holds data of its region and names neither `isolated` nor `immutable`, or whose type cannot cross at all (a promise holder, a function value, an opaque type parameter, a thread-bound handle) |
+| [E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait) | a message or `spawn` factory that may wait on another party while it holds its own service |
+| [E3222](/docs/cli/error-codes/#e3222--semanticreplydeferralrefused) | `reply.later()` or a `Reply` used where the holder could not answer it exactly once, or a `Reply` leaving its service's code |
+| [E3223](/docs/cli/error-codes/#e3223--semanticlinearvaluenotconsumed) | a linear value dropped, overwritten, discarded, or live across a wait |
+| [E3224](/docs/cli/error-codes/#e3224--semanticlinearrefused) | a linear value in a field, container, tuple, capture, promise, reply or other place that cannot consume it exactly once, and a finalizer or `consuming self` written outside its rules |

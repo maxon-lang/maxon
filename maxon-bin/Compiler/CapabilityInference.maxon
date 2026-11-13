@@ -360,7 +360,8 @@ module type CapabilityFacts
 			mutable gives ParamClass.mutableOnly
 			immutable gives ParamClass.immutableOnly
 			isolated gives ParamClass.isolatedParam
-			unmarked gives self.inferredClassAt(index, position: position)
+			unmarked or
+			consuming gives self.inferredClassAt(index, position: position)
 		end 'capability'
 	end 'classAt'
 
@@ -464,7 +465,8 @@ module function argumentCapabilityOf(project Project, func IrFunction, argId Val
 				mutable then return ValueCapability.mutable
 				immutable then return ValueCapability.immutable
 				isolated then return ValueCapability.isolated
-				unmarked then break
+				unmarked or
+				consuming then break
 			end 'declared'
 		end 'aDeclaredSignature'
 	end 'aParameter'
@@ -778,13 +780,39 @@ module function witnessCallPartsOf(op MaxonOp) returns (ValueIdArray, NameRoster
 	end 'op'
 end 'witnessCallPartsOf'
 
-module function edgeTransmits(kind CallEdgeKind, waits bool) returns bool
+function edgeTransmits(kind CallEdgeKind, waits bool) returns bool
 	return match kind 'kind'
 		call or
 		spawn gives true
 		async gives waits
 	end 'kind'
 end 'edgeTransmits'
+
+module enum CallBlocking
+	neither
+	yields
+	waits
+end 'CallBlocking'
+
+module function edgeCarriesMark(facts CapabilityFacts, calleeIndex ElementIndex, kind CallEdgeKind, waits bool) returns bool
+	if not edgeTransmits(kind, waits: waits) 'theEdgeStopsIt'
+		return false
+	end 'theEdgeStopsIt'
+
+	return facts.waits(calleeIndex) if waits else facts.yields(calleeIndex)
+end 'edgeCarriesMark'
+
+module function callBlockingOf(facts CapabilityFacts, calleeIndex ElementIndex, kind CallEdgeKind) returns CallBlocking
+	if edgeCarriesMark(facts, calleeIndex: calleeIndex, kind: kind, waits: true) 'itWaits'
+		return CallBlocking.waits
+	end 'itWaits'
+
+	if edgeCarriesMark(facts, calleeIndex: calleeIndex, kind: kind, waits: false) 'itYields'
+		return CallBlocking.yields
+	end 'itYields'
+
+	return CallBlocking.neither
+end 'callBlockingOf'
 
 function closureCallEdgeOf(project Project, func IrFunction, op MaxonOp) returns (immutable ByteArray, CallEdgeKind) throws AbsentError
 	match op 'op'
@@ -800,6 +828,36 @@ module function callOrClosureEdgeOf(project Project, func IrFunction, op MaxonOp
 
 	return try closureCallEdgeOf(project, func: func, op: op)
 end 'callOrClosureEdgeOf'
+
+module union WaitCandidate
+	aCall
+	anAwait
+	aSend(timed bool)
+end 'WaitCandidate'
+
+module function waitCandidateOf(op MaxonOp) returns WaitCandidate throws AbsentError
+	match op 'op'
+		call or
+		tryCall or
+		indirectCall or
+		witnessDispatch or
+		witnessTryDispatch then return WaitCandidate.aCall
+		await or
+		tryAwait then return WaitCandidate.anAwait
+		serviceSend(_, _, _, _, _, _, _, timed) then return WaitCandidate.aSend(timed)
+		default throws AbsentError.absent
+	end 'op'
+end 'waitCandidateOf'
+
+module function opMayWaitForAnotherParty(op MaxonOp) returns bool
+	let candidate = try waitCandidateOf(op) otherwise return false
+
+	return match candidate 'candidate'
+		aCall or
+		anAwait gives true
+		aSend(timed) gives timed
+	end 'candidate'
+end 'opMayWaitForAnotherParty'
 
 module function blockingSeedOf(func IrFunction, waits bool, libraryFacts LibraryFacts) returns bool
 	if bodyIsUnreadable(func) 'aBodyNothingCanBeProvedAbout'
@@ -908,6 +966,7 @@ function slotNoun(slot ParamCapability) returns String
 		unmarked or
 		mutable gives "a writable slot"
 		isolated gives "an `isolated` slot"
+		consuming panic("slotNoun: a `consuming` word marks a receiver, never a slot")
 	end 'slot'
 end 'slotNoun'
 
@@ -917,6 +976,7 @@ function noteResultSlotSeed(facts CapabilityFacts, slot ParamCapability, sources
 		unmarked or
 		mutable then facts.pinMutable(callerIndex, bits: sources, line: line, reason: reason)
 		isolated then break
+		consuming then panic("noteResultSlotSeed: a `consuming` word marks a receiver, never a slot")
 	end 'slot'
 end 'noteResultSlotSeed'
 
@@ -1132,7 +1192,8 @@ function pinDeclaredSources(facts CapabilityFacts, declared ParamCapability, ind
 	match declared 'capability'
 		mutable then facts.pinMutable(index, bits: sources, line: line, reason: "it is passed to a `mutable` parameter of '{boundary}'")
 		immutable then facts.pinFrozen(index, bits: sources, elementsOfUnknownType: valueOfUnknownType, line: line, reason: "it is passed to an `immutable` parameter of '{boundary}'")
-		unmarked then orIntoMask(facts.buildsRecordFrom, index: index, bits: sources)
+		unmarked or
+		consuming then orIntoMask(facts.buildsRecordFrom, index: index, bits: sources)
 		isolated then break
 	end 'capability'
 end 'pinDeclaredSources'

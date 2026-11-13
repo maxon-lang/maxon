@@ -133,26 +133,21 @@ outstanding 0
 
 <!-- test: builtins-gt-quiesce.a-second-waiter-aborts -->
 <!-- tier: stdlib -->
-The service waits for every green thread while `main` waits too. One waiter at a time is all the scheduler holds,
-so whichever arrives second ends the program with runtime abort 123.
+A coroutine of `main` waits for every green thread while `main` waits too. One waiter at a time is all the
+scheduler holds, so whichever arrives second ends the program with runtime abort 123. A service message cannot be
+the first waiter: it holds its own service while it parks, so the compiler refuses it (E3221).
 ```maxon
-type Waiter
-	static function create() returns Self
-		return Self{}
-	end 'create'
-
-	export function wait()
-		let outstanding = __Builtins.gtQuiesce()
-		print("the service saw {outstanding}\n")
-	end 'wait'
-end 'Waiter'
+function wait()
+	let outstanding = __Builtins.gtQuiesce()
+	print("the coroutine saw {outstanding}\n")
+end 'wait'
 
 function main() returns ExitCode
-	let waiter = spawn Waiter.create()
-	try waiter.wait() otherwise panic("an open mailbox with room takes the send")
+	let waiter = async wait()
 
 	let outstanding = __Builtins.gtQuiesce()
 	print("main saw {outstanding}\n")
+	await waiter
 	return 0
 end 'main'
 ```

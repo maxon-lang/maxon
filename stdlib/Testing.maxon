@@ -76,10 +76,13 @@ public typealias CownTortureViolations = int(0 to u64.max)
 
 public type CownTorture
 	/// Stress-tests the multi-cown acquire: `workers` green threads each run `rounds` rounds, and a
-	/// round acquires two cowns drawn from `cownCount` (a draw may repeat one cown) and holds them
-	/// across a yield. Answers how many times a held cown was entered again, plus one when the
-	/// per-cown entry counts do not add up to the acquisitions made; 0 means mutual exclusion held.
-	/// `cownCount` must be a power of two, and any other value aborts the process.
+	/// round draws a service or a pair of services from `cownCount` (a draw may repeat one) and either
+	/// sends the first a message or acquires the pair and holds it across a yield. One worker stops a
+	/// service half way through. Answers how many times a held service was entered again, plus one when
+	/// the per-service entry counts do not add up to the messages delivered and the services acquired,
+	/// plus one for every acquire of the stopped service that did not answer stopped; 0 means mutual
+	/// exclusion and the stopped answer held. `cownCount` must be a power of two, and any other value
+	/// aborts the process. It waits for the green threads it starts.
 	public static function violations(cownCount CownTortureSize, workers CownTortureSize, rounds CownTortureSize) returns CownTortureViolations
 		return __Builtins.cownTestMulti(cownCount, workers, rounds) as CownTortureViolations
 	end 'violations'

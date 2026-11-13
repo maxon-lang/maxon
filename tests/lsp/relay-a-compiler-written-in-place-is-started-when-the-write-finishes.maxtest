@@ -1,0 +1,38 @@
+let PartialWriteCaseDirName = "relay-partial-write"
+let PartialWriteDocumentName = "one.maxon"
+let PartialWriteDocumentText = "partial"
+
+test 'relay: a compiler written in place is started when the write finishes'
+	let caseDir = stagedRelayCase(PartialWriteCaseDirName)
+	installPartialRelaySlot(caseDir, generation: 1)
+
+	let client = LspClient.start()
+
+	if let observed = try startedAfterTheWriteFinishes(client, caseDir: caseDir) 'observed'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.notEqual(observed.0, expected: RelayFakeServerName, message: "half a compiler answered initialize.")
+		try Expect.equal(observed.1, expected: "generation 1 saw: {PartialWriteDocumentText}", message: "the compiler whose write finished in place did not take over the open document.")
+	end 'observed' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a compiler written in place is started when the write finishes'
+
+function startedAfterTheWriteFinishes(client LspClient, caseDir FilePath) returns (String, String) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(PartialWriteDocumentName))
+	let advertised = try client.initializeAtRoot(relayCheckout(caseDir))
+	let served = try advertised.serverIdentity.serverName()
+
+	try client.initialized()
+	try client.openDocument(uri, content: PartialWriteDocumentText)
+
+	_ = try relayHoverRefusal(client, uri: uri)
+
+	completeRelaySlotInPlace(caseDir)
+	try relaySlotChanged(client, caseDir: caseDir)
+
+	let published = relayFirstMessage(try awaitFakePublish(client, uri: uri, generation: 1, text: PartialWriteDocumentText))
+
+	return (served, published)
+end 'startedAfterTheWriteFinishes'

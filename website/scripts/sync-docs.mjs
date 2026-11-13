@@ -83,7 +83,7 @@ const SOURCES = [
       { page: 'stdlib/text.md', sections: ['String', 'Character', 'Ascii', 'Unicode', 'CharacterSet'] },
       {
         page: 'stdlib/collections.md',
-        sections: ['Array', 'List', 'Map', 'Set', 'FixedArray', 'Range', 'Iterators', 'Interfaces'],
+        sections: ['Array', 'List', 'Map', 'Set', 'Slot', 'FixedArray', 'Range', 'Iterators', 'Interfaces'],
       },
       {
         page: 'stdlib/io.md',
@@ -91,7 +91,7 @@ const SOURCES = [
       },
       { page: 'stdlib/network.md', sections: ['TcpClient', 'TcpListener', 'TlsClient', 'TlsListener', 'TlsStream', 'TlsError', 'HttpClient', 'HttpServer', 'URL'] },
       { page: 'stdlib/data.md', sections: ['Json', 'Base64', 'Pem', 'Der', 'Sha2', 'Hmac', 'Hkdf', 'Rsa', 'AesGcm', 'ChaCha20Poly1305', 'X25519', 'Ed25519', 'EcdhP256', 'Ecdsa', 'EcdsaP256', 'EcdsaP384', 'X509', 'Hasher'] },
-      { page: 'stdlib/runtime.md', sections: ['Clock', 'Scheduler', 'HeapStats', 'SharedValue', 'Random', 'TrustStore', 'Math', 'Primitive Extensions'] },
+      { page: 'stdlib/runtime.md', sections: ['Clock', 'Scheduler', 'HeapStats', 'Reply', 'SharedValue', 'Random', 'TrustStore', 'Math', 'Primitive Extensions'] },
       { page: 'stdlib/testing.md', sections: ['Testing'] },
       { page: 'stdlib/build.md', sections: ['Build'] },
     ],

@@ -73,7 +73,7 @@ let MainThreadEntryFrameBytes = ShadowSpaceBytes + StackWordBytes
 // scheduler and never calls `__gt_spawn`, so pruning that one function (correctly) would turn the chunk
 // gate off and the link would fail on `__gt_context_switch`. The fact is written down ONCE, where it is
 // decided, and read here.
-export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, dataSection DataSectionEntryArray, userGlobalCount ElementIndex) returns CodeResult throws CompileError
+export function prepareBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, dataSection DataSectionEntryArray, userGlobalCount ElementIndex) returns BackendBuild throws CompileError
 	let sugarProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.sugarGate)
 	assertNoSugarOps(stdModule)
 	recordPhase(project, phase: CompilePhase.sugarGate, probe: sugarProbe)
@@ -95,7 +95,7 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// ⭐⭐ **THE ONE NAME INDEX EVERY BACKEND RESOLVES A CALLEE THROUGH.** It comes back from the
 	// prune rather than being built here because the prune is what makes an earlier one stale, and it is
 	// built at all because NOTHING APPENDS A FUNCTION AFTER THIS LINE: every `install*Runtime` ran in
-	// `compileToCodeResult` above, the entry stub and the hand-assembled runtime chunks join at the TARGET
+	// `afterPipeline` above, the entry stub and the hand-assembled runtime chunks join at the TARGET
 	// tier as chunks rather than Std functions, and this dispatch is the last thing between the prune and
 	// the backends. So an index taken here describes the array all three backends will walk — which is what
 	// lets their per-callee maps take the INDEX as an argument instead of the module, and stop resting on a
@@ -136,7 +136,7 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 
 	// ⭐⭐ **THE `.data` SECTION IS LAID OUT HERE, AFTER THE PRUNE, BECAUSE THE PRUNE IS WHAT SAYS WHICH
 	// RUNTIME WORDS ARE READ.** Nothing between here and the encoders asks for an offset — the three
-	// `dataSectionOffsetOf` readers are all encode-stage — and nothing after `compileToCodeResult` registers
+	// `dataSectionOffsetOf` readers are all encode-stage — and nothing after `afterPipeline` registers
 	// a run, so this is the earliest point that can answer with the survivors and the latest that still
 	// precedes every reader. Its own phase because it is the only step here whose cost is O(globals).
 	//
@@ -154,12 +154,85 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 
 	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
 
-	match target.cpu 'cpu'
-		x64 then return try buildX64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
-		arm64 then return try buildArm64Backend(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
-		wasm32 then return buildWasmBackend(stdModule, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
-	end 'cpu'
-end 'buildBackend'
+	return BackendBuild.of(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames)
+end 'prepareBackend'
+
+export union BackendStep
+	awaiting
+	finished(codeResult CodeResult)
+end 'BackendStep'
+
+typealias BackendRunArray = Array with BackendRun
+typealias RegAllocProbeArray = Array with PhaseProbe
+
+export type BackendBuild
+	let stdModule as StdModule
+	let target as Target
+	let globalData as GlobalDataTable
+	let project as Project
+	let usage as RuntimeUsage
+	let funcNames as FunctionNameIndex
+	let chunks as FunctionCodeChunkArray
+	var pools as BackendRunArray
+	var brackets as RegAllocProbeArray
+
+	static function of(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns BackendBuild
+		return Self{stdModule: stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames, chunks: FunctionCodeChunkArray.create(0), pools: BackendRunArray.create(0), brackets: RegAllocProbeArray.create(0)}
+	end 'of'
+
+	export function begin(receiver CompileReceiver.handle) returns BackendStep throws CompileError
+		match self.target.cpu 'cpu'
+			x64 or
+			arm64 then break
+			wasm32 then return BackendStep.finished(buildWasmBackend(self.stdModule, globalData: self.globalData, project: self.project, usage: self.usage, funcNames: self.funcNames))
+		end 'cpu'
+
+		let bracket = PhaseProbe.beginPhase(self.project, phase: CompilePhase.regalloc)
+		let pool = BackendRun.create(self.stdModule, target: self.target, globalData: self.globalData, project: self.project, funcNames: self.funcNames, usesGt: self.usage.usesGt, chunks: self.chunks)
+		self.pools.push(pool)
+
+		if not pool.begin(receiver) 'nothingInFlight'
+			self.brackets.push(bracket)
+
+			return try self.finishPool()
+		end 'nothingInFlight'
+
+		bracket.suspend()
+		self.brackets.push(bracket)
+
+		return BackendStep.awaiting
+	end 'begin'
+
+	export function answered(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle) returns BackendStep throws CompileError
+		let pool = try self.pools.get(0) otherwise panic("BackendBuild.answered: a unit answered before the pool began")
+
+		if not pool.answered(job, answered: answered, refused: refused, receiver: receiver) 'stillInFlight'
+			return BackendStep.awaiting
+		end 'stillInFlight'
+
+		let bracket = try self.brackets.get(0) otherwise panic("BackendBuild.answered: the pool began without opening its bracket")
+		bracket.resume()
+
+		return try self.finishPool()
+	end 'answered'
+
+	function finishPool() returns BackendStep throws CompileError
+		let pool = try self.pools.get(0) otherwise panic("BackendBuild.finishPool: no pool began")
+		let bracket = try self.brackets.get(0) otherwise panic("BackendBuild.finishPool: the pool began without opening its bracket")
+		let targetModule = try pool.finish()
+		recordPhase(self.project, phase: CompilePhase.regalloc, probe: bracket)
+
+		let releaseProbe = PhaseProbe.beginPhase(self.project, phase: CompilePhase.releaseIr)
+		self.stdModule.releaseBody()
+		recordPhase(self.project, phase: CompilePhase.releaseIr, probe: releaseProbe)
+
+		match self.target.cpu 'cpu'
+			x64 then return BackendStep.finished(try finishX64Backend(self.stdModule, target: self.target, globalData: self.globalData, project: self.project, usage: self.usage, funcNames: self.funcNames, targetModule: targetModule, chunks: self.chunks))
+			arm64 then return BackendStep.finished(try finishArm64Backend(self.stdModule, target: self.target, globalData: self.globalData, project: self.project, usage: self.usage, funcNames: self.funcNames, targetModule: targetModule, chunks: self.chunks))
+			wasm32 then panic("BackendBuild.finishPool: the wasm backend runs no pool (got {targetToString(self.target)})")
+		end 'cpu'
+	end 'finishPool'
+end 'BackendBuild'
 
 // ⭐⭐ **THE `.data` ROSTER, IN LAYOUT ORDER: the user's globals, then every runtime family's words.** The
 // order is the `.data` order — `layOut` sorts by width and is stable — so a family's position here is a
@@ -213,23 +286,6 @@ function programStartedGlobals(target Target) returns DataSectionEntryArray
 	return out
 end 'programStartedGlobals'
 
-// Every per-function step from instruction selection to machine code, on one pool (`BackendPool`).
-// The `regalloc` bracket is the pool's wall; the `isel`, `branchCleanup`, `prologueEpilogue` and
-// `encode` rows are measured on the workers and folded in as breakdowns of it. `globalData` reaches
-// it because a float constant, a jump table and an abort message are `.rdata` content the lowering
-// is the first to see; concat resolves those labels against the same table.
-module function encodeOnTheBackendPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex, chunks FunctionCodeChunkArray) returns TargetModule throws CompileError
-	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
-	let targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt, chunks: chunks)
-	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
-
-	let releaseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)
-	stdModule.releaseBody()
-	recordPhase(project, phase: CompilePhase.releaseIr, probe: releaseProbe)
-
-	return targetModule
-end 'encodeOnTheBackendPool'
-
 // The span/op parity check lives here because this is the last moment it can be asked: the release below
 // drops the column it reads. It is the whole-module twin of the check the allocator's private module runs,
 // and it sits after the encode because the runtime band mints ops once the pool has handed
@@ -277,10 +333,7 @@ end 'buildWasmBackend'
 // The x64 backend: Std → the backend pool (Target code and machine code, per function) → runtime
 // augmentation → the prepended functions' and the hand-assembled runtime's machine code → link →
 // CodeResult.
-function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
-	let chunks = FunctionCodeChunkArray.create(0)
-	let targetModule = try encodeOnTheBackendPool(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames, chunks: chunks)
-
+function finishX64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex, targetModule TargetModule, chunks FunctionCodeChunkArray) returns CodeResult throws CompileError
 	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
 	let userFunctionCount = targetModule.funcCount()
 
@@ -314,7 +367,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 		windows or
 		linux then appendX64RuntimeChunks(chunks, target: target, dumpCoverage: usage.usesCoverage, usesGt: usage.usesGt, carriesHostLock: posixUsesHostLock(usage), probesCpuFeatures: cpuFeaturesAreProbed(usage, target: target), emitsHardwareAes: hardwareAesChunksAreEmitted(usage, target: target), context: project.hostContext)
 		macos or
-		wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
+		wasi then panic("finishX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
 	end 'panicRuntime'
 
 	// The host surface — hand-assembled bodies with no TargetOp spelling for the same reason the panic
@@ -326,7 +379,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 		linux then appendX64LinuxHostSurfaceChunks(chunks, usage: usage)
 		windows then appendX64WindowsHostSurfaceChunks(chunks, usage: usage)
 		macos or
-		wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
+		wasi then panic("finishX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
 	end 'hostSurface'
 
 	// The hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`,
@@ -356,7 +409,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
 
 	return codeResult
-end 'buildX64Backend'
+end 'finishX64Backend'
 
 // Function/chunk name → the byte offset that chunk starts at in `.text`. Declared ONCE, here, because
 // it is one fact: x64 and arm64 each carried an identical typealias under its own name, and both concat

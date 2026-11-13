@@ -61,7 +61,7 @@ stores its record into the old tail's next pointer. The runner follows next poin
   next pointer waits a bounded time. Every publisher is a symbol that asynchronous preemption never stops: an
   unguarded function, or one that pins its thread. The runner's own finish claim publishes through
   `__cown_enqueue_finish` rather than inline in `__cown_run`, which is stoppable, and the builder refuses to
-  emit a publish into a function that could be stopped. `__cown_multi_release` and `__cown_acquire_many` spin on
+  emit a publish into a function that could be stopped. `__cown_acquire_release` and `__cown_acquire_many` spin on
   these links and must never gain a park point.
 - A behaviour record is freed only after the runner has decided to release or hand on, so a late reader of a
   next pointer never reads freed memory. The compare-and-swap that sets `CownOffLast` from the current
@@ -115,10 +115,11 @@ the cown's own reference and frees the cown if that was the last.
   thread, still holding the cown, so every other runnable service runs before it continues. When the queue is
   empty it ends.
 - It ends with `__gt_owner_done` on its own green thread: a runner is its own consumer, so nothing else joins it.
-- A handler that waits (`await`, `sleep`, I/O) parks the runner's green thread with the cown held. Messages
-  queue behind it up to the capacity.
+- A handler that sleeps or does I/O parks the runner's green thread with the cown held. Messages queue behind it
+  up to the capacity. No handler waits on another party: the compiler refuses a message that may (E3221).
 - A runner that reaches an `acquire` behaviour decrements the group's count and ends without releasing the
-  cown; the party that brings the count to 0 runs the code and releases every cown of the group.
+  cown; the party that brings the count to 0 runs the group's code, and the group's cowns stay held until
+  `__cown_acquire_release`.
 
 ## Parked senders
 
@@ -150,20 +151,30 @@ stack margin an unguarded runtime function may use, which the compiler reports a
 
 ## The multi-cown acquire
 
-`__cown_acquire_many(cowns, n, code, arg)` takes several cowns for one group so that `code(group)` runs with
-all of them. `CownTorture` (below) is its only caller.
+`__cown_acquire(cowns, n)` is what an `acquire` block calls. It answers the group once every named cown is held,
+or `AcquireStoppedBit` with the position of a stopped cown in the low bits; a caller that was cancelled while
+parked answers stopped too. It parks the calling green thread (`GtParkKind.cownAcquire`) until the group is
+granted, so the thread's machine runs other work meanwhile. After the grant it checks each cown's state again:
+a cown whose state has been finished releases the group and answers stopped.
+
+`__cown_acquire_many(cowns, n, code)` takes several cowns for one group so that `code(group)` runs with all of
+them.
 
 1. **Phase 0** sorts the cowns by address and collapses duplicates.
-2. **Phase 1** swaps the group's slot into each cown's tail in ascending address order. A cown whose tail slot
-   belongs to another group first waits for that group's `phase1Done` flag, so two groups that need the same
-   two cowns never enqueue in opposite orders.
-3. **Phase 2** sets `phase1Done` and subtracts the granted count plus the bias of 1 from the group's count.
-   The party that brings the count to 0 runs `code(group)`.
+2. **Lock** takes each cown's exclusive lock in ascending address order.
+3. **Phase 1** swaps the group's slot into each cown's tail. The locks make a group's slots appear in every
+   cown's queue together, so two groups that need the same two cowns never enqueue in opposite orders. Each
+   lock is released once the slots are in.
+4. **Phase 2** subtracts the granted count plus the bias of 1 from the group's count. The party that brings the
+   count to 0 runs `code(group)`.
 
-`code` must end by calling `__cown_multi_release`, which hands each cown to its next behaviour. The acquire-exit
-path does not give back the cown's reference, so an acquire is correct only on a cown that is not closed.
+For an `acquire` block `code` is `__cown_acquire_grant`: it hands the group to the parked acquirer, or, for an
+acquirer that has abandoned the group, releases it. The block ends with `__cown_acquire_release(group)`, which
+hands each cown to its next behaviour; every cown of the group stays held until then. The acquire-exit path does
+not give back the cown's reference, so an acquire is correct only on a cown that is not closed.
 
-`CownTorture.violations(cownCount, workers:, rounds:)` in `stdlib/Testing.maxon` drives this path
+`CownTorture.violations(cownCount, workers:, rounds:)` in `stdlib/Testing.maxon` drives the same door an
+`acquire` block uses, with sends and a stopped service in the mix
 ([STDLIB_REFERENCE](../STDLIB_REFERENCE.md#cowntorture)). `cownCount` must be a power of two.
 
 ## How the scheduler sees a cown
@@ -177,7 +188,7 @@ condition, so `__gt_drain_at_exit` waits for queued messages without knowing cow
 The close spawns a finish runner from the main thread's scheduler context, and the spawn's trace-id mint is safe
 there because it needs no processor.
 
-`GtParkKind.cownSend` is the park kind of a parked sender.
+`GtParkKind.cownSend` is the park kind of a parked sender, and `GtParkKind.cownAcquire` of a parked acquirer.
 
 ## Where to look when it breaks
 
@@ -189,4 +200,4 @@ there because it needs no processor.
   `cown-batch-fairness-torture.maxon` pins it.
 - A waiting sender that is lost, doubled or overtaken: the Waiters bit and the slot transfer.
   `cown-send-wait-torture.maxon` pins delivered plus refused equals attempted.
-- Two groups in one cown at once: the address order and `phase1Done`. `cown-multi-torture.maxon`.
+- Two groups in one cown at once: the address order and the cown locks. `cown-multi-torture.maxon`.

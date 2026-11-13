@@ -68,6 +68,7 @@ export function installServiceBehaviours(module MaxonModule, project Project, si
 	// driving it from inside the roster loop would multiply the whole module by the number of service types
 	// — the one place in this file where a per-type constant would become a per-type PASS.
 	let spawned = spawnedInstancesByService(module, services: services)
+	let defersReplies = moduleDefersAReply(module)
 
 	for i in 0 upto services.count() 'eachService'
 		let typeName = try services.get(i) otherwise panic("installServiceBehaviours: services.get OOB at {i} on a list walked to its own count")
@@ -80,7 +81,7 @@ export function installServiceBehaviours(module MaxonModule, project Project, si
 			continue
 		end 'aHandlerWasAbandoned'
 
-		buildServiceBehaviours(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, instances: try spawned.get(i) otherwise panic("installServiceBehaviours: spawned.get OOB at {i} — one bucket is pushed per service before the walk"))
+		buildServiceBehaviours(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, defersReplies: defersReplies, instances: try spawned.get(i) otherwise panic("installServiceBehaviours: spawned.get OOB at {i} — one bucket is pushed per service before the walk"))
 	end 'eachService'
 end 'installServiceBehaviours'
 
@@ -107,9 +108,9 @@ end 'servicesInDeclarationOrder'
 // a `returns T` handler takes the instance's layout descriptor, and the state releases through
 // `__destruct_<mangled>`. A shared body has nothing to source either from (a synthesized function carries no
 // dictionary of its own), so there is one pair per instantiation the program spawns.
-function buildServiceBehaviours(module MaxonModule, project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, typeName ByteArray, instances GenericInstanceIdArray)
+function buildServiceBehaviours(module MaxonModule, project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, typeName ByteArray, defersReplies bool, instances GenericInstanceIdArray)
 	if not signatures.structDeclaresTypeParams(typeName) 'monomorphic'
-		buildServiceBehaviourPair(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, instance: ServiceStateInstance.monomorphic)
+		buildServiceBehaviourPair(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, defersReplies: defersReplies, instance: ServiceStateInstance.monomorphic)
 		return
 	end 'monomorphic'
 
@@ -128,7 +129,7 @@ function buildServiceBehaviours(module MaxonModule, project Project, signatures 
 	instanceOrder.sortBy(function(left ElementIndex, right ElementIndex) gives compareBytesOrdinally(try mangledInstances.get(left) otherwise panic("buildServiceBehaviours: mangledInstances.get OOB at {left}"), right: try mangledInstances.get(right) otherwise panic("buildServiceBehaviours: mangledInstances.get OOB at {right}")))
 
 	for slot in instanceOrder 'eachInstantiation'
-		buildServiceBehaviourPair(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, instance: ServiceStateInstance.at(try instances.get(slot) otherwise panic("buildServiceBehaviours: instances.get OOB at {slot}")))
+		buildServiceBehaviourPair(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, defersReplies: defersReplies, instance: ServiceStateInstance.at(try instances.get(slot) otherwise panic("buildServiceBehaviours: instances.get OOB at {slot}")))
 	end 'eachInstantiation'
 end 'buildServiceBehaviours'
 
@@ -228,8 +229,8 @@ end 'noteDistinctInstance'
 let ServiceCownParam = 0 as ValueId
 let ServiceRequestParam = 1 as ValueId
 
-function buildServiceBehaviourPair(module MaxonModule, project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, typeName ByteArray, instance ServiceStateInstance)
-	buildServiceBehave(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, instance: instance)
+function buildServiceBehaviourPair(module MaxonModule, project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, typeName ByteArray, defersReplies bool, instance ServiceStateInstance)
+	buildServiceBehave(module, project: project, signatures: signatures, funcNames: funcNames, typeName: typeName, defersReplies: defersReplies, instance: instance)
 	buildServiceFinish(module, project: project, signatures: signatures, typeName: typeName, instance: instance)
 end 'buildServiceBehaviourPair'
 
@@ -263,7 +264,7 @@ end 'loadServiceState'
 //                          handler did not consume, return
 //              default  -> __cown_unknown_tag()  // aborts
 // ```
-function buildServiceBehave(module MaxonModule, project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, typeName ByteArray, instance ServiceStateInstance)
+function buildServiceBehave(module MaxonModule, project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, typeName ByteArray, defersReplies bool, instance ServiceStateInstance)
 	let stateType = serviceStateTypeOf(signatures, typeName: typeName, instance: instance)
 
 	let paramTypes = MaxonTypeArray.create(0)
@@ -288,7 +289,7 @@ function buildServiceBehave(module MaxonModule, project Project, signatures Prog
 	let armIds = BlockIdArray.create(request.caseCount(), zeroed: false)
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
-		armIds.push(buildMessageArm(fn, signatures: signatures, funcNames: funcNames, callee: qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)), instance: instance, request: request, caseIndex: caseIndex, state: state, site: site))
+		armIds.push(buildMessageArm(fn, signatures: signatures, funcNames: funcNames, callee: qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)), defersReplies: defersReplies, instance: instance, request: request, caseIndex: caseIndex, state: state, site: site))
 	end 'eachVariant'
 
 	fn.terminateBlock(entry, op: MaxonOp.switch(tag, denseTargetBlockIds: armIds, defaultBlockId: unknownTag.id), site: site)
@@ -326,7 +327,7 @@ function dropLoadedPayload(fn SynthesizedFunction, signatures ProgramSignatures,
 	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: signatures.indexTypeNames(), fieldType: signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())), args: argsOf(loaded), site: site)
 end 'dropLoadedPayload'
 
-function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, instance ServiceStateInstance, request EnumLayout, caseIndex CaseIndex, state ValueId, site SynthesizedSite) returns BlockId
+function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, callee ByteArray, defersReplies bool, instance ServiceStateInstance, request EnumLayout, caseIndex CaseIndex, state ValueId, site SynthesizedSite) returns BlockId
 	let armId = fn.openBlock(request.caseNameAt(caseIndex)).id
 	let payloads = request.payloadsAt(caseIndex)
 
@@ -360,6 +361,8 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// to disagree about which register the reply's value word came back in.
 	let returned = try serviceHandlerReturnType(signatures, callee: callee, instance: instance, typeNames: signatures.indexTypeNames()) otherwise panic("buildMessageArm: '{String.from(callee)}' has a declaration (`serviceDeclarationOf` just answered) yet records no return type — both read the one declaration sweep")
 	let reply = serviceArmReply(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: ServiceRequestParam, site: site)
+	let deferrable = armCanDefer(reply, defersReplies: defersReplies)
+	armDeferral(fn, reply: reply, deferrable: deferrable, site: site)
 	let cells = spillReassignedPayloads(fn, byReference: funcNames.byReferenceParamsOf(callee), classes: payloadClasses, types: payloadTypes, args: args, site: site)
 	let outcome = emitServiceHandlerCall(fn, callee: callee, returned: returned, signatures: signatures, args: handlerArgsOf(args, cells: cells), site: site)
 	reclaimReassignedPayloads(fn, cells: cells, args: args, site: site)
@@ -380,7 +383,7 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// teardown word: **every read or release of shared state precedes the arrival that hands it over.**
 	dropUnconsumedPayloads(fn, signatures: signatures, callee: callee, request: request, caseIndex: caseIndex, classes: payloadClasses, args: args, site: site)
 
-	emitServiceReplyCompletion(fn, returned: returned, outcome: outcome, reply: reply, site: site)
+	emitArmReplyCompletion(fn, deferrable: deferrable, returned: returned, outcome: outcome, reply: reply, site: site)
 
 	// ⛔⛔ **THE CURRENT BLOCK, NOT THE ARM'S ENTRY — THE TWO DIFFER FOR A THROWING HANDLER.** Its `tryCall`'s
 	// error edge is a diamond (`emitServiceReplyCompletion`), so the ops above landed in that diamond's MERGE and
@@ -389,6 +392,54 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	fn.terminate(MaxonOp.retVoid, site: site)
 	return armId
 end 'buildMessageArm'
+
+function armCanDefer(reply ServiceReplyTarget, defersReplies bool) returns bool
+	return match reply 'reply'
+		fireAndForget gives false
+		cell gives defersReplies
+	end 'reply'
+end 'armCanDefer'
+
+function armDeferral(fn SynthesizedFunction, reply ServiceReplyTarget, deferrable bool, site SynthesizedSite)
+	if not deferrable 'completesAlways'
+		return
+	end 'completesAlways'
+
+	match reply 'reply'
+		fireAndForget then panic("armDeferral: `armCanDefer` answered true for a message with no reply cell")
+		cell(value) then fn.emitPositionalCallDiscarding(GtReplyArmName, args: argsOf(value), site: site)
+	end 'reply'
+end 'armDeferral'
+
+function emitArmReplyCompletion(fn SynthesizedFunction, deferrable bool, returned MaxonReturnType, outcome ServiceHandlerOutcome, reply ServiceReplyTarget, site SynthesizedSite)
+	if not deferrable 'completesAlways'
+		emitServiceReplyCompletion(fn, returned: returned, outcome: outcome, reply: reply, site: site)
+		return
+	end 'completesAlways'
+
+	let taken = fn.emitPositionalCall(GtReplyDeferredName, args: ValueIdArray.create(0), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: site)
+	let isDeferred = fn.emitCompare(taken, rhs: fn.emitTypedLiteral(0, valueType: MaxonType.integer, site: site), op: MaxonCmpOp.ne, site: site)
+	let checked = fn.currentBlock()
+
+	let completing = fn.openBlock(b"replycompletes")
+	emitServiceReplyCompletion(fn, returned: returned, outcome: outcome, reply: reply, site: site)
+	let completionEnd = fn.currentBlock()
+
+	let settled = fn.openBlock(b"replysettled")
+	fn.terminateBlock(completionEnd, op: MaxonOp.branch(settled.id), site: site)
+	fn.terminateBlock(checked, op: MaxonOp.condBranch(isDeferred, thenBlockId: settled.id, elseBlockId: completing.id), site: site)
+	fn.resumeBlock(settled)
+end 'emitArmReplyCompletion'
+
+function moduleDefersAReply(module MaxonModule) returns bool
+	for func in module.functions 'eachFunc'
+		if functionDefersAReply(module, func: func) 'defers'
+			return true
+		end 'defers'
+	end 'eachFunc'
+
+	return false
+end 'moduleDefersAReply'
 
 type ReassignedPayloadCell
 	export let position as ParamCount

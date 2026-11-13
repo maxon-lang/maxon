@@ -99,7 +99,7 @@ Output: `2024-10-04 11017`, then `2023-11-14T22:13:20.123Z`.
 | `Scheduler.machineCpuCount()` | The machine's logical processor count, at least 1, whatever `MAXON_MAX_PROCS` sets: every active processor in every processor group on Windows, the processors this process may run on under Linux. A `SchedulerProcessorCount`. |
 | `Scheduler.counters()` | The scheduler's event counters since the program started, as a `SchedulerCounters`, each read once. |
 | `Scheduler.currentStackBytes()` | The calling green thread's current stack size in bytes, a `StackByteCount` (`int(0 to u64.max)`). A stack grows on demand and halves once the thread has been idle with most of it unused. |
-| `Scheduler.quiesce()` | Park the caller until every machine is idle and nothing pending can run again, and answer how many other green threads are still owned — a service still running, or a promise neither awaited nor dropped — as a `GreenThreadCount` (`int(0 to u64.max)`): `0` when every one has finished, or the count left. A machine waiting for its pinned thread's next turn counts as idle, and a coroutine still unwinding after its promise was dropped keeps the wait open until it finishes. A coroutine whose promise has been dropped answers at once, with the count at that moment. The program carries on afterwards unchanged; services stay running. |
+| `Scheduler.quiesce()` | Park the caller until every machine is idle and nothing pending can run again, and answer how many other green threads are still owned — a service still running, or a promise neither awaited nor dropped — as a `GreenThreadCount` (`int(0 to u64.max)`): `0` when every one has finished, or the count left. A machine waiting for its pinned thread's next turn counts as idle, and a coroutine still unwinding after its promise was dropped keeps the wait open until it finishes. A coroutine whose promise has been dropped answers at once, with the count at that moment. The program carries on afterwards unchanged; services stay running. It waits on every other green thread, so it is called from `main`, a test body or a coroutine; a message or a `spawn` factory that reaches it is [E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait). |
 | `Scheduler.parallelBoundary()` | A compile-time marker with no run-time effect. A CPU-bound function calls it to mark a spawn of itself as deliberate, which satisfies [E3073](/docs/cli/error-codes/#e3073--asyncnonyielding) for a function that only computes. |
 | `Scheduler.pinToMachine()` | Bind the calling green thread to the machine (OS thread) running it, and answer whether it did. A pinned thread that parks resumes on the same machine. Pins nest: each one taken is released once. |
 | `Scheduler.unpinFromMachine()` | Release one pin the calling green thread took; the last release frees it from its machine. Called by a green thread that holds no pin, it is a fatal runtime error. |
@@ -238,6 +238,69 @@ end 'main'
 ```
 
 Output: `true true 1`.
+
+## Reply
+
+`Reply with T` is a service message's reply, taken to answer later. A message that returns a `T` and declares
+`throws ReplyStopped` writes `let pending = reply.later()` as the whole initializer of a `let` at the top level of
+its body; the message then ends without answering, and the caller's `await` stays pending until some service
+answers through the `Reply`. The rules for `reply.later()` and for where a `Reply` may live are in
+[Deferred Replies](/docs/language/async/#deferred-replies--reply).
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+typealias TallyReplyArray = Array with TallyReply
+
+type Ledger
+	var total as Tally
+	var waiting as TallyReplyArray
+
+	static function create() returns Self
+		return Self{total: 0, waiting: TallyReplyArray.create(0)}
+	end 'create'
+
+	export function ask() returns Tally throws ReplyStopped
+		let pending = reply.later()
+		self.waiting.push(pending)
+		return
+	end 'ask'
+
+	export function deposit(amount Tally)
+		self.total = self.total + amount
+	end 'deposit'
+
+	export function settle()
+		let pending = try self.waiting.pop() otherwise return
+		pending.answer(self.total)
+	end 'settle'
+end 'Ledger'
+
+function main() returns ExitCode
+	let ledger = spawn Ledger.create()
+	let asked = try ledger.ask() otherwise panic("a running service with room takes the send")
+	try ledger.deposit(40) otherwise panic("a running service with room takes the send")
+	try ledger.deposit(2) otherwise panic("a running service with room takes the send")
+	try ledger.settle() otherwise panic("a running service with room takes the send")
+	let total = try await asked otherwise panic("the continuation answered")
+	print("{total}\n")
+	return 0
+end 'main'
+```
+
+Output: `42`.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `answer(value T)` | — | Complete the caller's reply with `value` and consume the `Reply`. A send that never waits, so any message may call it. |
+
+A `Reply` is [unique](/docs/language/regions/#unique-types): it lives in a service's state, in a container or in a message
+argument, and is answered at most once. `ReplyStopped` is the error the caller's `await` receives when a `Reply` is
+dropped unanswered, a holder freed with it still inside included:
+
+| `ReplyStopped` case | Meaning |
+|---------------------|---------|
+| `serviceStopped` | The `Reply` was dropped without an answer. |
 
 ## SharedValue
 

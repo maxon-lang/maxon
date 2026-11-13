@@ -58,7 +58,9 @@ before a declaration), `test` (a top-level declaration followed by a `TEST_NAME`
 type's factory call, optionally after a `(capacity: n)` group), `bits` (followed by `(` on a typealias right-hand side), `unique` (after `is` in a `type_decl` header: `type Ticket is unique`),
 `sendable` (after `is` in a `constraint`), `mutates` and `captures` (the `mutates_clause` ending a
 `function_type`), `modify` (a `modify_stmt`: at the start of a statement, followed by an IDENTIFIER or `self`,
-on a line ending in a LABEL), and `freeze`, `swap` and `merge` (a `region_expr`: not after `.`, followed by an
+on a line ending in a LABEL), `acquire` (an `acquire_stmt`: at the start of a statement, followed by an IDENTIFIER, on
+a line ending in a LABEL), `destruct` (a `destruct_stmt`: not after `.`, followed by `self`), `consuming` (a
+`receiver_param`: directly before `self`), `reply` (a `reply_later`: followed by `.later()`), and `freeze`, `swap` and `merge` (a `region_expr`: not after `.`, followed by an
 IDENTIFIER, `self`, `Self`, `try`, or a `(` set apart from the word by a space; `swap(` with the parenthesis
 adjacent is a call). `__line__` and `__file__`
 are identifiers in the reserved `__` space, legal only as a parameter default (§3.1).
@@ -269,9 +271,12 @@ function_decl = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 'end' LABEL
 
 receiver_param
-              = ( capability | 'mutable' ) 'self'            (* directly after '(' and followed by ',' or ')'; first parameter of a
+              = ( capability | 'mutable' | 'consuming' ) 'self'
+                                                             (* directly after '(' and followed by ',' or ')'; first parameter of a
                                                                 method or requirement only; a static or free function, or `self`
-                                                                after another parameter, is a parse error *)
+                                                                after another parameter, is a parse error; `consuming self` moves
+                                                                the receiver, and is legal in a method of a `type` that declares a
+                                                                finalizer (§5.1) *)
 
 capability    = 'isolated' | 'immutable'                     (* contextual; a prefix word on a type_ref *)
 
@@ -593,6 +598,8 @@ statement     = return_stmt
               | let_decl
               | discard_stmt
               | modify_stmt
+              | acquire_stmt
+              | destruct_stmt
               | if_stmt
               | while_stmt
               | for_stmt
@@ -626,7 +633,7 @@ annotated_decl
 var_decl      = 'var' IDENTIFIER '=' ( expression | isolated_init )
               | 'var' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 
-let_decl      = 'let' IDENTIFIER '=' ( expression | isolated_init )
+let_decl      = 'let' IDENTIFIER '=' ( expression | isolated_init | reply_later )
               | 'let' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 
 discard_stmt  = '_' '=' expression
@@ -635,12 +642,37 @@ isolated_init = expression 'as' 'isolated' type_ref            (* the whole init
                                                                   the local is a region of its own; as a call argument
                                                                   or on a value type it is a parse error *)
 
+reply_later   = 'reply' '.' 'later' '(' ')'                    (* contextual; the whole initializer of a `let_decl` at the top level
+                                                                  of a service message's body: takes the message's reply and binds
+                                                                  a `Reply with T` (E3222 anywhere else) *)
+
 modify_stmt   = 'modify' modify_target LABEL NEWLINE           (* contextual; opens an `isolated` local, parameter or
                 body                                              field for the block; `await` and any call that may
                 'end' LABEL                                       wait or yield inside it is E3205 *)
 
 modify_target = IDENTIFIER { '.' IDENTIFIER }
               | 'self' { '.' IDENTIFIER }
+
+acquire_stmt  = 'acquire' acquire_names LABEL NEWLINE
+                body
+                'end' LABEL 'otherwise' [ '(' IDENTIFIER ')' ] LABEL NEWLINE
+                body
+                'end' LABEL
+                                                             (* contextual; at the start of a statement, on a line ending in a
+                                                                LABEL; takes the services behind the named handles at once and
+                                                                runs the first `body` with each name bound to its service's state;
+                                                                `otherwise` follows the first `end` on its line, and the second
+                                                                `body` runs instead when a service has stopped, the IDENTIFIER
+                                                                holding the position of a stopped service in the name list;
+                                                                `await`, `awaitAny`, a nested `acquire` and any call that may wait
+                                                                or yield inside the first `body` is E3205, and an `acquire` in a
+                                                                message or factory is E3221 *)
+
+acquire_names = IDENTIFIER { ',' IDENTIFIER }                  (* each names a local or parameter that is a service handle *)
+
+destruct_stmt = 'destruct' 'self'                              (* contextual; a statement of a method that takes `consuming self`,
+                                                                  on a `type` that holds fields; ends the life of the receiver;
+                                                                  not after a `.` *)
 ```
 
 Constraints:

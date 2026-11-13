@@ -223,7 +223,7 @@ let GtOffAwaiter = GtOffOwner + PointerFieldBytes
 // Read only on a reply cell: a green thread's holds a stale word.
 export let GtOffReplyWitness = GtOffAwaiter + PointerFieldBytes
 
-export let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
+let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
 
 // A reply cell is the record's first `GtCellBytes` and is carved exactly that long, so every field a cell
 // is read or written through lies below it: one past it reads a neighbouring cell's bytes. The layout check
@@ -466,7 +466,7 @@ let GtOffStackHighWater = GtOffStackResizedAt + PointerFieldBytes
 // whenever a member runs, because the taking is what starts one.
 let GtOffStrandResume = GtOffStackHighWater + PointerFieldBytes
 
-export let GtPromiseHeld = 0
+let GtPromiseHeld = 0
 let GtPromiseGivenUp = 1
 
 let GtRestraintArmed = 1
@@ -515,6 +515,8 @@ end 'GtLastErrorDirection'
 // record keeps the one it has, and a zeroed word would carve a second.
 export let GtOffStaging = GtOffSendOutcome + PointerFieldBytes
 
+let GtOffReplyCell = GtOffStaging + PointerFieldBytes
+
 // The GT struct's size. Must be a multiple of 8.
 //
 // A new field goes into `gtFieldRoster` with the rule that says who initialises it; the layout
@@ -523,7 +525,7 @@ export let GtOffStaging = GtOffSendOutcome + PointerFieldBytes
 // walks them all along correctly.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
-export let GtStructSize = GtOffStaging + PointerFieldBytes
+export let GtStructSize = GtOffReplyCell + PointerFieldBytes
 
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each names the STORE
 // `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed back on
@@ -568,6 +570,8 @@ export enum GtParkKind
 	// `__gt_run_strand` (`CownRuntime.emitCownSendParkCommit`), which leaves the cown lock the sender
 	// holds across the switch, so `__gt_register_park` never sees it.
 	cownSend = 12
+
+	cownAcquire = 13
 end 'GtParkKind'
 
 // ⭐ **THE POLLER OWNS TWO PARK KINDS, AND EVERY SITE THAT ASKS WHETHER A THREAD IS ON IT MEANS BOTH.** One
@@ -1843,6 +1847,13 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 export let GtQuiesceName = b"__gt_quiesce"
 export let GtQuiesceWaiterLabel = b"__gt_quiesce_waiter"
 
+export let GtPanicFlushName = b"__gt_panic_flush"
+export let GtFaultFlushName = b"__gt_fault_flush"
+let GtPanicFlushClaimLabel = b"__gt_panic_flush_claim"
+let GtPanicFlushBudgetNs = 500 * NanosPerMilli
+let GtPanicFlushClaimed = 1
+let GtPanicFlushFinished = 2
+
 // ⭐⭐ **THE ADAPTIVE SEED — Go's `startingStackSize`.** The size `__gt_free_get` gives a new
 // thread's stack: the smallest power of two in [`gtSeedStackBytes`,
 // `GtSeedMaxBytes`] that holds the average stack the threads that finished in the last window
@@ -2427,6 +2438,7 @@ export function gtRuntimeGlobals(usage RuntimeUsage, target Target) returns Data
 	pushRuntimeGlobal(out, label: GtTraceCounterLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
 	pushRuntimeGlobal(out, label: GtQuiesceWaiterLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtPanicFlushClaimLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
 	// The adaptive seed starts at the floor, so the first spawn commits what every spawn committed before any
 	// thread has finished.
@@ -2583,6 +2595,7 @@ function gtFieldRoster() returns GtFieldArray
 	fields.push(GtField.create("GtOffSendDeadline", offset: GtOffSendDeadline, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
 	fields.push(GtField.create("GtOffSendOutcome", offset: GtOffSendOutcome, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
 	fields.push(GtField.create("GtOffStaging", offset: GtOffStaging, width: PointerFieldBytes, rule: GtFieldRule.keptAcrossReuse))
+	fields.push(GtField.create("GtOffReplyCell", offset: GtOffReplyCell, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
 
 	return fields
 end 'gtFieldRoster'
@@ -2745,6 +2758,8 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtAwaitAny(module)
 	buildGtDrainAtExit(module, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals)
 	buildGtQuiesce(module)
+	buildGtPanicFlush(module)
+	buildGtFaultFlush(module)
 	buildGtRunMain(module, target: target, descendantArming: descendantArming)
 	buildGtAwait(module, name: GtAwaitName, throwing: false, arrival: GtAwaitArrival.inTheAwait, tracing: tracing)
 	buildGtAwait(module, name: GtTryAwaitName, throwing: true, arrival: GtAwaitArrival.inTheAwait, tracing: tracing)
@@ -2769,6 +2784,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// The reply cell's two doors, beside the rendezvous they step and the drop that renounces them.
 	buildGtCellAlloc(module)
 	buildGtCellComplete(module)
+	buildGtReplyHandle(module)
 	buildGtSleep(module, tracing: tracing)
 
 	// The park's registrar, beside the store doors it dispatches to.
@@ -3885,6 +3901,130 @@ export let GtPinDestructName = b"__gt_pin_destruct"
 
 export let ManagedPinTokenOffset = 0 as ByteOffset
 export let ManagedPinBoxBytes = 8 as FullRangeInt
+
+export let GtReplyArmName = b"__gt_reply_arm"
+
+export let GtReplyDeferredName = b"__gt_reply_deferred"
+
+export let GtReplyLaterName = b"__gt_reply_later"
+
+export let GtReplyAnswerName = b"__gt_reply_answer"
+
+let GtReplyDestructName = b"__gt_reply_destruct"
+
+let ReplyCellOffset = 0
+let ReplyBoxBytes = 8
+export let GtReplyStoppedFlag = ErrorFlagOrdinalBias
+
+function buildGtReplyHandle(module StdModule)
+	buildGtReplyArm(module)
+	buildGtReplyDeferred(module)
+	buildGtReplyLater(module)
+	buildGtReplyAnswer(module)
+	buildGtReplyDestruct(module)
+end 'buildGtReplyHandle'
+
+function buildGtReplyArm(module StdModule)
+	let func = IrFunction.createFromStd(GtReplyArmName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	let ids = ValueMinter.create(1)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let cell = 0
+
+	emitStoreField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffReplyCell, value: cell)
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtReplyArm'
+
+function buildGtReplyDeferred(module StdModule)
+	let func = IrFunction.createFromStd(GtReplyDeferredName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+
+	let cell = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffReplyCell, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(emitCompareWithConstant(module, block: entry, value: cell, pred: StdCmpPred.eq, against: 0, ids: ids)))
+
+	module.functions.push(func)
+end 'buildGtReplyDeferred'
+
+function buildGtReplyLater(module StdModule)
+	let func = IrFunction.createFromStd(GtReplyLaterName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let armed = module.addBlock(func, label: b"replyarmed", heat: BlockHeat.normal)
+	let unarmed = module.addBlock(func, label: b"replyunarmed", heat: BlockHeat.cold)
+
+	let current = emitLoadCurrentGt(module, block: entry, ids: ids)
+	let cell = emitLoadField(module, block: entry, record: current, offset: GtOffReplyCell, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: cell, pred: StdCmpPred.ne, against: 0, whenTrue: armed, whenFalse: unarmed, ids: ids)
+
+	emitRuntimeAbort(module, func: func, block: unarmed, abort: RuntimeAbort.serviceSendProtocolBroken, ids: ids)
+
+	emitStoreField(module, block: armed, record: current, offset: GtOffReplyCell, value: emitConst(module, block: armed, value: 0, ids: ids))
+
+	let size = emitConst(module, block: armed, value: ReplyBoxBytes, ids: ids)
+	let destructor = ids.mint()
+	module.appendOp(armed, op: StdOp.funcAddr(destructor, funcName: GtReplyDestructName))
+	let box = ids.mint()
+	emitMmAllocCall(module, block: armed, result: box, size: size, destructor: destructor, tag: mmTagIndex(MmTag.Untagged), ids: ids)
+	emitStoreField(module, block: armed, record: box, offset: ReplyCellOffset, value: cell)
+	module.setTerminator(armed, op: StdOp.ret(box))
+
+	module.functions.push(func)
+end 'buildGtReplyLater'
+
+function buildGtReplyAnswer(module StdModule)
+	let func = IrFunction.createFromStd(GtReplyAnswerName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
+	let ids = ValueMinter.create(2)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let live = module.addBlock(func, label: b"replylive", heat: BlockHeat.normal)
+	let answered = module.addBlock(func, label: b"replyanswered", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: 2)
+	let box = 0
+	let value = 1
+
+	let cell = emitLoadField(module, block: entry, record: box, offset: ReplyCellOffset, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: cell, pred: StdCmpPred.ne, against: 0, whenTrue: live, whenFalse: answered, ids: ids)
+
+	emitRuntimeAbort(module, func: func, block: answered, abort: RuntimeAbort.serviceSendProtocolBroken, ids: ids)
+
+	emitStoreField(module, block: live, record: box, offset: ReplyCellOffset, value: emitConst(module, block: live, value: 0, ids: ids))
+	module.appendOp(live, op: StdOp.call(ids.mint(), callee: GtCellCompleteName, args: threeArgs(cell, second: value, third: emitConst(module, block: live, value: 0, ids: ids))))
+	module.appendOp(live, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(box)))
+	module.setTerminator(live, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtReplyAnswer'
+
+function buildGtReplyDestruct(module StdModule)
+	let func = IrFunction.createFromStd(GtReplyDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true)
+	let ids = ValueMinter.create(1)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let unanswered = module.addBlock(func, label: b"replyunanswered", heat: BlockHeat.cold)
+	let done = module.addBlock(func, label: b"replydone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0
+
+	let cell = emitLoadField(module, block: entry, record: box, offset: ReplyCellOffset, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: cell, pred: StdCmpPred.ne, against: 0, whenTrue: unanswered, whenFalse: done, ids: ids)
+
+	emitStoreField(module, block: unanswered, record: box, offset: ReplyCellOffset, value: emitConst(module, block: unanswered, value: 0, ids: ids))
+	module.appendOp(unanswered, op: StdOp.call(ids.mint(), callee: GtCellCompleteName, args: threeArgs(cell, second: emitConst(module, block: unanswered, value: 0, ids: ids), third: emitConst(module, block: unanswered, value: GtReplyStoppedFlag, ids: ids))))
+	module.setTerminator(unanswered, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtReplyDestruct'
 
 export function isMachineBindingCallee(callee ByteArray) returns bool
 	return callee.equals(GtPinMachineName) or callee.equals(GtUnpinMachineName) or callee.equals(GtCurrentMachineName) or callee.equals(GtPinDepthName) or callee.equals(GtPinAcquireName) or callee.equals(GtPinTokenName) or callee.equals(GtPinReleaseName) or callee.equals(GtPinSurrenderName) or callee.equals(GtPinDestructName)
@@ -5193,6 +5333,11 @@ end 'buildGtDrainAtExit'
 // caller answers without that wait, for the reason the renounce mark in `buildGtPromiseDrop` gives;
 // its sum is taken unlocked, so steps in flight on other machines can leave it transiently negative,
 // and it is clamped to 0.
+export function emitBranchOnRenounced(module StdModule, block IrBlock, gt ValueId, whenRenounced IrBlock, whenHeld IrBlock, ids ValueMinter)
+	let renounced = emitLoadField(module, block: block, record: gt, offset: GtOffRenounced, ids: ids)
+	emitBranchOnCompare(module, block: block, value: renounced, pred: StdCmpPred.ne, against: GtPromiseHeld, whenTrue: whenRenounced, whenFalse: whenHeld, ids: ids)
+end 'emitBranchOnRenounced'
+
 function buildGtQuiesce(module StdModule)
 	let func = IrFunction.createFromStd(GtQuiesceName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(0))
 	let ids = ValueMinter.create(0)
@@ -5205,14 +5350,12 @@ function buildGtQuiesce(module StdModule)
 	let negative = module.addBlock(func, label: b"quiescenegative", heat: BlockHeat.normal)
 	let counted = module.addBlock(func, label: b"quiescecounted", heat: BlockHeat.normal)
 
-	let renouncedBeforeParking = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffRenounced, ids: ids)
-	emitBranchOnCompare(module, block: entry, value: renouncedBeforeParking, pred: StdCmpPred.ne, against: GtPromiseHeld, whenTrue: renounced, whenFalse: wait, ids: ids)
+	emitBranchOnRenounced(module, block: entry, gt: emitLoadCurrentGt(module, block: entry, ids: ids), whenRenounced: renounced, whenHeld: wait, ids: ids)
 
 	emitGtPark(module, ids: ids, cur: wait, kind: GtParkKind.quiesce.rawValue, arg: emitConst(module, block: wait, value: GtParkArgUnused, ids: ids), cont: resumed)
 
 	let quiescer = emitLoadCurrentGt(module, block: resumed, ids: ids)
-	let renouncedWhileParked = emitLoadField(module, block: resumed, record: quiescer, offset: GtOffRenounced, ids: ids)
-	emitBranchOnCompare(module, block: resumed, value: renouncedWhileParked, pred: StdCmpPred.ne, against: GtPromiseHeld, whenTrue: renounced, whenFalse: answered, ids: ids)
+	emitBranchOnRenounced(module, block: resumed, gt: quiescer, whenRenounced: renounced, whenHeld: answered, ids: ids)
 
 	module.setTerminator(answered, op: StdOp.ret(emitLoadField(module, block: answered, record: quiescer, offset: GtOffParkArg, ids: ids)))
 
@@ -5224,6 +5367,127 @@ function buildGtQuiesce(module StdModule)
 
 	module.functions.push(func)
 end 'buildGtQuiesce'
+
+function emitFlushClaim(module StdModule, func IrFunction, prefix String, entry IrBlock, won IrBlock, bail IrBlock, yields bool, ids ValueMinter) returns (ValueId, ValueId, IrBlock)
+	let haveOffset = module.addBlock(func, label: freeze "{prefix}offset".toByteArray(), heat: BlockHeat.normal)
+	let haveMachine = module.addBlock(func, label: freeze "{prefix}machine".toByteArray(), heat: BlockHeat.normal)
+	let checkLocks = module.addBlock(func, label: freeze "{prefix}locks".toByteArray(), heat: BlockHeat.normal)
+	let claim = module.addBlock(func, label: freeze "{prefix}claim".toByteArray(), heat: BlockHeat.normal)
+	let lost = module.addBlock(func, label: freeze "{prefix}lost".toByteArray(), heat: BlockHeat.normal)
+	let poll = module.addBlock(func, label: freeze "{prefix}poll".toByteArray(), heat: BlockHeat.normal)
+	let pollTime = module.addBlock(func, label: freeze "{prefix}polltime".toByteArray(), heat: BlockHeat.normal)
+	let pollAgain = module.addBlock(func, label: freeze "{prefix}pollagain".toByteArray(), heat: BlockHeat.normal)
+	let finish = module.addBlock(func, label: freeze "{prefix}finish".toByteArray(), heat: BlockHeat.normal)
+
+	let (m, running) = emitLoadRunningGtOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveThread: checkLocks, bail: bail, ids: ids)
+
+	let locksHeld = emitLoadField(module, block: checkLocks, record: m, offset: MOffLocks, ids: ids)
+
+	if yields 'aGreenThreadMustBeAbleToYield'
+		let checkStack = module.addBlock(func, label: freeze "{prefix}stack".toByteArray(), heat: BlockHeat.normal)
+		let checkStatus = module.addBlock(func, label: freeze "{prefix}status".toByteArray(), heat: BlockHeat.normal)
+
+		emitBranchOnCompare(module, block: checkLocks, value: locksHeld, pred: StdCmpPred.eq, against: 0, whenTrue: checkStack, whenFalse: bail, ids: ids)
+
+		let stackBase = emitLoadField(module, block: checkStack, record: running, offset: GtOffStackBase, ids: ids)
+		emitBranchOnCompare(module, block: checkStack, value: stackBase, pred: StdCmpPred.ne, against: 0, whenTrue: checkStatus, whenFalse: bail, ids: ids)
+
+		let status = emitGtLoadPublishedStatus(module, block: checkStatus, gt: running, ids: ids)
+		let parking = emitGtStatusEquals(module, block: checkStatus, status: status, want: GtStatus.waiting, ids: ids)
+		module.setTerminator(checkStatus, op: StdOp.condBranch(parking, thenBlockId: bail.id, elseBlockId: claim.id))
+	end 'aGreenThreadMustBeAbleToYield' else 'cannotYieldHere'
+		emitBranchOnCompare(module, block: checkLocks, value: locksHeld, pred: StdCmpPred.eq, against: 0, whenTrue: claim, whenFalse: bail, ids: ids)
+	end 'cannotYieldHere'
+
+	let claimed = emitCasGlobalWord(module, block: claim, label: GtPanicFlushClaimLabel, expected: emitConst(module, block: claim, value: 0, ids: ids), replacement: emitConst(module, block: claim, value: GtPanicFlushClaimed, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: claim, result: claimed, lost: lost, won: won, ids: ids)
+
+	let pollDeadline = ids.mint()
+	poll.blockArgs.push(IrBlockArg.create(pollDeadline, argType: StdType.i64))
+	emitBranchCarrying(module, from: lost, to: poll, values: argsOf(emitFlushDeadline(module, block: lost, ids: ids)))
+
+	if yields 'aGreenThreadMayYield'
+		module.appendOp(poll, op: StdOp.call(ids.mint(), callee: GtReschedName, args: ValueIdArray.create(0)))
+	end 'aGreenThreadMayYield'
+
+	let word = emitLoadAcquireGlobalWord(module, block: poll, label: GtPanicFlushClaimLabel, ids: ids)
+	emitBranchOnCompare(module, block: poll, value: word, pred: StdCmpPred.eq, against: GtPanicFlushFinished, whenTrue: bail, whenFalse: pollTime, ids: ids)
+
+	emitBranchOnCompareValues(module, block: pollTime, a: emitGtNowNs(module, block: pollTime, ids: ids), pred: StdCmpPred.ge, b: pollDeadline, whenTrue: bail, whenFalse: pollAgain, ids: ids)
+	emitBranchCarrying(module, from: pollAgain, to: poll, values: argsOf(pollDeadline))
+
+	emitStoreReleaseGlobalWord(module, block: finish, label: GtPanicFlushClaimLabel, value: emitConst(module, block: finish, value: GtPanicFlushFinished, ids: ids), ids: ids)
+	module.setTerminator(finish, op: StdOp.branch(bail.id))
+
+	return (m, running, finish)
+end 'emitFlushClaim'
+
+function emitFlushDeadline(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	return emitBin(module, block: block, a: emitGtNowNs(module, block: block, ids: ids), b: emitConst(module, block: block, value: GtPanicFlushBudgetNs, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+end 'emitFlushDeadline'
+
+function emitClaimedFlushWait(module StdModule, func IrFunction, prefix String, from IrBlock, yields bool, finish IrBlock, ids ValueMinter)
+	let wait = module.addBlock(func, label: freeze "{prefix}wait".toByteArray(), heat: BlockHeat.normal)
+	let timeCheck = module.addBlock(func, label: freeze "{prefix}time".toByteArray(), heat: BlockHeat.normal)
+	let again = module.addBlock(func, label: freeze "{prefix}again".toByteArray(), heat: BlockHeat.normal)
+
+	let armedDeadline = ids.mint()
+	wait.blockArgs.push(IrBlockArg.create(armedDeadline, argType: StdType.i64))
+	emitBranchCarrying(module, from: from, to: wait, values: argsOf(emitFlushDeadline(module, block: from, ids: ids)))
+
+	if yields 'aGreenThreadMayYield'
+		module.appendOp(wait, op: StdOp.call(ids.mint(), callee: GtReschedName, args: ValueIdArray.create(0)))
+	end 'aGreenThreadMayYield'
+
+	emitSchedLockEnter(module, block: wait, ids: ids)
+	let settled = emitSchedNothingElseRuns(module, block: wait, ids: ids)
+	emitSchedLockLeave(module, block: wait, ids: ids)
+	module.setTerminator(wait, op: StdOp.condBranch(settled, thenBlockId: finish.id, elseBlockId: timeCheck.id))
+
+	emitBranchOnCompareValues(module, block: timeCheck, a: emitGtNowNs(module, block: timeCheck, ids: ids), pred: StdCmpPred.ge, b: armedDeadline, whenTrue: finish, whenFalse: again, ids: ids)
+	emitBranchCarrying(module, from: again, to: wait, values: argsOf(armedDeadline))
+end 'emitClaimedFlushWait'
+
+function buildGtPanicFlush(module StdModule)
+	let func = IrFunction.createFromStd(GtPanicFlushName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	let ids = ValueMinter.create(0)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let arm = module.addBlock(func, label: b"panicflusharm", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"panicflushdone", heat: BlockHeat.normal)
+
+	let (_, _, finish) = emitFlushClaim(module, func: func, prefix: "panicflush", entry: entry, won: arm, bail: doneBlock, yields: true, ids: ids)
+	emitClaimedFlushWait(module, func: func, prefix: "panicflush", from: arm, yields: true, finish: finish, ids: ids)
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildGtPanicFlush'
+
+// Runs on a fatal path's system stack with the dying thread still current: its guard word is zeroed
+// before any guarded callee runs, or the first prologue reads the system stack as an overflow and
+// re-enters the fatal chunk. Pinned by specs/fault-log-flush.md.
+function buildGtFaultFlush(module StdModule)
+	let func = IrFunction.createFromStd(GtFaultFlushName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(0))
+	let ids = ValueMinter.create(0)
+
+	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let arm = module.addBlock(func, label: b"faultflusharm", heat: BlockHeat.normal)
+	let handOff = module.addBlock(func, label: b"faultflushhandoff", heat: BlockHeat.normal)
+	let doneBlock = module.addBlock(func, label: b"faultflushdone", heat: BlockHeat.normal)
+
+	let (m, dying, finish) = emitFlushClaim(module, func: func, prefix: "faultflush", entry: entry, won: arm, bail: doneBlock, yields: false, ids: ids)
+
+	emitStoreField(module, block: arm, record: dying, offset: GtOffStackGuard, value: emitConst(module, block: arm, value: 0, ids: ids))
+	let processor = emitLoadField(module, block: arm, record: m, offset: MOffCurrentP, ids: ids)
+	emitBranchOnCompare(module, block: arm, value: processor, pred: StdCmpPred.eq, against: 0, whenTrue: finish, whenFalse: handOff, ids: ids)
+
+	emitStoreField(module, block: handOff, record: m, offset: MOffCurrentP, value: emitConst(module, block: handOff, value: 0, ids: ids))
+	module.appendOp(handOff, op: StdOp.call(ids.mint(), callee: SchedHandoffPName, args: argsOf(processor)))
+	emitClaimedFlushWait(module, func: func, prefix: "faultflush", from: handOff, yields: false, finish: finish, ids: ids)
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildGtFaultFlush'
 
 function emitReleaseOwnersAfterDrain(module StdModule, func IrFunction, cur IrBlock, releasesRegistry bool, releasesGlobals bool, code ValueId, ids ValueMinter) returns IrBlock
 	if not (releasesRegistry or releasesGlobals) 'nothingOwnsAService'
@@ -6178,6 +6442,9 @@ function buildGtPromiseRenounce(module StdModule)
 	let sendParked = module.addBlock(func, label: b"droppedsendpark", heat: BlockHeat.normal)
 	let sendWake = module.addBlock(func, label: b"droppedsendwake", heat: BlockHeat.normal)
 	let notSendParked = module.addBlock(func, label: b"droppednotsendpark", heat: BlockHeat.normal)
+	let acquireParked = module.addBlock(func, label: b"droppedacquirepark", heat: BlockHeat.normal)
+	let acquireWake = module.addBlock(func, label: b"droppedacquirewake", heat: BlockHeat.normal)
+	let notAcquireParked = module.addBlock(func, label: b"droppednotacquirepark", heat: BlockHeat.normal)
 	let waitingArm = module.addBlock(func, label: b"waitingarm", heat: BlockHeat.normal)
 	let notAwaiting = module.addBlock(func, label: b"droppednotawaiting", heat: BlockHeat.normal)
 	let pollerParked = module.addBlock(func, label: b"droppedpollerpark", heat: BlockHeat.normal)
@@ -6230,10 +6497,16 @@ function buildGtPromiseRenounce(module StdModule)
 	// ⭐⭐ **A THREAD PARKED IN AN AWAIT OR AN awaitAny IS RENOUNCED, NOT DEREGISTERED.** Its frame holds the
 	// promise it awaits, and only its own body can drop that; the completion it waits for readies it, it runs
 	// its body out, and its runner reclaims it — the queued arm's contract.
-	let inAwait = emitCompareWithConstant(module, block: notSendParked, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.awaitPromise.rawValue, ids: ids)
-	let inAwaitAny = emitCompareWithConstant(module, block: notSendParked, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.awaitAny.rawValue, ids: ids)
-	let awaiting = emitBin(module, block: notSendParked, a: inAwait, b: inAwaitAny, opcode: StdBinOpcode.bitOr, ids: ids)
-	module.setTerminator(notSendParked, op: StdOp.condBranch(awaiting, thenBlockId: queuedArm.id, elseBlockId: notAwaiting.id))
+	emitBranchOnCompare(module, block: notSendParked, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.cownAcquire.rawValue, whenTrue: acquireParked, whenFalse: notAcquireParked, ids: ids)
+
+	let acquireAbandonDebt = ids.mint()
+	module.appendOp(acquireParked, op: StdOp.call(acquireAbandonDebt, callee: CownAcquireAbandonName, args: argsOf(gt)))
+	emitSchedWakeIfOwed(module, cur: acquireParked, owed: acquireAbandonDebt, wake: acquireWake, cont: queuedArm, ids: ids)
+
+	let inAwait = emitCompareWithConstant(module, block: notAcquireParked, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.awaitPromise.rawValue, ids: ids)
+	let inAwaitAny = emitCompareWithConstant(module, block: notAcquireParked, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.awaitAny.rawValue, ids: ids)
+	let awaiting = emitBin(module, block: notAcquireParked, a: inAwait, b: inAwaitAny, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(notAcquireParked, op: StdOp.condBranch(awaiting, thenBlockId: queuedArm.id, elseBlockId: notAwaiting.id))
 
 	// ⭐⭐⭐ **A PARKED THREAD IS RENOUNCED, NOT ABANDONED — the AWAIT arm's answer, generalised.**
 	// Nothing can unwind a SUSPENDED frame from outside: freeing the stack of a thread that will never
@@ -6754,12 +7027,18 @@ function buildGtSleep(module StdModule, tracing GtTracing)
 	let ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	let begin = module.addBlock(func, label: b"sleepbegin", heat: BlockHeat.normal)
+	let cancelled = module.addBlock(func, label: b"sleepcancelled", heat: BlockHeat.normal)
 	let timed = module.addBlock(func, label: b"sleeptimed", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ms = 0
 
-	let deadline = emitGtDeadlineAfterMs(module, func: func, cur: entry, ms: ms, joined: timed, ids: ids)
+	emitBranchOnRenounced(module, block: entry, gt: emitLoadCurrentGt(module, block: entry, ids: ids), whenRenounced: cancelled, whenHeld: begin, ids: ids)
+	module.appendOp(cancelled, op: StdOp.call(ids.mint(), callee: GtReschedName, args: ValueIdArray.create(0)))
+	module.setTerminator(cancelled, op: StdOp.retVoid)
+
+	let deadline = emitGtDeadlineAfterMs(module, func: func, cur: begin, ms: ms, joined: timed, ids: ids)
 	entry = timed
 
 	// The trace pair BRACKETS the park, exactly as `__gt_io_park`'s does — same exit, different tag, and the
@@ -6920,6 +7199,10 @@ function buildGtRegisterPark(module StdModule)
 	let quiesceArm = module.addBlock(func, label: b"parkquiesce", heat: BlockHeat.normal)
 	let quiesceTaken = module.addBlock(func, label: b"parkquiescetaken", heat: BlockHeat.cold)
 	let quiesceRegister = module.addBlock(func, label: b"parkquiesceregister", heat: BlockHeat.normal)
+	let notQuiesce = module.addBlock(func, label: b"notparkquiesce", heat: BlockHeat.normal)
+	let acquireArm = module.addBlock(func, label: b"parkacquire", heat: BlockHeat.normal)
+	let acquireParked = module.addBlock(func, label: b"parkacquireparked", heat: BlockHeat.normal)
+	let acquireGranted = module.addBlock(func, label: b"parkacquiregranted", heat: BlockHeat.normal)
 	let resumeRunnable = module.addBlock(func, label: b"parkresumerunnable", heat: BlockHeat.normal)
 	let unknownArm = module.addBlock(func, label: b"parkunknown", heat: BlockHeat.normal)
 	let doneBlock = module.addBlock(func, label: b"parkdone", heat: BlockHeat.normal)
@@ -6978,7 +7261,16 @@ function buildGtRegisterPark(module StdModule)
 
 	emitBranchOnCompare(module, block: notAwait, value: kind, pred: StdCmpPred.eq, against: GtParkKind.awaitAny.rawValue, whenTrue: awaitAnyArm, whenFalse: notAwaitAny, ids: ids)
 
-	emitBranchOnCompare(module, block: notAwaitAny, value: kind, pred: StdCmpPred.eq, against: GtParkKind.quiesce.rawValue, whenTrue: quiesceArm, whenFalse: unknownArm, ids: ids)
+	emitBranchOnCompare(module, block: notAwaitAny, value: kind, pred: StdCmpPred.eq, against: GtParkKind.quiesce.rawValue, whenTrue: quiesceArm, whenFalse: notQuiesce, ids: ids)
+
+	emitBranchOnCompare(module, block: notQuiesce, value: kind, pred: StdCmpPred.eq, against: GtParkKind.cownAcquire.rawValue, whenTrue: acquireArm, whenFalse: unknownArm, ids: ids)
+
+	emitGtMarkWaiting(module, block: acquireArm, gt: gt, ids: ids)
+	let acquireRegistered = emitCasField(module, block: acquireArm, record: arg, offset: GrpOffWaiter, expected: emitConst(module, block: acquireArm, value: 0, ids: ids), replacement: gt, ids: ids)
+	emitBranchOnCasLost(module, block: acquireArm, result: acquireRegistered, lost: acquireGranted, won: acquireParked, ids: ids)
+
+	emitBranchCarrying(module, from: acquireParked, to: doneBlock, values: argsOf(noDebt))
+	emitBranchCarrying(module, from: acquireGranted, to: doneBlock, values: argsOf(emitGtReady(module, block: acquireGranted, gt: gt, gate: GtReadyGate.fromWaiting, hold: SchedLockHold.free, ids: ids)))
 
 	emitGtMarkWaiting(module, block: quiesceArm, gt: gt, ids: ids)
 	let registered = emitCasGlobalWord(module, block: quiesceArm, label: GtQuiesceWaiterLabel, expected: emitConst(module, block: quiesceArm, value: 0, ids: ids), replacement: gt, ids: ids)

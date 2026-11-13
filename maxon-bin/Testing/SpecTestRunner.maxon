@@ -967,7 +967,7 @@ end 'TestRun'
 // `prepared` and `observations` hold exactly one entry per selected test in declaration order, a
 // `notRequired` observation included, so the third pass pairs them by index; a length that disagrees
 // panics rather than misattributing a result.
-export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap, runWorkingDir FilePath) returns SpecRun throws CompileError
+export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, driver CompileDriver.handle, runWorkingDir FilePath) returns SpecRun throws CompileError
 	var cpu = SuiteCpuTally.zero()
 
 	let specPath = specDir.join("{specName}{SpecFileExtension}")
@@ -990,7 +990,7 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	let exeExtension = executableExtension(effectiveTarget.os)
 	let specDirName = specDir.filename()
 	let actions = irActionsFor(tests, holdsPins: specHoldsAnyPin(parsed.tests), mode: mode, effectiveTarget: effectiveTarget)
-	let batch = prepareBatch(tests, actions: actions, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, mode: mode, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	let batch = prepareBatch(tests, actions: actions, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, mode: mode, effectiveTarget: effectiveTarget, driver: driver)
 	let reminted = BlockRemintArray.create(0)
 	let prepared = PreparedTestArray.create(tests.count(), zeroed: false)
 
@@ -999,12 +999,12 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 
 		match batchedStep 'batched'
 			found(step) then prepared.push(step)
-			absent then prepared.push(preparedAfterBatching(test, at: iter.index(), refusals: batch.refusals, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: irActionAt(actions, index: iter.index()), effectiveTarget: effectiveTarget, fileMemos: fileMemos))
+			absent then prepared.push(preparedAfterBatching(test, at: iter.index(), refusals: batch.refusals, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: irActionAt(actions, index: iter.index()), effectiveTarget: effectiveTarget, driver: driver))
 		end 'batched'
 	end 'eachCompile'
 
 	let firstPass = executeRuns(prepared, batches: batch.batches, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
-	let performed = withBatchedFailuresDiagnosed(firstPass, prepared: prepared, programCount: batch.batches.count(), tests: tests, actions: actions, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	let performed = withBatchedFailuresDiagnosed(firstPass, prepared: prepared, programCount: batch.batches.count(), tests: tests, actions: actions, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, driver: driver)
 
 	for (iter, test) in tests.withIterator() 'eachVerdict'
 		let step = try prepared.get(iter.index()) otherwise panic("runOneSpec: {prepared.count()} prepared tests for {tests.count()} selected — one is pushed per selected test, in one loop")
@@ -1084,7 +1084,7 @@ end 'batchedShare'
 
 // A batched FAIL is compiled alone only to diagnose it, never to recover it: a solo PASS becomes a FAIL
 // naming the batching gap (`batchingGapVerdict`), and a solo FAIL is the case's verdict.
-function withBatchedFailuresDiagnosed(performed RunsPerformed, prepared PreparedTestArray, programCount ElementIndex, tests SpecTestArray, actions IrActionArray, specName String, specDirName String, tempDir FilePath, exeExtension String, runWorkingDir FilePath, effectiveTarget Target, fileMemos SharedFileMemoMap) returns RunsPerformed
+function withBatchedFailuresDiagnosed(performed RunsPerformed, prepared PreparedTestArray, programCount ElementIndex, tests SpecTestArray, actions IrActionArray, specName String, specDirName String, tempDir FilePath, exeExtension String, runWorkingDir FilePath, effectiveTarget Target, driver CompileDriver.handle) returns RunsPerformed
 	let failed = TestRunIndexArray.create(0)
 	let reasons = BatchedFailureMap.create()
 
@@ -1104,7 +1104,7 @@ function withBatchedFailuresDiagnosed(performed RunsPerformed, prepared Prepared
 	for at in failed 'eachAffected'
 		let test = try tests.get(at) otherwise panic("withBatchedFailuresDiagnosed: test {at} is past the {tests.count()} the spec selected")
 		let action = irActionAt(actions, index: at)
-		let step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: action, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		let step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: action, effectiveTarget: effectiveTarget, driver: driver)
 		again.push(step)
 		try prepared.set(at, value: step) otherwise panic("withBatchedFailuresDiagnosed: prepared test {at} is past the {prepared.count()} the spec prepared")
 	end 'eachAffected'
@@ -2222,7 +2222,7 @@ function batchableMembers(tests SpecTestArray, actions IrActionArray) returns Ba
 	return members
 end 'batchableMembers'
 
-function prepareBatch(tests SpecTestArray, actions IrActionArray, specName String, specDirName String, tempDir FilePath, exeExtension String, mode SpecRunMode, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchPreparation
+function prepareBatch(tests SpecTestArray, actions IrActionArray, specName String, specDirName String, tempDir FilePath, exeExtension String, mode SpecRunMode, effectiveTarget Target, driver CompileDriver.handle) returns BatchPreparation
 	let batches = PreparedBatchArray.create(0)
 	let refusals = BatchRefusalMap.create()
 	let harnessErrors = StringArray.create(0)
@@ -2237,14 +2237,14 @@ function prepareBatch(tests SpecTestArray, actions IrActionArray, specName Strin
 		return BatchPreparation.create(batches, refusals: refusals, harnessErrors: harnessErrors)
 	end 'tooFewToShare'
 
-	let claimed = claimedMembersOf(candidates, tests: tests, specDirName: specDirName, tempDir: tempDir, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	let claimed = claimedMembersOf(candidates, tests: tests, specDirName: specDirName, tempDir: tempDir, effectiveTarget: effectiveTarget)
 
 	for (iter, group) in partitionedByClaims(claimed).withIterator() 'eachProgram'
 		emitWorkerStep(WorkerStep.compile, label: "{specName}: program {iter.index()} for {group.members.count()} run case(s)")
 
 		// The ordinal is the program's position among the BUILT programs, which `RunVia.batched` indexes
 		// into, so a group that builds nothing must not take one.
-		let outcome = buildBatchDroppingRefused(tempDir, ordinal: batches.count(), tests: tests, members: group.members, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		let outcome = buildBatchDroppingRefused(tempDir, ordinal: batches.count(), tests: tests, members: group.members, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
 
 		for (at, refusal) in outcome.refusals 'eachRefusal'
 			refusals.upsert(at, value: refusal)
@@ -2267,13 +2267,13 @@ end 'prepareBatch'
 // One front-end pass per candidate, before any program is built: it answers whether the case's
 // initializers run program code, which library names it shadows, and the names it declares and
 // mentions, from which the partition keeps conflicting cases apart. A case it keeps out runs alone.
-function claimedMembersOf(members BatchMemberArray, tests SpecTestArray, specDirName String, tempDir FilePath, effectiveTarget Target, fileMemos SharedFileMemoMap) returns ClaimedMemberArray
+function claimedMembersOf(members BatchMemberArray, tests SpecTestArray, specDirName String, tempDir FilePath, effectiveTarget Target) returns ClaimedMemberArray
 	let kept = ClaimedMemberArray.create(0)
 
 	for member in members 'eachMember'
 		let test = try tests.get(member.testIndex) otherwise panic("claimedMembersOf: member names test {member.testIndex}, past the {tests.count()} the spec selected")
 
-		match claimedPlacementOf(member, answer: claimAnswerFor(tempDir, test: test, specDirName: specDirName, effectiveTarget: effectiveTarget, fileMemos: fileMemos)) 'placement'
+		match claimedPlacementOf(member, answer: claimAnswerFor(tempDir, test: test, specDirName: specDirName, effectiveTarget: effectiveTarget)) 'placement'
 			together(claimed) then kept.push(claimed)
 			apart then continue
 		end 'placement'
@@ -2282,16 +2282,15 @@ function claimedMembersOf(members BatchMemberArray, tests SpecTestArray, specDir
 	return kept
 end 'claimedMembersOf'
 
-function claimAnswerFor(tempDir FilePath, test SpecTest, specDirName String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns ClaimAnswer
+function claimAnswerFor(tempDir FilePath, test SpecTest, specDirName String, effectiveTarget Target) returns ClaimAnswer
 	match stageTest(tempDir, test: test, specDirName: specDirName) 'staging'
 		failed then return ClaimAnswer.refused
-		staged(case) then return stagedClaimAnswer(case, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		staged(case) then return stagedClaimAnswer(case, effectiveTarget: effectiveTarget)
 	end 'staging'
 end 'claimAnswerFor'
 
-function stagedClaimAnswer(staged StagedTest, effectiveTarget Target, fileMemos SharedFileMemoMap) returns ClaimAnswer
-	let session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
-	let claims = try claimsOfSources(staged.buildTargets, target: effectiveTarget, session: session, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir)) otherwise 'refused'
+function stagedClaimAnswer(staged StagedTest, effectiveTarget Target) returns ClaimAnswer
+	let claims = try claimsOfSources(staged.buildTargets, target: effectiveTarget, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir)) otherwise 'refused'
 		deleteWrittenFiles(staged.writtenFiles)
 		return ClaimAnswer.refused
 	end 'refused'
@@ -2320,8 +2319,8 @@ function withBatchBreakNote(run TestRun, refusal BatchRefusal) returns TestRun
 	end 'outcome'
 end 'withBatchBreakNote'
 
-function preparedAfterBatching(test SpecTest, at ElementIndex, refusals BatchRefusalMap, specName String, specDirName String, tempDir FilePath, exeExtension String, action IrAction, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
-	let step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: action, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+function preparedAfterBatching(test SpecTest, at ElementIndex, refusals BatchRefusalMap, specName String, specDirName String, tempDir FilePath, exeExtension String, action IrAction, effectiveTarget Target, driver CompileDriver.handle) returns PreparedTest
+	let step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: action, effectiveTarget: effectiveTarget, driver: driver)
 	let refusal = try refusals.get(at) otherwise return step
 	return refusedBatchStep(step, refusal: refusal)
 end 'preparedAfterBatching'
@@ -2350,7 +2349,7 @@ end 'batchSteps'
 
 // Compile one test in this process and take its verdict as far as it can go without running the
 // program.
-function prepareOneTest(test SpecTest, specName String, specDirName String, tempDir FilePath, exeExtension String, action IrAction, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
+function prepareOneTest(test SpecTest, specName String, specDirName String, tempDir FilePath, exeExtension String, action IrAction, effectiveTarget Target, driver CompileDriver.handle) returns PreparedTest
 	let exeBase = tempDir.join(test.name)
 
 	// The driver appends the platform extension to the `outputOverride` value
@@ -2364,14 +2363,14 @@ function prepareOneTest(test SpecTest, specName String, specDirName String, temp
 
 	match staging 'staging'
 		failed(reason) then return PreparedTest.finished(TestRun.notCompiled(reason))
-		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, action: action, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		staged(s) then return compileStagedTest(test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, action: action, effectiveTarget: effectiveTarget, driver: driver)
 	end 'staging'
 end 'prepareOneTest'
 
 // Compile a test whose source is already on disk and decide as much of its verdict as the compiler's
 // answer alone can decide. Split out of `prepareOneTest` only because staging can FAIL, and a union's
 // arms are the honest way to say so — the two functions are one story read top to bottom.
-function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, action IrAction, effectiveTarget Target, fileMemos SharedFileMemoMap) returns PreparedTest
+function compileStagedTest(test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, action IrAction, effectiveTarget Target, driver CompileDriver.handle) returns PreparedTest
 	// ⭐⭐ **THE BREADCRUMB, IMMEDIATELY BEFORE THE COMPILE, AND THIS IS THE WHOLE REASON IT EXISTS.**
 	// The compile runs in THIS process, so a compiler panic kills this worker and the parent never
 	// receives a single record for the job. The parent's plan tells it which tests it is owed; only
@@ -2380,7 +2379,7 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 	// `SpecWorkerPool.emitWorkerStep`.
 	emitWorkerStep(WorkerStep.compile, label: testLabel(specName, testName: test.name))
 
-	let compiled = compileOneTest(test, staged: staged, exeBase: exeBase, exePath: exePath, emitIr: rendersTargetIr(test, action: action, effectiveTarget: effectiveTarget), effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	let compiled = compileOneTest(test, staged: staged, exeBase: exeBase, exePath: exePath, emitIr: rendersTargetIr(test, action: action, effectiveTarget: effectiveTarget), effectiveTarget: effectiveTarget, driver: driver)
 
 	if test.compilesAsLibrary() 'theSpecsLibraryWalkMustNotSeeIt'
 		deleteWrittenFiles(staged.writtenFiles)
@@ -2419,9 +2418,9 @@ export function testLabel(specName String, testName String) returns String
 end 'testLabel'
 
 // ⭐⭐ **THE COMPILE ITSELF — IN THIS PROCESS, THROUGH `Compiler.compileToProduct`, WHICH IS THE SAME
-// PIPELINE DRIVER A COMMAND LINE GOES THROUGH.** There is deliberately no second `loadProject →
-// compileToCodeResult → writeExecutable` sequence here: the harness calls the ONE driver and the
-// command line calls it too, so the two cannot come to disagree about what a build is.
+// PIPELINE DRIVER A COMMAND LINE GOES THROUGH.** There is deliberately no second sequence here
+// that loads a project, compiles it and writes the executable: the harness calls the ONE driver and
+// the command line calls it too, so the two cannot come to disagree about what a build is.
 //
 // ⭐ **ONE CAPTURING SINK SERVES THE WHOLE CALL, INCLUDING THE FAILURE REPORT.** A refused compile
 // writes its diagnostics through the session's `DiagnosticSink` from inside the pipeline; the
@@ -2433,8 +2432,8 @@ end 'testLabel'
 // `metricsPath` is deliberately not passed: `--metrics`'s TSV existed on this path only so the CPU
 // total could be read back off disk, and `CompileProduct.totalCpuTicks` IS that total — the same
 // number, from the same whole-compile probe, without the file.
-function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exePath FilePath, emitIr bool, effectiveTarget Target, fileMemos SharedFileMemoMap) returns CompiledTest
-	let session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
+function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exePath FilePath, emitIr bool, effectiveTarget Target, driver CompileDriver.handle) returns CompiledTest
+	let session = DriverSession.capturing()
 
 	// The target is stated EXPLICITLY even when it IS the host — the runner says what it is testing
 	// rather than trusting a default to agree with it, exactly as the old `--target=` argument did.
@@ -2444,7 +2443,8 @@ function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exeP
 	// no printer for a name to reach. An `<!-- AsyncTrace -->` case and a capture case each ask for
 	// their producer per CASE, so no other case pays for it and an untraced program is byte-for-byte
 	// what it was.
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exeBase.toString()), emitIr: emitIr, runtimeIrNames: test.runtimeNames.clone(), asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), poisonFreed: test.buildsWithFreedBoxPoison(), debugInfo: test.debugInfo, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir), scriptlib: ScriptlibLoad.omitted, session: session) otherwise (e) 'compileFailed'
+	let request = freeze CompileRequest.create(DriverWork.build, origin: ProjectOrigin.sources, target: effectiveTarget, session: session, inputPaths: staged.buildTargets, outputOverride: StatedText.stated(exeBase.toString()), emitIr: emitIr, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), poisonFreed: test.buildsWithFreedBoxPoison(), debugInfo: test.debugInfo, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir), scriptlib: ScriptlibLoad.omitted).clone()
+	let product = try compileToProduct(driver, request: request, session: session) otherwise (e) 'compileFailed'
 		reportCompileError(e, sink: session.diagnostics)
 		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), cpu: CompileCpu.unreported, irText: StatedText.unstated, exePath: exePath)
 	end 'compileFailed'

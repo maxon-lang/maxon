@@ -3168,6 +3168,7 @@ function peerLeft(fault HttpHandlerFault) returns bool
 		threw or
 		threwAfterResponding or
 		threwWithoutAnyAnswer or
+		threwAfterDeferring or
 		returnedWithoutResponding or
 		returnedWithoutAnyAnswer or
 		acceptInterrupted gives false

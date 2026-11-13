@@ -111,6 +111,7 @@
 // `pruneRungDir`, which enforces the other half of the invariant.
 let RungMetricsSuffix = ".metrics.tsv"
 let RungOutputSuffix = ".out"
+let DebugSidecarSuffix = ".mxdbg"
 
 // The compiler must be given a RELATIVE rung path, and this is load-bearing rather than tidy.
 //
@@ -589,6 +590,8 @@ function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) return
 	let metricsPath = try corpusRootFile(root, name: "{RungDirPrefix}{rung.index}{RungMetricsSuffix}")
 	let outputBase = try corpusRootFile(root, name: "{RungDirPrefix}{rung.index}{RungOutputSuffix}")
 
+	try removeRungProducts(outputBase, rung: rung)
+
 	let argv = StringArray.create(4, zeroed: false)
 	argv.push(BuildSubcommandName)
 	argv.push(rung.dir.toString())
@@ -629,7 +632,7 @@ end 'compileRung'
 // target model. `SpecTestRunner` asks `executableExtension(effectiveTarget.os)` instead, which is
 // the target's extension and a different question.
 function runRung(outputBase FilePath, rung ScaleRung) throws ScaleError
-	let executable = try FilePath.from("{outputBase.toString()}{hostExecutableExtension()}") otherwise throw ScaleError.reason("rung {rung.index}'s output path is not a valid executable path")
+	let executable = try rungExecutablePath(outputBase, rung: rung)
 
 	let run = try runProcess(Executable.path(executable), argv: StringArray.create(0), workingDirectory: WorkingDirectory.inherit) otherwise (e) 'spawnFailed'
 		throw ScaleError.reason("rung {rung.index} compiled but its binary {executable.toString()} could not be started: {e.displayReason()}")
@@ -639,6 +642,26 @@ function runRung(outputBase FilePath, rung ScaleRung) throws ScaleError
 		throw ScaleError.reason("rung {rung.index} exited {run.exitCode} where every witness holding is {CorpusOkExit}. Each generated driver hands `main` its argument back only when the construct it emitted computed what ScaleCorpus built it to compute, so this rung's binary DISAGREES with the generator about what its own program does — the numbers this rung produced are about a program that is not the one described. stderr: {run.stderr.trim()}")
 	end 'wrongExit'
 end 'runRung'
+
+function rungExecutablePath(outputBase FilePath, rung ScaleRung) returns FilePath throws ScaleError
+	return try FilePath.from("{outputBase.toString()}{hostExecutableExtension()}") otherwise throw ScaleError.reason("rung {rung.index}'s output path is not a valid executable path")
+end 'rungExecutablePath'
+
+function removeRungProducts(outputBase FilePath, rung ScaleRung) throws ScaleError
+	let executable = try rungExecutablePath(outputBase, rung: rung)
+	let sidecar = try FilePath.from("{executable.toString()}{DebugSidecarSuffix}") otherwise throw ScaleError.reason("rung {rung.index}'s debug sidecar path is not a valid path")
+
+	try removeLeftBehind(executable, rung: rung)
+	try removeLeftBehind(sidecar, rung: rung)
+end 'removeRungProducts'
+
+function removeLeftBehind(product FilePath, rung ScaleRung) throws ScaleError
+	if not File.exists(product) 'nothingLeft'
+		return
+	end 'nothingLeft'
+
+	try File.delete(product) otherwise throw ScaleError.reason("could not remove {product.toString()}, which a previous compile of rung {rung.index} left")
+end 'removeLeftBehind'
 
 function corpusRootFile(root FilePath, name String) returns FilePath throws ScaleError
 	let component = try FilePath.from(name) otherwise throw ScaleError.reason("'{name}' is not a valid path component")

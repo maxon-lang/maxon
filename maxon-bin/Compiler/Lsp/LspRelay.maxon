@@ -8,7 +8,28 @@ module typealias LspChildLinkArray = Array with LspChildLink
 
 module typealias LspRelayDocumentMap = Map with (String, LspRelayDocument)
 
-let RelaySlotPollMs = 500
+let RelayWatchRequestId = "maxon-relay-watch"
+let RelayWatchRegistrationId = "maxon-relay-slot"
+let RelayRegisterCapabilityMethod = "client/registerCapability"
+let RelayWatchedFilesMethod = "workspace/didChangeWatchedFiles"
+let RelayCapabilitiesKey = "capabilities"
+let RelayWorkspaceKey = "workspace"
+let RelayDidChangeWatchedFilesKey = "didChangeWatchedFiles"
+let RelayDynamicRegistrationKey = "dynamicRegistration"
+let RelayRelativePatternSupportKey = "relativePatternSupport"
+let RelayRegistrationsKey = "registrations"
+let RelayRegistrationIdKey = "id"
+let RelayRegistrationMethodKey = "method"
+let RelayRegisterOptionsKey = "registerOptions"
+let RelayWatchersKey = "watchers"
+let RelayGlobPatternKey = "globPattern"
+let RelayBaseUriKey = "baseUri"
+let RelayPatternKey = "pattern"
+let RelayWatchKindKey = "kind"
+let RelayWatchCreateOrChange = 3
+let RelayGlobMetacharacters = b"[]{}*?"
+let RelayGlobOpenByte = 0x5B
+let RelayGlobCloseByte = 0x5D
 let RelayChildExitDeadlineMs = 2000
 let RelayReapDeadlineMs = 3000
 let RelayStderrPendingCapBytes = 16384
@@ -36,6 +57,45 @@ module union LspRelayChild
 	none
 	running(link LspChildLink)
 end 'LspRelayChild'
+
+module union RelayWatchSupport
+	unsupported
+	absolute
+	relative
+end 'RelayWatchSupport'
+
+module function relayWatchSupportOf(doc JsonDoc) returns RelayWatchSupport
+	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return RelayWatchSupport.unsupported
+	let capabilities = try lspMember(doc, of: params, key: RelayCapabilitiesKey) otherwise return RelayWatchSupport.unsupported
+	let workspace = try lspMember(doc, of: capabilities, key: RelayWorkspaceKey) otherwise return RelayWatchSupport.unsupported
+	let watched = try lspMember(doc, of: workspace, key: RelayDidChangeWatchedFilesKey) otherwise return RelayWatchSupport.unsupported
+	let dynamic = try doc.getBool(watched, key: RelayDynamicRegistrationKey) otherwise return RelayWatchSupport.unsupported
+
+	if not dynamic 'staticOnly'
+		return RelayWatchSupport.unsupported
+	end 'staticOnly'
+
+	let relative = try doc.getBool(watched, key: RelayRelativePatternSupportKey) otherwise false
+
+	return RelayWatchSupport.relative if relative else RelayWatchSupport.absolute
+end 'relayWatchSupportOf'
+
+function relayGlobEscaped(text String) returns String
+	let escaped = ByteArray.create(0)
+
+	for textByte in text.bytes() 'eachByte'
+		if RelayGlobMetacharacters.contains(textByte) 'aMetacharacter'
+			escaped.push(RelayGlobOpenByte)
+			escaped.push(textByte)
+			escaped.push(RelayGlobCloseByte)
+			continue
+		end 'aMetacharacter'
+
+		escaped.push(textByte)
+	end 'eachByte'
+
+	return String.from(escaped)
+end 'relayGlobEscaped'
 
 module function lspRelayRoute(doc JsonDoc) returns LspRelayRoute throws RunCacheError
 	if not trustedByInitializationOptions(doc) 'untrusted'
@@ -228,17 +288,13 @@ module type LspRelay
 	var processes as LspChildProcessList
 	var nextGeneration as LspChildGeneration
 	var attached as LspSlotStamp
-	var observed as LspSlotStamp
 	var spawnFailed as LspSlotStamp
 	var unreadableTold as StatedText
+	let watch as RelayWatchSupport
 
-	module static function create(slot FilePath, initializeBody String, initializeId LspRequestId) returns LspRelay
-		return Self{slot: slot, initializeBody: initializeBody, initializeId: initializeId, initializedBody: StatedText.unstated, stateNotices: StringArray.create(0), documents: LspRelayDocumentMap.create(), inFlight: LspRelayInFlightMap.create(), current: LspRelayChild.none, retired: LspChildLinkArray.create(0), processes: LspChildProcessList.create(), nextGeneration: 0, attached: LspSlotStamp.absent(), observed: LspSlotStamp.absent(), spawnFailed: LspSlotStamp.absent(), unreadableTold: StatedText.unstated}
+	module static function create(slot FilePath, initializeBody String, initializeId LspRequestId, watch RelayWatchSupport) returns LspRelay
+		return Self{slot: slot, initializeBody: initializeBody, initializeId: initializeId, initializedBody: StatedText.unstated, stateNotices: StringArray.create(0), documents: LspRelayDocumentMap.create(), inFlight: LspRelayInFlightMap.create(), current: LspRelayChild.none, retired: LspChildLinkArray.create(0), processes: LspChildProcessList.create(), nextGeneration: 0, attached: LspSlotStamp.absent(), spawnFailed: LspSlotStamp.absent(), unreadableTold: StatedText.unstated, watch: watch}
 	end 'create'
-
-	module function armTick(workspace LspWorkspaceState)
-		workspace.arrivals.push(async slotTickAfter(RelaySlotPollMs))
-	end 'armTick'
 
 	module function report(reason String, workspace LspWorkspaceState)
 		announceLspLog(workspace.writer, sentence: "maxon lsp-server: {reason}")
@@ -252,18 +308,27 @@ module type LspRelay
 			return LspAttachOutcome.failed(reason)
 		end 'unreadable'
 
-		self.observed = stamp
-
 		return self.attach(stamp, initial: true, workspace: workspace)
 	end 'attachInitial'
 
 	module function clientFrame(body String, doc JsonDoc, workspace LspWorkspaceState)
 		let id = readRequestId(doc)
+		self.forwardStderr(workspace)
 
 		let method = try doc.getString(doc.root, key: JsonRpcMethodKey) otherwise 'aResponse'
+			if self.answersTheWatchRequest(id) 'ours'
+				self.watchAnswered(doc, workspace: workspace)
+				return
+			end 'ours'
+
 			self.forward(body)
 			return
 		end 'aResponse'
+
+		if method == RelayWatchedFilesMethod 'aWatchedFileChanged'
+			self.slotChanged(workspace)
+			return
+		end 'aWatchedFileChanged'
 
 		self.remember(method, doc: doc, body: body, workspace: workspace)
 
@@ -271,7 +336,79 @@ module type LspRelay
 			running(link) then self.forwardTo(link, body: body, id: id, method: method)
 			none then self.answerWhileDetached(method, id: id, workspace: workspace)
 		end 'child'
+
+		if method == RelayInitializedMethod 'handshakeComplete'
+			self.watchTheSlot(workspace)
+		end 'handshakeComplete'
 	end 'clientFrame'
+
+	function answersTheWatchRequest(id LspRequestId) returns bool
+		return match id 'addressee'
+			text(value) gives value == RelayWatchRequestId
+			number or
+			absent gives false
+		end 'addressee'
+	end 'answersTheWatchRequest'
+
+	function watchTheSlot(workspace LspWorkspaceState)
+		match self.watch 'support'
+			unsupported then self.report("the client does not support dynamic registration of file watchers, so a compiler built into {self.slot.path} after this session began is not picked up until the session restarts.", workspace: workspace)
+			absolute or
+			relative then self.requestWatch(workspace)
+		end 'support'
+	end 'watchTheSlot'
+
+	function requestWatch(workspace LspWorkspaceState)
+		let doc = JsonDoc.create()
+
+		let watcher = LspJsonObject.create(doc)
+		watcher.putNode(RelayGlobPatternKey, value: self.slotGlob(doc))
+		watcher.put(RelayWatchKindKey, value: JsonNode.numberNode(RelayWatchCreateOrChange as JsonFloat))
+
+		let watchers = JsonNodeIdArray.create(0)
+		watchers.push(watcher.finish())
+
+		let options = LspJsonObject.create(doc)
+		options.putNode(RelayWatchersKey, value: doc.add(JsonNode.arrayNode(watchers)))
+
+		let registration = LspJsonObject.create(doc)
+		registration.put(RelayRegistrationIdKey, value: JsonNode.stringNode(RelayWatchRegistrationId))
+		registration.put(RelayRegistrationMethodKey, value: JsonNode.stringNode(RelayWatchedFilesMethod))
+		registration.putNode(RelayRegisterOptionsKey, value: options.finish())
+
+		let registrations = JsonNodeIdArray.create(0)
+		registrations.push(registration.finish())
+
+		let params = LspJsonObject.create(doc)
+		params.putNode(RelayRegistrationsKey, value: doc.add(JsonNode.arrayNode(registrations)))
+
+		writeLspRequest(workspace.writer, doc: doc, id: LspRequestId.text(RelayWatchRequestId), method: RelayRegisterCapabilityMethod, params: params.finish())
+	end 'requestWatch'
+
+	function slotGlob(doc JsonDoc) returns JsonNodeId
+		return match self.watch 'support'
+			relative gives self.relativeSlotGlob(doc)
+			absolute gives doc.add(JsonNode.stringNode(relayGlobEscaped(self.slot.toString().replace(WindowsPathSeparator, with: PortablePathSeparator))))
+			unsupported panic("LspRelay.slotGlob: a client that cannot register a watcher is told so, and is sent no registration")
+		end 'support'
+	end 'slotGlob'
+
+	function relativeSlotGlob(doc JsonDoc) returns JsonNodeId
+		let directory = try self.slot.parent() otherwise panic("LspRelay.relativeSlotGlob: a slot is a file inside a checkout, so it has a parent directory")
+
+		let pattern = LspJsonObject.create(doc)
+		pattern.put(RelayBaseUriKey, value: JsonNode.stringNode(lspFileUri(directory)))
+		pattern.put(RelayPatternKey, value: JsonNode.stringNode(relayGlobEscaped(self.slot.filename())))
+
+		return pattern.finish()
+	end 'relativeSlotGlob'
+
+	function watchAnswered(doc JsonDoc, workspace LspWorkspaceState)
+		match lspResponseErrorMessage(doc) 'answer'
+			stated(reason) then self.report("the client refused to watch {self.slot.path}, so a compiler built there after this session began is not picked up until the session restarts: {reason}", workspace: workspace)
+			unstated then self.slotChanged(workspace)
+		end 'answer'
+	end 'watchAnswered'
 
 	module function childArrived(arrival LspArrival, workspace LspWorkspaceState)
 		match arrival 'arrival'
@@ -284,10 +421,7 @@ module type LspRelay
 		end 'arrival'
 	end 'childArrived'
 
-	module function slotTicked(workspace LspWorkspaceState)
-		self.armTick(workspace)
-		self.forwardStderr(workspace)
-
+	function slotChanged(workspace LspWorkspaceState)
 		let stamp = try LspSlotStamp.of(self.slot) otherwise (failure) 'unreadable'
 			self.tellUnreadable(failure, workspace: workspace)
 			return
@@ -295,19 +429,14 @@ module type LspRelay
 
 		self.unreadableTold = StatedText.unstated
 
-		// A rebuilt slot is attached once two polls agree on it, so a build still writing the binary is
-		// never spawned; a stamp a spawn already failed on is retried only after the slot changes again.
-		let settled = stamp.exists and stamp.agrees(self.observed)
-		self.observed = stamp
-
-		if settled and not stamp.agrees(self.attached) and not stamp.agrees(self.spawnFailed) 'replaced'
+		if stamp.exists and not stamp.agrees(self.attached) and not stamp.agrees(self.spawnFailed) 'replaced'
 			match self.attach(stamp, initial: false, workspace: workspace) 'attachment'
 				attached or
 				detached then break
 				failed(reason) then self.report(reason, workspace: workspace)
 			end 'attachment'
 		end 'replaced'
-	end 'slotTicked'
+	end 'slotChanged'
 
 	module function shutDown(workspace LspWorkspaceState)
 		match self.current 'child'
@@ -319,7 +448,7 @@ module type LspRelay
 		self.current = LspRelayChild.none
 
 		let started = Clock.nowMs()
-		workspace.arrivals.push(async slotTickAfter(RelayReapDeadlineMs))
+		workspace.arrivals.push(async reapDeadlineAfter(RelayReapDeadlineMs))
 
 		while self.retired.count() > 0 and workspace.arrivals.count() > 0 and Clock.elapsedMs(started) < RelayReapDeadlineMs 'reaping'
 			let arrival = workspace.nextPendingArrival()
@@ -330,10 +459,11 @@ module type LspRelay
 				childStderr or
 				childStderrEnded or
 				childStderrFailed then self.childArrived(arrival, workspace: workspace)
-				slotTick or
+				reapDeadline or
 				framed or
 				endOfStream or
 				framingError or
+				projectCheckSettled or
 				projectResolved then continue
 			end 'arrival'
 		end 'reaping'
@@ -342,6 +472,7 @@ module type LspRelay
 	function childFrame(generation LspChildGeneration, body String, workspace LspWorkspaceState)
 		let link = self.linkOf(generation)
 		self.rearm(link, workspace: workspace)
+		self.forwardStderr(workspace)
 
 		if not self.serves(link) 'retired'
 			return
@@ -362,7 +493,7 @@ module type LspRelay
 	end 'childEnded'
 
 	// Re-armed for every line, so a child writing to its error output never blocks on a full pipe while
-	// it serves; the lines are held and reported on the next slot tick.
+	// it serves; the lines are held and reported on the next frame either side sends.
 	function childStderr(generation LspChildGeneration, line String, workspace LspWorkspaceState)
 		let link = self.linkOf(generation)
 		link.noteStderrLine(line)

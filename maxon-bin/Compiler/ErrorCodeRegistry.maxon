@@ -1720,9 +1720,8 @@ export enum ErrorCode
 
 	// A member was called on a service or interface HANDLE that is not one of its messages.
 	// A handle's surface is exactly its service type's `export` INSTANCE methods, one variant of the
-	// synthesized request union each. That is the isolation boundary, and it is also what makes self-send
-	// deadlock unspellable rather than diagnosed: a private helper is not on the handle, so a call to one from
-	// inside a message body can only ever be a DIRECT call on the service's own state.
+	// synthesized request union each. That is the isolation boundary: a private helper is not on the handle,
+	// so a call to one from inside a message body is a DIRECT call on the service's own state.
 	// On a service's own handle, two shapes reach it, and the message tells them apart because the cures
 	// differ. The member may be DECLARED on the service type and merely not exported -- a private helper, or a
 	// `static`, which has no receiver and so can never be a message -- in which case `export` makes it one, or
@@ -1737,27 +1736,6 @@ export enum ErrorCode
 	// It is neither E3018 (a missing FIELD) nor E3004 (an undefined FUNCTION): the member usually exists, on
 	// the type, and saying otherwise would read as a typo.
 	semanticServiceNotAMessage = "E3136"
-
-	// Two or more services can await replies from each other, so a message of each could be blocked waiting
-	// on the other. Mutual reentrancy is made UNREPRESENTABLE rather than diagnosed at run time.
-	// The compiler builds a directed graph over service TYPES and refuses any cycle in it. An edge `A -> B`
-	// exists when a message of `A`, or the factory `A` is spawned with, AWAITS a reply from a
-	// `B.handle` -- transitively through ordinary functions, so a message that calls a helper that
-	// awaits still contributes the edge. A factory counts: it runs as the service's start behaviour.
-	// ONLY BLOCKING EDGES COUNT. A send that is not awaited is not an edge: a send returns at once, queued
-	// or failed with its `sendError`, so it cannot participate in a wait cycle -- which is what keeps
-	// peer-to-peer messaging legal, and is the whole of why the rule is not crippling.
-	// Why acyclicity is sufficient rather than merely suggestive: an acyclic graph has a topological order,
-	// the service lowest in it awaits nobody and so always makes progress, and by induction every blocked
-	// caller eventually resumes. There is no configuration in which everyone is waiting.
-	// A SELF-EDGE is a cycle too, and it is the one users hit most: a `Worker` whose message awaits a reply
-	// from another `Worker` is refused even though two distinct instances would not actually deadlock. Edges
-	// are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the
-	// instances apart and must be conservative -- the guarantee is deadlock freedom.
-	// The cure is to break the cycle: make one of the messages return nothing and throw nothing, send it
-	// with `try <handle>.<message>(…) otherwise …` without awaiting it, and have the peer reply with a
-	// separate message; or split the role into two types.
-	semanticServiceCallCycle = "E3139"
 
 	// A `spawn` makes a type a SERVICE, and one of its reply-bearing messages declares a reply the compiler
 	// cannot carry back to a sender.
@@ -2292,6 +2270,14 @@ export enum ErrorCode
 	// data of the region it opens is refused unless the same statement consumes the result: a comparison, a
 	// `for` loop over it, or a call whose other inputs and result are values (`.count()`). Use it inside a
 	// `modify` block otherwise. Reported at the offending value.
+	// Inside an `acquire` block a statement reaches one acquired state, because two names of one block may be
+	// one service: bind a value read from one state in its own statement first. While a `modify` or `acquire`
+	// block is open, an `isolated` value of a linear type from outside it cannot be moved into a parameter
+	// the callee keeps and that is not `isolated`, because it would become part of the open region: move it
+	// into an `isolated` parameter or slot, send it, or `merge` it. The receiver of a `consuming self` method
+	// is such a parameter when the method stores, returns or passes `self` on, and a finalizer that only
+	// reads `self` and ends in `destruct self` is accepted. The value stays outside the block through a local
+	// it is moved into, the `isolated` result of a call it is moved into, and the value a failed send hands back.
 	semanticIsolatedCallOpensTwoRegions = "E3201"
 
 	// A mutable value leaves the region a `modify` block, or the one statement that opens an isolated value,
@@ -2300,6 +2286,12 @@ export enum ErrorCode
 	// replace it, and lend it on to another `mutable isolated` parameter (its own method's recursion
 	// included), but never move it out, alias it, store it or pass it to an `isolated` parameter, because
 	// the caller's variable would then name a region another owner holds.
+	// An `acquire` block holds the same line: a mutable value cannot leave it, and the name of an acquired
+	// state cannot be bound, returned, stored, moved into an `isolated` parameter or a `spawn`, or sent through
+	// `async`, because the service keeps its state. A call that opens a region and answers mutable data of it is
+	// judged where its result leaves the statement: a number read out of the result is accepted, binding,
+	// returning or storing the result is refused. A `Reply` taken out of an acquired state cannot outlive the
+	// statement that opens the state.
 	semanticValueLeavesWindow = "E3202"
 
 	// The variable that names an open value is reassigned inside its own `modify` block. Only the region's
@@ -2312,11 +2304,14 @@ export enum ErrorCode
 	// record is read-only. Reassign it before or after the block.
 	semanticOuterDataWrittenInWindow = "E3204"
 
-	// A `modify` block, or the one statement that opens an isolated value, waits for another party while the
-	// region is open: an `await` of a coroutine or of a message reply, or a call to a function that may wait
-	// (it awaits a reply from a service) or may yield (it awaits a coroutine, directly or through what it
-	// calls). Another coroutine could run while the region is open. Both facts are inferred from the bodies
-	// with no marker, and the message names the chain. Await or call before or after the block.
+	// A `modify` block, an `acquire` block, or the one statement that opens an isolated value (a call that
+	// passes an `isolated` value in an unmarked position, as receiver or argument, opens it for that call)
+	// waits for another party while the region is open: an `await` of a coroutine or of a message reply,
+	// `awaitAny`, an `acquire`, a runtime park such as `Scheduler.quiesce`, or a call to a function that may
+	// wait (it awaits a reply from a service, or reaches one of those) or may yield (it awaits a coroutine,
+	// directly or through what it calls). Another coroutine could run while the region is open. Both facts
+	// are inferred from the bodies with no marker, and the message names the chain. Await or call before or
+	// after the block. A callee that only reads, writes or sleeps is accepted.
 	semanticWaitInsideWindow = "E3205"
 
 	// An unmarked parameter is used as mutable and as immutable. A body that writes through the parameter,
@@ -2405,9 +2400,10 @@ export enum ErrorCode
 	// `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`, and every type holding
 	// one) are unique, so they are never cloned either. A unique value read out of a field, an element, a
 	// `for` loop variable or a tuple destructure cannot be bound, passed to a parameter that keeps it, or
-	// given elsewhere, because the field or element goes on owning it and a unique value has one name. Move
-	// it out with `pop` or `remove`, `swap` it out of an isolated field, or read what you need from it where
-	// it stands.
+	// given elsewhere, because the field or element goes on owning it and a unique value has one name. An
+	// element a call such as `get` hands back is read the same way: `show(items.get(0))` lends it
+	// for the call, and `let t = items.get(0)` is refused. Move it out with `pop`, `remove`, `removeFirst` or
+	// `Slot.take`, `swap` it out of an isolated field, or read what you need from it where it stands.
 	semanticUniqueValueRefused = "E3214"
 
 	// A type argument breaks a bound on a generic type's type parameter. `where T is sendable` takes a value,
@@ -2466,6 +2462,56 @@ export enum ErrorCode
 	// initializer, since it runs only when the closure is called; a call that receives the closure is.
 	semanticModuleLetCallsAFunction = "E3220"
 
+	// A message or a `spawn` factory may wait on another party while it holds its own service. A message
+	// runs to its end holding its service, and the service takes no other message meanwhile, so a message
+	// that waits can wait for ever on a service that waits for it. Waiting is an `await` of a message reply or
+	// of a promise whose coroutine the compiler cannot see, `awaitAny`, a send with a positive `sendTimeout:`,
+	// an `acquire`, the spawn of a throwing factory, and a runtime park such as `Scheduler.quiesce` or
+	// `CownTorture.violations`; a message that calls a function that waits, or starts a coroutine that waits,
+	// waits too. The message names the chain from the message to the wait. `main`, a test body and a
+	// coroutine hold no service and may wait.
+	// Send the request with the service's handle and handle the reply in another message, passing the asker's
+	// handle with the request or answering through a `Reply`; send with `sendTimeout: 0`, which fails
+	// `mailboxFull` instead of waiting; or make the wait from `main`.
+	semanticHolderMayWait = "E3221"
+
+	// A deferred reply is written or used where the service that holds it could not answer it exactly once.
+	// `reply.later()` takes the reply of the message it is written in: it is the whole initializer of a `let`
+	// at the top level of the message's body, written once, in a message of a service that returns a value
+	// and declares `throws ReplyStopped`, and not in a generic service or in a message that returns an
+	// interface value. A message that defers answers through its `Reply` alone, so its own `return` carries no
+	// value, and it is called only by a send through the service's handle. A `Reply` is answered through the
+	// local or parameter that holds it, so take it out of a field first
+	// (`let pending = try self.waiting.pop() otherwise return`).
+	// A `Reply` never leaves the code of the service that holds it: a function declares no result whose type can
+	// hold one, an `async` call takes no parameter that can hold one, no closure captures one and no value that
+	// can hold one is widened to an interface type, because a function value and an interface value carry what
+	// they hold to whatever code receives them. Pass the answer's inputs as message arguments, and answer the
+	// `Reply` in the message that holds it.
+	semanticReplyDeferralRefused = "E3222"
+
+	// A linear value is not consumed exactly once. A type with a finalizer, a method that contains `destruct
+	// self` and takes `consuming self`, is linear, and so is a union with a linear payload. A linear value is
+	// consumed on every path out of its scope, throws, early returns and propagating `try`s included, by a
+	// finalizer call or by being moved on to a function that takes it, a `return`, a `throw` or a message. It
+	// is refused dropped, overwritten, rebound while live, discarded with `let _ = r`, left in a temporary
+	// nobody consumes, or live across a wait (an `await`, a send with a `sendTimeout:`, or a call that waits),
+	// because a wait may never end. Consume it before the exit or the wait: call its finalizer, or hand it to
+	// code that does.
+	semanticLinearValueNotConsumed = "E3223"
+
+	// A linear value is used where it cannot be consumed exactly once. It lives only in locals, parameters and
+	// message arguments: a field, a container or other type argument, a tuple item, a closure capture, a
+	// promise payload, a message reply, a union stored in a field, an argument of an `async` call, the result
+	// of an `async` call and an argument of an interface or function value call are refused. A linear value
+	// lent to code that does not own it (a parameter of a function that does not take it) is not consumed
+	// there. `consuming self` belongs to a method of a `type` that declares a finalizer, and `destruct self`
+	// is written in a method that takes `consuming self`, on a `type` that holds fields. A `match` over a
+	// union with a linear payload binds the payload in every arm that covers its case and consumes it there,
+	// and a `default` arm cannot cover such a case. Carry the value in a local or a message argument, and
+	// consume it where it is received.
+	semanticLinearRefused = "E3224"
+
 	// A member is used that its type does not have: a method the type does not declare, a method a
 	// conditional extension gives only to types meeting its `where` clause, or `allCases` on a union. The
 	// message names the type as source would qualify it, so the library's `Range` in a program declaring
@@ -2477,6 +2523,13 @@ export enum ErrorCode
 	// container element types. Maxon's ownership model requires acyclic type
 	// graphs for deterministic destruction, so recursive type references are
 	// rejected. Emitted by the type-cycle check after type resolution.
+	// A service handle is an edge of the same graph, from the handle to the service it addresses, and from an
+	// interface handle to each service that implements the interface. A service whose state reaches a handle
+	// to itself, directly, through the handles of other services, or through an interface handle, is never
+	// freed, because the handle counts as a holder of the service; the message names the cycle. A function
+	// value holds whatever its closure captured, so a service state that holds one reaches the handle of
+	// every service some closure in the program captures. Pass the handle with each message instead of
+	// keeping it in a field, or give the services distinct types. A handle a message carries is not state.
 	irTypeCycle = "E4014"
 
 	// a declaration in the source took a function name that belongs to the compiler.

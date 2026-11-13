@@ -521,7 +521,8 @@ error E3207: <fragment>:23:7: 'edit' writes 'b'; 'pinned' is immutable
 ```
 
 <!-- test: call-that-only-spawns-a-waiting-factory-reports-the-chain -->
-`start` waits only through the factory it spawns, and no call that may wait runs inside the block.
+`start` waits only through the factory it spawns, and no call that may wait runs inside the block. The factory
+is also refused where it is declared, because a factory never waits.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -567,7 +568,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3205: <fragment>:37:7: cannot call 'start' inside 'fill'; it may wait (it spawns 'create', which it awaits a reply from 'Oracle' at line 20). Call it before or after the block
+error E3221: <fragment>:18:18: the spawn factory 'create' may wait (it awaits a reply from 'Oracle' at line 20) while holding its own service; send the request with this service's handle and handle the reply in another message
+error E3205: <fragment>:37:7: cannot call 'start' inside 'fill'; it may wait (it spawns 'create', which awaits a reply from 'Oracle' at line 20). Call it before or after the block
 ```
 
 <!-- test: write-through-a-returned-parameter-of-a-frozen-local-is-refused -->
@@ -3665,7 +3667,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3207: <fragment>:27:7: 'edit' writes 'p' (line 19: `i = i + 1`); 'pinned' is immutable
+error E3207: <fragment>:27:7: 'edit' writes 'p' (line 19: `items.push(e)`); 'pinned' is immutable
 ```
 
 <!-- test: a-parameter-returned-on-one-path-and-fresh-data-on-another-accepts-a-frozen-argument-for-reading -->

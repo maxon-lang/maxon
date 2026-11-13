@@ -962,7 +962,7 @@ export type LibraryFacts
 	// with no allocator every name of those files is filed unreached — their bodies lower no `.rdata` and
 	// insert no guard, exactly as any other swept library body.
 	//
-	// ⛔ **IT IS ASKED ONLY ONCE `usesHeap` IS FINAL** (`Compiler.compileToCodeResult`, past every arm that
+	// ⛔ **IT IS ASKED ONLY ONCE `usesHeap` IS FINAL** (`prepareLowering`, past every arm that
 	// can still turn it on) **AND AFTER `scanRuntimeUsage` HAS RUN**, because the direction of risk inverts
 	// between the two readers: over-approximating what the SCAN treats as unreached leaves a body calling
 	// into a floor nothing installed, while over-approximating what is SWEPT skips the lowering of a body the
@@ -1026,7 +1026,7 @@ end 'LibraryFacts'
 // ⭐ DERIVE THE REACH FACTS, all but `substrateEntries` (see `withSubstrateEntriesOf`). Runs once
 // per compile, right after the module is merged and before any pass that reads them — and before
 // `DeadGlobalElimination.liveGlobalLabels`, which is the earliest reader
-// (`Compiler.compileToCodeResult`).
+// (`prepareLowering`).
 //
 // It takes `signatures` for one thing: the functions a top-level initializer calls. Those calls are
 // made by `__module_init`, which does not exist yet at this point and is called by the entry stub
@@ -1113,7 +1113,7 @@ module function libraryReachOf(project Project, module MaxonModule, signatures P
 	return LibraryReach.walked(roster, stdlib: stdlibSet, reachable: reachable, ledger: ledger)
 end 'libraryReachOf'
 
-// The fixpoint step `queryAllModule` iterates, answering whether the demand grew.
+// The fixpoint step `FrontEndRun` iterates, answering whether the demand grew.
 //
 // ⚠ It asks `deriveLibraryFacts`' question of the same walk (`libraryReachOf`): the set of bodies
 // this compile builds and the set `lowerMaxonToStd` lowers must be decided by one derivation, or a
@@ -1192,7 +1192,7 @@ module type LibraryFunctionRoster
 	end 'create'
 end 'LibraryFunctionRoster'
 
-// Read back from each library file's PARSE ARTIFACT — a memo HIT, since `queryAllModule` has already
+// Read back from each library file's PARSE ARTIFACT — a memo HIT, since `FrontEndRun` has already
 // parsed it — so the cost is O(library functions) and touches nothing the user wrote.
 function libraryFunctionRoster(project Project) returns LibraryFunctionRoster throws CompileError
 	let names = NameRoster.create(0)
@@ -1236,7 +1236,7 @@ end 'collectOneLibraryFile'
 // SEE IS DECLARED; EVERY CALL IT CAN SEE IS DISCOVERED."* Every other tier family is kept alive by a call
 // the PARSER mints from user source (`__Builtins.cpuCount()` ⇒ `__cpu_count`), which is an ordinary edge in
 // an ordinary body and the from-`main` walk finds it. These files' callers are `StdOp.call` sites an
-// INSTALLER mints into the appended band (`Compiler.compileToCodeResult`), long after this derivation has
+// INSTALLER mints into the appended band (`afterPipeline`), long after this derivation has
 // run and into a module that is not the Maxon one — so the walk holds no evidence about them at all, and
 // every one of their entries would be filed `unreachedRuntimeTier` while the bodies ship. The slab's two
 // are minted by `installSlabRuntime`; `ManagedGeometry.maxon`'s three are minted by the managed-memory,
@@ -1264,7 +1264,7 @@ end 'collectOneLibraryFile'
 // its body ships is a call into a floor nothing installed, which is a link failure. The heap cannot be asked
 // at this point: `usesHeap` has producers (`--async-trace`, `--debugstream`) that run AFTER the scan, and one
 // of those missed is exactly the unsafe direction. ⇒ The gate is asked once it is final instead —
-// `LibraryFacts.withCompilerCalledTierUnreached`, from `Compiler.compileToCodeResult` before lowering — so a
+// `LibraryFacts.withCompilerCalledTierUnreached`, from `prepareLowering` before lowering — so a
 // program the installer will mint no call for lowers none of these bodies and registers none of their
 // `.rdata` (`specs/stdlib-loading.md`'s `a-stdlib-modules-literals-cannot-reach-the-rdata-image` is the
 // gate: the arena's panic strings must not lead a heap-free program's read-only image).
@@ -1655,7 +1655,7 @@ end 'drainReachableWorklist'
 // `Character.hash` — whose conformer key then credits `Character.clone`/`Character.init`, bodies that build
 // the managed record `Character{managed: …}`. `scanRuntimeUsage` turns the heap on, the image is laid down
 // with the allocator's `.data` slots in it, and the `static-variables/data-section-*` pins then read their
-// `var` at a displaced offset — against `compileToCodeResult`'s own invariant, *"a `return 42` program
+// `var` at a displaced offset — against the compile's own invariant, *"a `return 42` program
 // allocates nothing, so it gets no allocator, no `.data` slots and no leak check"*.
 //
 // ⭐⭐⭐ **SO THE SEED IS GATED ON THE QUESTION IT IS THE ANSWER TO: CAN THE REACHED CODE NAME A WITNESS

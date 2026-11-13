@@ -194,7 +194,7 @@ those calls, so every name in those files is declared reached (`LibraryFunctionR
   helpers, and the short-circuit path hands `classifyLibraryReach` an empty reached set with no walk to
   close a name roster. A new entry point in a listed file needs no new line.
 - **Unconditional at the walk**, because `usesHeap` is not final until after `scanRuntimeUsage`.
-- **Settled once the gate is final.** `Compiler.compileToCodeResult` calls
+- **Settled once the gate is final.** `prepareLowering` calls
   `LibraryFacts.withCompilerCalledTierUnreached(not usage.usesHeap)` after every producer of `usesHeap` has
   run, which files every name of the listed files unreached in a program with no allocator. Every minter
   rides `usesHeap`: `installSlabRuntime` returns without it, and the `__mg_*` callers are installed only

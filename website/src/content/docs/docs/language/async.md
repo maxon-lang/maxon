@@ -202,6 +202,12 @@ any promise in the array has finished and returns its index. It consumes nothing
 included, is still awaited (or dropped) afterwards. An already-finished promise is returned without parking.
 `p.isComplete()` asks one promise whether it has finished, without parking or consuming it.
 
+`awaitAny` is a wait and a yield: the compiler cannot see which coroutine or service produced an array element,
+so a function that calls it waits on a party it cannot see. A message or a `spawn` factory that reaches it is
+[E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait); a `modify` block, an `acquire` block or a one-call
+open that reaches it, directly or through a callee, is
+[E3205](/docs/cli/error-codes/#e3205--semanticwaitinsidewindow). `main` and a plain coroutine may select.
+
 **Reading a promise out of storage.** A promise has one owner, so reading one out of the array or the struct
 field that holds it starts a MOVE out of that slot: consuming the read empties the slot, and a read never
 consumed stays the container's and is dropped with it. `get(i)`, `first()`, `for p in array`, an array
@@ -334,6 +340,11 @@ dropped promise has the effects below.
   numeric address. A service send it makes to a full mailbox fails `mailboxFull` at once, with or without a
   `sendTimeout:`, and a send already waiting for room fails `mailboxFull` when the promise is dropped (see
   [Mailboxes and failed sends](#mailboxes-and-failed-sends)).
+- Cancellation is cooperative: it marks the coroutine and never tears it down mid-frame, so the coroutine
+  runs to the end of its own code. A `sleep` it is parked in ends early, and each `sleep` it makes afterwards
+  yields once, so its siblings run, and then returns at once. A [linear value](/docs/language/regions/#linear-types-and-finalizers) it
+  holds is consumed by its own code on the path the early return of the wait leads it down, so a finalizer
+  runs and nothing leaks.
 
 ## Yielding
 
@@ -396,8 +407,9 @@ end 'main'
   that runs it.
 - **An idle service owns no green thread.** A message that reaches an idle service starts a runner that handles
   the queued messages in order, at most 64 per turn, and yields between turns so every other runnable service
-  runs. A handler that waits (`await`, `sleep`, I/O) keeps its service held, and messages queue behind it up to
-  the mailbox's capacity.
+  runs. A handler that sleeps or does I/O keeps its service held for as long as the sleep or the peer takes,
+  and messages queue behind it up to the mailbox's capacity. A handler never waits on another party
+  ([Holders Never Wait](#holders-never-wait)).
 - **A factory that throws makes the `spawn` a throwing call.** The spawner waits until the factory has run,
   then receives either the handle or the factory's error, of the factory's own type. Write
   `try spawn Type.factory(…)` with an `otherwise`, propagate it from a throwing function, or place it in a
@@ -420,7 +432,7 @@ end 'main'
 - **A reply is kept, or discarded on purpose.** A method that returns or throws, sent as a statement, is
   **E3190**. Await the reply, keep it, or discard it on purpose with `_ = try h.method(…)`.
 - **Private methods are not messages.** Calling a non-exported method or a static through a handle is
-  **E3136**. A service cannot send to itself.
+  **E3136**: a handle reaches exactly the type's `export` instance methods.
 - **A message is as visible as its service, and no more.** Its `export` makes it a message rather than
   widening it past the type, so the types its signature names need only the service type's visibility
   ([E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethandeclaration)): a file-private service's messages may name
@@ -442,7 +454,8 @@ end 'main'
   of a concrete type.
 - A refusal of a `spawn`'s target or factory (**E3134**, **E3008**, **E2015**) points at the `spawn`
   keyword.
-- Services that `await` each other in a cycle are **E3139**; a factory's `await` counts as its service's.
+- A message or a factory that waits on another party is **E3221**, so services never wait on each other in a
+  cycle ([Holders Never Wait](#holders-never-wait)).
 - `spawn` is a contextual keyword; it remains usable as a name.
 
 **What crosses a message.** A value sent to a service must not stay reachable from the sender in a way
@@ -500,6 +513,16 @@ record or union that holds one is [E3216](/docs/cli/error-codes/#e3216--semantic
 `spawn`. Each message may run on a different green thread, and a coroutine belongs to the strand that started it,
 so a promise kept in the state could be awaited or dropped by a strand that does not own it. A message or the
 factory `await`s or `.cancel()`s the coroutines it starts before it returns, and keeps their result in the field.
+
+**A service's state reaches no handle to its own type.** A service is freed when its last handle is dropped, so
+state that holds a handle to the service itself keeps it alive for ever. That is
+[E4014](/docs/cli/error-codes/#e4014--irtypecycle), with the cycle in the message: a field `var me as
+Echo.handle`; two services whose states hold each other's handles (`Ping` holds a `Pong.handle` and `Pong` holds a
+`Ping.handle`); an interface handle whose conformers include the service; and a function-valued field, union
+payload or container element while some closure in the program captures a handle that reaches the service,
+because a function type does not say what its closure captured. Pass the handle with each message
+(`start(oracle Oracle.handle, me Asker.handle)`), which keeps it only for the message, or give the services
+distinct types. A chain of distinct services, each holding the next one's handle, is not a cycle.
 
 **Module-level state.** A service keeps its state in its own fields and hands results back through replies. A
 module-level `let` is `immutable` image data, so a handler or factory reads the one copy every thread shares,
@@ -584,10 +607,9 @@ end 'main'
 ```
 
 - **A full mailbox is the sender's to handle.** Wait for room with `sendTimeout:`, as above, send elsewhere,
-  or drop the message. A send with a finite timeout waits a bounded time, so with those the only unbounded
-  wait is an `await`, and [E3139](/docs/cli/error-codes/#e3139--semanticservicecallcycle)'s cycle rule keeps the
-  program deadlock-free. A `ForeverMs` send is an unbounded wait too: services that fill each other's
-  mailboxes with `ForeverMs` sends can deadlock.
+  or drop the message. A send with a positive timeout waits, so a message or a `spawn` factory that makes one
+  is [E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait): a message sends with `sendTimeout: 0`, which
+  fails `mailboxFull` instead of waiting. `main`, a test body and a coroutine hold no service and may wait.
 - ⚠ **Retrying coroutines can livelock.** A yield runs the green thread's other runnable coroutines first.
   When every coroutine of one green thread retries a send without a timeout to the same full service, at one
   processor with preemption off (`MAXON_MAX_PROCS=1`, `MAXON_PREEMPT=off`) the coroutines hand the processor
@@ -650,8 +672,224 @@ end 'main'
 - A requirement sent through `I.handle` is a message of every service implementing `I`, so each declares it
   as an `export` instance method. Sending one that an implementer declares another way (a private method,
   say), or that no implementer declares, is [E3136](/docs/cli/error-codes/#e3136--semanticservicenotamessage).
-- A handler that sends through an `I.handle` is checked against the implementers of `I`, so
-  [E3139](/docs/cli/error-codes/#e3139--semanticservicecallcycle) finds an await cycle through any of them.
+- A handler that awaits a reply through an `I.handle` waits, so it is
+  [E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait) like any other waiting message.
+
+## Atomic Updates — `acquire`
+
+`acquire a, b 'label' … end 'label' otherwise 'stopped' … end 'stopped'` takes the services behind two or
+more handles at once and runs its block with their states. The block's name `move` below is its label:
+
+```maxon
+typealias Money = int(i64.min to i64.max)
+typealias EntryArray = Array with Money
+
+type Account
+	var balance as Money
+	var history as EntryArray
+
+	static function create(opening Money) returns Self
+		return Self{balance: opening, history: EntryArray.create(0)}
+	end 'create'
+
+	function canPay(amount Money) returns bool
+		return self.balance >= amount
+	end 'canPay'
+
+	function change(by Money)
+		self.balance = self.balance + by
+		self.history.push(by)
+	end 'change'
+
+	function historyCopy() returns isolated EntryArray
+		return self.history.clone()
+	end 'historyCopy'
+
+	function replaceHistory(entries isolated EntryArray)
+		self.history = merge entries
+	end 'replaceHistory'
+
+	export function balanceNow() returns Money
+		return self.balance
+	end 'balanceNow'
+end 'Account'
+
+function transfer(source Account.handle, target Account.handle, amount Money) returns bool
+	acquire source, target 'move'
+		if not source.canPay(amount) 'short'
+			return false
+		end 'short'
+
+		source.change(-amount)
+		target.change(amount)
+	end 'move' otherwise 'stopped'
+		return false
+	end 'stopped'
+
+	return true
+end 'transfer'
+
+function copyHistory(first Account.handle, second Account.handle) returns bool
+	acquire first, second 'copy'
+		let copy = second.historyCopy()
+		first.replaceHistory(copy)
+	end 'copy' otherwise 'stopped'
+		return false
+	end 'stopped'
+
+	return true
+end 'copyHistory'
+
+function main() returns ExitCode
+	let a = spawn Account.create(100)
+	let b = spawn Account.create(0)
+	let moved = transfer(a, target: b, amount: 30)
+	let left = try await a.balanceNow() otherwise 0
+	print("{moved} {left}\n")
+	let copied = copyHistory(b, second: a)
+	print("{copied}\n")
+	return 0
+end 'main'
+```
+
+Output: `true 70` and `true`. No message to either account runs between the debit and the credit, so no message
+sees the money in flight.
+
+- **Each name is the service's state.** Inside `transfer`, `source` and `target` are `Account` values; the
+  names are written where the handles are in scope, and each handle is of a spawned service type. A handle
+  reached through an expression is bound with `let` first (`let source = self.left`).
+- **The block takes every service it names at once.** It runs on the caller's green thread; the calling
+  coroutine parks until all the services are free, and the thread's other coroutines keep running meanwhile.
+  `return`, `break`, `continue` and `throw` leave it as they leave any block, and every service is released on
+  the way out. `acquire s, s` names one service and takes it once.
+- **`otherwise` is the block that runs when a service has stopped.** It holds no service. It follows
+  the block's `end` on the same line, as `else` does, and takes a label of its own; `otherwise (e) 'stopped'`
+  binds the position in the name list of a service that stopped. An `acquire` takes no mailbox capacity, so
+  a stopped service is its only failure.
+- **One state is open at a time.** Reading a field of a state or calling a method on it opens it for that one
+  statement. What the statement hands back leaves it only as a value, `immutable` data or a fresh `isolated`
+  value ([E3202](/docs/cli/error-codes/#e3202--semanticvalueleaveswindow)): `let held = source.cell` is refused;
+  `let n = source.cell.n` and `let copy = source.cell.clone()` are not. A call that opens a state and hands
+  back mutable data of it is judged where its result leaves the statement, so a number read out of the result
+  is accepted and binding, returning or storing the result is refused.
+- **A statement reaches one acquired state.** Two names of one block may be one service, so a statement that
+  reaches `first` and `second` is [E3201](/docs/cli/error-codes/#e3201--semanticisolatedcallopenstworegions):
+  `first.replaceHistory(second.historyCopy())` is refused, and `copyHistory` binds the value read from
+  `second` in a statement of its own first. Several statements on one state use `modify source 'debit' … end
+  'debit'`; inside it every other state is read-only.
+- **A state stays in the block.** Binding the name, returning it, storing it, moving it into an `isolated`
+  parameter or a `spawn`, or sending it through `async` is refused (E3202,
+  [E3205](/docs/cli/error-codes/#e3205--semanticwaitinsidewindow)): the service keeps its state.
+- **The block runs to its end holding every service.** `async`, a coroutine `await`, an `acquire` and a call
+  that may wait or yield are E3205 inside it, as in a [`modify` block](/docs/language/regions/#modify-blocks). An `acquire` in code
+  that holds a service is [E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait)
+  ([Holders Never Wait](#holders-never-wait)).
+
+## Holders Never Wait
+
+Code that holds a service never waits on another party. A message runs to its end holding its own service, a
+`spawn` factory holds the service it starts, and an `acquire` block holds the services it names. Were one of them
+to wait for a reply, two services could each wait for the other for ever. A message or a factory that may wait is
+[E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait), and the diagnostic names the chain to the wait:
+
+```text
+error E3221: the message 'ask' may wait (it awaits a reply from 'Worker' at line 10) while holding its own service; send the request with this service's handle and handle the reply in another message
+```
+
+These wait on another party:
+
+- an `await` of a message reply or of a promise whose coroutine the compiler cannot see, such as one read
+  out of an array;
+- `awaitAny`, which parks until one promise of an array has completed;
+- a send with a positive `sendTimeout:`, which waits for mailbox space;
+- an `acquire`;
+- the spawn of a factory that throws, whose spawner waits for the factory's result;
+- `Scheduler.quiesce()` and `CownTorture.violations`, which park until other green threads are idle or have
+  finished;
+- a call to a function that does any of these, and the start of a coroutine that does.
+
+`main`, a test body and a coroutine hold no service and may wait. `HttpServer.serve` and
+`TraceCapture.stopCapture` wait, so they are called from `main`, a test body or a coroutine. Sleeping, and file,
+socket and process I/O, hold the service for as long as the sleep or the peer takes, and messages queue behind
+it up to the mailbox's capacity. An `await` of a coroutine the same function started is a yield.
+
+**The continuation pattern.** A message that needs another service's answer sends the request with the
+data the answer needs, and returns. The answer comes back as a message of its own, handled by the same
+service: the request carries the asker's handle, or a [`Reply`](#deferred-replies--reply) the answer
+completes. A handle a message carries lives only until the message returns, so a request may carry the asker's
+own handle ([E4014](/docs/cli/error-codes/#e4014--irtypecycle) concerns handles kept in a field).
+
+## Deferred Replies — `Reply`
+
+A message that returns a value answers when its handler returns. `reply.later()` lets a message answer from
+somewhere else: written as the whole initializer of a `let` at the top level of the message's body, it takes the
+message's reply and hands back a `Reply with T`, where `T` is the message's reply type. The caller's `await`
+stays pending until some service calls `answer(value)` on that `Reply`, which consumes it and completes the
+reply:
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+type Clerk
+	var served as Tally
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function look(waiting TallyReply)
+		self.served = self.served + 1
+		waiting.answer(self.served * 21)
+	end 'look'
+end 'Clerk'
+
+type Desk
+	let clerk as Clerk.handle
+
+	static function create(clerk Clerk.handle) returns Self
+		return Self{clerk: clerk}
+	end 'create'
+
+	export function ask() returns Tally throws ReplyStopped
+		let pending = reply.later()
+		try self.clerk.look(pending) otherwise ignore
+		return
+	end 'ask'
+end 'Desk'
+
+function main() returns ExitCode
+	let clerk = spawn Clerk.create()
+	let desk = spawn Desk.create(clerk.clone())
+	let total = try await desk.ask() otherwise panic("the clerk answered")
+	print("{total}\n")
+	return 0
+end 'main'
+```
+
+Output: `21`. Neither message waits: `Desk.ask` returns as soon as it has sent, and the answer reaches `main` from the
+`Clerk`.
+
+- **A `Reply` is unique.** It lives in a service's state, in a container or in a message argument, and moves like
+  any [unique value](/docs/language/regions/#unique-types), so it is answered at most once. A `Reply` is answered through the local or
+  parameter that holds it: take it out of a field first (`let pending = try self.waiting.pop() otherwise return`),
+  then `pending.answer(value)`. `answer` is a send that returns at once, so any message may call it.
+- **A message that defers declares `throws ReplyStopped`.** A `Reply` dropped unanswered, a holder freed with it
+  still inside included, fails the caller's `await` with `ReplyStopped.serviceStopped`.
+- **After `reply.later()` the message's own `return` carries no value.** The answer travels through the `Reply`.
+  A message that defers is called only by a send through the service's handle.
+- **`reply.later()` is a statement of the message's own body.** It is refused in an `if`, a loop, a `match` or a
+  `try` inside the body, in a closure or a default value, a second time in one message, in a message with no
+  `returns` clause or one that returns an interface value, and in a generic service
+  ([E3222](/docs/cli/error-codes/#e3222--semanticreplydeferralrefused)).
+- **A `Reply` stays in the code of the service that holds it.** No function declares a result whose type can
+  hold one (a message's reply, a promise's payload and a helper's result included), no `async` call takes a
+  parameter that can hold one, no closure captures one, and no such value is widened to an interface type, because
+  a function value and an interface value carry what they hold to whatever code receives them (E3222). A `Reply`
+  taken out of an acquired state cannot outlive the statement that opens the state (E3202).
+- **A `Reply` is answered, and a promise is awaited.** A service's state and its message arguments hold a `Reply`
+  freely, where [E3216](/docs/cli/error-codes/#e3216--semanticservicestateholdsapromise) and
+  [E3217](/docs/cli/error-codes/#e3217--semanticmessageneedsacapability) refuse a promise.
 
 ## Program-Wide Defaults — `default`
 

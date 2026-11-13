@@ -358,6 +358,21 @@ export type RebasedParse
 	end 'create'
 end 'RebasedParse'
 
+module type ParseRebaseCheck
+	let rebase as ParseRebase
+	let mints as ParseMints
+
+	module static function create(rebase ParseRebase, mints ParseMints) returns ParseRebaseCheck
+		return Self{rebase: rebase, mints: mints}
+	end 'create'
+
+	module function applyTo(artifact FileParseArtifact) returns RebasedParse
+		artifact.parseMints = self.mints
+
+		return RebasedParse.create(artifact, rebase: self.rebase)
+	end 'applyTo'
+end 'ParseRebaseCheck'
+
 export type SharedLibraryParse
 	let variant as HashDigest
 	let key as HashDigest
@@ -384,22 +399,19 @@ export type SharedLibraryParse
 		return self.artifact.clone()
 	end 'workingArtifact'
 
-	function rebasedOnto(signatures ProgramSignatures, overrides RowSetOverrideTable, consuming bool) returns RebasedParse throws SharedMemoMiss
-		let rebase = try signatures.rebaseFor(self.footprint)
+	module function checkedAgainst(signatures ProgramSignatures, overrides RowSetOverrideTable) returns ParseRebaseCheck throws SharedMemoMiss
+		let rebase = (try signatures.rebaseFor(self.footprint)).clone()
 
 		// Before the told answers are re-asked: their clone walk interns rows, which this check would read as
 		// the baseline's own.
-		let rebasedMints = try self.rebasedMintsAbsentFromTheBaseline(signatures, rebase: rebase)
+		let rebasedMints = (try self.rebasedMintsAbsentFromTheBaseline(signatures, rebase: rebase)).clone()
 
 		if not self.toldAnswersHold(signatures, overrides: overrides) 'anAnswerMoved'
 			throw SharedMemoMiss.footprintMoved
 		end 'anAnswerMoved'
 
-		let rebasedArtifact = self.workingArtifact(consuming)
-		rebasedArtifact.parseMints = rebasedMints
-
-		return RebasedParse.create(rebasedArtifact, rebase: rebase)
-	end 'rebasedOnto'
+		return ParseRebaseCheck.create(rebase, mints: rebasedMints)
+	end 'checkedAgainst'
 
 	function rebasedMintsAbsentFromTheBaseline(signatures ProgramSignatures, rebase ParseRebase) returns ParseMints throws SharedMemoMiss
 		return match self.artifact.parseMints 'mints'
@@ -415,11 +427,11 @@ export type SharedLibraryParse
 		end 'mints'
 	end 'toldAnswersHold'
 
-	function answers(wantedVariant HashDigest, wantedKey HashDigest) returns bool
+	module function answers(wantedVariant HashDigest, wantedKey HashDigest) returns bool
 		return self.variant == wantedVariant and self.key == wantedKey
 	end 'answers'
 
-	function isOfVariant(wantedVariant HashDigest) returns bool
+	module function isOfVariant(wantedVariant HashDigest) returns bool
 		return self.variant == wantedVariant
 	end 'isOfVariant'
 
@@ -427,8 +439,6 @@ export type SharedLibraryParse
 		return self.variant
 	end 'variantOf'
 end 'SharedLibraryParse'
-
-export typealias SharedLibraryParseArray = Array with SharedLibraryParse
 
 export typealias PendingSharedParseMap = Map with (HashDigest, SharedLibraryParse)
 
@@ -482,18 +492,13 @@ export type SharedFileMemo
 	var facts as RawStreamFacts
 	var factsKnown as bool
 	export var views as SharedBuildViewArray
-	var parses as SharedLibraryParseArray
-
-	export function parseCount() returns ElementIndex
-		return self.parses.count()
-	end 'parseCount'
 
 	export static function create(tokens TokenArray) returns SharedFileMemo
-		return Self{raw: RawTokensHold.held(tokens), facts: RawStreamFacts.of(tokens), factsKnown: true, views: SharedBuildViewArray.create(0), parses: SharedLibraryParseArray.create(0)}
+		return Self{raw: RawTokensHold.held(tokens), facts: RawStreamFacts.of(tokens), factsKnown: true, views: SharedBuildViewArray.create(0)}
 	end 'create'
 
 	export static function holdingNothingYet() returns SharedFileMemo
-		return Self{raw: RawTokensHold.absent, facts: RawStreamFacts.nothing(), factsKnown: false, views: SharedBuildViewArray.create(0), parses: SharedLibraryParseArray.create(0)}
+		return Self{raw: RawTokensHold.absent, facts: RawStreamFacts.nothing(), factsKnown: false, views: SharedBuildViewArray.create(0)}
 	end 'holdingNothingYet'
 
 	export function holdsRawTokens() returns bool
@@ -535,49 +540,6 @@ export type SharedFileMemo
 		self.facts = learned
 		self.factsKnown = true
 	end 'learnRawStreamFacts'
-
-	export function parseOf(variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable, consuming bool) returns RebasedParse throws SharedMemoMiss
-		let position = try self.positionAnswering(variant, key: key)
-		let held = try self.parses.get(position) otherwise panic("SharedFileMemo.parseOf: parses.get OOB at {position}, the position just found")
-		let rebased = try held.rebasedOnto(signatures, overrides: overrides, consuming: consuming)
-
-		if consuming 'noLaterCompileWillAsk'
-			_ = try self.parses.remove(position) otherwise panic("SharedFileMemo.parseOf: remove({position}) of {self.parses.count()} held parses")
-		end 'noLaterCompileWillAsk'
-
-		return rebased
-	end 'parseOf'
-
-	function positionAnswering(variant HashDigest, key HashDigest) returns ElementIndex throws SharedMemoMiss
-		for (iter, held) in self.parses.withIterator() 'eachHeld'
-			if held.answers(variant, wantedKey: key) 'thisParse'
-				return iter.index()
-			end 'thisParse'
-		end 'eachHeld'
-
-		throw SharedMemoMiss.notHeld
-	end 'positionAnswering'
-
-	export function holdsParseAnswering(variant HashDigest, key HashDigest) returns bool
-		for held in self.parses 'eachHeld'
-			if held.answers(variant, wantedKey: key) 'thisParse'
-				return true
-			end 'thisParse'
-		end 'eachHeld'
-
-		return false
-	end 'holdsParseAnswering'
-
-	export function holdParse(held SharedLibraryParse)
-		for position in 0 upto self.parses.count() 'eachHeld'
-			if (try self.parses.get(position) otherwise panic("SharedFileMemo.holdParse: parses.get OOB at {position} below count {self.parses.count()}")).isOfVariant(held.variantOf()) 'sameVariant'
-				try self.parses.set(position, value: held) otherwise panic("SharedFileMemo.holdParse: parses.set OOB at {position} below count {self.parses.count()}")
-				return
-			end 'sameVariant'
-		end 'eachHeld'
-
-		self.parses.push(held)
-	end 'holdParse'
 
 	export function viewOf(buildKey BuildKey) returns SharedBuildView throws SharedMemoMiss
 		for view in self.views 'eachView'
@@ -863,7 +825,7 @@ export type QueryDatabase
 
 	export var parseCache as ParseCacheMap
 
-	// ⭐⭐ **THE STDLIB FILES THIS COMPILE BUILDS FUNCTION BODIES FOR** — empty until `queryAllModule`'s
+	// ⭐⭐ **THE STDLIB FILES THIS COMPILE BUILDS FUNCTION BODIES FOR** — empty until `FrontEndRun`'s
 	// fixpoint has walked a module, and grown by it once per round (`growStdlibBodyDemand`).
 	//
 	// It lives on the DATABASE rather than on `Project` because it is the third half of a parse memo's KEY:
@@ -925,6 +887,7 @@ export type QueryDatabase
 	export var sharedParsePublishes as QueryCount
 	export var sharedParseDrifts as QueryCount
 	export var sharedParseReusedFiles as HashDigestSet
+	export var sharedParseVariantsUsed as HashDigestSet
 	export var pendingSharedParses as PendingSharedParseMap
 	export var stashedParsePacks as StashedParsePackMap
 	export var libraryTally as LibraryCacheTally
@@ -955,7 +918,7 @@ export type QueryDatabase
 			signatureCache: SignatureMemo.empty(os),
 			allModuleCache: ModuleMemo.empty(),
 			tokenHits: 0, tokenMisses: 0,
-			sharedTokenHits: 0, sharedActiveTokenHits: 0, sharedProducerMaskHits: 0, sharedParseHits: 0, sharedParseMisses: 0, sharedParsePublishes: 0, sharedParseDrifts: 0, sharedParseReusedFiles: HashDigestSet.create(), pendingSharedParses: PendingSharedParseMap.create(), stashedParsePacks: StashedParsePackMap.create(), libraryTally: LibraryCacheTally.create(), libraryBaseline: LibraryBaselineState.unused, libraryStateKey: 0, libraryStateKeySources: 0, libraryStateKeyComputed: false,
+			sharedTokenHits: 0, sharedActiveTokenHits: 0, sharedProducerMaskHits: 0, sharedParseHits: 0, sharedParseMisses: 0, sharedParsePublishes: 0, sharedParseDrifts: 0, sharedParseReusedFiles: HashDigestSet.create(), sharedParseVariantsUsed: HashDigestSet.create(), pendingSharedParses: PendingSharedParseMap.create(), stashedParsePacks: StashedParsePackMap.create(), libraryTally: LibraryCacheTally.create(), libraryBaseline: LibraryBaselineState.unused, libraryStateKey: 0, libraryStateKeySources: 0, libraryStateKeyComputed: false,
 			activeTokenHits: 0, activeTokenMisses: 0,
 			parseHits: 0, parseMisses: 0, parseMissPaths: ParseMissPathRoster.create(0), recordParseMissPaths: false,
 			signatureHits: 0, signatureMisses: 0,

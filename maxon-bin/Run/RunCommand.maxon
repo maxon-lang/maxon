@@ -101,7 +101,7 @@ end 'CachedProgram'
 //
 // A hit is the file being THERE. Its name is the key, so there is nothing beside it to read and nothing
 // to compare — a build under that name was made from these very inputs.
-export function cachedBuild(program FilePath, isProject bool, target Target, entryFunction ByteArray, speaker String, session CompileSession = CompileSession.printing()) returns CachedProgram throws CachedBuildError
+export function cachedBuild(program FilePath, isProject bool, target Target, entryFunction ByteArray, speaker String, session DriverSession = DriverSession.printing()) returns CachedProgram throws CachedBuildError
 	let slot = try locateRunSlot(program, isProject: isProject, target: target, entryFunction: entryFunction) otherwise (e) 'noCache'
 		reportCacheError(e, speaker: speaker, sink: session.diagnostics)
 		throw CachedBuildError.notBuilt
@@ -128,13 +128,14 @@ end 'cachedBuild'
 // ⚠ **`debugInfo` DEFAULTS TO FALSE ON `compileToProduct` AND MUST NOT HERE.** A program launched this way
 // is one somebody is developing, and a crash with no sidecar beside the binary is a stack trace nobody can
 // read.
-function fillSlot(slot RunSlot, target Target, entryFunction ByteArray, speaker String, session CompileSession) throws CachedBuildError
+function fillSlot(slot RunSlot, target Target, entryFunction ByteArray, speaker String, session DriverSession) throws CachedBuildError
 	let program = slot.program
 
 	let inputPaths = MaxonSourcePathArray.create(1, zeroed: false)
 	inputPaths.push(program)
 
-	let product = try compileToProduct(inputPaths, target: target, outputOverride: StatedText.stated(slot.pending.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(0), poisonFreed: false, debugInfo: true, entryFunction: entryFunction, session: session) otherwise (e) 'compileFailed'
+	let request = freeze CompileRequest.create(DriverWork.build, origin: ProjectOrigin.sources, target: target, session: session, inputPaths: inputPaths, outputOverride: StatedText.stated(slot.pending.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(0), poisonFreed: false, debugInfo: true, entryFunction: entryFunction).clone()
+	let product = try compileToProduct(freshCompileDriver(), request: request, session: session) otherwise (e) 'compileFailed'
 		reportCompileError(e, sink: session.diagnostics)
 		throw CachedBuildError.notBuilt
 	end 'compileFailed'

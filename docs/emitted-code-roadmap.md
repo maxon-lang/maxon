@@ -233,7 +233,7 @@ Target tier — which is what makes this rung a DELETION rather than a reorderin
 why it is low risk.
 
 ✅ **LANDED 2026-08-28** as `maxon-bin/Compiler/Targets/Shared/BranchCleanup.maxon`, scheduled in
-`buildX64Backend` and `buildArm64Backend` between `lowerAndAllocateOnAWorkerPool` and the frame pass — after `applyAllocation`,
+`BackendWorker.finishFunction`, between allocation and the frame pass — after `applyAllocation`,
 which is the whole correctness argument for the threading half (before SSA destruction has placed its
 edge copies, a "jmp-only" block is an edge ABOUT to receive moves). Four transforms landed: jump
 elision, conditional inversion, jump threading, unreachable-block elimination. **Block REORDERING did
@@ -1036,7 +1036,7 @@ the foot of this document.
 
 ✅ **LANDED 2026-08-29** as `maxon-bin/Compiler/IR/Std/StrengthReduceDivision.maxon`, scheduled in
 `buildLoweringPasses` between `foldConstants` and `foldConstOperands`, and run a SECOND time by
-`Compiler.compileToCodeResult` over the appended runtime band.
+`afterPipeline` over the appended runtime band.
 
 ⭐⭐ **IT IS A Std PASS AND NOT AN ISEL, AND THAT IS FORCED RATHER THAN CHOSEN — WHICH MAKES IT THE
 FIRST ROW OF THIS WORKSTREAM THAT COULD NOT GO WHERE `EC16` AND `EC19` WENT.** The sequence needs four

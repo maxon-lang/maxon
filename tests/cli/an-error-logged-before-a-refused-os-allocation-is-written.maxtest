@@ -1,0 +1,30 @@
+let ALoggedErrorBeforeARefusedAllocationCaseDirName = "os-allocation-refusal-after-an-error"
+let LoggedBeforeRefusalRequest = "281474976710656"
+let LoggedBeforeRefusalExitCode = 82
+let LoggedBeforeRefusalLine = "level=ERROR msg=boom"
+let LoggedBeforeRefusalDiagnostic = "fatal error: out of memory"
+
+let LoggedBeforeRefusalSource = "function main() returns ExitCode\n\tLog.info(\"one\")\n\tLog.error(\"boom\")\n\tlet bytes = ByteArray.create(0)\n\tbytes.reserve({LoggedBeforeRefusalRequest})\n\tprint(\"\{bytes.count()}\")\n\treturn 0\nend 'main'\n"
+
+test 'an error logged before the operating system refuses a memory request reaches stderr ahead of the out-of-memory diagnostic'
+	requireHeldOutsideCheckout(ALoggedErrorBeforeARefusedAllocationCaseDirName, check: LoggedErrorSurvivesTheRefusal.create())
+end 'an error logged before the operating system refuses a memory request reaches stderr ahead of the out-of-memory diagnostic'
+
+type LoggedErrorSurvivesTheRefusal implements OutsideCheckoutCase
+	static function create() returns LoggedErrorSurvivesTheRefusal
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		let app = stagingDir(dir.join(AppDirName).toString())
+		writeStagedFile(app.join(StagedProgramFileName), content: LoggedBeforeRefusalSource)
+
+		let built = spawnCompiler([BuildCommandWord, AppDirName], staged: dir)
+		try Expect.equal(built.exitCode(), expected: 0, message: "a program that logs an error and then reserves {LoggedBeforeRefusalRequest} bytes did not build. It wrote to stderr: {built.stderr}")
+
+		let ran = spawnCompiler(StringArray.create(0), binary: app.join("{AppDirName}{executableSuffix()}"), staged: dir)
+		try Expect.equal(ran.exitCode(), expected: LoggedBeforeRefusalExitCode, message: "the program exited {ran.exitCode()} rather than the allocator's refusal exit. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
+		try Expect.isTrue(ran.stderr.contains(LoggedBeforeRefusalLine), message: "the error logged before the refusal never reached stderr. It wrote to stderr: {ran.stderr}")
+		try Expect.isTrue(ran.stderr.contains(LoggedBeforeRefusalDiagnostic), message: "the allocator ended the process without saying why. It wrote to stderr: {ran.stderr}")
+	end 'requireHeldIn'
+end 'LoggedErrorSurvivesTheRefusal'

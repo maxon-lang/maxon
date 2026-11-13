@@ -1506,3 +1506,66 @@ end 'main'
 ```exitcode
 0
 ```
+
+
+
+<!-- test: a-let-rebind-of-a-let-unique-value-moves-it -->
+`first` is a `let` holding a unique value, and `let second = first` moves it, exactly as it does from a `var`: the read of `first` that follows is a use of a moved value.
+```maxon
+typealias Number = int(0 to 999)
+
+type Ticket is unique
+	var n as Number
+
+	static function create(n Number) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function show() returns Number
+		return self.n
+	end 'show'
+end 'Ticket'
+
+function main() returns ExitCode
+	let first = Ticket.create(1)
+	let second = first
+	print("{first.show()} {second.show()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:19:10: use of moved value 'first': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: a-let-rebind-of-a-reply-moves-it -->
+A `Reply` is unique, so `let moved = pending` moves it out of `pending` and the later `pending.answer(4)` is a use of a moved value.
+```maxon
+typealias Number = int(0 to 999)
+
+type Desk
+	var n as Number
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ask() returns Number throws ReplyStopped
+		let pending = reply.later()
+		let moved = pending
+		moved.answer(3)
+		pending.answer(4)
+		return
+	end 'ask'
+end 'Desk'
+
+function main() returns ExitCode
+	let desk = spawn Desk.create()
+	let asked = try desk.ask() otherwise panic("sent")
+	let answer = try await asked otherwise panic("answered")
+	print("{answer}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:15:3: use of moved value 'pending': its ownership moved to another binding at an earlier bind or assignment
+```

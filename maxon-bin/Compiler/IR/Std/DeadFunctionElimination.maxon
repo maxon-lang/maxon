@@ -57,7 +57,7 @@
 // (`.rdata` offsets move, so every `RequiredData` pin moves with them).
 //
 // ⚠ **A USER GLOBAL'S SLOT IS DECIDED UPSTREAM, AND DELIBERATELY NOT HERE**: a dead top-level global's slot
-// is never BUILT, by `IR/Maxon/DeadGlobalElimination` filtering the arena in `compileToCodeResult`, and it
+// is never BUILT, by `IR/Maxon/DeadGlobalElimination` filtering the arena in `prepareLowering`, and it
 // reaches `layOut` as a `declared` entry. So the two never both answer for a user global, and nothing here
 // needs a `shouldKeepGlobal` list; the label set this pass collects decides runtime words alone.
 //
@@ -396,6 +396,8 @@ module function compilerOwnedRoots(target Target, stub EntryStubCalls) returns C
 	roots.push(CompilerOwnedRoot.create(GtRunMainName, isCalledHere: stub.runsMainOnAGreenThread))
 	roots.push(CompilerOwnedRoot.create(ProcessDescendantGateName, isCalledHere: stub.gatesDescendants))
 	roots.push(CompilerOwnedRoot.create(GtPreemptName, isCalledHere: true))
+	roots.push(CompilerOwnedRoot.create(GtPanicFlushName, isCalledHere: true))
+	roots.push(CompilerOwnedRoot.create(GtFaultFlushName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(GtStackAllocName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(GtStackFreeName, isCalledHere: true))
 	roots.push(CompilerOwnedRoot.create(DsInitName, isCalledHere: stub.bracketsDebugStream))

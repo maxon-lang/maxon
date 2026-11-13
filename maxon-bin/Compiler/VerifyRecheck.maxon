@@ -5,8 +5,9 @@
 // ⭐ **WHY THIS GATE EXISTS, AND WHY IT IS SEPARATE FROM `verify-warm-rebuild`.** That gate proves
 // the QUERY SPINE is sound — a re-query over unchanged input hits, a re-query over changed input
 // misses, and only the memos that read the changed input miss. It proves all of that WITHOUT EVER
-// RUNNING THE PIPELINE: `verifyCacheHit` calls only `queryAllModule`, and its own header says why —
-// *"the memoized module is never mutated"*. So the spine is gated and the PIPELINE OVER IT is not.
+// RUNNING THE PIPELINE: `verifyCacheHit` compiles only to `WarmGoal.merged`, and its own header says
+// why — *"the memoized module is never mutated"*. So the spine is gated and the PIPELINE OVER IT is
+// not.
 //
 // That gap is exactly where an editor lives. A language server holds one `Project` open for hours
 // and re-checks it on every keystroke, which is the one thing nothing in this tree does today: every
@@ -42,47 +43,50 @@ let MinFilesForRecheck = 1
 let SemanticBreakEditText = "function recheckProbeBroken() returns bool\n\treturn recheckProbeNobodyDeclaredThis()\nend 'recheckProbeBroken'"
 
 // Every property loads its projects here, so a define reaches each check exactly as it reaches a build.
-function definedProject(inputPath FilePath, target Target, defines DefineArray) returns Project throws CompileError
-	let project = try loadProject([inputPath], target: target, session: CompileSession.discarding(), defines: defines)
+let RecheckSlot = "recheck"
 
-	return project
-end 'definedProject'
+type RecheckProject
+	let session as WarmSession
+	module let sources as WarmSourceArray
 
-// Drive `project` through the whole pipeline once and report how many diagnostics stand afterwards.
-//
-// ⚠ **THE REFUSAL IS AN EXPECTED OUTCOME HERE, NOT AN ERROR TO REPORT.** Half of this gate's runs are
-// over a deliberately broken buffer, where `compileToCodeResult` prints and throws by design. The
-// throw is swallowed and the printing discarded (`definedProject`'s session) so the gate's own output
-// stays readable; the MEASUREMENT is `project.diagnostics`, which the refusing and the succeeding path
-// both leave behind.
-function checkOnce(project Project) returns DiagnosticTally
-	_ = compileCompleted(project)
+	static function opened(inputPath FilePath, target Target, defines DefineArray) returns RecheckProject throws CompileError
+		let session = WarmSession.over(persistentCompileDriver(), sink: DiagnosticSink.discarding())
+		let loaded = try session.load(RecheckSlot, input: inputPath, target: target, defines: defines)
 
-	return project.diagnostics.count()
-end 'checkOnce'
+		return Self{session: session, sources: loaded.sources}
+	end 'opened'
 
-// True if the pipeline produced a `CodeResult`, false if it refused. Split out because
-// `otherwise ignore` is rejected in value position (E3059), so swallowing the refusal needs a
-// handler that diverges — and a handler that diverges needs its own function to diverge out of.
-function compileCompleted(project Project) returns bool
-	_ = try compileToCodeResult(project) otherwise 'refused'
-		return false
-	end 'refused'
+	function firstSource() returns WarmSource
+		return try self.sources.get(0) otherwise panic("RecheckProject.firstSource: loadSourceFiles throws noSourceFiles before an empty project reaches here")
+	end 'firstSource'
 
-	return true
-end 'compileCompleted'
+	function edit(source WarmSource, content String) throws CompileError
+		_ = try self.session.edit(RecheckSlot, path: source.path, content: content)
+	end 'edit'
 
-// Print the diagnostics standing on `project`, one per line, under a caller-supplied heading.
+	// A refusal is an expected outcome here, not an error to report: half of this gate's runs are over a
+	// deliberately broken buffer. The measurement is the diagnostics standing after the check, which the
+	// refusing and the succeeding path both leave behind.
+	function checkOnce() returns WarmReading throws CompileError
+		return try self.session.tryCompile(RecheckSlot, goal: WarmGoal.codeResult(false))
+	end 'checkOnce'
+end 'RecheckProject'
+
+function diagnosticTallyOf(reading WarmReading) returns DiagnosticTally
+	return reading.diagnostics.count()
+end 'diagnosticTallyOf'
+
+// Print the diagnostics standing after a check, one per line, under a caller-supplied heading.
 //
 // ⭐ **A FAILURE HERE MUST NAME WHAT APPEARED, NOT ONLY THAT A NUMBER MOVED.** "0 became 5" is a
 // verdict; the five rendered lines are the evidence, and they are what says WHICH pass re-reported —
 // which is the whole difference between a gate that reports a bug and a gate that starts an
 // investigation. Routed through `Diagnostic.render()` so these read exactly as the compiler's own
 // output does, rather than through a second opinion about how a diagnostic looks.
-function printStandingDiagnostics(project Project, heading String)
+function printStandingDiagnostics(reading WarmReading, heading String)
 	printError("{heading}\n")
 
-	for diagnostic in project.diagnostics 'each'
+	for diagnostic in reading.diagnostics 'each'
 		printError("    {diagnostic.render()}\n")
 	end 'each'
 end 'printStandingDiagnostics'
@@ -113,10 +117,12 @@ end 'verifyRecheck'
 // one-shot input and cannot report it twice. The two read differently and the message says which
 // happened, because they have different fixes.
 function verifyRecheckStability(inputPath FilePath, target Target, defines DefineArray) returns bool throws CompileError
-	let project = try definedProject(inputPath, target: target, defines: defines)
+	let project = try RecheckProject.opened(inputPath, target: target, defines: defines)
 
-	let first = checkOnce(project)
-	let second = checkOnce(project)
+	let firstReading = try project.checkOnce()
+	let secondReading = try project.checkOnce()
+	let first = diagnosticTallyOf(firstReading)
+	let second = diagnosticTallyOf(secondReading)
 
 	if first == second 'stable'
 		print("PASS stability: two checks over unchanged input both reported {first} diagnostic(s)\n")
@@ -125,7 +131,7 @@ function verifyRecheckStability(inputPath FilePath, target Target, defines Defin
 
 	if second > first 'grew'
 		printError("FAIL stability: the first check reported {first} diagnostic(s) and the second {second}, over input that did not change. Diagnostics ACCUMULATE — `project.diagnostics` is appended to by every reporting pass and nothing clears it between runs, so a long-lived project re-reports everything it has ever seen.\n")
-		printStandingDiagnostics(project, heading: "  standing after the second check:")
+		printStandingDiagnostics(secondReading, heading: "  standing after the second check:")
 		return false
 	end 'grew'
 
@@ -140,19 +146,19 @@ end 'verifyRecheckStability'
 // reports nothing at all is perfectly stable — so the two are asked separately, and the middle step
 // is asserted to actually BREAK the program, which is what stops this passing vacuously.
 function verifyDiagnosticsClear(inputPath FilePath, target Target, defines DefineArray) returns bool throws CompileError
-	let project = try definedProject(inputPath, target: target, defines: defines)
-	let fileCount = project.db.sourcePaths.count()
+	let project = try RecheckProject.opened(inputPath, target: target, defines: defines)
+	let fileCount = project.sources.count()
 
 	if fileCount < MinFilesForRecheck 'cannotProve'
 		printError("FAIL clearing: this project has no source files, so there is nothing to break and nothing to fix\n")
 		return false
 	end 'cannotProve'
 
-	let fixture = editableSourceAt(project, index: 0)
-	let editedPath = fixture.path
+	let fixture = project.firstSource()
 	let original = fixture.content
 
-	let beforeBreak = checkOnce(project)
+	let beforeReading = try project.checkOnce()
+	let beforeBreak = diagnosticTallyOf(beforeReading)
 
 	// ⚠ **THE PROPERTY CANNOT BE ASKED OF A PROJECT THAT IS ALREADY RED, and that is a fact about the
 	// PIPELINE rather than a shortcoming of this gate.** The error gates stop the compile between
@@ -162,15 +168,16 @@ function verifyDiagnosticsClear(inputPath FilePath, target Target, defines Defin
 	// `verifyInvalidation` refuses a single-file project rather than reporting a vacuous pass on one.
 	if beforeBreak != 0 'startsRed'
 		printError("FAIL clearing: this project reports {beforeBreak} diagnostic(s) BEFORE any edit, so the clearing property cannot be measured on it — the pipeline stops at its first error gate, so the synthetic break below would never be reached and the count would not move. Point the gate at a program that compiles clean; the diagnostics standing now are:\n")
-		printStandingDiagnostics(project, heading: "  already standing:")
+		printStandingDiagnostics(beforeReading, heading: "  already standing:")
 		return false
 	end 'startsRed'
 
-	fileChanged(project, path: editedPath, content: "{original}\n{SemanticBreakEditText}\n")
-	let whileBroken = checkOnce(project)
+	try project.edit(fixture, content: "{original}\n{SemanticBreakEditText}\n")
+	let whileBroken = diagnosticTallyOf(try project.checkOnce())
 
-	fileChanged(project, path: editedPath, content: original)
-	let afterFix = checkOnce(project)
+	try project.edit(fixture, content: original)
+	let afterFixReading = try project.checkOnce()
+	let afterFix = diagnosticTallyOf(afterFixReading)
 
 	// ⚠ **ASKED FIRST, BECAUSE IT IS THIS GATE'S OWN PREMISE.** If the synthetic edit did not actually
 	// break the program then `afterFix == beforeBreak` proves nothing — a diagnostic that never
@@ -187,7 +194,7 @@ function verifyDiagnosticsClear(inputPath FilePath, target Target, defines Defin
 	end 'cleared'
 
 	printError("FAIL clearing: the buffer was broken ({beforeBreak} -> {whileBroken} diagnostics) and then restored byte-for-byte, but the count came back to {afterFix} instead of {beforeBreak}. An error the user has already fixed is still being reported. This is the defect a long-lived editor session shows first and a `maxon build` can never show, because a build gets a fresh Project every time.\n")
-	printStandingDiagnostics(project, heading: "  standing after the fix:")
+	printStandingDiagnostics(afterFixReading, heading: "  standing after the fix:")
 	return false
 end 'verifyDiagnosticsClear'
 
@@ -203,7 +210,7 @@ end 'verifyDiagnosticsClear'
 // `CompileSession`.
 //
 // ⚠⚠ **READ THIS AS A REGRESSION PIN, NOT AS EVIDENCE OF A FIX — NO SABOTAGE WAS FOUND THAT IT
-// CATCHES.** Removing `compileToCodeResult`'s `project.diagnostics.clear()` reddens the CLEARING
+// CATCHES.** Removing `resetForLowering`'s `project.diagnostics.clear()` reddens the CLEARING
 // property and leaves this one green, because that sink is per-`Project` and never crossed between
 // them. Nor can it see a shared file memo: `definedProject` gives each project a session of its own,
 // where the language server's document projects share one (`LspWorkspaceState.fileMemos`).
@@ -213,19 +220,19 @@ end 'verifyDiagnosticsClear'
 // walk past it. Cheap (one extra load), honest about what it is worth, and not to be cited as though a
 // sabotage had confirmed it.
 function verifyProjectIsolation(inputPath FilePath, target Target, defines DefineArray) returns bool throws CompileError
-	let first = try definedProject(inputPath, target: target, defines: defines)
-	let second = try definedProject(inputPath, target: target, defines: defines)
+	let first = try RecheckProject.opened(inputPath, target: target, defines: defines)
+	let second = try RecheckProject.opened(inputPath, target: target, defines: defines)
 
-	let firstAlone = checkOnce(first)
-	let secondAlone = checkOnce(second)
+	let firstAlone = diagnosticTallyOf(try first.checkOnce())
+	let secondAlone = diagnosticTallyOf(try second.checkOnce())
 
 	// ⚠⚠ **B IS BROKEN ON PURPOSE, AND WITHOUT THAT THIS PROPERTY IS VACUOUS.** MEASURED: an earlier
 	// version interleaved two CLEAN projects and passed while diagnostics were accumulating unbounded —
 	// every count was 0, so "A did not drift" was true and meant nothing. A needs something to be
 	// contaminated BY, so B is given real diagnostics and left holding them.
-	let source = editableSourceAt(second, index: 0)
-	fileChanged(second, path: source.path, content: "{source.content}\n{SemanticBreakEditText}\n")
-	let secondBroken = checkOnce(second)
+	let source = second.firstSource()
+	try second.edit(source, content: "{source.content}\n{SemanticBreakEditText}\n")
+	let secondBroken = diagnosticTallyOf(try second.checkOnce())
 
 	if secondBroken <= secondAlone 'probeDidNotBreakB'
 		printError("FAIL isolation: the synthetic break took project B from {secondAlone} to {secondBroken} diagnostic(s), so B reports nothing and A has nothing to be contaminated by. The measurement below would pass for the one reason it must never pass.\n")
@@ -234,7 +241,7 @@ function verifyProjectIsolation(inputPath FilePath, target Target, defines Defin
 
 	// THE MEASUREMENT. A was not edited, so it must answer exactly what it answered alone — while a
 	// second project, holding diagnostics of its own, is live in the same process.
-	let firstBeside = checkOnce(first)
+	let firstBeside = diagnosticTallyOf(try first.checkOnce())
 
 	if firstBeside != firstAlone 'contaminated'
 		printError("FAIL isolation: project A reported {firstAlone} diagnostic(s) alone and {firstBeside} while a second, BROKEN project was live. B's state is reaching A — a record both projects hold, their `CompileSession`s first, is where to look.\n")
@@ -242,7 +249,7 @@ function verifyProjectIsolation(inputPath FilePath, target Target, defines Defin
 	end 'contaminated'
 
 	// And B keeps its own answer too: a shared sink would show up as B LOSING diagnostics to A's check.
-	let secondBeside = checkOnce(second)
+	let secondBeside = diagnosticTallyOf(try second.checkOnce())
 
 	if secondBeside != secondBroken 'secondLostItsOwn'
 		printError("FAIL isolation: project B reported {secondBroken} diagnostic(s) and then {secondBeside} after A was checked in between.\n")
@@ -252,22 +259,3 @@ function verifyProjectIsolation(inputPath FilePath, target Target, defines Defin
 	print("PASS isolation: A holds {firstAlone} diagnostic(s) and B {secondBroken} across an interleaved A B A B, neither seeing the other\n")
 	return true
 end 'verifyProjectIsolation'
-
-// The source at `index` of the project's fold order, and its content.
-module function editableSourceAt(project Project, index ElementIndex) returns EditableSource
-	let listed = try project.db.sourcePaths.get(index) otherwise panic("editableSourceAt: index {index} is not below the project's {project.db.sourcePaths.count()} source files — loadSourceFiles throws noSourceFiles before an empty project reaches here")
-	let path = try FilePath.from(listed.path) otherwise panic("editableSourceAt: that path came out of the project's own source list, so it cannot fail to re-parse as a path")
-	let entry = try project.db.sourceFiles.get(path) otherwise panic("editableSourceAt: sourcePaths lists a file that sourceFiles has no entry for")
-
-	return EditableSource.create(path, content: entry.content)
-end 'editableSourceAt'
-
-// One file's path and content. See `editableSourceAt`.
-module type EditableSource
-	export let path as FilePath
-	export let content as String
-
-	static function create(path FilePath, content String) returns EditableSource
-		return Self{path: path, content: content}
-	end 'create'
-end 'EditableSource'

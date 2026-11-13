@@ -160,6 +160,7 @@ end 'CounterSource'
 export type PhaseProbe
 	export var nanos as InstantNanos
 	export var cpuTicks as CpuTicks
+	var cpuAccumulated as CpuTicks
 
 	// Cumulative allocations, frees and bytes at the instant the phase opened.
 	export var allocTotal as AllocCount
@@ -225,10 +226,18 @@ export type PhaseProbe
 	end 'beginProcessWideCounters'
 
 	static function openOn(source CounterSource, opensSpan bool) returns PhaseProbe
-		let probe = Self{nanos: 0, cpuTicks: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source, opensSpan: opensSpan, outerOpen: false, outer: CompilePhase.load, upkeepMark: PhaseDelta.zero()}
+		let probe = Self{nanos: 0, cpuTicks: 0, cpuAccumulated: 0, allocTotal: 0, freeTotal: 0, bytes: 0, source: source, opensSpan: opensSpan, outerOpen: false, outer: CompilePhase.load, upkeepMark: PhaseDelta.zero()}
 		probe.readCounters()
 		return probe
 	end 'openOn'
+
+	export function suspend()
+		self.cpuAccumulated = self.cpuAccumulated + ((Clock.threadCpuTicks() as CpuTicks) - self.cpuTicks)
+	end 'suspend'
+
+	export function resume()
+		self.cpuTicks = Clock.threadCpuTicks() as CpuTicks
+	end 'resume'
 
 	// ⭐ **OPEN THIS PROBE AGAIN, ON THE COUNTERS IT WAS OPENED ON** — for a bracket that runs once per
 	// step per function on a pool worker, where a fresh probe per bracket is an allocation INSIDE the
@@ -254,6 +263,7 @@ export type PhaseProbe
 		self.freeTotal = freesRead as AllocCount
 		self.bytes = bytesRead as HeapByteCount
 		self.nanos = Clock.nowNanos()
+		self.cpuAccumulated = 0
 		self.cpuTicks = Clock.threadCpuTicks() as CpuTicks
 	end 'readCounters'
 
@@ -307,7 +317,7 @@ export type PhaseProbe
 		let bytesRead = heapBytesOf(self.source)
 
 		delta.nanos = (endNanos - self.nanos) as DurationNanos
-		delta.cpuTicks = endCpuTicks - self.cpuTicks
+		delta.cpuTicks = self.cpuAccumulated + (endCpuTicks - self.cpuTicks)
 		delta.allocs = (allocationsRead as AllocCount) - self.allocTotal
 		delta.frees = (freesRead as AllocCount) - self.freeTotal
 		delta.bytes = (bytesRead as HeapByteCount) - self.bytes

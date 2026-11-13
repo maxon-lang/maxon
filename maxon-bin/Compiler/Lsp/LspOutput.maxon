@@ -1,5 +1,9 @@
 export typealias LspDocumentVersion = int(0 to u64.max)
 
+export typealias LspVersionCell = SharedValue with LspDocumentVersion
+
+module let LspNoDocumentVersion = 0 as LspDocumentVersion
+
 typealias LspDocumentVersionMap = Map with (String, LspDocumentVersion)
 
 let LogMessageMethod = "window/logMessage"
@@ -49,6 +53,15 @@ module function submitToLspWriter(writer LspStdoutWriter.handle, command LspWrit
 	end 'refused'
 end 'submitToLspWriter'
 
+module function postToLspWriter(writer LspStdoutWriter.handle, command LspWriterCommand)
+	try writer.perform(command) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then return
+			serviceStopped then panic("postToLspWriter: the stdout writer stopped while the session still held its handle")
+		end 'why'
+	end 'refused'
+end 'postToLspWriter'
+
 module function announceLspRefusal(writer LspStdoutWriter.handle, sentence String)
 	let doc = JsonDoc.create()
 	let params = LspJsonObject.create(doc)
@@ -57,15 +70,6 @@ module function announceLspRefusal(writer LspStdoutWriter.handle, sentence Strin
 
 	submitToLspWriter(writer, command: LspWriterCommand.write(lspNotificationText(doc, method: ShowMessageMethod, params: params.finish())))
 end 'announceLspRefusal'
-
-export function lspWriterHoldsVersion(writer LspStdoutWriter.handle, uri String, version LspDocumentVersion) returns bool
-	return try await writer.isCurrent(uri.clone(), version: version, sendTimeout: ForeverMs) otherwise (e) 'refused'
-		match e 'why'
-			mailboxFull or
-			serviceStopped then return false
-		end 'why'
-	end 'refused'
-end 'lspWriterHoldsVersion'
 
 // The one writer of the client's stream, spawned as a service: a project check runs on a strand of its
 // own, and two strands framing onto stdout would interleave their bytes.
@@ -97,7 +101,7 @@ export type LspStdoutWriter
 		self.sessionOpen = false
 	end 'endSession'
 
-	export function isCurrent(uri String, version LspDocumentVersion) returns bool
+	function isCurrent(uri String, version LspDocumentVersion) returns bool
 		let current = try self.versions.get(uri) otherwise return false
 
 		return current == version

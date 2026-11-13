@@ -25,7 +25,7 @@
 // → opRefs → ops` — so the arrival order cannot reach the output, and everything that is order-dependent
 // is folded in function-index order after the drain (`BackendPool`).
 
-export typealias BackendUnitBodyArray = Array with BackendUnitBody
+export typealias BackendUnitBodySlot = Slot with BackendUnitBody
 
 // What crosses TO a worker: the function as a single-function Std module, and the facts the
 // allocator and the encoder read off the real function that the unit's own does not carry.
@@ -306,32 +306,28 @@ function debugLocalsLeaveTheirScopes(func IrFunction) returns bool
 	return false
 end 'debugLocalsLeaveTheirScopes'
 
-export typealias FinishedUnitArray = Array with FinishedUnit
+export typealias FinishedUnitSlot = Slot with FinishedUnit
 
 // THE MESSAGE ARGUMENT AND ITS REPLY: which function, its body in a one-slot holder the worker pops
 // (see `FrontEndJob`), and the finished function the worker files in the same unit.
 export type BackendUnit
 	export var funcIndex as ElementIndex
-	export var holder as BackendUnitBodyArray
-	export var finished as FinishedUnitArray
+	export let holder as BackendUnitBodySlot
+	export let finished as FinishedUnitSlot
 
 	export static function awaitingABody(funcIndex ElementIndex) returns BackendUnit
-		return Self{funcIndex: funcIndex, holder: BackendUnitBodyArray.create(0), finished: FinishedUnitArray.create(0)}
+		return Self{funcIndex: funcIndex, holder: BackendUnitBodySlot.create("BackendUnit.holder"), finished: FinishedUnitSlot.create("BackendUnit.finished")}
 	end 'awaitingABody'
 
 	export static function extract(module StdModule, func IrFunction, funcIndex ElementIndex, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns isolated BackendUnit
 		let unit = BackendUnit.awaitingABody(funcIndex) as isolated BackendUnit
 
 		modify unit 'fill'
-			unit.holder.push(BackendUnitBody.extract(module, func: func, runtimeTier: runtimeTier, spanTable: spanTable))
+			unit.holder.fill(BackendUnitBody.extract(module, func: func, runtimeTier: runtimeTier, spanTable: spanTable))
 		end 'fill'
 
 		return unit
 	end 'extract'
-
-	export function takeFinished() returns FinishedUnit
-		return try self.finished.pop() otherwise panic("BackendUnit.takeFinished: the unit for function {self.funcIndex} came back with no finished function")
-	end 'takeFinished'
 end 'BackendUnit'
 
 export enum DebugVersionKind

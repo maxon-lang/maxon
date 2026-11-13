@@ -1,0 +1,40 @@
+let BusyAnswerDirName = "diagnostics-project-busy-check-answers"
+let BusyAnswerRequestCount = 8
+let BusyAnswerBoundMs = 10000 as DurationMs
+
+test 'a project check running on a busy project does not stop the server answering other requests'
+	let root = stagedBusyCheckProject(BusyAnswerDirName)
+
+	let client = LspClient.start()
+
+	if let slowest = try slowestAnswerDuringTheCheck(client, root: root) 'answered'
+		client.release()
+		discardStagedDir(root)
+
+		try Expect.isTrue(slowest < BusyAnswerBoundMs, message: "a request asked while the project check of a large project was running took {slowest} ms to answer, past the {BusyAnswerBoundMs} ms bound: the check held the server's session loop.")
+	end 'answered' else (e) 'failed'
+		abandonedStagedSession(client, staged: root, failure: e, doing: "the session did not answer requests while its project check was running")
+	end 'failed'
+end 'a project check running on a busy project does not stop the server answering other requests'
+
+function slowestAnswerDuringTheCheck(client LspClient, root FilePath) returns DurationMs throws LspClientError
+	let uri = fileUriOf(root.join(BusyCheckBufferFileName))
+
+	_ = try client.initializeAtRoot(root)
+	try client.initialized()
+	try client.openDocument(uri, content: BusyCheckBufferSource)
+	_ = try client.awaitPublishedDiagnostics(uri)
+	sleep(BusyCheckPastTheDebounceMs)
+
+	var slowest = 0 as DurationMs
+
+	for _ in 0 upto BusyAnswerRequestCount 'eachRequest'
+		let started = Clock.nowMs()
+		_ = try client.documentSymbols(uri)
+		let took = Clock.elapsedMs(started)
+
+		slowest = took if took > slowest else slowest
+	end 'eachRequest'
+
+	return slowest
+end 'slowestAnswerDuringTheCheck'

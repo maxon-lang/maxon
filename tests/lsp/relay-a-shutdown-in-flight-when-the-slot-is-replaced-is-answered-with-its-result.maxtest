@@ -23,7 +23,12 @@ function shutDownAcrossAReplacement(client LspClient, caseDir FilePath) returns 
 
 	armRelaySwapOnShutdown(caseDir)
 
-	try client.shutdown()
+	let before = relaySlotModifiedAt(caseDir)
+	let shutdown = try client.startShutdown()
+
+	awaitRelaySlotSwap(caseDir, before: before)
+	try relaySlotChanged(client, caseDir: caseDir)
+	try client.awaitReplyTo(shutdown)
 	try client.exit()
 
 	let code = try client.waitForExit()

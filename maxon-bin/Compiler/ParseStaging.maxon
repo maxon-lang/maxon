@@ -1019,10 +1019,6 @@ export type FileParseArtifact
 	// to be captured here rather than recovered downstream.
 	export var asyncSpawnSites as AsyncSpawnSiteMap
 
-	// The twin of `asyncSpawnSites` for services: every `await` of a service reply this file holds, keyed by the op
-	// index in THIS artifact's module and folded with the merge's offset. See `Project.serviceAwaitSites`.
-	export var serviceAwaitSites as ServiceAwaitSiteMap
-
 	export var registryUseSites as RegistryUseSiteTable
 
 	// The mm-trace tag of each compiler-minted box this file allocates that is not any declared type's.
@@ -1233,7 +1229,6 @@ export type FileParseArtifact
 			opRanges: SourceRangeTable.create(),
 			covPoints: CovPointArray.create(0),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
-			serviceAwaitSites: ServiceAwaitSiteMap.create(),
 			registryUseSites: noRegistryUseSites,
 			allocTagSites: AllocTagSiteMap.create(),
 			closureRecordSites: ClosureRecordSiteSet.create(),
@@ -1374,12 +1369,6 @@ export type FileParseArtifact
 	export function recordAsyncSpawnSite(site AsyncSpawnSite)
 		self.asyncSpawnSites.upsert(self.module.opCount(), value: site)
 	end 'recordAsyncSpawnSite'
-
-	// The service twin, on the same read-it-through-here contract and for its reason: the site lands on the op
-	// the parser is ABOUT to append, so the key is the current count.
-	export function recordServiceAwaitSite(site ServiceAwaitSite)
-		self.serviceAwaitSites.upsert(self.module.opCount(), value: site.clone())
-	end 'recordServiceAwaitSite'
 
 	export function recordRegistryUseSite(site RegistryUseSite)
 		let byOp = self.registryUseSitesForWrite()
@@ -1595,7 +1584,6 @@ export type FileParseArtifact
 		self.opRanges.cacheWrite(writer)
 		cacheWriteCovPointArray(writer, value: self.covPoints)
 		cacheWriteAsyncSpawnSiteMap(writer, value: self.asyncSpawnSites)
-		cacheWriteServiceAwaitSiteMap(writer, value: self.serviceAwaitSites)
 		cacheWriteRegistryUseSiteTable(writer, value: self.registryUseSites)
 		cacheWriteAllocTagSiteMap(writer, value: self.allocTagSites)
 		cacheWriteClosureRecordSiteSet(writer, value: self.closureRecordSites)
@@ -1646,7 +1634,6 @@ export type FileParseArtifact
 		let f_opRanges = try SourceRangeTable.cacheRead(reader)
 		let f_covPoints = try cacheReadCovPointArray(reader)
 		let f_asyncSpawnSites = try cacheReadAsyncSpawnSiteMap(reader)
-		let f_serviceAwaitSites = try cacheReadServiceAwaitSiteMap(reader)
 		let f_registryUseSites = try cacheReadRegistryUseSiteTable(reader)
 		let f_allocTagSites = try cacheReadAllocTagSiteMap(reader)
 		let f_closureRecordSites = try cacheReadClosureRecordSiteSet(reader)
@@ -1688,11 +1675,11 @@ export type FileParseArtifact
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, closureRecordSites: f_closureRecordSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, abandonedRegions: f_abandonedRegions, refusal: f_refusal, refusedInstanceDeferrals: f_refusedInstanceDeferrals, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, hiddenTypeDeclarations: f_hiddenTypeDeclarations, secondaryDiagnostics: f_secondaryDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, closureRecordSites: f_closureRecordSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, abandonedRegions: f_abandonedRegions, refusal: f_refusal, refusedInstanceDeferrals: f_refusedInstanceDeferrals, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, hiddenTypeDeclarations: f_hiddenTypeDeclarations, secondaryDiagnostics: f_secondaryDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize384
-		return sizeof(FileParseArtifact) as CacheSize384
+	static function cacheLayoutBytes() returns CacheSize376
+		return sizeof(FileParseArtifact) as CacheSize376
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1703,7 +1690,6 @@ export type FileParseArtifact
 
 		for opIndex in mark.ops to opLimit 'eachOpSince'
 			_ = self.asyncSpawnSites.remove(opIndex)
-			_ = self.serviceAwaitSites.remove(opIndex)
 			_ = self.allocTagSites.remove(opIndex)
 			_ = self.closureRecordSites.remove(opIndex)
 			_ = self.debugStreamNameSites.remove(opIndex)
@@ -1897,7 +1883,7 @@ end 'ownedNames'
 //   3. fold its op source spans onto `project.opRanges`, in lockstep with (2),
 //   4. commit the artifact's registry contributions into `Project` — all but its type-name
 //      declarations, which `commitTypeNameDeclsInPathOrder` commits once every file has merged.
-// `target` is the accumulator module `queryAllModule` builds (and caches); the
+// `target` is the accumulator module `FrontEndRun` builds (and caches); the
 // registries land on `Project`.
 export function mergeArtifact(project Project, target MaxonModule, artifact FileParseArtifact, signatures ProgramSignatures)
 	signatures.beginMerge()
@@ -1962,7 +1948,6 @@ end 'commitArtifactRegistries'
 module enum OpKeyedTable
 	synthesizedOpFiles
 	registryUseSites
-	serviceAwaitSites
 	asyncSpawnSites
 	allocTagSites
 	closureRecordSites
@@ -1981,7 +1966,6 @@ module function heldBy(table OpKeyedTable, project Project) returns ElementIndex
 	return match table 'whichTable'
 		synthesizedOpFiles gives project.synthesizedOpFiles.count()
 		registryUseSites gives project.registryUseSites.count()
-		serviceAwaitSites gives project.serviceAwaitSites.count()
 		asyncSpawnSites gives project.asyncSpawnSites.count()
 		allocTagSites gives project.allocTagSites.count()
 		closureRecordSites gives project.closureRecordSites.count()
@@ -2298,7 +2282,7 @@ end 'InstantiationAnchor'
 // author wrote. A diagnostic raised at symbol-emission time has no user span to land on and would blame
 // a file the author never opened.
 //
-// Called once per compile from `compileToCodeResult`, after `queryProgramSignatures` has interned every
+// Called once per compile from `prepareLowering`, after `queryProgramSignatures` has interned every
 // instantiation — the same placement, and for the same reason, as `checkWhereConstraints`.
 export function checkTypeSymbolNamespace(project Project, signatures ProgramSignatures)
 	if project.poison.typeUniverseIsUnreadable() 'theUniverseIsUnreadable'
@@ -3167,8 +3151,6 @@ end 'commitPendingBrandRecords'
 // instead, and the two are the same only while every file is merged before any is lowered — a property of
 // today's pipeline, not a rule.
 function commitOpKeyedSites(project Project, artifact FileParseArtifact, opOffset ElementIndex)
-	project.serviceAwaitSites.upsertRelocated(artifact.serviceAwaitSites, offset: opOffset)
-
 	match artifact.registryUseSites 'registryUses'
 		unwritten then break
 		entries(byOp) then project.registryUseSites.upsertRelocated(byOp, offset: opOffset)

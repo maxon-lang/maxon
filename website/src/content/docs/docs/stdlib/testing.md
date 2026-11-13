@@ -105,7 +105,7 @@ at once. It is what `scripts/multicore-stress/cown-multi-torture.maxon` runs.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `violations(cownCount, workers:, rounds:)` | `CownTortureViolations` | `workers` green threads each run `rounds` rounds. A round acquires two cowns drawn from `cownCount` cowns (a draw may repeat one), and holds them across a yield. Answers how many times a held cown was entered again, plus one when the per-cown entry counts do not add up to the acquisitions made; 0 means mutual exclusion held. `cownCount` must be a power of two, and any other value aborts the process. |
+| `violations(cownCount, workers:, rounds:)` | `CownTortureViolations` | `workers` green threads each run `rounds` rounds. A round draws a service or a pair of services from `cownCount` services (a draw may repeat one) and either sends the first a message or acquires the pair and holds it across a yield. One worker stops a service half way through, so later acquires of it answer stopped and later sends to it fail. Answers how many times a held service was entered again, plus one when the per-service entry counts do not add up to the messages delivered and the services acquired, plus one for every acquire of the stopped service that did not answer stopped; 0 means mutual exclusion and the stopped answer held. `cownCount` must be a power of two, and any other value aborts the process. It waits for the green threads it starts, so it is called from `main`, a test body or a coroutine; a message or a `spawn` factory that reaches it is [E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait). |
 
 `CownTortureSize` is `int(1 to u32.max)`, the type of all three arguments, and `CownTortureViolations` is
 `int(0 to u64.max)`.

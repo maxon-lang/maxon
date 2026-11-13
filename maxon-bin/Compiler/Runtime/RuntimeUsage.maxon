@@ -518,7 +518,7 @@ export type RuntimeUsage
 
 	// ⭐⭐ **DOES THIS BUILD CARRY THE DebugStream PRODUCER?** Not a finding of the scan — no walk of a Maxon
 	// module can see it, because the producer is `--debugstream` plus a heap and both are decided after the
-	// walk — but a DECLARATION `Compiler.compileToCodeResult` makes at the one moment
+	// walk — but a DECLARATION `prepareLowering` makes at the one moment
 	// `buildCarriesDebugStream` is answered.
 	//
 	// ⚠ **IT EXISTS BECAUSE A BACKEND SEES ONLY THIS RECORD.** The producer's own body reaches the uptime
@@ -528,7 +528,7 @@ export type RuntimeUsage
 	export var usesDebugStream as bool
 
 	// ⭐⭐ **DOES THIS BUILD CARRY THE COVERAGE DUMP?** `--coverage`, and nothing else — a Maxon module cannot
-	// name `__cov_dump`, so this is a DECLARATION `Compiler.compileToCodeResult` makes rather than a finding
+	// name `__cov_dump`, so this is a DECLARATION `prepareLowering` makes rather than a finding
 	// of the scan, exactly as `usesDebugStream` is.
 	//
 	// ⚠ **IT ALSO DECLARES `usesManagedFile`**, and that is not a convenience: the dump's body is
@@ -552,7 +552,7 @@ export type RuntimeUsage
 	//
 	// ⛔ **IT MUST AGREE WITH `IrModule.parksOnIo`**, which decides whether the park is EMITTED where this
 	// decides whether the scheduler is INSTALLED; both come from one computation in
-	// `Compiler.compileToCodeResult`. See that field for what a disagreement produces.
+	// `prepareLowering`. See that field for what a disagreement produces.
 	//
 	// ⚠ It seeds TRUE, which is every complete target's answer.
 	export var parksOnIo as bool
@@ -752,7 +752,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesSchedulerlessNowNs = true
 	end 'schedulerlessNowNs' else if not usage.parksOnIo and callee.equals(GtSleepName) 'schedulerlessSleep'
 		usage.usesSchedulerlessSleep = true
-	end 'schedulerlessSleep' else if isGtRuntimeCallee(callee) and not strandGuardCallIsElided(usage.parksOnIo, callee: callee) 'gt'
+	end 'schedulerlessSleep' else if isGtRuntimeCallee(callee) and not strandGuardCallIsElided(usage.parksOnIo, callee: callee) and not pinDestructIsInert(usage.parksOnIo, callee: callee) 'gt'
 		recordGtUsage(usage)
 	end 'gt'
 
@@ -762,9 +762,9 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 	end 'sharedValue'
 
-	if callee.equals(CownTestMultiName) 'cownTest'
+	if callee.equals(CownTestMultiName) or isCownAcquireEntry(callee) 'cownEntry'
 		recordGtUsage(usage)
-	end 'cownTest'
+	end 'cownEntry'
 
 	if isServiceRegistryRuntimeCallee(callee) 'serviceRegistry'
 		usage.usesServiceRegistry = true

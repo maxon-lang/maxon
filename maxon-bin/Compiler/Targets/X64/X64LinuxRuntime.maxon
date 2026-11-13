@@ -1393,7 +1393,8 @@ end 'buildX64LinuxPathOpChunk'
 //
 // ⚠ **THE DURABILITY STEP IS BEST-EFFORT AND ITS FAILURES ARE DELIBERATELY NOT REPORTED.** The rename has
 // already happened and is already visible; a caller told "the rename failed" because the parent directory
-// could not be opened would delete or retry something that is in fact in place.
+// could not be opened would delete or retry something that is in fact in place. The one failure that is
+// reported is the scratch page that holds the directory prefix: when it cannot be mapped the chunk panics.
 //
 // ⚠ **AND NOTHING BELOW THE RENAME MAY STASH AN errno**, for the same reason: the word is read by an
 // `osLastError` the Std tier emits immediately after this call, and a `fsync` that failed would be blamed
@@ -1405,8 +1406,8 @@ function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Function
 	let asm = X64RuntimeAsm.beginFunction(3)
 
 	let renamed = asm.newLabel()
+	let mapped = asm.newLabel()
 	let unmap = asm.newLabel()
-	let released = asm.newLabel()
 	let answered = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotNewPath), srcReg: X64Register.rdx, wide: true)
@@ -1425,7 +1426,10 @@ function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Function
 	asm.placeLabel(renamed)
 	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxPathBytes as MachineWord))
 	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.lessEqual, targetBlockId: released)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greater, targetBlockId: mapped)
+	x64LinuxEmitPanicConstant(asm, bytes: LinuxRenameMapFailedMessage)
+
+	asm.placeLabel(mapped)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotPrefixPage), srcReg: X64Register.rax, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotNewPath), wide: true)
@@ -1452,7 +1456,6 @@ function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Function
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(SlotPrefixPage), wide: true)
 	encodeX64MunmapBaseInRdi(asm.code, length: X64MapLength.fixed(LinuxPathBytes as MachineWord))
 
-	asm.placeLabel(released)
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: Win32True as MachineWord)
 
 	asm.placeLabel(answered)

@@ -68,8 +68,8 @@ is NOT bent to dodge a runtime cost, because the cost is what the instrument exi
   backlog at 1024 messages, so peak memory compares directly.
 - **spawn-many** pays a message and a reply round trip per Maxon service, where each goroutine writes
   one slice slot, so its ratio is skewed against Maxon by the messaging on top of the spawn.
-- **thread-ring** cannot await its successor: the ring is a cycle of handles and a node awaiting a node
-  that awaits it is E3139. The holder at 0 therefore sends a reply-less report to a `Reporter` service,
+- **thread-ring** cannot await its successor: a message that awaits a reply waits while holding its
+  service, which is E3221. The holder at 0 therefore sends a reply-less report to a `Reporter` service,
   `main` parks in `Scheduler.quiesce()` until the ring is idle and then asks the reporter who holds the
   token, and every node is shut down at the end. The Go program reports over a channel.
 - **worker-pool** distributes tasks round-robin by `t mod count` at the send. Go's workers pull tasks

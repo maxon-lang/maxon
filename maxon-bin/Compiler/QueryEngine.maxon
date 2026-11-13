@@ -72,7 +72,8 @@ end 'forgetOneSourceFile'
 
 // --- The memo that outlives a `Project` ---
 //
-// ⭐⭐ **ONE STORE PER `CompileSession.fileMemos` OWNER.** A spec worker process, the language
+// ⭐⭐ **RAW TOKENS AND VIEWS ARE HELD PER `CompileSession.fileMemos` OWNER; PARSES, BASELINES AND PACKS
+// ARE ONE FROZEN STORE FOR THE PROCESS (`SharedLibraryCache`).** A spec worker process, the language
 // server's document projects and each MCP session compile many programs, and every one of them
 // would otherwise re-lex the same `stdlib/` files from scratch. Its disk tier (`LibraryCacheStore`)
 // carries the views, the held parses and the library baseline from one process to the next.
@@ -87,9 +88,9 @@ end 'forgetOneSourceFile'
 // asking program's own declarations shift. So each held parse carries a footprint of those facts
 // (`ParseFootprint`), and a hit is rebased onto the current program, or misses when a row or a told
 // answer moved (`sharedParseDrifts`). A store that retains what it loads
-// (`SharedFileMemoMap.create`) deep-clones it at the stash and at every hit: the merge renumbers an
+// (`SharedFileMemoMap.create`) freezes it and deep-clones it at every hit: the merge renumbers an
 // artifact in place, so nothing a `Project` can reach may be the stored one. A one-compile store
-// (`forOneCompile`) hands the held parse over and drops it, since no later compile asks.
+// (`forOneCompile`) hands the decoded parse over and drops it, since no later compile asks.
 //
 // Its key is the library-only signature hash (`ProgramSignatures.libraryHash`), because the
 // whole-program hash moves with every user declaration. A program that shadows or overlaps a
@@ -132,12 +133,13 @@ export function sharedMemoEntryCount(project Project) returns QueryCount
 	return project.session.fileMemos.entries.count()
 end 'sharedMemoEntryCount'
 
-export function sharedParseEntryCount(project Project) returns QueryCount
+module function sharedParseEntryCount(project Project) returns QueryCount
+	let store = SharedLibraryCache.current()
 	var held = 0 as QueryCount
 
-	for (_, memo) in project.session.fileMemos.entries 'eachMemo'
-		held = held + (memo.parseCount() as QueryCount)
-	end 'eachMemo'
+	for contentHash in project.db.shareableTokenHashes 'eachAdmitted'
+		held = held + ((try store.files.holding(contentHash) otherwise continue).countOf(project.db.sharedParseVariantsUsed) as QueryCount)
+	end 'eachAdmitted'
 
 	return held
 end 'sharedParseEntryCount'
@@ -202,9 +204,9 @@ end 'viewsPackName'
 
 type OpenViewsPack
 	export let name as String
-	export let pack as LibraryPack
+	export let pack as immutable LibraryPack
 
-	static function create(name String, pack LibraryPack) returns OpenViewsPack
+	static function create(name String, pack immutable LibraryPack) returns OpenViewsPack
 		return Self{name: name, pack: pack}
 	end 'create'
 end 'OpenViewsPack'
@@ -442,7 +444,10 @@ export function sharedParsePlanOf(project Project, job ParseJob, contentHash Has
 
 	let key = Hasher.combined(Hasher.combined(signatures.libraryHash, value: overrides.digest), value: liveness)
 
-	return SharedParsePlan.shareable(contentHash, variant: sharedParseVariant(project, job: job), key: key)
+	let variant = sharedParseVariant(project, job: job)
+	project.db.sharedParseVariantsUsed.insert(variant)
+
+	return SharedParsePlan.shareable(contentHash, variant: variant, key: key)
 end 'sharedParsePlanOf'
 
 export function sharedParseOf(project Project, plan SharedParsePlan, signatures ProgramSignatures, overrides RowSetOverrideTable) returns FileParseArtifact throws SharedMemoMiss
@@ -455,11 +460,7 @@ end 'sharedParseOf'
 // The baseline is restored after every lookup, hit or miss: checking a held parse's told row-set
 // answers re-asks them, which writes journaled memos onto this program's index.
 function heldParseFor(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable) returns FileParseArtifact throws SharedMemoMiss
-	let memo = memoOrNew(project, contentHash: contentHash)
-	loadParseIfAbsent(project, memo: memo, contentHash: contentHash, variant: variant, key: key, libraryHash: signatures.libraryHash)
-
-	let consuming = not project.session.fileMemos.library.retainsWhatItLoads()
-	let rebased = try memo.parseOf(variant, key: key, signatures: signatures, overrides: overrides, consuming: consuming) otherwise (miss) 'notHeld'
+	let rebased = try rebasedHeldParse(project, contentHash: contentHash, variant: variant, key: key, signatures: signatures, overrides: overrides) otherwise (miss) 'notHeld'
 		signatures.restoreBaseline()
 		project.db.sharedParseMisses = project.db.sharedParseMisses + 1
 
@@ -479,7 +480,32 @@ function heldParseFor(project Project, contentHash HashDigest, variant HashDiges
 	return rebased.artifact
 end 'heldParseFor'
 
-let MostKeysPerLibraryParse = 6
+function rebasedHeldParse(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable) returns RebasedParse throws SharedMemoMiss
+	if not project.session.fileMemos.library.retainsWhatItLoads() 'handedOver'
+		let decoded = try decodedParseFor(project, contentHash: contentHash, variant: variant, key: key, libraryHash: signatures.libraryHash)
+
+		return (try decoded.checkedAgainst(signatures, overrides: overrides)).applyTo(decoded.artifact)
+	end 'handedOver'
+
+	let shared = try sharedParseFor(project, contentHash: contentHash, variant: variant, key: key, libraryHash: signatures.libraryHash)
+
+	return (try shared.checkedAgainst(signatures, overrides: overrides)).applyTo(shared.artifact.clone())
+end 'rebasedHeldParse'
+
+function sharedParseFor(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest) returns immutable SharedLibraryParse throws SharedMemoMiss
+	let store = SharedLibraryCache.current()
+
+	if let held = try (try store.files.holding(contentHash)).answering(variant, key: key) 'alreadyShared'
+		refreshSharedParse(store, contentHash: contentHash, variant: variant)
+
+		return held
+	end 'alreadyShared'
+
+	let shared = freeze (try decodedParseFor(project, contentHash: contentHash, variant: variant, key: key, libraryHash: libraryHash)).clone()
+	publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: shared))
+
+	return shared
+end 'sharedParseFor'
 
 function parsesPackName(project Project, libraryHash HashDigest) returns String throws CompileError
 	let state = try libraryStateKeyOf(project)
@@ -489,23 +515,17 @@ function parsesPackName(project Project, libraryHash HashDigest) returns String 
 	return libraryEntryName(LibraryEntryKind.parses, entryClass: entryClass, parts: [state, libraryHash])
 end 'parsesPackName'
 
-function loadParseIfAbsent(project Project, memo SharedFileMemo, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest)
-	if memo.holdsParseAnswering(variant, key: key) 'inMemory'
-		return
-	end 'inMemory'
-
+function decodedParseFor(project Project, contentHash HashDigest, variant HashDigest, key HashDigest, libraryHash HashDigest) returns SharedLibraryParse throws SharedMemoMiss
 	let library = project.session.fileMemos.library
-	let name = try parsesPackName(project, libraryHash: libraryHash) otherwise return
-	let pack = try library.openPack(project.target, name: name, tally: project.db.libraryTally) otherwise return
-	let reader = try pack.section(contentHash, second: variant, third: key) otherwise return
+	let name = try parsesPackName(project, libraryHash: libraryHash) otherwise throw SharedMemoMiss.notHeld
+	let pack = try library.openPack(project.target, name: name, tally: project.db.libraryTally) otherwise throw SharedMemoMiss.notHeld
+	let reader = try pack.section(contentHash, second: variant, third: key) otherwise throw SharedMemoMiss.notHeld
 
-	let parse = try decodedParseSection(reader, variant: variant, key: key) otherwise (damage) 'damaged'
+	return try decodedParseSection(reader, variant: variant, key: key) otherwise (damage) 'damaged'
 		library.rejectDecoded(project.target, name: name, damage: damage, tally: project.db.libraryTally)
-		return
+		throw SharedMemoMiss.notHeld
 	end 'damaged'
-
-	memo.holdParse(parse)
-end 'loadParseIfAbsent'
+end 'decodedParseFor'
 
 export function persistSharedEntries(project Project)
 	let library = project.session.fileMemos.library
@@ -636,8 +656,7 @@ export function publishStandingParses(project Project)
 	project.db.pendingSharedParses = PendingSharedParseMap.create()
 
 	for (contentHash, standing) in pending 'eachPending'
-		let memo = try heldMemoFor(project, contentHash: contentHash) otherwise panic("publishStandingParses: a parse was stashed for bytes no shared file memo holds — a shareable plan requires admitted bytes, and admitted bytes that lexed are held")
-		memo.holdParse(standing)
+		publishToSharedLibrary(SharedLibraryChange.parse(contentHash, held: freeze standing.clone()))
 		published = published + 1
 	end 'eachPending'
 
@@ -715,13 +734,13 @@ end 'allModuleCacheValid'
 // ⭐⭐ **THE PIPELINE MUTATES THE MODULE THIS MEMO HANDS OUT, SO THE PIPELINE MUST DROP IT.**
 //
 // Every other memo here is valid exactly while its input's content hash is unchanged, and that test is
-// sound because nothing downstream writes to a memoized value. `queryAllModule`'s is the ONE exception:
+// sound because nothing downstream writes to a memoized value. `FrontEndRun`'s is the ONE exception:
 // `TypeResolution.resolveTypes` rewrites `maxonParamTypes`/`maxonReturnType` on the module's functions
 // IN PLACE, and `installManagedGlobalInit` appends to it. The bytes did not move, so the hash still
 // matches, so the memo still says VALID — and hands back a module the last compile edited.
 //
 // ⛔ **MEASURED, and it is not a drift — it is a WRONG ANSWER and then a CRASH.** A second
-// `compileToCodeResult` over one `Project`:
+// `CompileRun` over one `Project`:
 //   • on a 3-line program invented **5 diagnostics** where the first reported none — all E3016
 //     "partial interface implementation" against `stdlib/` (`compare(other Character) returns int`
 //     against `expected compare(other Self) returns Ordering`). `checkConformance` runs BEFORE
@@ -735,7 +754,7 @@ end 'allModuleCacheValid'
 // saves, under the rule that a memo needing a deep copy per use cannot save more than producing it costs.
 // Making resolution non-destructive is the structurally cleaner answer and touches every reader of
 // those two fields; it stays available and this does not block it. Dropping the memo costs ONE re-fold
-// (`Queries.foldTheFrontEnd`), and every file's TOKENS and PARSE stay hits, because those memos are
+// (`FrontEndRun`), and every file's TOKENS and PARSE stay hits, because those memos are
 // untouched by any of this.
 // ⇒ **The expensive caches survive; only the fold that assembles them re-runs.**
 //

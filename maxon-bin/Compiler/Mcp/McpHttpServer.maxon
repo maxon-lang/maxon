@@ -56,10 +56,10 @@ type McpHttpSession
 	export let id as String
 	export var lastSeenMs as SessionMillis
 	export var debug as DebugSessionSlot
-	export var fileMemos as SharedFileMemoMap
+	export let driver as CompileDriver.handle
 
 	static function create(id String, nowMs SessionMillis) returns McpHttpSession
-		return Self{id: id, lastSeenMs: nowMs, debug: DebugSessionSlot.create(), fileMemos: SharedFileMemoMap.create()}
+		return Self{id: id, lastSeenMs: nowMs, debug: DebugSessionSlot.create(), driver: persistentCompileDriver()}
 	end 'create'
 
 	export function touch()
@@ -240,7 +240,8 @@ type McpHttpHandler
 					tlsFailed then break
 					sendFailed or
 					alreadyResponded or
-					invalidResponse then panic("McpHttpHandler.serveUntilEnded: taking a connection does not throw `{fault.name}`")
+					invalidResponse or
+					deferralUnavailable then panic("McpHttpHandler.serveUntilEnded: taking a connection does not throw `{fault.name}`")
 				end 'why'
 
 				continue
@@ -353,8 +354,7 @@ function acceptDeadlineFor(sessions McpHttpSessionList, idleMs SessionMillis) re
 		return AcceptDeadline.cleared
 	end 'noSessionToExpire'
 
-	let first = try sessions.first() otherwise panic("acceptDeadlineFor: a session list that is not empty has a first session")
-	var longestIdle = first.lastSeenMs
+	var longestIdle = (try sessions.first() otherwise panic("acceptDeadlineFor: a session list that is not empty has a first session")).lastSeenMs
 
 	for session in sessions 'eachSession'
 		longestIdle = session.lastSeenMs if session.lastSeenMs < longestIdle else longestIdle
@@ -457,7 +457,7 @@ function serveInitialize(exchange HttpExchange, doc JsonDoc, offered OfferedSess
 end 'serveInitialize'
 
 function serveOnSession(exchange HttpExchange, doc JsonDoc, session McpHttpSession, devMode bool, exePath FilePath, minted OfferedSession) throws HttpServerError
-	let reply = handleRpcDocument(doc, exePath: exePath, devMode: devMode, debug: session.debug, fileMemos: session.fileMemos)
+	let reply = handleRpcDocument(doc, exePath: exePath, devMode: devMode, debug: session.debug, driver: session.driver)
 	session.touch()
 
 	match reply 'answer'

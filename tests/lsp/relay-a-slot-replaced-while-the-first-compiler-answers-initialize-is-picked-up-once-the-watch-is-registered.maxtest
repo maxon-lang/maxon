@@ -1,9 +1,9 @@
 let EarlySwapCaseDirName = "relay-early-swap"
 let EarlySwapDocumentName = "one.maxon"
 let EarlySwapDocumentText = "early"
-let EarlySwapExpectedVersion = "generation 2 relayed"
+let EarlySwapExpectedVersion = "generation 1 relayed"
 
-test 'relay: a slot compiler replaced before the first one answers initialize gives the client the real answer'
+test 'relay: a slot compiler replaced while the first one answers initialize is picked up once the watch is registered'
 	let caseDir = stagedRelayCase(EarlySwapCaseDirName)
 	installRelaySlot(caseDir, generation: 1)
 	armRelaySwapOnInitialize(caseDir)
@@ -15,12 +15,12 @@ test 'relay: a slot compiler replaced before the first one answers initialize gi
 		discardStagedDir(caseDir)
 
 		try Expect.equal(observed.0, expected: RelayFakeServerName, message: "the initialize reply did not come from the compiler the checkout's slot holds.")
-		try Expect.equal(observed.1, expected: EarlySwapExpectedVersion, message: "the initialize reply did not come from the replacement compiler that was asked it.")
-		try Expect.equal(observed.2, expected: "generation 2 saw: {EarlySwapDocumentText}", message: "the replacement compiler did not take over the document opened after initialize.")
+		try Expect.equal(observed.1, expected: EarlySwapExpectedVersion, message: "the initialize reply did not come from the compiler that was asked it.")
+		try Expect.equal(observed.2, expected: "generation 2 saw: {EarlySwapDocumentText}", message: "the replacement compiler did not take over the document opened after initialize, which means a replacement that landed before the watch was registered was never noticed.")
 	end 'initialized' else (e) 'failed'
 		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
 	end 'failed'
-end 'relay: a slot compiler replaced before the first one answers initialize gives the client the real answer'
+end 'relay: a slot compiler replaced while the first one answers initialize is picked up once the watch is registered'
 
 function initializedAcrossAReplacement(client LspClient, caseDir FilePath) returns (String, String, String) throws LspClientError
 	let uri = fileUriOf(relayCheckout(caseDir).join(EarlySwapDocumentName))

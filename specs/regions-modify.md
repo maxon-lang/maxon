@@ -1473,7 +1473,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3201: <fragment>:27:31: one statement reaches through two isolated values, 'part' and 'part'; a statement opens one isolated value, so open one with `modify` or split the statement
+error E3201: <fragment>:27:25: one statement reaches through two isolated values, 'part' and 'part'; a statement opens one isolated value, so open one with `modify` or split the statement
 ```
 
 <!-- test: one-statement-takes-two-one-call-opens-and-one-region-twice -->
@@ -1972,7 +1972,8 @@ error E3196: <fragment>:15:29: cannot store an isolated 'Box' into 'an element o
 ```
 
 <!-- test: spawn-of-a-waiting-factory-inside-modify-refused -->
-`spawn Relay.create()` runs the factory, which awaits a reply, while `batch` is open.
+`spawn Relay.create()` runs the factory, which awaits a reply, while `batch` is open. The factory is also refused
+where it is declared, because a factory never waits, and the spawn inside the block is refused for the same wait.
 
 ```maxon
 typealias Tally = int(0 to u64.max)
@@ -2014,6 +2015,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
+error E3221: <fragment>:18:18: the spawn factory 'create' may wait (it awaits a reply from 'Oracle' at line 20) while holding its own service; send the request with this service's handle and handle the reply in another message
 error E3205: <fragment>:33:7: cannot spawn 'create' inside 'fill'; it may wait (it awaits a reply from 'Oracle' at line 20). Spawn it before or after the block
 ```
 
@@ -2053,7 +2055,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3205: <fragment>:26:3: cannot call 'push' inside 'edit'; it may wait (it waits on another party). Call it before or after the block
+error E3205: <fragment>:26:3: cannot call 'push' inside 'edit'; it may wait (it sends with a timeout, which waits for mailbox space, at line 18). Call it before or after the block
 ```
 
 <!-- test: a-one-call-open-of-an-isolated-argument-to-a-generic-callee-counts-as-a-region -->

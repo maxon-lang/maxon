@@ -1885,7 +1885,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:6:9: 'ByteArray.init(try raw.slice(0, n) otherwise panic("sliced: slice"))' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted. Declare it `as isolated ByteArray`, or pass a copy
+error E3200: <fragment>:6:9: 'ByteArray.init(try raw.slice(0, n) otherwise panic("sliced: slice"))' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; use a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
 ```
 
 <!-- test: error.a-named-mutable-runtime-buffer-is-not-isolated -->
@@ -1908,7 +1908,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3200: <fragment>:7:9: 'ByteArray.init(managed)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted. Declare it `as isolated ByteArray`, or pass a copy
+error E3200: <fragment>:7:9: 'ByteArray.init(managed)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; use a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
 ```
 
 <!-- test: error.array-init-over-an-isolated-local-moves-it -->
@@ -5589,8 +5589,8 @@ error E3200: <fragment>:23:13: 'takeEarly(src)' is not isolated: only a clean ca
 error E3200: <fragment>:27:13: 'takeLate(src)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; declare it `as isolated ByteArray`, or store a copy
 error E3200: <fragment>:31:15: 'takeEarly(src)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
 error E3200: <fragment>:35:15: 'takeLate(src)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; pass a copy
-error E3200: <fragment>:39:9: 'takeEarly(src)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted. Declare it `as isolated ByteArray`, or pass a copy
-error E3200: <fragment>:43:9: 'takeLate(src)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted. Declare it `as isolated ByteArray`, or pass a copy
+error E3200: <fragment>:39:9: 'takeEarly(src)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; use a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
+error E3200: <fragment>:43:9: 'takeLate(src)' is not isolated: only a clean call, a `swap` or an `isolated` local goes where an isolated value is wanted; use a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy
 ```
 
 <!-- test: error.an-element-of-an-isolated-array-field-cannot-leave-a-for-loop-into-outside-data -->

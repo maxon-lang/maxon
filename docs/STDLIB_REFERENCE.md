@@ -11,6 +11,12 @@ with instance methods (`String`, `Array`, `FilePath`). A handful of names are fr
 `printError`, `sleep`, `sha256`, `spreadHash`) and a handful are type aliases used across the library
 (`ByteArray`, `StringArray`, `ExitCode`).
 
+A message or a `spawn` factory that calls a library operation which waits on another party, such as
+`HttpServer.serve`, `TraceCapture.stopCapture` or `Scheduler.quiesce`, is
+[E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221); the reference names each such operation. A service
+that makes a file, socket, subprocess or `HttpClient` call, or reads `stdin`, is held for as long as the peer
+takes, and messages queue behind it.
+
 Generic types are used through a type alias that names the element type:
 
 ```maxon
@@ -31,11 +37,11 @@ end 'main'
 |------|----------|
 | [Core](#overview) | [Core Functions](#core-functions) |
 | [Text](#string) | String, Character, Ascii, Unicode, CharacterSet |
-| [Collections](#array) | Array, List, Map, Set, FixedArray, Range, Iterators, Interfaces |
+| [Collections](#array) | Array, List, Map, Set, Slot, FixedArray, Range, Iterators, Interfaces |
 | [I/O and processes](#file) | File, FilePath, Directory, Console, Stream, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](#json) | Json, Base64, Pem, Der, Sha2, Hmac, Hkdf, Rsa, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, EcdhP256, Ecdsa, EcdsaP256, EcdsaP384, Hasher |
-| [System](#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, TrustStore, Math, Primitive Extensions |
+| [System](#clock) | Clock, Scheduler, HeapStats, Reply, SharedValue, Random, TrustStore, Math, Primitive Extensions |
 | [Testing](#testing) | Testing |
 | [Build](#build) | Build |
 
@@ -890,6 +896,44 @@ end 'main'
 
 Output: `2 true true 1`.
 
+## Slot
+
+`Slot with T` is a named place that holds one `T` or none. `T` is any type, a `unique` one included. A slot
+is an ordinary record, so it lives in a field and inside an `isolated` region.
+
+```maxon
+type Job
+	export var n as ElementIndex
+
+	static function create(n ElementIndex) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Job'
+
+typealias JobSlot = Slot with Job
+
+function main() returns ExitCode
+	let slot = JobSlot.create("jobs")
+	slot.fill(Job.create(3))
+	print("{slot.isFull()} {slot.held().n}\n")
+	let job = slot.take()
+	print("{job.n} {slot.isEmpty()}\n")
+	return 0
+end 'main'
+```
+
+Output: `true 3` and `3 true`.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Slot.create(name String)` | `Slot` | An empty slot. `name` appears in the panic of a misuse. |
+| `isEmpty()` / `isFull()` | `bool` | Whether the slot holds a value. |
+| `fill(item T)` | — | Puts `item` in the slot. Panics naming the slot when it is full. |
+| `replace(item T)` | — | Puts `item` in the slot whether or not it was full. |
+| `held()` | `T` | Reads the value and leaves it in the slot. Panics naming the slot when it is empty. |
+| `take()` | `T` | Moves the value out. Panics naming the slot when it is empty. |
+| `clear()` | — | Empties the slot; an empty slot stays empty. |
+
 ## FixedArray
 
 `FixedArray` is a fixed-size array whose element count is part of its type: `FixedArray with 3 Coord`
@@ -1603,13 +1647,12 @@ The standard library's default sink is a `TextLogHandler` on stderr with the tim
 milliseconds) and a minimum level of INFO.
 
 Only an enabled call builds a record: the level is checked at the call, before anything reaches the handler.
-Below ERROR, a call sends its record to the handler and returns, and the handler writes it. When the
-handler's mailbox is full, the call waits up to 10 seconds for room and then discards the record; a record
-logged after the handler has stopped is discarded. At ERROR and above the call waits for room as long as it
-takes. `Log.error` —
-and any call at a rank of ERROR or above — returns once the handler has written its record, and so every
-record sent before it too, because the handler takes records in order; a line logged just before a `panic` is
-on the stream. When the program exits normally, every record still queued is written first.
+A call sends its record to the handler and returns, and the handler writes it; the default handler's mailbox
+holds as many records as `InstrumentationMailboxCapacity`, so a call does not wait, and a `Log` call may be made
+from a message or a `spawn` factory. A record logged after the handler has stopped is discarded. When the program
+exits normally, or ends in a `panic`, a fatal stack overflow or a hardware fault, every record still queued is
+written first, ahead of the panic line. A fatal path hands its processor to the handler and waits until nothing
+else runs or half a second has passed; the wait is skipped when the faulting thread holds a runtime lock, runs on a scheduler's own stack, or is part-way through parking.
 
 Logging runs on services, so it is refused on `wasm32-wasi`
 ([E3104](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3104)), at the call.
@@ -1783,9 +1826,12 @@ library's `default` for its capture control: a program that calls `TraceCapture`
 | `TraceCapture.stopCapture()` | `TraceKeyArray` | Switch capturing off, then await the recorder's keys, in the order it received them; the recorder starts empty again. |
 | `TraceCapture.fired(capturedKeys TraceKeyArray, key String)` | `bool` | True when `key` was recorded at least once. |
 
-`trace`, `startCapture` and `stopCapture` wait for room when the recorder's mailbox is full, as long as it
-takes (`sendTimeout: ForeverMs`). In a cancelled coroutine the message is dropped, and `stopCapture` returns
-an empty array.
+`trace` and `startCapture` hand the recorder a command and return: its mailbox holds as many commands as
+`InstrumentationMailboxCapacity`, so neither waits, and a message or a `spawn` factory may call them.
+`stopCapture` waits for the recorder's reply, as long as it takes, so it is called from `main`, a test body or a
+coroutine; a message or factory that reaches it is
+[E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221). In a cancelled coroutine `stopCapture` returns an
+empty array.
 
 ```maxon
 function main() returns ExitCode
@@ -2703,9 +2749,12 @@ nothing and replaces what the option held. A configuration that no handshake cou
 | `setHandshakeDeadline(milliseconds SocketDeadlineMs)` | — | How long the handshake may take, from when `connect` starts it, before `connect` throws `handshakeTimedOut`; `0` waits with no deadline. |
 | `setVerificationTime(seconds UnixSeconds)` | — | The Unix time certificates are checked at, in place of the clock. |
 
-The system roots are read once per process, by the first connection that trusts them, and every later
-connection uses that read. When they cannot be read, `connect` throws `trustStoreUnavailable` after the connection
-was made, and the failed read is kept: every later connection that trusts the system roots throws the same.
+A connection that trusts the system roots reads them from the operating system the first time one is needed, on its
+own thread, and the result is kept for the rest of the process: later connections use it. No connection waits for
+another's read, so connections that start together while nothing is kept each read the source, and one result is
+kept. When the roots cannot be read, `connect` throws `trustStoreUnavailable` after the connection was made, and the
+failed read is kept: every later connection that trusts the system roots throws the same without reading again. A
+message body may therefore make a TLS connection or an `HttpClient` request.
 
 ```maxon
 function main() returns ExitCode
@@ -3138,7 +3187,7 @@ connection closes. Keep-alive, chunked transfer and `Expect: 100-continue` are o
 | `setLimits(caps HttpServerLimits)` | — | — | Replace the caps later requests are parsed under. |
 | `setAcceptDeadline(milliseconds SocketDeadlineMs)` | — | `HttpServerError` | Make an `accept()` still waiting `milliseconds` after this call throw `acceptTimedOut`; `0` clears it. Throws `listenerClosed` once the server is closed. |
 | `accept()` | `HttpExchange` | `HttpServerError` | Take the next connection and the one request on it. An `OPTIONS *` is answered here, and the next connection taken. |
-| `serve(handler immutable HttpHandler)` | `HttpServeEnd` | — | Accept and answer until a listener failure, the accept deadline, or `.cancel()` on the promise of the `async` call that runs it, serving each connection in a service of its own. On a server already closed it returns `closed` at once. |
+| `serve(handler immutable HttpHandler)` | `HttpServeEnd` | — | Accept and answer until a listener failure, the accept deadline, or `.cancel()` on the promise of the `async` call that runs it, serving each connection in a service of its own. On a server already closed it returns `closed` at once. `serve` waits for its connections, so it is called from `main`, a test body or a coroutine; a message or a `spawn` factory that reaches it is [E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221). |
 | `close()` | — | — | Stop listening and release the port: a later `accept()` throws `listenerClosed`, and a later `serve` returns `closed`. A server running in an `async` call is lent to that coroutine, so it is cancelled first and closed after (see [Starting a Coroutine](LANGUAGE_REFERENCE.md#starting-a-coroutine)). |
 
 `serve` moves each accepted connection, a `TcpClient` or a `TlsStream`, to a service of its own, which reads its
@@ -3146,7 +3195,9 @@ request and runs its handler. A client that stalls delays only its own connectio
 without waiting delays only its own: connections run on as many processors as the program has. Connections in
 flight are bounded by the operating system's socket limits, each in time by [`HttpServerLimits`](#httpserverlimits)
 and, for TLS, by the options' handshake deadline. `serve` returns once the listener has ended and every
-connection it took has finished.
+connection it took has finished or has deferred its answer to an [`HttpResponder`](#httpresponder): the
+connection's service keeps the connection open until the answer arrives or the last handle to that service
+is dropped, and `serve` has no deadline for it.
 
 The handler is one read-only value every connection reads at once: `serve` takes it `immutable`. A handler whose
 fields are all `let` values (numbers, `String`, `bool`, enums, service handles) is already such a value and is
@@ -3216,7 +3267,8 @@ The program answers `counted` to every request until no connection has arrived f
 `<n> visits`.
 
 `serve` hands each exchange to `handler.handle`. A handler that throws, or returns without answering, has
-its exchange answered `500` with an empty body, and `handler.faulted` is told. A request `accept()` refuses
+its exchange answered `500` with an empty body, and `handler.faulted` is told; a handler that returns after
+`respondLater` leaves the answer to its [`HttpResponder`](#httpresponder). A request `accept()` refuses
 has already been answered with its status (see [Protocol errors](#protocol-errors)), and `serve` goes on
 to the next connection. When the OS refuses one connection (`acceptInterrupted`), `serve` tells
 `handler.faulted`, waits 5 ms and accepts again; each consecutive interruption doubles the wait, up to
@@ -3313,9 +3365,11 @@ lines ahead of the request line are skipped. Header lines follow [Header parsing
 | `request()` | `HttpRequest` | — | The request that arrived, with its body. For an origin-form target `url()` is built as `http://<Host><target>` (`https://` on a TLS server), so `path` and `query()` read the target; an HTTP/1.0 request that sent no `Host` has a hostless `url()`, whose `host()` throws `fieldNotPresent`. For an absolute-form target `url()` is read from the target. |
 | `respond(response HttpResponse)` | — | `HttpServerError` | Write the response and close the connection. Throws `alreadyResponded` on a second answer, `invalidResponse` for a response the rules below refuse, and `sendFailed` when the write fails or outlasts `writeDeadlineMs`. |
 | `respondWith(code StatusCode, body String, contentType String)` | — | `HttpServerError` | Answer a status, a body and its content type, as `respond` does. |
+| `respondLater()` | `HttpResponder` | `HttpServerError` | End the handler's duty to answer and hand the answer to whoever holds the returned [`HttpResponder`](#httpresponder). Throws `alreadyResponded` on an exchange already answered or deferred, and `deferralUnavailable` on an exchange `accept()` returned, which no connection service owns. |
 
 `respond` and `respondWith` record that the exchange is answered, whether it came from `accept()` or is the
-`exchange` parameter `serve` hands a handler.
+`exchange` parameter `serve` hands a handler. A handler that must consult a service before it can answer calls
+`respondLater` and returns.
 
 Every response carries `Connection: close`, and a `Content-Length` computed from its body whenever its
 status allows a body: every status but 204 and 304, which end at their headers. The server writes both
@@ -3328,6 +3382,105 @@ When the peer sent bytes past the request, beyond its `Content-Length`, the serv
 write side, and reads and discards what the peer still sends — for up to 500 ms or 256 KiB — before it
 closes. Closing with those bytes unread would reset the connection, which can destroy the answer before
 the peer reads it. A refused request's answer closes the same way, unless the peer has already gone.
+
+### HttpResponder
+
+`exchange.respondLater()` returns an `HttpResponder`, the right to answer one request later and the duty to. The
+handler returns, and whoever holds the responder answers: a handler that must consult a service before it can
+answer sends the responder to that service in a message of its own, so no message waits for another.
+
+```maxon
+typealias Count = int(0 to 1000000)
+
+type Auth
+	var checked as Count
+
+	static function create() returns Self
+		return Self{checked: 0}
+	end 'create'
+
+	export function check(token String, responder HttpResponder)
+		self.checked = self.checked + 1
+
+		let code = StatusCode.ok if token == "/secret" else StatusCode.unauthorized
+
+		try responder.respondWith(code, body: token, contentType: "text/plain") otherwise (e) 'unsent'
+			match e 'why'
+				notSent(back) then back.abandon()
+				invalidResponse(back) then back.abandon()
+			end 'why'
+		end 'unsent'
+	end 'check'
+end 'Auth'
+
+function refuse(responder HttpResponder)
+	try responder.respondWith(StatusCode.serviceUnavailable, body: "busy", contentType: "text/plain") otherwise (e) 'unsent'
+		match e 'why'
+			notSent(back) then back.abandon()
+			invalidResponse(back) then back.abandon()
+		end 'why'
+	end 'unsent'
+end 'refuse'
+
+type AuthHandler implements HttpHandler
+	let auth as Auth.handle
+
+	static function create(auth Auth.handle) returns AuthHandler
+		return AuthHandler{auth: auth}
+	end 'create'
+
+	function handle(exchange mutable HttpExchange) throws HttpServerError
+		let responder = try exchange.respondLater()
+		let token = exchange.request().url().path
+
+		try self.auth.check(token, responder: responder) otherwise (e) 'busy'
+			match e 'why'
+				mailboxFull(_, back) then refuse(back)
+				serviceStopped(_, back) then refuse(back)
+			end 'why'
+		end 'busy'
+	end 'handle'
+
+	function faulted(fault HttpHandlerFault)
+		printError("{fault.describe()}\n")
+	end 'faulted'
+end 'AuthHandler'
+
+function main() returns ExitCode
+	let server = try HttpServer.bind("127.0.0.1", port: 8080) otherwise return 1
+	let auth = spawn Auth.create()
+	try server.setAcceptDeadline(1000) otherwise return 2
+
+	_ = server.serve(AuthHandler.create(auth.clone()))
+
+	return 0
+end 'main'
+```
+
+The program answers `200` to `/secret` and `401` to any other path, each from the `Auth` service.
+
+| Member | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `respond(response isolated HttpResponse)` | — | `HttpResponderError` | Answer the request and consume the responder. The answer is a send to the connection's service that never waits. |
+| `respondWith(code StatusCode, body String, contentType String)` | — | `HttpResponderError` | Answer a status, a body and its content type, as `respond` does. |
+| `abandon()` | — | — | Close the connection with no answer: the one way to end a responder that cannot answer. |
+
+An `HttpResponder` is a [linear value](LANGUAGE_REFERENCE.md#linear-types-and-finalizers): `respond`,
+`respondWith` and `abandon` are its finalizers, and every path consumes it exactly once. It lives in a local, a
+parameter or a message argument, so a service that consults another service carries it in each continuation
+message. A failed answer throws `HttpResponderError`, a union whose cases carry the responder back, to answer
+again or to `abandon`:
+
+| `HttpResponderError` case | Meaning |
+|---------------------------|---------|
+| `notSent(responder)` | The connection's service could not take the answer; the handler of the failure answers `503` through the returned responder or abandons it. |
+| `invalidResponse(responder)` | The response breaks the [rules for a response](#httpexchange): a `204` or `304` with a body, an invalid header name, or a control character in a reason phrase or header value. |
+
+A send to another service that fails hands the responder back in `mailboxFull` or `serviceStopped`, and the
+handler of the failure consumes it, as `refuse` does above. An exchange `accept()` returned has no connection
+service, and `respondLater` on it throws `deferralUnavailable`. There is no deadline for an answer: a deferred
+exchange keeps its connection until the answer arrives or the last handle to the connection's service is
+dropped.
 
 ### HttpHandler
 
@@ -3346,6 +3499,7 @@ cases the `fault` the handler threw.
 | `threw(request, fault)` | The handler threw before answering; the exchange was answered `500` |
 | `threwAfterResponding(request, fault)` | The handler threw after its answer was sent |
 | `threwAfterAFailedResponse(request, fault)` | The handler threw after its own answer failed to send |
+| `threwAfterDeferring(request, fault)` | The handler threw after `respondLater`; its responder still owes the answer |
 | `threwWithoutAnyAnswer(request, fault)` | The handler threw before answering, and the `500` failed to send too |
 | `returnedWithoutResponding(request)` | The handler returned without answering; the exchange was answered `500` |
 | `returnedWithoutAnyAnswer(request)` | The handler returned without answering, and the `500` failed to send too |
@@ -3388,7 +3542,7 @@ its error is thrown, so the peer hears why.
 
 `accept()` also throws `listenerClosed`, `acceptFailed`, `acceptTimedOut` and `acceptInterrupted`, which
 concern the listener alone. `respond` throws `alreadyResponded`, `invalidResponse` and
-`sendFailed`. `HttpServerError` is a union, matched rather than compared with `==`; `tlsFailed(error)` is its one
+`sendFailed`, and `respondLater` throws `alreadyResponded` and `deferralUnavailable`. `HttpServerError` is a union, matched rather than compared with `==`; `tlsFailed(error)` is its one
 case that carries a value, the [`TlsError`](#tlserror).
 
 ```maxon
@@ -4372,7 +4526,7 @@ Output: `2024-10-04 11017`, then `2023-11-14T22:13:20.123Z`.
 | `Scheduler.machineCpuCount()` | The machine's logical processor count, at least 1, whatever `MAXON_MAX_PROCS` sets: every active processor in every processor group on Windows, the processors this process may run on under Linux. A `SchedulerProcessorCount`. |
 | `Scheduler.counters()` | The scheduler's event counters since the program started, as a `SchedulerCounters`, each read once. |
 | `Scheduler.currentStackBytes()` | The calling green thread's current stack size in bytes, a `StackByteCount` (`int(0 to u64.max)`). A stack grows on demand and halves once the thread has been idle with most of it unused. |
-| `Scheduler.quiesce()` | Park the caller until every machine is idle and nothing pending can run again, and answer how many other green threads are still owned — a service still running, or a promise neither awaited nor dropped — as a `GreenThreadCount` (`int(0 to u64.max)`): `0` when every one has finished, or the count left. A machine waiting for its pinned thread's next turn counts as idle, and a coroutine still unwinding after its promise was dropped keeps the wait open until it finishes. A coroutine whose promise has been dropped answers at once, with the count at that moment. The program carries on afterwards unchanged; services stay running. |
+| `Scheduler.quiesce()` | Park the caller until every machine is idle and nothing pending can run again, and answer how many other green threads are still owned — a service still running, or a promise neither awaited nor dropped — as a `GreenThreadCount` (`int(0 to u64.max)`): `0` when every one has finished, or the count left. A machine waiting for its pinned thread's next turn counts as idle, and a coroutine still unwinding after its promise was dropped keeps the wait open until it finishes. A coroutine whose promise has been dropped answers at once, with the count at that moment. The program carries on afterwards unchanged; services stay running. It waits on every other green thread, so it is called from `main`, a test body or a coroutine; a message or a `spawn` factory that reaches it is [E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221). |
 | `Scheduler.parallelBoundary()` | A compile-time marker with no run-time effect. A CPU-bound function calls it to mark a spawn of itself as deliberate, which satisfies [E3073](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3073) for a function that only computes. |
 | `Scheduler.pinToMachine()` | Bind the calling green thread to the machine (OS thread) running it, and answer whether it did. A pinned thread that parks resumes on the same machine. Pins nest: each one taken is released once. |
 | `Scheduler.unpinFromMachine()` | Release one pin the calling green thread took; the last release frees it from its machine. Called by a green thread that holds no pin, it is a fatal runtime error. |
@@ -4511,6 +4665,69 @@ end 'main'
 ```
 
 Output: `true true 1`.
+
+## Reply
+
+`Reply with T` is a service message's reply, taken to answer later. A message that returns a `T` and declares
+`throws ReplyStopped` writes `let pending = reply.later()` as the whole initializer of a `let` at the top level of
+its body; the message then ends without answering, and the caller's `await` stays pending until some service
+answers through the `Reply`. The rules for `reply.later()` and for where a `Reply` may live are in
+[Deferred Replies](LANGUAGE_REFERENCE.md#deferred-replies--reply).
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+typealias TallyReplyArray = Array with TallyReply
+
+type Ledger
+	var total as Tally
+	var waiting as TallyReplyArray
+
+	static function create() returns Self
+		return Self{total: 0, waiting: TallyReplyArray.create(0)}
+	end 'create'
+
+	export function ask() returns Tally throws ReplyStopped
+		let pending = reply.later()
+		self.waiting.push(pending)
+		return
+	end 'ask'
+
+	export function deposit(amount Tally)
+		self.total = self.total + amount
+	end 'deposit'
+
+	export function settle()
+		let pending = try self.waiting.pop() otherwise return
+		pending.answer(self.total)
+	end 'settle'
+end 'Ledger'
+
+function main() returns ExitCode
+	let ledger = spawn Ledger.create()
+	let asked = try ledger.ask() otherwise panic("a running service with room takes the send")
+	try ledger.deposit(40) otherwise panic("a running service with room takes the send")
+	try ledger.deposit(2) otherwise panic("a running service with room takes the send")
+	try ledger.settle() otherwise panic("a running service with room takes the send")
+	let total = try await asked otherwise panic("the continuation answered")
+	print("{total}\n")
+	return 0
+end 'main'
+```
+
+Output: `42`.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `answer(value T)` | — | Complete the caller's reply with `value` and consume the `Reply`. A send that never waits, so any message may call it. |
+
+A `Reply` is [unique](LANGUAGE_REFERENCE.md#unique-types): it lives in a service's state, in a container or in a message
+argument, and is answered at most once. `ReplyStopped` is the error the caller's `await` receives when a `Reply` is
+dropped unanswered, a holder freed with it still inside included:
+
+| `ReplyStopped` case | Meaning |
+|---------------------|---------|
+| `serviceStopped` | The `Reply` was dropped without an answer. |
 
 ## SharedValue
 
@@ -4811,7 +5028,7 @@ at once. It is what `scripts/multicore-stress/cown-multi-torture.maxon` runs.
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `violations(cownCount, workers:, rounds:)` | `CownTortureViolations` | `workers` green threads each run `rounds` rounds. A round acquires two cowns drawn from `cownCount` cowns (a draw may repeat one), and holds them across a yield. Answers how many times a held cown was entered again, plus one when the per-cown entry counts do not add up to the acquisitions made; 0 means mutual exclusion held. `cownCount` must be a power of two, and any other value aborts the process. |
+| `violations(cownCount, workers:, rounds:)` | `CownTortureViolations` | `workers` green threads each run `rounds` rounds. A round draws a service or a pair of services from `cownCount` services (a draw may repeat one) and either sends the first a message or acquires the pair and holds it across a yield. One worker stops a service half way through, so later acquires of it answer stopped and later sends to it fail. Answers how many times a held service was entered again, plus one when the per-service entry counts do not add up to the messages delivered and the services acquired, plus one for every acquire of the stopped service that did not answer stopped; 0 means mutual exclusion and the stopped answer held. `cownCount` must be a power of two, and any other value aborts the process. It waits for the green threads it starts, so it is called from `main`, a test body or a coroutine; a message or a `spawn` factory that reaches it is [E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221). |
 
 `CownTortureSize` is `int(1 to u32.max)`, the type of all three arguments, and `CownTortureViolations` is
 `int(0 to u64.max)`.

@@ -252,7 +252,7 @@ let SlabClassGeomLabel = "__slab_class_geom"
 // ⚠ The same three spellings as bytes, and the pair cannot collapse into `GlobalDataTable.labelBytesOf`.
 // `lowerRawIntrinsic` emits a `rdataAddr` for each of these from tier source, inside `pipeline.run()`,
 // and the payloads are not registered until `installSlabRuntime` several steps later
-// (`Compiler.compileToCodeResult`) — so a shared record fetched by label would be a lookup of a payload
+// (`afterPipeline`) — so a shared record fetched by label would be a lookup of a payload
 // that does not exist yet. A drift between a pair is not silent: nothing would register the payload the
 // emitted op names, and `GlobalDataTable.rdataOffsetOf` panics by name on it at relocation time.
 export let SlabSizeToClass8LabelBytes = b"__slab_size_to_class8"
@@ -725,7 +725,7 @@ let OsDirectPrefixBytes = 16
 
 // --- Installation ---
 
-// Install the object layer. Gated by `usesHeap` at the call site (`Compiler.compileToCodeResult`) exactly
+// Install the object layer. Gated by `usesHeap` at the call site (`afterPipeline`) exactly
 // as `installMmRuntime` is, because this IS the allocator that file's boxes come from.
 //
 // ⚠ It takes `globalData` because it REGISTERS as well as emits: the three `.rdata` tables must be in the

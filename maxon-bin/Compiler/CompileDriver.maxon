@@ -1,0 +1,216 @@
+export enum MemoKind
+	forOneCompile
+	persistent
+	withoutLibraryCache
+end 'MemoKind'
+
+export enum CheckedDiagnostics
+	inSourceOrder
+	asReported
+	besideClaims
+end 'CheckedDiagnostics'
+
+export union DriverWork
+	build
+	check(rendersTargetIr bool, reading CheckedDiagnostics)
+	warm(step WarmStep)
+	lexSweep(root FilePath, stdlibDir FilePath, runtimeDir FilePath, files LexSweepFileArray)
+
+	module function word() returns String
+		return match self 'work'
+			build gives "build"
+			check gives "check"
+			warm(step) gives "warm {step.word()}"
+			lexSweep gives "lex sweep"
+		end 'work'
+	end 'word'
+end 'DriverWork'
+
+export union ProjectOrigin
+	sources
+	libraryProgram(program FilePath, stdlibDir FilePath, scriptlib ScriptlibLoad, bodies LibraryBodies, text String)
+	document(root FilePath, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, bufferPath FilePath, bufferText String)
+end 'ProjectOrigin'
+
+export type CompileRequest
+	export let work as DriverWork
+	export let origin as ProjectOrigin
+	export let inputPaths as MaxonSourcePathArray
+	export let target as Target
+	export let outputOverride as StatedText
+	export let emitIr as bool
+	export let metrics as StatedText
+	export let runtimeIrNames as RuntimeFunctionNameArray
+	export let asyncTrace as bool
+	export let debugStream as bool
+	export let poisonFreed as bool
+	export let debugInfo as bool
+	export let coverage as bool
+	export let censusByTag as bool
+	export let censusPhase as TagCensusPhases
+	export let allocationsByTag as bool
+	export let allocationsPhase as TagCensusPhases
+	export let stdlibDirOverride as StatedText
+	export let runtimeDirOverride as StatedText
+	export let scriptlib as ScriptlibLoad
+	export let entryFunction as immutable ByteArray
+	export let compilerWrittenSources as CompilerWrittenSourceArray
+	export let sourceSelection as SourceSelection
+	export let stagedSourceOrigins as StagedSourceOriginArray
+	export let productVersion as VersionComponentArray
+	export let defines as DefineArray
+	export let sink as DiagnosticDestination
+	export let lock as LockHoldState
+
+	export static function create(work DriverWork, origin ProjectOrigin, target Target, session DriverSession, inputPaths MaxonSourcePathArray = MaxonSourcePathArray.create(0), outputOverride StatedText = StatedText.unstated, emitIr bool = false, metrics StatedText = StatedText.unstated, runtimeIrNames RuntimeFunctionNameArray = RuntimeFunctionNameArray.create(0), asyncTrace bool = false, debugStream bool = false, poisonFreed bool = false, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), defines DefineArray = DefineArray.create(0)) returns CompileRequest
+		return Self{work: work, origin: origin, inputPaths: inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metrics: metrics, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, poisonFreed: poisonFreed, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, sink: session.diagnostics.destination, lock: session.treeLock.holdings().clone()}
+	end 'create'
+end 'CompileRequest'
+
+export union DriverOutcome
+	built(product CompileProduct)
+	checked(compiled bool, diagnostics DiagnosticArray, irText String)
+	warmed(reading WarmReading)
+	swept(outcomes LexLandedArray)
+	failed(error CompileError)
+end 'DriverOutcome'
+
+export type DriverAnswer
+	export let outcome as DriverOutcome
+	export let lines as CapturedDiagnosticTextArray
+	export let lock as LockHoldState
+
+	export static function of(outcome DriverOutcome, lines CapturedDiagnosticTextArray, lock LockHoldState) returns DriverAnswer
+		return Self{outcome: outcome, lines: lines, lock: lock}
+	end 'of'
+end 'DriverAnswer'
+
+export type DriverSession
+	export let diagnostics as DiagnosticSink
+	export let treeLock as LockHold
+
+	static function over(diagnostics DiagnosticSink) returns DriverSession
+		return Self{diagnostics: diagnostics, treeLock: LockHold.none()}
+	end 'over'
+
+	export static function printing() returns DriverSession
+		return Self.over(DiagnosticSink.printing())
+	end 'printing'
+
+	export static function capturing() returns DriverSession
+		return Self.over(DiagnosticSink.capturing())
+	end 'capturing'
+
+	export static function discarding() returns DriverSession
+		return Self.over(DiagnosticSink.discarding())
+	end 'discarding'
+end 'DriverSession'
+
+typealias DriverReply = Reply with DriverAnswer
+typealias DriverReplyArray = Array with DriverReply
+typealias CompileRequestArray = Array with immutable CompileRequest
+typealias JobRunSlot = Slot with JobRun
+
+export type CompileDriver implements CompileReceiver
+	var memos as SharedFileMemoMap
+	let bench as WarmBench
+	let bases as GenerationBases
+	let running as JobRunSlot
+	var owed as DriverReplyArray
+	var requests as CompileRequestArray
+
+	export static function create(memo MemoKind) returns CompileDriver
+		let memos = match memo 'memo'
+			forOneCompile gives SharedFileMemoMap.forOneCompile()
+			persistent gives SharedFileMemoMap.create()
+			withoutLibraryCache gives SharedFileMemoMap.withoutLibraryCache()
+		end 'memo'
+
+		return Self{memos: memos, bench: WarmBench.create(), bases: GenerationBases.create(), running: JobRunSlot.create("CompileDriver.running"), owed: DriverReplyArray.create(0), requests: CompileRequestArray.create(0)}
+	end 'create'
+
+	export function run(request immutable CompileRequest, receiver CompileReceiver.handle) returns isolated DriverAnswer throws ReplyStopped
+		let pending = reply.later()
+		self.requests.push(request)
+		self.owed.push(pending)
+		self.startNext(receiver)
+		return
+	end 'run'
+
+	export function libraryTotals() returns isolated LibraryCacheTally
+		return self.memos.library.takeTotals().clone()
+	end 'libraryTotals'
+
+	export function frontEndAnswered(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle)
+		self.settle(self.running.held().frontEndAnswered(generation, job: job, answered: answered, receiver: receiver.clone()), receiver: receiver)
+	end 'frontEndAnswered'
+
+	export function stdPassAnswered(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle)
+		self.settle(self.running.held().stdPassAnswered(job, answered: answered, receiver: receiver.clone()), receiver: receiver)
+	end 'stdPassAnswered'
+
+	export function backendAnswered(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle)
+		self.settle(self.running.held().backendAnswered(job, answered: answered, refused: refused, receiver: receiver.clone()), receiver: receiver)
+	end 'backendAnswered'
+
+	export function logFlushed(receiver CompileReceiver.handle)
+		self.settle(self.running.held().logFlushed(receiver.clone()), receiver: receiver)
+	end 'logFlushed'
+
+	function startNext(receiver CompileReceiver.handle)
+		if self.running.isFull() 'busy'
+			return
+		end 'busy'
+
+		let next = try self.requests.remove(0) otherwise return
+
+		if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+			compilerLogger(CompilerLogGroup.compiler).debug("compile driver: {next.work.word()} job begins")
+		end 'debugging'
+
+		let run = JobRun.create(next, memos: self.memos, bench: self.bench, bases: self.bases)
+		self.running.fill(run)
+		self.settle(run.begin(receiver.clone()), receiver: receiver)
+	end 'startNext'
+
+	function settle(step CompileStep, receiver CompileReceiver.handle)
+		match step 'step'
+			awaiting then return
+			finished then break
+		end 'step'
+
+		let run = self.running.held()
+		let owing = try self.owed.remove(0) otherwise panic("CompileDriver.settle: a running job holds the reply it owes")
+		self.running.clear()
+		owing.answer(run.answer())
+		self.startNext(receiver)
+	end 'settle'
+end 'CompileDriver'
+
+export function freshCompileDriver() returns CompileDriver.handle
+	return spawn(capacity: AnswerMailboxCapacity) CompileDriver.create(MemoKind.forOneCompile)
+end 'freshCompileDriver'
+
+export function persistentCompileDriver() returns CompileDriver.handle
+	return spawn(capacity: AnswerMailboxCapacity) CompileDriver.create(MemoKind.persistent)
+end 'persistentCompileDriver'
+
+export function memoryOnlyCompileDriver() returns CompileDriver.handle
+	return spawn(capacity: AnswerMailboxCapacity) CompileDriver.create(MemoKind.withoutLibraryCache)
+end 'memoryOnlyCompileDriver'
+
+module function driverAnswerOf(driver CompileDriver.handle, request immutable CompileRequest) returns DriverAnswer
+	let asked = try driver.run(request, receiver: driver.clone() as CompileReceiver.handle, sendTimeout: ForeverMs) otherwise panic("driverAnswerOf: the compile driver stopped while its caller still held its handle")
+
+	let answer = try await asked otherwise panic("driverAnswerOf: the compile driver stopped before it answered")
+
+	return merge answer
+end 'driverAnswerOf'
+
+export function driverLibraryTotals(driver CompileDriver.handle) returns LibraryCacheTally
+	let asked = try driver.libraryTotals(sendTimeout: ForeverMs) otherwise panic("driverLibraryTotals: the compile driver stopped while its caller still held its handle")
+
+	let tally = await asked
+
+	return merge tally
+end 'driverLibraryTotals'

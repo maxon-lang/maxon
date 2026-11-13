@@ -1,0 +1,37 @@
+let UnwatchedCaseDirName = "relay-unwatched"
+let UnwatchedDocumentName = "one.maxon"
+let UnwatchedDocumentText = "unwatched"
+let UnwatchedNeedle = "does not support dynamic registration of file watchers"
+let UnwatchedQuietMs = 2000
+
+test 'relay: a client that cannot register a file watcher is told once that a rebuilt compiler is not picked up'
+	let caseDir = stagedRelayCase(UnwatchedCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	let client = LspClient.start()
+	client.declareNoFileWatching()
+
+	if let observed = try toldWithoutWatching(client, caseDir: caseDir) 'observed'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.contains(observed.0, needle: UnwatchedNeedle, message: "a client that declared no dynamic registration of file watchers was not told a rebuilt compiler would not be picked up.")
+		try Expect.equal(observed.1, expected: 0, message: "the notice that a rebuilt compiler is not picked up was repeated.")
+	end 'observed' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a client that cannot register a file watcher is told once that a rebuilt compiler is not picked up'
+
+function toldWithoutWatching(client LspClient, caseDir FilePath) returns (String, ElementIndex) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(UnwatchedDocumentName))
+	_ = try client.initializeAtRoot(relayCheckout(caseDir))
+
+	try client.initialized()
+	try client.openDocument(uri, content: UnwatchedDocumentText)
+	_ = try awaitFakePublish(client, uri: uri, generation: 1, text: UnwatchedDocumentText)
+
+	let notice = try client.awaitLogMessage(UnwatchedNeedle, polled: uri)
+	let repeated = try client.countLogMessagesWhilePolling(UnwatchedNeedle, polled: uri, forMs: UnwatchedQuietMs)
+
+	return (notice, repeated)
+end 'toldWithoutWatching'

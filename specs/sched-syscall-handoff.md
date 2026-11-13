@@ -371,13 +371,12 @@ type Reader
 
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
-		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
+		try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 		let line = textOf(try Console.stdin().readLine() otherwise LineRead.ended)
 		print("R: read returned\n")
 
-		let tail = await tailReply
 		let n = line.count()
-		print("done sibling={tail} read={n}\n")
+		print("done read={n}\n")
 
 		return n
 	end 'read'
@@ -390,10 +389,8 @@ type Sentinel
 		return Self{n: 0}
 	end 'create'
 
-	export function ping() returns Integer
+	export function ping()
 		print("S: sentinel ran\n")
-
-		return 1
 	end 'ping'
 end 'Sentinel'
 
@@ -413,7 +410,7 @@ end 'main'
 R: reading
 S: sentinel ran
 R: read returned
-done sibling=1 read=5
+done read=5
 ```
 ```exitcode
 0
@@ -459,13 +456,12 @@ type Reader
 
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
-		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
+		try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 		let line = textOf(try Console.stdin().readLine() otherwise LineRead.ended)
 		print("R: read returned\n")
 
-		let tail = await tailReply
 		let n = line.count()
-		print("done sibling={tail} read={n}\n")
+		print("done read={n}\n")
 
 		return n
 	end 'read'
@@ -478,10 +474,8 @@ type Sentinel
 		return Self{n: 0}
 	end 'create'
 
-	export function ping() returns Integer
+	export function ping()
 		print("S: sentinel ran\n")
-
-		return 1
 	end 'ping'
 end 'Sentinel'
 
@@ -501,7 +495,7 @@ end 'main'
 R: reading
 S: sentinel ran
 R: read returned
-done sibling=1 read=5
+done read=5
 ```
 ```exitcode
 0
@@ -545,13 +539,12 @@ type Reader
 
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
-		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
+		try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 		let line = textOf(try Console.stdin().readLine() otherwise LineRead.ended)
 		print("R: read returned\n")
 
-		let tail = await tailReply
 		let n = line.count()
-		print("done sibling={tail} read={n}\n")
+		print("done read={n}\n")
 
 		return n
 	end 'read'
@@ -564,10 +557,8 @@ type Sentinel
 		return Self{n: 0}
 	end 'create'
 
-	export function ping() returns Integer
+	export function ping()
 		print("S: sentinel ran\n")
-
-		return 1
 	end 'ping'
 end 'Sentinel'
 
@@ -593,7 +584,7 @@ end 'main'
 R: reading
 S: sentinel ran
 R: read returned
-done sibling=1 read=5
+done read=5
 retaken=yes
 ```
 ```exitcode
@@ -718,13 +709,12 @@ type Waiter
 		end 'noChild'
 
 		print("W: waiting\n")
-		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
+		try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 		let exited = exitedOnItsOwn(child)
 		child.release()
 		print("W: wait returned\n")
 
-		let tail = await tailReply
-		print("done sibling={tail} exited={exited}\n")
+		print("done exited={exited}\n")
 		return 1
 	end 'outlast'
 end 'Waiter'
@@ -736,9 +726,8 @@ type Sentinel
 		return Self{n: 0}
 	end 'create'
 
-	export function ping() returns Integer
+	export function ping()
 		print("S: sentinel ran\n")
-		return 1
 	end 'ping'
 end 'Sentinel'
 
@@ -759,7 +748,7 @@ end 'main'
 W: waiting
 S: sentinel ran
 W: wait returned
-done sibling=1 exited=true
+done exited=true
 ```
 ```exitcode
 0
@@ -812,13 +801,12 @@ type Reader
 
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
-		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
+		try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 		let line = textOf(try Console.stdin().readLine() otherwise LineRead.ended)
 		print("R: read returned\n")
 
-		let tail = await tailReply
 		let n = line.count()
-		print("done sibling={tail} read={n}\n")
+		print("done read={n}\n")
 
 		return n
 	end 'read'
@@ -831,10 +819,8 @@ type Sentinel
 		return Self{n: 0}
 	end 'create'
 
-	export function ping() returns Integer
+	export function ping()
 		print("S: sentinel ran\n")
-
-		return 1
 	end 'ping'
 end 'Sentinel'
 
@@ -914,7 +900,7 @@ end 'main'
 R: reading
 S: sentinel ran
 R: read returned
-done sibling=1 read=5
+done read=5
 retaken=yes ran=7
 ```
 ```exitcode

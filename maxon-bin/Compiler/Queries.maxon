@@ -7,7 +7,7 @@
 //     -> queryTokens (per-file memo; tokenize)
 //       -> queryProgramSignatures (whole-program memo; every file's DECLARATIONS, from tokens)
 //         -> queryParseOps (per-file memo; Parser -> FileParseArtifact)
-//           -> queryAllModule (whole-program; mergeArtifact fold)
+//           -> FrontEndRun (whole-program; mergeArtifact fold)
 //
 // `queryProgramSignatures` sits UNDER a per-file query despite being whole-program: a call's result
 // type must be exact at parse time, and the callee may be in another file. It reads TOKENS, never
@@ -1116,7 +1116,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	let holding = sharedMemoEntryCount(project)
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		logCompilerDebugSettled("shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding, {sharedParseEntryCount(project)} parse artifact(s) held, {project.db.sharedParseHits} parse hit(s), {project.db.sharedParseMisses} parse miss(es), {project.db.sharedParsePublishes} parse publish(es), {project.db.sharedParseDrifts} parse(s) whose referenced ids moved, library parses {signatures.libraryParseSharing.name}")
+		compilerLogger(CompilerLogGroup.compiler).debug("shared stdlib memo — {project.db.sharedTokenHits} token hit(s), {project.db.sharedActiveTokenHits} active-token hit(s), {project.db.sharedProducerMaskHits} producer-mask hit(s), {project.db.shareableTokenHashes.count()} admitted, {holding} holding, {sharedParseEntryCount(project)} parse artifact(s) held, {project.db.sharedParseHits} parse hit(s), {project.db.sharedParseMisses} parse miss(es), {project.db.sharedParsePublishes} parse publish(es), {project.db.sharedParseDrifts} parse(s) whose referenced ids moved, library parses {signatures.libraryParseSharing.name}")
 	end 'debugging'
 
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: signatureMemoKey(project), computed: true)
@@ -1124,7 +1124,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 end 'queryProgramSignatures'
 
 function foldOneFileInto(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, extents BlockExtentsByPath) throws CompileError
-	// Outside the probe, exactly as `queryAllModule` keeps `queryParseOps` outside its `merge` probe:
+	// Outside the probe, exactly as `FrontEndRun` keeps `queryParseOps` outside its `merge` probe:
 	// the tokens query does its own `lex` timing, and a phase that absorbed another's is the defect
 	// CompileTimings' header is about.
 	let tokens = try queryActiveTokens(project, path: path)
@@ -2392,54 +2392,322 @@ export enum NamespaceDirectoryCheck
 	refuseUnnameable
 end 'NamespaceDirectoryCheck'
 
-export function queryAllModule(project Project, directories NamespaceDirectoryCheck) returns MaxonModule throws CompileError
-	// ⛔ **THE POOL IS CLOSED ON EVERY EXIT.** Dropping the last handle to a worker is what lets its green thread
-	// finish, and a front end that threw with its workers still held would leave services no exit can end.
-	let pool = FrontEndPool.create()
+module union FrontEndStep
+	next
+	awaiting
+	finished(merged MaxonModule)
+end 'FrontEndStep'
 
-	let merged = try queryAllModuleOn(project, pool: pool, directories: directories) otherwise (err) 'frontEndFailed'
-		pool.close(project)
-		finishLibraryCache(project)
-		throw err
-	end 'frontEndFailed'
+enum FrontEndPlace
+	unnameableLex
+	unnameableCheck
+	collisionLex
+	collisionCheck
+	cacheLookup
+	foldLex
+	foldFirst
+	roundBegin
+	verdictBegin
+	verdictEnd
+	roundEnd
+	reachCheck
+	settled
+	retiring
+	retired
+end 'FrontEndPlace'
 
-	pool.close(project)
-	finishLibraryCache(project)
-	return merged
-end 'queryAllModule'
+module typealias MaxonModuleSlot = Slot with MaxonModule
+typealias FoldLedgerSlot = Slot with FoldLedger
+typealias FoldRoundSlot = Slot with FoldRound
 
-function queryAllModuleOn(project Project, pool FrontEndPool, directories NamespaceDirectoryCheck) returns MaxonModule throws CompileError
-	// Ahead of the memo and the fold, so E3182 is reported before any parse diagnostic, and on a
-	// warm hit too.
-	match directories 'directories'
-		refuseUnnameable then try refuseUnnameableNamespaceDirectories(project, pool: pool)
-		unchecked then break
-	end 'directories'
+// Every file lexed, then folded into a module until the stdlib's body demand stops growing — all of it on one
+// pool.
+// The merge is a fixpoint, because a stdlib body is built only if something reaches it: round 0
+// folds every file with no stdlib body built at all, and each later round has the bodies the
+// previous round's reachability walk demanded. See `StdlibSource.growStdlibBodyDemand` for why it
+// terminates.
+//
+// ⚠ A round re-merges every file from the first one whose parse moved, rather than splicing that
+// file's newly-built bodies into the module: `mergeArtifact`'s registries are first-wins and
+// push-append, and its `opRanges`/`valueOrigins` are parallel to the module's op array by offset,
+// so only a suffix can be dropped and merged again (`FoldLedger`). Every parse it asks for is a
+// memo hit except the files whose demand actually moved.
+module type FrontEndRun
+	let project as Project
+	let pool as FrontEndPool
+	let directories as NamespaceDirectoryCheck
+	var place as FrontEndPlace
+	let merged as MaxonModuleSlot
+	let ledger as FoldLedgerSlot
+	let rounds as FoldRoundSlot
 
-	project.retiredWorkers.release()
-	try refuseCollidingNominalDeclarations(project, pool: pool)
+	module static function create(project Project, directories NamespaceDirectoryCheck, generationBase DrainGeneration) returns FrontEndRun
+		return Self{project: project, pool: FrontEndPool.create(generationBase), directories: directories, place: FrontEndPlace.unnameableLex, merged: MaxonModuleSlot.create("FrontEndRun.merged"), ledger: FoldLedgerSlot.create("FrontEndRun.ledger"), rounds: FoldRoundSlot.create("FrontEndRun.rounds")}
+	end 'create'
 
-	if allModuleCacheValid(project) 'hit'
-		project.db.allModuleHits = project.db.allModuleHits + 1
-		return project.db.allModuleCache.value
-	end 'hit'
+	module function close()
+		self.pool.close(self.project)
+		finishLibraryCache(self.project)
+	end 'close'
 
-	project.db.allModuleMisses = project.db.allModuleMisses + 1
-	let merged = try foldTheFrontEnd(project, pool: pool)
+	module function answered(generation DrainGeneration, job ElementIndex, answer isolated FrontEndJob, receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
+		if not (try self.pool.landAnswered(self.project, generation: generation, job: job, answered: answer, receiver: receiver)) 'notOurs'
+			return FrontEndStep.awaiting
+		end 'notOurs'
 
-	// The project's ranged-alias registry gets the same range-contest settlement `ProgramSignatures`
-	// did, and it must be settled here because this is where its last declaration lands. The two
-	// registries are built from the same per-file arrays by two different folds and are both asked
-	// about a range-qualified element — the signature index for the whole-program stride, this one for
-	// the erasure and the bounds — so a second derivation would be free to disagree with the mint the
-	// parser's instances name.
-	project.typeAliases.settleRangeContests(programSignaturesIn(project, asker: "queryAllModule").crossKindScopedAliasNames())
+		if self.place == FrontEndPlace.retired and not self.pool.retirementIsFinished() 'stillRetiring'
+			return FrontEndStep.awaiting
+		end 'stillRetiring'
 
-	project.db.allModuleCache = ModuleMemo.create(merged, keyHash: compositeSourceHash(project), computed: true)
-	return merged
-end 'queryAllModuleOn'
+		if not self.pool.drainIsFinished() 'stillInFlight'
+			return FrontEndStep.awaiting
+		end 'stillInFlight'
 
-// Runs once per `queryAllModule`, on a refused front end too. A stashed parse stays sound after a
+		return try self.advance(receiver)
+	end 'answered'
+
+	module function advance(receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
+		while true 'advancing'
+			let step = try self.runStage(receiver)
+
+			match step 'step'
+				next then continue
+				awaiting or
+				finished then return step
+			end 'step'
+		end 'advancing'
+
+		panic("FrontEndRun.advance: the loop above ends only by returning a step")
+	end 'advance'
+
+	function runStage(receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
+		return match self.place 'place'
+			unnameableLex gives try self.unnameableLexStage(receiver)
+			unnameableCheck gives try self.unnameableCheckStage()
+			collisionLex gives try self.collisionLexStage(receiver)
+			collisionCheck gives try self.collisionCheckStage()
+			cacheLookup gives self.cacheLookupStage()
+			foldLex gives try self.foldLexStage(receiver)
+			foldFirst gives try self.foldFirstStage()
+			roundBegin gives try self.roundBeginStage()
+			verdictBegin gives try self.verdictBeginStage(receiver)
+			verdictEnd gives try self.verdictEndStage()
+			roundEnd gives self.roundEndStage()
+			reachCheck gives try self.reachCheckStage()
+			settled gives self.settledStage()
+			retiring gives self.retiringStage(receiver)
+			retired gives self.retiredStage()
+		end 'place'
+	end 'runStage'
+
+	function lexThen(next FrontEndPlace, receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
+		self.place = next
+
+		let inFlight = try self.pool.beginLex(self.project, receiver: receiver)
+
+		if inFlight 'drainIsOut'
+			return FrontEndStep.awaiting
+		end 'drainIsOut'
+
+		return FrontEndStep.next
+	end 'lexThen'
+
+	function unnameableLexStage(receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
+		match self.directories 'directories'
+			refuseUnnameable then return try self.lexThen(FrontEndPlace.unnameableCheck, receiver: receiver)
+			unchecked then break
+		end 'directories'
+
+		self.place = FrontEndPlace.collisionLex
+
+		return FrontEndStep.next
+	end 'unnameableLexStage'
+
+	function unnameableCheckStage() returns FrontEndStep throws CompileError
+		_ = try self.pool.finishLex(self.project)
+		try refuseUnnameableNamespaceDirectories(self.project)
+		self.place = FrontEndPlace.collisionLex
+
+		return FrontEndStep.next
+	end 'unnameableCheckStage'
+
+	function collisionLexStage(receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
+		self.project.retiredWorkers.release()
+
+		return try self.lexThen(FrontEndPlace.collisionCheck, receiver: receiver)
+	end 'collisionLexStage'
+
+	function collisionCheckStage() returns FrontEndStep throws CompileError
+		_ = try self.pool.finishLex(self.project)
+		try refuseCollidingNominalDeclarations(self.project)
+		self.place = FrontEndPlace.cacheLookup
+
+		return FrontEndStep.next
+	end 'collisionCheckStage'
+
+	function cacheLookupStage() returns FrontEndStep
+		if allModuleCacheValid(self.project) 'hit'
+			self.project.db.allModuleHits = self.project.db.allModuleHits + 1
+
+			return FrontEndStep.finished(self.project.db.allModuleCache.value)
+		end 'hit'
+
+		self.project.db.allModuleMisses = self.project.db.allModuleMisses + 1
+		self.place = FrontEndPlace.foldLex
+
+		return FrontEndStep.next
+	end 'cacheLookupStage'
+
+	function foldLexStage(receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
+		return try self.lexThen(FrontEndPlace.foldFirst, receiver: receiver)
+	end 'foldLexStage'
+
+	function foldFirstStage() returns FrontEndStep throws CompileError
+		_ = try self.pool.finishLex(self.project)
+		self.merged.fill(MaxonModule.create())
+		self.ledger.fill(FoldLedger.create())
+		self.place = FrontEndPlace.roundBegin
+
+		return FrontEndStep.next
+	end 'foldFirstStage'
+
+	function roundBeginStage() returns FrontEndStep throws CompileError
+		self.rounds.clear()
+		self.rounds.fill(try FoldRound.begin(self.project, ledger: self.ledger.held()))
+		self.place = FrontEndPlace.verdictBegin
+
+		return FrontEndStep.next
+	end 'roundBeginStage'
+
+	function verdictBeginStage(receiver CompileReceiver.handle) returns FrontEndStep throws CompileError
+		let round = self.rounds.held()
+		round.checkpoint = FoldCheckpoint.of(self.project)
+		self.place = FrontEndPlace.verdictEnd
+
+		let inFlight = try foldVerdictBegin(self.project, pool: self.pool, signatures: round.signatures, receiver: receiver)
+
+		if inFlight 'drainIsOut'
+			return FrontEndStep.awaiting
+		end 'drainIsOut'
+
+		return FrontEndStep.next
+	end 'verdictBeginStage'
+
+	function verdictEndStage() returns FrontEndStep throws CompileError
+		let round = self.rounds.held()
+		let verdict = try foldVerdictFinish(self.project, pool: self.pool, signatures: round.signatures, into: self.merged.held(), ledger: self.ledger.held(), moved: round.moved, pathOrder: round.pathOrder, emissionOrder: round.emissionOrder)
+		self.ledger.held().settle(verdict, since: round.checkpoint, project: self.project)
+
+		match verdict 'verdict'
+			stands then self.place = FrontEndPlace.roundEnd
+			answersMoved or
+			indexMoved then try self.foldAgain(round)
+		end 'verdict'
+
+		return FrontEndStep.next
+	end 'verdictEndStage'
+
+	function foldAgain(round FoldRound) throws CompileError
+		round.folds = round.folds + 1
+		round.signatures = try queryProgramSignatures(self.project)
+		self.project.db.rowSetOverrides.belongTo(self.project.db.signatureCache.keyHash)
+		self.place = FrontEndPlace.verdictBegin
+	end 'foldAgain'
+
+	function roundEndStage() returns FrontEndStep
+		self.ledger.held().requireEveryDeferralExplained(self.project)
+		publishStandingParses(self.project)
+		logMergeRound(self.project, folds: self.rounds.held().folds, ledger: self.ledger.held())
+		self.place = FrontEndPlace.reachCheck
+
+		return FrontEndStep.next
+	end 'roundEndStage'
+
+	function reachCheckStage() returns FrontEndStep throws CompileError
+		let demandGrew = try frontEndMustFoldAgain(self.project, module: self.merged.held())
+
+		if demandGrew 'demandGrew'
+			self.place = FrontEndPlace.roundBegin
+		end 'demandGrew' else 'demandSettled'
+			self.place = FrontEndPlace.settled
+		end 'demandSettled'
+
+		return FrontEndStep.next
+	end 'reachCheckStage'
+
+	function settledStage() returns FrontEndStep
+		self.project.typeAliases.settleRangeContests(programSignaturesIn(self.project, asker: "FrontEndRun.settledStage").crossKindScopedAliasNames())
+		self.project.db.allModuleCache = ModuleMemo.create(self.merged.held(), keyHash: compositeSourceHash(self.project), computed: true)
+		self.place = FrontEndPlace.retiring
+
+		return FrontEndStep.next
+	end 'settledStage'
+
+	function retiringStage(receiver CompileReceiver.handle) returns FrontEndStep
+		self.place = FrontEndPlace.retired
+
+		if self.pool.beginRetire(self.project, receiver: receiver) 'workersAreAnswering'
+			return FrontEndStep.awaiting
+		end 'workersAreAnswering'
+
+		return FrontEndStep.next
+	end 'retiringStage'
+
+	function retiredStage() returns FrontEndStep
+		return FrontEndStep.finished(self.merged.held())
+	end 'retiredStage'
+end 'FrontEndRun'
+
+// One round of the merge: every file's artifact folded into `merged`, with the registries
+// `mergeArtifact` builds reset first. Artifacts are the source of truth for those registries, so a
+// miss rebuilds them from scratch and a warm re-run never double-commits — which is what makes a
+// second round of the body-demand fixpoint above safe to run over the same project. The files
+// `ledger` keeps from the fold before are replayed into the registries, not merged again
+// (`foldVerdict`).
+//
+// ⭐ **EVERY FILE IS PARSED BEFORE ANY IS MERGED**, against the signature index restored to its settled
+// baseline: a merge writes the index, and a parse reads only what every parse reads. Once every file is merged
+// the index holds every file's rows, and each file's row-set answers are checked against them; a file told
+// something the whole program disagrees with is filed the whole program's answer and the round is folded again,
+// its parse now keyed on that answer (`ProgramSignatures.rowSetAnswersThatMoved`).
+//
+// `merge` is probed around `mergeArtifact`, the replay, the path order and the type-name commit
+// ALONE: the parses run before them, so the fold's cost never absorbs the parse's.
+type FoldRound
+	module let moved as InstantiatedTypeNameSet
+	module let pathOrder as SourceFileInPathOrderArray
+	module let emissionOrder as EmissionSlotArray
+	module var signatures as ProgramSignatures
+	module var folds as FoldCount
+	module var checkpoint as FoldCheckpoint
+
+	// ⭐ **A ROUND TERMINATES WITH NO BOUND OF ITS OWN.** A fold that is not the last either files or drops a
+	// generic type in `InstantiatedByAParse` — each name at most once (`noteMoved`) — which settles a new index
+	// and drops every override, or, against one index, stands an answer for a (file, question) pair no earlier
+	// fold stood (`RowSetOverrideTable.stand`). Both are finite, so the folds are too.
+	static function begin(project Project, ledger FoldLedger) returns FoldRound throws CompileError
+		ledger.withdrawStandingFold(project)
+
+		let signatures = try queryProgramSignatures(project)
+		project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
+
+		let pathOrderProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
+		let pathOrder = sourceFilesInPathOrder(project.db.sourcePaths)
+		let emissionOrder = sourceFilesInEmissionOrder(project)
+		project.emissionRanks = emissionRanksFrom(project, emissionOrder: emissionOrder)
+		recordPhase(project, phase: CompilePhase.merge, probe: pathOrderProbe)
+
+		return Self{moved: InstantiatedTypeNameSet.create(), pathOrder: pathOrder, emissionOrder: emissionOrder, signatures: signatures, folds: 1, checkpoint: FoldCheckpoint.of(project)}
+	end 'begin'
+end 'FoldRound'
+
+function logMergeRound(project Project, folds FoldCount, ledger FoldLedger)
+	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+		compilerLogger(CompilerLogGroup.compiler).debug("merge: {folds} fold(s), {ledger.reMerged} of {project.db.sourcePaths.count()} file(s) re-merged")
+	end 'debugging'
+end 'logMergeRound'
+
+// Runs once per `FrontEndRun`, on a refused front end too. A stashed parse stays sound after a
 // refusal elsewhere in the program: its key covers its content, variant, library hash, overrides
 // and liveness, and it is validated again when loaded. The resets are for a retained `Project`,
 // which compiles again.
@@ -2450,7 +2718,7 @@ function finishLibraryCache(project Project)
 	let tally = project.db.libraryTally
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		logCompilerDebugSettled("library cache — baseline {project.db.libraryBaseline.name}, {tally.loaded} loaded, {tally.written} written, {tally.rejected} rejected, {tally.swept} library file(s) swept, {tally.parsed} library file(s) parsed")
+		compilerLogger(CompilerLogGroup.compiler).debug("library cache — baseline {project.db.libraryBaseline.name}, {tally.loaded} loaded, {tally.written} written, {tally.rejected} rejected, {tally.swept} library file(s) swept, {tally.parsed} library file(s) parsed")
 	end 'debugging'
 
 	project.session.fileMemos.library.totals.add(tally)
@@ -2458,11 +2726,7 @@ function finishLibraryCache(project Project)
 	project.db.libraryBaseline = LibraryBaselineState.unused
 end 'finishLibraryCache'
 
-function refuseUnnameableNamespaceDirectories(project Project, pool FrontEndPool) throws CompileError
-	// On the pool first, so the signature query reads memoized token streams rather than lexing
-	// each file in turn.
-	try pool.lexEveryFile(project)
-
+function refuseUnnameableNamespaceDirectories(project Project) throws CompileError
 	if reportUnnameableNamespaceDirectories(project, signatures: try queryProgramSignatures(project)) 'aDirectoryCannotBeNamed'
 		try refuseCompile(project)
 	end 'aDirectoryCannotBeNamed'
@@ -2472,8 +2736,7 @@ end 'refuseUnnameableNamespaceDirectories'
 // one module directory, share one identity in one interner, so once one file's declaration is filed
 // another file's own `Self{…}` can never bind its declaration. A collision therefore reports E3006
 // alone.
-function refuseCollidingNominalDeclarations(project Project, pool FrontEndPool) throws CompileError
-	try pool.lexEveryFile(project)
+function refuseCollidingNominalDeclarations(project Project) throws CompileError
 	let collisions = (try queryProgramSignatures(project)).collidingNominalDeclarations()
 
 	if collisions.isEmpty() 'noNameIsDeclaredTwice'
@@ -2483,46 +2746,6 @@ function refuseCollidingNominalDeclarations(project Project, pool FrontEndPool) 
 	reportTypeNameCollisions(project, collisions: collisions)
 	try refuseCompile(project)
 end 'refuseCollidingNominalDeclarations'
-
-module function lexEveryFileOnAPool(project Project) throws CompileError
-	let pool = FrontEndPool.create()
-
-	try pool.lexEveryFile(project) otherwise (err) 'lexingFailed'
-		pool.close(project)
-		throw err
-	end 'lexingFailed'
-
-	pool.close(project)
-end 'lexEveryFileOnAPool'
-
-// Every file lexed, then folded into a module until the stdlib's body demand stops growing — all of it on one
-// pool.
-function foldTheFrontEnd(project Project, pool FrontEndPool) returns MaxonModule throws CompileError
-	try pool.lexEveryFile(project)
-
-	// The merge is a fixpoint, because a stdlib body is built only if something reaches it: round 0
-	// folds every file with no stdlib body built at all, and each later round has the bodies the
-	// previous round's reachability walk demanded. See `StdlibSource.growStdlibBodyDemand` for why it
-	// terminates.
-	//
-	// ⚠ A round re-merges every file from the first one whose parse moved, rather than splicing that
-	// file's newly-built bodies into the module: `mergeArtifact`'s registries are first-wins and
-	// push-append, and its `opRanges`/`valueOrigins` are parallel to the module's op array by offset,
-	// so only a suffix can be dropped and merged again (`FoldLedger`). Every parse it asks for is a
-	// memo hit except the files whose demand actually moved.
-	let merged = MaxonModule.create()
-	let ledger = FoldLedger.create()
-	try foldEveryFileInto(project, pool: pool, merged: merged, ledger: ledger)
-
-	while try frontEndMustFoldAgain(project, module: merged) 'demandGrew'
-		// Nothing is invalidated here, and that is the point: only the files whose bodies this round
-		// newly demanded have a moved parse key, so a round costs one re-parse of the files that changed
-		// plus a fold, not a re-parse of the whole cone.
-		try foldEveryFileInto(project, pool: pool, merged: merged, ledger: ledger)
-	end 'demandGrew'
-
-	return merged
-end 'foldTheFrontEnd'
 
 function frontEndMustFoldAgain(project Project, module MaxonModule) returns bool throws CompileError
 	let signatures = try queryProgramSignatures(project)
@@ -2582,63 +2805,6 @@ function noteLiveReachOf(module MaxonModule, func IrFunction, defaultKeys LiveNa
 		end 'eachOp'
 	end 'eachBlock'
 end 'noteLiveReachOf'
-
-// One round of the merge: every file's artifact folded into `merged`, with the registries
-// `mergeArtifact` builds reset first. Artifacts are the source of truth for those registries, so a
-// miss rebuilds them from scratch and a warm re-run never double-commits — which is what makes a
-// second round of the body-demand fixpoint above safe to run over the same project. The files
-// `ledger` keeps from the fold before are replayed into the registries, not merged again
-// (`foldVerdict`).
-//
-// ⭐ **EVERY FILE IS PARSED BEFORE ANY IS MERGED**, against the signature index restored to its settled
-// baseline: a merge writes the index, and a parse reads only what every parse reads. Once every file is merged
-// the index holds every file's rows, and each file's row-set answers are checked against them; a file told
-// something the whole program disagrees with is filed the whole program's answer and the round is folded again,
-// its parse now keyed on that answer (`ProgramSignatures.rowSetAnswersThatMoved`).
-//
-// `merge` is probed around `mergeArtifact`, the replay, the path order and the type-name commit
-// ALONE: the parses run before them, so the fold's cost never absorbs the parse's.
-function foldEveryFileInto(project Project, pool FrontEndPool, merged MaxonModule, ledger FoldLedger) throws CompileError
-	// ⭐ **THIS TERMINATES WITH NO BOUND OF ITS OWN.** A fold that is not the last either files or drops a generic
-	// type in `InstantiatedByAParse` — each name at most once (`noteMoved`) — which settles a new index and drops
-	// every override, or, against one index, stands an answer for a (file, question) pair no earlier fold stood
-	// (`RowSetOverrideTable.stand`). Both are finite, so the folds are too.
-	ledger.withdrawStandingFold(project)
-
-	var signatures = try queryProgramSignatures(project)
-	project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
-	let moved = InstantiatedTypeNameSet.create()
-	var folds = 1 as FoldCount
-
-	let pathOrderProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
-	let pathOrder = sourceFilesInPathOrder(project.db.sourcePaths)
-	let emissionOrder = sourceFilesInEmissionOrder(project)
-	project.emissionRanks = emissionRanksFrom(project, emissionOrder: emissionOrder)
-	recordPhase(project, phase: CompilePhase.merge, probe: pathOrderProbe)
-
-	while true 'untilTheFoldStands'
-		let checkpoint = FoldCheckpoint.of(project)
-		let verdict = try foldVerdict(project, pool: pool, signatures: signatures, into: merged, ledger: ledger, moved: moved, pathOrder: pathOrder, emissionOrder: emissionOrder)
-		ledger.settle(verdict, since: checkpoint, project: project)
-
-		match verdict 'verdict'
-			stands then break 'untilTheFoldStands'
-			answersMoved or
-			indexMoved then folds = folds + 1
-		end 'verdict'
-
-		// A new index when the one before it was settled without a type this fold filed; the same one otherwise.
-		signatures = try queryProgramSignatures(project)
-		project.db.rowSetOverrides.belongTo(project.db.signatureCache.keyHash)
-	end 'untilTheFoldStands'
-
-	ledger.requireEveryDeferralExplained(project)
-	publishStandingParses(project)
-
-	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		logCompilerDebugSettled("merge: {folds} fold(s), {ledger.reMerged} of {project.db.sourcePaths.count()} file(s) re-merged")
-	end 'debugging'
-end 'foldEveryFileInto'
 
 enum SourceTier
 	author
@@ -2886,7 +3052,7 @@ type FoldLedger
 		end 'verdict'
 	end 'settle'
 
-	// Asked first in each round of `foldEveryFileInto`: every fold reports every artifact's
+	// Asked first in each round of the front end: every fold reports every artifact's
 	// diagnostics again, so the fold an earlier round stood is withdrawn before the next one reports,
 	// or each would stand twice.
 	function withdrawStandingFold(project Project)
@@ -3019,11 +3185,15 @@ end 'StandingFold'
 // the next fold does not run, and a refusal may be one a store without its descriptor earned; the fold's own
 // diagnostics are withdrawn with it, and the next fold reports afresh. A row a merge holds is an instance the
 // program really mints whether or not every file merged, so the type is filed either way.
-function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, ledger FoldLedger, moved InstantiatedTypeNameSet, pathOrder SourceFileInPathOrderArray, emissionOrder EmissionSlotArray) returns FoldVerdict throws CompileError
+function foldVerdictBegin(project Project, pool FrontEndPool, signatures ProgramSignatures, receiver CompileReceiver.handle) returns bool throws CompileError
 	resetMergeTargets(project, signatures: signatures)
 	signatures.restoreBaseline()
 
-	let artifacts = try pool.parseEveryFile(project, signatures: signatures)
+	return try pool.beginParse(project, signatures: signatures, receiver: receiver)
+end 'foldVerdictBegin'
+
+function foldVerdictFinish(project Project, pool FrontEndPool, signatures ProgramSignatures, into MaxonModule, ledger FoldLedger, moved InstantiatedTypeNameSet, pathOrder SourceFileInPathOrderArray, emissionOrder EmissionSlotArray) returns FoldVerdict throws CompileError
+	let artifacts = pool.finishParse(project)
 
 	let kept = ledger.keptPrefix(signatures, parsed: artifacts, emissionOrder: emissionOrder)
 	let replayProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.merge)
@@ -3111,7 +3281,7 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 	end 'aFiledTypeNoLongerNeedsFiling'
 
 	return FoldVerdict.answersMoved if rowSetAnswersMoved(project, artifacts: artifacts, signatures: signatures) else FoldVerdict.stands
-end 'foldVerdict'
+end 'foldVerdictFinish'
 
 function requestedTupleTypesOf(project Project, signatures ProgramSignatures, instance GenericFunctionInstance) returns RequestedTupleTypes
 	let layouts = StructLayoutArray.create(0)
@@ -3205,7 +3375,7 @@ end 'genericInstancesRequestedBy'
 function logTypeNameTable(artifact FileParseArtifact)
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
 		let names = artifact.typeNames
-		logCompilerDebugSettled("typeNames {artifact.filePath.toString()}: {names.count()} names, {names.arenaByteCount()} bytes, reserved {names.reservedNameCount()} names / {names.reservedArenaByteCount()} bytes, rehashes {names.rehashes()}, regrowths {names.regrowths()}")
+		compilerLogger(CompilerLogGroup.compiler).debug("typeNames {artifact.filePath.toString()}: {names.count()} names, {names.arenaByteCount()} bytes, reserved {names.reservedNameCount()} names / {names.reservedArenaByteCount()} bytes, rehashes {names.rehashes()}, regrowths {names.regrowths()}")
 	end 'debugging'
 end 'logTypeNameTable'
 
@@ -3249,12 +3419,12 @@ end 'fileRowSetAnswersMoved'
 // Every function-value ternary / match expression recorded a `PendingFnMergeCheck` at parse,
 // because a forward-referenced or cross-file arm's signature is not knowable at parse (the
 // whole-program `funcSignatures` is not assembled until merge). This drains those records: after
-// `queryAllModule` has merged every file's signatures, and before the pipeline's `resolveTypes`
+// `FrontEndRun` has merged every file's signatures, and before the pipeline's `resolveTypes`
 // erases the alias names the diagnostic prints, so a same-file, forward-referenced and cross-file
 // arm are all checked identically.
 //
-// Called once per compile from `compileToCodeResult`, deliberately not inside the memoized
-// `queryAllModule`, so a warm rebuild re-reports.
+// Called once per compile from `prepareLowering`, deliberately not inside the memoized
+// `FrontEndRun`, so a warm rebuild re-reports.
 export function checkValueMergeSignatures(project Project)
 	if project.pendingFnMergeChecks.count() == 0 'nothingToCheck'
 		return
@@ -3369,7 +3539,7 @@ function reportUnverifiableFnMerge(project Project, check PendingFnMergeCheck)
 end 'reportUnverifiableFnMerge'
 
 // Re-runs the per-file queries (tokens, then parse) for every source file, so the warm-rebuild gate
-// can prove the per-file memos survived a whole-program rebuild: a subsequent `queryAllModule` is a
+// can prove the per-file memos survived a whole-program rebuild: a subsequent `FrontEndRun` is a
 // whole-program HIT that returns early and never revisits the per-file caches, so observing them as
 // still hot requires re-querying them directly.
 //
@@ -3509,7 +3679,7 @@ function blameOutsideTheLibrary(project Project, blame LibraryBlame) returns Lib
 	end 'blame'
 end 'blameOutsideTheLibrary'
 
-// Every caller here runs below the point `compileToCodeResult` computes and memoizes the signature
+// Every caller here runs below the point `prepareLowering` computes and memoizes the signature
 // index, so a fresh failure is impossible and a `throws` on each caller would be an error path no
 // program can take.
 //
@@ -3517,7 +3687,7 @@ end 'blameOutsideTheLibrary'
 // memo or panic" would be a second place for the sentence explaining why it cannot fail to go
 // stale.
 export function programSignaturesIn(project Project, asker String) returns ProgramSignatures
-	return try queryProgramSignatures(project) otherwise panic("{asker}: queryProgramSignatures failed below the pipeline — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+	return try queryProgramSignatures(project) otherwise panic("{asker}: queryProgramSignatures failed below the pipeline — it is computed and memoized by FrontEndRun before the pipeline runs, so it cannot fail fresh here")
 end 'programSignaturesIn'
 
 // Read by two location gates guarding a `module`-visible member the compiler synthesizes, which therefore
@@ -3691,7 +3861,7 @@ function buildsBodiesFor(project Project, path FilePath, isStdlibSource bool) re
 	return project.db.demandedLibraryBodyFiles.contains(path)
 end 'buildsBodiesFor'
 
-// Clear the registries that `mergeArtifact` rebuilds from artifacts, so a queryAllModule miss
+// Clear the registries that `mergeArtifact` rebuilds from artifacts, so a `FrontEndRun` miss
 // re-derives them cleanly rather than compounding a prior run's commits.
 function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.funcReturnTypes = FuncReturnTypeMap.create()
@@ -3779,7 +3949,6 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	// against.
 	project.synthesizedOpFiles = SynthesizedOpFileMap.create()
 	project.registryUseSites = RegistryUseSiteMap.create()
-	project.serviceAwaitSites = ServiceAwaitSiteMap.create()
 	project.asyncSpawnSites = AsyncSpawnSiteMap.create()
 	project.allocTagSites = AllocTagSiteMap.create()
 	project.closureRecordSites = ClosureRecordSiteSet.create()

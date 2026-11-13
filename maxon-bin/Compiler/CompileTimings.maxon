@@ -199,7 +199,7 @@ export typealias CpuTicksArray = FixedArray with CpuTicks
 //   lex/signatures/parse/merge
 //                    Queries.*                 — the query spine, timed at the leaves
 //   checkDeclarations … layOutGlobals, installRuntime, synthesizeBodies
-//                    Compiler.compileToCodeResult — the whole-program work either side of the pipeline
+//                    CompileRun — the whole-program work either side of the pipeline
 //   pipelineNameIndex
 //                    PassPipeline.run          — the one shared FunctionNameIndex
 //   resolveTypes …   PassPipeline.dispatch     — one arm per PassKind (compilePhaseOfPass)
@@ -273,7 +273,7 @@ export enum CompilePhase
 
 	// ── EVERYTHING BELOW THIS LINE IS APPENDED AFTER THE PHASES ABOVE, AND IT IS COST EVERY COMPILE PAYS.
 	//
-	// A long span of `Compiler.compileToCodeResult` runs inside no other bracket. The whole-compile
+	// A long span of `CompileRun` runs inside no other bracket. The whole-compile
 	// probe still measures it, but it would land in `unattributedCost`, which
 	// `ScaleTestRunner.parseRungMetrics` reads and DISCARDS, so no table could say which of a dozen
 	// whole-program passes had grown. MEASURED on the scale corpus, unbracketed: rung 0 — 27,506
@@ -300,7 +300,7 @@ export enum CompilePhase
 	// `signatures` phase; `addPhaseCost` accumulates, so two disjoint intervals make one honest row.
 	checkDeclarations
 
-	// The `verify*Ordinals` block — the builtin-error ordinal claims (`Compiler.compileToCodeResult`).
+	// The `verify*Ordinals` block — the builtin-error ordinal claims (`prepareLowering`).
 	verifyOrdinals
 
 	// From `liveGlobalLabels` to `collectFnRefThunkTargets`: which globals the program can still name,
@@ -580,7 +580,7 @@ export type CompileTimings
 	var rowKinds as PhaseRowKindArray
 
 	// Cost of the whole compile, stamped once by `compile`. Zero until then: the
-	// warm-rebuild gate drives `compileToCodeResult` directly and never reports, so a
+	// warm-rebuild gate drives `WarmProjects` directly and never reports, so a
 	// zero total means "not a reported build", not "an instant build".
 	export var total as PhaseCost
 

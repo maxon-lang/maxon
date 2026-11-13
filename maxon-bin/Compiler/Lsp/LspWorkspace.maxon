@@ -249,7 +249,7 @@ type HeldCorpus
 			return SweptProject.rerooted
 		end 'rerooted'
 
-		return self.project.sweptOver(self.sweep, request: request)
+		return self.project.sweptOver(self.sweep, request: request, driver: workspace.driver)
 	end 'sweptFor'
 
 	function resweepMovesTheRoot(root SweepRoot, workspace LspWorkspaceState) returns bool
@@ -449,19 +449,26 @@ module union ProjectResolution
 	superseded
 end 'ProjectResolution'
 
+module typealias LspVersionCellMap = Map with (String, LspVersionCell)
+
 module type LspWorkspaceState
 	module var held as RecentHeldRoots
 	module var trusted as bool
 	module var folders as LspFolderArray
 	module var fileMemos as SharedFileMemoMap
+	module let driver as CompileDriver.handle
 	module let writer as LspStdoutWriter.handle
 	module var arrivals as LspArrivalPromiseArray
 	module var recordWatches as RecordWatchMap
 	var nextResolutionTicket as ResolutionTicket
 	module var tiersMemo as LibraryTiersMemo
+	var versionCells as LspVersionCellMap
+	let checkers as LspCheckerPool
 
 	module static function create(writer LspStdoutWriter.handle) returns LspWorkspaceState
-		return Self{held: RecentHeldRoots.create(), trusted: true, folders: LspFolderArray.create(0), fileMemos: SharedFileMemoMap.create(), writer: writer, arrivals: LspArrivalPromiseArray.create(0), recordWatches: RecordWatchMap.create(), nextResolutionTicket: 0, tiersMemo: LibraryTiersMemo.unlocated}
+		let checkers = LspCheckerPool.create(writer.clone())
+
+		return Self{held: RecentHeldRoots.create(checkers), trusted: true, folders: LspFolderArray.create(0), fileMemos: SharedFileMemoMap.create(), driver: persistentCompileDriver(), writer: writer, arrivals: LspArrivalPromiseArray.create(0), recordWatches: RecordWatchMap.create(), nextResolutionTicket: 0, tiersMemo: LibraryTiersMemo.unlocated, versionCells: LspVersionCellMap.create(), checkers: checkers}
 	end 'create'
 
 	module function projectInputsOf(name RootName) returns ProjectInputsAnswer
@@ -472,13 +479,65 @@ module type LspWorkspaceState
 
 	module function projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket) returns ProjectResolution
 		let root = try self.held.rootSpelledAs(dir) otherwise return ProjectResolution.superseded
+		let landed = root.inputs.hold(answer, ticket: ticket)
 
-		if not root.inputs.hold(answer, ticket: ticket) 'superseded'
+		match root.resolution.finished() 'queued'
+			waiting(queuedDir, queuedTicket) then self.resolveQueued(root, dir: queuedDir, ticket: queuedTicket)
+			nothing then break
+		end 'queued'
+
+		if not landed 'superseded'
 			return ProjectResolution.superseded
 		end 'superseded'
 
 		return ProjectResolution.landed(root.name.key())
 	end 'projectResolved'
+
+	module function publishVersion(uri String, version LspDocumentVersion)
+		if let cell = try self.versionCells.get(uri) 'known'
+			cell.publish(version)
+			return
+		end 'known'
+
+		self.versionCells.upsert(uri.clone(), value: LspVersionCell.create(version))
+	end 'publishVersion'
+
+	module function versionCellOf(uri String) returns LspVersionCell
+		let cell = try self.versionCells.get(uri) otherwise panic("LspWorkspaceState.versionCellOf: a check is requested for a document the session published a version of, and closing a document is what drops its cell")
+
+		return cell.clone()
+	end 'versionCellOf'
+
+	module function retireVersionCell(uri String)
+		if let cell = try self.versionCells.get(uri) 'known'
+			cell.publish(LspNoDocumentVersion)
+			_ = self.versionCells.remove(uri)
+		end 'known'
+	end 'retireVersionCell'
+
+	module function endChecks()
+		for (_, cell) in self.versionCells 'eachDocument'
+			cell.publish(LspNoDocumentVersion)
+		end 'eachDocument'
+
+		self.versionCells = LspVersionCellMap.create()
+		self.checkers.shutdown()
+	end 'endChecks'
+
+	module function requestProjectCheck(request immutable LspProjectCheckRequest)
+		let interest = CompileInterest.whileCurrent(self.versionCellOf(request.uri), version: request.version)
+
+		self.arrivals.push(async settledProjectCheck(request, interest: interest))
+	end 'requestProjectCheck'
+
+	module function projectCheckSettled(request immutable LspProjectCheckRequest, interest CompileInterest)
+		_ = try self.held.rootSpelledAs(request.root) otherwise 'noRoot'
+			reportProjectCheck(self.writer, request: request, outcome: ProjectCheckOutcome.superseded)
+			return
+		end 'noRoot'
+
+		self.checkers.submit(LspQueuedCheck.create(request, interest: interest))
+	end 'projectCheckSettled'
 
 	module function nextArrival() returns LspArrival
 		let ready = self.arrivals.awaitAny()
@@ -500,11 +559,24 @@ module type LspWorkspaceState
 		self.nextResolutionTicket = self.nextResolutionTicket + 1
 		let ticket = self.nextResolutionTicket
 		let root = try self.held.rootSpelledAs(dir) otherwise panic("LspWorkspaceState.requestResolution: a resolution is requested only through `projectInputsOf`, which files the root under this very spelling first")
-		let resolver = root.resolver.obtained(function() gives spawn LspProjectResolver.create())
-		self.arrivals.push(try resolver.resolve(dir.path, ticket: ticket, previous: freeze root.inputs.previousInputStamps().clone(), sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
+
+		if root.resolution.admit(dir, ticket: ticket) 'startsNow'
+			self.startResolution(root, dir: dir, ticket: ticket)
+		end 'startsNow'
 
 		return ticket
 	end 'requestResolution'
+
+	function resolveQueued(root HeldRoot, dir FilePath, ticket ResolutionTicket)
+		if root.inputs.awaits(ticket) 'stillAwaited'
+			self.startResolution(root, dir: dir, ticket: ticket)
+		end 'stillAwaited'
+	end 'resolveQueued'
+
+	function startResolution(root HeldRoot, dir FilePath, ticket ResolutionTicket)
+		root.resolution.start()
+		self.arrivals.push(async resolvedProjectArrival(dir.path, ticket: ticket, previous: freeze root.inputs.previousInputStamps().clone()))
+	end 'startResolution'
 end 'LspWorkspaceState'
 
 module function lspLibraryTiers(workspace LspWorkspaceState) returns LibraryTiers throws CompileError
@@ -786,54 +858,59 @@ function writeProjectLoadingNotification(writer LspStdoutWriter.handle, rootPath
 	writeLspNotification(writer, doc: doc, method: ProjectLoadingMethod, params: params.finish())
 end 'writeProjectLoadingNotification'
 
-module function lspProjectCheckerFor(workspace LspWorkspaceState, name RootName, tiers LibraryTiers) returns LspProjectChecker.handle
-	let root = workspace.held.rootAt(name)
-
-	return root.checker.obtained(function() gives spawn LspProjectChecker.create(name.spelled, stdlibDir: tiers.stdlibDir, runtimeDir: tiers.runtimeDir, writer: workspace.writer.clone()))
-end 'lspProjectCheckerFor'
-
 union HeldWorkspaceSlot
 	notBuilt
 	built(workspace HeldWorkspace)
 end 'HeldWorkspaceSlot'
 
-type HeldService uses Handle
-	typealias Spawner = function() returns Handle
-	typealias HandleColumn = Array with Handle
+union QueuedResolution
+	nothing
+	waiting(dir FilePath, ticket ResolutionTicket)
+end 'QueuedResolution'
 
-	var held as HandleColumn
+type ResolutionFlight
+	var running as bool
+	var queued as QueuedResolution
 
-	static function create() returns Self
-		return Self{held: HandleColumn.create(0)}
+	static function create() returns ResolutionFlight
+		return Self{running: false, queued: QueuedResolution.nothing}
 	end 'create'
 
-	function obtained(spawner Spawner) returns Handle
-		if self.held.isEmpty() 'notSpawned'
-			self.held.push(spawner())
-		end 'notSpawned'
+	function admit(dir FilePath, ticket ResolutionTicket) returns bool
+		if not self.running 'free'
+			return true
+		end 'free'
 
-		return try self.held.get(0) otherwise panic("HeldService.obtained: a service was held or spawned a line above")
-	end 'obtained'
-end 'HeldService'
+		self.queued = QueuedResolution.waiting(dir, ticket: ticket)
 
-typealias HeldChecker = HeldService with LspProjectChecker.handle
+		return false
+	end 'admit'
 
-typealias HeldResolver = HeldService with LspProjectResolver.handle
+	function start()
+		self.running = true
+	end 'start'
+
+	function finished() returns QueuedResolution
+		let next = self.queued
+		self.running = false
+		self.queued = QueuedResolution.nothing
+
+		return next
+	end 'finished'
+end 'ResolutionFlight'
 
 type HeldRoot
 	module let name as RootName
 	module var workspace as HeldWorkspaceSlot
-	module var checker as HeldChecker
-	module var resolver as HeldResolver
+	module let resolution as ResolutionFlight
 	module var inputs as ProjectInputsMemo
 
 	static function create(name RootName) returns HeldRoot
-		return Self{name: name, workspace: HeldWorkspaceSlot.notBuilt, checker: HeldChecker.create(), resolver: HeldResolver.create(), inputs: ProjectInputsMemo.create()}
+		return Self{name: name, workspace: HeldWorkspaceSlot.notBuilt, resolution: ResolutionFlight.create(), inputs: ProjectInputsMemo.create()}
 	end 'create'
 
 	function demote()
 		self.workspace = HeldWorkspaceSlot.notBuilt
-		self.checker = HeldChecker.create()
 	end 'demote'
 end 'HeldRoot'
 
@@ -886,9 +963,10 @@ module type RecentHeldRoots
 	var roots as HeldRootMap
 	var order as HeldProjectKeyArray
 	module let pathless as HeldWorkspace
+	let checkers as LspCheckerPool
 
-	static function create() returns RecentHeldRoots
-		return Self{roots: HeldRootMap.create(), order: HeldProjectKeyArray.create(0), pathless: HeldWorkspace.create()}
+	static function create(checkers LspCheckerPool) returns RecentHeldRoots
+		return Self{roots: HeldRootMap.create(), order: HeldProjectKeyArray.create(0), pathless: HeldWorkspace.create(), checkers: checkers}
 	end 'create'
 
 	function rootAt(name RootName) returns HeldRoot
@@ -977,6 +1055,7 @@ module type RecentHeldRoots
 	// asked would never be checked against it.
 	function evict(key String)
 		let held = try self.roots.get(key) otherwise panic("RecentHeldRoots.evict: '{key}' is in the order, so it is in the map")
+		self.forgetWarmProject(held)
 
 		if held.inputs.isAwaitingResolution() 'awaitsItsResolver'
 			held.demote()
@@ -991,8 +1070,16 @@ module type RecentHeldRoots
 			return
 		end 'stillHeld'
 
+		if let held = try self.roots.get(key) 'aDemotedRoot'
+			self.forgetWarmProject(held)
+		end 'aDemotedRoot'
+
 		_ = self.roots.remove(key)
 	end 'releaseIfDemoted'
+
+	function forgetWarmProject(held HeldRoot)
+		self.checkers.forget(held.name.spelled.path)
+	end 'forgetWarmProject'
 
 	// Walks the map, not the order: a demoted root is in the map alone, and goes with its folder too.
 	function dropUnder(folder FilePath)
@@ -1005,6 +1092,7 @@ module type RecentHeldRoots
 		end 'eachRoot'
 
 		for key in gone 'eachGone'
+			self.forgetWarmProject(try self.roots.get(key) otherwise panic("RecentHeldRoots.dropUnder: '{key}' was found in the map a moment ago"))
 			_ = self.roots.remove(key)
 		end 'eachGone'
 
@@ -1050,6 +1138,10 @@ module function lspBufferRootOf(reader LspReaderSearch) returns FilePath
 		outside gives reader.document.path
 	end 'tier'
 end 'lspBufferRootOf'
+
+module function lspDocumentOrigin(reader LspReaderSearch, text String) returns ProjectOrigin
+	return ProjectOrigin.document(lspBufferRootOf(reader), stdlibDir: reader.tiers.stdlibDir, runtimeDir: reader.tiers.runtimeDir, scriptlib: reader.tiers.scriptlib, bufferPath: lspBufferPathOf(reader), bufferText: text)
+end 'lspDocumentOrigin'
 
 // A tier document is registered under the tier's own spelling: library provenance
 // (`Queries.isLibrarySourceFile`) is a lexical test against the tier directory, so a buffer opened
@@ -1558,36 +1650,36 @@ function isAVolumeRoot(dir FilePath) returns bool
 end 'isAVolumeRoot'
 
 extension Project
-	// ⛔ The pipeline stops at LEX plus SIGNATURES, and `queryAllModule` is never called here. Lexing and
+	// ⛔ The pipeline stops at LEX plus SIGNATURES, and `FrontEndRun` is never run here. Lexing and
 	// folding signatures is what a name-to-file question actually needs; parse and merge cost more than
 	// the two of them together and answer nothing asked here.
-	function sweptOver(walk SourceSweep, request SweepRequest) returns SweptProject
+	function sweptOver(walk SourceSweep, request SweepRequest, driver CompileDriver.handle) returns SweptProject
 		return match request 'request'
-			reading(source) gives self.sweptForReader(walk, source: source)
-			loadingFor gives self.sweptForLoad(walk, request: request)
+			reading(source) gives self.sweptForReader(walk, source: source, driver: driver)
+			loadingFor gives self.sweptForLoad(walk, request: request, driver: driver)
 		end 'request'
 	end 'sweptOver'
 
-	function sweptForReader(walk SourceSweep, source ReaderSource) returns SweptProject
+	function sweptForReader(walk SourceSweep, source ReaderSource, driver CompileDriver.handle) returns SweptProject
 		let reader = try self.refreshFromWalk(walk, source: source, unreadable: UnreadableSource.skipped) otherwise panic("sweptForReader: a corpus skips a source it cannot read, so its refresh refuses nothing")
 
-		let signatures = try self.foldedSignatures() otherwise return SweptProject.unavailable
+		let signatures = try self.foldedSignatures(driver) otherwise return SweptProject.unavailable
 
 		return SweptProject.read(self, signatures: signatures, readerPath: reader)
 	end 'sweptForReader'
 
 	// Registers no reader: the document asking may be the `.maxproj` that marks this project, and as a
 	// reader its declarations would fold into the project's signatures and its text could fail the fold.
-	function sweptForLoad(walk SourceSweep, request SweepRequest) returns SweptProject
+	function sweptForLoad(walk SourceSweep, request SweepRequest, driver CompileDriver.handle) returns SweptProject
 		try self.refreshWithoutReader(walk, request: request, unreadable: UnreadableSource.skipped) otherwise panic("sweptForLoad: a load skips a source it cannot read, so its refresh refuses nothing")
 
-		_ = try self.foldedSignatures() otherwise return SweptProject.unavailable
+		_ = try self.foldedSignatures(driver) otherwise return SweptProject.unavailable
 
 		return SweptProject.loaded
 	end 'sweptForLoad'
 
-	function foldedSignatures() returns ProgramSignatures throws CompileError
-		try lexEveryFileOnAPool(self)
+	function foldedSignatures(driver CompileDriver.handle) returns ProgramSignatures throws CompileError
+		try lexedOnDriver(driver, project: self)
 
 		return try queryProgramSignatures(self)
 	end 'foldedSignatures'

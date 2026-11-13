@@ -17,6 +17,7 @@ public union HttpServerError implements Error
 	unsupportedVersion
 	acceptInterrupted
 	invalidResponse
+	deferralUnavailable
 	tlsFailed(error TlsError)
 end 'HttpServerError'
 
@@ -37,6 +38,7 @@ public union HttpHandlerFault
 	threwAfterResponding(request HttpRequest, fault HttpServerError)
 	threwAfterAFailedResponse(request HttpRequest, fault HttpServerError)
 	threwWithoutAnyAnswer(request HttpRequest, fault HttpServerError)
+	threwAfterDeferring(request HttpRequest, fault HttpServerError)
 	returnedWithoutResponding(request HttpRequest)
 	returnedWithoutAnyAnswer(request HttpRequest)
 	acceptInterrupted(retryMs HttpAcceptRetryMs)
@@ -48,6 +50,7 @@ public union HttpHandlerFault
 			threwAfterResponding(request, fault) gives "{requestLabel(request)} failed with {fault.name} after its answer was sent"
 			threwAfterAFailedResponse(request, fault) gives "{requestLabel(request)} failed with {fault.name} after its answer could not be sent"
 			threwWithoutAnyAnswer(request, fault) gives "{requestLabel(request)} failed with {fault.name}, and the 500 sent in its place could not be sent"
+			threwAfterDeferring(request, fault) gives "{requestLabel(request)} failed with {fault.name} after its answer was deferred; its responder still owes the answer"
 			returnedWithoutResponding(request) gives "{requestLabel(request)} ended without an answer and was answered 500"
 			returnedWithoutAnyAnswer(request) gives "{requestLabel(request)} ended without an answer, and the 500 sent in its place could not be sent"
 			acceptInterrupted(retryMs) gives "accepting a connection failed; the next attempt is in {retryMs} ms"
@@ -90,6 +93,7 @@ end 'HttpServerLimits'
 
 enum ResponseStage
 	awaiting
+	deferred
 	answered
 	abandoned
 end 'ResponseStage'
@@ -109,27 +113,30 @@ public union HttpConnectionSecurity
 	tls(protocol TlsProtocol, cipherSuite TlsCipherSuite, applicationProtocol TlsApplicationProtocol, peerCertificates ByteArrays)
 end 'HttpConnectionSecurity'
 
+typealias OpenExchangeSlot = Slot with OpenExchange
+
 /// One accepted connection: the request that arrived and the response owed for it.
 public type HttpExchange
-	var inbound as HttpTransportReader
-	let parsed as HttpRequest
-	var progress as ExchangeProgress
-	let writeDeadlineMs as SocketDeadlineMs
-	let leftoverArrived as bool
+	let open as OpenExchangeSlot
+	let progress as ExchangeProgress
+	var owner as ExchangeOwner
 
-	static function create(inbound HttpTransportReader, parsed HttpRequest, writeDeadlineMs SocketDeadlineMs, leftoverArrived bool) returns HttpExchange
-		return HttpExchange{inbound: inbound, parsed: parsed, progress: ExchangeProgress.create(), writeDeadlineMs: writeDeadlineMs, leftoverArrived: leftoverArrived}
+	static function create(open OpenExchange, progress ExchangeProgress, owner ExchangeOwner) returns HttpExchange
+		let held = OpenExchangeSlot.create("HttpExchange.open")
+		held.fill(open)
+
+		return HttpExchange{open: held, progress: progress, owner: owner}
 	end 'create'
 
 	/// The request that arrived. Its `url()` is read from an absolute-form target, and otherwise built
 	/// as `http://<Host><target>` (`https` on a TLS server), hostless for an HTTP/1.0 request that sent no `Host`.
 	public function request() returns HttpRequest
-		return self.parsed
+		return self.open.held().request()
 	end 'request'
 
 	/// Whether the request arrived over TLS, and what the handshake settled.
 	public function security() returns HttpConnectionSecurity
-		return try self.inbound.source.security() otherwise panic("HttpExchange.security: the request arrived over a connection whose handshake completed")
+		return self.open.held().security()
 	end 'security'
 
 	function stage() returns ResponseStage
@@ -140,11 +147,76 @@ public type HttpExchange
 	/// `alreadyResponded` on a second answer, `invalidResponse` for a body on a 204 or 304 or an
 	/// unsendable reason or header, and `sendFailed` when the write fails or outlasts the write deadline.
 	public function respond(response HttpResponse) throws HttpServerError
+		try self.open.held().respond(response)
+	end 'respond'
+
+	/// Answer a status, a body and its content type.
+	public function respondWith(code StatusCode, body String, contentType String) throws HttpServerError
+		try self.respond(httpResponseWith(code, body: body, contentType: contentType))
+	end 'respondWith'
+
+	/// Hand the answer to another service: the handler returns, and whoever holds the `HttpResponder` answers
+	/// the request later. `serve` has no deadline for an answer, so a responder that is never answered leaves
+	/// its connection open. Throws `alreadyResponded` once the exchange is answered or deferred, and
+	/// `deferralUnavailable` for an exchange `accept()` returned, which no worker serves.
+	public function respondLater() returns HttpResponder throws HttpServerError
+		if self.stage() != ResponseStage.awaiting 'answeredAlready'
+			throw HttpServerError.alreadyResponded
+		end 'answeredAlready'
+
+		let responder = try self.owner.responder()
+		self.owner = ExchangeOwner.taken
+		self.progress.stage = ResponseStage.deferred
+
+		return responder
+	end 'respondLater'
+
+	function takeOpen() returns OpenExchange
+		return self.open.take()
+	end 'takeOpen'
+end 'HttpExchange'
+
+type OpenExchange
+	var inbound as HttpTransportReader
+	let parsed as HttpRequest
+	let progress as ExchangeProgress
+	let writeDeadlineMs as SocketDeadlineMs
+	let leftoverArrived as bool
+
+	static function create(inbound HttpTransportReader, parsed HttpRequest, progress ExchangeProgress, writeDeadlineMs SocketDeadlineMs, leftoverArrived bool) returns OpenExchange
+		return OpenExchange{inbound: inbound, parsed: parsed, progress: progress, writeDeadlineMs: writeDeadlineMs, leftoverArrived: leftoverArrived}
+	end 'create'
+
+	function request() returns HttpRequest
+		return self.parsed
+	end 'request'
+
+	function security() returns HttpConnectionSecurity
+		return try self.inbound.source.security() otherwise panic("HttpExchange.security: the request arrived over a connection whose handshake completed")
+	end 'security'
+
+	function respond(response HttpResponse) throws HttpServerError
 		if self.progress.stage != ResponseStage.awaiting 'answeredAlready'
 			throw HttpServerError.alreadyResponded
 		end 'answeredAlready'
 
-		let head = try httpBuildResponseHead(response)
+		try self.write(response, head: try httpBuildResponseHead(response))
+	end 'respond'
+
+	function answerDeferred(response HttpResponse)
+		if self.progress.stage != ResponseStage.deferred 'notDeferred'
+			panic("OpenExchange.answerDeferred: a parked exchange stays deferred until its one answer arrives")
+		end 'notDeferred'
+
+		try self.write(response, head: httpBuildSendableResponseHead(response)) otherwise (fault) 'writeFailed'
+			match fault 'which'
+				sendFailed then return
+				default panic("OpenExchange.answerDeferred: `HttpResponder.respond` validated the response, so the write fails only by `sendFailed`, not `{fault.name}`")
+			end 'which'
+		end 'writeFailed'
+	end 'answerDeferred'
+
+	function write(response HttpResponse, head String) throws HttpServerError
 		let sendsContent = self.parsed.method() != HttpMethod.head and httpStatusAllowsContent(response.statusCode())
 		let wire = "{head}{response.body()}" if sendsContent else head
 
@@ -155,13 +227,61 @@ public type HttpExchange
 		end 'writeFailed'
 
 		self.progress.stage = ResponseStage.answered
+	end 'write'
+end 'OpenExchange'
+
+union ExchangeOwner
+	held(worker ConnectionWorker.handle)
+	taken
+
+	function responder() returns HttpResponder throws HttpServerError
+		match self 'which'
+			held(worker) then return HttpResponder.over(worker)
+			taken then throw HttpServerError.deferralUnavailable
+		end 'which'
+	end 'responder'
+end 'ExchangeOwner'
+
+/// The right to answer one deferred request, and the duty to: `respond` and `respondWith` each answer it
+/// exactly once, and a responder is held in a local, a parameter or a message argument until one of them
+/// does. A failed answer throws `notSent`, which hands the responder back.
+public type HttpResponder
+	var worker as ConnectionWorker.handle
+
+	static function over(worker ConnectionWorker.handle) returns HttpResponder
+		return HttpResponder{worker: worker}
+	end 'over'
+
+	/// Answer the request this responder was made for. The answer is a send that never waits: when the
+	/// connection's worker cannot take it, this throws `notSent` carrying the responder.
+	public function respond(consuming self, response isolated HttpResponse) throws HttpResponderError
+		try httpRequireSendableResponse(response) otherwise 'unsendable'
+			throw HttpResponderError.invalidResponse(self)
+		end 'unsendable'
+
+		try self.worker.deliver(response) otherwise 'refused'
+			throw HttpResponderError.notSent(self)
+		end 'refused'
+
+		destruct self
 	end 'respond'
 
 	/// Answer a status, a body and its content type.
-	public function respondWith(code StatusCode, body String, contentType String) throws HttpServerError
+	public function respondWith(consuming self, code StatusCode, body String, contentType String) throws HttpResponderError
 		try self.respond(httpResponseWith(code, body: body, contentType: contentType))
 	end 'respondWith'
-end 'HttpExchange'
+
+	/// Close the connection without an answer: the one way to end a responder that cannot answer.
+	public function abandon(consuming self)
+		destruct self
+	end 'abandon'
+end 'HttpResponder'
+
+/// What a failed answer hands back.
+public union HttpResponderError implements Error
+	notSent(responder HttpResponder)
+	invalidResponse(responder HttpResponder)
+end 'HttpResponderError'
 
 /// What `serve` calls for each exchange. A handler that throws has its exchange answered `500`.
 public interface HttpHandler
@@ -284,7 +404,7 @@ public type HttpServer
 		while true 'nextConnection'
 			let transport = try self.nextTransport()
 			let policy = self.connectionPolicy()
-			let arrival = try policy.arrive(transport)
+			let arrival = try policy.arrive(transport, owner: ExchangeOwner.taken)
 
 			match arrival 'arrival'
 				ready(exchange) then return exchange
@@ -305,15 +425,17 @@ public type HttpServer
 		return freeze ServerConnection.over(self.limits.clone(), scheme: self.listener.scheme())
 	end 'connectionPolicy'
 
-	/// Hand each accepted exchange to `handler` on a green thread of its own per connection, until
+	/// Hand each accepted exchange to `handler` in a service of its own per connection, until
 	/// a listener failure, the accept deadline or `.cancel()` on the promise of the `async` call that
 	/// runs it; the answer says which, and is `closed` for a server already closed. A connection is
-	/// read, and its handler run, on its own thread, so a client that stalls or a handler that
+	/// read, and its handler run, in its own service, so a client that stalls or a handler that
 	/// computes delays only its own connection. `handler` is one value every connection reads at once,
 	/// so it is `immutable` (build it with `freeze`): a handler whose methods write its fields is
 	/// refused, and state that connections share lives in a service the handler holds a handle to.
-	/// `serve` returns once every connection it took has finished. A refused request is skipped, and
-	/// an interrupted accept is retried after a wait that doubles from 5 ms to 1 s.
+	/// `serve` returns once every connection it took has finished or deferred its answer to an
+	/// `HttpResponder`, which has no deadline. It waits for its connections, so a message or `spawn`
+	/// factory that calls it is refused. A refused request is skipped, and an interrupted accept is
+	/// retried after a wait that doubles from 5 ms to 1 s.
 	public function serve(handler immutable HttpHandler) returns HttpServeEnd
 		var progress = ServeProgress.serving
 		var retryMs = NoAcceptRetryMs
@@ -337,7 +459,7 @@ public type HttpServer
 
 			let worker = spawn ConnectionWorker.create(self.connectionPolicy())
 
-			inFlight.push(try worker.serve(handler, transport: transport) otherwise panic("HttpServer.serve: a connection worker that has just been spawned takes its first message"))
+			inFlight.push(try worker.serve(handler, transport: transport, worker: worker.clone()) otherwise panic("HttpServer.serve: a connection worker that has just been spawned takes its first message"))
 
 			if inFlight.count() >= reapAt 'reap'
 				reapFinished(inFlight)
@@ -366,7 +488,7 @@ type ServerConnection
 		return ServerConnection{limits: limits, scheme: scheme}
 	end 'over'
 
-	function arrive(transport HttpTransport) returns ConnectionArrival throws HttpServerError
+	function arrive(transport HttpTransport, owner ExchangeOwner) returns ConnectionArrival throws HttpServerError
 		let inbound = StreamReader.over(transport)
 
 		let arrived = try self.readArrival(inbound) otherwise (fault) 'protocolFault'
@@ -377,9 +499,16 @@ type ServerConnection
 
 		match arrived 'arrival'
 			forTheServer(leftoverArrived) then return self.answeredServerWide(inbound, leftoverArrived: leftoverArrived)
-			forResource(request, leftoverArrived) then return ConnectionArrival.ready(HttpExchange.create(inbound, parsed: request, writeDeadlineMs: self.limits.writeDeadlineMs, leftoverArrived: leftoverArrived))
+			forResource(request, leftoverArrived) then return self.readyExchange(inbound, request: request, leftoverArrived: leftoverArrived, owner: owner)
 		end 'arrival'
 	end 'arrive'
+
+	function readyExchange(inbound HttpTransportReader, request HttpRequest, leftoverArrived bool, owner ExchangeOwner) returns ConnectionArrival
+		let progress = ExchangeProgress.create()
+		let open = OpenExchange.create(inbound, parsed: request, progress: progress, writeDeadlineMs: self.limits.writeDeadlineMs, leftoverArrived: leftoverArrived)
+
+		return ConnectionArrival.ready(HttpExchange.create(open, progress: progress, owner: owner))
+	end 'readyExchange'
 
 	function readArrival(inbound HttpTransportReader) returns RequestArrival throws HttpServerError
 		try inbound.source.setReadDeadline(self.limits.readDeadlineMs) otherwise throw HttpServerError.connectionClosed
@@ -439,7 +568,13 @@ end 'ServerConnection'
 enum ConnectionEnd
 	refused
 	served
+	deferred
 end 'ConnectionEnd'
+
+union DeferredExchange
+	waiting(open OpenExchange)
+	none
+end 'DeferredExchange'
 
 typealias ConnectionPromise = Promise with ConnectionEnd
 typealias ConnectionPromises = Array with ConnectionPromise
@@ -448,21 +583,46 @@ typealias ConnectionPromises = Array with ConnectionPromise
 // shares with the sender, and the shared handler is read-only for every worker at once.
 type ConnectionWorker
 	var connection as immutable ServerConnection
+	var deferred as DeferredExchange
 
 	static function create(connection immutable ServerConnection) returns ConnectionWorker
-		return ConnectionWorker{connection: connection}
+		return ConnectionWorker{connection: connection, deferred: DeferredExchange.none}
 	end 'create'
 
-	export function serve(handler immutable HttpHandler, transport HttpTransport) returns ConnectionEnd
-		let arrival = try self.connection.arrive(transport) otherwise return ConnectionEnd.refused
+	export function serve(handler immutable HttpHandler, transport HttpTransport, worker ConnectionWorker.handle) returns ConnectionEnd
+		let arrival = try self.connection.arrive(transport, owner: ExchangeOwner.held(worker)) otherwise return ConnectionEnd.refused
 
 		match arrival 'arrival'
-			ready(exchange) then dispatchExchange(exchange, handler: handler)
+			ready(exchange) then return self.dispatch(exchange, handler: handler)
 			answered then break
 		end 'arrival'
 
 		return ConnectionEnd.served
 	end 'serve'
+
+	function dispatch(exchange HttpExchange, handler HttpHandler) returns ConnectionEnd
+		match dispatchExchange(exchange, handler: handler) 'outcome'
+			finished then return ConnectionEnd.served
+			deferred(open) then return self.park(open)
+		end 'outcome'
+	end 'dispatch'
+
+	function park(open OpenExchange) returns ConnectionEnd
+		self.deferred = DeferredExchange.waiting(open)
+
+		return ConnectionEnd.deferred
+	end 'park'
+
+	export function deliver(response isolated HttpResponse)
+		let answer = merge response
+
+		match self.deferred 'pending'
+			waiting(open) then open.answerDeferred(answer)
+			none then panic("ConnectionWorker.deliver: a responder exists only for an exchange the worker parked, and the worker handles its messages one at a time")
+		end 'pending'
+
+		self.deferred = DeferredExchange.none
+	end 'deliver'
 end 'ConnectionWorker'
 
 function reapFinished(inFlight ConnectionPromises)
@@ -546,7 +706,8 @@ function progressAfter(fault HttpServerError) returns ServeProgress
 		connectionClosed or
 		sendFailed or
 		alreadyResponded or
-		invalidResponse panic("HttpServer.serve: taking a connection does not throw `{fault.name}`")
+		invalidResponse or
+		deferralUnavailable panic("HttpServer.serve: taking a connection does not throw `{fault.name}`")
 	end 'which'
 end 'progressAfter'
 
@@ -567,6 +728,7 @@ function acceptRetryAfter(fault HttpServerError, previous HttpAcceptRetryMs) ret
 		unsupportedMethod or
 		unsupportedVersion or
 		invalidResponse or
+		deferralUnavailable or
 		tlsFailed gives NoAcceptRetryMs
 	end 'which'
 end 'acceptRetryAfter'
@@ -648,23 +810,39 @@ function listenerFaultOf(cause NetworkError) returns HttpServerError
 	end 'which'
 end 'listenerFaultOf'
 
-function dispatchExchange(exchange HttpExchange, handler HttpHandler)
+union DispatchOutcome
+	finished
+	deferred(open OpenExchange)
+end 'DispatchOutcome'
+
+function dispatchExchange(exchange HttpExchange, handler HttpHandler) returns DispatchOutcome
 	let request = exchange.request()
 
 	try handler.handle(exchange) otherwise (fault) 'handlerThrew'
 		handler.faulted(answerAThrow(exchange, request: request, fault: fault.clone()))
 
-		return
+		return outcomeOf(exchange)
 	end 'handlerThrew'
 
 	if exchange.stage() == ResponseStage.awaiting 'leftUnanswered'
 		handler.faulted(answerInsteadOfTheHandler(exchange, answered: HttpHandlerFault.returnedWithoutResponding(request), unanswered: HttpHandlerFault.returnedWithoutAnyAnswer(request)))
 	end 'leftUnanswered'
+
+	return outcomeOf(exchange)
 end 'dispatchExchange'
+
+function outcomeOf(exchange HttpExchange) returns DispatchOutcome
+	if exchange.stage() != ResponseStage.deferred 'finishedHere'
+		return DispatchOutcome.finished
+	end 'finishedHere'
+
+	return DispatchOutcome.deferred(exchange.takeOpen())
+end 'outcomeOf'
 
 function answerAThrow(exchange HttpExchange, request HttpRequest, fault HttpServerError) returns HttpHandlerFault
 	return match exchange.stage() 'stage'
 		answered gives HttpHandlerFault.threwAfterResponding(request, fault: fault)
+		deferred gives HttpHandlerFault.threwAfterDeferring(request, fault: fault)
 		abandoned gives HttpHandlerFault.threwAfterAFailedResponse(request, fault: fault)
 		awaiting gives answerInsteadOfTheHandler(exchange, answered: HttpHandlerFault.threw(request, fault: fault), unanswered: HttpHandlerFault.threwWithoutAnyAnswer(request, fault: fault))
 	end 'stage'
@@ -698,7 +876,8 @@ function protocolAnswerFor(fault HttpServerError) returns ProtocolAnswer
 		acceptTimedOut or
 		alreadyResponded or
 		acceptInterrupted or
-		invalidResponse panic("HttpServer.protocolAnswerFor: `{fault.name}` is not a fault reading a request can end in")
+		invalidResponse or
+		deferralUnavailable panic("HttpServer.protocolAnswerFor: `{fault.name}` is not a fault reading a request can end in")
 	end 'which'
 end 'protocolAnswerFor'
 

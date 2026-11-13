@@ -2714,6 +2714,8 @@ export type StdToX64Lowering
 	// the Linux syscall in EDI — which is why the argument move, not just the terminal call, is inside the
 	// OS branch (unlike arm64, where AAPCS64 and the syscall ABI share x0).
 	function lowerOsExit(codeId ValueId, dstBlock IrBlock)
+		self.appendLogFlush(dstBlock)
+
 		match x64OsCallKind(self.target.os) 'route'
 			importCall then self.lowerOsExitWin64(codeId, dstBlock: dstBlock)
 			syscall then self.lowerOsExitLinux(codeId, dstBlock: dstBlock)
@@ -2747,6 +2749,7 @@ export type StdToX64Lowering
 	// from `x64OsCallKind(target.os)` — the same door `lowerOsExit` consults here. A third spelling of
 	// "which OS am I" bought nothing but a lane that silently said less.
 	function lowerPanic(label ByteArray, dstBlock IrBlock)
+		self.appendLogFlush(dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(x64PhysReg(X64Register.rcx), label: label))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(PanicName))
 	end 'lowerPanic'
@@ -2757,9 +2760,16 @@ export type StdToX64Lowering
 	// `mrt_panic`, one cstr contract, two ways of producing the bytes. RCX is written and immediately
 	// consumed, so no intervening op can clobber it.
 	function lowerPanicValue(messagePtrId ValueId, dstBlock IrBlock)
+		self.appendLogFlush(dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(messagePtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(PanicName))
 	end 'lowerPanicValue'
+
+	function appendLogFlush(dstBlock IrBlock)
+		if self.usesGt 'runsGreenThreads'
+			self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(GtPanicFlushName))
+		end 'runsGreenThreads'
+	end 'appendLogFlush'
 
 	// `osAllocPages` is its own op rather than a `call` because Maxon's ABI passes argument 3 in rax
 	// and returns in R8, where both hosts pass it elsewhere and return in RAX: routing it through

@@ -816,7 +816,7 @@ end 'classPoolSizeOf'
 // target's mask proves "arm64's call ops agree with arm64's mask" while the colorer, one screen away,
 // asks the X64 one unconditionally — so the two spellings the check exists to hold together are never
 // both under it. Sourced once in
-// `lowerAndAllocateOnAWorkerPool` and passed in, the mask the ABI clobbers and the mask the colorer prefers are
+// `BackendRun.create` and passed in, the mask the ABI clobbers and the mask the colorer prefers are
 // ONE value, and a target that got the wrong one fails the build here instead of colouring quietly.
 //
 // VERIFIED BY SABOTAGE: with `callerSavedMaskFor`'s arm64 arm put back to `callerSavedMask()`, an
@@ -961,7 +961,7 @@ end 'assertOneCallClobber'
 // The CALLER-saved (volatile) half of `target`'s pool — the registers a call destroys, and so the
 // registers the colorer should hand a value that does NOT cross one (`preferredVolatilityMask`).
 // The twin of `allocatablePool` and `registerFileFor`: sourced ONCE per module in
-// `lowerAndAllocateOnAWorkerPool` and carried beside `pool` through the whole colorer.
+// `BackendRun.create` and carried beside `pool` through the whole colorer.
 //
 // ⭐⭐ **THE MASK MUST BE THE TARGET'S OWN: x64'S `callerSavedMask()` IS WRONG ON arm64, AND
 // THE REGISTER NUMBERS DO NOT EVEN LINE UP.** x64's `xmm0..xmm5` are RegNums 16–21, which in the
@@ -1204,7 +1204,7 @@ function assertCalleeSavedListsMatchMasks()
 end 'assertCalleeSavedListsMatchMasks'
 
 // ⭐ THE STRUCTURAL FACTS THE WHOLE ALLOCATOR RESTS ON, CHECKED ONCE PER COMPILE before the pool is
-// spawned (`lowerAndAllocateOnAWorkerPool`).
+// spawned (`BackendRun.create`).
 //
 // ORDER IS LOAD-BEARING: most primitive fact first. `callerSavedMask` is built from
 // `classRegisterMask`, which is built from `RegisterFileSize` — so a drifted register file makes
@@ -4261,7 +4261,7 @@ end 'copyGroupBlocked'
 // xmm0..xmm5, so x19/x20/x21 read as volatile and x3/x4/x5/x12..x15 did not; on arm64 SIMD the
 // intersection is EMPTY, so `anyVolatileFree` is false at every value and this returns the whole
 // class pool — a preference that prefers nothing. `chooseRegister` then died on programs that fit
-// (`register-volatility-preference`). The mask is per ISA, so it arrives from `lowerAndAllocateOnAWorkerPool`
+// (`register-volatility-preference`). The mask is per ISA, so it arrives from `BackendRun.create`
 // with `pool`, and asking for it HERE — by any spelling, dispatched or not — is both the bug and a
 // per-value cost.
 function preferredVolatilityMask(blocked RegMask, classPool RegMask, callerSaved RegMask) returns RegMask

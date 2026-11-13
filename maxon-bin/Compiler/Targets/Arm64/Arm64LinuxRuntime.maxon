@@ -40,7 +40,7 @@
 // parameter.
 //
 // ⚠ **EVERY CHUNK HERE IS LINUX-ONLY AND IS APPENDED ONLY FOR `Os.linux`** (`appendArm64LinuxRuntimeChunks`,
-// called from `buildArm64Backend`), under the SAME `RuntimeUsage` bits the Std-tier installers read — so a
+// called from `finishArm64Backend`), under the SAME `RuntimeUsage` bits the Std-tier installers read — so a
 // chunk can never be absent for a body that calls it: one bit, two tiers, exactly as the Darwin surface is
 // gated.
 
@@ -961,21 +961,22 @@ end 'buildArm64LinuxPathOpChunk'
 // ⚠ **THE DURABILITY STEP IS BEST-EFFORT AND ITS FAILURES ARE DELIBERATELY NOT REPORTED.** The rename has
 // already happened and is already visible; a caller told "the rename failed" because the parent directory
 // could not be opened would delete or retry something that is in fact in place. So every exit below the
-// rename answers TRUE, and the only thing that can answer FALSE is the rename itself.
+// rename answers TRUE, and the only thing that can answer FALSE is the rename itself. The one failure that
+// is reported is the scratch page: when it cannot be mapped the chunk panics.
 //
 // ⚠ **AND NOTHING BELOW THE RENAME MAY STASH AN errno**, for the same reason: the word is read by an
 // `osLastError` the Std tier emits immediately after this call, and a `fsync` that failed would be blamed for
 // a rename that succeeded. The three syscalls in the durability step therefore go through `arm64EmitSyscall`
 // directly rather than through `arm64LinuxEmitStashIfFailed`.
-function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
+function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome, globalData GlobalDataTable) returns FunctionCodeChunk
 	let SlotNewPath = 0
 	let SlotDirFd = 1
 	let SlotPrefixPage = 2
 	let asm = Arm64RuntimeAsm.beginFunction(3)
 
 	let renamed = asm.newLabel()
+	let mapped = asm.newLabel()
 	let unmap = asm.newLabel()
-	let released = asm.newLabel()
 	let answered = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotNewPath)
@@ -1000,7 +1001,10 @@ function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Functi
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: MmapNoOffset)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMmap)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: released)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.gt, label: mapped)
+	arm64EmitPanicConstant(asm, globalData: globalData, bytes: LinuxRenameMapFailedMessage)
+
+	asm.placeLabel(mapped)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotPrefixPage)
 
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
@@ -1026,7 +1030,6 @@ function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns Functi
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxPathBytes as MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMunmap)
 
-	asm.placeLabel(released)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: Win32True as MachineWord)
 
 	asm.placeLabel(answered)
@@ -3338,7 +3341,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	if usage.usesManagedFile 'managedFile'
 		chunks.push(buildArm64LinuxFileSizeChunk(errnoHome))
 		chunks.push(buildArm64LinuxPathOpChunk(HostFileDeleteName, syscallNumber: Arm64LinuxSyscallUnlinkat, thirdArgument: LinuxUnlinkFileFlags, errnoHome: errnoHome))
-		chunks.push(buildArm64LinuxFileRenameChunk(errnoHome))
+		chunks.push(buildArm64LinuxFileRenameChunk(errnoHome, globalData: globalData))
 	end 'managedFile'
 
 	// ⚠ `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's

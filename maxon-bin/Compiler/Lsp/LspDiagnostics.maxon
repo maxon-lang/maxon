@@ -78,6 +78,32 @@ union BufferParse
 	compilable
 end 'BufferParse'
 
+union DocumentCheck
+	checked(diagnostics DiagnosticArray)
+	unbuilt(failures StringArray)
+
+	function diagnostics() returns DiagnosticArray
+		return match self 'check'
+			checked(standing) gives standing
+			unbuilt gives DiagnosticArray.create(0)
+		end 'check'
+	end 'diagnostics'
+
+	function failures() returns StringArray
+		return match self 'check'
+			checked gives StringArray.create(0)
+			unbuilt(lines) gives lines
+		end 'check'
+	end 'failures'
+end 'DocumentCheck'
+
+function checkedDiagnostics(reader LspReaderSearch, text String) returns DocumentCheck
+	match checkOnDriver(reader.workspace.driver, origin: lspDocumentOrigin(reader, text: text), inputPaths: MaxonSourcePathArray.create(0), target: detectHostTarget(), rendersTargetIr: false, reading: CheckedDiagnostics.besideClaims, session: DriverSession.discarding()) 'answer'
+		checked(_, standing, _) then return DocumentCheck.checked(standing)
+		failed(error) then return DocumentCheck.unbuilt(projectFailureLines(error))
+	end 'answer'
+end 'checkedDiagnostics'
+
 union SweptParse
 	parsed(published DiagnosticArray)
 	bufferHasBeenTypedInto
@@ -118,70 +144,49 @@ extension Project
 		let root = workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument)
 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
 
-		let fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
+		let check = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
+		let fast = check.diagnostics()
 		let (refusal, notice) = projectFileSaid(reader, path: path)
+		refusal.append(check.failures())
 		submitToLspWriter(reader.workspace.writer, command: LspWriterCommand.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: refusal, notices: notice)))
 
 		return BufferPublish.published(reader, root: root, path: path, fast: fast)
 	end 'publishDocumentDiagnostics'
 
-	function documentDiagnostics(reader LspReaderSearch, root WorkspaceRoot, path FilePath, text String, tokens TokenArray) returns DiagnosticArray
+	function documentDiagnostics(reader LspReaderSearch, root WorkspaceRoot, path FilePath, text String, tokens TokenArray) returns DocumentCheck
 		match projectLayoutOf(reader) 'layout'
-			nestedIn(outer) then return [nestedProjectFileDiagnostic(outer, nested: path)]
+			nestedIn(outer) then return DocumentCheck.checked([nestedProjectFileDiagnostic(outer, nested: path)])
 			standsAlone then break
 		end 'layout'
 
 		match root 'stating'
 			projectDirectory or
 			libraryTier then break
-			singleFile then return self.checkedDiagnostics()
+			singleFile then return checkedDiagnostics(reader, text: text)
 		end 'stating'
 
 		match self.bufferParse(path) 'parse'
 			compilable then return self.correctedCheck(reader, root: root, buffer: path, text: text, tokens: tokens)
-			refused(reported) then return self.correctedRefusal(reported, reader: reader, root: root, buffer: path, text: text, tokens: tokens)
+			refused(reported) then return DocumentCheck.checked(self.correctedRefusal(reported, reader: reader, root: root, buffer: path, text: text, tokens: tokens))
 		end 'parse'
 	end 'documentDiagnostics'
 
-	function checkedDiagnostics() returns DiagnosticArray
-		_ = checkWithoutWriting(self)
+	function correctedCheck(reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DocumentCheck
+		let check = checkedDiagnostics(reader, text: text)
 
-		self.reportSecondaryFindingsBesideClaims()
+		match check 'check'
+			checked(standing) then return DocumentCheck.checked(self.explainedWhenReported(thisDocumentsOwn(standing, path: buffer), reader: reader, root: root, buffer: buffer, text: text, tokens: tokens))
+			unbuilt then return check
+		end 'check'
+	end 'correctedCheck'
 
-		return self.diagnostics.clone()
-	end 'checkedDiagnostics'
-
-	// A whole-program claim is withheld from the buffer, so beside one alone the secondary findings are
-	// published. Only the before-lowering flush has run: those claims stop the build before the Std tier.
-	module function reportSecondaryFindingsBesideClaims()
-		if self.onlyWholeProgramClaimsStand() 'noRealErrorStands'
-			_ = reportFindingsDueAt(self, flush: SecondaryFlush.beforeLowering)
-		end 'noRealErrorStands'
-	end 'reportSecondaryFindingsBesideClaims'
-
-	function onlyWholeProgramClaimsStand() returns bool
-		if self.diagnostics.isEmpty() 'nothingStands'
-			return false
-		end 'nothingStands'
-
-		for diagnostic in self.diagnostics 'eachStanding'
-			if not claimsAboutTheWholeProgram(diagnostic.code) 'aRealError'
-				return false
-			end 'aRealError'
-		end 'eachStanding'
-
-		return true
-	end 'onlyWholeProgramClaimsStand'
-
-	function correctedCheck(reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
-		let reported = thisDocumentsOwn(self.checkedDiagnostics(), path: buffer)
-
+	function explainedWhenReported(reported DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
 		if reported.isEmpty() 'nothingToExplain'
 			return reported
 		end 'nothingToExplain'
 
 		return self.explainedByTheCorpus(reported, reader: reader, root: root, buffer: buffer, text: text, tokens: tokens)
-	end 'correctedCheck'
+	end 'explainedWhenReported'
 
 	function explainedByTheCorpus(reported DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot, buffer FilePath, text String, tokens TokenArray) returns DiagnosticArray
 		let swept = lspProjectCorpus(reader, root: root)
@@ -575,22 +580,6 @@ function identifierSubjectAt(tokens TokenArray, index ElementIndex) returns Diag
 
 	return DiagnosticSubject.named(token.value, index: index)
 end 'identifierSubjectAt'
-
-// A single-buffer compile cannot honestly publish a whole-program claim: it holds one file plus the
-// library tiers, so each claim here is true of what this server compiled and false of the program the
-// author is editing. "This program declares no entry point" would sit on the first line of every
-// library file an editor opens. The unused-export family (E3092/E3093/E3094) says nothing else in the
-// program references a declaration, and none of the program's other files is in this compile. The
-// corpus does not rescue either: it is lexed and folded, never checked. `attributedTo` reads this same
-// filter, so the project check withholds these codes too.
-//
-// ⚠ A member is added by measurement, never by guessing. Suppressing a diagnostic that is genuinely
-// about this file hides a real error, which is worse than the squiggle it removes; the leading digit
-// cannot stand in for the question, because it names the stage that raised a diagnostic rather than
-// the scope it claims.
-function claimsAboutTheWholeProgram(code ErrorCode) returns bool
-	return code == ErrorCode.noMainFunction or code == ErrorCode.semanticUnusedExportedSymbol or code == ErrorCode.semanticExportableAsModule or code == ErrorCode.semanticUnusedModuleSymbol
-end 'claimsAboutTheWholeProgram'
 
 // Does this diagnostic report on THIS document's text?
 //

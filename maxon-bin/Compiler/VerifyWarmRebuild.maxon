@@ -25,13 +25,13 @@
 //
 // THE MUTATE-THE-MEMO TRAP (why the two checks are structured the way they are):
 // `resolveTypes` mutates the merged `MaxonModule` IN PLACE (named -> concrete),
-// and `queryAllModule` returns the SAME module object out of its memo. So one must
-// NOT run the full pipeline twice over a single shared `queryAllModule` result and
+// and a `WarmGoal.merged` compile returns the SAME module object out of its memo. So one must
+// NOT run the full pipeline twice over a single shared merged module and
 // expect a clean second run — the second pipeline would see an already-resolved,
 // mutated module. Both checks sidestep this:
 //   - Determinism runs each compile on its OWN fresh Project/QueryDatabase, so the
 //     two runs share no module object at all.
-//   - Cache-hit calls ONLY `queryAllModule` between its two probes and never runs
+//   - Cache-hit compiles only to `WarmGoal.merged` between its two probes and never runs
 //     resolveTypes/the backend, so the memoized module is never mutated.
 
 // The emitted byte arrays compared for byte-identity. `data` is the `dataPrelude`
@@ -93,7 +93,7 @@ let WarmClause = "warm equals cold"
 let ClauseSeparator = " + "
 
 union WarmRebuildProperty
-	determinism(first CodeResult)
+	determinism(first WarmImage)
 	cache
 	invalidation
 	warm
@@ -165,7 +165,7 @@ function verifyWhatNeedsNoCompile(inputPath FilePath, target Target) returns boo
 	return false
 end 'verifyWhatNeedsNoCompile'
 
-function verifyEveryProperty(inputPath FilePath, target Target, first CodeResult) returns bool
+function verifyEveryProperty(inputPath FilePath, target Target, first WarmImage) returns bool
 	let verdicts = PropertyVerdictArray.create(0)
 	verdicts.push(checkProperty(WarmRebuildProperty.determinism(first), inputPath: inputPath, target: target))
 	verdicts.push(checkProperty(WarmRebuildProperty.cache, inputPath: inputPath, target: target))
@@ -212,12 +212,30 @@ end 'joinedClauses'
 // `inputPath`, driven through the shared compile path to an emitted CodeResult and
 // then discarded. Determinism compares two of these; each MUST own its Project so
 // the two share no mutable module object (the mutate-the-memo trap in the header).
-function compileColdOnce(inputPath FilePath, target Target) returns CheckedCompile throws CompileError
-	let project = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
-	return try checkRefusingOnlyAProgram(project)
+function compileColdOnce(inputPath FilePath, target Target) returns ColdCompile throws CompileError
+	let warm = freshWarmSession()
+	_ = try warm.load(OnlySlot, input: inputPath, target: target)
+	let reading = try warm.tryCompile(OnlySlot, goal: WarmGoal.codeResult(true))
+
+	if reading.refused 'aRefusedProgram'
+		return ColdCompile.refused
+	end 'aRefusedProgram'
+
+	return ColdCompile.compiled(reading.image)
 end 'compileColdOnce'
 
-function verifyDeterminism(inputPath FilePath, target Target, first CodeResult) returns bool throws CompileError
+union ColdCompile
+	compiled(image WarmImage)
+	refused
+end 'ColdCompile'
+
+let OnlySlot = "only"
+
+function freshWarmSession() returns WarmSession
+	return WarmSession.over(memoryOnlyCompileDriver(), sink: DiagnosticSink.printing())
+end 'freshWarmSession'
+
+function verifyDeterminism(inputPath FilePath, target Target, first WarmImage) returns bool throws CompileError
 	// Two INDEPENDENT cold compiles, each with its OWN Project/QueryDatabase (see the
 	// mutate-the-memo trap in this file's header). Two fresh projects share no module
 	// object, so each is a genuine cold compile and the byte comparison is meaningful.
@@ -227,8 +245,8 @@ function verifyDeterminism(inputPath FilePath, target Target, first CodeResult) 
 	end 'second'
 end 'verifyDeterminism'
 
-function determinismVerdict(first CodeResult, second CodeResult) returns bool
-	return match compareCodeResults(first, right: second) 'outcome'
+function determinismVerdict(first WarmImage, second WarmImage) returns bool
+	return match compareImages(first, right: second) 'outcome'
 		allIdentical(totalBytes) gives reportDeterminismPass(totalBytes)
 		sectionDiffers(detail) gives reportDeterminismFail(detail)
 	end 'outcome'
@@ -236,7 +254,7 @@ end 'determinismVerdict'
 
 // Compare every emitted section of two compiles, summing identical bytes; stop at the
 // FIRST section that differs and report it (that is the actionable failure).
-function compareCodeResults(left CodeResult, right CodeResult) returns DeterminismOutcome
+function compareImages(left WarmImage, right WarmImage) returns DeterminismOutcome
 	var totalBytes = 0 as BytePos
 
 	for section in EmittedSection.allCases 'each'
@@ -247,14 +265,14 @@ function compareCodeResults(left CodeResult, right CodeResult) returns Determini
 	end 'each'
 
 	return DeterminismOutcome.allIdentical(totalBytes)
-end 'compareCodeResults'
+end 'compareImages'
 
-function emittedSectionOf(result CodeResult, section EmittedSection) returns ByteArray
+function emittedSectionOf(result WarmImage, section EmittedSection) returns ByteArray
 	return match section 'which'
 		code gives result.code
 		rdata gives result.rdata
 		symdata gives result.symdata
-		data gives result.dataPrelude
+		data gives result.data
 	end 'which'
 end 'emittedSectionOf'
 
@@ -299,24 +317,25 @@ end 'compareSection'
 // --- Property 2: cache-hit (incrementality over unchanged input) ---
 
 function verifyCacheHit(inputPath FilePath, target Target) returns bool throws CompileError
-	// ONE Project shared across both queryAllModule calls, running ONLY the query
+	// ONE Project shared across both `WarmGoal.merged` compiles, running ONLY the front end
 	// between them (never resolveTypes/the backend) so the memoized module is never
 	// mutated (see the mutate-the-memo trap in this file's header). This check therefore
 	// never reaches the allocator at all.
-	let project = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
-	let fileCount = project.db.sourcePaths.count()
+	let warm = freshWarmSession()
+	let loaded = try warm.load(OnlySlot, input: inputPath, target: target)
+	let fileCount = loaded.sources.count()
 
 	// Whole-program memo: the first call is a cold MISS, the second a cache HIT.
-	let amMissBefore = project.db.allModuleMisses
-	let amHitBefore = project.db.allModuleHits
+	let amMissBefore = loaded.counters.allModuleMisses
+	let amHitBefore = loaded.counters.allModuleHits
 
-	_ = try queryAllModule(project, directories: NamespaceDirectoryCheck.unchecked)
-	let amMissAfterFirst = project.db.allModuleMisses
-	let amHitAfterFirst = project.db.allModuleHits
+	let first = (try warm.compile(OnlySlot, goal: WarmGoal.merged)).counters
+	let amMissAfterFirst = first.allModuleMisses
+	let amHitAfterFirst = first.allModuleHits
 
-	_ = try queryAllModule(project, directories: NamespaceDirectoryCheck.unchecked)
-	let amMissAfterSecond = project.db.allModuleMisses
-	let amHitAfterSecond = project.db.allModuleHits
+	let second = (try warm.compile(OnlySlot, goal: WarmGoal.merged)).counters
+	let amMissAfterSecond = second.allModuleMisses
+	let amHitAfterSecond = second.allModuleHits
 
 	// Per-file memos survived the whole-program rebuild. The cold pass populated the
 	// token/parse caches; the second (whole-program HIT) returned early and never
@@ -331,32 +350,30 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	// rebuilt index would be a second object whose hash the parse memos were never stamped with —
 	// the exact silent-staleness this key exists to prevent, caught as a miss instead of a wrong
 	// answer.
-	let tokHitBefore = project.db.tokenHits
-	let actHitBefore = project.db.activeTokenHits
-	let parHitBefore = project.db.parseHits
-	let sigHitBefore = project.db.signatureHits
-	let tokMissBefore = project.db.tokenMisses
-	let actMissBefore = project.db.activeTokenMisses
-	let parMissBefore = project.db.parseMisses
-	let sigMissBefore = project.db.signatureMisses
-	let parMissRosterStart = project.db.parseMissPaths.count()
+	let tokHitBefore = second.tokenHits
+	let actHitBefore = second.activeTokenHits
+	let parHitBefore = second.parseHits
+	let sigHitBefore = second.signatureHits
+	let tokMissBefore = second.tokenMisses
+	let actMissBefore = second.activeTokenMisses
+	let sigMissBefore = second.signatureMisses
 
-	try probeRebuildCacheHitsNamingMisses(project)
-	let tokHitAfter = project.db.tokenHits
-	let actHitAfter = project.db.activeTokenHits
-	let parHitAfter = project.db.parseHits
-	let sigHitAfter = project.db.signatureHits
-	let tokMissAfter = project.db.tokenMisses
-	let actMissAfter = project.db.activeTokenMisses
-	let parMissAfter = project.db.parseMisses
-	let sigMissAfter = project.db.signatureMisses
+	let probed = try warm.probe(OnlySlot)
+	let tokHitAfter = probed.counters.tokenHits
+	let actHitAfter = probed.counters.activeTokenHits
+	let parHitAfter = probed.counters.parseHits
+	let sigHitAfter = probed.counters.signatureHits
+	let tokMissAfter = probed.counters.tokenMisses
+	let actMissAfter = probed.counters.activeTokenMisses
+	let parMissAfter = probed.counters.parseMisses
+	let sigMissAfter = probed.counters.signatureMisses
 
 	// Evaluate every assertion (each prints its own failure detail) before combining,
 	// so a broken gate reports ALL violated properties, not just the first.
-	let firstIsMiss = assertCounterMove("first queryAllModule is a miss (allModuleMisses)", before: amMissBefore, after: amMissAfterFirst, expectedDelta: OneQuery)
-	let firstNoHit = assertCounterMove("first queryAllModule records no hit (allModuleHits)", before: amHitBefore, after: amHitAfterFirst, expectedDelta: NoCounterMove)
-	let secondIsHit = assertCounterMove("second queryAllModule is a hit (allModuleHits)", before: amHitAfterFirst, after: amHitAfterSecond, expectedDelta: OneQuery)
-	let secondNoMiss = assertCounterMove("second queryAllModule records no new miss (allModuleMisses)", before: amMissAfterFirst, after: amMissAfterSecond, expectedDelta: NoCounterMove)
+	let firstIsMiss = assertCounterMove("first FrontEndRun is a miss (allModuleMisses)", before: amMissBefore, after: amMissAfterFirst, expectedDelta: OneQuery)
+	let firstNoHit = assertCounterMove("first FrontEndRun records no hit (allModuleHits)", before: amHitBefore, after: amHitAfterFirst, expectedDelta: NoCounterMove)
+	let secondIsHit = assertCounterMove("second FrontEndRun is a hit (allModuleHits)", before: amHitAfterFirst, after: amHitAfterSecond, expectedDelta: OneQuery)
+	let secondNoMiss = assertCounterMove("second FrontEndRun records no new miss (allModuleMisses)", before: amMissAfterFirst, after: amMissAfterSecond, expectedDelta: NoCounterMove)
 	let tokensHitOnRebuild = assertCounterMove("rebuild token re-query hits (tokenHits)", before: tokHitBefore, after: tokHitAfter, expectedDelta: fileCount as QueryCount)
 	let parseHitOnRebuild = assertCounterMove("rebuild parse re-query hits (parseHits)", before: parHitBefore, after: parHitAfter, expectedDelta: fileCount as QueryCount)
 
@@ -373,7 +390,7 @@ function verifyCacheHit(inputPath FilePath, target Target) returns bool throws C
 	let activeTokensHitOnRebuild = assertCounterMove("rebuild active-token re-query hits (activeTokenHits)", before: actHitBefore, after: actHitAfter, expectedDelta: fileCount as QueryCount)
 	let activeTokensNotRecomputed = assertCounterMove("rebuild does not re-filter directives (activeTokenMisses)", before: actMissBefore, after: actMissAfter, expectedDelta: NoCounterMove)
 	let tokensNotRecomputed = assertCounterMove("rebuild does not recompute tokens (tokenMisses)", before: tokMissBefore, after: tokMissAfter, expectedDelta: NoCounterMove)
-	let parseNotRecomputed = assertParseMisses("rebuild does not recompute parse (parseMisses)", probe: ParseMissProbe.create(parMissAfter - parMissBefore, rosterStart: parMissRosterStart, rosterEnd: project.db.parseMissPaths.count()), expectedDelta: NoCounterMove, project: project)
+	let parseNotRecomputed = assertParseMisses("rebuild does not recompute parse (parseMisses)", probe: probed.probe, expectedDelta: NoCounterMove)
 	let signaturesNotRecomputed = assertCounterMove("rebuild does not recompute signatures (signatureMisses)", before: sigMissBefore, after: sigMissAfter, expectedDelta: NoCounterMove)
 
 	let allOk = firstIsMiss and firstNoHit and secondIsHit and secondNoMiss and tokensHitOnRebuild and activeTokensHitOnRebuild and parseHitOnRebuild and signaturesHitOnRebuild and tokensNotRecomputed and activeTokensNotRecomputed and parseNotRecomputed and signaturesNotRecomputed
@@ -444,6 +461,25 @@ let ArrayValueEditAfter = "let warmRebuildProbeArray = [9, 9, 9]"
 let ArraySignEditBefore = "let warmRebuildProbeSignArray = [1, -1]"
 let ArraySignEditAfter = "let warmRebuildProbeSignArray = [1, u64.max]"
 
+// ⭐⭐ **THE DECLARATION THE BOX PROBE IS BUILT OVER — BOUND ONCE, so "the type is held byte-identical
+// across the pair" is STRUCTURAL rather than asserted.** A second copy could drift by one byte — a renamed
+// case, an added `export` — and the probe would silently become a DECLARATION edit, which the probes above
+// already gate; it would then report `fileCount` forever for the wrong reason and never fail again.
+//
+// The slot's range is the probe's own domain, one decimal digit, and the pair below fixes it at 1 and 2.
+let WarmRebuildProbeBoxDecl = "typealias WarmRebuildProbeSlot = int(0 to 9)\nunion WarmRebuildProbeChoice\n\tfirst(value WarmRebuildProbeSlot)\n\tsecond\nend 'WarmRebuildProbeChoice'"
+
+// ⭐ **THE STORED-BOX PROBE, ASSERTING THE OPPOSITE OF THE ARRAY PROBE ABOVE.**
+//
+// A module-level `let` initializer calls nothing (E3220), so a boxed union is the one record a constant can
+// still be: it is built by `__module_init` into a `.data` slot, and every reader loads from the slot and
+// bakes nothing of the construction. `first(1)` becoming `first(2)` therefore moves no reader's bytes, and
+// the key carries the slot's type, brand and label and nothing of the construction (`mixRecordStorage`).
+// Mix the construction in and every other probe here stays green while a keystroke inside any stored
+// global's initializer re-parses the whole program.
+let UnionPayloadEditBefore = "let warmRebuildProbeUnion = WarmRebuildProbeChoice.first(1)"
+let UnionPayloadEditAfter = "let warmRebuildProbeUnion = WarmRebuildProbeChoice.first(2)"
+
 // ⭐ **THE `static`-FLAG PROBE: the same interface requirement twice, differing ONLY in the KEYWORD.**
 //
 // Every probe above moves a NAME or a VALUE. An interface requirement's RECEIVER KIND is neither, and
@@ -512,9 +548,9 @@ typealias VisibilityFlipProbeArray = Array with VisibilityFlipProbe
 
 type InvalidationMeasurement
 	export let kind as String
-	export let probe as ParseMissProbe
+	export let probe as WarmProbe
 
-	static function create(kind String, probe ParseMissProbe) returns InvalidationMeasurement
+	static function create(kind String, probe WarmProbe) returns InvalidationMeasurement
 		return Self{kind: kind, probe: probe}
 	end 'create'
 end 'InvalidationMeasurement'
@@ -535,55 +571,55 @@ function visibilityFlipProbes() returns VisibilityFlipProbeArray
 	return probes
 end 'visibilityFlipProbes'
 
-function measureVisibilityFlips(project Project, editedPath FilePath, original String) returns InvalidationMeasurementArray throws CompileError
+function measureVisibilityFlips(warm WarmSession, editedPath FilePath, original String) returns InvalidationMeasurementArray throws CompileError
 	let measurements = InvalidationMeasurementArray.create(0)
 
 	for flip in visibilityFlipProbes() 'eachFlip'
 		// Discarded: adding the declaration moves a name, so only the steps after it isolate a modifier.
-		fileChanged(project, path: editedPath, content: "{original}\n{flip.spelledAt(NoModifierText)}\n")
-		_ = try parseMissesOnRequery(project)
+		_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{flip.spelledAt(NoModifierText)}\n")
+		_ = try probedMisses(warm)
 
-		fileChanged(project, path: editedPath, content: "{original}\n{flip.spelledAt(ModuleModifierText)}\n")
-		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `module`", probe: try parseMissesOnRequery(project)))
+		_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{flip.spelledAt(ModuleModifierText)}\n")
+		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `module`", probe: try probedMisses(warm)))
 
-		fileChanged(project, path: editedPath, content: "{original}\n{flip.spelledAt(ExportModifierText)}\n")
-		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `module` to `export`", probe: try parseMissesOnRequery(project)))
+		_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{flip.spelledAt(ExportModifierText)}\n")
+		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `module` to `export`", probe: try probedMisses(warm)))
 
-		fileChanged(project, path: editedPath, content: "{original}\n{flip.spelledAt(PublicModifierText)}\n")
-		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `export` to `public`", probe: try parseMissesOnRequery(project)))
+		_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{flip.spelledAt(PublicModifierText)}\n")
+		measurements.push(InvalidationMeasurement.create("{flip.kind}'s `export` to `public`", probe: try probedMisses(warm)))
 	end 'eachFlip'
 
 	return measurements
 end 'measureVisibilityFlips'
 
-function measureDeclarationMoves(project Project, editedPath FilePath, original String, receiver EditableSource) returns InvalidationMeasurementArray throws CompileError
+function measureDeclarationMoves(warm WarmSession, editedPath FilePath, original String, receiver WarmSource) returns InvalidationMeasurementArray throws CompileError
 	let measurements = InvalidationMeasurementArray.create(0)
-	measurements.push(InvalidationMeasurement.create("a typealias MOVED to another file", probe: try measureDeclarationMove(project, editedPath: editedPath, editedBase: original, receiverPath: receiver.path, receiverBase: receiver.content, moving: MovedDeclarationText)))
-	measurements.push(InvalidationMeasurement.create("a method MOVED to another file", probe: try measureDeclarationMove(project, editedPath: editedPath, editedBase: "{original}\n{MethodHostDeclarationText}", receiverPath: receiver.path, receiverBase: receiver.content, moving: MovedMethodText)))
+	measurements.push(InvalidationMeasurement.create("a typealias MOVED to another file", probe: try measureDeclarationMove(warm, editedPath: editedPath, editedBase: original, receiverPath: receiver.path, receiverBase: receiver.content, moving: MovedDeclarationText)))
+	measurements.push(InvalidationMeasurement.create("a method MOVED to another file", probe: try measureDeclarationMove(warm, editedPath: editedPath, editedBase: "{original}\n{MethodHostDeclarationText}", receiverPath: receiver.path, receiverBase: receiver.content, moving: MovedMethodText)))
 
-	fileChanged(project, path: editedPath, content: original)
-	fileChanged(project, path: receiver.path, content: receiver.content)
-	_ = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: original)
+	_ = try warm.edit(OnlySlot, path: receiver.path, content: receiver.content)
+	_ = try probedMisses(warm)
 	return measurements
 end 'measureDeclarationMoves'
 
-function measureDeclarationMove(project Project, editedPath FilePath, editedBase String, receiverPath FilePath, receiverBase String, moving String) returns ParseMissProbe throws CompileError
+function measureDeclarationMove(warm WarmSession, editedPath FilePath, editedBase String, receiverPath FilePath, receiverBase String, moving String) returns WarmProbe throws CompileError
 	// Discarded: seating the declaration in the edited file adds a name, so only the move after it
 	// holds every name in the program fixed.
-	fileChanged(project, path: editedPath, content: "{editedBase}\n{moving}\n")
-	fileChanged(project, path: receiverPath, content: receiverBase)
-	_ = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{editedBase}\n{moving}\n")
+	_ = try warm.edit(OnlySlot, path: receiverPath, content: receiverBase)
+	_ = try probedMisses(warm)
 
-	fileChanged(project, path: editedPath, content: editedBase)
-	fileChanged(project, path: receiverPath, content: "{moving}\n{receiverBase}")
-	return try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: editedBase)
+	_ = try warm.edit(OnlySlot, path: receiverPath, content: "{moving}\n{receiverBase}")
+	return try probedMisses(warm)
 end 'measureDeclarationMove'
 
-function measurementsInvalidateEveryFile(measurements InvalidationMeasurementArray, fileCount QueryCount, project Project) returns bool
+function measurementsInvalidateEveryFile(measurements InvalidationMeasurementArray, fileCount QueryCount) returns bool
 	var allHeld = true
 
 	for measurement in measurements 'eachMeasurement'
-		if not assertParseMisses("{measurement.kind} edit re-parses EVERY file (parseMisses)", probe: measurement.probe, expectedDelta: fileCount, project: project) 'missed'
+		if not assertParseMisses("{measurement.kind} edit re-parses EVERY file (parseMisses)", probe: measurement.probe, expectedDelta: fileCount) 'missed'
 			allHeld = false
 		end 'missed'
 	end 'eachMeasurement'
@@ -600,10 +636,10 @@ function censusKeyOf(diagnostic Diagnostic, filePath FilePath) returns String
 	return "{filePath.toString()}{CensusKeySeparator}{diagnostic.code.rawValue}{CensusKeySeparator}{diagnostic.message}"
 end 'censusKeyOf'
 
-function diagnosticCensusOf(project Project, watched FilePathArray) returns DiagnosticCensus
+function diagnosticCensusOf(diagnostics DiagnosticArray, watched FilePathArray) returns DiagnosticCensus
 	let census = DiagnosticCensus.create()
 
-	for diagnostic in project.diagnostics 'eachDiagnostic'
+	for diagnostic in diagnostics 'eachDiagnostic'
 		let anchored = try diagnostic.anchor.anchoredFile() otherwise continue
 
 		if not pathIsAmong(watched, path: anchored) 'notAWatchedFile'
@@ -674,9 +710,14 @@ let MinFilesForInvalidation = 2 as Count
 //   (d) EDIT AN INTERFACE REQUIREMENT'S `static` FLAG ⇒ EVERY file's parse must be invalidated. Not a
 //       special case of (a) or (c): no name moves and no value moves — a KEYWORD does, and a
 //       parse in another file accepts or REFUSES on it. See `ReceiverKindEditBefore`.
-//   (e) EDIT AN **IMAGED** ARRAY CONSTANT'S CONTENT ⇒ EVERY file's parse must be invalidated. (c) at the
-//       shape whose value is an array rather than a number: an imaged `let` is `.rdata` and every read
-//       bakes its bytes. See `ArrayValueEditBefore`.
+//   (e) EDIT AN **IMAGED** RECORD CONSTANT'S CONTENT ⇒ EVERY file's parse must be invalidated, AND the
+//       same edit on a STORED one may invalidate only the edited file. (c)'s pair at the shapes whose
+//       value is a record rather than a number: an imaged `let` is `.rdata` and every read bakes its
+//       bytes, while a stored `let`'s record is a slot every read loads from. The two pull opposite ways for one
+//       spelling, so a key that mixed content unconditionally satisfies half of this and throws (b) away.
+//       ⚠ **AND EACH RECORD ARM NEEDS ITS OWN PAIR**: an ARRAY and a BOX hash through different functions,
+//       so a guard deleted in one is invisible to the other's probes. See `ArrayValueEditBefore`,
+//       and `UnionPayloadEditBefore`.
 //   (f) EDIT A DECLARATION'S VISIBILITY ⇒ EVERY file's parse must be invalidated, at each step
 //       from no modifier to `module`, `module` to `export`, and `export` to `public`, for every
 //       declaration kind in `visibilityFlipProbes`. No name and no value moves; another file's
@@ -699,121 +740,133 @@ let MinFilesForInvalidation = 2 as Count
 // **A gate you cannot see fail is not a gate**, so this one FAILS on a single-file input rather than
 // reporting green, and says what to point it at.
 function verifyInvalidation(inputPath FilePath, target Target) returns bool throws CompileError
-	let project = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
-	let fileCount = project.db.sourcePaths.count()
+	let warm = freshWarmSession()
+	let loaded = try warm.load(OnlySlot, input: inputPath, target: target)
+	let fileCount = loaded.sources.count()
 
 	if fileCount < MinFilesForInvalidation 'cannotProve'
 		printError("FAIL invalidation: this project has {fileCount} source file, and the property is VACUOUS on one — 'a declaration edit re-parses every file' and 'a bytes-only edit re-parses one file' are the same assertion when every file IS the one file, so the single-file-hash key this property exists to reject would PASS. Point the gate at a project with at least {MinFilesForInvalidation} files (a cross-file callee is the whole point: `a.maxon` declares it, `b.maxon` calls it)\n")
 		return false
 	end 'cannotProve'
 
-	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("verifyInvalidation: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
-	let editedPath = try FilePath.from(firstPath.path) otherwise panic("verifyInvalidation: '{firstPath.path}' came out of the project's own source list, so it cannot fail to re-parse as a path")
-	let entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyInvalidation: sourcePaths lists {editedPath} but sourceFiles has no entry for it")
-	let original = entry.content
+	let first = try loaded.sources.get(0) otherwise panic("verifyInvalidation: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
+	let editedPath = first.path
+	let original = first.content
 
-	// Warm every per-file memo (and the signature index) against the UNEDITED program. Only
-	// `queryAllModule` runs, so nothing mutates the memoized module (the trap in this file's header).
-	_ = try queryAllModule(project, directories: NamespaceDirectoryCheck.unchecked)
-	let receiver = try lastAuthoredSourceOf(project)
+	// Warm every per-file memo (and the signature index) against the UNEDITED program. Only the
+	// front end runs (`WarmGoal.merged`), so nothing mutates the memoized module (the trap in this
+	// file's header).
+	let warmed = try warm.compile(OnlySlot, goal: WarmGoal.merged)
+	let receiver = try lastAuthoredOf(loaded.sources, inputPath: inputPath)
 	let edited = [editedPath, receiver.path]
-	let censusBefore = diagnosticCensusOf(project, watched: edited)
+	let censusBefore = diagnosticCensusOf(warmed.diagnostics, watched: edited)
 
-	fileChanged(project, path: editedPath, content: "{original}\n{BytesOnlyEditText}\n")
-	let bytesEditMisses = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{BytesOnlyEditText}\n")
+	let bytesEditMisses = try probedMisses(warm)
 
-	fileChanged(project, path: editedPath, content: "{original}\n{DeclarationEditText}\n")
-	let declarationEditMisses = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{DeclarationEditText}\n")
+	let declarationEditMisses = try probedMisses(warm)
 
 	// Seat the constant probe at its BEFORE value. This transition adds a declaration, so it is an
 	// ordinary declaration edit and its miss count asserts nothing new — it exists only to make the
 	// NEXT transition a change of the number ALONE. Discarded for that reason.
-	fileChanged(project, path: editedPath, content: "{original}\n{ConstantValueEditBefore}\n")
-	_ = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{ConstantValueEditBefore}\n")
+	_ = try probedMisses(warm)
 
 	// The measurement: same file, same declaration, same NAME — only the value moved.
-	fileChanged(project, path: editedPath, content: "{original}\n{ConstantValueEditAfter}\n")
-	let constantValueEditMisses = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{ConstantValueEditAfter}\n")
+	let constantValueEditMisses = try probedMisses(warm)
 
 	// Seat the ARRAY probe at its BEFORE value — a declaration edit, discarded for the same reason its
 	// scalar twin's is.
-	fileChanged(project, path: editedPath, content: "{original}\n{ArrayValueEditBefore}\n")
-	_ = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{ArrayValueEditBefore}\n")
+	_ = try probedMisses(warm)
 
 	// The measurement: same name, same element kind — only the BYTES a reader bakes moved.
-	fileChanged(project, path: editedPath, content: "{original}\n{ArrayValueEditAfter}\n")
-	let arrayValueEditMisses = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{ArrayValueEditAfter}\n")
+	let arrayValueEditMisses = try probedMisses(warm)
 
 	// Seat the SIGN probe, then measure it: the elements' payload bits are identical, and only whether the
 	// source wrote `-1` or `u64.max` moved, which is what decides how every reader renders and compares a read.
-	fileChanged(project, path: editedPath, content: "{original}\n{ArraySignEditBefore}\n")
-	_ = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{ArraySignEditBefore}\n")
+	_ = try probedMisses(warm)
 
-	fileChanged(project, path: editedPath, content: "{original}\n{ArraySignEditAfter}\n")
-	let arraySignEditMisses = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{ArraySignEditAfter}\n")
+	let arraySignEditMisses = try probedMisses(warm)
+
+	// Seat the stored-BOX probe, then measure it: same type declaration, same case — only the payload
+	// moved. The declaration is interpolated rather than carried in each pair, so the two spellings cannot
+	// drift into a declaration edit (`WarmRebuildProbeBoxDecl`).
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{UnionPayloadEditBefore}\n")
+	_ = try probedMisses(warm)
+
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{UnionPayloadEditAfter}\n")
+	let unionPayloadEditMisses = try probedMisses(warm)
 
 	// Seat the receiver-kind probe at its BEFORE value — a declaration edit, discarded for the same
-	// reason the probes above are.
-	fileChanged(project, path: editedPath, content: "{original}\n{ReceiverKindEditBefore}\n")
-	_ = try parseMissesOnRequery(project)
+	// reason the two above are.
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{ReceiverKindEditBefore}\n")
+	_ = try probedMisses(warm)
 
 	// The measurement: same interface, same requirement, same formals and result — only `static` moved.
-	fileChanged(project, path: editedPath, content: "{original}\n{ReceiverKindEditAfter}\n")
-	let receiverKindEditMisses = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{ReceiverKindEditAfter}\n")
+	let receiverKindEditMisses = try probedMisses(warm)
 
 	// Seat the METHOD receiver-kind probe at its BEFORE value — a declaration edit, discarded for the same
-	// reason the probes above are.
-	fileChanged(project, path: editedPath, content: "{original}\n{MethodReceiverKindEditBefore}\n")
-	_ = try parseMissesOnRequery(project)
+	// reason the three above are.
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{MethodReceiverKindEditBefore}\n")
+	_ = try probedMisses(warm)
 
 	// The measurement: same type, same method, same result, no parameters — only `static` moved.
-	fileChanged(project, path: editedPath, content: "{original}\n{MethodReceiverKindEditAfter}\n")
-	let methodReceiverKindEditMisses = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{MethodReceiverKindEditAfter}\n")
+	let methodReceiverKindEditMisses = try probedMisses(warm)
 
-	fileChanged(project, path: editedPath, content: "{original}\n{ExtensionConformanceHostDecl}\n{ExtensionConformanceEditBefore}\n")
-	_ = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{ExtensionConformanceHostDecl}\n{ExtensionConformanceEditBefore}\n")
+	_ = try probedMisses(warm)
 
-	fileChanged(project, path: editedPath, content: "{original}\n{ExtensionConformanceHostDecl}\n{ExtensionConformanceEditAfter}\n")
-	let extensionConformanceEditMisses = try parseMissesOnRequery(project)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: "{original}\n{ExtensionConformanceHostDecl}\n{ExtensionConformanceEditAfter}\n")
+	let extensionConformanceEditMisses = try probedMisses(warm)
 
-	let visibilityFlips = try measureVisibilityFlips(project, editedPath: editedPath, original: original)
+	let visibilityFlips = try measureVisibilityFlips(warm, editedPath: editedPath, original: original)
 
 	if receiver.path.equals(editedPath) 'noSecondFileToMoveInto'
 		printError("FAIL invalidation: {editedPath} is the only file of the project's own, so no declaration can be moved to another file — point the gate at a project with at least {MinFilesForInvalidation} files of its own\n")
 		return false
 	end 'noSecondFileToMoveInto'
 
-	fileChanged(project, path: editedPath, content: original)
-	let declarationMoves = try measureDeclarationMoves(project, editedPath: editedPath, original: original, receiver: receiver)
+	_ = try warm.edit(OnlySlot, path: editedPath, content: original)
+	let declarationMoves = try measureDeclarationMoves(warm, editedPath: editedPath, original: original, receiver: receiver)
 
 	// A synthetic edit that stopped an edited file reading would make BOTH assertions pass for the
 	// wrong reason: the file contributes no declarations, so a declaration edit moves no other file's
 	// key. Refuse to report on a probe whose premise broke.
-	if let departure = try firstCensusDeparture(censusBefore, current: diagnosticCensusOf(project, watched: edited)) 'probeBrokeTheProgram'
+	if let departure = try firstCensusDeparture(censusBefore, current: diagnosticCensusOf((try warm.read(OnlySlot)).diagnostics, watched: edited)) 'probeBrokeTheProgram'
 		printError("FAIL invalidation: a synthetic probe edit made {editedPath} report {departure}, so the miss counts mean nothing (a file that cannot be read declares nothing, so an edit to it moves no other file's parse key)\n")
 		return false
 	end 'probeBrokeTheProgram'
 
 	// `before: NoCounterMove` because each value above is already a DELTA — the misses that one edit
 	// caused. Routed through the same reporter as property 2 so a failure prints the same way.
-	let bytesEditIsLocal = assertParseMisses("a BYTES-ONLY edit re-parses only the edited file (parseMisses)", probe: bytesEditMisses, expectedDelta: OneQuery, project: project)
-	let declarationEditInvalidatesEveryFile = assertParseMisses("a DECLARATION edit re-parses EVERY file (parseMisses)", probe: declarationEditMisses, expectedDelta: fileCount as QueryCount, project: project)
-	let constantValueEditInvalidatesEveryFile = assertParseMisses("a top-level constant's VALUE edit re-parses EVERY file (parseMisses)", probe: constantValueEditMisses, expectedDelta: fileCount as QueryCount, project: project)
+	let bytesEditIsLocal = assertParseMisses("a BYTES-ONLY edit re-parses only the edited file (parseMisses)", probe: bytesEditMisses, expectedDelta: OneQuery)
+	let declarationEditInvalidatesEveryFile = assertParseMisses("a DECLARATION edit re-parses EVERY file (parseMisses)", probe: declarationEditMisses, expectedDelta: fileCount as QueryCount)
+	let constantValueEditInvalidatesEveryFile = assertParseMisses("a top-level constant's VALUE edit re-parses EVERY file (parseMisses)", probe: constantValueEditMisses, expectedDelta: fileCount as QueryCount)
 
-	let arrayValueEditInvalidatesEveryFile = assertParseMisses("a top-level constant ARRAY's value edit re-parses EVERY file (parseMisses)", probe: arrayValueEditMisses, expectedDelta: fileCount as QueryCount, project: project)
-	let arraySignEditInvalidatesEveryFile = assertParseMisses("a top-level constant ARRAY's element SIGN edit re-parses EVERY file (parseMisses)", probe: arraySignEditMisses, expectedDelta: fileCount as QueryCount, project: project)
-	let receiverKindEditInvalidatesEveryFile = assertParseMisses("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: receiverKindEditMisses, expectedDelta: fileCount as QueryCount, project: project)
-	let methodReceiverKindEditInvalidatesEveryFile = assertParseMisses("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: methodReceiverKindEditMisses, expectedDelta: fileCount as QueryCount, project: project)
+	let arrayValueEditInvalidatesEveryFile = assertParseMisses("a top-level constant ARRAY's value edit re-parses EVERY file (parseMisses)", probe: arrayValueEditMisses, expectedDelta: fileCount as QueryCount)
+	let arraySignEditInvalidatesEveryFile = assertParseMisses("a top-level constant ARRAY's element SIGN edit re-parses EVERY file (parseMisses)", probe: arraySignEditMisses, expectedDelta: fileCount as QueryCount)
+	let storedUnionEditIsLocal = assertParseMisses("a STORED boxed-union `let`'s payload edit re-parses only the edited file (parseMisses)", probe: unionPayloadEditMisses, expectedDelta: OneQuery)
 
-	let extensionConformanceEditInvalidatesEveryFile = assertParseMisses("an `extension`'s `implements` clause edit re-parses EVERY file (parseMisses)", probe: extensionConformanceEditMisses, expectedDelta: fileCount as QueryCount, project: project)
+	let receiverKindEditInvalidatesEveryFile = assertParseMisses("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: receiverKindEditMisses, expectedDelta: fileCount as QueryCount)
+	let methodReceiverKindEditInvalidatesEveryFile = assertParseMisses("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: methodReceiverKindEditMisses, expectedDelta: fileCount as QueryCount)
 
-	let visibilityFlipsInvalidate = measurementsInvalidateEveryFile(visibilityFlips, fileCount: fileCount as QueryCount, project: project)
-	let declarationMovesInvalidate = measurementsInvalidateEveryFile(declarationMoves, fileCount: fileCount as QueryCount, project: project)
+	let extensionConformanceEditInvalidatesEveryFile = assertParseMisses("an `extension`'s `implements` clause edit re-parses EVERY file (parseMisses)", probe: extensionConformanceEditMisses, expectedDelta: fileCount as QueryCount)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and arraySignEditInvalidatesEveryFile and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and extensionConformanceEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
+	let visibilityFlipsInvalidate = measurementsInvalidateEveryFile(visibilityFlips, fileCount: fileCount as QueryCount)
+	let declarationMovesInvalidate = measurementsInvalidateEveryFile(declarationMoves, fileCount: fileCount as QueryCount)
+
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and arraySignEditInvalidatesEveryFile and storedUnionEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and extensionConformanceEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
 
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array and constant-array-sign edits each re-parsed all {fileCount}; a requirement's and a method's `static`-flag edits and an extension's `implements` edit each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array and constant-array-sign edits each re-parsed all {fileCount}; a stored boxed-union edit re-parsed 1 file; a requirement's and a method's `static`-flag edits and an extension's `implements` edit each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
 		return true
 	end 'passed'
 
@@ -830,260 +883,73 @@ end 'verifyInvalidation'
 // an instance id a reused artifact still holds for another instance. Properties 2 and 3 count memo hits and
 // misses and cannot see that; only comparing what the two compiles EMIT can.
 function verifyWarmCompileMatchesCold(inputPath FilePath, target Target) returns bool throws CompileError
-	let warm = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
-	warm.debugInfo = true
-	let edited = try lastAuthoredSourceOf(warm)
+	let warm = freshWarmSession()
+	let loaded = try warm.load(OnlySlot, input: inputPath, target: target, debugInfo: true)
+	let edited = try lastAuthoredOf(loaded.sources, inputPath: inputPath)
 
-	if warm.db.sourcePaths.count() - warm.librarySourcePaths.count() < MinFilesForInvalidation 'cannotProve'
+	if authoredCountOf(loaded.sources) < MinFilesForInvalidation 'cannotProve'
 		printError("FAIL warm: this project has fewer than {MinFilesForInvalidation} source files of its own, so no file's parse is reused across the edit and a warm compile IS a cold one. Point the gate at a project with at least {MinFilesForInvalidation} files\n")
 		return false
 	end 'cannotProve'
 
-	_ = try queryAllModule(warm, directories: NamespaceDirectoryCheck.unchecked)
-	let merged = snapshotParses(warm)
+	_ = try warm.compile(OnlySlot, goal: WarmGoal.merged)
+	_ = try warm.snapshot(OnlySlot, tag: MergedSnapshot)
 
-	_ = try compileToCodeResult(warm)
-	let piped = snapshotParses(warm)
+	_ = try warm.compile(OnlySlot, goal: WarmGoal.codeResult(false))
+	_ = try warm.snapshot(OnlySlot, tag: PipedSnapshot)
 
 	let editedContent = "{edited.content}\n{BytesOnlyEditText}\n"
-	fileChanged(warm, path: edited.path, content: editedContent)
-	_ = try queryAllModule(warm, directories: NamespaceDirectoryCheck.unchecked)
-	let remerged = snapshotParses(warm)
+	_ = try warm.edit(OnlySlot, path: edited.path, content: editedContent)
+	_ = try warm.compile(OnlySlot, goal: WarmGoal.merged)
+	_ = try warm.snapshot(OnlySlot, tag: RemergedSnapshot)
 
-	let warmResult = try compileToCodeResult(warm)
-	let repiped = snapshotParses(warm)
+	let warmResult = (try warm.compile(OnlySlot, goal: WarmGoal.codeResult(true))).image
+	_ = try warm.snapshot(OnlySlot, tag: RepipedSnapshot)
 
-	let cold = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
-	cold.debugInfo = true
-	fileChanged(cold, path: edited.path, content: editedContent)
-	let coldResult = try compileToCodeResult(cold)
+	let cold = freshWarmSession()
+	_ = try cold.load(OnlySlot, input: inputPath, target: target, debugInfo: true)
+	_ = try cold.edit(OnlySlot, path: edited.path, content: editedContent)
+	let coldResult = (try cold.compile(OnlySlot, goal: WarmGoal.codeResult(true))).image
 
-	let parsesUnchanged = reusedParsesStayAsMerged(merged, piped: piped, remerged: remerged, repiped: repiped, editedPath: edited.path)
+	let compared = try warm.compareParses(OnlySlot, merged: MergedSnapshot, piped: PipedSnapshot, remerged: RemergedSnapshot, repiped: RepipedSnapshot, edited: edited.path)
+	let parsesUnchanged = reportImmutability(compared.immutability)
 
-	return match compareCodeResults(warmResult, right: coldResult) 'outcome'
+	return match compareImages(warmResult, right: coldResult) 'outcome'
 		allIdentical(totalBytes) gives reportWarmPass(totalBytes) and parsesUnchanged
 		sectionDiffers(detail) gives reportWarmFail(detail) and parsesUnchanged
 	end 'outcome'
 end 'verifyWarmCompileMatchesCold'
 
-let OpsPerDigest = 256
-let BlocksPerDigest = 32
+let MergedSnapshot = "merged"
+let PipedSnapshot = "piped"
+let RemergedSnapshot = "remerged"
+let RepipedSnapshot = "repiped"
 
-typealias PartDigestArray = Array with HashDigest
+function authoredCountOf(sources WarmSourceArray) returns Count
+	var authored = 0 as Count
 
-type ParseSnapshot
-	export var artifact as FileParseArtifact
-	export var digests as PartDigestArray
+	for source in sources 'eachSource'
+		if not source.library 'authored'
+			authored = authored + 1
+		end 'authored'
+	end 'eachSource'
 
-	static function create(artifact FileParseArtifact, digests PartDigestArray) returns ParseSnapshot
-		return Self{artifact: artifact, digests: digests}
-	end 'create'
-end 'ParseSnapshot'
+	return authored
+end 'authoredCountOf'
 
-typealias ParseSnapshotMap = Map with (FilePath, ParseSnapshot)
-
-typealias ParseChangeArray = Array with String
-
-function snapshotParses(project Project) returns ParseSnapshotMap
-	let snapshot = ParseSnapshotMap.create()
-
-	for (path, memo) in project.db.parseCache 'eachParse'
-		snapshot.upsert(path, value: ParseSnapshot.create(memo.value, digests: partDigests(memo.value)))
-	end 'eachParse'
-
-	return snapshot
-end 'snapshotParses'
-
-function digestOf(bytes ByteArray) returns HashDigest
-	return Hasher.combinedBytes(Hasher.empty(), bytes: bytes)
-end 'digestOf'
-
-function partDigests(artifact FileParseArtifact) returns PartDigestArray
-	let digests = PartDigestArray.create(0)
-
-	for func in artifact.module.functions 'eachFunction'
-		let one = IrFunctionArray.create(0)
-		one.push(func)
-		let writer = LibraryCacheWriter.create()
-		cacheWriteIrFunctionArray(writer, value: one)
-		digests.push(digestOf(writer.payload()))
-	end 'eachFunction'
-
-	for entry in artifact.rangeChecks 'eachRangeCheckEntry'
-		let writer = LibraryCacheWriter.create()
-		entry.checks.cacheWrite(writer)
-		digests.push(digestOf(writer.payload()))
-	end 'eachRangeCheckEntry'
-
-	for layout in artifact.structTypes 'eachStructLayout'
-		let one = StructLayoutArray.create(0)
-		one.push(layout)
-		let writer = LibraryCacheWriter.create()
-		cacheWriteStructLayoutArray(writer, value: one)
-		digests.push(digestOf(writer.payload()))
-	end 'eachStructLayout'
-
-	var first = 0 as ElementIndex
-
-	while first < artifact.module.blocks.count() 'eachBlockChunk'
-		let limit = chunkLimit(first, size: BlocksPerDigest, total: artifact.module.blocks.count())
-		let chunk = IrBlockArray.create(limit - first, zeroed: false)
-
-		for position in first upto limit 'eachBlock'
-			chunk.push(try artifact.module.blocks.get(position) otherwise panic("partDigests: blocks.get OOB at {position}"))
-		end 'eachBlock'
-
-		let writer = LibraryCacheWriter.create()
-		cacheWriteIrBlockArray(writer, value: chunk)
-		digests.push(digestOf(writer.payload()))
-		first = first + BlocksPerDigest
-	end 'eachBlockChunk'
-
-	first = 0
-
-	while first < artifact.module.ops.count() 'eachOpChunk'
-		let writer = LibraryCacheWriter.create()
-
-		for position in first upto chunkLimit(first, size: OpsPerDigest, total: artifact.module.ops.count()) 'eachOp'
-			cacheWriteMaxonOp(writer, value: try artifact.module.ops.get(position) otherwise panic("partDigests: ops.get OOB at {position}"))
-		end 'eachOp'
-
-		digests.push(digestOf(writer.payload()))
-		first = first + OpsPerDigest
-	end 'eachOpChunk'
-
-	let whole = LibraryCacheWriter.create()
-	artifact.cacheWrite(whole)
-	digests.push(digestOf(whole.payload()))
-	return digests
-end 'partDigests'
-
-function chunkLimit(first ElementIndex, size ElementIndex, total ElementIndex) returns ElementIndex
-	let limit = first + size
-	return total if limit > total else limit
-end 'chunkLimit'
-
-function chunkCount(total ElementIndex, size ElementIndex) returns ElementIndex
-	var chunks = 0 as ElementIndex
-	var covered = 0 as ElementIndex
-
-	while covered < total 'eachChunk'
-		chunks = chunks + 1
-		covered = covered + size
-	end 'eachChunk'
-
-	return chunks
-end 'chunkCount'
-
-function describePart(artifact FileParseArtifact, index ElementIndex) returns String
-	var rest = index
-
-	if rest < artifact.module.functions.count() 'aFunction'
-		let func = try artifact.module.functions.get(rest) otherwise panic("describePart: functions.get OOB at {rest}")
-		return "function '{String.from(func.name)}'"
-	end 'aFunction'
-
-	rest = rest - artifact.module.functions.count()
-
-	if rest < artifact.rangeChecks.count() 'aRangeCheckEntry'
-		let entry = try artifact.rangeChecks.get(rest) otherwise panic("describePart: rangeChecks.get OOB at {rest}")
-		return "range checks of '{String.from(entry.name)}'"
-	end 'aRangeCheckEntry'
-
-	rest = rest - artifact.rangeChecks.count()
-
-	if rest < artifact.structTypes.count() 'aStructLayout'
-		let layout = try artifact.structTypes.get(rest) otherwise panic("describePart: structTypes.get OOB at {rest}")
-		return "struct layout '{String.from(layout.name)}'"
-	end 'aStructLayout'
-
-	rest = rest - artifact.structTypes.count()
-	let blockChunks = chunkCount(artifact.module.blocks.count(), size: BlocksPerDigest)
-
-	if rest < blockChunks 'aBlockChunk'
-		return "blocks {rest * BlocksPerDigest} onward"
-	end 'aBlockChunk'
-
-	rest = rest - blockChunks
-	let opChunks = chunkCount(artifact.module.ops.count(), size: OpsPerDigest)
-
-	if rest < opChunks 'anOpChunk'
-		return "ops {rest * OpsPerDigest} onward"
-	end 'anOpChunk'
-
-	return "a field of the artifact outside its functions, range checks, struct layouts, blocks and ops"
-end 'describePart'
-
-union ParseComparison
-	unchanged
-	changedAt(part ElementIndex)
-	reshaped(before ElementIndex, after ElementIndex)
-end 'ParseComparison'
-
-function firstChangedPart(before PartDigestArray, after PartDigestArray) returns ParseComparison
-	if before.count() != after.count() 'aPartAppearedOrVanished'
-		return ParseComparison.reshaped(before.count(), after: after.count())
-	end 'aPartAppearedOrVanished'
-
-	for (iter, digest) in before.withIterator() 'eachPart'
-		if digest != (try after.get(iter.index()) otherwise panic("firstChangedPart: after.get({iter.index()}) OOB below the shared count {after.count()}")) 'aPartMoved'
-			return ParseComparison.changedAt(iter.index())
-		end 'aPartMoved'
-	end 'eachPart'
-
-	return ParseComparison.unchanged
-end 'firstChangedPart'
-
-function noteChange(changes ParseChangeArray, path FilePath, stage String, before ParseSnapshot, after ParseSnapshot)
-	match firstChangedPart(before.digests, after: after.digests) 'verdict'
-		unchanged then return
-		changedAt(part) then changes.push("{path.toString()} {stage}: {describePart(after.artifact, index: part)}")
-		reshaped(held, now) then changes.push("{path.toString()} {stage}: it held {held} digested parts and now holds {now}")
-	end 'verdict'
-end 'noteChange'
-
-let FirstPipelineStage = "was written by the first pipeline"
-let RemergeStage = "was changed by the merge after the bytes-only edit, which moves no id and so owes the artifact no renumbering"
-let SecondPipelineStage = "was written by the second pipeline"
-
-function reusedParsesStayAsMerged(merged ParseSnapshotMap, piped ParseSnapshotMap, remerged ParseSnapshotMap, repiped ParseSnapshotMap, editedPath FilePath) returns bool
-	var compared = 0 as Count
-	var digested = 0 as Count
-	let changes = ParseChangeArray.create(0)
-
-	for (path, first) in merged 'eachParse'
-		if path.equals(editedPath) 'theEditedFile'
-			continue
-		end 'theEditedFile'
-
-		let afterPipeline = try piped.get(path) otherwise panic("reusedParsesStayAsMerged: the parse of {path.toString()} left the memo during the first pipeline")
-		let afterRemerge = try remerged.get(path) otherwise panic("reusedParsesStayAsMerged: the parse of {path.toString()} left the memo across a bytes-only edit of another file")
-		let afterSecond = try repiped.get(path) otherwise panic("reusedParsesStayAsMerged: the parse of {path.toString()} left the memo during the second pipeline")
-		compared = compared + 1
-		digested = digested + first.digests.count()
-
-		if not (afterPipeline.artifact is first.artifact and afterRemerge.artifact is first.artifact and afterSecond.artifact is first.artifact) 'reparsed'
-			changes.push("{path.toString()} was parsed again although only another file was edited, so it is not a reused parse")
-			continue
-		end 'reparsed'
-
-		noteChange(changes, path: path, stage: FirstPipelineStage, before: first, after: afterPipeline)
-		noteChange(changes, path: path, stage: RemergeStage, before: afterPipeline, after: afterRemerge)
-		noteChange(changes, path: path, stage: SecondPipelineStage, before: afterRemerge, after: afterSecond)
-	end 'eachParse'
-
-	if not changes.isEmpty() 'someChanged'
-		for change in changes 'eachChange'
+function reportImmutability(verdict WarmImmutability) returns bool
+	if not verdict.changes.isEmpty() 'someChanged'
+		for change in verdict.changes 'eachChange'
 			printError("FAIL immutable: {change}\n")
 		end 'eachChange'
 
-		printError("FAIL immutable: {changes.count()} changes across {compared} reused parse artifacts, so a pass wrote into an object the parse cache owns\n")
+		printError("FAIL immutable: {verdict.changes.count()} changes across {verdict.compared} reused parse artifacts, so a pass wrote into an object the parse cache owns\n")
 		return false
 	end 'someChanged'
 
-	print("PASS immutable: {compared} reused parse artifacts, {digested} digested parts, the same objects before and after the edit and unchanged by both pipelines and by the second merge\n")
+	print("PASS immutable: {verdict.compared} reused parse artifacts, {verdict.digested} digested parts, the same objects before and after the edit and unchanged by both pipelines and by the second merge\n")
 	return true
-end 'reusedParsesStayAsMerged'
+end 'reportImmutability'
 
 function reportWarmPass(totalBytes BytePos) returns bool
 	print("PASS warm: {totalBytes} bytes identical between a warm compile after a bytes-only edit and a cold compile of the edited program\n")
@@ -1124,46 +990,37 @@ union LibraryReuseOutcome
 	end 'clause'
 end 'LibraryReuseOutcome'
 
-function loadProbedProject(inputPath FilePath, target Target, session CompileSession) returns Project throws CompileError
-	let project = try loadProject([inputPath], target: target, session: session)
-	let edited = try lastAuthoredSourceOf(project)
-	fileChanged(project, path: edited.path, content: "{edited.content}\n{LibraryReuseProbeText}\n")
-	return project
-end 'loadProbedProject'
-
 function verifyLibraryParseReuse(inputPath FilePath, target Target) returns LibraryReuseOutcome throws CompileError
-	let session = CompileSession.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.withoutLibraryCache(), treeLock: LockHold.none())
-	let primer = try loadReplacedProject(inputPath, target: target, session: session, firstFileText: PrimerMainText)
-	_ = try compileToCodeResult(primer)
+	emptySharedLibrary()
+	let shared = freshWarmSession()
+	_ = try shared.load(PrimerSlot, input: inputPath, target: target, edit: replacedBy(PrimerMainText))
+	let primer = try shared.compile(PrimerSlot, goal: WarmGoal.codeResult(false))
 
-	let first = try loadProject([inputPath], target: target, session: session)
-	let firstResult = try compileToCodeResult(first)
-	let verdict = (try queryProgramSignatures(first)).libraryParseSharing
+	_ = try shared.load(FirstSlot, input: inputPath, target: target)
+	let first = try compiledWithImage(shared, slot: FirstSlot)
+	let verdict = (try shared.read(FirstSlot, sharing: true)).sharing
 
-	let coldFirst = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
-	let coldFirstResult = try compileToCodeResult(coldFirst)
+	let coldFirst = try compiledImageOfColdLoad(inputPath, target: target, edit: WarmLoadEdit.none)
 
-	let second = try loadProbedProject(inputPath, target: target, session: session)
-	let secondResult = try compileToCodeResult(second)
+	_ = try shared.load(SecondSlot, input: inputPath, target: target, edit: WarmLoadEdit.appendToLastAuthored(LibraryReuseProbeText))
+	let second = try compiledWithImage(shared, slot: SecondSlot)
 
-	let cold = try loadProbedProject(inputPath, target: target, session: CompileSession.printingWithoutLibraryCache())
-	let coldResult = try compileToCodeResult(cold)
+	let cold = try compiledImageOfColdLoad(inputPath, target: target, edit: WarmLoadEdit.appendToLastAuthored(LibraryReuseProbeText))
 	let storeIsBounded = sharedStoreIsBounded(primer, second: second)
 
 	if verdict == LibraryParseSharing.shareable 'aSiblingPublishes'
-		let sibling = try loadReplacedProject(inputPath, target: target, session: session, firstFileText: siblingProgramText())
-		_ = try compileToCodeResult(sibling)
+		_ = try shared.load(SiblingSlot, input: inputPath, target: target, edit: replacedBy(siblingProgramText()))
+		_ = try shared.compile(SiblingSlot, goal: WarmGoal.codeResult(false))
 	end 'aSiblingPublishes'
 
-	let third = try loadReplacedProject(inputPath, target: target, session: session, firstFileText: RenamedProgramText)
-	let thirdResult = try compileToCodeResult(third)
+	_ = try shared.load(ThirdSlot, input: inputPath, target: target, edit: replacedBy(RenamedProgramText))
+	let third = try compiledWithImage(shared, slot: ThirdSlot)
 
-	let coldThird = try loadReplacedProject(inputPath, target: target, session: CompileSession.printingWithoutLibraryCache(), firstFileText: RenamedProgramText)
-	let coldThirdResult = try compileToCodeResult(coldThird)
+	let coldThird = try compiledImageOfColdLoad(inputPath, target: target, edit: replacedBy(RenamedProgramText))
 
-	let firstMatchesCold = reusedMatchesCold(firstResult, cold: coldFirstResult, subject: "the program compiled after a primer of another shape")
-	let secondMatchesCold = reusedMatchesCold(secondResult, cold: coldResult, subject: "a second program")
-	let thirdMatchesCold = reusedMatchesCold(thirdResult, cold: coldThirdResult, subject: "a third program declaring none of the first's type names")
+	let firstMatchesCold = reusedMatchesCold(first.image, cold: coldFirst, subject: "the program compiled after a primer of another shape")
+	let secondMatchesCold = reusedMatchesCold(second.image, cold: cold, subject: "a second program")
+	let thirdMatchesCold = reusedMatchesCold(third.image, cold: coldThird, subject: "a third program declaring none of the first's type names")
 
 	if not (firstMatchesCold and secondMatchesCold and thirdMatchesCold and storeIsBounded) 'aPropertyFailed'
 		return LibraryReuseOutcome.failed
@@ -1173,11 +1030,11 @@ function verifyLibraryParseReuse(inputPath FilePath, target Target) returns Libr
 		return libraryReuseOutcome(primer, second: second, third: third)
 	end 'theStoreIsOpen'
 
-	return libraryColdOutcome(first, second: second, verdict: verdict)
+	return libraryColdOutcome(first, secondReading: second, verdict: verdict)
 end 'verifyLibraryParseReuse'
 
-function reusedMatchesCold(reused CodeResult, cold CodeResult, subject String) returns bool
-	return match compareCodeResults(reused, right: cold) 'outcome'
+function reusedMatchesCold(reused WarmImage, cold WarmImage, subject String) returns bool
+	return match compareImages(reused, right: cold) 'outcome'
 		allIdentical gives true
 		sectionDiffers(detail) gives reportLibraryReuseDiffers(subject, detail: detail)
 	end 'outcome'
@@ -1197,36 +1054,40 @@ function siblingProgramText() returns String
 	return RenamedProgramText.replace(RenamedProbeNamePrefix, with: SiblingProbeNamePrefix)
 end 'siblingProgramText'
 
-function loadReplacedProject(inputPath FilePath, target Target, session CompileSession, firstFileText String) returns Project throws CompileError
-	let project = try loadProject([inputPath], target: target, session: session)
-	var firstPlaced = false
+function replacedBy(firstFileText String) returns WarmLoadEdit
+	return WarmLoadEdit.replaceAuthored(firstFileText, others: PrimerBlankText)
+end 'replacedBy'
 
-	for index in 0 upto project.db.sourcePaths.count() 'eachSource'
-		let source = editableSourceAt(project, index: index)
+function compiledWithImage(warm WarmSession, slot String) returns WarmReading throws CompileError
+	return try warm.compile(slot, goal: WarmGoal.codeResult(true))
+end 'compiledWithImage'
 
-		if isLibrarySourceFile(project, path: source.path) 'libraryFile'
-			continue
-		end 'libraryFile'
+function compiledImageOfColdLoad(inputPath FilePath, target Target, edit WarmLoadEdit) returns WarmImage throws CompileError
+	let cold = freshWarmSession()
+	_ = try cold.load(OnlySlot, input: inputPath, target: target, edit: edit)
 
-		fileChanged(project, path: source.path, content: PrimerBlankText if firstPlaced else firstFileText)
-		firstPlaced = true
-	end 'eachSource'
+	return (try compiledWithImage(cold, slot: OnlySlot)).image
+end 'compiledImageOfColdLoad'
 
-	return project
-end 'loadReplacedProject'
+let PrimerSlot = "primer"
+let FirstSlot = "first"
+let SecondSlot = "second"
+let SiblingSlot = "sibling"
+let ThirdSlot = "third"
 
 let LibraryParseVariantsPerFile = 2 as QueryCount
 
-function sharedStoreIsBounded(primer Project, second Project) returns bool
-	let admitted = second.db.shareableTokenHashes.count() as QueryCount
-	let held = sharedMemoEntryCount(second)
-	let parsesHeld = sharedParseEntryCount(second)
-	let firstReadNothing = assertCounterMove("the first program of a session reads no token stream out of the empty store (sharedTokenHits)", before: NoCounterMove, after: primer.db.sharedTokenHits, expectedDelta: NoCounterMove)
+function sharedStoreIsBounded(primerReading WarmReading, second WarmReading) returns bool
+	let primer = primerReading.counters
+	let admitted = second.counters.admittedLibraryFiles
+	let held = second.counters.storeEntries
+	let parsesHeld = second.counters.storeParses
+	let firstReadNothing = assertCounterMove("the first program of a session reads no token stream out of the empty store (sharedTokenHits)", before: NoCounterMove, after: primer.sharedTokenHits, expectedDelta: NoCounterMove)
 	let holdsWhatWasAdmitted = assertCounterMove("the store holds exactly the byte-contents admitted — {held} held, {admitted} admitted", before: NoCounterMove, after: held, expectedDelta: admitted)
 	var secondReadTokens = true
 	var parsesAreBounded = true
 
-	if second.db.sharedTokenHits == NoCounterMove 'neverFired'
+	if second.counters.sharedTokenHits == NoCounterMove 'neverFired'
 		printError("FAIL: the second program of a session read no token stream out of the store (sharedTokenHits), so every other property here passed over a mechanism that never fired\n")
 		secondReadTokens = false
 	end 'neverFired'
@@ -1244,33 +1105,38 @@ function reportLibraryReuseDiffers(which String, detail String) returns bool
 	return false
 end 'reportLibraryReuseDiffers'
 
-function libraryReuseOutcome(primer Project, second Project, third Project) returns LibraryReuseOutcome
-	let admitted = second.db.shareableTokenHashes.count()
-	let firstReadNothing = assertCounterMove("the primer program of a session reads no library parse out of the empty store (sharedParseHits)", before: NoCounterMove, after: primer.db.sharedParseHits, expectedDelta: NoCounterMove)
-	let secondReusedEveryFile = everyLibraryParseServed("the second program", program: second)
-	let thirdReusedEveryFile = everyLibraryParseServed("the third program, which declares none of the first's type names", program: third)
+function libraryReuseOutcome(primerReading WarmReading, second WarmReading, third WarmReading) returns LibraryReuseOutcome
+	let primer = primerReading.counters
+	let secondCounters = second.counters
+	let thirdCounters = third.counters
+	let admitted = secondCounters.admittedLibraryFiles
+	let firstReadNothing = assertCounterMove("the primer program of a session reads no library parse out of the empty store (sharedParseHits)", before: NoCounterMove, after: primer.sharedParseHits, expectedDelta: NoCounterMove)
+	let secondReusedEveryFile = everyLibraryParseServed("the second program", program: secondCounters)
+	let thirdReusedEveryFile = everyLibraryParseServed("the third program, which declares none of the first's type names", program: thirdCounters)
 
 	if not (firstReadNothing and secondReusedEveryFile and thirdReusedEveryFile) 'aPropertyFailed'
 		printError("FAIL library reuse: the store did not serve every library parse to the second and third programs (see above)\n")
 		return LibraryReuseOutcome.failed
 	end 'aPropertyFailed'
 
-	print("PASS library reuse: {second.db.sharedParseReusedFiles.count()} of {admitted} library parse artifacts, published by the primer and the programs after it ({primer.db.sharedParsePublishes} publishes, {second.db.sharedParseDrifts} drifted), served to a second program that differs by an enum, a type, an array of it and a function ({second.db.sharedParseHits} hits, {second.db.sharedParseMisses} misses) and to a third that shares none of the first's type names ({third.db.sharedParseHits} hits, {third.db.sharedParseMisses} misses, {third.db.sharedParseDrifts} drifted), each compiling to what a cold compile of it emits\n")
+	print("PASS library reuse: {secondCounters.sharedParseReusedFiles} of {admitted} library parse artifacts, published by the primer and the programs after it ({primer.sharedParsePublishes} publishes, {secondCounters.sharedParseDrifts} drifted), served to a second program that differs by an enum, a type, an array of it and a function ({secondCounters.sharedParseHits} hits, {secondCounters.sharedParseMisses} misses) and to a third that shares none of the first's type names ({thirdCounters.sharedParseHits} hits, {thirdCounters.sharedParseMisses} misses, {thirdCounters.sharedParseDrifts} drifted), each compiling to what a cold compile of it emits\n")
 	return LibraryReuseOutcome.reused
 end 'libraryReuseOutcome'
 
-function everyLibraryParseServed(who String, program Project) returns bool
-	let admitted = program.db.shareableTokenHashes.count()
-	let reusedFiles = program.db.sharedParseReusedFiles.count()
-	let served = assertCounterMove("every library file's parse is served to {who} ({reusedFiles} of {admitted} files)", before: NoCounterMove, after: reusedFiles as QueryCount, expectedDelta: admitted as QueryCount)
-	let neverDrifted = assertCounterMove("no held library parse has its footprint move under {who} (sharedParseDrifts)", before: NoCounterMove, after: program.db.sharedParseDrifts, expectedDelta: NoCounterMove)
+function everyLibraryParseServed(who String, program WarmCounters) returns bool
+	let admitted = program.admittedLibraryFiles
+	let reusedFiles = program.sharedParseReusedFiles
+	let served = assertCounterMove("every library file's parse is served to {who} ({reusedFiles} of {admitted} files)", before: NoCounterMove, after: reusedFiles, expectedDelta: admitted)
+	let neverDrifted = assertCounterMove("no held library parse has its footprint move under {who} (sharedParseDrifts)", before: NoCounterMove, after: program.sharedParseDrifts, expectedDelta: NoCounterMove)
 	return served and neverDrifted
 end 'everyLibraryParseServed'
 
-function libraryColdOutcome(first Project, second Project, verdict LibraryParseSharing) returns LibraryReuseOutcome
-	let neverPublished = assertCounterMove("a program that shares no library parse publishes none (sharedParsePublishes)", before: NoCounterMove, after: first.db.sharedParsePublishes + second.db.sharedParsePublishes, expectedDelta: NoCounterMove)
-	let neverServed = assertCounterMove("a program that shares no library parse reads none out of the store (sharedParseHits)", before: NoCounterMove, after: first.db.sharedParseHits + second.db.sharedParseHits, expectedDelta: NoCounterMove)
-	let neverAsked = assertCounterMove("a program that shares no library parse never consults the store (sharedParseMisses)", before: NoCounterMove, after: first.db.sharedParseMisses + second.db.sharedParseMisses, expectedDelta: NoCounterMove)
+function libraryColdOutcome(firstReading WarmReading, secondReading WarmReading, verdict LibraryParseSharing) returns LibraryReuseOutcome
+	let first = firstReading.counters
+	let second = secondReading.counters
+	let neverPublished = assertCounterMove("a program that shares no library parse publishes none (sharedParsePublishes)", before: NoCounterMove, after: first.sharedParsePublishes + second.sharedParsePublishes, expectedDelta: NoCounterMove)
+	let neverServed = assertCounterMove("a program that shares no library parse reads none out of the store (sharedParseHits)", before: NoCounterMove, after: first.sharedParseHits + second.sharedParseHits, expectedDelta: NoCounterMove)
+	let neverAsked = assertCounterMove("a program that shares no library parse never consults the store (sharedParseMisses)", before: NoCounterMove, after: first.sharedParseMisses + second.sharedParseMisses, expectedDelta: NoCounterMove)
 
 	if not (neverPublished and neverServed and neverAsked) 'aPropertyFailed'
 		printError("FAIL library reuse: the store was consulted for a program whose library parse is refused ({verdict.name}) (see above)\n")
@@ -1281,65 +1147,36 @@ function libraryColdOutcome(first Project, second Project, verdict LibraryParseS
 	return LibraryReuseOutcome.parsedCold(verdict)
 end 'libraryColdOutcome'
 
-// The last source file in fold order that is not library source, owned (`editableSourceAt`).
-function lastAuthoredSourceOf(project Project) returns EditableSource throws CompileError
-	var index = project.db.sourcePaths.count()
+function lastAuthoredOf(sources WarmSourceArray, inputPath FilePath) returns WarmSource throws CompileError
+	var index = sources.count()
 
 	while index > 0 'fromTheEnd'
 		index = index - 1
-		let source = editableSourceAt(project, index: index)
+		let source = try sources.get(index) otherwise panic("lastAuthoredOf: index {index} is below the {sources.count()} sources")
 
-		if not isLibrarySourceFile(project, path: source.path) 'authored'
+		if not source.library 'authored'
 			return source
 		end 'authored'
 	end 'fromTheEnd'
 
-	throw CompileError.noSourceFiles(project.rootPath)
-end 'lastAuthoredSourceOf'
+	throw CompileError.noSourceFiles(inputPath)
+end 'lastAuthoredOf'
 
-// Re-query every file's parse and report how many RECOMPUTED. The miss DELTA is the whole
+// Re-query every file's parse and report how many RECOMPUTED, naming them. The miss DELTA is the whole
 // measurement: it names exactly which memos the preceding edit invalidated.
-function parseMissesOnRequery(project Project) returns ParseMissProbe throws CompileError
-	let before = project.db.parseMisses
-	let rosterStart = project.db.parseMissPaths.count()
-	try probeRebuildCacheHitsNamingMisses(project)
-	return ParseMissProbe.create(project.db.parseMisses - before, rosterStart: rosterStart, rosterEnd: project.db.parseMissPaths.count())
-end 'parseMissesOnRequery'
-
-// The probe with `parseMissPaths` armed for its span, so a miss it counts is also a miss it can name;
-// outside the span the roster is not written (`QueryDatabase.recordParseMissPaths`).
-function probeRebuildCacheHitsNamingMisses(project Project) throws CompileError
-	project.db.recordParseMissPaths = true
-	try probeRebuildCacheHits(project) otherwise (err) 'probeFailed'
-		project.db.recordParseMissPaths = false
-		throw err
-	end 'probeFailed'
-
-	project.db.recordParseMissPaths = false
-end 'probeRebuildCacheHitsNamingMisses'
-
-// What one re-query of every file missed: the count an assertion compares, and the span of
-// `parseMissPaths` holding its misses, so a failure can name them. The span is closed at both ends
-// because the roster keeps growing under later probes and the assertions run after all of them.
-type ParseMissProbe
-	export let misses as QueryCount
-	export let rosterStart as ElementIndex
-	export let rosterEnd as ElementIndex
-
-	static function create(misses QueryCount, rosterStart ElementIndex, rosterEnd ElementIndex) returns ParseMissProbe
-		return Self{misses: misses, rosterStart: rosterStart, rosterEnd: rosterEnd}
-	end 'create'
-end 'ParseMissProbe'
+function probedMisses(warm WarmSession) returns WarmProbe throws CompileError
+	return (try warm.probe(OnlySlot)).probe
+end 'probedMisses'
 
 // `assertCounterMove` over a parse-miss probe, naming the missed files on failure: a stale parse memo
 // is located by its path, which the count cannot carry.
-function assertParseMisses(label String, probe ParseMissProbe, expectedDelta QueryCount, project Project) returns bool
+function assertParseMisses(label String, probe WarmProbe, expectedDelta QueryCount) returns bool
 	if assertCounterMove(label, before: NoCounterMove, after: probe.misses, expectedDelta: expectedDelta) 'held'
 		return true
 	end 'held'
 
-	for i in probe.rosterStart upto probe.rosterEnd 'eachMiss'
-		printError("  parse miss: {try project.db.parseMissPaths.get(i) otherwise panic("assertParseMisses: index {i} is below parseMissPaths.count()")}\n")
+	for missed in probe.missed 'eachMiss'
+		printError("  parse miss: {missed}\n")
 	end 'eachMiss'
 
 	return false

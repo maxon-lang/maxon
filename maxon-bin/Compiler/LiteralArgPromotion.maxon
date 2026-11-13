@@ -68,7 +68,7 @@
 // its own would be a second fixpoint over the same graph.
 //
 // ⚠ **THE OPS IT INSERTS ARE WHY `scanRuntimeUsage` MOVED BELOW THE PIPELINE** (see
-// `Compiler.compileToCodeResult`). A `__str_clone` or `__str_retain` appended after the usage scan had
+// `prepareLowering`). A `__str_clone` or `__str_retain` appended after the usage scan had
 // already run would be a call to a runtime entry nothing installed — an unresolved relocation, not a leak.
 //
 // ⚠ **A PROGRAM THAT HAS ALREADY REPORTED AN ERROR IS LEFT ALONE.** `PassPipeline.run` throws on the
@@ -552,7 +552,7 @@ end 'appendPromotionRuntimeCall'
 // would shift every later value's type by one — the invariant `Parser.mintValue` and
 // `ModuleInit.SynthesizedFunction.mint` each keep for their own tier.
 //
-// ⚠ **AND THE DENSE COLUMNS ARE ALIASED WITH THE FILE'S PARSE ARTIFACT**, which `queryAllModule` hands back on a
+// ⚠ **AND THE DENSE COLUMNS ARE ALIASED WITH THE FILE'S PARSE ARTIFACT**, which `FrontEndRun` hands back on a
 // cache hit and the stdlib body-demand fixpoint re-folds — so a push onto the merged function's column would
 // lengthen the ARTIFACT's, and every later fold would inherit values no op defines. Each mint therefore writes
 // through `IrFunction.makePrivate`; a function this pass does not change never mints, so it never

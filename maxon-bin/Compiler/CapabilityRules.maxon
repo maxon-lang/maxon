@@ -10,7 +10,13 @@ module let CapturesClauseWord = b"captures"
 
 module let ModifyBlockWord = b"modify"
 
+module let AcquireBlockWord = b"acquire"
+
 module let FreezeOperatorWord = b"freeze"
+
+module let ConsumingReceiverWord = b"consuming"
+
+module let DestructStatementWord = b"destruct"
 
 module let SwapOperatorWord = b"swap"
 
@@ -60,6 +66,12 @@ end 'handedBackRefusal'
 module function calleeSourceName(callee immutable ByteArray) returns String
 	return String.from(unqualifiedMemberOf(genericTemplateName(callee)))
 end 'calleeSourceName'
+
+module let IsolatedBindingAdvice = "; initialize it with a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy"
+
+module function isolatedMoveAdvice(declarableLocal bool, typeName String) returns String
+	return (". Declare it `as isolated {typeName}`, or pass a copy" if declarableLocal else "; use a fresh value, a clean call, a `swap` or an `isolated` local, or pass a copy")
+end 'isolatedMoveAdvice'
 
 module function uniqueAliasMessage(action String) returns String
 	return "cannot {action} a unique value read out of a field or an element: the field or element goes on owning it, and a unique value has one name; read what is needed through the field without binding it, or move it out with `pop` or `remove`"
@@ -148,7 +160,15 @@ module function spellsCapabilityWord(word ByteArray) returns bool
 	return word.equals(IsolatedCapabilityWord) or word.equals(ImmutableCapabilityWord) or word.equals(MutableMarkerWord)
 end 'spellsCapabilityWord'
 
+module function spellsReceiverWord(word ByteArray) returns bool
+	return spellsCapabilityWord(word) or word.equals(ConsumingReceiverWord)
+end 'spellsReceiverWord'
+
 module function capabilityOfWord(word ByteArray) returns ParamCapability throws AbsentError
+	if word.equals(ConsumingReceiverWord) 'consuming'
+		return ParamCapability.consuming
+	end 'consuming'
+
 	if word.equals(IsolatedCapabilityWord) 'isolated'
 		return ParamCapability.isolated
 	end 'isolated'
@@ -169,6 +189,7 @@ module function declarationWordOf(capability ParamCapability) returns String
 		mutable gives String.from(MutableMarkerWord)
 		immutable gives String.from(ImmutableCapabilityWord)
 		isolated gives String.from(IsolatedCapabilityWord)
+		consuming gives String.from(ConsumingReceiverWord)
 		unmarked panic("declarationWordOf: an unmarked position declares no word")
 	end 'capability'
 end 'declarationWordOf'
@@ -188,6 +209,7 @@ module function resultCapabilityOf(capability ParamCapability) returns ResultCap
 		mutable gives ResultCapability.mutable
 		isolated gives ResultCapability.isolated
 		immutable gives ResultCapability.immutable
+		consuming panic("resultCapabilityOf: a `consuming` word marks a receiver, never a result")
 	end 'capability'
 end 'resultCapabilityOf'
 
@@ -291,6 +313,7 @@ module function slotCapabilityOf(slot ParamCapability) returns ValueCapability
 		mutable gives ValueCapability.mutable
 		isolated gives ValueCapability.isolated
 		immutable gives ValueCapability.immutable
+		consuming panic("slotCapabilityOf: a `consuming` word marks a receiver, never a slot")
 	end 'slot'
 end 'slotCapabilityOf'
 

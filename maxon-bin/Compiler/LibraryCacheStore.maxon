@@ -1,7 +1,8 @@
 export let LibraryCacheDirName = "library"
+
 // A change to any column the library cache writes bumps this: an entry written under the old number would
 // otherwise be read under the new layout.
-let LibraryCacheFormat = 25
+let LibraryCacheFormat = 26
 let LibraryEntryExtension = ".mxlc"
 let LibraryEntryNameSeparator = "-"
 
@@ -75,11 +76,8 @@ union LibraryCacheDirectory
 end 'LibraryCacheDirectory'
 
 typealias LibraryDirectoryMap = Map with (String, LibraryCacheDirectory)
-typealias LibraryPackMap = Map with (String, LibraryPack)
 typealias AbsentPackSet = Set with String
 export typealias LibraryEntryKeyArray = Array with HashDigest
-
-let MostHeldBaselines = 4
 
 // A lineage is one compiler path and target, so `maxon.previous`, retired images and temporary
 // compilers each start one; without this bound they accumulate forever.
@@ -87,22 +85,18 @@ let MostLibraryLineages = 16
 export let MostEntriesOfAKind = 4 as ElementIndex
 export let MostParsePacks = 16 as ElementIndex
 
-type HeldBaseline
+module type HeldBaseline
 	export let key as HashDigest
 	export let kind as LibraryEntryKind
 	export var declarations as LibraryDeclarations
 
-	static function create(key HashDigest, kind LibraryEntryKind, declarations LibraryDeclarations) returns HeldBaseline
+	module static function create(key HashDigest, kind LibraryEntryKind, declarations LibraryDeclarations) returns HeldBaseline
 		return Self{key: key, kind: kind, declarations: declarations}
 	end 'create'
 end 'HeldBaseline'
 
-typealias HeldBaselineArray = Array with HeldBaseline
-
 export type LibraryCache
 	var directories as LibraryDirectoryMap
-	var baselines as HeldBaselineArray
-	var packs as LibraryPackMap
 	var absent as AbsentPackSet
 	let installed as InstalledTiers
 	let onDisk as bool
@@ -110,7 +104,7 @@ export type LibraryCache
 	export var totals as LibraryCacheTally
 
 	static function holding(onDisk bool, retains bool) returns LibraryCache
-		return Self{directories: LibraryDirectoryMap.create(), baselines: HeldBaselineArray.create(0), packs: LibraryPackMap.create(), absent: AbsentPackSet.create(), installed: resolvedInstalledTiers(), onDisk: onDisk, retains: retains, totals: LibraryCacheTally.create()}
+		return Self{directories: LibraryDirectoryMap.create(), absent: AbsentPackSet.create(), installed: resolvedInstalledTiers(), onDisk: onDisk, retains: retains, totals: LibraryCacheTally.create()}
 	end 'holding'
 
 	export function entryClassOf(project Project) returns LibraryEntryClass
@@ -144,47 +138,6 @@ export type LibraryCache
 
 		return taken
 	end 'takeTotals'
-
-	export function heldManifest(key HashDigest) returns LibraryManifest throws LibraryEntryMiss
-		for held in self.baselines 'eachHeld'
-			if held.key == key 'thisLibrary'
-				return held.declarations.manifest
-			end 'thisLibrary'
-		end 'eachHeld'
-
-		throw LibraryEntryMiss.absent
-	end 'heldManifest'
-
-	function heldPosition(key HashDigest, kind LibraryEntryKind) returns ElementIndex throws LibraryEntryMiss
-		for (iter, held) in self.baselines.withIterator() 'eachHeld'
-			if held.key == key and held.kind == kind 'thisLibrary'
-				return iter.index()
-			end 'thisLibrary'
-		end 'eachHeld'
-
-		throw LibraryEntryMiss.absent
-	end 'heldPosition'
-
-	export function heldBaseline(key HashDigest, kind LibraryEntryKind) returns LibraryDeclarations throws LibraryEntryMiss
-		let position = try self.heldPosition(key, kind: kind)
-
-		return (try self.baselines.get(position) otherwise panic("LibraryCache.heldBaseline: baselines.get OOB at {position}, the position just found")).declarations
-	end 'heldBaseline'
-
-	export function holdBaseline(key HashDigest, kind LibraryEntryKind, declarations LibraryDeclarations)
-		let held = HeldBaseline.create(key, kind: kind, declarations: declarations)
-
-		if let position = try self.heldPosition(key, kind: kind) 'alreadyHeld'
-			try self.baselines.set(position, value: held) otherwise panic("LibraryCache.holdBaseline: baselines.set OOB at {position}, the position just found")
-			return
-		end 'alreadyHeld'
-
-		self.baselines.push(held)
-
-		if self.baselines.count() > MostHeldBaselines 'moreThanWorthKeeping'
-			_ = try self.baselines.remove(0) otherwise panic("LibraryCache.holdBaseline: remove(0) of {self.baselines.count()} held baselines")
-		end 'moreThanWorthKeeping'
-	end 'holdBaseline'
 
 	function directoryFor(target Target) returns LibraryCacheDirectory
 		let key = targetToString(target)
@@ -243,8 +196,12 @@ export type LibraryCache
 		end 'damaged'
 	end 'open'
 
-	export function openPack(target Target, name String, tally LibraryCacheTally) returns LibraryPack throws LibraryEntryMiss
-		if let held = try self.packs.get(name) 'alreadyOpen'
+	export function openPack(target Target, name String, tally LibraryCacheTally) returns immutable LibraryPack throws LibraryEntryMiss
+		let store = SharedLibraryCache.current()
+
+		if let held = try store.packs.packNamed(name) 'alreadyOpen'
+			refreshSharedPack(store, name: name)
+
 			return held
 		end 'alreadyOpen'
 
@@ -257,19 +214,19 @@ export type LibraryCache
 			throw miss
 		end 'missing'
 
-		let pack = try LibraryPack.open(image) otherwise (damage) 'damaged'
+		let pack = freeze try LibraryPack.open(image) otherwise (damage) 'damaged'
 			self.rejectDecoded(target, name: name, damage: damage, tally: tally)
 			throw LibraryEntryMiss.rejected
 		end 'damaged'
 
-		self.packs.upsert(name, value: pack)
+		publishToSharedLibrary(SharedLibraryChange.pack(name, opened: pack))
 		tally.loaded = tally.loaded + 1
 
 		return pack
 	end 'openPack'
 
 	export function forgetPack(name String)
-		_ = self.packs.remove(name)
+		publishToSharedLibrary(SharedLibraryChange.withoutPack(name))
 		_ = self.absent.remove(name)
 	end 'forgetPack'
 
@@ -392,6 +349,6 @@ end 'discardStaleLineages'
 
 module function noteLibraryCacheTrouble(message String)
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		logCompilerDebugSettled("library cache: {message}")
+		compilerLogger(CompilerLogGroup.compiler).debug("library cache: {message}")
 	end 'debugging'
 end 'noteLibraryCacheTrouble'

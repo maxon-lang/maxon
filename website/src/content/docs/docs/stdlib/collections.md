@@ -274,6 +274,44 @@ end 'main'
 
 Output: `2 true true 1`.
 
+## Slot
+
+`Slot with T` is a named place that holds one `T` or none. `T` is any type, a `unique` one included. A slot
+is an ordinary record, so it lives in a field and inside an `isolated` region.
+
+```maxon
+type Job
+	export var n as ElementIndex
+
+	static function create(n ElementIndex) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Job'
+
+typealias JobSlot = Slot with Job
+
+function main() returns ExitCode
+	let slot = JobSlot.create("jobs")
+	slot.fill(Job.create(3))
+	print("{slot.isFull()} {slot.held().n}\n")
+	let job = slot.take()
+	print("{job.n} {slot.isEmpty()}\n")
+	return 0
+end 'main'
+```
+
+Output: `true 3` and `3 true`.
+
+| Member | Returns | Description |
+|--------|---------|-------------|
+| `Slot.create(name String)` | `Slot` | An empty slot. `name` appears in the panic of a misuse. |
+| `isEmpty()` / `isFull()` | `bool` | Whether the slot holds a value. |
+| `fill(item T)` | — | Puts `item` in the slot. Panics naming the slot when it is full. |
+| `replace(item T)` | — | Puts `item` in the slot whether or not it was full. |
+| `held()` | `T` | Reads the value and leaves it in the slot. Panics naming the slot when it is empty. |
+| `take()` | `T` | Moves the value out. Panics naming the slot when it is empty. |
+| `clear()` | — | Empties the slot; an empty slot stays empty. |
+
 ## FixedArray
 
 `FixedArray` is a fixed-size array whose element count is part of its type: `FixedArray with 3 Coord`

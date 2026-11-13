@@ -12,7 +12,7 @@ All files named below are under `maxon-bin/Compiler/Targets/Shared/`.
 
 ## Pipeline
 
-`BackendPool.lowerAndAllocateOnAWorkerPool` (`BackendPool.maxon`) computes the target's register facts once
+`BackendRun` (`BackendPool.maxon`) computes the target's register facts once
 per module and hands each function, longest first, to whichever pool worker frees first
 (`MAXON_MAX_PROCS=1` gives a pool of one). The worker selects instructions, splits critical edges so every
 phi copy has an edge block to land in, and runs `allocateFunctionCore` (`RegisterAllocator.maxon`):

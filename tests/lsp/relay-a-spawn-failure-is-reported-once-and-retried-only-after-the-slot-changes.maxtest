@@ -3,7 +3,6 @@ let SpawnFailureDocumentName = "one.maxon"
 let SpawnFailureDocumentText = "unspawned"
 let SpawnFailureReportNeedle = "could not start the compiler"
 let SpawnFailureQuietMs = 2500
-let SpawnFailureTicksMs = 1500
 
 test 'relay: a compiler that fails to start is reported once and tried again only after its file changes'
 	let caseDir = stagedRelayCase(SpawnFailureCaseDirName)
@@ -39,11 +38,12 @@ function failedToStartThenChanged(client LspClient, caseDir FilePath) returns (S
 	let reportedAgain = try client.countLogMessagesWhilePolling(SpawnFailureReportNeedle, polled: uri, forMs: SpawnFailureQuietMs)
 
 	makeRelaySlotRunnable(caseDir)
-	sleep(SpawnFailureTicksMs)
+	try relaySlotChanged(client, caseDir: caseDir)
 
 	let refusalAfterRepair = try relayHoverRefusal(client, uri: uri)
 
 	replaceRelaySlot(caseDir, generation: 2)
+	try relaySlotChanged(client, caseDir: caseDir)
 
 	let published = relayFirstMessage(try awaitFakePublish(client, uri: uri, generation: 2, text: SpawnFailureDocumentText))
 

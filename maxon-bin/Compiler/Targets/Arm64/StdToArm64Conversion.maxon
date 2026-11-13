@@ -2124,6 +2124,7 @@ export type StdToArm64Lowering
 	// on macOS, `exit_group` via `svc #0` on Linux — the arm64 twin of x64's ExitProcess path (the same
 	// primitive the arm64 entry stub uses). AAPCS64 and the Linux syscall ABI both put the code in x0.
 	function lowerOsExit(codeId ValueId, dstRef ElementIndex)
+		self.emitLogFlush(dstRef)
 		self.emitHostCall(dstRef, callee: self.hostCalleeOn(OsImportSlot.exit, linux: Arm64LinuxRoute.syscall(Arm64LinuxSyscallExitGroup)), args: argsOf(codeId))
 	end 'lowerOsExit'
 
@@ -2136,6 +2137,7 @@ export type StdToArm64Lowering
 	// `Arm64PanicRuntime` derives it from the same `arm64OsCallKind` door this file consults for every
 	// other primitive.
 	function lowerPanic(label ByteArray, dstRef ElementIndex)
+		self.emitLogFlush(dstRef)
 		self.emit(dstRef, op: TargetOp.arm64LeaRdata(arm64PhysReg(Arm64Register.x0), label: label))
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(PanicName))
 	end 'lowerPanic'
@@ -2145,9 +2147,16 @@ export type StdToArm64Lowering
 	// a label address there. Everything after is identical: one `mrt_panic`, one cstr contract, two ways
 	// of producing the bytes.
 	function lowerPanicValue(messagePtrId ValueId, dstRef ElementIndex)
+		self.emitLogFlush(dstRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(messagePtrId)))
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(PanicName))
 	end 'lowerPanicValue'
+
+	function emitLogFlush(dstRef ElementIndex)
+		if self.usesGt 'runsGreenThreads'
+			self.emit(dstRef, op: TargetOp.arm64BranchLink(GtPanicFlushName))
+		end 'runsGreenThreads'
+	end 'emitLogFlush'
 
 	// The POSIX page source, `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)`.
 	// `MAP_ANON` returns zeroed pages, which satisfies the slab's zeroing contract.

@@ -15,6 +15,58 @@ release's version as its heading when the release is cut.
 
 ### Breaking changes
 
+- `let b = a` moves a unique value from a `let` source as it does from a `var`: after `let second = first` with
+  `let first = Ticket.create(1)` (a `unique` type, a type holding a unique field, a `Reply`), reading `first` is
+  E3102. Until now a `let` source stayed readable beside its `let` alias.
+  Fix: read the value through the new name, or bind the source with `.clone()` where the type has one; a `unique`
+  value has one name.
+
+- `HttpServerError` has the case `deferralUnavailable`, which `HttpExchange.respondLater` throws for an exchange
+  `HttpServer.accept` returned, and `HttpHandlerFault` has the case `threwAfterDeferring`, so a `match` over either
+  that names every case no longer covers it.
+  Fix: add a `deferralUnavailable` arm to each `match` over `HttpServerError` and a `threwAfterDeferring` arm to
+  each `match` over `HttpHandlerFault`.
+
+- A service type's state may not reach a handle to its own type: directly (`var me as Echo.handle`), through other
+  service types' handles (`Ping` holds a `Pong.handle` and `Pong` holds a `Ping.handle`), or through an interface
+  handle whose conformers include it (`Hub implements Listener` holding a `Listener.handle`). It is E4014, with the
+  cycle in the message: a service's handle is counted by its holder, so a cycle of handles is never freed and the
+  leak gate exits 101. A handle that a message carries is not state and is not a cycle.
+  Fix: pass the handle with each message (`start(oracle Oracle.handle, me Asker.handle)`) instead of keeping it in a
+  field, or give the two services distinct types.
+
+- A service type's state may not hold a function value while a closure in the program captures a handle that reaches
+  that service. A function type does not say what its closure captured, so a field, union payload or container
+  element of function type reaches the handle of every service some closure captures, and a cycle through it is
+  E4014 (`Echo` with `var notify as Notifier` while any closure captures an `Echo.handle`). The rule does not trace
+  which closure is stored where, so it also refuses a program whose function field and capturing closure never meet.
+  Fix: pass the handle as an argument to the call that needs it instead of capturing it, or keep the function value
+  out of the service's state.
+
+- A message or a `spawn` factory that may wait on another party while it holds its own service is E3221, and E3139,
+  the await-cycle check, is removed. Waiting is an `await` of a message reply or of a promise whose coroutine the
+  compiler cannot see, `awaitAny`, a send with a positive `sendTimeout:`, an `acquire`, the spawn of a throwing
+  factory, `Scheduler.quiesce()`, `CownTorture.violations`, and a call to a function that does one of these, which
+  includes `HttpServer.serve` and `TraceCapture.stopCapture`. Until now a message could await a reply from another
+  service so long as no cycle of services awaited each other. The diagnostic names the chain from the message to
+  the wait.
+  Fix: send the request with the service's handle and handle the reply in another message (pass the asker's handle
+  with the request, or answer through `reply.later()` and `Reply.answer`); send with `sendTimeout: 0`, which fails
+  `mailboxFull` instead of waiting; or make the wait from `main`, a test body or a coroutine, which hold no service.
+
+- A call on an `isolated` value that hands back a view of what it opens, such as `j.items.createIterator()` on an
+  `isolated` `j`, cannot be bound, returned or stored: the view is mutable data of the region the call opens, which
+  is E3201 (E3202 inside a `modify` or `acquire` block), and a `try … otherwise` handler on the `let` makes no
+  difference. Until now the iterator was taken for a fresh value.
+  Fix: bind the value, not the view: read what is needed in the same statement
+  (`let first = try j.items.get(0) otherwise return 0`), or open the value with `modify j 'walk'` and iterate inside
+  the block.
+
+- A `unique` element handed out by a container call is lent for the call: `show(items.get(0))` reads it, and
+  `let ticket = items.get(0)` is E3214, as is passing it to a parameter the callee keeps. Until now such a binding
+  aliased the element.
+  Fix: read through the call, or move the element out with `take` (`Slot`), `removeFirst`, `pop` or `remove`.
+
 - `Subprocess` takes its working directory as a `WorkingDirectory`, not a `FilePath`: a child that starts in the
   parent's directory is `WorkingDirectory.inherit` and one that starts elsewhere is `WorkingDirectory.at(path)`, in
   `Subprocess.run`, `Configuration.create`, `Configuration.workingDirectory`, `StreamingSubprocess.spawnWithCwd`,
@@ -349,10 +401,10 @@ release's version as its heading when the release is cut.
   reading it after the `spawn` is E3102, and an argument is held to a message argument's terms (`isolated T` or
   `immutable T`, E3217 without one), so one read out of a field or a container is not `isolated` (E3200) even
   where the factory does not keep it. A factory, or a function it calls, is held to the rules a message
-  handler is: awaiting a reply in a cycle of services is E3139. A factory argument held at an opaque type parameter (a `T` value
+  handler is: waiting on another party is E3221. A factory argument held at an opaque type parameter (a `T` value
   inside a generic function) is E2015.
   Fix: pass `binding.clone()` to keep reading the binding, and `.clone()` a borrowed argument; keep the
-  value in a field of the service and reach it through a message; break the await cycle as E3139's entry
+  value in a field of the service and reach it through a message; handle a reply in another message, as the E3221 entry
   describes; spawn from a function of a concrete type.
 - A generic body the program instantiates with a promise, or a type holding one, is held to a promise's
   rules: a `T` parameter it stores in a record twice, or inside a loop, is E3102, and a closure in it that

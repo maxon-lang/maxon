@@ -1,6 +1,7 @@
 export enum WindowKind
 	modify
 	oneStatement
+	acquire
 end 'WindowKind'
 
 export type OpenWindow
@@ -21,6 +22,17 @@ export type OpenWindow
 end 'OpenWindow'
 
 export typealias WindowStack = Array with OpenWindow
+
+export type AcquiredStateName
+	module let state as ValueId
+	module let name as immutable ByteArray
+
+	export static function create(state ValueId, name ByteArray) returns AcquiredStateName
+		return Self{state: state, name: name}
+	end 'create'
+end 'AcquiredStateName'
+
+export typealias AcquiredStateNameArray = Array with AcquiredStateName
 
 export type FieldOrigin
 	module let holder as ValueId
@@ -59,9 +71,10 @@ export type HeldStore
 	module let line as LineNumber
 	module let place as String
 	module let valueStart as ElementIndex
+	module let statementStart as ElementIndex
 
-	export static function create(value ValueId, line LineNumber, place String, valueStart ElementIndex) returns HeldStore
-		return Self{value: value, line: line, place: place, valueStart: valueStart}
+	export static function create(value ValueId, line LineNumber, place String, valueStart ElementIndex, statementStart ElementIndex) returns HeldStore
+		return Self{value: value, line: line, place: place, valueStart: valueStart, statementStart: statementStart}
 	end 'create'
 end 'HeldStore'
 
@@ -79,9 +92,10 @@ export type CarriedStore
 	module let valueStart as ElementIndex
 	module let valueEnd as ElementIndex
 	module let line as LineNumber
+	module let statementStart as ElementIndex
 
-	export static function create(holder StoreHolder, value ValueId, slot ParamCapability, assumedValue ValueCapability, windows WindowStack, fieldName String, valueStart ElementIndex, valueEnd ElementIndex, line LineNumber) returns CarriedStore
-		return Self{holder: holder, value: value, slot: slot, assumedValue: assumedValue, windows: windows, fieldName: fieldName, valueStart: valueStart, valueEnd: valueEnd, line: line}
+	export static function create(holder StoreHolder, value ValueId, slot ParamCapability, assumedValue ValueCapability, windows WindowStack, fieldName String, valueStart ElementIndex, valueEnd ElementIndex, line LineNumber, statementStart ElementIndex) returns CarriedStore
+		return Self{holder: holder, value: value, slot: slot, assumedValue: assumedValue, windows: windows, fieldName: fieldName, valueStart: valueStart, valueEnd: valueEnd, line: line, statementStart: statementStart}
 	end 'create'
 end 'CarriedStore'
 
@@ -128,6 +142,8 @@ end 'LentLocal'
 export typealias LentLocalArray = Array with LentLocal
 
 export typealias UseLineMap = Map with (ValueId, LineNumber)
+
+export typealias WindowBirthMap = Map with (ValueId, ValueId)
 
 export typealias PhiParamSourceMap = Map with (ValueId, ParamPositionMask)
 
@@ -519,10 +535,117 @@ end 'OpenKeptSite'
 
 module typealias OpenKeptSiteArray = Array with OpenKeptSite
 
+export enum DroppedOwnedKind
+	promise
+	linear
+end 'DroppedOwnedKind'
+
+// @generated library-cache begin
+let CacheCasesDroppedOwnedKind = [DroppedOwnedKind.promise, DroppedOwnedKind.linear]
+
+function cacheReadDroppedOwnedKind(reader LibraryCacheReader) returns DroppedOwnedKind throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesDroppedOwnedKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadDroppedOwnedKind'
+
+function cacheTableAgreesDroppedOwnedKind() returns bool
+	let declared = DroppedOwnedKind.allCases
+
+	if CacheCasesDroppedOwnedKind.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesDroppedOwnedKind.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesDroppedOwnedKind'
+
+module function cacheEnumTablesAgreeInCompilerRegionWindows() returns bool
+	if not cacheTableAgreesDroppedOwnedKind() 'disagreesCacheTableAgreesDroppedOwnedKind'
+		return false
+	end 'disagreesCacheTableAgreesDroppedOwnedKind'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerRegionWindows'
+
+// @generated library-cache end
+
+export type DroppedOwned
+	export let op as ElementIndex
+	export let name as immutable ByteArray
+	export let kind as DroppedOwnedKind
+
+	export static function create(op ElementIndex, name immutable ByteArray, kind DroppedOwnedKind) returns DroppedOwned
+		return Self{op: op, name: name, kind: kind}
+	end 'create'
+
+	export function atOp(opIndex ElementIndex) returns DroppedOwned
+		return DroppedOwned.create(opIndex, name: self.name, kind: self.kind)
+	end 'atOp'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.unsigned(self.op as CacheUnsigned)
+		writer.bytes(self.name)
+		writer.unsigned(self.kind.ordinal as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns DroppedOwned throws LibraryCacheDamage
+		let f_op = (try reader.unsigned()) as ElementIndex
+		let f_name = freeze try reader.bytes()
+		let f_kind = try cacheReadDroppedOwnedKind(reader)
+
+		return Self{op: f_op, name: f_name, kind: f_kind}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(DroppedOwned) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'DroppedOwned'
+
+export typealias DroppedOwnedArray = Array with DroppedOwned
+
+// @generated library-cache begin
+function cacheWriteDroppedOwnedArray(writer LibraryCacheWriter, value DroppedOwnedArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteDroppedOwnedArray'
+
+function cacheReadDroppedOwnedArray(reader LibraryCacheReader) returns DroppedOwnedArray throws LibraryCacheDamage
+	let count = try reader.count()
+	let result = DroppedOwnedArray.create(count, zeroed: false)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try DroppedOwned.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadDroppedOwnedArray'
+
+// @generated library-cache end
+
 export type CapabilityNotes
 	export var windowCallOps as FuncIndexArray
 	export var windowCallLabels as NameRoster
 	export var windowCallPausedOperands as PausedOperandMaskArray
+	export var windowReceiverOps as FuncIndexArray
+	export var windowReceiverLabels as NameRoster
+	export var windowReceiverLines as LineNumberArray
+	export var windowReceiverColumns as ColumnNumberArray
 	export var useSiteParams as ParamCountArray
 	export var useSiteMutable as BoolArray
 	export var useSiteLines as LineNumberArray
@@ -533,8 +656,9 @@ export type CapabilityNotes
 	export var captureSites as CaptureSiteArray
 	export var storedSlotArgs as StoredSlotArgArray
 	export var tiedAsyncOps as FuncIndexArray
-	export var droppedPromiseOps as FuncIndexArray
-	export var droppedPromiseNames as NameRoster
+	export var droppedOwned as DroppedOwnedArray
+	export var liveLinearCallOps as FuncIndexArray
+	export var liveLinearCallNames as NameRoster
 	export var undecidedResultOps as FuncIndexArray
 	export var derivedResultValues as ValueIdArray
 	export var derivedResultOps as FuncIndexArray
@@ -565,7 +689,7 @@ export type CapabilityNotes
 	export var keptReadBlocks as FuncIndexArray
 
 	export static function create() returns CapabilityNotes
-		return Self{windowCallOps: FuncIndexArray.create(0), windowCallLabels: NameRoster.create(0), windowCallPausedOperands: PausedOperandMaskArray.create(0), useSiteParams: ParamCountArray.create(0), useSiteMutable: BoolArray.create(0), useSiteLines: LineNumberArray.create(0), useSitePhrases: NameRoster.create(0), argNameOps: FuncIndexArray.create(0), argNamePositions: ParamCountArray.create(0), argNames: NameRoster.create(0), captureSites: CaptureSiteArray.create(0), storedSlotArgs: StoredSlotArgArray.create(0), tiedAsyncOps: FuncIndexArray.create(0), droppedPromiseOps: FuncIndexArray.create(0), droppedPromiseNames: NameRoster.create(0), undecidedResultOps: FuncIndexArray.create(0), derivedResultValues: ValueIdArray.create(0), derivedResultOps: FuncIndexArray.create(0), resultWriteOps: FuncIndexArray.create(0), resultWriteLines: LineNumberArray.create(0), resultWriteColumns: ColumnNumberArray.create(0), resultWriteFields: NameRoster.create(0), resultWritePlaces: NameRoster.create(0), resultWriteWritable: BoolArray.create(0), retainOps: FuncIndexArray.create(0), retainParams: ParamCountArray.create(0), joinedSources: JoinedParamSourceArray.create(0), callArgSources: CallArgSourceArray.create(0), resultUses: ResultUseArray.create(0), heldParams: ParamCountArray.create(0), heldResultOps: FuncIndexArray.create(0), constructionOps: FuncIndexArray.create(0), keptArgOps: FuncIndexArray.create(0), keptArgPositions: ParamCountArray.create(0), keptArgNames: NameRoster.create(0), keptArgLines: LineNumberArray.create(0), keptArgColumns: ColumnNumberArray.create(0), keptArgOrigins: UniqueOriginArray.create(0), keptNextLap: BoolArray.create(0), keptReadSites: FuncIndexArray.create(0), keptReadLines: LineNumberArray.create(0), keptReadColumns: ColumnNumberArray.create(0), keptReadBlocks: FuncIndexArray.create(0)}
+		return Self{windowCallOps: FuncIndexArray.create(0), windowCallLabels: NameRoster.create(0), windowCallPausedOperands: PausedOperandMaskArray.create(0), windowReceiverOps: FuncIndexArray.create(0), windowReceiverLabels: NameRoster.create(0), windowReceiverLines: LineNumberArray.create(0), windowReceiverColumns: ColumnNumberArray.create(0), useSiteParams: ParamCountArray.create(0), useSiteMutable: BoolArray.create(0), useSiteLines: LineNumberArray.create(0), useSitePhrases: NameRoster.create(0), argNameOps: FuncIndexArray.create(0), argNamePositions: ParamCountArray.create(0), argNames: NameRoster.create(0), captureSites: CaptureSiteArray.create(0), storedSlotArgs: StoredSlotArgArray.create(0), tiedAsyncOps: FuncIndexArray.create(0), droppedOwned: DroppedOwnedArray.create(0), liveLinearCallOps: FuncIndexArray.create(0), liveLinearCallNames: NameRoster.create(0), undecidedResultOps: FuncIndexArray.create(0), derivedResultValues: ValueIdArray.create(0), derivedResultOps: FuncIndexArray.create(0), resultWriteOps: FuncIndexArray.create(0), resultWriteLines: LineNumberArray.create(0), resultWriteColumns: ColumnNumberArray.create(0), resultWriteFields: NameRoster.create(0), resultWritePlaces: NameRoster.create(0), resultWriteWritable: BoolArray.create(0), retainOps: FuncIndexArray.create(0), retainParams: ParamCountArray.create(0), joinedSources: JoinedParamSourceArray.create(0), callArgSources: CallArgSourceArray.create(0), resultUses: ResultUseArray.create(0), heldParams: ParamCountArray.create(0), heldResultOps: FuncIndexArray.create(0), constructionOps: FuncIndexArray.create(0), keptArgOps: FuncIndexArray.create(0), keptArgPositions: ParamCountArray.create(0), keptArgNames: NameRoster.create(0), keptArgLines: LineNumberArray.create(0), keptArgColumns: ColumnNumberArray.create(0), keptArgOrigins: UniqueOriginArray.create(0), keptNextLap: BoolArray.create(0), keptReadSites: FuncIndexArray.create(0), keptReadLines: LineNumberArray.create(0), keptReadColumns: ColumnNumberArray.create(0), keptReadBlocks: FuncIndexArray.create(0)}
 	end 'create'
 
 	export function noteArgumentName(op ElementIndex, position ParamCount, name immutable ByteArray)
@@ -575,7 +699,7 @@ export type CapabilityNotes
 	end 'noteArgumentName'
 
 	export function holdsNothing() returns bool
-		return self.windowCallOps.isEmpty() and self.useSiteParams.isEmpty() and self.argNameOps.isEmpty() and self.captureSites.isEmpty() and self.storedSlotArgs.isEmpty() and self.tiedAsyncOps.isEmpty() and self.droppedPromiseOps.isEmpty() and self.droppedPromiseNames.isEmpty() and self.undecidedResultOps.isEmpty() and self.derivedResultValues.isEmpty() and self.resultWriteOps.isEmpty() and self.retainOps.isEmpty() and self.joinedSources.isEmpty() and self.callArgSources.isEmpty() and self.resultUses.isEmpty() and self.heldParams.isEmpty() and self.heldResultOps.isEmpty() and self.constructionOps.isEmpty() and self.keptArgOps.isEmpty()
+		return self.windowCallOps.isEmpty() and self.windowReceiverOps.isEmpty() and self.useSiteParams.isEmpty() and self.argNameOps.isEmpty() and self.captureSites.isEmpty() and self.storedSlotArgs.isEmpty() and self.tiedAsyncOps.isEmpty() and self.droppedOwned.isEmpty() and self.liveLinearCallOps.isEmpty() and self.undecidedResultOps.isEmpty() and self.derivedResultValues.isEmpty() and self.resultWriteOps.isEmpty() and self.retainOps.isEmpty() and self.joinedSources.isEmpty() and self.callArgSources.isEmpty() and self.resultUses.isEmpty() and self.heldParams.isEmpty() and self.heldResultOps.isEmpty() and self.constructionOps.isEmpty() and self.keptArgOps.isEmpty()
 	end 'holdsNothing'
 
 	export function shiftedBy(opOffset ElementIndex) returns CapabilityNotes
@@ -585,6 +709,14 @@ export type CapabilityNotes
 			shifted.windowCallOps.push(op + opOffset)
 		end 'eachWindowCall'
 
+		for op in self.windowReceiverOps 'eachWindowReceiver'
+			shifted.windowReceiverOps.push(op + opOffset)
+		end 'eachWindowReceiver'
+
+		shifted.windowReceiverLabels = self.windowReceiverLabels.clone()
+		shifted.windowReceiverLines = self.windowReceiverLines.clone()
+		shifted.windowReceiverColumns = self.windowReceiverColumns.clone()
+
 		for op in self.argNameOps 'eachNamedCall'
 			shifted.argNameOps.push(op + opOffset)
 		end 'eachNamedCall'
@@ -593,9 +725,15 @@ export type CapabilityNotes
 			shifted.tiedAsyncOps.push(op + opOffset)
 		end 'eachTiedAsync'
 
-		for op in self.droppedPromiseOps 'eachDroppedPromise'
-			shifted.droppedPromiseOps.push(op + opOffset)
-		end 'eachDroppedPromise'
+		for dropped in self.droppedOwned 'eachDroppedOwned'
+			shifted.droppedOwned.push(dropped.atOp(dropped.op + opOffset))
+		end 'eachDroppedOwned'
+
+		for op in self.liveLinearCallOps 'eachLiveLinearCall'
+			shifted.liveLinearCallOps.push(op + opOffset)
+		end 'eachLiveLinearCall'
+
+		shifted.liveLinearCallNames = self.liveLinearCallNames.clone()
 
 		for op in self.undecidedResultOps 'eachUndecidedResult'
 			shifted.undecidedResultOps.push(op + opOffset)
@@ -623,7 +761,6 @@ export type CapabilityNotes
 
 		shifted.retainParams = self.retainParams.clone()
 
-		shifted.droppedPromiseNames = self.droppedPromiseNames.clone()
 		shifted.windowCallLabels = self.windowCallLabels.clone()
 		shifted.windowCallPausedOperands = self.windowCallPausedOperands.clone()
 		shifted.useSiteParams = self.useSiteParams.clone()
@@ -712,6 +849,10 @@ export type CapabilityNotes
 		cacheWriteFuncIndexArray(writer, value: self.windowCallOps)
 		cacheWriteNameRoster(writer, value: self.windowCallLabels)
 		cacheWritePausedOperandMaskArray(writer, value: self.windowCallPausedOperands)
+		cacheWriteFuncIndexArray(writer, value: self.windowReceiverOps)
+		cacheWriteNameRoster(writer, value: self.windowReceiverLabels)
+		cacheWriteLineNumberArray(writer, value: self.windowReceiverLines)
+		cacheWriteColumnNumberArray(writer, value: self.windowReceiverColumns)
 		cacheWriteParamCountArray(writer, value: self.useSiteParams)
 		cacheWriteBoolArray(writer, value: self.useSiteMutable)
 		cacheWriteLineNumberArray(writer, value: self.useSiteLines)
@@ -722,8 +863,9 @@ export type CapabilityNotes
 		cacheWriteCaptureSiteArray(writer, value: self.captureSites)
 		cacheWriteStoredSlotArgArray(writer, value: self.storedSlotArgs)
 		cacheWriteFuncIndexArray(writer, value: self.tiedAsyncOps)
-		cacheWriteFuncIndexArray(writer, value: self.droppedPromiseOps)
-		cacheWriteNameRoster(writer, value: self.droppedPromiseNames)
+		cacheWriteDroppedOwnedArray(writer, value: self.droppedOwned)
+		cacheWriteFuncIndexArray(writer, value: self.liveLinearCallOps)
+		cacheWriteNameRoster(writer, value: self.liveLinearCallNames)
 		cacheWriteFuncIndexArray(writer, value: self.undecidedResultOps)
 		cacheWriteValueIdArray(writer, value: self.derivedResultValues)
 		cacheWriteFuncIndexArray(writer, value: self.derivedResultOps)
@@ -758,6 +900,10 @@ export type CapabilityNotes
 		let f_windowCallOps = try cacheReadFuncIndexArray(reader)
 		let f_windowCallLabels = try cacheReadNameRoster(reader)
 		let f_windowCallPausedOperands = try cacheReadPausedOperandMaskArray(reader)
+		let f_windowReceiverOps = try cacheReadFuncIndexArray(reader)
+		let f_windowReceiverLabels = try cacheReadNameRoster(reader)
+		let f_windowReceiverLines = try cacheReadLineNumberArray(reader)
+		let f_windowReceiverColumns = try cacheReadColumnNumberArray(reader)
 		let f_useSiteParams = try cacheReadParamCountArray(reader)
 		let f_useSiteMutable = try cacheReadBoolArray(reader)
 		let f_useSiteLines = try cacheReadLineNumberArray(reader)
@@ -768,8 +914,9 @@ export type CapabilityNotes
 		let f_captureSites = try cacheReadCaptureSiteArray(reader)
 		let f_storedSlotArgs = try cacheReadStoredSlotArgArray(reader)
 		let f_tiedAsyncOps = try cacheReadFuncIndexArray(reader)
-		let f_droppedPromiseOps = try cacheReadFuncIndexArray(reader)
-		let f_droppedPromiseNames = try cacheReadNameRoster(reader)
+		let f_droppedOwned = try cacheReadDroppedOwnedArray(reader)
+		let f_liveLinearCallOps = try cacheReadFuncIndexArray(reader)
+		let f_liveLinearCallNames = try cacheReadNameRoster(reader)
 		let f_undecidedResultOps = try cacheReadFuncIndexArray(reader)
 		let f_derivedResultValues = try cacheReadValueIdArray(reader)
 		let f_derivedResultOps = try cacheReadFuncIndexArray(reader)
@@ -799,11 +946,11 @@ export type CapabilityNotes
 		let f_keptReadColumns = try cacheReadColumnNumberArray(reader)
 		let f_keptReadBlocks = try cacheReadFuncIndexArray(reader)
 
-		return Self{windowCallOps: f_windowCallOps, windowCallLabels: f_windowCallLabels, windowCallPausedOperands: f_windowCallPausedOperands, useSiteParams: f_useSiteParams, useSiteMutable: f_useSiteMutable, useSiteLines: f_useSiteLines, useSitePhrases: f_useSitePhrases, argNameOps: f_argNameOps, argNamePositions: f_argNamePositions, argNames: f_argNames, captureSites: f_captureSites, storedSlotArgs: f_storedSlotArgs, tiedAsyncOps: f_tiedAsyncOps, droppedPromiseOps: f_droppedPromiseOps, droppedPromiseNames: f_droppedPromiseNames, undecidedResultOps: f_undecidedResultOps, derivedResultValues: f_derivedResultValues, derivedResultOps: f_derivedResultOps, resultWriteOps: f_resultWriteOps, resultWriteLines: f_resultWriteLines, resultWriteColumns: f_resultWriteColumns, resultWriteFields: f_resultWriteFields, resultWritePlaces: f_resultWritePlaces, resultWriteWritable: f_resultWriteWritable, retainOps: f_retainOps, retainParams: f_retainParams, joinedSources: f_joinedSources, callArgSources: f_callArgSources, resultUses: f_resultUses, heldParams: f_heldParams, heldResultOps: f_heldResultOps, constructionOps: f_constructionOps, keptArgOps: f_keptArgOps, keptArgPositions: f_keptArgPositions, keptArgNames: f_keptArgNames, keptArgLines: f_keptArgLines, keptArgColumns: f_keptArgColumns, keptArgOrigins: f_keptArgOrigins, keptNextLap: f_keptNextLap, keptReadSites: f_keptReadSites, keptReadLines: f_keptReadLines, keptReadColumns: f_keptReadColumns, keptReadBlocks: f_keptReadBlocks}
+		return Self{windowCallOps: f_windowCallOps, windowCallLabels: f_windowCallLabels, windowCallPausedOperands: f_windowCallPausedOperands, windowReceiverOps: f_windowReceiverOps, windowReceiverLabels: f_windowReceiverLabels, windowReceiverLines: f_windowReceiverLines, windowReceiverColumns: f_windowReceiverColumns, useSiteParams: f_useSiteParams, useSiteMutable: f_useSiteMutable, useSiteLines: f_useSiteLines, useSitePhrases: f_useSitePhrases, argNameOps: f_argNameOps, argNamePositions: f_argNamePositions, argNames: f_argNames, captureSites: f_captureSites, storedSlotArgs: f_storedSlotArgs, tiedAsyncOps: f_tiedAsyncOps, droppedOwned: f_droppedOwned, liveLinearCallOps: f_liveLinearCallOps, liveLinearCallNames: f_liveLinearCallNames, undecidedResultOps: f_undecidedResultOps, derivedResultValues: f_derivedResultValues, derivedResultOps: f_derivedResultOps, resultWriteOps: f_resultWriteOps, resultWriteLines: f_resultWriteLines, resultWriteColumns: f_resultWriteColumns, resultWriteFields: f_resultWriteFields, resultWritePlaces: f_resultWritePlaces, resultWriteWritable: f_resultWriteWritable, retainOps: f_retainOps, retainParams: f_retainParams, joinedSources: f_joinedSources, callArgSources: f_callArgSources, resultUses: f_resultUses, heldParams: f_heldParams, heldResultOps: f_heldResultOps, constructionOps: f_constructionOps, keptArgOps: f_keptArgOps, keptArgPositions: f_keptArgPositions, keptArgNames: f_keptArgNames, keptArgLines: f_keptArgLines, keptArgColumns: f_keptArgColumns, keptArgOrigins: f_keptArgOrigins, keptNextLap: f_keptNextLap, keptReadSites: f_keptReadSites, keptReadLines: f_keptReadLines, keptReadColumns: f_keptReadColumns, keptReadBlocks: f_keptReadBlocks}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize344
-		return sizeof(CapabilityNotes) as CacheSize344
+	static function cacheLayoutBytes() returns CacheSize384
+		return sizeof(CapabilityNotes) as CacheSize384
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -919,8 +1066,25 @@ export type ParamSourceTable
 	end 'mixedJoinSources'
 end 'ParamSourceTable'
 
+module union PendingCallOpen
+	none
+	opened(box ValueId, range SourceRange, label immutable ByteArray)
+end 'PendingCallOpen'
+
+module union PendingWindowReceiver
+	none
+	moved(line LineNumber, column ColumnNumber, label immutable ByteArray)
+end 'PendingWindowReceiver'
+
+module union SuspendedStatementFacts
+	nothing
+	held(reached ValueIdArray, merged ValueMarkSet)
+end 'SuspendedStatementFacts'
+
 export type RegionFactTable
 	module var windows as WindowStack
+	module var windowBirths as WindowBirthMap
+	module var pendingWindowReceiver as PendingWindowReceiver
 	module var fieldOrigins as FieldOriginMap
 	module var mutableUseLines as UseLineMap
 	module var paramSources as ParamSourceTable
@@ -935,6 +1099,10 @@ export type RegionFactTable
 	module var carriedHolders as CarriedHolderArray
 	module var lentUniques as ValueMarkSet
 	module var destructuredUniques as ValueMarkSet
+	module var acquiredNames as AcquiredStateNameArray
+	module var reachedStates as ValueIdArray
+	module var mergedValues as ValueMarkSet
+	module var pendingCallOpen as PendingCallOpen
 
 	// Filed for an alias of an immutable holder and for a view of read-only elements, never for a `let` that
 	// owns a fresh record: a by-reference cell write is refused only for a filed root.
@@ -945,8 +1113,34 @@ export type RegionFactTable
 	module var heldLiterals as HeldLiteralMap
 
 	export static function create() returns RegionFactTable
-		return Self{windows: WindowStack.create(0), fieldOrigins: FieldOriginMap.create(), mutableUseLines: UseLineMap.create(), paramSources: ParamSourceTable.create(), callOpens: WindowStack.create(0), callGuards: 0, deferredRefusal: DeferredRefusal.none, handedBack: ValueIdArray.create(0), carriedRoots: ValueMarkSet.create(), carriedDerivations: CarriedDerivationArray.create(0), carriedStores: CarriedStoreArray.create(0), carriedStoredSlots: CarriedStoredSlotArray.create(0), carriedHolders: CarriedHolderArray.create(0), lentUniques: ValueMarkSet.create(), destructuredUniques: ValueMarkSet.create(), cellRefusedRoots: ValueMarkSet.create(), cleanFunctionValues: ValueMarkSet.create(), lentLocals: LentLocalArray.create(0), pendingHeld: HeldStoreArray.create(0), heldLiterals: HeldLiteralMap.create()}
+		return Self{windows: WindowStack.create(0), windowBirths: WindowBirthMap.create(), pendingWindowReceiver: PendingWindowReceiver.none, fieldOrigins: FieldOriginMap.create(), mutableUseLines: UseLineMap.create(), paramSources: ParamSourceTable.create(), callOpens: WindowStack.create(0), callGuards: 0, deferredRefusal: DeferredRefusal.none, handedBack: ValueIdArray.create(0), carriedRoots: ValueMarkSet.create(), carriedDerivations: CarriedDerivationArray.create(0), carriedStores: CarriedStoreArray.create(0), carriedStoredSlots: CarriedStoredSlotArray.create(0), carriedHolders: CarriedHolderArray.create(0), lentUniques: ValueMarkSet.create(), destructuredUniques: ValueMarkSet.create(), acquiredNames: AcquiredStateNameArray.create(0), reachedStates: ValueIdArray.create(0), mergedValues: ValueMarkSet.create(), pendingCallOpen: PendingCallOpen.none, cellRefusedRoots: ValueMarkSet.create(), cleanFunctionValues: ValueMarkSet.create(), lentLocals: LentLocalArray.create(0), pendingHeld: HeldStoreArray.create(0), heldLiterals: HeldLiteralMap.create()}
 	end 'create'
+
+	module function birthOf(value ValueId) returns ValueId
+		return try self.windowBirths.get(value) otherwise value
+	end 'birthOf'
+
+	module function carriesABirth(value ValueId) returns bool
+		return self.windowBirths.contains(value)
+	end 'carriesABirth'
+
+	module function forgetStatement()
+		self.reachedStates.clear()
+		self.mergedValues = ValueMarkSet.create()
+	end 'forgetStatement'
+
+	module function suspendStatement() returns SuspendedStatementFacts
+		let suspended = SuspendedStatementFacts.held(self.reachedStates, merged: self.mergedValues)
+		self.reachedStates = ValueIdArray.create(0)
+		self.mergedValues = ValueMarkSet.create()
+
+		return suspended
+	end 'suspendStatement'
+
+	module function resumeStatement(reached ValueIdArray, merged ValueMarkSet)
+		self.reachedStates = reached
+		self.mergedValues = merged
+	end 'resumeStatement'
 
 	module function clearCarried()
 		self.carriedRoots = ValueMarkSet.create()
@@ -987,7 +1181,7 @@ module function capabilityWithinExplicitWindows(windows WindowStack, value Value
 		position = position - 1
 		let window = try windows.get(position) otherwise panic("capabilityWithinExplicitWindows: windows.get OOB at {position} below the count just read")
 
-		if window.kind == WindowKind.modify 'anExplicitWindow'
+		if window.kind == WindowKind.modify or window.kind == WindowKind.acquire 'anExplicitWindow'
 			return capabilityWithinWindowAt(windows, position: position, value: value, intrinsic: intrinsic)
 		end 'anExplicitWindow'
 	end 'outwardFromTheInnermost'
@@ -995,33 +1189,66 @@ module function capabilityWithinExplicitWindows(windows WindowStack, value Value
 	return intrinsic
 end 'capabilityWithinExplicitWindows'
 
-function capabilityWithinWindowAt(windows WindowStack, position ElementIndex, value ValueId, intrinsic ValueCapability) returns ValueCapability
-	let window = try windows.get(position) otherwise panic("capabilityWithinWindowAt: windows.get OOB at {position}")
+function windowOpensARoot(window OpenWindow) returns bool
+	return not window.opensAField and window.kind != WindowKind.acquire
+end 'windowOpensARoot'
 
-	if not window.opensAField and value == window.openedValue 'theOpenedRoot'
-		return ValueCapability.mutable
+enum WindowStanding
+	theOpenedRoot
+	anEnclosingRoot
+	outerData
+	bornInside
+end 'WindowStanding'
+
+function standingInWindowAt(windows WindowStack, position ElementIndex, value ValueId) returns WindowStanding
+	let window = try windows.get(position) otherwise panic("standingInWindowAt: windows.get OOB at {position}")
+
+	if windowOpensARoot(window) and value == window.openedValue 'theOpenedRoot'
+		return WindowStanding.theOpenedRoot
 	end 'theOpenedRoot'
 
 	if valueIsAnEnclosingWindowsRoot(windows, value: value, below: position) 'outsideTheInnerBlock'
-		return ValueCapability.paused
+		return WindowStanding.anEnclosingRoot
 	end 'outsideTheInnerBlock'
 
 	if value >= window.floor 'insideTheWindow'
-		return intrinsic
+		return WindowStanding.bornInside
 	end 'insideTheWindow'
 
-	if intrinsic == ValueCapability.mutable or intrinsic == ValueCapability.temporary 'outerWritableData'
-		return ValueCapability.paused
-	end 'outerWritableData'
+	return WindowStanding.outerData
+end 'standingInWindowAt'
 
-	return intrinsic
+module function valueIsOutsideInnermostWindow(windows WindowStack, value ValueId) returns bool
+	return match standingInWindowAt(windows, position: windows.count() - 1, value: value) 'standing'
+		anEnclosingRoot or
+		outerData gives true
+		theOpenedRoot or
+		bornInside gives false
+	end 'standing'
+end 'valueIsOutsideInnermostWindow'
+
+module function keepingPositionText(callee ByteArray, parameter ByteArray) returns String
+	return "the parameter '{displayParamName(parameter)}' of '{String.from(callee)}', which keeps it"
+end 'keepingPositionText'
+
+module function outerValueIntoOpenWindowMessage(label ByteArray, into String) returns String
+	return "an isolated value from outside '{String.from(label)}' cannot be moved into {into} while '{String.from(label)}' is open: it would become part of the open region. Move it into an `isolated` parameter or an `isolated` slot, send it, or `merge` it"
+end 'outerValueIntoOpenWindowMessage'
+
+function capabilityWithinWindowAt(windows WindowStack, position ElementIndex, value ValueId, intrinsic ValueCapability) returns ValueCapability
+	return match standingInWindowAt(windows, position: position, value: value) 'standing'
+		theOpenedRoot gives ValueCapability.mutable
+		anEnclosingRoot gives ValueCapability.paused
+		bornInside gives intrinsic
+		outerData gives ValueCapability.paused if intrinsic == ValueCapability.mutable or intrinsic == ValueCapability.temporary else intrinsic
+	end 'standing'
 end 'capabilityWithinWindowAt'
 
 function valueIsAnEnclosingWindowsRoot(windows WindowStack, value ValueId, below ElementIndex) returns bool
 	for position in 0 upto below 'eachEnclosingWindow'
 		let enclosing = try windows.get(position) otherwise panic("valueIsAnEnclosingWindowsRoot: windows.get OOB at {position} below the window asked about")
 
-		if not enclosing.opensAField and value == enclosing.openedValue 'anEnclosingRoot'
+		if windowOpensARoot(enclosing) and value == enclosing.openedValue 'anEnclosingRoot'
 			return true
 		end 'anEnclosingRoot'
 	end 'eachEnclosingWindow'
@@ -1052,7 +1279,7 @@ end 'windowOpenedOnRoot'
 
 module function windowOpensValue(windows WindowStack, value ValueId) returns bool
 	for window in windows 'eachWindow'
-		if not window.opensAField and window.openedValue == value 'theOpenedValue'
+		if windowOpensARoot(window) and window.openedValue == value 'theOpenedValue'
 			return true
 		end 'theOpenedValue'
 	end 'eachWindow'
@@ -1064,9 +1291,9 @@ module function modifyWindowCount(windows WindowStack) returns ElementIndex
 	var count = 0 as ElementIndex
 
 	for window in windows 'eachWindow'
-		if window.kind == WindowKind.modify 'aModifyBlock'
+		if window.kind == WindowKind.modify or window.kind == WindowKind.acquire 'anExplicitBlock'
 			count = count + 1
-		end 'aModifyBlock'
+		end 'anExplicitBlock'
 	end 'eachWindow'
 
 	return count

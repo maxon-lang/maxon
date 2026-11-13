@@ -649,7 +649,7 @@ function buildAndReport(inputPaths MaxonSourcePathArray, target Target, args Max
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'refusedOptions'
 
-	let session = CompileSession.printing()
+	let session = DriverSession.printing()
 	let lockExit = acquireBuildTreeLock(inputPaths, outputOverride: args.outputOverride, into: session.treeLock)
 
 	if not exitSucceeded(lockExit) 'busyTree'
@@ -690,7 +690,7 @@ union RecordKeeping
 end 'RecordKeeping'
 
 // Separate from `buildAndReport` so the locks have one release: Maxon has no `defer`.
-function buildUnlessUpToDate(job BuildJob, session CompileSession) returns BuildOutcome
+function buildUnlessUpToDate(job BuildJob, session DriverSession) returns BuildOutcome
 	let output = try resolveOutputPath(job.target, inputPaths: job.inputPaths, outputOverride: job.outputOverride) otherwise 'unresolvable'
 		return compileAndReport(job, subject: job.firstInputPath(), reason: "{NoBuildRecordReason}: the output path cannot be resolved", keeping: RecordKeeping.keepsNone, session: session)
 	end 'unresolvable'
@@ -719,7 +719,7 @@ function buildUnlessUpToDate(job BuildJob, session CompileSession) returns Build
 		return compileWithoutRecord(job, output: output, identity: identity, reason: "the output is the running compiler", session: session)
 	end 'rebuildsTheCompiler'
 
-	match buildRecordOf(job.recordRequestFor(identity, sourceOrder: session.sourceOrder)) 'recordability'
+	match buildRecordOf(job.recordRequestFor(identity, sourceOrder: sourceOrderFromEnvironment())) 'recordability'
 		unrecordable(why) then return compileWithoutRecord(job, output: output, identity: identity, reason: "{NoBuildRecordReason}: {why}", session: session)
 		recordable(record) then return buildKeepingRecord(job, record: record, output: output, session: session)
 	end 'recordability'
@@ -731,7 +731,7 @@ function unidentifiableOutcome(why RunCacheError) returns BuildOutcome
 	return BuildOutcome.failed(OwnFailureExit)
 end 'unidentifiableOutcome'
 
-function buildKeepingRecord(job BuildJob, record BuildRecord, output FilePath, session CompileSession) returns BuildOutcome
+function buildKeepingRecord(job BuildJob, record BuildRecord, output FilePath, session DriverSession) returns BuildOutcome
 	let freshness = Freshness.stale("{RebuildFlag} was requested") if job.args.rebuildRequested else freshnessOf(record)
 
 	match freshness 'freshness'
@@ -744,7 +744,7 @@ function buildKeepingRecord(job BuildJob, record BuildRecord, output FilePath, s
 	return BuildOutcome.built(output)
 end 'buildKeepingRecord'
 
-function compileRecording(job BuildJob, record BuildRecord, output FilePath, reason String, session CompileSession) returns BuildOutcome
+function compileRecording(job BuildJob, record BuildRecord, output FilePath, reason String, session DriverSession) returns BuildOutcome
 	// Before the compile touches the output, so a compile that fails leaves no record claiming it is up to
 	// date.
 	try File.delete(record.path) otherwise ignore
@@ -756,7 +756,7 @@ function compileRecording(job BuildJob, record BuildRecord, output FilePath, rea
 	return compileAndReport(job, subject: output, reason: reason, keeping: RecordKeeping.keeps(record, started: started), session: session)
 end 'compileRecording'
 
-function compileWithoutRecord(job BuildJob, output FilePath, identity FilePath, reason String, session CompileSession) returns BuildOutcome
+function compileWithoutRecord(job BuildJob, output FilePath, identity FilePath, reason String, session DriverSession) returns BuildOutcome
 	discardBuildRecordOf(identity)
 
 	return compileAndReport(job, subject: output, reason: reason, keeping: RecordKeeping.keepsNone, session: session)
@@ -827,10 +827,11 @@ function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride St
 	return acquireTreeLock(root, into: into)
 end 'acquireBuildTreeLock'
 
-function compileAndReport(job BuildJob, subject FilePath, reason String, keeping RecordKeeping, session CompileSession) returns BuildOutcome
+function compileAndReport(job BuildJob, subject FilePath, reason String, keeping RecordKeeping, session DriverSession) returns BuildOutcome
 	compilerLogger(CompilerLogGroup.compiler).info("compiling {subject}: {reason}")
 
-	let product = try compile(job.inputPaths, target: job.target, outputOverride: job.outputOverride, emitIr: job.args.emitIr, metrics: job.args.metrics, runtimeIrNames: job.args.runtimeIrNames, asyncTrace: job.args.asyncTrace, debugStream: job.args.debugStream, poisonFreed: job.args.poisonFreed, debugInfo: job.debugInfo, coverage: job.args.coverage, censusByTag: job.args.censusByTag, censusPhase: job.args.censusPhase, allocationsByTag: job.args.allocationsByTag, allocationsPhase: job.args.allocationsPhase, productVersion: job.productVersion, defines: job.defines, session: session) otherwise (e) 'compileErr'
+	let request = freeze CompileRequest.create(DriverWork.build, origin: ProjectOrigin.sources, target: job.target, session: session, inputPaths: job.inputPaths, outputOverride: job.outputOverride, emitIr: job.args.emitIr, metrics: job.args.metrics, runtimeIrNames: job.args.runtimeIrNames, asyncTrace: job.args.asyncTrace, debugStream: job.args.debugStream, poisonFreed: job.args.poisonFreed, debugInfo: job.debugInfo, coverage: job.args.coverage, censusByTag: job.args.censusByTag, censusPhase: job.args.censusPhase, allocationsByTag: job.args.allocationsByTag, allocationsPhase: job.args.allocationsPhase, productVersion: job.productVersion, defines: job.defines).clone()
+	let product = try compile(freshCompileDriver(), request: request, session: session) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return BuildOutcome.failed(OwnFailureExit)
 	end 'compileErr'
@@ -930,7 +931,7 @@ function runCheckScriptlib(args MaxonArgs) returns ExitCode
 		return SucceededExit
 	end 'nothingToCheck'
 
-	let clean = try scriptlibPackagesCompile(directory, session: CompileSession.printing()) otherwise (e) 'notChecked'
+	let clean = try scriptlibPackagesCompile(freshCompileDriver(), scriptlibDir: directory, session: DriverSession.printing()) otherwise (e) 'notChecked'
 		reportCompileError(e)
 		return OwnFailureExit
 	end 'notChecked'
@@ -952,7 +953,7 @@ function runCheckStdlib(args MaxonArgs) returns ExitCode
 	var clean = true
 
 	for target in targets 'eachTarget'
-		let check = try stdlibCheckOf(target, session: CompileSession.discarding()) otherwise (e) 'notChecked'
+		let check = try stdlibCheckOf(freshCompileDriver(), target: target, session: DriverSession.discarding()) otherwise (e) 'notChecked'
 			reportCompileError(e)
 			return OwnFailureExit
 		end 'notChecked'

@@ -118,7 +118,6 @@ ARTIFACT_REWIND = {
     "opRanges": ("parallel", "ops"),
     "covPoints": ("counted",),
     "asyncSpawnSites": ("opKeyed",),
-    "serviceAwaitSites": ("opKeyed",),
     "registryUseSites": ("custom", {
         "marks": [],
         "rewind": ["self.forgetRegistryUseSitesFrom(mark.ops, limit: opLimit)"],

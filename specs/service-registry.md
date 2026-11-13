@@ -76,7 +76,8 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: a-handle-converts-to-its-interface-at-every-door -->
 A `Fixed.handle` becomes a `Source.handle` at an argument, a return, a field initializer, an array element and
-a message argument; each path ends in an awaited reply, and the replies are distinct powers of two.
+a message argument; each path ends in an awaited reply, and the replies are distinct powers of two. The message
+argument comes back in the message's reply, because a message body never waits for another service's reply.
 ```maxon
 interface Source
 	function value() returns Integer
@@ -109,9 +110,9 @@ type Relay
 		return Self{asked: 0}
 	end 'create'
 
-	export function ask(source Source.handle) returns Integer
+	export function ask(source Source.handle) returns Source.handle
 		self.asked = self.asked + 1
-		return try await source.value() otherwise 0
+		return source.clone()
 	end 'ask'
 end 'Relay'
 
@@ -140,7 +141,8 @@ function main() returns ExitCode
 	let fromElement = try await element.value() otherwise 0
 
 	let relay = spawn Relay.create()
-	let fromMessage = try await relay.ask(spawn Fixed.create(16)) otherwise 0
+	let kept = try await relay.ask(spawn Fixed.create(16)) otherwise panic("the relay answers")
+	let fromMessage = try await kept.value() otherwise 0
 
 	return (fromArgument + fromReturn + fromField + fromElement + fromMessage) as ExitCode
 end 'main'
@@ -1149,8 +1151,9 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: error.an-await-cycle-through-a-second-implementer -->
 `Innocent`, the first implementer of `Echo`, awaits nothing. `Relay`, the second, awaits `Bouncer`, and
-`Bouncer` awaits through an `Echo.handle`, which may hold a `Relay`, so the two can wait on each other. The
-cycle is found through every implementer of the interface, not only the first. A requirement never waits, so
+`Bouncer` awaits through an `Echo.handle`, which may hold a `Relay`, so the two could wait on each other. A
+message never waits, so `Relay.echo` and `Bouncer.back` are each refused, and the await through the interface
+handle is refused whichever implementer the handle holds, not only the first. A requirement never waits, so
 `Relay.echo` is also refused at `Echo.echo`.
 ```maxon
 interface Echo
@@ -1209,10 +1212,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3210: <fragment>:26:18: 'Relay.echo' may wait (it awaits a reply from 'Bouncer' at line 28), but a requirement never waits or yields
-error E3139: <fragment>:41:14: service call cycle — these messages can deadlock waiting on each other:
-    `Bouncer.back` (<fragment>:41:14) awaits a reply from `Relay`
-    `Relay.echo` (<fragment>:28:14) awaits a reply from `Bouncer`
-    A message may not await a reply from a service that can await back. Break the ring by making one of these messages return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it — because a non-blocking send is not part of the graph
+error E3221: <fragment>:26:18: the message 'echo' may wait (it awaits a reply from 'Bouncer' at line 28) while holding its own service; send the request with this service's handle and handle the reply in another message
+error E3221: <fragment>:39:18: the message 'back' may wait (it awaits a reply from 'Echo' at line 41) while holding its own service; send the request with this service's handle and handle the reply in another message
 ```
 
 <!-- test: a-shared-value-of-a-string -->

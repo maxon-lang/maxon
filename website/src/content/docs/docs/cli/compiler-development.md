@@ -113,7 +113,7 @@ maxon scale-test [options]
 | Option | Description |
 |--------|-------------|
 | `--rungs=<n>` | Climb `<n>` rungs (default 6, range 1–8). Each rung doubles the program. |
-| `--repeat=<n>` | Compile every rung `<n>` times (default 1, range 1–25) and report the least CPU per phase. Memory comes from the first compile and must be identical in the rest; a difference is a broken run. |
+| `--repeat=<n>` | Compile every rung `<n>` times (default 1, range 1–25) and report the least CPU per phase. Memory comes from the first compile and must be identical in the rest; a difference is a broken run. Each compile of a rung starts with the executable and `.mxdbg` sidecar the previous one left removed, so every repeat meets the same output directory. |
 | `--note=<text>` | Record the run as a dated row in `docs/optimization-log.md` with `<text>` as the reason. Without it, nothing is recorded. |
 | `--emit-corpus=<dir>` | Write the generated programs to `<dir>` and compile nothing. |
 | `--result-json=<path>` | Also write the whole run, including the change since the last recorded row, to `<path>` as JSON. |

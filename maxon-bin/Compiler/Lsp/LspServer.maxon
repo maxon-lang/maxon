@@ -60,7 +60,7 @@ let TrustedKey = "trusted"
 // Run the server until the client ends the session, and report how it ended.
 export function runLspServer(args MaxonArgs) returns ExitCode
 	_ = quietTheBuildChatter(args.logOverridden)
-	let writer = spawn LspStdoutWriter.create()
+	let writer = spawn(capacity: InstrumentationMailboxCapacity) LspStdoutWriter.create()
 	let stdinReader = spawn LspStdinReader.create()
 	let mode = LspSessionMode.served if args.relayed else LspSessionMode.unrouted
 	let session = LspSession.create(writer, stdinReader: stdinReader, mode: mode)
@@ -103,6 +103,7 @@ type LspSession
 		end 'pump'
 
 		self.finishRelay()
+		self.workspace.endChecks()
 		submitToLspWriter(self.workspace.writer, command: LspWriterCommand.endSession)
 
 		return exitCode()
@@ -126,12 +127,13 @@ type LspSession
 			endOfStream then self.stopped = true
 			framingError(detail) then self.failOnBrokenStream(detail)
 			projectResolved(dir, answer, ticket) then self.projectResolved(dir, answer: answer, ticket: ticket)
+			projectCheckSettled(request, interest) then self.workspace.projectCheckSettled(request, interest: interest)
 			childFramed or
 			childEnded or
 			childStderr or
 			childStderrEnded or
 			childStderrFailed then self.relayOrPanic().childArrived(arrival, workspace: self.workspace)
-			slotTick then self.relayOrPanic().slotTicked(self.workspace)
+			reapDeadline then panic("LspSession.dispatch: the reap deadline is armed and consumed inside `LspRelay.shutDown`, so no session loop turn receives it")
 		end 'arrival'
 	end 'dispatch'
 
@@ -200,8 +202,7 @@ type LspSession
 	end 'serveInitializeInProcess'
 
 	function becomeRelay(slot FilePath, body String, doc JsonDoc)
-		let relay = LspRelay.create(slot, initializeBody: body, initializeId: readRequestId(doc))
-		relay.armTick(self.workspace)
+		let relay = LspRelay.create(slot, initializeBody: body, initializeId: readRequestId(doc), watch: relayWatchSupportOf(doc))
 
 		match relay.attachInitial(self.workspace) 'attachment'
 			attached then break
@@ -270,6 +271,7 @@ type LspSession
 		self.documents.upsert(uri, value: text)
 		self.nextDocumentVersion = self.nextDocumentVersion + 1
 		let version = self.nextDocumentVersion
+		self.workspace.publishVersion(uri, version: version)
 		submitToLspWriter(self.workspace.writer, command: LspWriterCommand.track(uri.clone(), version: version))
 
 		match publishBufferDiagnostics(self.workspace, uri: uri, text: text, arrival: arrival) 'publish'
@@ -323,7 +325,7 @@ type LspSession
 			return
 		end 'stillResolving'
 
-		submitProjectCheck(lspProjectCheckerFor(self.workspace, name: name, tiers: reader.tiers), request: LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion.clone(), alone: alone.clone(), inputs: inputs.clone()))
+		self.workspace.requestProjectCheck(freeze LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion.clone(), alone: alone.clone(), inputs: inputs.clone(), root: name.spelled.clone(), stdlibDir: reader.tiers.stdlibDir.clone(), runtimeDir: reader.tiers.runtimeDir.clone()))
 	end 'requestCheckOnceResolved'
 
 	function exitCode() returns ExitCode
@@ -485,6 +487,7 @@ type LspSession
 	function closeDocument(doc JsonDoc) throws LspParamsError
 		let (_, _, uri) = try notifiedDocument(doc)
 		_ = self.documents.remove(uri)
+		self.workspace.retireVersionCell(uri)
 		submitToLspWriter(self.workspace.writer, command: LspWriterCommand.forget(uri.clone()))
 		clearPublishedDiagnostics(self.workspace.writer, uri: uri)
 	end 'closeDocument'

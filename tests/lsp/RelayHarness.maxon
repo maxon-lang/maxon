@@ -39,6 +39,7 @@ let RelayOversizeMarkerName = "oversize-on-hover"
 #endif
 
 let RelayWaitBoundMs = 30000
+let RelaySwapPauseMs = 20
 let RelayHoverLine = 0
 let RelayHoverCharacter = 0
 
@@ -112,6 +113,40 @@ public function replaceRelaySlot(caseDir FilePath, generation RelayGeneration)
 	movedIntoTheSlot(aside, caseDir: caseDir)
 end 'replaceRelaySlot'
 
+public function relaySlotFileName(caseDir FilePath) returns String
+	return relaySlotPath(caseDir).filename()
+end 'relaySlotFileName'
+
+public function relaySlotUri(caseDir FilePath) returns String
+	return fileUriOf(relaySlotPath(caseDir))
+end 'relaySlotUri'
+
+public function relaySlotChanged(client LspClient, caseDir FilePath) throws LspClientError
+	try client.notifyWatchedFileChanged(relaySlotUri(caseDir), change: WatchedFileChange.changed)
+end 'relaySlotChanged'
+
+public function relaySlotModifiedAt(caseDir FilePath) returns Timestamp
+	let info = try File.info(relaySlotPath(caseDir)) otherwise return 0
+
+	return info.modifiedTime
+end 'relaySlotModifiedAt'
+
+public function awaitRelaySlotSwap(caseDir FilePath, before Timestamp)
+	let started = Clock.nowMs()
+
+	while Clock.elapsedMs(started) < RelayWaitBoundMs 'untilSwapped'
+		let now = relaySlotModifiedAt(caseDir)
+
+		if now != 0 and now != before 'swapped'
+			return
+		end 'swapped'
+
+		sleep(RelaySwapPauseMs)
+	end 'untilSwapped'
+
+	panic("the gate could not run — the fake slot compiler did not replace its own image within {RelayWaitBoundMs} ms.")
+end 'awaitRelaySlotSwap'
+
 function armRelayMarker(caseDir FilePath, marker String)
 	writeStagedFile(relaySlotDirectory(caseDir).join(marker), content: marker)
 end 'armRelayMarker'
@@ -144,6 +179,18 @@ public function installUnrunnableRelaySlot(caseDir FilePath)
 	installRelaySlot(caseDir, generation: 1)
 	relaySlotExecutionAllowed(caseDir, allowed: false)
 end 'installUnrunnableRelaySlot'
+
+public function installPartialRelaySlot(caseDir FilePath, generation RelayGeneration)
+	writeRelayGeneration(caseDir, generation: generation)
+
+	let image = relayFakeImage(caseDir)
+	let partial = try image.slice(0, endIndex: image.count() / 2) otherwise panic("the gate could not run — the fake slot compiler's image has no first half to write.")
+	writeRelayImage(relaySlotPath(caseDir), image: partial)
+end 'installPartialRelaySlot'
+
+public function completeRelaySlotInPlace(caseDir FilePath)
+	writeRelayImage(relaySlotPath(caseDir), image: relayFakeImage(caseDir))
+end 'completeRelaySlotInPlace'
 
 public function makeRelaySlotRunnable(caseDir FilePath)
 	relaySlotExecutionAllowed(caseDir, allowed: true)
@@ -239,3 +286,25 @@ public function relayHoverRefusal(client LspClient, uri String) returns String t
 
 	return RelayAnsweredText
 end 'relayHoverRefusal'
+
+public function relayRefusalOf(client LspClient, id LspRequestIdNumber) returns String throws LspClientError
+	try client.awaitReplyTo(id) otherwise (e) 'refused'
+		match e 'reason'
+			serverRefused(code, _) then return "{code}"
+			transportFailed or
+			malformedResponse then throw e
+		end 'reason'
+	end 'refused'
+
+	return RelayAnsweredText
+end 'relayRefusalOf'
+
+public function relayHoverRefusalAcrossASwap(client LspClient, caseDir FilePath, uri String) returns String throws LspClientError
+	let before = relaySlotModifiedAt(caseDir)
+	let id = try client.startHover(uri, line: RelayHoverLine, character: RelayHoverCharacter)
+
+	awaitRelaySlotSwap(caseDir, before: before)
+	try relaySlotChanged(client, caseDir: caseDir)
+
+	return try relayRefusalOf(client, id: id)
+end 'relayHoverRefusalAcrossASwap'

@@ -501,7 +501,7 @@ end 'formattedSnippetReply'
 // What `check` and `dump_ir` compiled. `diagnostics` is the text the command line would have printed on
 // stderr for the same build.
 union InProcessCompile
-	compiled(project Project, codeResult CodeResult, diagnostics String)
+	compiled(irText String, diagnostics String)
 	refused(diagnostics String)
 end 'InProcessCompile'
 
@@ -509,9 +509,9 @@ end 'InProcessCompile'
 // program rather than producing or running one, so there is no binary, no `.ir` file and no child whose
 // output has to be read back: the pipeline stops at a `CodeResult`, exactly as `maxon lsp-server` compiles
 // a buffer. The capture keeps the pipeline's diagnostics off this server's own streams.
-function compileInProcess(reqDoc JsonDoc, args OptionalNode, rendersTargetIr bool, fileMemos SharedFileMemoMap) returns InProcessCompile
+function compileInProcess(reqDoc JsonDoc, args OptionalNode, rendersTargetIr bool, driver CompileDriver.handle) returns InProcessCompile
 	let pathArg = requiredStringArg(reqDoc, args: args, key: "path")
-	let session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
+	let session = DriverSession.capturing()
 
 	let path = try FilePath.from(pathArg) otherwise 'badPath'
 		session.diagnostics.emit("error: invalid path: {pathArg}")
@@ -521,23 +521,18 @@ function compileInProcess(reqDoc JsonDoc, args OptionalNode, rendersTargetIr boo
 	let paths = MaxonSourcePathArray.create(0)
 	paths.push(path)
 
-	let project = try loadProject(paths, target: detectHostTarget(), session: session) otherwise (e) 'notLoaded'
-		reportCompileError(e, sink: session.diagnostics)
-		return InProcessCompile.refused(session.diagnostics.text())
-	end 'notLoaded'
+	match checkOnDriver(driver, origin: ProjectOrigin.sources, inputPaths: paths, target: detectHostTarget(), rendersTargetIr: rendersTargetIr, reading: CheckedDiagnostics.inSourceOrder, session: session) 'answer'
+		failed(e) then reportCompileError(e, sink: session.diagnostics)
+		checked(compiled, _, irText) then return InProcessCompile.compiled(irText, diagnostics: session.diagnostics.text()) if compiled else InProcessCompile.refused(session.diagnostics.text())
+	end 'answer'
 
-	project.rendersTargetIr = rendersTargetIr
-
-	return match checkWithoutWriting(project) 'compile'
-		compiled(codeResult) gives InProcessCompile.compiled(project, codeResult: codeResult, diagnostics: session.diagnostics.text())
-		refused gives InProcessCompile.refused(session.diagnostics.text())
-	end 'compile'
+	return InProcessCompile.refused(session.diagnostics.text())
 end 'compileInProcess'
 
 // `success` and `diagnostics`, which both answers carry. Answers whether the compile succeeded.
 function addCompileOutcome(doc JsonDoc, payload JsonObjectBuilder, compile InProcessCompile) returns bool
 	let (succeeded, diagnostics) = match compile 'outcome'
-		compiled(_, _, text) gives (true, text)
+		compiled(_, text) gives (true, text)
 		refused(text) gives (false, text)
 	end 'outcome'
 
@@ -559,24 +554,24 @@ function addInProcessAttribution(doc JsonDoc, payload JsonObjectBuilder, exePath
 	payload.addString(doc, key: "stdlibRoot", value: stdlibRootLabel())
 end 'addInProcessAttribution'
 
-export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, fileMemos SharedFileMemoMap) returns String
+export function executeCheckTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, driver CompileDriver.handle) returns String
 	let doc = JsonDoc.create()
 	let payload = JsonObjectBuilder.create()
-	let succeeded = addCompileOutcome(doc, payload: payload, compile: compileInProcess(reqDoc, args: args, rendersTargetIr: false, fileMemos: fileMemos))
+	let succeeded = addCompileOutcome(doc, payload: payload, compile: compileInProcess(reqDoc, args: args, rendersTargetIr: false, driver: driver))
 	addInProcessAttribution(doc, payload: payload, exePath: exePath)
 
 	return toolResultText(reqDoc, idNode: idNode, payloadText: payload.buildAsRoot(doc), isError: not succeeded)
 end 'executeCheckTool'
 
-export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, fileMemos SharedFileMemoMap) returns String
+export function executeDumpIrTool(reqDoc JsonDoc, idNode JsonNodeId, args OptionalNode, exePath FilePath, driver CompileDriver.handle) returns String
 	let doc = JsonDoc.create()
 	let payload = JsonObjectBuilder.create()
-	let compile = compileInProcess(reqDoc, args: args, rendersTargetIr: true, fileMemos: fileMemos)
+	let compile = compileInProcess(reqDoc, args: args, rendersTargetIr: true, driver: driver)
 	let succeeded = addCompileOutcome(doc, payload: payload, compile: compile)
 	addInProcessAttribution(doc, payload: payload, exePath: exePath)
 
 	let irText = match compile 'ir'
-		compiled(project, codeResult, _) gives try renderTargetIr(project, codeResult: codeResult) otherwise panic("executeDumpIrTool: the tool names no runtime function to render, so the render has nothing to refuse")
+		compiled(text, _) gives text
 		refused gives ""
 	end 'ir'
 

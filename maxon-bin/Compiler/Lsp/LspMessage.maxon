@@ -172,6 +172,20 @@ module function lspNotificationText(doc JsonDoc, method String, params JsonNodeI
 	return jsonRpcMessageText(doc, envelope: envelope)
 end 'lspNotificationText'
 
+module function writeLspRequest(writer LspStdoutWriter.handle, doc JsonDoc, id LspRequestId, method String, params JsonNodeId)
+	let envelope = beginJsonRpcMessage(doc)
+	envelope.put(JsonRpcIdKey, value: idNodeFor(id))
+	envelope.put(JsonRpcMethodKey, value: JsonNode.stringNode(method))
+	envelope.putNode(JsonRpcParamsKey, value: params)
+	submitToLspWriter(writer, command: LspWriterCommand.write(jsonRpcMessageText(doc, envelope: envelope)))
+end 'writeLspRequest'
+
+module function lspResponseErrorMessage(doc JsonDoc) returns StatedText
+	let failure = try doc.getChild(doc.root, key: JsonRpcErrorKey) otherwise return StatedText.unstated
+
+	return StatedText.stated(try doc.getString(failure, key: JsonRpcErrorMessageKey) otherwise "no reason stated")
+end 'lspResponseErrorMessage'
+
 // Refuse the request `id`. `message` is the human-readable sentence the client displays; `code` is the
 // machine-readable reason it branches on.
 module function writeLspError(writer LspStdoutWriter.handle, id LspRequestId, code LspJsonRpcErrorCode, message String)

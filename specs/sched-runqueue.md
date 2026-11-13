@@ -995,7 +995,7 @@ scheduled and answering, at the point in the program where the overflow has just
 
 ⚠ **A LOST THREAD IS A DIAGNOSIS RATHER THAN A SHORT NUMBER, AND NOTHING SPINS WAITING FOR ONE.** A thread the overflow dropped never runs, so the reply `main` awaits from it never resolves, every
 green thread in the program is parked and none can become ready — which is the scheduler's `checkdead`,
-**exit 92**, taken by the last machine to go idle (`services.a-blocking-cycle-through-an-indirect-call-aborts`
+**exit 92**, taken by the last machine to go idle (`services.a-scheduler-deadlock-decides-the-same-at-four-processors`
 measures it at four processors). The case's `<!-- procs: 1 -->` pins the ring arithmetic above, not the
 detector, which decides under `__sched_lock` at every count.
 

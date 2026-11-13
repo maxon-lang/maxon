@@ -34,8 +34,6 @@
 
 // A reply cell carrying one function back. The message throws nothing, so the promise names no
 // error type.
-typealias StdPassReply = Promise with (StdUnit)
-typealias StdPassReplyArray = Array with StdPassReply
 typealias StdArrivedUnits = ArrivedUnits with StdModule
 typealias StdPassWorkerHandleArray = Array with StdPassWorker.handle
 
@@ -132,19 +130,28 @@ export type StdPassWorker
 		return Self{reducesDivision: targetLowersMulHigh(cpu), budget: hoistPressureBudgetFor(Target.create(cpu, os: os)), schedule: steps, slot: StdUnit.empty(0)}
 	end 'create'
 
-	// The message. It never awaits and never sends, which is what makes the blocking graph E3139 checks
-	// trivially acyclic: a pool worker is a leaf. Its error set is empty — see this file's header.
-	export function run(unit isolated StdUnit) returns isolated StdUnit
+	export function runThen(unit isolated StdUnit, job ElementIndex, receiver CompileReceiver.handle)
+		let finished = self.worked(unit)
+
+		try receiver.stdPassAnswered(job, answered: finished, receiver: receiver.clone()) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then panicOnRefusedAnswer("StdPassWorker.runThen")
+				serviceStopped then return
+			end 'why'
+		end 'refused'
+	end 'runThen'
+
+	function worked(unit isolated StdUnit) returns isolated StdUnit
 		let idle = swap self.slot with unit
 
 		modify self.slot 'work'
-			let body = try self.slot.holder.pop() otherwise panic("StdPassWorker.run: the unit for function {self.slot.funcIndex} carried no body — `StdUnit.extract` pushes exactly one")
+			let body = self.slot.holder.take()
 			let answer = self.runSteps(body)
-			self.slot.answers.push(answer)
+			self.slot.answers.fill(answer)
 		end 'work'
 
 		return swap self.slot with idle
-	end 'run'
+	end 'worked'
 
 	// Every step of the schedule over the unit's one function, each bracketed on this thread's counters.
 	// The workspaces, the tallies the scratches write into and the costs are this function's own.
@@ -233,54 +240,119 @@ end 'refineVersionedRangesInFunc'
 // Run the schedule's per-function passes over every function on a worker pool; `PoolSizing` owns how the
 // pool is sized. `members` is the schedule, every one a pass `classifyPass` answers `perFunction` for
 // (`PassPipeline.requireFanOutMembership`).
-export function runStdPassesOnAWorkerPool(project Project, module StdModule, members StdFanOutStepArray)
-	let funcCount = module.funcCount()
-	let sizing = PoolSizing.forJobs(funcCount)
-	let workerCount = sizing.workerCount
-	let reducesDivision = targetLowersMulHigh(project.target.cpu)
+typealias StdPoolStateSlot = Slot with StdPoolState
 
-	if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
-		compilerLogger(CompilerLogGroup.codegen).debug(sizing.line(PoolKind.stdFanOut))
-	end 'debugging'
+type StdPoolState
+	module let workers as StdPassWorkerHandleArray
+	module let dispatch as PoolDispatch
+	module let arrivedUnits as StdArrivedUnits
+	module let scratch as SpliceScratch
+	module let stealsBefore as SchedulerEventCount
 
-	let tallies = StdPassTallyArray.create(members.count(), zeroed: false)
+	static function of(workers StdPassWorkerHandleArray, dispatch PoolDispatch, arrivedUnits StdArrivedUnits, scratch SpliceScratch, stealsBefore SchedulerEventCount) returns StdPoolState
+		return Self{workers: workers, dispatch: dispatch, arrivedUnits: arrivedUnits, scratch: scratch, stealsBefore: stealsBefore}
+	end 'of'
+end 'StdPoolState'
 
-	for _ in members 'eachStep'
-		tallies.push(StdPassTally.create())
-	end 'eachStep'
+export type StdPassRun
+	let project as Project
+	let std as StdModule
+	let members as StdFanOutStepArray
+	let funcCount as ElementIndex
+	let reducesDivision as bool
+	let tallies as StdPassTallyArray
+	let landedOrigins as DerivedOriginsArray
+	let slots as LandingSlots
+	let pool as StdPoolStateSlot
 
-	let landedOrigins = DerivedOriginsArray.create(0)
-	let slots = LandingSlots.create(funcCount)
+	export static function create(project Project, std StdModule, members StdFanOutStepArray) returns StdPassRun
+		let funcCount = std.funcCount()
+		let tallies = StdPassTallyArray.create(members.count(), zeroed: false)
 
-	if funcCount > 0 'somethingToRun'
-		let poolSize = workerCount as PoolSize
-		let workers = StdPassWorkerHandleArray.create(workerCount, zeroed: false)
+		for _ in members 'eachStep'
+			tallies.push(StdPassTally.create())
+		end 'eachStep'
 
-		for _ in 0 upto workerCount 'eachWorker'
-			workers.push(spawn StdPassWorker.create(project.target.cpu, os: project.target.os, steps: freeze members.clone()))
-		end 'eachWorker'
+		return Self{project: project, std: std, members: members, funcCount: funcCount, reducesDivision: targetLowersMulHigh(project.target.cpu), tallies: tallies, landedOrigins: DerivedOriginsArray.create(0), slots: LandingSlots.create(funcCount), pool: StdPoolStateSlot.create("StdPassRun.pool")}
+	end 'create'
 
-		let stealsBefore = Scheduler.counters().steals
-		drainTheStdPool(project, module: module, members: members, workers: workers, workerCount: poolSize, landedOrigins: landedOrigins, slots: slots, tallies: tallies)
-		let stealsAfter = Scheduler.counters().steals
+	export function begin(receiver CompileReceiver.handle) returns bool
+		let sizing = PoolSizing.forJobs(self.funcCount)
 
 		if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
-			compilerLogger(CompilerLogGroup.codegen).debug("stdFanOut pool: {stealsAfter - stealsBefore} work-steal(s) while the pool drained")
+			compilerLogger(CompilerLogGroup.codegen).debug(sizing.line(PoolKind.stdFanOut))
 		end 'debugging'
 
-		project.retiredWorkers.stdPass.keep(workers)
-	end 'somethingToRun'
+		if self.funcCount == 0 'nothingToRun'
+			return false
+		end 'nothingToRun'
 
-	for funcIndex in 0 upto funcCount 'foldOriginsInIndexOrder'
-		let origins = try landedOrigins.get(slots.slotOf(funcIndex)) otherwise panic("runStdPassesOnAWorkerPool: landedOrigins.get OOB for function {funcIndex}")
-		origins.foldInto(project.valueOrigins, funcIndex: funcIndex)
-	end 'foldOriginsInIndexOrder'
+		let workers = StdPassWorkerHandleArray.create(sizing.workerCount, zeroed: false)
 
-	announceAndSummarizeSteps(members, tallies: tallies, funcCount: funcCount, reducesDivision: reducesDivision)
-end 'runStdPassesOnAWorkerPool'
+		for _ in 0 upto sizing.workerCount 'eachWorker'
+			workers.push(spawn StdPassWorker.create(self.project.target.cpu, os: self.project.target.os, steps: freeze self.members.clone()))
+		end 'eachWorker'
+
+		let dispatch = PoolDispatch.create(functionOpTallies(self.std.functions, blocks: self.std.blocks), workerCount: sizing.workerCount as PoolSize, assignment: PoolAssignment.staticShare)
+		let arrivedUnits = StdArrivedUnits.create(self.funcCount, spent: StdModule.create())
+		self.pool.fill(StdPoolState.of(workers, dispatch: dispatch, arrivedUnits: arrivedUnits, scratch: SpliceScratch.create(), stealsBefore: Scheduler.counters().steals))
+
+		for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
+			self.dispatchOne(dispatch.fillWorker(), receiver: receiver)
+		end 'fillThePipeline'
+
+		return true
+	end 'begin'
+
+	export function answered(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle) returns bool
+		let state = self.pool.held()
+		let freedWorker = state.dispatch.landJob(job)
+		let unit = merge answered
+		let answer = unit.answers.take()
+		self.slots.record(job, slot: self.landedOrigins.count())
+		state.arrivedUnits.arrive(answer.body.unitModule)
+		self.landedOrigins.push(answer.body.origins)
+		foldUnitAnswer(self.project, answer: answer, members: self.members, tallies: self.tallies)
+
+		if state.dispatch.hasUndispatchedFor(freedWorker) 'handTheFreedWorkerTheNextJob'
+			self.dispatchOne(freedWorker, receiver: receiver)
+		end 'handTheFreedWorkerTheNextJob'
+
+		spliceSettledStdUnits(self.std, dispatch: state.dispatch, slots: self.slots, arrivedUnits: state.arrivedUnits, scratch: state.scratch)
+
+		return state.dispatch.inFlightCount() == 0
+	end 'answered'
+
+	export function finish()
+		if self.pool.isFull() 'aPoolRan'
+			let state = self.pool.held()
+			state.dispatch.requireEveryJobSettled()
+
+			if compilerLogEnabled(CompilerLogGroup.codegen, level: LogLevel.debug) 'debugging'
+				compilerLogger(CompilerLogGroup.codegen).debug("stdFanOut pool: {Scheduler.counters().steals - state.stealsBefore} work-steal(s) while the pool drained")
+			end 'debugging'
+
+			self.project.retiredWorkers.stdPass.keep(state.workers)
+		end 'aPoolRan'
+
+		for funcIndex in 0 upto self.funcCount 'foldOriginsInIndexOrder'
+			let origins = try self.landedOrigins.get(self.slots.slotOf(funcIndex)) otherwise panic("StdPassRun.finish: landedOrigins.get OOB for function {funcIndex}")
+			origins.foldInto(self.project.valueOrigins, funcIndex: funcIndex)
+		end 'foldOriginsInIndexOrder'
+
+		announceAndSummarizeSteps(self.members, tallies: self.tallies, funcCount: self.funcCount, reducesDivision: self.reducesDivision)
+	end 'finish'
+
+	function dispatchOne(workerSlot ElementIndex, receiver CompileReceiver.handle)
+		let state = self.pool.held()
+		let worker = try state.workers.get(workerSlot) otherwise panic("StdPassRun.dispatchOne: workers.get OOB at {workerSlot} below count {state.workers.count()}")
+		let funcIndex = state.dispatch.nextJob(workerSlot)
+		try worker.runThen(StdUnit.extract(self.std, func: self.std.getFunc(funcIndex), funcIndex: funcIndex), job: funcIndex, receiver: receiver.clone()) otherwise panic("{workerRefusedSendMessage("StdPassRun.dispatchOne", subject: "the worker running function {funcIndex}")}")
+	end 'dispatchOne'
+end 'StdPassRun'
 
 // ⭐⭐ **THE SAME PER-FUNCTION PASSES OVER THE APPENDED RUNTIME BAND — `module.functions[firstFuncIndex …]`.**
-// `Compiler.compileToCodeResult`'s install block is where the two-run arrangement is stated and owned; this
+// `afterPipeline`'s install block is where the two-run arrangement is stated and owned; this
 // is the driver it names.
 //
 // ⭐ **PASS-MAJOR AND SERIAL, WHERE THE PIPELINE'S RUN IS FUNCTION-MAJOR ON A POOL, AND THAT IS A COST
@@ -384,7 +456,7 @@ end 'bandPhaseOfStep'
 // Fold one function's per-step costs into the passes' own phase rows, and its tallies into the driver's.
 function foldUnitAnswer(project Project, answer StdUnitAnswer, members StdFanOutStepArray, tallies StdPassTallyArray)
 	if answer.costs.width() != members.count() or answer.tallies.count() != members.count() 'notTheSchedule'
-		panic("runStdPassesOnAWorkerPool: a unit answered {answer.costs.width()} cost row(s) and {answer.tallies.count()} tally(s) against a schedule of {members.count()} step(s) — every worker is spawned with this schedule")
+		panic("foldUnitAnswer: a unit answered {answer.costs.width()} cost row(s) and {answer.tallies.count()} tally(s) against a schedule of {members.count()} step(s) — every worker is spawned with this schedule")
 	end 'notTheSchedule'
 
 	for k in 0 upto members.count() 'eachStep'
@@ -395,45 +467,6 @@ function foldUnitAnswer(project Project, answer StdUnitAnswer, members StdFanOut
 	end 'eachStep'
 end 'foldUnitAnswer'
 
-// ⭐⭐ **THE DISPATCH LOOP: fill the pipeline, then serve whoever finished first.** The protocol is
-// `PoolDispatch`'s, shared with `BackendPool.drainTheBackendPool`; what is this pool's own is the reply
-// type and the landing. Every promise is awaited (an un-awaited one is the green-thread exit gate's own
-// error, exit 75), `awaitAny` keeps the pool busy, and the dispatch order is longest-first
-// (`fillLongestFirstOrder`, which says why that order cannot reach the output).
-function drainTheStdPool(project Project, module StdModule, members StdFanOutStepArray, workers StdPassWorkerHandleArray, workerCount PoolSize, landedOrigins DerivedOriginsArray, slots LandingSlots, tallies StdPassTallyArray)
-	let scratch = SpliceScratch.create()
-
-	let dispatch = PoolDispatch.create(functionOpTallies(module.functions, blocks: module.blocks), workerCount: workerCount, assignment: PoolAssignment.staticShare)
-	let replies = StdPassReplyArray.create(dispatch.pipelineDepth(), zeroed: false)
-	let arrivedUnits = StdArrivedUnits.create(module.funcCount(), spent: StdModule.create())
-
-	for _ in 0 upto dispatch.initialInFlight() 'fillThePipeline'
-		dispatchOneStdJob(module, workers: workers, workerSlot: dispatch.fillWorker(), dispatch: dispatch, replies: replies)
-	end 'fillThePipeline'
-
-	while replies.count() > 0 'serveWhoeverFinishedFirst'
-		let ready = replies.awaitAny()
-		let freedWorker = dispatch.workerAt(ready)
-		let job = dispatch.land(ready, outstanding: replies.count())
-		let reply = try replies.remove(ready) otherwise panic("drainTheStdPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
-
-		let unit = await reply
-		let answer = unit.takeAnswer()
-		slots.record(job, slot: landedOrigins.count())
-		arrivedUnits.arrive(answer.body.unitModule)
-		landedOrigins.push(answer.body.origins)
-		foldUnitAnswer(project, answer: answer, members: members, tallies: tallies)
-
-		if dispatch.hasUndispatchedFor(freedWorker) 'handTheFreedWorkerTheNextJob'
-			dispatchOneStdJob(module, workers: workers, workerSlot: freedWorker, dispatch: dispatch, replies: replies)
-		end 'handTheFreedWorkerTheNextJob'
-
-		spliceSettledStdUnits(module, dispatch: dispatch, slots: slots, arrivedUnits: arrivedUnits, scratch: scratch)
-	end 'serveWhoeverFinishedFirst'
-
-	dispatch.requireEveryJobSettled()
-end 'drainTheStdPool'
-
 function spliceSettledStdUnits(module StdModule, dispatch PoolDispatch, slots LandingSlots, arrivedUnits StdArrivedUnits, scratch SpliceScratch)
 	while dispatch.hasNextToSettle() 'eachSettledJob'
 		let job = dispatch.takeNextToSettle()
@@ -442,14 +475,6 @@ function spliceSettledStdUnits(module StdModule, dispatch PoolDispatch, slots La
 		arrivedUnits.spend(slot)
 	end 'eachSettledJob'
 end 'spliceSettledStdUnits'
-
-// Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch`
-// just recorded the job in.
-function dispatchOneStdJob(module StdModule, workers StdPassWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies StdPassReplyArray)
-	let worker = try workers.get(workerSlot) otherwise panic("dispatchOneStdJob: workers.get OOB at {workerSlot} below count {workers.count()}")
-	let funcIndex = dispatch.nextJob(workerSlot)
-	replies.push(try worker.run(StdUnit.extract(module, func: module.getFunc(funcIndex), funcIndex: funcIndex)) otherwise panic("{workerRefusedSendMessage("dispatchOneStdJob", subject: "the worker running function {funcIndex}")}"))
-end 'dispatchOneStdJob'
 
 function announceAndSummarizeSteps(members StdFanOutStepArray, tallies StdPassTallyArray, funcCount ElementIndex, reducesDivision bool)
 	if not compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'quiet'

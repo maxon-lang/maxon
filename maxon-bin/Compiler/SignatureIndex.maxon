@@ -589,6 +589,7 @@ enum SignatureDiscriminator
 	regionBoundIsolated = 163
 	declShapeExtensionConformance = 164
 	declShapeExtensionHeldArgument = 165
+	declShapeLinearType = 166
 end 'SignatureDiscriminator'
 
 // The discriminator for one backing. A `match` rather than a chained `if`, so a new backing cannot be added
@@ -6319,6 +6320,10 @@ end 'cacheReadServiceHandleOwnerMap'
 
 // @generated library-cache end
 
+typealias InstanceNestingDepth = int(0 to u32.max)
+
+let GrowingFieldNestingFloor = 2
+
 // The answer to "does this callee consume any parameter?" — a union so "no recorded entry" is an ANSWER
 // (a borrow-only callee), never confused with an empty-but-present one.
 export union CalleeConsume
@@ -9294,7 +9299,7 @@ export let EnumLookupNoSuchCaseNameCaseName = b"noSuchCaseName"
 // declares it (`stdlib/Character.maxon:15-17`), so it cannot wear the `__` prefix — `ArrayError`'s position
 // exactly — and `Runtime/GraphemeRuntime.buildCharAscii` transcribes its ordinal as the literal error flag
 // `__char_ascii` returns on the failure edge. That is the two-halves shape `BuiltinErrorOrdinalCheck` exists
-// for, and it is the criterion `Compiler.compileToCodeResult`'s roster states for itself when it explains why
+// for, and it is the criterion `prepareLowering`'s roster states for itself when it explains why
 // `StringError` and `MapError` LEFT: a family is on the roster exactly while a throwing runtime graph
 // transcribes its ordinals.
 //
@@ -18948,6 +18953,159 @@ export type ProgramSignatures
 		return tag == ValueTypeTag.genericInstance and self.instanceBaseIsSharedValue(nameId as GenericInstanceId)
 	end 'isSharedValueInstanceAt'
 
+	export function instanceBaseIsReply(id GenericInstanceId) returns bool
+		return self.genericInstanceBaseName(id).equals(ReplyTypeName)
+	end 'instanceBaseIsReply'
+
+	export function isReplyInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.instanceBaseIsReply(nameId as GenericInstanceId)
+	end 'isReplyInstanceAt'
+
+	export function typeHoldsAReply(type MaxonType) returns bool
+		return self.typeReplyHolding(type, visited: NameRoster.create(0))
+	end 'typeHoldsAReply'
+
+	export function valueHoldsAReply(t MaxonType, idsFrom TypeNameInterner) returns bool
+		let tag = maxonTypeTag(t)
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.typeReplyHolding(t, visited: NameRoster.create(0))
+		end 'anInstance'
+
+		if not self.tagMayNameAggregate(tag) 'notAnAggregate'
+			return false
+		end 'notAnAggregate'
+
+		let name = try idsFrom.nameOf(typeNameIdOf(t)) otherwise panic("valueHoldsAReply: type-name id {typeNameIdOf(t)} is not in the interner it was resolved against — pass the interner this type's ids live in")
+		return self.aggregateReplyHolding(self.denotedAggregateName(name), visited: NameRoster.create(0))
+	end 'valueHoldsAReply'
+
+	export function declaredSlotHoldsAReply(declared MaxonType, declFilePath FilePath) returns bool
+		return self.typeHoldsAReply(self.declaredSlotType(declared, into: self.typeNames, slotScopeFilePath: declFilePath))
+	end 'declaredSlotHoldsAReply'
+
+	function typeReplyHolding(type MaxonType, visited NameRoster) returns bool
+		let tag = maxonTypeTag(type)
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.instanceReplyHolding(genericInstanceIdOf(type), visited: visited)
+		end 'anInstance'
+
+		if not self.tagMayNameAggregate(tag) 'notAnAggregate'
+			return false
+		end 'notAnAggregate'
+
+		let name = self.denotedSlotAggregateName(type)
+
+		if self.isFunctionAliasInAnyFile(name) 'aFunctionAlias'
+			return false
+		end 'aFunctionAlias'
+
+		if self.isGenericAliasInAnyFile(name) 'genericAlias'
+			let live = try self.liveGenericAliasInstance(name) otherwise return false
+			return self.instanceReplyHolding(live, visited: visited)
+		end 'genericAlias'
+
+		return self.aggregateReplyHolding(name, visited: visited)
+	end 'typeReplyHolding'
+
+	function instanceReplyHolding(id GenericInstanceId, visited NameRoster) returns bool
+		if self.instanceBaseIsReply(id) 'aReply'
+			return true
+		end 'aReply'
+
+		if self.instanceIsPromiseHandle(id) 'aPromise'
+			return self.typeReplyHolding(self.substitutedInstanceArg(id, position: ContainerElementArgPosition), visited: visited)
+		end 'aPromise'
+
+		let mangled = self.mangleGenericInstance(id)
+
+		if visited.contains(mangled) or self.nameIsAServiceType(self.genericInstanceBaseName(id)) 'alreadyWalkedOrHeldByACown'
+			return false
+		end 'alreadyWalkedOrHeldByACown'
+
+		visited.push(mangled)
+
+		if self.isElementBearingRecordInstance(id) 'anElementRecord'
+			return self.typeReplyHolding(self.containerElementType(id), visited: visited)
+		end 'anElementRecord'
+
+		if not self.genericInstanceHasBaseLayout(id) 'noFieldsToRead'
+			return false
+		end 'noFieldsToRead'
+
+		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+			if self.typeReplyHolding(self.substituteInstanceFieldType(id, index: i), visited: visited) 'aReplyField'
+				return true
+			end 'aReplyField'
+		end 'eachField'
+
+		return false
+	end 'instanceReplyHolding'
+
+	function nameIsAServiceType(name ByteArray) returns bool
+		for candidate in self.serviceSpawnCandidates() 'eachCandidate'
+			if candidate.typeName.equals(name) 'aSpawnedType'
+				return true
+			end 'aSpawnedType'
+		end 'eachCandidate'
+
+		return false
+	end 'nameIsAServiceType'
+
+	function aggregateReplyHolding(name ByteArray, visited NameRoster) returns bool
+		if visited.contains(name) or self.nameIsAServiceType(name) 'alreadyWalkedOrHeldByACown'
+			return false
+		end 'alreadyWalkedOrHeldByACown'
+
+		visited.push(name)
+
+		if self.containsStructInAnyFile(name) 'aStruct'
+			let layout = self.structLayoutOf(name)
+
+			for i in 0 upto layout.fieldCount() 'eachField'
+				if self.typeReplyHolding(self.layoutFieldType(layout, structName: name, index: i), visited: visited) 'aReplyField'
+					return true
+				end 'aReplyField'
+			end 'eachField'
+
+			return false
+		end 'aStruct'
+
+		match self.enumInAnyFile(name) 'union'
+			declared(layout) then return self.unionPayloadsHoldAReply(layout, visited: visited)
+			undeclared then return false
+		end 'union'
+	end 'aggregateReplyHolding'
+
+	function unionPayloadsHoldAReply(layout EnumLayout, visited NameRoster) returns bool
+		for ci in 0 upto layout.caseCount() 'eachCase'
+			let payloads = layout.payloadsAt(ci)
+
+			for fi in 0 upto payloads.count() 'eachPayload'
+				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.unionPayloadsHoldAReply: payloadsAt count disagrees with get at {fi}")
+
+				if self.typeReplyHolding(field.declaredType, visited: visited) 'aReplyPayload'
+					return true
+				end 'aReplyPayload'
+			end 'eachPayload'
+		end 'eachCase'
+
+		return false
+	end 'unionPayloadsHoldAReply'
+
+	export function replyElementOf(id GenericInstanceId) returns MaxonType
+		return self.substitutedInstanceArg(id, position: ContainerElementArgPosition)
+	end 'replyElementOf'
+
+	export function internReplyInstanceForMessage(messageKey ByteArray) returns GenericInstanceId
+		let result = try self.declaredReturnTypeOf(messageKey, into: self.typeNames) otherwise panic("internReplyInstanceForMessage: `{String.from(messageKey)}` declares no return type — `reply.later()` is refused in a message that returns nothing before it asks for an instance")
+		let args = MaxonTypeArray.create(0)
+		args.push(self.promiseResultArgFor(result))
+
+		return self.internRow(self.typeNames.intern(ReplyTypeName), args: args)
+	end 'internReplyInstanceForMessage'
+
 	export function defaultKeyIsAService(key ByteArray) returns bool
 		return self.nameDeclaresAnInterface(key)
 	end 'defaultKeyIsAService'
@@ -19024,6 +19182,30 @@ export type ProgramSignatures
 	export function isAnyServiceHandle(name ByteArray) returns bool
 		return self.isServiceHandle(name) or self.isInterfaceHandle(name)
 	end 'isAnyServiceHandle'
+
+	export function serviceHandleNames() returns NameRoster
+		let names = NameRoster.create(0)
+
+		for (handleName, _) in self.settledDeclarations().serviceHandleOwners 'eachServiceHandle'
+			names.push(handleName)
+		end 'eachServiceHandle'
+
+		return names
+	end 'serviceHandleNames'
+
+	export function interfaceHandleNames() returns NameRoster
+		let names = NameRoster.create(0)
+
+		for (handleName, _) in self.settledDeclarations().interfaceHandleOwners 'eachInterfaceHandle'
+			names.push(handleName)
+		end 'eachInterfaceHandle'
+
+		return names
+	end 'interfaceHandleNames'
+
+	export function serviceOfHandleInstance(id GenericInstanceId) returns immutable ByteArray
+		return self.serviceOfHandle(self.genericInstanceBaseName(id))
+	end 'serviceOfHandleInstance'
 
 	// ⭐⭐ **REGISTER A SERVICE'S TWO COMPANIONS — through `recordEnum`/`recordStruct`, the SAME doors an
 	// author-written declaration takes.** That is the whole point of the door rather than a convenience:
@@ -20389,7 +20571,7 @@ export type ProgramSignatures
 				continue
 			end 'noIsolatedParameter'
 
-			let filed = try self.settledDeclarations().declParamConsumes.get(declaration.site) otherwise ParamConsumeInfo.noFacts(sweptParamNamesFor(declaration.paramNames, takesReceiver: declaration.takesReceiver))
+			let filed = try self.settledDeclarations().declParamConsumes.get(declaration.site) otherwise ParamConsumeInfo.noFacts(sweptParamNamesFor(declaration.paramNames, takesReceiver: declaration.takesReceiver, selfCapability: declaration.selfCapability))
 			let bits = filed.bits.clone() as isolated BoolArray
 
 			for position in 0 upto owned.count() 'eachOwnedPosition'
@@ -20403,6 +20585,42 @@ export type ProgramSignatures
 			self.mainThreadSettled().funcParamConsumes.upsert(key, value: settled)
 		end 'eachDeclaration'
 	end 'closeIsolatedParamConsumes'
+
+	function closeLinearParamConsumes()
+		for (key, declaration) in self.settledDeclarations().sweptDeclarations 'eachDeclaration'
+			let linear = self.linearParamBitsOf(declaration)
+
+			if not anyBitSet(linear) 'noLinearParameter'
+				continue
+			end 'noLinearParameter'
+
+			let filed = try self.settledDeclarations().declParamConsumes.get(declaration.site) otherwise ParamConsumeInfo.noFacts(sweptParamNamesFor(declaration.paramNames, takesReceiver: declaration.takesReceiver, selfCapability: declaration.selfCapability))
+			let bits = filed.bits.clone() as isolated BoolArray
+
+			for position in 0 upto linear.count() 'eachLinearPosition'
+				if bitAt(linear, index: position as ParamCount) 'aLinearPosition'
+					setParamBit(bits, index: position as ParamCount)
+				end 'aLinearPosition'
+			end 'eachLinearPosition'
+
+			let settled = filed.withBits(freeze bits)
+			self.mainThreadSettled().declParamConsumes.upsert(declaration.site, value: settled)
+			self.mainThreadSettled().funcParamConsumes.upsert(key, value: settled)
+		end 'eachDeclaration'
+	end 'closeLinearParamConsumes'
+
+	function linearParamBitsOf(declaration SweptDeclaration) returns BoolArray
+		let linear = BoolArray.create(0)
+		let firstSource = 1 if declaration.takesReceiver else 0
+
+		for (iter, paramType) in declaration.paramTypes.withIterator() 'eachParameter'
+			if self.typeIsLinear(paramType) 'aLinearParameter'
+				setParamBit(linear, index: (iter.index() + firstSource) as ParamCount)
+			end 'aLinearParameter'
+		end 'eachParameter'
+
+		return linear
+	end 'linearParamBitsOf'
 
 	module function isolatedParamMaskOf(declaration SweptDeclaration) returns ParamPositionMask
 		var mask = NoParamPositions
@@ -22039,6 +22257,10 @@ export type ProgramSignatures
 		if layout.isUnique 'aUniqueType'
 			state = Hasher.combined(state, value: SignatureDiscriminator.declShapeUniqueType)
 		end 'aUniqueType'
+
+		if layout.isLinear 'aLinearType'
+			state = Hasher.combined(state, value: SignatureDiscriminator.declShapeLinearType)
+		end 'aLinearType'
 
 		for i in 0 upto layout.fieldCount() 'eachField'
 			state = self.mixField(state, layout: layout, index: i)
@@ -24706,7 +24928,7 @@ export type ProgramSignatures
 	// `default`'s slot, with the label and value its `.data` slot carries — the door the backend's
 	// data-section layout asks through.
 	//
-	// It is asked ONCE per compile (`Compiler.compileToCodeResult`), never per file: it is O(globals),
+	// It is asked ONCE per compile (`prepareLowering`), never per file: it is O(globals),
 	// and a whole-program query under a per-file one is asked once per FILE, which is how a linear
 	// walk becomes quadratic (docs/internals/query-spine.md, Whole-program queries under per-file ones).
 	//
@@ -24851,7 +25073,7 @@ export type ProgramSignatures
 	// must run before and after `main`?" (a label, the literal's bytes, its type). Fusing them would hand
 	// the layout a payload it has no use for and the synthesis a `StdType` it cannot build a record from.
 	//
-	// Asked ONCE per compile (`Compiler.compileToCodeResult`), never per file — it is O(declarations), and a
+	// Asked ONCE per compile (`prepareLowering`), never per file — it is O(declarations), and a
 	// whole-program query under a per-file one is asked once per FILE, which is how a linear walk becomes
 	// quadratic (docs/internals/query-spine.md, Whole-program queries under per-file ones).
 	//
@@ -26857,7 +27079,7 @@ export type ProgramSignatures
 	// ⭐⭐ **EVERY CROSS-KIND CONTESTED NAME, FOR THE ELEMENT-SCOPING MINT** —
 	// `RangedAliasRegistry.settleRangeContests`' `alsoScope`, which is where the whole argument for it
 	// lives. Read TWICE, by the two registries that must agree about which mints exist: this index's
-	// (`settleRangeScopedInstances`) and the project's (`Queries.queryAllModule`).
+	// (`settleRangeScopedInstances`) and the project's (`FrontEndRun`).
 	//
 	// ⚠ **IT IS EVERY CONTESTED NAME AND NOT THE ONES WITH A RANGED DECLARATION**, because "does a ranged
 	// alias hold this name" is `distinctRangeClaimants`' question and the registry is where it is asked. A
@@ -29994,8 +30216,8 @@ export type ProgramSignatures
 	//
 	// It is UNREACHABLE today and was measured so, not assumed: nothing runs the full pipeline twice on one
 	// `Project` — `build` and each spec-test worker construct a fresh one, and `verify-warm-rebuild` drives
-	// `queryAllModule` alone for its cache and invalidation probes (`compileColdOnce` takes its own
-	// `Project`). The fix when that changes is to derive the destructor installer's per-field questions from
+	// the front end alone (`WarmGoal.merged`) for its cache and invalidation probes (`compileColdOnce`
+	// takes its own `Project`). The fix when that changes is to derive the destructor installer's per-field questions from
 	// the layout it ALREADY HOLDS instead of re-asking this index by name; a restoration pass that no code
 	// path can exercise would be the unread-index shape the query spine's header warns about.
 
@@ -37736,9 +37958,52 @@ export type ProgramSignatures
 	// resolved; an alias may only be resolved at the door that needs the type.
 	export function substituteInstanceFieldType(id GenericInstanceId, index FieldIndex) returns MaxonType
 		let layout = self.baseLayoutOf(id)
-		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.substituteInstanceFieldType: field {index} out of range for instance {id}'s base struct")
-		return self.substituteThroughInstanceInterned(self.declaredSlotType(fieldType, into: self.typeNames, slotScopeFilePath: layout.declFilePath), id: id, interner: self.typeNames)
+		let declared = self.declaredInstanceFieldType(layout, index: index)
+		let substituted = self.substituteThroughInstanceInterned(declared, id: id, interner: self.typeNames)
+
+		if maxonTypeTag(substituted) == ValueTypeTag.genericInstance and self.fieldDeclaredToGrowItsOwner(layout, index: index, declared: declared) 'anExpandingField'
+			return declared
+		end 'anExpandingField'
+
+		return substituted
 	end 'substituteInstanceFieldType'
+
+	function expandedInstanceFieldType(id GenericInstanceId, index FieldIndex) returns MaxonType
+		return self.substituteThroughInstanceInterned(self.declaredInstanceFieldType(self.baseLayoutOf(id), index: index), id: id, interner: self.typeNames)
+	end 'expandedInstanceFieldType'
+
+	function declaredInstanceFieldType(layout StructLayout, index FieldIndex) returns MaxonType
+		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.declaredInstanceFieldType: field {index} out of range for the base struct")
+		return self.declaredSlotType(fieldType, into: self.typeNames, slotScopeFilePath: layout.declFilePath)
+	end 'declaredInstanceFieldType'
+
+	function fieldDeclaredToGrowItsOwner(layout StructLayout, index FieldIndex, declared MaxonType) returns bool
+		if maxonTypeTag(declared) != ValueTypeTag.genericInstance or self.instanceNestingDepth(genericInstanceIdOf(declared)) < GrowingFieldNestingFloor 'nothingCanGrow'
+			return false
+		end 'nothingCanGrow'
+
+		return self.fieldTypeGrowsItsOwner(layout.name, fieldName: layout.fieldNameAt(index))
+	end 'fieldDeclaredToGrowItsOwner'
+
+	function instanceNestingDepth(id GenericInstanceId) returns InstanceNestingDepth
+		var deepest = 0 as InstanceNestingDepth
+
+		for position in 0 upto self.genericInstanceArgCount(id) 'eachArgument'
+			let arg = self.denotedArg(id, position: position)
+
+			if maxonTypeTag(arg) != ValueTypeTag.genericInstance 'aLeafArgument'
+				continue
+			end 'aLeafArgument'
+
+			let depth = self.instanceNestingDepth(genericInstanceIdOf(arg))
+
+			if depth > deepest 'deeper'
+				deepest = depth
+			end 'deeper'
+		end 'eachArgument'
+
+		return deepest + 1
+	end 'instanceNestingDepth'
 
 	// ⭐⭐ **ARE THIS INSTANCE'S TYPE ARGUMENTS A CONTIGUOUS, IN-ORDER RUN OF SOME GENERIC'S OWN PARAMETERS?**
 	// `Cell with T` written inside `type Holder uses T` is one — argument 0 is the parameter at `uses`-list
@@ -38108,7 +38373,7 @@ export type ProgramSignatures
 	function instanceHoldsGrowth(id GenericInstanceId, owner ByteArray, path GrowthPath, visited ClonerSet) returns bool
 		if self.genericInstanceHasBaseLayout(id) 'aDeclaredGeneric'
 			for index in 0 upto self.genericInstanceFieldCount(id) 'eachField'
-				if self.typeGrowsOwner(self.denotedType(self.substituteInstanceFieldType(id, index: index)), owner: owner, path: path, visited: visited) 'aFieldGrows'
+				if self.typeGrowsOwner(self.denotedType(self.expandedInstanceFieldType(id, index: index)), owner: owner, path: path, visited: visited) 'aFieldGrows'
 					return true
 				end 'aFieldGrows'
 			end 'eachField'
@@ -40226,6 +40491,100 @@ export type ProgramSignatures
 		return freeze key
 	end 'uniqueHoldingKeyOf'
 
+	export function valueIsLinear(tag ValueTypeTag, nameId TypeNameId, from TypeNameInterner) returns bool
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.instanceIsLinear(nameId as GenericInstanceId)
+		end 'anInstance'
+
+		if not self.tagMayNameAggregate(tag) 'notAnAggregate'
+			return false
+		end 'notAnAggregate'
+
+		return self.aggregateIsLinear(try from.nameOf(nameId) otherwise panic("ProgramSignatures.valueIsLinear: type-name id {nameId} is not in the interner the caller named"), visited: NameRoster.create(0))
+	end 'valueIsLinear'
+
+	export function typeIsLinear(type MaxonType) returns bool
+		return self.typeIsLinearWalking(type, visited: NameRoster.create(0))
+	end 'typeIsLinear'
+
+	function typeIsLinearWalking(type MaxonType, visited NameRoster) returns bool
+		let tag = maxonTypeTag(type)
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.instanceIsLinear(genericInstanceIdOf(type))
+		end 'anInstance'
+
+		if not self.tagMayNameAggregate(tag) 'notAnAggregate'
+			return false
+		end 'notAnAggregate'
+
+		let name = self.denotedSlotAggregateName(type)
+
+		if self.isFunctionAliasInAnyFile(name) 'aFunctionAlias'
+			return false
+		end 'aFunctionAlias'
+
+		if self.isGenericAliasInAnyFile(name) 'genericAlias'
+			let live = try self.liveGenericAliasInstance(name) otherwise return false
+			return self.instanceIsLinear(live)
+		end 'genericAlias'
+
+		return self.aggregateIsLinear(name, visited: visited)
+	end 'typeIsLinearWalking'
+
+	function instanceIsLinear(id GenericInstanceId) returns bool
+		if self.instanceIsPromiseHandle(id) or self.isElementBearingRecordInstance(id) or not self.genericInstanceHasBaseLayout(id) 'neverLinear'
+			return false
+		end 'neverLinear'
+
+		return self.baseLayoutOf(id).isLinear
+	end 'instanceIsLinear'
+
+	function aggregateIsLinear(name ByteArray, visited NameRoster) returns bool
+		match compilerOwnedAggregateOf(self, name: name) 'compilerOwned'
+			managedFile or
+			managedDirectory or
+			managedSocket or
+			managedPages or
+			managedHandle or
+			managedPin or
+			serviceHandle then return false
+
+			userDeclared then break
+		end 'compilerOwned'
+
+		if visited.contains(name) 'alreadyWalked'
+			return false
+		end 'alreadyWalked'
+
+		visited.push(name)
+
+		if self.containsStructInAnyFile(name) 'aStruct'
+			return self.structLayoutOf(name).isLinear
+		end 'aStruct'
+
+		match self.enumInAnyFile(name) 'union'
+			declared(layout) then return self.unionPayloadsAreLinear(layout, visited: visited)
+			undeclared then return false
+		end 'union'
+	end 'aggregateIsLinear'
+
+	function unionPayloadsAreLinear(layout EnumLayout, visited NameRoster) returns bool
+		for ci in 0 upto layout.caseCount() 'eachCase'
+			let payloads = layout.payloadsAt(ci)
+
+			for fi in 0 upto payloads.count() 'eachPayload'
+				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.unionPayloadsAreLinear: payloadsAt count disagrees with get at {fi}")
+
+				if self.typeIsLinearWalking(field.declaredType, visited: visited) 'aLinearPayload'
+					return true
+				end 'aLinearPayload'
+			end 'eachPayload'
+		end 'eachCase'
+
+		return false
+	end 'unionPayloadsAreLinear'
+
 	function typeUniqueCause(type MaxonType, visited NameRoster) returns UniqueCause
 		let tag = maxonTypeTag(type)
 
@@ -40321,6 +40680,10 @@ export type ProgramSignatures
 			return UniqueCause.none
 		end 'noFieldsToRead'
 
+		if self.baseLayoutOf(id).isUnique 'declaredUnique'
+			return UniqueCause.declared
+		end 'declaredUnique'
+
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
 			let fieldType = self.substituteInstanceFieldType(id, index: i)
 
@@ -40362,6 +40725,10 @@ export type ProgramSignatures
 			sendable gives not unique and self.genericInstanceArgQualifier(gid, position: position) == GenericArgQualifier.frozen
 		end 'kind'
 	end 'instanceArgMeetsRegionBound'
+
+	export function instanceArgIsLinear(gid GenericInstanceId, position ElementIndex) returns bool
+		return self.typeIsLinear(self.substitutedInstanceArg(gid, position: position))
+	end 'instanceArgIsLinear'
 
 	export function instanceArgIsUnique(gid GenericInstanceId, position ElementIndex) returns bool
 		return self.typeUniqueCause(self.substitutedInstanceArg(gid, position: position), visited: NameRoster.create(0)).holdsAUnique()
@@ -44145,6 +44512,7 @@ export type ProgramSignatures
 		self.closeFreshReturnForwards()
 		self.closeForwardedStores()
 		self.closeIsolatedParamConsumes()
+		self.closeLinearParamConsumes()
 		_ = self.sweptConformanceIndex()
 		_ = self.conformerIndexWithExtensions()
 		self.indexCanonicalInstanceNames()

@@ -649,7 +649,7 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 	silenceCompilerLogging()
 
 	let stdin = Console.stdin()
-	let fileMemos = SharedFileMemoMap.create()
+	let driver = persistentCompileDriver()
 	print("{WorkerReadyMarker}\n")
 
 	while true 'jobLoop'
@@ -676,7 +676,7 @@ export function runPersistentWorker(specDir FilePath, filterPatterns FilterPatte
 			let prefix = jobPrefixOf(runs)
 
 			if job.startsWith(prefix) 'thisKind'
-				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos, runWorkingDir: runWorkingDir)
+				runSpecJob(specDir, specName: sliceAfterPrefix(job, prefix: prefix), runs: runs, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, driver: driver, runWorkingDir: runWorkingDir)
 				ran = true
 				break
 			end 'thisKind'
@@ -730,8 +730,8 @@ end 'silenceCompilerLogging'
 // when it dies, so panicking routes this diagnostic through `abortOnDeadWorker`, which prints it.
 // Returning quietly instead would leave the parent to notice a missing record and abort with no
 // idea why.
-function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, fileMemos SharedFileMemoMap, runWorkingDir FilePath)
-	let run = try runOneSpec(specDir, specName: specName, runs: runs, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, fileMemos: fileMemos, runWorkingDir: runWorkingDir) otherwise (e) 'specFailed'
+function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool, driver CompileDriver.handle, runWorkingDir FilePath)
+	let run = try runOneSpec(specDir, specName: specName, runs: runs, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork, driver: driver, runWorkingDir: runWorkingDir) otherwise (e) 'specFailed'
 		reportCompileError(e)
 		panic("spec worker: could not run spec '{specName}' — see the error above")
 	end 'specFailed'
@@ -748,7 +748,7 @@ function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatt
 	// checks the records against its plan. See this file's protocol note.
 	print("{jobCountsLine(WorkerJobBatchMarker, first: run.batch.batched as ParsedCount, second: run.batch.programs as ParsedCount, third: run.batch.alone as ParsedCount)}\n")
 
-	let library = fileMemos.library.takeTotals()
+	let library = driverLibraryTotals(driver)
 	print("{jobCountsLine(WorkerJobLibraryMarker, first: library.loaded as ParsedCount, second: library.written as ParsedCount, third: library.rejected as ParsedCount)}\n")
 	print("{jobCountsLine(WorkerJobCpuMarker, first: run.cpu.ticks as ParsedCount, second: run.cpu.reported as ParsedCount, third: run.cpu.unreported as ParsedCount)}\n")
 end 'runSpecJob'

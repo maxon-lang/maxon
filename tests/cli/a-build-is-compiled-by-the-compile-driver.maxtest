@@ -1,0 +1,26 @@
+let ABuildIsCompiledByTheCompileDriverCaseDirName = "build-is-compiled-by-the-compile-driver"
+let CompileDriverLinePrefix = "[CMP] DEBUG: compile driver: "
+let BuildJobLine = "[CMP] DEBUG: compile driver: build job begins"
+
+test 'a build is one job of the compile driver, and its answer is the only thing the command waits for'
+	requireHeldOutsideCheckout(ABuildIsCompiledByTheCompileDriverCaseDirName, check: BuildRunsOneDriverJob.create())
+end 'a build is one job of the compile driver, and its answer is the only thing the command waits for'
+
+type BuildRunsOneDriverJob implements OutsideCheckoutCase
+	static function create() returns BuildRunsOneDriverJob
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
+
+		let built = try requireLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, which: "the build")
+		let said = "It wrote to stderr: {built.stderr}"
+
+		let lines = linesOpeningIn(built.stderr, prefix: CompileDriverLinePrefix)
+		try Expect.equal(lines.count(), expected: 1, message: "the build printed {lines.count()} line(s) opening `{CompileDriverLinePrefix}` under `{CompilerDebugLogFlag}`, where the compile driver names each job it begins once. {said}")
+
+		let line = try lines.get(0) otherwise panic("{ABuildIsCompiledByTheCompileDriverCaseDirName}: a list holding one line has a first line")
+		try Expect.equal(line, expected: BuildJobLine, message: "the compile driver's one line says '{line}' where a build begins one `build` job. {said}")
+	end 'requireHeldIn'
+end 'BuildRunsOneDriverJob'

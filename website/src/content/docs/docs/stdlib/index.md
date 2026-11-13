@@ -16,6 +16,12 @@ with instance methods (`String`, `Array`, `FilePath`). A handful of names are fr
 `printError`, `sleep`, `sha256`, `spreadHash`) and a handful are type aliases used across the library
 (`ByteArray`, `StringArray`, `ExitCode`).
 
+A message or a `spawn` factory that calls a library operation which waits on another party, such as
+`HttpServer.serve`, `TraceCapture.stopCapture` or `Scheduler.quiesce`, is
+[E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait); the reference names each such operation. A service
+that makes a file, socket, subprocess or `HttpClient` call, or reads `stdin`, is held for as long as the peer
+takes, and messages queue behind it.
+
 Generic types are used through a type alias that names the element type:
 
 ```maxon
@@ -36,11 +42,11 @@ end 'main'
 |------|----------|
 | [Core](#overview) | [Core Functions](#core-functions) |
 | [Text](/docs/stdlib/text/#string) | String, Character, Ascii, Unicode, CharacterSet |
-| [Collections](/docs/stdlib/collections/#array) | Array, List, Map, Set, FixedArray, Range, Iterators, Interfaces |
+| [Collections](/docs/stdlib/collections/#array) | Array, List, Map, Set, Slot, FixedArray, Range, Iterators, Interfaces |
 | [I/O and processes](/docs/stdlib/io/#file) | File, FilePath, Directory, Console, Stream, CommandLine, Log, TraceCapture, Process, Subprocess, SharedMemory, Debuggee, Sampler |
 | [Network](/docs/stdlib/network/#tcpclient) | TcpClient, TcpListener, HttpClient, HttpServer, URL |
 | [Data](/docs/stdlib/data/#json) | Json, Base64, Pem, Der, Sha2, Hmac, Hkdf, Rsa, Aead, AesGcm, ChaCha20Poly1305, Aes, ChaCha20, Poly1305, X25519, Ed25519, EcdhP256, Ecdsa, EcdsaP256, EcdsaP384, Hasher |
-| [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, HeapStats, SharedValue, Random, TrustStore, Math, Primitive Extensions |
+| [System](/docs/stdlib/runtime/#clock) | Clock, Scheduler, HeapStats, Reply, SharedValue, Random, TrustStore, Math, Primitive Extensions |
 | [Testing](/docs/stdlib/testing/) | Testing |
 | [Build](/docs/stdlib/build/) | Build |
 

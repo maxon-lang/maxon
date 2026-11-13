@@ -102,11 +102,10 @@ typealias CandidateOrder = Array with ElementIndex
 // `popcount(peak.witness)` are available there. This DIRECTLY throws (rather than
 // returning an error for the caller to throw) so the control flow is byte-for-byte the shape
 // of `PassPipeline.run`'s gate — report onto the shared project, then a plain
-// `throw CompileError.compileError`; `compileToCodeResult` catches it, prints, and re-throws a
-// FRESH one (the documented re-throw gotcha). Constructing-then-returning the error to throw
-// elsewhere leaves an owned `CompileError` box in flight across the throw boundary, which the
-// runtime does not reclaim (a stderr "MM leak" line that would corrupt the diagnostic — the very
-// thing the `maxoncstderr` block compares).
+// `throw CompileError.compileError`; `CompileRun.ended` receives it. Constructing-then-returning
+// the error to throw elsewhere leaves an owned `CompileError` box in flight across the throw
+// boundary, which the runtime does not reclaim (a stderr "MM leak" line that would corrupt the
+// diagnostic — the very thing the `maxoncstderr` block compares).
 export function raiseRegisterPressure(project Project, module TargetModule, func IrFunction, funcIndex ElementIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
 	let message = buildRegisterPressureMessage(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
 

@@ -1,0 +1,52 @@
+let WatchedCaseDirName = "relay-watched"
+let WatchedDocumentName = "one.maxon"
+let WatchedFirstText = "one"
+let WatchedCurrentText = "two"
+let WatchedChangedVersion = 2
+let WatchedUnnotifiedPauseMs = 1500
+let WatchedSlotDirectoryTail = "/maxon-bin/.maxon"
+let WatchedCreateOrChange = 3
+
+test 'relay: a replaced slot compiler is attached when the client reports its file changed, and not before'
+	let caseDir = stagedRelayCase(WatchedCaseDirName)
+	installRelaySlot(caseDir, generation: 1)
+
+	let client = LspClient.start()
+
+	if let observed = try replacedThenReported(client, caseDir: caseDir) 'observed'
+		client.release()
+		discardStagedDir(caseDir)
+
+		try Expect.equal(observed.0, expected: relaySlotFileName(caseDir), message: "the relay did not ask the client to watch the slot compiler's file by name.")
+		try Expect.equal(observed.1, expected: "{WatchedCreateOrChange}", message: "the relay asked the client for events other than a created or changed file.")
+		try Expect.equal(observed.2, expected: "true", message: "the relay's watcher is not rooted at the slot's directory.")
+		try Expect.equal(observed.3, expected: "generation 1 saw: {WatchedCurrentText}", message: "the replaced slot compiler took over before the client reported its file changed, which is a poll.")
+		try Expect.equal(observed.4, expected: "generation 2 saw: {WatchedCurrentText}", message: "the replaced slot compiler did not take over when the client reported its file changed.")
+	end 'observed' else (e) 'failed'
+		abandonedStagedSession(client, staged: caseDir, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'relay: a replaced slot compiler is attached when the client reports its file changed, and not before'
+
+function replacedThenReported(client LspClient, caseDir FilePath) returns (String, String, String, String, String) throws LspClientError
+	let uri = fileUriOf(relayCheckout(caseDir).join(WatchedDocumentName))
+	_ = try client.initializeAtRoot(relayCheckout(caseDir))
+
+	try client.initialized()
+
+	let registration = try client.awaitWatchRegistration()
+
+	try client.openDocument(uri, content: WatchedFirstText)
+	_ = try awaitFakePublish(client, uri: uri, generation: 1, text: WatchedFirstText)
+
+	replaceRelaySlot(caseDir, generation: 2)
+	sleep(WatchedUnnotifiedPauseMs)
+
+	try client.changeDocument(uri, content: WatchedCurrentText, version: WatchedChangedVersion)
+	let before = relayFirstMessage(try awaitFakePublish(client, uri: uri, generation: 1, text: WatchedCurrentText))
+
+	try relaySlotChanged(client, caseDir: caseDir)
+
+	let after = relayFirstMessage(try awaitFakePublish(client, uri: uri, generation: 2, text: WatchedCurrentText))
+
+	return (registration.pattern, "{registration.kind}", "{registration.baseUri.endsWith(WatchedSlotDirectoryTail)}", before, after)
+end 'replacedThenReported'

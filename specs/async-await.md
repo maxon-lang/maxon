@@ -1860,7 +1860,7 @@ function describe(name String) returns String
 end 'describe'
 ```
 ```maxoncstderr
-error E3210: <fragment>:22:16: function value for 'Plain' may yield (it awaits a coroutine at line 12), but a function type never waits or yields
+error E3210: <fragment>:22:16: function value for 'Plain' may wait (it awaits a promise whose coroutine it cannot see, at line 12), but a function type never waits or yields
 ```
 
 <!-- test: async-await.a-promise-parameter-handed-through-self-to-a-storing-method-is-handed-on -->

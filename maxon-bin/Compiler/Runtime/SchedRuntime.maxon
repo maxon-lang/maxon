@@ -2036,7 +2036,7 @@ end 'isSchedSubstrateQueryCallee'
 //
 // ⚠ **IT IS CALLED WITH NO PROCESSOR AND NO ROSTER MACHINE OF ITS OWN**, from the sysmon thread, which is why
 // it may take `__sched_lock` freely and why it must not assume the calling machine holds a processor.
-let SchedHandoffPName = b"__sched_handoffp"
+export let SchedHandoffPName = b"__sched_handoffp"
 
 // ⭐⭐ `__sched_retake(now, preemptOff) -> how many processors this pass took` — Go's `retake` (`proc.go:6682`):
 // ask a strand that has held its processor for `SchedForcePreemptNs` to yield (`__sched_preemptone`), and take
@@ -7162,8 +7162,7 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 	// nothing pending. A machine blocked in the poller stays off the list until its wait returns, so a promise
 	// drop, a claimed timed send or a netpoll readiness that empties the pending set under it breaks that wait
 	// (`__sched_break_idle_poller`).
-	let running = emitSchedMachinesRunning(module, block: block, ids: ids)
-	let aloneOnTheBox = emitCompareWithConstant(module, block: block, value: running, pred: StdCmpPred.eq, against: 1, ids: ids)
+	let aloneOnTheBox = emitSchedAloneOnTheBox(module, block: block, ids: ids)
 	let settled = emitBin(module, block: block, a: quiet, b: aloneOnTheBox, opcode: StdBinOpcode.bitAnd, ids: ids)
 
 	let drainOver = emitBin(module, block: block, a: settled, b: isStuck, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -7173,6 +7172,17 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 	let mainMet = emitBin(module, block: block, a: awaitingMainOnly, b: mainDone, opcode: StdBinOpcode.bitAnd, ids: ids)
 	return emitBin(module, block: block, a: drainMet, b: mainMet, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitSchedMainLoopUntilMet'
+
+function emitSchedAloneOnTheBox(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let running = emitSchedMachinesRunning(module, block: block, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: running, pred: StdCmpPred.eq, against: 1, ids: ids)
+end 'emitSchedAloneOnTheBox'
+
+export function emitSchedNothingElseRuns(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	let nothingRunnable = emitSchedFindsNoWork(module, block: block, ids: ids)
+	let aloneOnTheBox = emitSchedAloneOnTheBox(module, block: block, ids: ids)
+	return emitBin(module, block: block, a: nothingRunnable, b: aloneOnTheBox, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitSchedNothingElseRuns'
 
 // Continues at `resumeAt` uncredited: a credit makes `wfound` pay a wake, which only `wparkspinbecome`'s
 // road owes, and that block takes the credit itself.

@@ -11,7 +11,7 @@
 // derivation rather than a pass beside `DeadFunctionElimination` at the Std tier**, which is where both
 // references do the equivalent job. In the compiler all three pieces are produced BEFORE the pipeline runs:
 // `ProgramSignatures.declaredGlobals` reserves the slots and `ModuleInit.installManagedGlobalInit`
-// synthesizes the two functions, both from the SAME arena, both in `Compiler.compileToCodeResult`. So a
+// synthesizes the two functions, both from the SAME arena, both in `prepareLowering`. So a
 // filter applied to that arena drops all three atomically **by construction** — there is no init run to
 // splice out of a lowered body, no `.data` table to re-lay-out, and no ordering between three edits to
 // get right. The references have to remove because their `.data` layout is already fixed by the time
@@ -157,7 +157,7 @@ end 'liveGlobalLabels'
 // payload, asked per op).** A union with ANY payload variant is boxed, so
 // `union MaxonOpGlobalLabel{none, label(ByteArray)}` allocates one box per ask — a payload-free `none`
 // does NOT keep the common answer a scalar. It costs more here than there because there are three ask
-// sites and two of them are inside walks `queryAllModule`'s stdlib body-demand fixpoint repeats once per
+// sites and two of them are inside walks `FrontEndRun`'s stdlib body-demand fixpoint repeats once per
 // round. MEASURED A/B on one tree at one path, allocations exact: `phase:deriveRuntimeNeeds` reads
 // **72,145 / 119,171 / 213,225 / 401,334 / 777,543 / 1,529,902** across the six rungs with the union —
 // x1.96 per doubling, DEAD LINEAR IN THE USER'S PROGRAM — against

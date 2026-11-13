@@ -140,14 +140,14 @@ export type ManifestVoice
 		end 'audience'
 	end 'quietedChatter'
 
-	function compileSession() returns CompileSession
+	function compileSession() returns DriverSession
 		return match self.audience 'audience'
-			commandLine gives CompileSession.printing()
-			editor gives CompileSession.create(DiagnosticSink.capturing(), fileMemos: SharedFileMemoMap.forOneCompile(), treeLock: LockHold.none())
+			commandLine gives DriverSession.printing()
+			editor gives DriverSession.capturing()
 		end 'audience'
 	end 'compileSession'
 
-	function adopt(session CompileSession)
+	function adopt(session DriverSession)
 		match self.audience 'audience'
 			commandLine then return
 			editor then self.sayAll(session.diagnostics.emitted())

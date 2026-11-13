@@ -116,7 +116,7 @@ type QualifierMachine
 
 		var qualifies = false
 
-		if kind == TokenKind.identifier and spellsCapabilityWord(token.value) 'aQualifierWord'
+		if kind == TokenKind.identifier and spellsReceiverWord(token.value) 'aQualifierWord'
 			qualifies = self.recordVerdict(index, token: token)
 		end 'aQualifierWord'
 
@@ -167,9 +167,13 @@ type QualifierMachine
 			return QualifierVerdict.capabilityQualifier
 		end 'aBoundWord'
 
-		if spelledAsCapability and self.namesTheReceiver(index) 'theReceiver'
+		if spellsReceiverWord(token.value) and self.namesTheReceiver(index) 'theReceiver'
 			return QualifierVerdict.capabilityQualifier
 		end 'theReceiver'
+
+		if not spelledAsCapability 'aReceiverWordElsewhere'
+			return QualifierVerdict.plainName
+		end 'aReceiverWordElsewhere'
 
 		if not qualifierOperandStartsWith(self.kindAfter(index)) or not self.typePositionHolds() 'notAQualifier'
 			return QualifierVerdict.plainName
@@ -495,7 +499,7 @@ end 'QualifierMachine'
 function receiverHeadAt(tokens TokenArray, wordIndex ElementIndex) returns bool
 	let word = try tokens.get(wordIndex) otherwise return false
 
-	if word.kind != TokenKind.identifier or not spellsCapabilityWord(word.value) or tokenKindAt(tokens, index: wordIndex + 1) != TokenKind.self 'notAReceiver'
+	if word.kind != TokenKind.identifier or not spellsReceiverWord(word.value) or tokenKindAt(tokens, index: wordIndex + 1) != TokenKind.self 'notAReceiver'
 		return false
 	end 'notAReceiver'
 

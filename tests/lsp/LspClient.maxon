@@ -497,7 +497,7 @@ end 'LspClientError'
 
 // A request id. JSON-RPC admits any scalar; this client only ever sends integers, and it starts at 1 so
 // that "no request has been sent" is not a value it can produce.
-typealias LspRequestIdNumber = int(1 to i64.max)
+public typealias LspRequestIdNumber = int(1 to i64.max)
 
 let FirstRequestId = 1
 
@@ -508,10 +508,31 @@ typealias SkippedMessageTally = int(0 to i64.max)
 
 let UnaddressedMessageBudget = 64 as SkippedMessageTally
 
+public type WatchRegistration
+	public let baseUri as String
+	public let pattern as String
+	public let kind as JsonInteger
+
+	static function create(baseUri String, pattern String, kind JsonInteger) returns WatchRegistration
+		return Self{baseUri: baseUri, pattern: pattern, kind: kind}
+	end 'create'
+end 'WatchRegistration'
+
+public enum WatchedFileChange
+	created = 1
+	changed = 2
+	deleted = 3
+end 'WatchedFileChange'
+
 public type LspClient
 	var server as StreamingSubprocess
 	var replies as ChildOutputReader
 	var nextRequestId as LspRequestIdNumber
+	var watchesFiles as bool
+
+	// Every server-initiated request seen and not yet taken, in arrival order. Each is answered with a
+	// null result the moment it is read, as an editor that accepts a registration does.
+	var serverRequests as StringArray
 
 	// Every server-initiated notification seen and not yet taken, in arrival order. They arrive ahead
 	// of the next reply, so an `awaitReply` that discarded them would leave the messages tests assert
@@ -539,8 +560,12 @@ public type LspClient
 			panic("LspClient: the test could not run — the server's stdout could not be taken ({e.displayReason()}).")
 		end 'stdoutNotTaken'
 
-		return Self{server: spawned, replies: merge replies, nextRequestId: FirstRequestId, notifications: StringArray.create(0)}
+		return Self{server: spawned, replies: merge replies, nextRequestId: FirstRequestId, watchesFiles: true, serverRequests: StringArray.create(0), notifications: StringArray.create(0)}
 	end 'start'
+
+	public function declareNoFileWatching()
+		self.watchesFiles = false
+	end 'declareNoFileWatching'
 
 	// End the session and free the OS handle. MUST be called on every path — a dropped
 	// `StreamingSubprocess` leaks, and a leak is exit 101.
@@ -568,7 +593,7 @@ public type LspClient
 		let params = JsonObjectBuilder.create(doc)
 		params.putNull(ProcessIdKey)
 		params.putNull(RootUriKey)
-		params.putNode(CapabilitiesKey, value: clientCapabilities(doc, declaresWorkspaceFolders: false))
+		params.putNode(CapabilitiesKey, value: clientCapabilities(doc, declaresWorkspaceFolders: false, watchesFiles: self.watchesFiles))
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
@@ -637,7 +662,7 @@ public type LspClient
 			params.putNode(WorkspaceFoldersKey, value: doc.add(JsonNode.arrayNode(workspaceFolderNodes(doc, uris: folderUris))))
 		end 'namesFolders'
 
-		params.putNode(CapabilitiesKey, value: clientCapabilities(doc, declaresWorkspaceFolders: declaresWorkspaceFolders))
+		params.putNode(CapabilitiesKey, value: clientCapabilities(doc, declaresWorkspaceFolders: declaresWorkspaceFolders, watchesFiles: self.watchesFiles))
 		message.putNode(JsonRpcParamsKey, value: params.finish())
 
 		let (replyDoc, result) = try self.sendRequest(doc, message: message)
@@ -978,6 +1003,18 @@ public type LspClient
 		throw LspClientError.transportFailed("no project check outcome for version {through} of {uri} arrived within {ProjectCheckPublishFailureBoundMs} ms; {reports.count()} outcome line(s) for earlier versions did")
 	end 'awaitProjectCheckReports'
 
+	public function projectCheckHasPublished(uri String) returns bool throws LspClientError
+		_ = try self.documentSymbols(uri)
+
+		for report in try self.takeProjectCheckReports(projectCheckReportPrefix(uri)) 'eachReport'
+			if report.outcome == ProjectCheckPublishedOutcome 'published'
+				return true
+			end 'published'
+		end 'eachReport'
+
+		return false
+	end 'projectCheckHasPublished'
+
 	function takeProjectCheckReports(prefix String) returns ProjectCheckReportArray throws LspClientError
 		let reports = ProjectCheckReportArray.create(0)
 
@@ -1259,6 +1296,10 @@ public type LspClient
 	// Address `message` with the next id, send it, and wait for the reply that carries that id back.
 	// The reply's document is handed back with the result node because the node is an index into it.
 	function sendRequest(doc JsonDoc, message JsonObjectBuilder) returns (JsonDoc, JsonNodeId) throws LspClientError
+		return try self.awaitReply(try self.sendWithoutAwaiting(doc, message: message))
+	end 'sendRequest'
+
+	function sendWithoutAwaiting(doc JsonDoc, message JsonObjectBuilder) returns LspRequestIdNumber throws LspClientError
 		let id = self.nextRequestId
 		self.nextRequestId = id + 1
 
@@ -1266,8 +1307,8 @@ public type LspClient
 		doc.root = message.finish()
 		try self.writeFrame(Json.stringify(doc))
 
-		return try self.awaitReply(id)
-	end 'sendRequest'
+		return id
+	end 'sendWithoutAwaiting'
 
 	// A notification carries no id, and JSON-RPC forbids answering one — so nothing is read back.
 	function sendNotification(doc JsonDoc, message JsonObjectBuilder) throws LspClientError
@@ -1303,18 +1344,154 @@ public type LspClient
 				return try replyOf(doc)
 			end 'ours'
 
-			// A message carrying no id at all is a NOTIFICATION and is kept for whoever asks; one
-			// carrying somebody else's id is a reply this client can do nothing with, and is dropped.
-			if not hasMember(doc, of: doc.root, key: JsonRpcIdKey) 'aNotification'
-				self.notifications.push(body.clone())
-			end 'aNotification'
+			try self.admit(body, doc: doc)
 
 			skipped = skipped + 1
 		end 'correlate'
 
 		throw LspClientError.transportFailed("no reply to request {id} arrived within {UnaddressedMessageBudget} messages addressed elsewhere")
 	end 'awaitReply'
+
+	// A message carrying no id at all is a NOTIFICATION and is kept for whoever asks; one carrying an id
+	// and a method is a REQUEST of the server's, kept and answered; one carrying somebody else's id and
+	// no method is a reply this client can do nothing with, and is dropped.
+	function admit(body String, doc JsonDoc) throws LspClientError
+		if not hasMember(doc, of: doc.root, key: JsonRpcIdKey) 'aNotification'
+			self.notifications.push(body.clone())
+			return
+		end 'aNotification'
+
+		if hasMember(doc, of: doc.root, key: JsonRpcMethodKey) 'aServerRequest'
+			self.serverRequests.push(body.clone())
+			try self.answerServerRequest(doc)
+		end 'aServerRequest'
+	end 'admit'
+
+	function answerServerRequest(request JsonDoc) throws LspClientError
+		let reply = JsonDoc.create()
+		let message = JsonObjectBuilder.create(reply)
+		message.putString(JsonRpcVersionKey, value: JsonRpcVersion)
+
+		let idNode = request.get(try memberNode(request, of: request.root, key: JsonRpcIdKey))
+
+		match idNode.kind 'idShape'
+			jsonString then message.putString(JsonRpcIdKey, value: idNode.stringValue)
+			jsonNumber then message.putInt(JsonRpcIdKey, value: trunc(idNode.numberValue) as JsonInteger)
+			jsonNull or
+			jsonBool or
+			jsonArray or
+			jsonObject then throw LspClientError.malformedResponse("a request of the server's carries an id that is neither a string nor a number")
+		end 'idShape'
+
+		message.putNull(JsonRpcResultKey)
+		reply.root = message.finish()
+		try self.writeFrame(Json.stringify(reply))
+	end 'answerServerRequest'
+
+	public function awaitWatchRegistration() returns WatchRegistration throws LspClientError
+		var waited = 0 as SkippedMessageTally
+
+		while waited < UnaddressedMessageBudget 'untilRegistered'
+			match try self.takeWatchRegistration() 'search'
+				found(registration) then return registration
+				none then break
+			end 'search'
+
+			let body = try self.readFrame()
+			let doc = try Json.parse(body) otherwise 'notJson'
+				throw LspClientError.malformedResponse("a message body is not valid JSON: {body}")
+			end 'notJson'
+
+			try self.admit(body, doc: doc)
+			waited = waited + 1
+		end 'untilRegistered'
+
+		throw LspClientError.transportFailed("no client/registerCapability request for a file watcher arrived within {UnaddressedMessageBudget} messages")
+	end 'awaitWatchRegistration'
+
+	function takeWatchRegistration() returns WatchRegistrationSearch throws LspClientError
+		for position in 0 upto self.serverRequests.count() 'eachRequest'
+			let body = try self.serverRequests.get(position) otherwise panic("LspClient.takeWatchRegistration: a position below the count")
+			let doc = try Json.parse(body) otherwise 'notJson'
+				throw LspClientError.malformedResponse("a stashed request is not valid JSON: {body}")
+			end 'notJson'
+
+			let method = try stringMember(doc, of: doc.root, key: JsonRpcMethodKey)
+
+			if method == MethodRegisterCapability 'aRegistration'
+				_ = try self.serverRequests.remove(position) otherwise panic("LspClient.takeWatchRegistration: a position below the count")
+
+				return WatchRegistrationSearch.found(try readWatchRegistration(doc))
+			end 'aRegistration'
+		end 'eachRequest'
+
+		return WatchRegistrationSearch.none
+	end 'takeWatchRegistration'
+
+	public function notifyWatchedFileChanged(uri String, change WatchedFileChange) throws LspClientError
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodDidChangeWatchedFiles)
+
+		let entry = JsonObjectBuilder.create(doc)
+		entry.putString(UriKey, value: uri)
+		entry.putInt(ChangeTypeKey, value: change.rawValue as JsonInteger)
+
+		let changes = JsonNodeIdArray.create(0)
+		changes.push(entry.finish())
+
+		let params = JsonObjectBuilder.create(doc)
+		params.putNode(ChangesKey, value: doc.add(JsonNode.arrayNode(changes)))
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		try self.sendNotification(doc, message: message)
+	end 'notifyWatchedFileChanged'
+
+	public function startHover(uri String, line LspCoordinate, character LspCoordinate) returns LspRequestIdNumber throws LspClientError
+		let doc = JsonDoc.create()
+		let message = beginMessage(doc, method: MethodHover)
+		message.putNode(JsonRpcParamsKey, value: positionParams(doc, uri: uri, line: line, character: character).finish())
+
+		return try self.sendWithoutAwaiting(doc, message: message)
+	end 'startHover'
+
+	public function startShutdown() returns LspRequestIdNumber throws LspClientError
+		let doc = JsonDoc.create()
+
+		return try self.sendWithoutAwaiting(doc, message: beginMessage(doc, method: MethodShutdown))
+	end 'startShutdown'
+
+	public function awaitReplyTo(id LspRequestIdNumber) throws LspClientError
+		_ = try self.awaitReply(id)
+	end 'awaitReplyTo'
 end 'LspClient'
+
+union WatchRegistrationSearch
+	found(registration WatchRegistration)
+	none
+end 'WatchRegistrationSearch'
+
+function readWatchRegistration(doc JsonDoc) returns WatchRegistration throws LspClientError
+	let params = try memberNode(doc, of: doc.root, key: JsonRpcParamsKey)
+	let registrations = try memberNode(doc, of: params, key: RegistrationsKey)
+	let registration = try arrayMember(doc, of: registrations, index: 0)
+	let options = try memberNode(doc, of: registration, key: RegisterOptionsKey)
+	let watchers = try memberNode(doc, of: options, key: WatchersKey)
+	let watcher = try arrayMember(doc, of: watchers, index: 0)
+	let glob = try memberNode(doc, of: watcher, key: GlobPatternKey)
+	let kind = try integerMember(doc, of: watcher, key: KindKey)
+
+	if doc.get(glob).kind == JsonKind.jsonString 'aPlainGlob'
+		return WatchRegistration.create("", pattern: doc.get(glob).stringValue, kind: kind)
+	end 'aPlainGlob'
+
+	return WatchRegistration.create(try stringMember(doc, of: glob, key: BaseUriKey), pattern: try stringMember(doc, of: glob, key: PatternKey), kind: kind)
+end 'readWatchRegistration'
+
+function arrayMember(doc JsonDoc, of JsonNodeId, index ElementIndex) returns JsonNodeId throws LspClientError
+	return try doc.arrayAt(of, index: index) otherwise 'absent'
+		throw LspClientError.malformedResponse("a request of the server's holds no element {index} where LSP defines one")
+	end 'absent'
+end 'arrayMember'
 
 export function fileUriOf(file FilePath) returns String
 	let slashed = file.toString().replace(WindowsPathSeparator, with: PortablePathSeparator)
@@ -1476,7 +1653,7 @@ end 'positionParams'
 // opened. This server advertises out of `servedMethods()` and consults no client capability at all
 // (`LspServer.respondInitialize` owns that rule), so `declaresWorkspaceFolders` changes what the client
 // claims and never what the server answers.
-function clientCapabilities(doc JsonDoc, declaresWorkspaceFolders bool) returns JsonNodeId
+function clientCapabilities(doc JsonDoc, declaresWorkspaceFolders bool, watchesFiles bool) returns JsonNodeId
 	let textDocument = JsonObjectBuilder.create(doc)
 
 	for feature in declaredTextDocumentFeatures() 'eachFeature'
@@ -1485,8 +1662,13 @@ function clientCapabilities(doc JsonDoc, declaresWorkspaceFolders bool) returns 
 		textDocument.putNode(feature, value: declaration.finish())
 	end 'eachFeature'
 
+	let watching = JsonObjectBuilder.create(doc)
+	watching.putBool(DynamicRegistrationKey, value: watchesFiles)
+	watching.putBool(RelativePatternSupportKey, value: watchesFiles)
+
 	let workspace = JsonObjectBuilder.create(doc)
 	workspace.putBool(WorkspaceFoldersKey, value: declaresWorkspaceFolders)
+	workspace.putNode(DidChangeWatchedFilesKey, value: watching.finish())
 
 	let capabilities = JsonObjectBuilder.create(doc)
 	capabilities.putNode(TextDocumentKey, value: textDocument.finish())
@@ -1951,6 +2133,17 @@ let TextDocumentKey = "textDocument"
 let WorkspaceKey = "workspace"
 let WorkspaceFoldersKey = "workspaceFolders"
 let DynamicRegistrationKey = "dynamicRegistration"
+let RelativePatternSupportKey = "relativePatternSupport"
+let DidChangeWatchedFilesKey = "didChangeWatchedFiles"
+let MethodRegisterCapability = "client/registerCapability"
+let MethodDidChangeWatchedFiles = "workspace/didChangeWatchedFiles"
+let RegistrationsKey = "registrations"
+let RegisterOptionsKey = "registerOptions"
+let WatchersKey = "watchers"
+let GlobPatternKey = "globPattern"
+let BaseUriKey = "baseUri"
+let PatternKey = "pattern"
+let ChangeTypeKey = "type"
 let ProcessIdKey = "processId"
 let RootUriKey = "rootUri"
 let InitializationOptionsKey = "initializationOptions"

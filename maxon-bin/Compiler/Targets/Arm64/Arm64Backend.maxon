@@ -4,7 +4,7 @@
 // This is the arm64 twin of `X64Backend`: `emitArm64FunctionChunk` maps each colored `TargetOp`
 // (its neutral `RegNum` operands resolved to an `Arm64Register`) to its 32-bit AArch64 encoding,
 // `concatArm64FunctionChunks` lays the chunks out into `.text` and resolves the intra-module `bl`
-// and code→data relocations, and `buildArm64Backend` drives the shared pipeline stages. The
+// and code→data relocations, and `finishArm64Backend` drives the shared pipeline stages. The
 // The ISA-specific traps live HERE: the ADRP+ADD address-materialisation pair (never
 // a bare ADR), the STUR simm9 / scaled-STR spill threshold, the movz/movk immediate ladder, the
 // NaN-safe float compare's condition mapping, and the SP-vs-XZR MOV disambiguation.
@@ -3007,7 +3007,7 @@ end 'encodeArm64FunctionChunk'
 // `LC_MAIN.entryoff = 0` — the opposite placement from x64's
 // `appendX64RuntimeChunks`, whose appended runtime is the TRAILING panic handler (x64's `mrt_start` is
 // a module function already laid out first). Every other runtime family — the panic runtime, the fault
-// runtime, the host surface, the scheduler — is appended AFTER user code by `buildArm64Backend`.
+// runtime, the host surface, the scheduler — is appended AFTER user code by `finishArm64Backend`.
 // `leakCheck` gates the entry stub's future MM leak bridge (false at the scalar core),
 // `initGlobals` its managed-global init/release bracket (false for a program with no
 // managed top-level global), `debugStream` the DebugStream producer's attach/detach bracket, and
@@ -3277,13 +3277,7 @@ end 'arm64ResolveFuncAdrpRelocs'
 // through a GOT import with no TargetOp channel, so it is hand-assembled as a chunk after the pool
 // (`appendArm64RuntimeChunks`) and laid out first. `throws CompileError` because register
 // allocation can fail for a real reason (E5001), exactly as the x64 backend does.
-export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex) returns CodeResult throws CompileError
-	// `target` reaches the isel on the pool because the three OS-primitive lowerings differ per OS:
-	// macOS routes them through libSystem GOT imports, Linux through raw `svc #0` (see
-	// `arm64OsCallKind`), and the mmap anonymous-mapping flag word is a different number on each.
-	let chunks = FunctionCodeChunkArray.create(0)
-	let targetModule = try encodeOnTheBackendPool(stdModule, target: target, globalData: globalData, project: project, usage: usage, funcNames: funcNames, chunks: chunks)
-
+export function finishArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex, targetModule TargetModule, chunks FunctionCodeChunkArray) returns CodeResult throws CompileError
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encodeRuntime)
 	let entryChunks = FunctionCodeChunkArray.create(0)
 
@@ -3337,8 +3331,8 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	match target.os 'hostSurface'
 		macos then appendArm64DarwinRuntimeChunks(chunks, usage: usage, globalData: globalData)
 		linux then appendArm64LinuxRuntimeChunks(chunks, usage: usage, globalData: globalData)
-		windows then panic("buildArm64Backend: there is no arm64-Windows lane in this compiler — `Target` admits the pair only through `arm64OsCallKind`'s two OSes")
-		wasi then panic("buildArm64Backend: `wasm32-wasi` is not an arm64 lane — a WASI component has no arm64 `.text` at all, so an `Os.wasi` reaching this backend is a target-construction bug")
+		windows then panic("finishArm64Backend: there is no arm64-Windows lane in this compiler — `Target` admits the pair only through `arm64OsCallKind`'s two OSes")
+		wasi then panic("finishArm64Backend: `wasm32-wasi` is not an arm64 lane — a WASI component has no arm64 `.text` at all, so an `Os.wasi` reaching this backend is a target-construction bug")
 	end 'hostSurface'
 
 	// The hand-assembled green-thread chunks, on the same `usesGt` bit `installGtRuntime` was gated on rather than
@@ -3362,4 +3356,4 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
 
 	return codeResult
-end 'buildArm64Backend'
+end 'finishArm64Backend'

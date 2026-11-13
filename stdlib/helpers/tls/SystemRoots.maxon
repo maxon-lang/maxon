@@ -1,6 +1,5 @@
 module union SystemRootsOutcome
 	unloaded
-	loading(loader SystemRootsLoader.handle)
 	loaded(anchors immutable X509RootPool)
 	failed(error TrustStoreError)
 end 'SystemRootsOutcome'
@@ -12,12 +11,6 @@ public type SystemRoots
 		return Self{outcome: SystemRootsOutcome.unloaded}
 	end 'unloaded'
 
-	module static function loading(loader SystemRootsLoader.handle) returns SystemRoots
-		// The state keeps its own handle: a reference the caller still holds fails the registered
-		// record's sole-owner check.
-		return Self{outcome: SystemRootsOutcome.loading(loader.clone())}
-	end 'loading'
-
 	module static function loaded(anchors immutable X509RootPool) returns SystemRoots
 		return Self{outcome: SystemRootsOutcome.loaded(anchors)}
 	end 'loaded'
@@ -27,50 +20,36 @@ public type SystemRoots
 	end 'failed'
 
 	public static function authenticator(purpose X509Purpose, now UnixSeconds) returns TlsX509Peer throws TrustStoreError
-		if not SystemRoots.current().isSettled() 'unsettled'
-			try settle()
-		end 'unsettled'
+		try settle(OperatingSystemTrust.create())
 
 		return try SystemRoots.current().authenticatorOver(purpose, now: now)
 	end 'authenticator'
 
-	static function settle() throws TrustStoreError
+	module static function settle(source immutable TrustSource) throws TrustStoreError
 		let seen = SystemRoots.current()
 
 		if seen.isUnloaded() 'unclaimed'
-			let loader = spawn SystemRootsLoader.create(OperatingSystemTrust.create())
-
-			_ = SystemRoots.register(SystemRoots.loading(loader), replacing: seen)
+			_ = SystemRoots.register(SystemRoots.read(source), replacing: seen)
 		end 'unclaimed'
 
 		match SystemRoots.current().outcome 'outcome'
-			loading(loader) then try load(loader)
 			loaded then return
 			failed(error) then throw error
-			unloaded then panic("SystemRoots: a claimed state was replaced by an unloaded one")
+			unloaded then panic("SystemRoots: a settled state was replaced by an unloaded one")
 		end 'outcome'
 	end 'settle'
 
-	static function load(loader SystemRootsLoader.handle) throws TrustStoreError
-		// A `ForeverMs` send fails only for a caller whose promise was dropped.
-		let reply = try loader.load(sendTimeout: ForeverMs) otherwise throw TrustStoreError.unavailable
+	static function read(source immutable TrustSource) returns SystemRoots
+		let roots = try source.read() otherwise (error) 'unread'
+			return SystemRoots.failed(error)
+		end 'unread'
 
-		try await reply
-	end 'load'
-
-	function isSettled() returns bool
-		return match outcome 'outcome'
-			unloaded or
-			loading gives false
-			loaded or
-			failed gives true
-		end 'outcome'
-	end 'isSettled'
+		return SystemRoots.loaded(X509RootPool.create(tlsCertificates(roots)))
+	end 'read'
 
 	function isUnloaded() returns bool
 		return match outcome 'outcome'
 			unloaded gives true
-			loading or
 			loaded or
 			failed gives false
 		end 'outcome'
@@ -80,8 +59,7 @@ public type SystemRoots
 		match outcome 'outcome'
 			loaded(anchors) then return TlsX509Peer.trusting(anchors, now: now, purpose: purpose)
 			failed(error) then throw error
-			unloaded or
-			loading then panic("SystemRoots: the loader answered before it published")
+			unloaded then panic("SystemRoots: authenticator asked of an unsettled state")
 		end 'outcome'
 	end 'authenticatorOver'
 end 'SystemRoots'

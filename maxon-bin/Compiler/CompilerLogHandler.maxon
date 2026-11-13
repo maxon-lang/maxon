@@ -44,6 +44,10 @@ type CompilerLogHandler implements LogHandler
 		return true
 	end 'flush'
 
+	export function flushThen(receiver CompileReceiver.handle)
+		try receiver.logFlushed(receiver.clone()) otherwise panic("CompilerLogHandler.flushThen: the run waiting for its log to drain refused the acknowledgement — it holds its handle until the acknowledgement arrives")
+	end 'flushThen'
+
 	export function handle(record immutable LogRecord) returns bool
 		let group = recordGroupOf(record)
 
@@ -68,41 +72,35 @@ end 'CompilerLogRoute'
 // The compiler's one handler, reached by `installCompilerLogHandler` and by `compileToProduct`'s
 // `attribute` alike; the `LogSink` default holds it only as a `LogHandler.handle`, which has no
 // `attribute`.
-default CompilerLogRoute = CompilerLogRoute.create(spawn CompilerLogHandler.create())
+default CompilerLogRoute = CompilerLogRoute.create(spawn(capacity: InstrumentationMailboxCapacity) CompilerLogHandler.create())
 
 export function installCompilerLogHandler()
 	Log.setDefault(LogSink.create(CompilerLogRoute.current().handler.clone(), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 end 'installCompilerLogHandler'
 
-// A `ForeverMs` send fails `mailboxFull` only for a cancelled sender, and both sites here drop the
-// record and the flush then.
-module function attributeCompilerLog(unit TraceUnit)
-	try CompilerLogRoute.current().handler.attribute(unit, sendTimeout: ForeverMs) otherwise (e) 'refused'
+module function attributeCompilerLogThen(unit TraceUnit, receiver CompileReceiver.handle)
+	try CompilerLogRoute.current().handler.attribute(unit) otherwise (e) 'refused'
 		match e 'why'
-			mailboxFull then return
-			serviceStopped then panic("attributeCompilerLog: the compiler's log handler stopped while the process still held its handle")
+			mailboxFull then break
+			serviceStopped then panic("attributeCompilerLogThen: the compiler's log handler stopped while the process still held its handle")
 		end 'why'
 	end 'refused'
 
-	flushCompilerLog()
-end 'attributeCompilerLog'
+	flushCompilerLogThen(receiver)
+end 'attributeCompilerLogThen'
 
 // A barrier: the handler is a service, so records still in its mailbox are handled after the sender
 // moves on, allocating inside whatever measured bracket is open by then. A compile flushes before
-// its totals close.
-module function flushCompilerLog()
-	try await CompilerLogRoute.current().handler.flush(sendTimeout: ForeverMs) otherwise (e) 'refused'
+// its totals close. The acknowledgement is a message to `receiver`, so a run that holds a service
+// waits for it as a stage and not inside one.
+module function flushCompilerLogThen(receiver CompileReceiver.handle)
+	try CompilerLogRoute.current().handler.flushThen(receiver) otherwise (e) 'refused'
 		match e 'why'
-			mailboxFull then return
-			serviceStopped then panic("flushCompilerLog: the compiler's log handler stopped answering")
+			mailboxFull then panic("flushCompilerLogThen: the compiler's log mailbox is full, and a run that holds a service cannot wait for room")
+			serviceStopped then panic("flushCompilerLogThen: the compiler's log handler stopped answering")
 		end 'why'
 	end 'refused'
-end 'flushCompilerLog'
-
-module function logCompilerDebugSettled(message String)
-	compilerLogger(CompilerLogGroup.compiler).debug(message)
-	flushCompilerLog()
-end 'logCompilerDebugSettled'
+end 'flushCompilerLogThen'
 
 function recordGroupOf(record LogRecord) returns CompilerLogGroup
 	let bound = try record.attrs.get(0) otherwise panic("CompilerLogHandler: a record carrying no attrs reached the compiler's handler — `compilerLogger` binds its group marker under the record's group on every compiler logger")

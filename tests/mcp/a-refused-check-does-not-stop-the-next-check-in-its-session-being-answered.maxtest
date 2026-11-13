@@ -1,0 +1,40 @@
+// The server's `check` and `dump_ir` compile on one compile driver for the whole session, one job at a time.
+// A refused check is a finished job like any other, so the check after it in the same session is answered, and a
+// `dump_ir` after both still carries the program's IR.
+
+let RefusedThenAnsweredDirName = "mcp-a-refused-check-then-the-next"
+let AnsweredDirName = "mcp-the-check-after-a-refusal"
+let DumpedDirName = "mcp-the-dump-after-a-refusal"
+
+let RefusedSource = "typealias Byte = int(0 to u8.max)\n\nfunction main() returns ExitCode\n\tlet x = 256 as Byte\n\treturn 0\nend 'main'\n"
+let RefusedCode = "E3005"
+let MainHeader = "func @main"
+
+test 'a refused check, a well-formed check and a dump_ir in one session are each answered'
+	let refused = stagedProgram(RefusedThenAnsweredDirName, fileName: StagedProgramFileName, source: RefusedSource)
+	let answered = stagedProgram(AnsweredDirName, fileName: StagedProgramFileName, source: WellFormedSource)
+	let dumped = stagedProgram(DumpedDirName, fileName: StagedProgramFileName, source: WellFormedSource)
+
+	let requests = StringArray.create(0)
+	requests.push(initRequest(1))
+	requests.push(toolCallRequest(2, name: "check", argumentsJson: pathArgument(refused)))
+	requests.push(toolCallRequest(3, name: "check", argumentsJson: pathArgument(answered)))
+	requests.push(toolCallRequest(4, name: "dump_ir", argumentsJson: pathArgument(dumped)))
+
+	let docs = responseDocs(runMcp(requests))
+	Expect.equal(docs.count(), expected: 4, message: "a session of four requests answered {docs.count()} of them")
+
+	let refusedAnswer = try docs.get(1) otherwise panic("a session of four answers has a second")
+	let answeredAnswer = try docs.get(2) otherwise panic("a session of four answers has a third")
+	let dumpedAnswer = try docs.get(3) otherwise panic("a session of four answers has a fourth")
+
+	Expect.isTrue(toolCallIsError(refusedAnswer), message: "`check` over a type error was answered as a success: {toolCallText(refusedAnswer)}")
+	Expect.contains(toolCallText(refusedAnswer), needle: RefusedCode, message: "`check` over a type error did not carry its diagnostic code {RefusedCode}: {toolCallText(refusedAnswer)}")
+	Expect.isFalse(toolCallIsError(answeredAnswer), message: "the `check` after a refused one was answered as an error: {toolCallText(answeredAnswer)}")
+	Expect.isFalse(toolCallIsError(dumpedAnswer), message: "the `dump_ir` after them was answered as an error: {toolCallText(dumpedAnswer)}")
+	Expect.contains(toolCallText(dumpedAnswer), needle: MainHeader, message: "the `dump_ir` after a refused `check` did not answer the IR of `main`: {toolCallText(dumpedAnswer)}")
+
+	discardStagedDir(stagedDirNamed(RefusedThenAnsweredDirName))
+	discardStagedDir(stagedDirNamed(AnsweredDirName))
+	discardStagedDir(stagedDirNamed(DumpedDirName))
+end 'a refused check, a well-formed check and a dump_ir in one session are each answered'

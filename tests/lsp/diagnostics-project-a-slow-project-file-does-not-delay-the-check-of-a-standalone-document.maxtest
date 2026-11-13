@@ -1,0 +1,47 @@
+let ResolvingBesideDirName = "diagnostics-project-resolving-beside-a-document-check"
+let ResolvingBesideSoloDirName = "diagnostics-project-resolving-beside-a-document-check-solo"
+let ResolvingBesideSoloFileName = "solo.maxon"
+let ResolvingBesideSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+test 'project diagnostics: a slow project file does not delay the check of a standalone document'
+	let root = freshOutsideCheckoutDir(ResolvingBesideDirName)
+	let solo = freshOutsideCheckoutDir(ResolvingBesideSoloDirName)
+	writeCorpusFile(root, fileName: GatedManifestFileName, content: GatedManifestSource)
+	writeCorpusFile(root, fileName: "main.maxon", content: ResolvingBesideSource)
+	writeCorpusFile(solo, fileName: ResolvingBesideSoloFileName, content: ResolvingBesideSource)
+
+	let client = LspClient.start()
+
+	if let answered = try checkedWhileResolving(client, root: root, solo: solo) 'answered'
+		client.release()
+		releaseGatedManifest(root)
+		discardStagedDir(root)
+		discardStagedDir(solo)
+		let (reported, finishedMeanwhile) = answered
+		expectCheckedWhileResolving(reported, finishedMeanwhile: finishedMeanwhile)
+	end 'answered' else (e) 'failed'
+		releaseGatedManifest(root)
+		abandonedStagedSession(client, staged: root, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'project diagnostics: a slow project file does not delay the check of a standalone document'
+
+function expectCheckedWhileResolving(reported ElementIndex, finishedMeanwhile bool) throws TestFailure
+	try Expect.isFalse(finishedMeanwhile, message: "`{GatedManifestFileName}` waits for `{GatedReleaseFileName}`, which the test writes only after the standalone document's diagnostics were published, and it had finished by then: the compile driver the document's check runs on waited for the project file.")
+	try Expect.equal(reported, expected: 0, message: "`{ResolvingBesideSoloFileName}` is a clean program, so its check reports nothing")
+end 'expectCheckedWhileResolving'
+
+function checkedWhileResolving(client LspClient, root FilePath, solo FilePath) returns (ElementIndex, bool) throws LspClientError
+	let mainUri = fileUriOf(root.join("main.maxon"))
+	let soloUri = fileUriOf(solo.join(ResolvingBesideSoloFileName))
+
+	_ = try client.initializeAtRoot(root)
+	try client.initialized()
+	try client.openDocument(mainUri, content: ResolvingBesideSource)
+
+	try awaitGatedManifestRunning(root)
+
+	try client.openDocument(soloUri, content: ResolvingBesideSource)
+	let published = try client.awaitPublishedDiagnostics(soloUri)
+
+	return (published.items.count(), File.exists(root.join(GatedFinishedFileName)))
+end 'checkedWhileResolving'

@@ -329,7 +329,7 @@ end 'UnknownTypeName'
 module function resolveTypes(project Project, module MaxonModule)
 	// Fetched ONCE for the whole pass, not per named type: `denotedNamedType` reads it for every
 	// reference, and the memoized query is a map probe that has no business being on that path.
-	let signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+	let signatures = try queryProgramSignatures(project) otherwise panic("resolveTypes: queryProgramSignatures failed — it is computed and memoized by FrontEndRun before the pipeline runs, so it cannot fail fresh here")
 	project.unknownTypeReports = UnknownTypeReports.create()
 
 	// Index-based so each function is a mutable binding (a `for x in ...` loop
@@ -733,7 +733,8 @@ function declaredMarkerIsRelaxable(marker ParamCapability) returns bool
 		unmarked or
 		mutable gives true
 		isolated or
-		immutable gives false
+		immutable or
+		consuming gives false
 	end 'marker'
 end 'declaredMarkerIsRelaxable'
 
@@ -1391,7 +1392,7 @@ end 'resolveType'
 // CAN OUTLIVE ITS REASON.** Each would belong for `ArrayError`'s reason — a bare seed
 // `createEnumRegistry` writes and a user declaration can displace, the hole the paragraph above describes.
 // Neither is seeded: `stdlib/String.maxon:6` and `stdlib/Map.maxon:6` are the declarations, no runtime
-// transcribes either enum's ordinals (`Compiler.compileToCodeResult` claims neither), and there is no
+// transcribes either enum's ordinals (`prepareLowering` claims neither), and there is no
 // `builtinStringErrorEnum`/`builtinMapErrorEnum`. An entry here would be a reservation with nothing behind
 // it, refusing an ordinary program — `enum StringError … end` in a user file — for a collision the compiler
 // cannot have.

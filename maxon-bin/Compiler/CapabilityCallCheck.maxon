@@ -1,6 +1,8 @@
 module function checkCapabilityCalls(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, kinds ArgumentRecordKinds, facts CapabilityFacts, calls CallSummaryIndex, paramSources ParamSourceIndex) throws CompileError
 	let witnessSlots = WitnessSlotsByDeclIndex.create()
 	checkParamsNeedNotBoth(project, funcNames: funcNames, facts: facts)
+	checkHoldersDoNotWait(project, module: module, signatures: signatures, funcNames: funcNames, facts: facts)
+	checkReplyDeferrals(project, module: module, signatures: signatures, funcNames: funcNames)
 
 	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
 		try requireStillWanted(project)
@@ -20,11 +22,13 @@ module function checkCapabilityCalls(project Project, module MaxonModule, signat
 		checkKeptArgumentsAreNotReadAgain(project, module: module, funcNames: funcNames, facts: facts, func: func)
 		checkResultUses(project, funcNames: funcNames, facts: facts, func: func, memo: memo)
 		checkNoWaitInsideWindows(project, module: module, funcNames: funcNames, facts: facts, func: func, windowCallOps: func.capabilityNotes.windowCallOps, windowCallLabels: func.capabilityNotes.windowCallLabels)
+		checkWindowReceiversKeepNothing(project, module: module, funcNames: funcNames, facts: facts, func: func)
 		checkPausedOperandsAreNotWritten(project, module: module, signatures: signatures, witnessSlots: witnessSlots, funcNames: funcNames, facts: facts, func: func)
 		checkWrittenCapturesAreWritable(project, facts: facts, func: func)
 		let tiedCarriers = tiedCarrierOwnersOf(module, func: func)
 		checkTiedPromisesAreOnlyAwaited(project, module: module, func: func, owners: tiedCarriers)
-		checkNoPromiseIsDropped(project, module: module, func: func, owners: tiedCarriers)
+		checkNoOwnedValueIsDropped(project, module: module, func: func, owners: tiedCarriers)
+		checkNoLinearIsLiveAcrossAWait(project, module: module, funcNames: funcNames, facts: facts, func: func)
 		checkDeferredResultWrites(project, funcNames: funcNames, facts: facts, func: func, memo: memo)
 	end 'eachFunc'
 
@@ -735,27 +739,76 @@ function tiedPromiseUseIsHarmless(op MaxonOp) returns bool
 	return callee.equals(GtPromiseDropName) or callee.equals(GtIsCompleteName)
 end 'tiedPromiseUseIsHarmless'
 
-function checkNoPromiseIsDropped(project Project, module MaxonModule, func IrFunction, owners TiedCarrierMap)
+function checkNoOwnedValueIsDropped(project Project, module MaxonModule, func IrFunction, owners TiedCarrierMap)
+	for dropped in func.capabilityNotes.droppedOwned 'eachDrop'
+		let range = project.opRanges.get(dropped.op)
+		let filePath = authoredFileOf(project, func: func, opIndex: dropped.op)
+		let name = displayParamName(dropped.name)
+
+		match dropped.kind 'kind'
+			linear then fileSecondary(project, code: ErrorCode.semanticLinearValueNotConsumed, message: droppedLinearMessage(name), line: range.line, column: range.column, filePath: filePath)
+			promise then reportDroppedPromise(project, module: module, dropped: dropped, name: name, owners: owners, range: range, filePath: filePath)
+		end 'kind'
+	end 'eachDrop'
+end 'checkNoOwnedValueIsDropped'
+
+function reportDroppedPromise(project Project, module MaxonModule, dropped DroppedOwned, name String, owners TiedCarrierMap, range SourceRange, filePath FilePath)
 	let operands = ValueIdArray.create(0)
+	maxonOpOperandValues(try module.ops.get(dropped.op) otherwise panic("reportDroppedPromise: ops.get OOB at {dropped.op}"), into: operands)
+	let promise = try operands.get(0) otherwise panic("reportDroppedPromise: a promise drop at op {dropped.op} names no promise")
+
+	if let tiedOp = try owners.get(promise) 'aTiedPromise'
+		let spawn = project.opRanges.get(tiedOp)
+		fileSecondary(project, code: ErrorCode.semanticTiedPromiseRefused, message: droppedTiedPromiseMessage(name, spawn: spawn), line: range.line, column: range.column, filePath: filePath)
+		return
+	end 'aTiedPromise'
+
+	fileSecondary(project, code: ErrorCode.semanticPromiseDropped, message: droppedPromiseMessage(name), line: range.line, column: range.column, filePath: filePath)
+end 'reportDroppedPromise'
+
+function droppedLinearMessage(name String) returns String
+	let subject = "this drops a linear value" if name.isEmpty() else "this drops '{name}', a linear value"
+
+	return "{subject} that was never consumed: call one of its finalizers (a `{String.from(ConsumingReceiverWord)} self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included"
+end 'droppedLinearMessage'
+
+function checkNoLinearIsLiveAcrossAWait(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction)
 	let notes = func.capabilityNotes
 
-	for position in 0 upto notes.droppedPromiseOps.count() 'eachDrop'
-		let dropOp = try notes.droppedPromiseOps.get(position) otherwise panic("checkNoPromiseIsDropped: droppedPromiseOps.get OOB at {position}")
-		maxonOpOperandValues(try module.ops.get(dropOp) otherwise panic("checkNoPromiseIsDropped: ops.get OOB at {dropOp}"), into: operands)
-		let dropped = try operands.get(0) otherwise panic("checkNoPromiseIsDropped: a promise drop at op {dropOp} names no promise")
-		let name = String.from(try notes.droppedPromiseNames.get(position) otherwise panic("checkNoPromiseIsDropped: droppedPromiseNames.get OOB at {position} — the columns are parallel"))
-		let range = project.opRanges.get(dropOp)
-		let filePath = authoredFileOf(project, func: func, opIndex: dropOp)
+	for position in 0 upto notes.liveLinearCallOps.count() 'eachCandidate'
+		let opIdx = try notes.liveLinearCallOps.get(position) otherwise panic("checkNoLinearIsLiveAcrossAWait: liveLinearCallOps.get OOB at {position}")
 
-		if let tiedOp = try owners.get(dropped) 'aTiedPromise'
-			let spawn = project.opRanges.get(tiedOp)
-			fileSecondary(project, code: ErrorCode.semanticTiedPromiseRefused, message: droppedTiedPromiseMessage(name, spawn: spawn), line: range.line, column: range.column, filePath: filePath)
+		if not opWaitsForAnotherParty(project, funcNames: funcNames, facts: facts, func: func, op: try module.ops.get(opIdx) otherwise panic("checkNoLinearIsLiveAcrossAWait: ops.get OOB at {opIdx}")) 'doesNotWait'
 			continue
-		end 'aTiedPromise'
+		end 'doesNotWait'
 
-		fileSecondary(project, code: ErrorCode.semanticPromiseDropped, message: droppedPromiseMessage(name), line: range.line, column: range.column, filePath: filePath)
-	end 'eachDrop'
-end 'checkNoPromiseIsDropped'
+		let name = displayParamName(try notes.liveLinearCallNames.get(position) otherwise panic("checkNoLinearIsLiveAcrossAWait: liveLinearCallNames.get OOB at {position} — the columns are parallel"))
+		let range = project.opRanges.get(opIdx)
+		let held = "a linear value" if name.isEmpty() else "the linear value '{name}'"
+
+		fileSecondary(project, code: ErrorCode.semanticLinearValueNotConsumed, message: "{held} is live across this wait: a wait may never end, so a linear value is consumed before any call that waits, `await` or send that waits", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIdx))
+	end 'eachCandidate'
+end 'checkNoLinearIsLiveAcrossAWait'
+
+function opWaitsForAnotherParty(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction, op MaxonOp) returns bool
+	let candidate = try waitCandidateOf(op) otherwise return false
+
+	match candidate 'candidate'
+		anAwait then return true
+		aSend(timed) then return timed
+		aCall then break
+	end 'candidate'
+
+	let edge = try callOrClosureEdgeOf(project, func: func, op: op) otherwise return false
+
+	if edge.0.equals(CownAcquireName) 'anAcquire'
+		return true
+	end 'anAcquire'
+
+	let calleeIndex = try funcNames.byName.get(edge.0) otherwise return false
+
+	return callBlockingOf(facts, calleeIndex: calleeIndex, kind: edge.1) == CallBlocking.waits
+end 'opWaitsForAnotherParty'
 
 function droppedTiedPromiseMessage(name String, spawn SourceRange) returns String
 	if name.isEmpty() 'unnamed'
@@ -1159,31 +1212,124 @@ function awaitDescription(project Project, module MaxonModule, func IrFunction, 
 
 	if let origin = try opDefiningValue(module, func: func, value: promise) 'anOrigin'
 		if let service = try repliedServiceOf(origin) 'aReply'
-			return "it awaits a reply from '{String.from(service)}' at line {line}"
+			return "awaits a reply from '{String.from(service)}' at line {line}"
 		end 'aReply'
 	end 'anOrigin'
 
-	return "it awaits a coroutine at line {line}"
+	return "awaits a coroutine at line {line}"
 end 'awaitDescription'
+
+function awaitSiteDescription(project Project, module MaxonModule, func IrFunction, opIdx ElementIndex) returns String
+	let promise = try awaitedPromiseOf(try module.ops.get(opIdx) otherwise panic("awaitSiteDescription: opIdx {opIdx} not in module.ops")) otherwise panic("awaitSiteDescription: the wait site of '{String.from(func.name)}' at op {opIdx} is not an await")
+
+	return awaitDescription(project, module: module, func: func, opIdx: opIdx, promise: promise)
+end 'awaitSiteDescription'
+
+function waitSiteReason(project Project, module MaxonModule, func IrFunction) returns String
+	match func.firstWaitSite 'site'
+		none then panic("waitSiteReason: '{String.from(func.name)}' is a wait seed whose body is readable, yet it recorded no wait site")
+		replyAwait(opIdx) then return awaitSiteDescription(project, module: module, func: func, opIdx: opIdx)
+		unknownOriginAwait(opIdx) then return "awaits a promise whose coroutine it cannot see, at line {project.opRanges.get(opIdx).line}"
+		selectAwait(opIdx) then return "selects over promises whose coroutines it cannot see, at line {project.opRanges.get(opIdx).line}"
+		timedSend(opIdx) then return "sends with a timeout, which waits for mailbox space, at line {project.opRanges.get(opIdx).line}"
+		acquire(opIdx) then return "acquires services at line {project.opRanges.get(opIdx).line}"
+		startAwait(opIdx) then return "awaits the start of a service at line {project.opRanges.get(opIdx).line}"
+		runtimePark(opIdx) then return runtimeParkDescription(project, module: module, opIdx: opIdx)
+	end 'site'
+end 'waitSiteReason'
+
+function runtimeParkDescription(project Project, module MaxonModule, opIdx ElementIndex) returns String
+	let op = try module.ops.get(opIdx) otherwise panic("runtimeParkDescription: opIdx {opIdx} not in module.ops")
+	let callee = try directCalleeOf(op) otherwise panic("runtimeParkDescription: the wait site at op {opIdx} is not a runtime call")
+	let line = project.opRanges.get(opIdx).line
+
+	if callee.equals(GtQuiesceName) 'quiesce'
+		return "parks until every other green thread is idle, at line {line}"
+	end 'quiesce'
+
+	if callee.equals(CownTestMultiName) 'cownTestMulti'
+		return "joins the acquirers it spawns, at line {line}"
+	end 'cownTestMulti'
+
+	panic("runtimeParkDescription: '{String.from(callee)}' is not a runtime park the compiler seeds")
+end 'runtimeParkDescription'
 
 function directBlockingReason(project Project, module MaxonModule, func IrFunction, waits bool) returns String
 	if bodyIsUnreadable(func) 'anOpaqueBody'
-		return "its body cannot be read, so it is assumed to wait on another party" if waits else "its body cannot be read, so it is assumed to yield to another coroutine"
+		return "has a body that cannot be read, so it is assumed to wait on another party" if waits else "has a body that cannot be read, so it is assumed to yield to another coroutine"
 	end 'anOpaqueBody'
+
+	if waits or func.mayWaitSeed 'aWaitIsTheCause'
+		return waitSiteReason(project, module: module, func: func)
+	end 'aWaitIsTheCause'
 
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let promise = try awaitedPromiseOf(try module.ops.get(opIdx) otherwise panic("directBlockingReason: live op index not in module.ops")) otherwise continue
 		return awaitDescription(project, module: module, func: func, opIdx: opIdx, promise: promise)
 	end 'eachOp'
 
-	return "it waits on another party" if waits else "it yields to another coroutine"
+	return "yields to another coroutine"
 end 'directBlockingReason'
 
-function blockingMarkOf(facts CapabilityFacts, index ElementIndex, waits bool) returns bool
-	return facts.waits(index) if waits else facts.yields(index)
-end 'blockingMarkOf'
+function namesAServiceFactory(signatures ProgramSignatures, callee ByteArray) returns bool
+	let base = genericTemplateName(callee)
 
-function blockingPath(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, waits bool) returns (FuncIndexArray, CallEdgeKindArray) throws AbsentError
+	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
+		if qualifiedMethodName(candidate.typeName, methodName: candidate.member).equals(base) 'theFactory'
+			return true
+		end 'theFactory'
+	end 'eachCandidate'
+
+	return false
+end 'namesAServiceFactory'
+
+function serviceHolderNounOf(signatures ProgramSignatures, func IrFunction) returns String throws AbsentError
+	if signatures.namesAServiceMessage(func.name) 'aMessage'
+		return "message"
+	end 'aMessage'
+
+	if namesAServiceFactory(signatures, callee: func.name) 'aFactory'
+		return "spawn factory"
+	end 'aFactory'
+
+	throw AbsentError.absent
+end 'serviceHolderNounOf'
+
+function waitCureOf(leaf IrFunction) returns String
+	return match leaf.firstWaitSite 'site'
+		replyAwait gives "; send the request with this service's handle and handle the reply in another message"
+		timedSend gives "; send with `sendTimeout: 0`, which fails `mailboxFull` instead of waiting"
+		runtimePark gives "; call it from `main`, which holds no service"
+		none or
+		unknownOriginAwait or
+		selectAwait or
+		acquire or
+		startAwait gives ""
+	end 'site'
+end 'waitCureOf'
+
+function checkHoldersDoNotWait(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex, facts CapabilityFacts)
+	for index in 0 upto funcNames.functions.count() 'eachFunc'
+		if not facts.waits(index) 'doesNotWait'
+			continue
+		end 'doesNotWait'
+
+		let func = try funcNames.functions.get(index) otherwise panic("checkHoldersDoNotWait: functions.get OOB at {index}")
+
+		if bodyIsUnreadable(func) or project.libraryFacts.bodyIsSwept(func.name) 'nothingToJudge'
+			continue
+		end 'nothingToJudge'
+
+		let noun = try serviceHolderNounOf(signatures, func: func) otherwise continue
+		let path = blockingPathOrPanic(project, module: module, funcNames: funcNames, facts: facts, index: index, waits: true)
+		let chain = blockingChainThrough(project, module: module, funcNames: funcNames, path: path, waits: true)
+		reportAtFunctionName(project, func: func, code: ErrorCode.semanticHolderMayWait, message: "the {noun} {functionDisplay(project, func: func).memberQuoted()} may wait ({chain}) while holding its own service{waitCureOf(blockingLeafOf(funcNames, path: path))}")
+	end 'eachFunc'
+end 'checkHoldersDoNotWait'
+
+typealias BlockingPath = (FuncIndexArray, CallEdgeKindArray)
+
+function blockingPath(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, waits bool) returns BlockingPath throws AbsentError
 	let count = funcNames.functions.count()
 	let seen = FixedBoolArray.create(count)
 	let parents = FixedFuncIndexArray.create(count)
@@ -1212,7 +1358,7 @@ function blockingPath(project Project, module MaxonModule, funcNames FunctionNam
 			let edge = try callOrClosureEdgeOf(project, func: func, op: try module.ops.get(opIdx) otherwise panic("blockingPath: live op index not in module.ops")) otherwise continue
 			let calleeIndex = try funcNames.byName.get(edge.0) otherwise continue
 
-			if (try seen.get(calleeIndex) otherwise panic("blockingPath: seen.get OOB at {calleeIndex}")) or not edgeTransmits(edge.1, waits: waits) or not blockingMarkOf(facts, index: calleeIndex, waits: waits) 'notAnUnseenCause'
+			if (try seen.get(calleeIndex) otherwise panic("blockingPath: seen.get OOB at {calleeIndex}")) or not edgeCarriesMark(facts, calleeIndex: calleeIndex, kind: edge.1, waits: waits) 'notAnUnseenCause'
 				continue
 			end 'notAnUnseenCause'
 
@@ -1226,7 +1372,7 @@ function blockingPath(project Project, module MaxonModule, funcNames FunctionNam
 	throw AbsentError.absent
 end 'blockingPath'
 
-function blockingPathTo(leaf ElementIndex, index ElementIndex, parents FixedFuncIndexArray, viaKinds FixedCallEdgeKindArray) returns (FuncIndexArray, CallEdgeKindArray)
+function blockingPathTo(leaf ElementIndex, index ElementIndex, parents FixedFuncIndexArray, viaKinds FixedCallEdgeKindArray) returns BlockingPath
 	let backwards = FuncIndexArray.create(0)
 	let backwardKinds = CallEdgeKindArray.create(0)
 	var current = leaf
@@ -1265,19 +1411,37 @@ function hopPhrase(kind CallEdgeKind, callee String, first bool) returns String
 	return "it {verb} {callee}, which " if first else "{verb} {callee}, which "
 end 'hopPhrase'
 
-function blockingChain(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, waits bool) returns String
-	let found = try blockingPath(project, module: module, funcNames: funcNames, facts: facts, index: index, waits: waits) otherwise panic("blockingChain: the facts mark '{String.from((try funcNames.functions.get(index) otherwise panic("blockingChain: functions.get OOB at {index}")).name)}' as blocking but no call, start or spawn path reaches a function that waits or yields itself")
-	let path = found.0
+function blockingPathOrPanic(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, waits bool) returns BlockingPath
+	return try blockingPath(project, module: module, funcNames: funcNames, facts: facts, index: index, waits: waits) otherwise panic("blockingChain: the facts mark '{String.from((try funcNames.functions.get(index) otherwise panic("blockingChain: functions.get OOB at {index}")).name)}' as blocking but no call, start or spawn path reaches a function that waits or yields itself")
+end 'blockingPathOrPanic'
+
+function blockingLeafOf(funcNames FunctionNameIndex, path BlockingPath) returns IrFunction
+	return try funcNames.functions.get(try path.0.get(path.0.count() - 1) otherwise panic("blockingLeafOf: the path is never empty")) otherwise panic("blockingLeafOf: functions.get OOB for the leaf")
+end 'blockingLeafOf'
+
+function hopDisplay(project Project, func IrFunction) returns String
+	if isLiftedClosureName(func.name) 'aClosureLiteral'
+		return "the closure at line {func.nameLine}"
+	end 'aClosureLiteral'
+
+	return functionDisplay(project, func: func).memberQuoted()
+end 'hopDisplay'
+
+function blockingChainThrough(project Project, module MaxonModule, funcNames FunctionNameIndex, path BlockingPath, waits bool) returns String
 	var text = ""
 
-	for hop in 1 upto path.count() 'eachHop'
-		let callee = try funcNames.functions.get(try path.get(hop) otherwise panic("blockingChain: path.get OOB at {hop}")) otherwise panic("blockingChain: functions.get OOB for the hop at {hop}")
-		text.append(hopPhrase(try found.1.get(hop) otherwise panic("blockingChain: kinds.get OOB at {hop}"), callee: functionDisplay(project, func: callee).memberQuoted(), first: hop == 1))
+	for hop in 1 upto path.0.count() 'eachHop'
+		let callee = try funcNames.functions.get(try path.0.get(hop) otherwise panic("blockingChain: path.get OOB at {hop}")) otherwise panic("blockingChain: functions.get OOB for the hop at {hop}")
+		text.append(hopPhrase(try path.1.get(hop) otherwise panic("blockingChain: kinds.get OOB at {hop}"), callee: hopDisplay(project, func: callee), first: hop == 1))
 	end 'eachHop'
 
-	let leaf = try funcNames.functions.get(try path.get(path.count() - 1) otherwise panic("blockingChain: the path is never empty")) otherwise panic("blockingChain: functions.get OOB for the leaf")
-	text.append(directBlockingReason(project, module: module, func: leaf, waits: waits))
-	return text
+	let reason = directBlockingReason(project, module: module, func: blockingLeafOf(funcNames, path: path), waits: waits)
+
+	return "it {reason}" if path.0.count() == 1 else "{text}{reason}"
+end 'blockingChainThrough'
+
+function blockingChain(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, waits bool) returns String
+	return blockingChainThrough(project, module: module, funcNames: funcNames, path: blockingPathOrPanic(project, module: module, funcNames: funcNames, facts: facts, index: index, waits: waits), waits: waits)
 end 'blockingChain'
 
 function checkNoWaitInsideWindows(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction, windowCallOps FuncIndexArray, windowCallLabels NameRoster)
@@ -1287,11 +1451,13 @@ function checkNoWaitInsideWindows(project Project, module MaxonModule, funcNames
 		let edge = try callOrClosureEdgeOf(project, func: func, op: try module.ops.get(opIdx) otherwise panic("checkNoWaitInsideWindows: opIdx {opIdx} not in module.ops")) otherwise continue
 		let calleeIndex = try funcNames.byName.get(edge.0) otherwise continue
 
-		let waits = facts.waits(calleeIndex) and edgeTransmits(edge.1, waits: true)
+		let blocking = callBlockingOf(facts, calleeIndex: calleeIndex, kind: edge.1)
 
-		if not waits and not (facts.yields(calleeIndex) and edgeTransmits(edge.1, waits: false)) 'theEdgeCarriesNeither'
+		if blocking == CallBlocking.neither 'theEdgeCarriesNeither'
 			continue
 		end 'theEdgeCarriesNeither'
+
+		let waits = blocking == CallBlocking.waits
 
 		let calleeFunc = try funcNames.functions.get(calleeIndex) otherwise panic("checkNoWaitInsideWindows: functions.get OOB at {calleeIndex}")
 		let reason = blockingChain(project, module: module, funcNames: funcNames, facts: facts, index: calleeIndex, waits: waits)
@@ -1301,6 +1467,31 @@ function checkNoWaitInsideWindows(project Project, module MaxonModule, funcNames
 		reportPositioned(project, code: ErrorCode.semanticWaitInsideWindow, message: "cannot {action.0} {functionDisplay(project, func: calleeFunc).memberQuoted()} inside '{String.from(label)}'; it may {verb} ({reason}). {action.1} it before or after the block", line: range.line, column: range.column, filePath: authoredFileOf(project, func: func, opIndex: opIdx))
 	end 'eachWindowCall'
 end 'checkNoWaitInsideWindows'
+
+function checkWindowReceiversKeepNothing(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction)
+	let notes = func.capabilityNotes
+
+	for site in 0 upto notes.windowReceiverOps.count() 'eachWindowReceiver'
+		let opIdx = try notes.windowReceiverOps.get(site) otherwise panic("checkWindowReceiversKeepNothing: windowReceiverOps.get OOB at {site} below its own count")
+		let parts = try directCallPartsOf(try module.ops.get(opIdx) otherwise panic("checkWindowReceiversKeepNothing: opIdx {opIdx} not in module.ops")) otherwise panic("checkWindowReceiversKeepNothing: a window receiver note names an op that is not a direct call")
+
+		if not consumedReceiverMayEscape(project, funcNames: funcNames, facts: facts, callee: parts.0, labels: parts.2) 'theCalleeOnlyDestroysIt'
+			continue
+		end 'theCalleeOnlyDestroysIt'
+
+		let label = try notes.windowReceiverLabels.get(site) otherwise panic("checkWindowReceiversKeepNothing: windowReceiverLabels.get OOB at {site} — the columns are pushed together")
+		let line = try notes.windowReceiverLines.get(site) otherwise panic("checkWindowReceiversKeepNothing: windowReceiverLines.get OOB at {site} — the columns are pushed together")
+		let column = try notes.windowReceiverColumns.get(site) otherwise panic("checkWindowReceiversKeepNothing: windowReceiverColumns.get OOB at {site} — the columns are pushed together")
+		reportPositioned(project, code: ErrorCode.semanticIsolatedCallOpensTwoRegions, message: outerValueIntoOpenWindowMessage(label, into: keepingPositionText(parts.0, parameter: SelfParamName)), line: line, column: column, filePath: authoredFileOf(project, func: func, opIndex: opIdx))
+	end 'eachWindowReceiver'
+end 'checkWindowReceiversKeepNothing'
+
+function consumedReceiverMayEscape(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, callee immutable ByteArray, labels NameRoster) returns bool
+	let receiver = try calleeParameterOf(project, funcNames: funcNames, callee: callee, labels: labels, argIndex: ReceiverArgumentIndex as ParamCount) otherwise return true
+	let calleeFunc = try funcNames.functions.get(receiver.calleeIndex) otherwise panic("consumedReceiverMayEscape: functions.get OOB at {receiver.calleeIndex}")
+
+	return calleeKeepsParameter(project, facts: facts, calleeFunc: calleeFunc, parameter: receiver, uniqueOnly: false) or maskHasParam(calleeFunc.resultFromParamMask, param: receiver.position)
+end 'consumedReceiverMayEscape'
 
 function checkPausedOperandsAreNotWritten(project Project, module MaxonModule, signatures ProgramSignatures, witnessSlots WitnessSlotsByDeclIndex, funcNames FunctionNameIndex, facts CapabilityFacts, func IrFunction)
 	let notes = func.capabilityNotes
@@ -1536,7 +1727,8 @@ end 'conversionVerdict'
 
 function mutableOnlyVerdict(declared ParamCapability) returns ConversionVerdict
 	return match declared 'declared'
-		unmarked gives ConversionVerdict.writesWhereNotDeclaredMutable
+		unmarked or
+		consuming gives ConversionVerdict.writesWhereNotDeclaredMutable
 		immutable gives ConversionVerdict.writesWhereDeclaredImmutable
 		mutable or
 		isolated gives ConversionVerdict.accepted
@@ -1545,7 +1737,8 @@ end 'mutableOnlyVerdict'
 
 function immutableOnlyVerdict(declared ParamCapability) returns ConversionVerdict
 	return match declared 'declared'
-		unmarked gives ConversionVerdict.needsFrozenWhereNotDeclaredImmutable
+		unmarked or
+		consuming gives ConversionVerdict.needsFrozenWhereNotDeclaredImmutable
 		mutable gives ConversionVerdict.needsFrozenWhereDeclaredMutable
 		immutable or
 		isolated gives ConversionVerdict.accepted

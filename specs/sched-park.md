@@ -17,19 +17,22 @@ another.
 
 A green thread that awaits parks the same way here, and so does one that sleeps, reads a pipe, waits for a
 child or receives from its mailbox. The cases below are the shapes a scheduler that runs a waiter's work ON
-the waiter's stack cannot finish: a chain of services that each await the next, a nested await whose answer
-needs `main` to move, `main` woken behind a service that is still waiting, and a service's own coroutine
-that must run while its handler sleeps.
+the waiter's stack cannot finish: a chain of coroutines that each await the next, a nested await whose answer
+needs `main` to move, `main` woken behind a coroutine that is still waiting, and a service's own coroutine
+that must run while its handler sleeps. A message body never waits for a reply, so every waiter here is `main`
+or a coroutine of it.
 
 ⚖ **An `async` coroutine still belongs to the green thread that started it, and runs only where that green
 thread's work runs** — one coroutine of a green thread at a time, never on a second machine at once. Its
 green thread's WAIT does not pin it: a coroutine started before a `sleep` runs during the sleep.
 
 ## Tests
-<!-- test: sched-park.nested-awaits-through-three-services-complete -->
+<!-- test: sched-park.nested-awaits-through-three-coroutines-complete -->
 <!-- procs: 1 -->
-**THREE SERVICES, EACH AWAITING THE NEXT, AND `main` AWAITING TWO OF THEM.** `w.run` awaits `y.ask`, which
-awaits `z.get`; `main` sends `y.ask` directly too. Every reply is answered, so the sum is 3 + 3.
+**THREE COROUTINES, EACH AWAITING THE NEXT, AND `main` AWAITING THE FIRST.** `askW` awaits the coroutine `askY`,
+which awaits the coroutine `askZ`, which awaits `Z.get`'s reply; `main` sends `Z.get` directly too, so the
+service has a second awaiter beside the chain's. Every wait parks, every completion readies its waiter, and the sum is 3 + 3.
+A message body never waits, so the chain is made of coroutines of `main` and the service stays a leaf.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -45,46 +48,33 @@ type Z
 	end 'get'
 end 'Z'
 
-type Y
-	var n as Integer
+function askZ(zh Z.handle) returns Integer
+	return try await zh.get() otherwise 0
+end 'askZ'
 
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
+function askY(zh Z.handle) returns Integer
+	let inner = async askZ(zh.clone())
+	return await inner
+end 'askY'
 
-	export function ask(zh Z.handle) returns Integer
-		return try await zh.get() otherwise 0
-	end 'ask'
-end 'Y'
-
-type W
-	var n as Integer
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function run(yh Y.handle, zh Z.handle) returns Integer
-		return try await yh.ask(zh.clone()) otherwise 0
-	end 'run'
-end 'W'
+function askW(zh Z.handle) returns Integer
+	let inner = async askY(zh.clone())
+	return await inner
+end 'askW'
 
 function main() returns ExitCode
 	let z = spawn Z.create()
-	let y = spawn Y.create()
-	let w = spawn W.create()
-	let py = try y.ask(z.clone()) otherwise panic("an open mailbox with room takes the send")
-	let pw = try w.run(y.clone(), zh: z.clone()) otherwise panic("an open mailbox with room takes the send")
-	let a = await py
-	let b = await pw
-	return (a + b) as ExitCode
+	let chain = async askW(z.clone())
+	let direct = try await z.get() otherwise 0
+	let viaChain = await chain
+	return (direct + viaChain) as ExitCode
 end 'main'
 ```
 ```exitcode
 6
 ```
 
-<!-- test: sched-park.nested-awaits-through-three-services-complete-on-four-processors -->
+<!-- test: sched-park.nested-awaits-through-three-coroutines-complete-on-four-processors -->
 <!-- procs: 4 -->
 The same chain at four processors.
 ```maxon
@@ -102,49 +92,37 @@ type Z
 	end 'get'
 end 'Z'
 
-type Y
-	var n as Integer
+function askZ(zh Z.handle) returns Integer
+	return try await zh.get() otherwise 0
+end 'askZ'
 
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
+function askY(zh Z.handle) returns Integer
+	let inner = async askZ(zh.clone())
+	return await inner
+end 'askY'
 
-	export function ask(zh Z.handle) returns Integer
-		return try await zh.get() otherwise 0
-	end 'ask'
-end 'Y'
-
-type W
-	var n as Integer
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function run(yh Y.handle, zh Z.handle) returns Integer
-		return try await yh.ask(zh.clone()) otherwise 0
-	end 'run'
-end 'W'
+function askW(zh Z.handle) returns Integer
+	let inner = async askY(zh.clone())
+	return await inner
+end 'askW'
 
 function main() returns ExitCode
 	let z = spawn Z.create()
-	let y = spawn Y.create()
-	let w = spawn W.create()
-	let py = try y.ask(z.clone()) otherwise panic("an open mailbox with room takes the send")
-	let pw = try w.run(y.clone(), zh: z.clone()) otherwise panic("an open mailbox with room takes the send")
-	let a = await py
-	let b = await pw
-	return (a + b) as ExitCode
+	let chain = async askW(z.clone())
+	let direct = try await z.get() otherwise 0
+	let viaChain = await chain
+	return (direct + viaChain) as ExitCode
 end 'main'
 ```
 ```exitcode
 6
 ```
 
-<!-- test: sched-park.a-nested-await-that-needs-main-completes -->
+<!-- test: sched-park.a-coroutine-await-that-needs-main-completes -->
 <!-- procs: 1 -->
-**A SERVICE'S AWAIT THAT ONLY `main` CAN ANSWER.** `Middle.go` awaits `Waiter.waitForFile`, which polls for a
-file `main` writes after its own `sleep(5)`. `main` must wake from that sleep while `Middle` is still waiting.
+**A COROUTINE'S AWAIT THAT ONLY `main` CAN ANSWER.** `waitFor` is a coroutine of `main` that awaits
+`Waiter.waitForFile`, which polls for a file `main` writes after its own `sleep(5)`. `main` must wake from that
+sleep while `waitFor` is still parked on the reply.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -164,23 +142,14 @@ type Waiter
 	end 'waitForFile'
 end 'Waiter'
 
-type Middle
-	var w as Waiter.handle
-
-	static function create() returns Self
-		return Self{w: spawn Waiter.create()}
-	end 'create'
-
-	export function go() returns Integer
-		let v = try await self.w.waitForFile() otherwise 0
-		return v
-	end 'go'
-end 'Middle'
+function waitFor(w Waiter.handle) returns Integer
+	return try await w.waitForFile() otherwise 0
+end 'waitFor'
 
 function main() returns ExitCode
 	try File.delete(FilePath from "sched-park-flag-one.txt") otherwise ignore
-	let m = spawn Middle.create()
-	let r = try m.go() otherwise panic("an open mailbox with room takes the send")
+	let w = spawn Waiter.create()
+	let r = async waitFor(w.clone())
 	sleep(5)
 	print("main woke\n")
 	try File.writeText(FilePath from "sched-park-flag-one.txt", content: "x") otherwise ignore
@@ -198,7 +167,7 @@ v=1
 0
 ```
 
-<!-- test: sched-park.a-nested-await-that-needs-main-completes-on-four-processors -->
+<!-- test: sched-park.a-coroutine-await-that-needs-main-completes-on-four-processors -->
 <!-- procs: 4 -->
 The same shape at four processors.
 ```maxon
@@ -220,23 +189,14 @@ type Waiter
 	end 'waitForFile'
 end 'Waiter'
 
-type Middle
-	var w as Waiter.handle
-
-	static function create() returns Self
-		return Self{w: spawn Waiter.create()}
-	end 'create'
-
-	export function go() returns Integer
-		let v = try await self.w.waitForFile() otherwise 0
-		return v
-	end 'go'
-end 'Middle'
+function waitFor(w Waiter.handle) returns Integer
+	return try await w.waitForFile() otherwise 0
+end 'waitFor'
 
 function main() returns ExitCode
 	try File.delete(FilePath from "sched-park-flag-four.txt") otherwise ignore
-	let m = spawn Middle.create()
-	let r = try m.go() otherwise panic("an open mailbox with room takes the send")
+	let w = spawn Waiter.create()
+	let r = async waitFor(w.clone())
 	sleep(5)
 	print("main woke\n")
 	try File.writeText(FilePath from "sched-park-flag-four.txt", content: "x") otherwise ignore
@@ -254,10 +214,10 @@ v=1
 0
 ```
 
-<!-- test: sched-park.main-wakes-on-time-behind-a-long-service-await -->
+<!-- test: sched-park.main-wakes-on-time-behind-a-long-coroutine-await -->
 <!-- procs: 1 -->
-**`main`'s TEN-MILLISECOND SLEEP ENDS WHILE A SERVICE IT MESSAGED IS STILL AWAITING A REPLY** that only `main`
-can end. The service polls a flag `main` publishes after its sleep, so a wake that waited for the service would
+**`main`'s TEN-MILLISECOND SLEEP ENDS WHILE ITS OWN COROUTINE IS STILL AWAITING A REPLY** that only `main`
+can end. The service polls a flag `main` publishes after its sleep, so a wake that waited for the coroutine would
 wait for ever and the runner would report the case TIMED OUT; no elapsed time is compared to a threshold, so a
 slow host cannot turn the order into a race. Nothing the service waits on lies under `main`'s wake.
 ```maxon
@@ -280,23 +240,14 @@ type Slow
 	end 'get'
 end 'Slow'
 
-type Middle
-	var s as Slow.handle
-
-	static function create(released ReleaseCell) returns Self
-		return Self{s: spawn Slow.create(released.clone())}
-	end 'create'
-
-	export function go() returns Integer
-		let v = try await self.s.get() otherwise 0
-		return v
-	end 'go'
-end 'Middle'
+function askSlow(s Slow.handle) returns Integer
+	return try await s.get() otherwise 0
+end 'askSlow'
 
 function main() returns ExitCode
 	let released = ReleaseCell.create(false)
-	let m = spawn Middle.create(released.clone())
-	let r = try m.go() otherwise panic("an open mailbox with room takes the send")
+	let s = spawn Slow.create(released.clone())
+	let r = async askSlow(s.clone())
 	sleep(10)
 	print("woke\n")
 	released.publish(true)

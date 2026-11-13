@@ -74,11 +74,15 @@ end 'libraryStateKeyOf'
 function copiedBaseline(held ProgramSignatures) returns ProgramSignatures
 	held.releaseTypeNameViews()
 
+	return clonedBaseline(held)
+end 'copiedBaseline'
+
+function clonedBaseline(held ProgramSignatures) returns ProgramSignatures
 	let copy = held.clone()
 	copy.shareModuleDirectoriesWithProvenance()
 
 	return copy
-end 'copiedBaseline'
+end 'clonedBaseline'
 
 // A library file declaring a generic function template folds differently once a program's instances
 // of it are adopted. A program requesting one starts from the core baseline, which lacks those
@@ -105,18 +109,20 @@ function noteBaselineState(project Project, state LibraryBaselineState)
 	end 'stillTheBuildingCompile'
 end 'noteBaselineState'
 
-function startFrom(project Project, key HashDigest, kind LibraryEntryKind, loaded LibraryDeclarations, state LibraryBaselineState) returns LibraryStart
+function startFrom(project Project, key HashDigest, kind LibraryEntryKind, loaded LibraryDeclarations, state LibraryBaselineState, publishes bool) returns LibraryStart
 	let library = project.session.fileMemos.library
 	let remainder = remainderOf(loaded.manifest, kind: kind)
 	noteBaselineState(project, state: state)
 
-	if not library.retainsWhatItLoads() 'oneCompile'
+	if not (library.retainsWhatItLoads() and publishes) 'notShared'
 		return LibraryStart.create(loaded.signatures, remainder: remainder, streamed: loaded.manifest.streamed)
-	end 'oneCompile'
+	end 'notShared'
 
-	library.holdBaseline(key, kind: kind, declarations: loaded)
+	loaded.signatures.releaseTypeNameViews()
+	publishToSharedLibrary(SharedLibraryChange.baseline(freeze HeldBaseline.create(key, kind: kind, declarations: LibraryDeclarations.create(loaded.signatures.clone(), manifest: loaded.manifest.clone()))))
+	loaded.signatures.shareModuleDirectoriesWithProvenance()
 
-	return LibraryStart.create(copiedBaseline(loaded.signatures), remainder: remainder, streamed: loaded.manifest.streamed)
+	return LibraryStart.create(loaded.signatures, remainder: remainder, streamed: loaded.manifest.streamed)
 end 'startFrom'
 
 module function libraryBaselineFor(project Project, partition ProgramPartition) returns LibraryStart throws CompileError
@@ -134,12 +140,17 @@ module function libraryBaselineFor(project Project, partition ProgramPartition) 
 end 'libraryBaselineFor'
 
 function heldStart(project Project, key HashDigest) returns LibraryStart throws LibraryEntryMiss
-	let library = project.session.fileMemos.library
-	let kind = kindFor(project, manifest: try library.heldManifest(key))
-	let chosen = try library.heldBaseline(key, kind: kind)
+	if not project.session.fileMemos.library.retainsWhatItLoads() 'oneCompile'
+		throw LibraryEntryMiss.absent
+	end 'oneCompile'
+
+	let shared = SharedLibraryCache.current()
+	let kind = kindFor(project, manifest: try shared.baselines.manifestFor(key))
+	let chosen = (try shared.baselines.baselineFor(key, kind: kind)).declarations
+	refreshSharedBaseline(shared, key: key, kind: kind)
 	noteBaselineState(project, state: LibraryBaselineState.loaded)
 
-	return LibraryStart.create(copiedBaseline(chosen.signatures), remainder: remainderOf(chosen.manifest, kind: kind), streamed: chosen.manifest.streamed)
+	return LibraryStart.create(clonedBaseline(chosen.signatures), remainder: remainderOf(chosen.manifest, kind: kind), streamed: chosen.manifest.streamed)
 end 'heldStart'
 
 function rejecting(project Project, name String, damage LibraryCacheDamage) returns LibraryEntryMiss
@@ -176,7 +187,7 @@ function loadedStart(project Project, key HashDigest) returns LibraryStart throw
 
 	project.db.libraryTally.loaded = project.db.libraryTally.loaded + 1
 
-	return startFrom(project, key: key, kind: kind, loaded: LibraryDeclarations.create(signatures, manifest: manifest), state: LibraryBaselineState.loaded)
+	return startFrom(project, key: key, kind: kind, loaded: LibraryDeclarations.create(signatures, manifest: manifest), state: LibraryBaselineState.loaded, publishes: true)
 end 'loadedStart'
 
 function builtStart(project Project, partition ProgramPartition, key HashDigest) returns LibraryStart throws CompileError
@@ -197,18 +208,18 @@ function builtStart(project Project, partition ProgramPartition, key HashDigest)
 	project.db.libraryBaseline = LibraryBaselineState.built
 
 	if project.diagnostics.count() != diagnosticsBefore 'theSweepReported'
-		return startFrom(project, key: key, kind: kind, loaded: coreDeclarations if kind == LibraryEntryKind.coreBaseline else completeDeclarations, state: LibraryBaselineState.built)
+		return startFrom(project, key: key, kind: kind, loaded: coreDeclarations if kind == LibraryEntryKind.coreBaseline else completeDeclarations, state: LibraryBaselineState.built, publishes: false)
 	end 'theSweepReported'
 
 	let completeCanonical = persistedBaseline(project, key: key, kind: LibraryEntryKind.baseline, declarations: completeDeclarations, wanted: kind == LibraryEntryKind.baseline)
 
 	if kind == LibraryEntryKind.baseline 'theCompleteStateServes'
-		return startFrom(project, key: key, kind: kind, loaded: completeCanonical, state: LibraryBaselineState.built)
+		return startFrom(project, key: key, kind: kind, loaded: completeCanonical, state: LibraryBaselineState.built, publishes: true)
 	end 'theCompleteStateServes'
 
 	let coreCanonical = persistedBaseline(project, key: key, kind: LibraryEntryKind.coreBaseline, declarations: coreDeclarations, wanted: true)
 
-	return startFrom(project, key: key, kind: kind, loaded: coreCanonical, state: LibraryBaselineState.built)
+	return startFrom(project, key: key, kind: kind, loaded: coreCanonical, state: LibraryBaselineState.built, publishes: true)
 end 'builtStart'
 
 function persistedBaseline(project Project, key HashDigest, kind LibraryEntryKind, declarations LibraryDeclarations, wanted bool) returns LibraryDeclarations

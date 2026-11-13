@@ -2,7 +2,7 @@
 // the errors that stopped it.
 //
 // ⭐ **THE COMPILE IS THE ONE DIAGNOSTICS RUNS, AND IT WRITES NOTHING TO DISK.** `lspDocumentProject`
-// registers the text in memory and `compileToCodeResult` stops at a `CodeResult`, so no executable and no
+// registers the text in memory and `CompileRun` stops at a `CodeResult`, so no executable and no
 // `.ir` file lands in the author's workspace; the text is `renderTargetIr`'s, which is what `--emit-ir`
 // writes.
 
@@ -29,40 +29,38 @@ module function generateIrAnswer(workspace LspWorkspaceState, incoming JsonDoc, 
 end 'generateIrAnswer'
 
 function exploredOutcome(workspace LspWorkspaceState, document ReaderDocument, source String) returns LspExtensionOutcome
-	let explored = lspDocumentProject(workspace, document: document, content: source)
-
-	return match explored 'explorer'
-		loaded(project, reader) gives LspExtensionOutcome.answered(project.generatedIr(lspBufferPathOf(reader), source: source))
+	return match lspDocumentReader(workspace, document: document) 'explorer'
+		found(reader) gives generatedIr(workspace, reader: reader, source: source)
 		unavailable gives LspExtensionOutcome.compilerUnavailable
 	end 'explorer'
 end 'exploredOutcome'
 
-extension Project
-	// ⭐ **EVERY DIAGNOSTIC IS REPORTED, INCLUDING A WHOLE-PROGRAM CLAIM.** Unlike an open document, the
-	// explorer's source IS the whole program, so "no `main`" is true of what the author wrote.
-	function generatedIr(path FilePath, source String) returns LspAnswer
-		self.rendersTargetIr = true
+// ⭐ **EVERY DIAGNOSTIC IS REPORTED, INCLUDING A WHOLE-PROGRAM CLAIM.** Unlike an open document, the
+// explorer's source IS the whole program, so "no `main`" is true of what the author wrote.
+function generatedIr(workspace LspWorkspaceState, reader LspReaderSearch, source String) returns LspExtensionOutcome
+	let path = lspBufferPathOf(reader)
 
-		let ir = match checkWithoutWriting(self) 'compile'
-			compiled(codeResult) gives try renderTargetIr(self, codeResult: codeResult) otherwise panic("generatedIr: the explorer names no runtime function to render, so the render has nothing to refuse")
-			refused gives ""
-		end 'compile'
+	match checkOnDriver(workspace.driver, origin: lspDocumentOrigin(reader, text: source), inputPaths: MaxonSourcePathArray.create(0), target: detectHostTarget(), rendersTargetIr: true, reading: CheckedDiagnostics.asReported, session: DriverSession.discarding()) 'compile'
+		checked(_, standing, irText) then return LspExtensionOutcome.answered(irAnswer(irText, diagnostics: standing, path: path, source: source))
+		failed then return LspExtensionOutcome.compilerUnavailable
+	end 'compile'
+end 'generatedIr'
 
-		let doc = JsonDoc.create()
-		let index = LspLineIndex.build(source)
-		let tokens = lspDocumentTokens(source, keywords: self.keywords)
-		let errors = JsonNodeIdArray.create(self.diagnostics.count(), zeroed: false)
+function irAnswer(ir String, diagnostics DiagnosticArray, path FilePath, source String) returns LspAnswer
+	let doc = JsonDoc.create()
+	let index = LspLineIndex.build(source)
+	let tokens = lspDocumentTokens(source, keywords: KeywordTable.create())
+	let errors = JsonNodeIdArray.create(diagnostics.count(), zeroed: false)
 
-		for diagnostic in self.diagnostics 'each'
-			errors.push(irErrorNode(doc, diagnostic: diagnostic, path: path, source: source, index: index, tokens: tokens))
-		end 'each'
+	for diagnostic in diagnostics 'each'
+		errors.push(irErrorNode(doc, diagnostic: diagnostic, path: path, source: source, index: index, tokens: tokens))
+	end 'each'
 
-		let result = LspJsonObject.create(doc)
-		result.put(IrKey, value: JsonNode.stringNode(ir))
-		result.putNode(ErrorsKey, value: doc.add(JsonNode.arrayNode(errors)))
-		return LspAnswer.of(doc, result: result.finish())
-	end 'generatedIr'
-end 'Project'
+	let result = LspJsonObject.create(doc)
+	result.put(IrKey, value: JsonNode.stringNode(ir))
+	result.putNode(ErrorsKey, value: doc.add(JsonNode.arrayNode(errors)))
+	return LspAnswer.of(doc, result: result.finish())
+end 'irAnswer'
 
 // A diagnostic located in another file has no position in the source the panel shows, so it is placed at
 // the source's start and its message names where it really is.

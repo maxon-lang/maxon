@@ -1,0 +1,86 @@
+export type LexSweepFile
+	export let path as FilePath
+	export let content as String
+
+	static function create(path FilePath, content String) returns LexSweepFile
+		return Self{path: path, content: content}
+	end 'create'
+end 'LexSweepFile'
+
+export typealias LexSweepFileArray = Array with LexSweepFile
+
+module type LexSweepRun
+	let project as Project
+	let pool as FrontEndPool
+	module let landed as LexLandedArray
+
+	module static function create(project Project, generationBase DrainGeneration) returns LexSweepRun
+		return Self{project: project, pool: FrontEndPool.create(generationBase), landed: LexLandedArray.create(0)}
+	end 'create'
+
+	module function begin(receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		let inFlight = try self.pool.beginLex(self.project, receiver: receiver)
+
+		if inFlight 'drainIsOut'
+			return CompileStep.awaiting
+		end 'drainIsOut'
+
+		return try self.finished()
+	end 'begin'
+
+	module function answered(generation DrainGeneration, job ElementIndex, answer isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		if not (try self.pool.landAnswered(self.project, generation: generation, job: job, answered: answer, receiver: receiver)) 'notOurs'
+			return CompileStep.awaiting
+		end 'notOurs'
+
+		if not self.pool.drainIsFinished() 'stillInFlight'
+			return CompileStep.awaiting
+		end 'stillInFlight'
+
+		return try self.finished()
+	end 'answered'
+
+	module function abandon()
+		self.pool.close(self.project)
+		self.project.retiredWorkers.release()
+	end 'abandon'
+
+	function finished() returns CompileStep throws CompileError
+		self.landed.append(try self.pool.finishLex(self.project))
+		self.pool.close(self.project)
+		self.project.retiredWorkers.release()
+
+		return CompileStep.finished
+	end 'finished'
+end 'LexSweepRun'
+
+module function lexedOnDriver(driver CompileDriver.handle, project Project) throws CompileError
+	let unlexed = try unlexedSourcesOf(project)
+
+	if unlexed.isEmpty() 'everyStreamIsHeld'
+		return
+	end 'everyStreamIsHeld'
+
+	let files = LexSweepFileArray.create(unlexed.count(), zeroed: false)
+
+	for source in unlexed 'eachUnlexed'
+		files.push(LexSweepFile.create(source.path, content: source.content))
+	end 'eachUnlexed'
+
+	let request = freeze CompileRequest.create(DriverWork.lexSweep(project.rootPath, stdlibDir: project.stdlibDir, runtimeDir: project.runtimeDir, files: files.clone()), origin: ProjectOrigin.sources, target: project.target, session: DriverSession.discarding(), debugStream: project.debugStream)
+	let answer = driverAnswerOf(driver, request: request)
+
+	match answer.outcome 'outcome'
+		swept(landed) then try landSwept(project, landed: landed)
+		failed(error) then throw error
+		built or
+		checked or
+		warmed then panic("lexedOnDriver: the driver answered a lex sweep with another kind of job")
+	end 'outcome'
+end 'lexedOnDriver'
+
+function landSwept(project Project, landed LexLandedArray) throws CompileError
+	for each in landed 'eachLanded'
+		_ = try queryActiveTokens(project, path: each.path, lexing: LexSource.pooled(each.outcome))
+	end 'eachLanded'
+end 'landSwept'

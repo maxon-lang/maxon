@@ -1,0 +1,35 @@
+let IsolatedCheckSlowDirName = "diagnostics-project-isolated-check-slow"
+let IsolatedCheckQuickDirName = "diagnostics-project-isolated-check-quick"
+let IsolatedCheckMainFileName = "main.maxon"
+
+test 'project diagnostics: a slow check of one project does not delay the check of another'
+	let slow = stagedBusyCheckProject(IsolatedCheckSlowDirName)
+	let quick = stagedProjectDiagnosticsRoot(IsolatedCheckQuickDirName)
+	writeCorpusFile(quick, fileName: IsolatedCheckMainFileName, content: BusyCheckBufferSource)
+
+	let client = LspClient.start()
+
+	if let slowFinishedMeanwhile = try quickSettlesWhileSlowChecks(client, slow: slow, quick: quick) 'settled'
+		client.release()
+		discardStagedDir(slow)
+		discardStagedDir(quick)
+		Expect.isFalse(slowFinishedMeanwhile, message: "the check of the large project had published by the time the small project's check settled, so the small one did not run beside it.")
+	end 'settled' else (e) 'failed'
+		abandonedStagedSession(client, staged: slow, failure: e, doing: "the session did not complete")
+	end 'failed'
+end 'project diagnostics: a slow check of one project does not delay the check of another'
+
+function quickSettlesWhileSlowChecks(client LspClient, slow FilePath, quick FilePath) returns bool throws LspClientError
+	let slowUri = fileUriOf(slow.join(BusyCheckBufferFileName))
+	let quickUri = fileUriOf(quick.join(IsolatedCheckMainFileName))
+
+	_ = try client.initializeAtRoot(slow)
+	try client.initialized()
+	try client.openDocument(slowUri, content: BusyCheckBufferSource)
+	_ = try client.awaitPublishedDiagnostics(slowUri)
+	try client.openDocument(quickUri, content: BusyCheckBufferSource)
+
+	_ = try client.awaitSettledProjectCheckSet(quickUri)
+
+	return try client.projectCheckHasPublished(slowUri)
+end 'quickSettlesWhileSlowChecks'

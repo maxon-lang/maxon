@@ -39,7 +39,7 @@
 // The one function a unit module holds.
 export let UnitFunctionIndex = 0 as ElementIndex
 
-export typealias StdUnitBodyArray = Array with StdUnitBody
+export typealias StdUnitBodySlot = Slot with StdUnitBody
 
 // EVERYTHING ONE FUNCTION CARRIES TO A WORKER AND BACK: the module, the derived-origin rows the passes
 // file for it.
@@ -52,7 +52,7 @@ export type StdUnitBody
 	end 'blank'
 end 'StdUnitBody'
 
-export typealias StdUnitAnswerArray = Array with StdUnitAnswer
+export typealias StdUnitAnswerSlot = Slot with StdUnitAnswer
 
 export type StdUnitAnswer
 	export var body as StdUnitBody
@@ -68,16 +68,12 @@ end 'StdUnitAnswer'
 // `answers` (see `FrontEndJob`).
 export type StdUnit
 	export var funcIndex as ElementIndex
-	export var holder as StdUnitBodyArray
-	export var answers as StdUnitAnswerArray
+	export let holder as StdUnitBodySlot
+	export let answers as StdUnitAnswerSlot
 
-	module static function empty(funcIndex ElementIndex) returns StdUnit
-		return Self{funcIndex: funcIndex, holder: StdUnitBodyArray.create(0), answers: StdUnitAnswerArray.create(0)}
+	export static function empty(funcIndex ElementIndex) returns StdUnit
+		return Self{funcIndex: funcIndex, holder: StdUnitBodySlot.create("StdUnit.holder"), answers: StdUnitAnswerSlot.create("StdUnit.answers")}
 	end 'empty'
-
-	module function takeAnswer() returns StdUnitAnswer
-		return try self.answers.pop() otherwise panic("StdUnit.takeAnswer: the unit for function {self.funcIndex} came back with no answer")
-	end 'takeAnswer'
 
 	module static function extract(module StdModule, func IrFunction, funcIndex ElementIndex) returns isolated StdUnit
 		let unit = Self.empty(funcIndex) as isolated StdUnit
@@ -85,7 +81,7 @@ export type StdUnit
 		modify unit 'fill'
 			let body = StdUnitBody.blank()
 			fillUnitModule(module, func: func, unitModule: body.unitModule)
-			unit.holder.push(body)
+			unit.holder.fill(body)
 		end 'fill'
 
 		return unit

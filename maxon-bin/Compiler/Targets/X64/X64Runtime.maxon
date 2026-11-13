@@ -1626,6 +1626,7 @@ function buildFaultThunkChunk(usesGt bool, target Target, context HostContextLay
 
 	if usesGt 'leaveTheGreenStack'
 		emitLeaveTheDispatchStack(asm, leaveTheStackSlot: SlotLeaveTheStack)
+		encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: GtFaultFlushName)
 	end 'leaveTheGreenStack'
 
 	// The panic line opens with whichever prefix the classification chose; the rest of the diagnostic
@@ -1930,7 +1931,7 @@ end 'buildLinuxWriteStderrChunk'
 // ⭐ **A MEMORY FAULT IS A STACK OVERFLOW WHEN IT LANDS BESIDE THE STACK POINTER** (`StackFaultReachBytes`).
 //
 // Slots: 0=rip, 1=rbp, 2=rsp, 3=panic prefix.
-function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
+function buildLinuxFaultHandlerChunk(usesGt bool) returns FunctionCodeChunk
 	let SlotRip = 0
 	let SlotRbp = 1
 	let SlotRsp = 2
@@ -1969,6 +1970,11 @@ function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
 	// The panic line — through the SAME prefix builder the Windows thunk picks from, so the two OSes
 	// cannot drift on the wording and the harness's strip-from-` at rip=0x` leaves an identical line.
 	asm.placeLabel(classified)
+
+	if usesGt 'flushTheQueuedLog'
+		encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: GtFaultFlushName)
+	end 'flushTheQueuedLog'
+
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotPanicPrefix), wide: true)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotRip, rbpSlot: SlotRbp, rspSlot: SlotRsp)
@@ -2224,6 +2230,7 @@ function buildGtStackOverflowChunk(exitRoute X64OsCallKind, target Target) retur
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFp), srcReg: X64Register.rdx, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSp), srcReg: X64Register.r8, wide: true)
 
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: GtFaultFlushName)
 	emitPrintString(asm, bytes: faultPanicLinePrefix(HardwareFaultKind.stackOverflow))
 	emitFaultAddressesAndBacktrace(asm, ripSlot: SlotPc, rbpSlot: SlotFp, rspSlot: SlotSp)
 	encodeX64ProcessExit(asm.code, callFixups: asm.callFixups, route: exitRoute, exitCode: PanicExitCode, usesGt: true, target: target)
@@ -2992,7 +2999,7 @@ function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X6
 	chunks.push(buildLinuxSignalStackInstallChunk())
 	chunks.push(buildLinuxSignalStackSizeChunk())
 	chunks.push(buildLinuxSigreturnTrampolineChunk())
-	chunks.push(buildLinuxFaultHandlerChunk())
+	chunks.push(buildLinuxFaultHandlerChunk(usesGt))
 	chunks.push(buildLinuxWriteStderrChunk())
 	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
 end 'appendX64LinuxRuntimeChunks'

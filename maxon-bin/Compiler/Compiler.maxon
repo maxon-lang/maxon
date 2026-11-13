@@ -13,8 +13,8 @@
 //
 // ⭐ **TWO ENTRIES, ONE DRIVER.** `compileToProduct` is the whole build and hands its
 // products back as VALUES; `compile` is the command line's adapter over it and adds
-// only the `.ir` sidecar write. There is deliberately no second
-// `loadProject → compileToCodeResult → writeExecutable` sequence anywhere.
+// only the `.ir` sidecar write. There is deliberately no second sequence that loads a project,
+// compiles it and writes the executable anywhere.
 
 export union TargetIrText
 	notRendered
@@ -43,33 +43,6 @@ export union StatedText
 		end 'stated'
 	end 'text'
 end 'StatedText'
-
-// Compile the files and/or directories `inputPaths` for `target`, returning the path of
-// the produced executable. `outputOverride` (the `--output=` value) wins over the
-// derived output name. `emitIr` (the `--emit-ir` flag)
-// additionally writes the lowered Target IR beside the exe as `<output>.ir`, and
-// `runtimeIrNames` (the `--emit-ir-runtime=` list) names the WITHHELD functions —
-// the compiler's emitted runtime, or a `stdlib/` body — that IR must also render,
-// and is empty for every build that names none.
-//
-// ⭐⭐ **THE COMMAND LINE'S ADAPTER OVER `compileToProduct`, AND THE ONE THING IT ADDS IS THE `.ir`
-// SIDECAR.** A `build` wants a FILE beside the exe; a caller compiling IN PROCESS wants the TEXT and
-// no filesystem round trip (see `CompileProduct`). The RENDER — which is the whole cost of that flag
-// — happens once, inside the core, so both callers read bytes from ONE renderer; only the WRITE is
-// the command line's, and it is the whole of this side of the seam.
-//
-// A file/IO error (`fileNotFound` / `noSourceFiles` / `readError`) propagates from here UNCHANGED —
-// `compileToProduct`'s drain owns that reason.
-export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride StatedText = StatedText.unstated, emitIr bool = false, metrics StatedText = StatedText.unstated, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, poisonFreed bool, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, productVersion VersionComponentArray = VersionComponentArray.create(0), defines DefineArray = DefineArray.create(0), session CompileSession = CompileSession.printing()) returns CompileProduct throws CompileError
-	let product = try compileToProduct(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metrics: metrics, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, poisonFreed: poisonFreed, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, productVersion: productVersion, defines: defines, session: session)
-
-	match product.irText 'emitIr'
-		notRendered then break
-		rendered(text) then writeTargetIr(text, outputPath: product.outputPath)
-	end 'emitIr'
-
-	return product
-end 'compile'
 
 // ⭐⭐ **WHAT ONE COMPILE PRODUCED, HANDED BACK AS VALUES RATHER THAN PUBLISHED TO THE FILESYSTEM.**
 //
@@ -104,262 +77,685 @@ export type CompileProduct
 	end 'create'
 end 'CompileProduct'
 
-// ⭐⭐ **THE WHOLE BUILD — the ONE pipeline driver, for the command line and for an in-process caller
-// alike.** It loads the project, resolves and clears the output, drives `compileToCodeResult`, writes
-// the executable, renders the IR when asked, and reports the timings and `--metrics`. The one thing it
-// does NOT do is publish the IR, because its two callers want that in different forms (see `compile`).
-//
-// ⛔ **A SECOND `loadProject → compileToCodeResult → writeExecutable` SEQUENCE ANYWHERE IS THE ONE
-// SHAPE THIS SPLIT MUST NOT PRODUCE.** The pipeline-driving half of it already lives in
-// `compileToCodeResult` so the `verify-warm-rebuild` gate compiles through the EXACT same path — a
-// determinism gate over a divergent code path would prove nothing — and the steps unique to a real
-// build (load, clear the output, write the executable, render the IR) are here, once.
-//
-// `stdlibDirOverride` names the `stdlib/` this compile reads instead of the one above the compiler's
-// own executable; `unstated` ⇒ the walk-up (see `stdlibDirFor`). `runtimeDirOverride` is its sibling
-// for the RUNTIME tier; `unstated` ⇒ the directory beside the `stdlib/` this compile resolved (see
-// `runtimeDirFor`).
-//
-// The next three arguments are `maxon test`'s, and their defaults are every other build's answer.
-// `entryFunction` is where this build begins (`Project.entryFunctionName`),
-// `compilerWrittenSources` names the inputs this compiler wrote, each with the reserved names it
-// minted there (`Project.compilerWrittenSources`), and `sourceSelection` says whether a directory
-// walk yields the `.maxtest` files too (`SourceSelection`).
-//
-// ⭐ **IT OWNS THE TOTAL: it is the only entry that spans a whole build**, so it is the only one that
-// can measure the denominator every phase's share is taken against (the warm-rebuild gate drives
-// `compileToCodeResult` directly and never reports). Every phase timed below and in the
-// passes/backend is a disjoint sub-interval of the wall time measured here, so they sum to at most the
-// total, and whatever they leave over is printed as `unattributed` rather than absorbed — see
-// CompileTimings.
-//
-// Two failure channels: (1) file/IO errors (`fileNotFound`, `noSourceFiles`, `readError`) carry NO
-// diagnostics and propagate straight out, and the caller prints a specific message; (2) reported
-// diagnostics (semantic/lexer) are printed inside `compileToCodeResult` — through
-// `session`'s `DiagnosticSink`, so a caller may CAPTURE them instead — and
-// re-signaled as a FRESH `compileError`.
-export function compileToProduct(inputPaths MaxonSourcePathArray, target Target, outputOverride StatedText = StatedText.unstated, emitIr bool = false, metrics StatedText = StatedText.unstated, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false, poisonFreed bool, debugInfo bool = false, coverage bool = false, censusByTag bool = false, censusPhase TagCensusPhases = TagCensusPhases.everyPhase, allocationsByTag bool = false, allocationsPhase TagCensusPhases = TagCensusPhases.everyPhase, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, scriptlib ScriptlibLoad = ScriptlibLoad.besideStdlib, entryFunction immutable ByteArray = MainFunctionName, compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), productVersion VersionComponentArray = VersionComponentArray.create(0), defines DefineArray = DefineArray.create(0), session CompileSession = CompileSession.printing()) returns CompileProduct throws CompileError
-	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
-	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
-	// second reading of the command line — so the pre-project `load` bracket and everything after it
-	// agree on which compile they are.
-	let unit = traceUnitOf(try commonAncestorOf(inputPaths))
-	attributeCompilerLog(unit)
-	let spans = TraceNameArray.create(0)
+export function compile(driver CompileDriver.handle, request immutable CompileRequest, session DriverSession) returns CompileProduct throws CompileError
+	let product = try compileToProduct(driver, request: request, session: session)
 
-	// ⭐⭐ **WHERE A FAILED BUILD CLOSES WHAT IT LEFT OPEN.** Four stages inside phase brackets can throw —
-	// `load`'s project load, `deadFunctions`' E4015, `regalloc`'s E5001 and `link`'s chunk-label refusal —
-	// and none of them reaches the `record*Delta` that would emit its span's END. The split exists ONLY to
-	// give that drain one home rather than an END at each throw site (see `closeOpenPhaseSpans`).
-	//
-	// ⚠⚠ **IT SITS ON THIS FUNCTION RATHER THAN ON `compile`, BECAUSE A CALLER SURVIVES A FAILED COMPILE
-	// AND THEN DOES THOUSANDS MORE.** The trace is one stream for the whole process, so a compile that
-	// threw with spans open leaves every later compile in that process reading as nested inside a phase
-	// that had already finished. `spec-test` compiles IN PROCESS, so the drain cannot lean on *"a throw out
-	// of it ends the process"* and sits at the entry EVERY whole build goes through.
-	//
-	// The error is RE-THROWN unchanged, never flattened: `Main` distinguishes the file/IO cases
-	// (`fileNotFound`/`noSourceFiles`/`readError`) from a reported `compileError` and prints a different
-	// message for each, so a fresh `compileError` here would replace three specific messages with one wrong
-	// one.
-	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metrics: metrics, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, poisonFreed: poisonFreed, debugInfo: debugInfo, coverage: coverage, censusByTag: censusByTag, censusPhase: censusPhase, allocationsByTag: allocationsByTag, allocationsPhase: allocationsPhase, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, productVersion: productVersion, defines: defines, unit: unit, spans: spans, session: session) otherwise (e) 'compileFailed'
-		closeOpenPhaseSpans(spans, unit: unit)
-		throw e
-	end 'compileFailed'
-end 'compileToProduct'
-
-// The build itself, from the whole-compile probe to the timing report — everything `compileToProduct`
-// measures. It is a separate function for the single reason its caller states: one failure path to hang
-// the trace-span drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride StatedText, emitIr bool, metrics StatedText, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, poisonFreed bool, debugInfo bool, coverage bool, censusByTag bool, censusPhase TagCensusPhases, allocationsByTag bool, allocationsPhase TagCensusPhases, stdlibDirOverride StatedText, runtimeDirOverride StatedText, scriptlib ScriptlibLoad, entryFunction ByteArray, compilerWrittenSources CompilerWrittenSourceArray, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, productVersion VersionComponentArray, defines DefineArray, unit TraceUnit, spans TraceNameArray, session CompileSession) returns CompileProduct throws CompileError
-	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit, spans: spans, treeLock: session.treeLock)
-
-	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
-	// probe — a second set of reads here would sample the same instant.
-	let project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: scriptlib, entryFunction: entryFunction, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, debugStream: debugStream, session: session, defines: defines, productVersion: productVersion, tallied: allocationsByTag, tallyPhases: allocationsPhase, openPhaseSpans: spans)
-	project.asyncTrace = asyncTrace
-	project.poisonFreed = poisonFreed
-	project.debugInfo = debugInfo
-	project.requestedRuntimeBodies = runtimeIrNames
-	project.rendersTargetIr = emitIr
-	project.compilesOnceAndExits = true
-	project.coverage = coverage
-
-	// Set before the first `recordPhase*`, which is the next statement: the census is sampled by the phase
-	// recorder, so a flag raised later leaves the compile's largest phase with no reading.
-	//
-	// ⚠ `--metrics` deliberately does not raise it. The census costs a quarter of a self-compile, and
-	// `run_scale_test` passes `--metrics` on every rung — riding that flag would put the instrument's own
-	// cost into the `unattributed` row of every trend datapoint recorded from then on. A harness that wants
-	// the TSV's residency columns asks for `--log=compiler:debug` as well.
-	project.censusByTag = censusByTag
-	project.samplesResidency = censusByTag or compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug)
-
-	if censusByTag 'sizeTheTagTable'
-		project.memory.enableTagCensus(censusPhase)
-	end 'sizeTheTagTable'
-
-	// EXCLUDING the runtime tier's own bracket, which `loadLibrarySources` opened inside this one: a phase
-	// that absorbs a neighbour's cost is the defect CompileTimings exists to prevent, and the rows must
-	// stay a disjoint partition of the compile.
-	recordPhaseExcluding(project, phase: CompilePhase.load, probe: whole, inner: CompilePhase.loadRuntime)
-
-	// Resolved before the pipeline, so an output that cannot be staged refuses the build before it
-	// compiles (`requireOutputStageable`).
-	//
-	// Bracketed as its own phase rather than left in `load`'s: these touch the OUTPUT, `load`
-	// reads the SOURCES, and a phase that absorbs a neighbour's cost is the defect CompileTimings'
-	// header is about.
-	let outputProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
-	let outputPath = try resolveOutputPath(project.target, inputPaths: inputPaths, outputOverride: outputOverride)
-	recordCoverageDataPath(project, outputPath: outputPath)
-	try ensureOutputDirectory(project, outputPath: outputPath)
-
-	// Before the pipeline, so a missing tool refuses the build without compiling it first.
-	let writerTools = try locateExecutableWriterTools(project.target) otherwise (e) 'writerToolsMissing'
-		reportDiagnostic(project, diagnostic: wasmComponentDiagnostic(e))
-		try refuseCompile(project)
-	end 'writerToolsMissing'
-
-	let outputIdentity = try entryIdentityPathOf(outputPath) otherwise (e) 'unidentifiable'
-		throw unidentifiablePathFailure(e)
-	end 'unidentifiable'
-
-	let rebuildsItself = try outputIsRunningImage(outputIdentity) otherwise (e) 'unidentifiableImage'
-		throw unidentifiablePathFailure(e)
-	end 'unidentifiableImage'
-
-	let staging = StagingDirectory.beside(outputPath)
-	try requireOutputStageable(project, staging: staging, outputPath: outputPath, rebuildsItself: rebuildsItself)
-
-	recordPhase(project, phase: CompilePhase.prepareOutput, probe: outputProbe)
-
-	let built = try buildStagedImage(project, tools: writerTools, staged: staging.image, outputPath: outputPath, emitIr: emitIr, debugInfo: debugInfo) otherwise (e) 'buildFailed'
-		abandonStagedBuild(staging, outputPath: outputPath, rebuildsItself: rebuildsItself)
-		throw e
-	end 'buildFailed'
-
-	let publishProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
-	let sidecar = try publishStagedImage(project, staging: staging, outputPath: outputPath, rebuildsItself: rebuildsItself, stagedSidecar: built.sidecar)
-	recordPhaseWithItsLog(project, phase: CompilePhase.prepareOutput, probe: publishProbe)
-
-	// Stamp the totals BEFORE anything reads them (every share divides by them, and both
-	// reconciliation panics compare against them), and build the tables lazily behind
-	// `compilerLogEnabled` so a build without `--log=compiler:debug` pays only for the handful of
-	// counter reads, never for formatting a row.
-	flushCompilerLog()
-
-	let total = whole.elapsed()
-	project.timings.total = PhaseCost.create(total.nanos, cpuTicks: total.cpuTicks)
-	project.memory.upkeep = project.session.treeLock.upkeepSince(whole.upkeepMark)
-	total.subtractMemory(project.memory.upkeep)
-	project.memory.total = total
-	project.retiredWorkers.release()
-
-	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
-		let log = compilerLogger(CompilerLogGroup.compiler)
-		log.debug(compileTimingsReport(project.timings))
-		log.debug(compileMemoryReport(project.memory, timings: project.timings))
-	end 'debugging'
-
-	// `--metrics=<path>`: the machine-readable twin of those two tables. Written last, so
-	// it can report the code size the degeneracy self-check needs (see MetricsEmit).
-	match metrics 'metrics'
-		unstated then break
-		stated(path) then writeMetrics(project, metricsPath: path, codeBytes: built.codeBytes)
-	end 'metrics'
-
-	compilerLogger(CompilerLogGroup.compiler).info("Wrote {built.codeBytes} bytes of code to {outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
-	return CompileProduct.create(outputPath, irText: built.irText, codeBytes: built.codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks, sidecar: sidecar, drivesOtherProcesses: built.drivesOtherProcesses)
-end 'compileMeasured'
-
-type StagedBuild
-	module let irText as TargetIrText
-	module let codeBytes as CodeByteCount
-	module let sidecar as SidecarOutcome
-	module let drivesOtherProcesses as bool
-
-	static function create(irText TargetIrText, codeBytes CodeByteCount, sidecar SidecarOutcome, drivesOtherProcesses bool) returns StagedBuild
-		return Self{irText: irText, codeBytes: codeBytes, sidecar: sidecar, drivesOtherProcesses: drivesOtherProcesses}
-	end 'create'
-end 'StagedBuild'
-
-function buildStagedImage(project Project, tools ExecutableWriterTools, staged FilePath, outputPath FilePath, emitIr bool, debugInfo bool) returns StagedBuild throws CompileError
-	let codeResult = try compileToCodeResult(project)
-
-	// ⭐ **THE BRACKET KEEPS THE RENDER, WHICH IS THE COST — the WRITE is the command line's and is
-	// not in it** (see `compile` and `writeTargetIr`). `printTargetModule` walks the whole Target
-	// module, every chunk and the data section; `File.writeText` is one call nobody ever read this
-	// row for.
-	//
-	// Two provenances are excluded, and for ONE reason — neither is code this program's author wrote,
-	// and both are invariant across every program that reaches them. The emitted runtime (the entry
-	// stub `mrt_start`, the allocator, the `__str_*`/`__managed_*` families) is the compiler's; the
-	// LIBRARY — every function the merged module got from `stdlib/` source — is the checkout's, and it
-	// is in this module at all only because `stdlib/` is compiled from source alongside the program. So
-	// both a `TargetIr` pin and `--emit-ir` show the program's own functions. `libraryFacts.libraryFunctions` is the per-function provenance the whole compiler
-	// asks this by (`StdlibSource.isLibraryFunction`), passed rather than re-derived.
-	//
-	// `runtimeIrNames` (`--emit-ir-runtime=`) is how a caller asks for a NAMED one of those withheld
-	// bodies anyway: it is the only route either has to a `TargetIr` pin, and it is per-build so no
-	// pin that does not ask for one moves a byte. The CHUNKS ride along for that same list's sake — a
-	// hand-assembled runtime piece has no `IrFunction` to print, so `printTargetModule` renders its
-	// assembled bytes instead, and this is the only place holding both the module and the chunks it
-	// was encoded into. See `printTargetModule`.
-	//
-	// Rendered ahead of the write, so a refused `--emit-ir-runtime=` name throws before any executable
-	// is written and before a compiler rebuilding itself has vacated its running image.
-	var irText = TargetIrText.notRendered
-
-	if emitIr 'emitIr'
-		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
-		irText = TargetIrText.rendered(try renderTargetIr(project, codeResult: codeResult))
-		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
+	match product.irText 'emitIr'
+		notRendered then break
+		rendered(text) then writeTargetIr(text, outputPath: product.outputPath)
 	end 'emitIr'
 
-	let writeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeExe)
-	codeResult.imagePlacement = try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: staged, tools: tools)
+	return product
+end 'compile'
 
-	// ⭐⭐ **AN INSTRUMENTED IMAGE IS PUBLISHED TWICE, AND THE SECOND PASS IS WHAT GIVES ITS `.mxcov` THE SAME
-	// BUILD-ID THE SIDECAR RECORDS.** The id is a plain fold of the `.text` a driver reads back OUT OF THE
-	// FILE, and `.text` is not final until the writer has patched its IAT and `.rdata` relocations — which it
-	// does inside itself, past the point where it read the `.data` image it serializes. So the first pass
-	// settles the code, the stamp writes the real id into the counter image, and the second publishes it.
-	//
-	// ⚠ Without it the `.mxcov` carries a fold of the UNPATCHED code, which every report refuses as
-	// belonging to a different build. Repeating the write is safe because every patch is an absolute
-	// overwrite at a fixed offset and the stamp does not resize a section, so the second pass reproduces the
-	// first byte for byte apart from those eight.
-	if project.coverage 'stampTheCounterImage'
-		stampCoverageImage(project, codeResult: codeResult)
-		codeResult.imagePlacement = try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: staged, tools: tools)
-	end 'stampTheCounterImage'
+export function compileToProduct(driver CompileDriver.handle, request immutable CompileRequest, session DriverSession) returns CompileProduct throws CompileError
+	match driverOutcomeOf(driver, request: request, session: session) 'outcome'
+		built(product) then return product
+		failed(error) then throw error
+		checked or
+		warmed or
+		swept then panic("compileToProduct: the driver answered a build with another kind of job")
+	end 'outcome'
+end 'compileToProduct'
 
-	recordPhaseWithItsLog(project, phase: CompilePhase.writeExe, probe: writeProbe)
+module union CheckAnswer
+	checked(compiled bool, diagnostics DiagnosticArray, irText String)
+	failed(error CompileError)
+end 'CheckAnswer'
 
-	try requireOutputWritten(project, staged: staged, outputPath: outputPath)
+module function checkOnDriver(driver CompileDriver.handle, origin ProjectOrigin, inputPaths MaxonSourcePathArray, target Target, rendersTargetIr bool, reading CheckedDiagnostics, session DriverSession) returns CheckAnswer
+	let request = freeze CompileRequest.create(DriverWork.check(rendersTargetIr, reading: reading), origin: origin, target: target, session: session, inputPaths: inputPaths).clone()
 
-	// ⭐ **AFTER THE EXECUTABLE IS PROVEN WRITTEN, because the sidecar describes THAT file** — its
-	// build-id is the fold of the very bytes just published, and a driver recomputes it from the binary
-	// before trusting a single row. Written past `requireOutputWritten` so a build that produced no
-	// executable also leaves no sidecar claiming to describe one.
-	var sidecar = SidecarOutcome.notOwed
+	return match driverOutcomeOf(driver, request: request, session: session) 'outcome'
+		checked(compiled, diagnostics, irText) gives CheckAnswer.checked(compiled, diagnostics: diagnostics.clone(), irText: irText)
+		failed(error) gives CheckAnswer.failed(error)
+		built or
+		warmed or
+		swept panic("checkOnDriver: the driver answered a check with another kind of job")
+	end 'outcome'
+end 'checkOnDriver'
 
-	if debugInfo 'writeDebugInfo'
+function driverOutcomeOf(driver CompileDriver.handle, request immutable CompileRequest, session DriverSession) returns DriverOutcome
+	let answer = driverAnswerOf(driver, request: request)
+	session.diagnostics.absorb(answer.lines)
+	session.treeLock.resume(answer.lock)
+
+	return answer.outcome
+end 'driverOutcomeOf'
+
+typealias ProjectSlot = Slot with Project
+typealias CompileRunSlot = Slot with CompileRun
+typealias BuildTailSlot = Slot with BuildTail
+typealias DriverOutcomeSlot = Slot with DriverOutcome
+
+enum JobPlace
+	attributing
+	compiling
+	writing
+	sidecar
+	publishing
+	totaling
+	finished
+end 'JobPlace'
+
+type BuildTail
+	module let outputPath as FilePath
+	module let writerTools as ExecutableWriterTools
+	module let staging as StagingDirectory
+	module let rebuildsItself as bool
+	module var irText as TargetIrText
+	module var sidecar as SidecarOutcome
+	module var codeBytes as CodeByteCount
+	module var drivesOtherProcesses as bool
+
+	static function prepared(outputPath FilePath, writerTools ExecutableWriterTools, staging StagingDirectory, rebuildsItself bool) returns BuildTail
+		return Self{outputPath: outputPath, writerTools: writerTools, staging: staging, rebuildsItself: rebuildsItself, irText: TargetIrText.notRendered, sidecar: SidecarOutcome.notOwed, codeBytes: 0, drivesOtherProcesses: false}
+	end 'prepared'
+end 'BuildTail'
+
+typealias LexSweepRunSlot = Slot with LexSweepRun
+
+module type JobRun
+	let spec as immutable CompileRequest
+	let session as CompileSession
+	let bench as WarmBench
+	let bases as GenerationBases
+	let spans as TraceNameArray
+	var unit as TraceUnit
+	var place as JobPlace
+	let projects as ProjectSlot
+	let machines as CompileRunSlot
+	let sweeps as LexSweepRunSlot
+	let wholeProbes as PhaseProbeSlot
+	let brackets as PhaseProbeSlot
+	let tails as BuildTailSlot
+	let outcomes as DriverOutcomeSlot
+
+	module static function create(request immutable CompileRequest, memos SharedFileMemoMap, bench WarmBench, bases GenerationBases) returns JobRun
+		let session = CompileSession.create(DiagnosticSink.to(request.sink), fileMemos: memos, treeLock: LockHold.resuming(request.lock.clone()))
+
+		return Self{spec: request, session: session, bench: bench, bases: bases, spans: TraceNameArray.create(0), unit: 0, place: JobPlace.attributing, projects: ProjectSlot.create("JobRun.projects"), machines: CompileRunSlot.create("JobRun.machines"), sweeps: LexSweepRunSlot.create("JobRun.sweeps"), wholeProbes: PhaseProbeSlot.create("JobRun.wholeProbes"), brackets: PhaseProbeSlot.create("JobRun.brackets"), tails: BuildTailSlot.create("JobRun.tails"), outcomes: DriverOutcomeSlot.create("JobRun.outcomes")}
+	end 'create'
+
+	module function begin(receiver CompileReceiver.handle) returns CompileStep
+		match self.spec.work 'work'
+			build then return self.beginBuild(receiver)
+			check then return self.beginCheck(receiver)
+			warm(step) then return self.beginWarm(step, receiver: receiver)
+			lexSweep(root, stdlibDir, runtimeDir, files) then return self.beginSweep(root, stdlibDir: stdlibDir, runtimeDir: runtimeDir, files: files, receiver: receiver)
+		end 'work'
+	end 'begin'
+
+	module function frontEndAnswered(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep
+		if self.sweeps.isFull() 'aSweepIsDraining'
+			return self.sweepAnswered(generation, job: job, answered: answered, receiver: receiver)
+		end 'aSweepIsDraining'
+
+		self.resumeWhole()
+
+		let step = try self.machines.held().frontEndAnswered(generation, job: job, answered: answered, receiver: receiver) otherwise (failure) 'failed'
+			return self.compileFailed(failure)
+		end 'failed'
+
+		return self.compiled(step, receiver: receiver)
+	end 'frontEndAnswered'
+
+	module function stdPassAnswered(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle) returns CompileStep
+		self.resumeWhole()
+
+		let step = try self.machines.held().stdPassAnswered(job, answered: answered, receiver: receiver) otherwise (failure) 'failed'
+			return self.compileFailed(failure)
+		end 'failed'
+
+		return self.compiled(step, receiver: receiver)
+	end 'stdPassAnswered'
+
+	module function backendAnswered(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle) returns CompileStep
+		self.resumeWhole()
+
+		let step = try self.machines.held().backendAnswered(job, answered: answered, refused: refused, receiver: receiver) otherwise (failure) 'failed'
+			return self.compileFailed(failure)
+		end 'failed'
+
+		return self.compiled(step, receiver: receiver)
+	end 'backendAnswered'
+
+	module function logFlushed(receiver CompileReceiver.handle) returns CompileStep
+		self.resumeWhole()
+		self.resumeBracket()
+
+		match self.place 'place'
+			attributing then return self.afterAttribution(receiver)
+			writing then return self.afterWrite(receiver)
+			sidecar then return self.afterSidecar(receiver)
+			publishing then return self.afterPublish(receiver)
+			totaling then return self.afterTotals()
+			compiling or
+			finished then panic("JobRun.logFlushed: the log acknowledged a flush nothing was waiting for")
+		end 'place'
+	end 'logFlushed'
+
+	module function answer() returns isolated DriverAnswer
+		return DriverAnswer.of(self.outcomes.held().clone(), lines: self.session.diagnostics.capturedLines.clone(), lock: self.session.treeLock.holdings().clone())
+	end 'answer'
+
+	function beginBuild(receiver CompileReceiver.handle) returns CompileStep
+		let root = try commonAncestorOf(self.spec.inputPaths) otherwise (failure) 'noRoot'
+			return self.failed(failure)
+		end 'noRoot'
+
+		self.unit = traceUnitOf(root)
+
+		attributeCompilerLogThen(self.unit, receiver: receiver.clone())
+
+		return CompileStep.awaiting
+	end 'beginBuild'
+
+	function afterAttribution(receiver CompileReceiver.handle) returns CompileStep
+		let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: self.unit, spans: self.spans, treeLock: self.session.treeLock)
+		self.wholeProbes.fill(whole)
+		self.place = JobPlace.compiling
+
+		let project = try self.loadedBuildProject() otherwise (failure) 'unloaded'
+			return self.failed(failure)
+		end 'unloaded'
+
+		self.projects.fill(project)
+
+		let prepared = try self.preparedOutput(project) otherwise (failure) 'unprepared'
+			return self.failed(failure)
+		end 'unprepared'
+
+		self.tails.fill(prepared)
+
+		return self.startMachine(CompileGoal.codeResult, receiver: receiver)
+	end 'afterAttribution'
+
+	function loadedBuildProject() returns Project throws CompileError
+		let request = self.spec
+		let project = try loadProject(request.inputPaths.clone(), target: request.target, stdlibDirOverride: request.stdlibDirOverride, runtimeDirOverride: request.runtimeDirOverride, scriptlib: request.scriptlib, entryFunction: request.entryFunction, compilerWrittenSources: request.compilerWrittenSources.clone(), sourceSelection: request.sourceSelection, stagedSourceOrigins: request.stagedSourceOrigins.clone(), debugStream: request.debugStream, session: self.session, defines: request.defines.clone(), productVersion: request.productVersion.clone(), tallied: request.allocationsByTag, tallyPhases: request.allocationsPhase, openPhaseSpans: self.spans)
+		project.asyncTrace = request.asyncTrace
+		project.poisonFreed = request.poisonFreed
+		project.debugInfo = request.debugInfo
+		project.requestedRuntimeBodies = request.runtimeIrNames.clone()
+		project.rendersTargetIr = request.emitIr
+		project.compilesOnceAndExits = true
+		project.coverage = request.coverage
+		project.censusByTag = request.censusByTag
+		project.samplesResidency = request.censusByTag or compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug)
+
+		if request.censusByTag 'sizeTheTagTable'
+			project.memory.enableTagCensus(request.censusPhase)
+		end 'sizeTheTagTable'
+
+		recordPhaseExcluding(project, phase: CompilePhase.load, probe: self.wholeProbes.held(), inner: CompilePhase.loadRuntime)
+
+		return project
+	end 'loadedBuildProject'
+
+	function preparedOutput(project Project) returns BuildTail throws CompileError
+		let outputProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
+		let outputPath = try resolveOutputPath(project.target, inputPaths: self.spec.inputPaths, outputOverride: self.spec.outputOverride)
+		recordCoverageDataPath(project, outputPath: outputPath)
+		try ensureOutputDirectory(project, outputPath: outputPath)
+
+		let writerTools = try locateExecutableWriterTools(project.target) otherwise (e) 'writerToolsMissing'
+			reportDiagnostic(project, diagnostic: wasmComponentDiagnostic(e))
+			try refuseCompile(project)
+		end 'writerToolsMissing'
+
+		let outputIdentity = try entryIdentityPathOf(outputPath) otherwise (e) 'unidentifiable'
+			throw unidentifiablePathFailure(e)
+		end 'unidentifiable'
+
+		let rebuildsItself = try outputIsRunningImage(outputIdentity) otherwise (e) 'unidentifiableImage'
+			throw unidentifiablePathFailure(e)
+		end 'unidentifiableImage'
+
+		let staging = StagingDirectory.beside(outputPath)
+		try requireOutputStageable(project, staging: staging, outputPath: outputPath, rebuildsItself: rebuildsItself)
+
+		recordPhase(project, phase: CompilePhase.prepareOutput, probe: outputProbe)
+
+		return BuildTail.prepared(outputPath, writerTools: writerTools, staging: staging, rebuildsItself: rebuildsItself)
+	end 'preparedOutput'
+
+	function beginCheck(receiver CompileReceiver.handle) returns CompileStep
+		let project = try self.createdCheckProject() otherwise (failure) 'uncreated'
+			return self.failed(failure)
+		end 'uncreated'
+
+		self.projects.fill(project)
+		self.place = JobPlace.compiling
+
+		return self.startMachine(CompileGoal.codeResult, receiver: receiver)
+	end 'beginCheck'
+
+	function beginWarm(step WarmStep, receiver CompileReceiver.handle) returns CompileStep
+		match step 'step'
+			compile(slot, goal) then return self.beginWarmCompile(slot, goal: goal, receiver: receiver)
+			load or
+			edit or
+			probe or
+			snapshot or
+			compareParses or
+			read then break
+		end 'step'
+
+		let reading = try self.bench.stepped(step, memos: self.session.fileMemos) otherwise (failure) 'refused'
+			return self.failed(failure)
+		end 'refused'
+
+		self.outcomes.fill(DriverOutcome.warmed(reading))
+		self.place = JobPlace.finished
+
+		return CompileStep.finished
+	end 'beginWarm'
+
+	function beginWarmCompile(slot String, goal WarmGoal, receiver CompileReceiver.handle) returns CompileStep
+		self.projects.fill(self.bench.projectIn(slot))
+		self.place = JobPlace.compiling
+
+		return self.startMachine(goalOfWarm(goal), receiver: receiver)
+	end 'beginWarmCompile'
+
+	function warmSlotAndGoal() returns (String, WarmGoal)
+		match self.spec.work 'work'
+			warm(step) then return self.compiledSlotAndGoalOf(step)
+			build or
+			check or
+			lexSweep then panic("JobRun.warmSlotAndGoal: only a warm compile names a slot")
+		end 'work'
+	end 'warmSlotAndGoal'
+
+	function compiledSlotAndGoalOf(step WarmStep) returns (String, WarmGoal)
+		match step 'step'
+			compile(slot, goal) then return (slot, goal)
+			load or
+			edit or
+			probe or
+			snapshot or
+			compareParses or
+			read then panic("JobRun.compiledSlotAndGoalOf: only a warm compile runs on the driver's pools")
+		end 'step'
+	end 'compiledSlotAndGoalOf'
+
+	function beginSweep(root FilePath, stdlibDir FilePath, runtimeDir FilePath, files LexSweepFileArray, receiver CompileReceiver.handle) returns CompileStep
+		let project = try self.sweepProject(root, stdlibDir: stdlibDir, runtimeDir: runtimeDir, files: files) otherwise (failure) 'unloaded'
+			return self.failed(failure)
+		end 'unloaded'
+
+		self.projects.fill(project)
+		let run = LexSweepRun.create(project, generationBase: self.bases.take())
+		self.sweeps.fill(run)
+		self.place = JobPlace.compiling
+
+		let step = try run.begin(receiver) otherwise (failure) 'refused'
+			run.abandon()
+			return self.failed(failure)
+		end 'refused'
+
+		return self.sweepStepped(step)
+	end 'beginSweep'
+
+	function sweepProject(root FilePath, stdlibDir FilePath, runtimeDir FilePath, files LexSweepFileArray) returns Project throws CompileError
+		let project = try createProject(root, target: self.spec.target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, scriptlib: ScriptlibTier.absent, debugStream: self.spec.debugStream, session: self.session)
+
+		for file in files 'eachFile'
+			fileChanged(project, path: file.path, content: file.content)
+		end 'eachFile'
+
+		return project
+	end 'sweepProject'
+
+	function sweepAnswered(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep
+		let run = self.sweeps.held()
+
+		let step = try run.answered(generation, job: job, answer: answered, receiver: receiver) otherwise (failure) 'refused'
+			run.abandon()
+			return self.failed(failure)
+		end 'refused'
+
+		return self.sweepStepped(step)
+	end 'sweepAnswered'
+
+	function sweepStepped(step CompileStep) returns CompileStep
+		match step 'step'
+			awaiting then return CompileStep.awaiting
+			finished then break
+		end 'step'
+
+		self.outcomes.fill(DriverOutcome.swept(self.sweeps.held().landed))
+		self.place = JobPlace.finished
+
+		return CompileStep.finished
+	end 'sweepStepped'
+
+	function createdCheckProject() returns Project throws CompileError
+		let request = self.spec
+
+		let project = match request.origin 'origin'
+			sources gives try loadProject(request.inputPaths.clone(), target: request.target, session: self.session)
+			libraryProgram(program, stdlibDir, scriptlib, bodies, text) gives try self.libraryProgramProject(program, stdlibDir: stdlibDir, scriptlib: scriptlib, bodies: bodies, text: text)
+			document(root, stdlibDir, runtimeDir, scriptlib, bufferPath, bufferText) gives try projectOverBuffer(root, stdlibDir: stdlibDir, runtimeDir: runtimeDir, scriptlib: scriptlib, buffer: OpenBuffer.held(bufferPath, content: bufferText), session: self.session)
+		end 'origin'
+
+		match request.work 'work'
+			check(rendersTargetIr, _) then project.rendersTargetIr = rendersTargetIr
+			build or
+			warm or
+			lexSweep then break
+		end 'work'
+
+		return project
+	end 'createdCheckProject'
+
+	function libraryProgramProject(program FilePath, stdlibDir FilePath, scriptlib ScriptlibLoad, bodies LibraryBodies, text String) returns Project throws CompileError
+		let project = try createProject(program, target: self.spec.target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirBeside(stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: false, session: self.session, stdlibBodies: bodies)
+		fileChanged(project, path: program, content: text)
+		try loadLibrarySources(project)
+
+		return project
+	end 'libraryProgramProject'
+
+	function startMachine(goal CompileGoal, receiver CompileReceiver.handle) returns CompileStep
+		let project = self.projects.held()
+		let machine = CompileRun.create(project, goal: goal, generationBase: self.bases.take())
+		self.machines.fill(machine)
+
+		let step = try machine.begin(receiver) otherwise (failure) 'failed'
+			return self.compileFailed(failure)
+		end 'failed'
+
+		return self.compiled(step, receiver: receiver)
+	end 'startMachine'
+
+	function compiled(step CompileStep, receiver CompileReceiver.handle) returns CompileStep
+		match step 'step'
+			awaiting then break
+			finished then return self.machineFinished(receiver)
+		end 'step'
+
+		self.suspendWhole()
+
+		return CompileStep.awaiting
+	end 'compiled'
+
+	function machineFinished(receiver CompileReceiver.handle) returns CompileStep
+		match self.spec.work 'work'
+			build then return self.writeImage(receiver)
+			check then return self.checkFinished()
+			warm then return self.warmFinished()
+			lexSweep then panic("JobRun.machineFinished: a lex sweep runs no compile machine")
+		end 'work'
+	end 'machineFinished'
+
+	function compileFailed(failure CompileError) returns CompileStep
+		match self.spec.work 'work'
+			build then return self.buildFailed(failure)
+			check then return self.checkRefused()
+			warm then return self.warmFailed(failure)
+			lexSweep then panic("JobRun.compileFailed: a lex sweep runs no compile machine")
+		end 'work'
+	end 'compileFailed'
+
+	function warmFinished() returns CompileStep
+		let (slot, goal) = self.warmSlotAndGoal()
+		let project = self.projects.held()
+		project.retiredWorkers.release()
+
+		self.outcomes.fill(DriverOutcome.warmed(self.bench.compiled(slot, image: self.warmImageOf(goal))))
+		self.place = JobPlace.finished
+
+		return CompileStep.finished
+	end 'warmFinished'
+
+	function warmImageOf(goal WarmGoal) returns WarmImage
+		if not warmKeepsImage(goal) 'noImageWanted'
+			return WarmImage.none()
+		end 'noImageWanted'
+
+		return WarmImage.of(self.machines.held().result.held())
+	end 'warmImageOf'
+
+	function warmFailed(failure CompileError) returns CompileStep
+		let (slot, _) = self.warmSlotAndGoal()
+		self.projects.held().retiredWorkers.release()
+
+		match failure.failure() 'failure'
+			reportedDiagnostics then break
+			abandoned or
+			driverFailed then return self.failed(failure)
+		end 'failure'
+
+		self.outcomes.fill(DriverOutcome.warmed(self.bench.refused(slot)))
+		self.place = JobPlace.finished
+
+		return CompileStep.finished
+	end 'warmFailed'
+
+	function buildFailed(failure CompileError) returns CompileStep
+		let tail = self.tails.held()
+		abandonStagedBuild(tail.staging, outputPath: tail.outputPath, rebuildsItself: tail.rebuildsItself)
+
+		return self.failed(failure)
+	end 'buildFailed'
+
+	function checkRefused() returns CompileStep
+		let project = self.projects.held()
+		project.retiredWorkers.release()
+
+		return self.checkedOutcome(false, irText: "")
+	end 'checkRefused'
+
+	function checkFinished() returns CompileStep
+		let project = self.projects.held()
+		project.retiredWorkers.release()
+
+		match self.spec.work 'work'
+			check(rendersTargetIr, _) then return self.checkedOutcome(true, irText: self.renderedIr(rendersTargetIr))
+			build or
+			warm or
+			lexSweep then panic("JobRun.checkFinished: only a check ends here")
+		end 'work'
+	end 'checkFinished'
+
+	function renderedIr(rendersTargetIr bool) returns String
+		if not rendersTargetIr 'noRender'
+			return ""
+		end 'noRender'
+
+		return try renderTargetIr(self.projects.held(), codeResult: self.machines.held().result.held()) otherwise panic("JobRun.renderedIr: a check names no runtime function to render, so the render has nothing to refuse")
+	end 'renderedIr'
+
+	function checkedOutcome(compiled bool, irText String) returns CompileStep
+		let standing = self.standingDiagnostics(compiled)
+		self.outcomes.fill(DriverOutcome.checked(compiled, diagnostics: standing, irText: irText))
+		self.place = JobPlace.finished
+
+		return CompileStep.finished
+	end 'checkedOutcome'
+
+	function standingDiagnostics(compiled bool) returns DiagnosticArray
+		let project = self.projects.held()
+
+		match self.spec.work 'work'
+			check(_, reading) then return self.readStanding(project, compiled: compiled, reading: reading)
+			build or
+			warm or
+			lexSweep then panic("JobRun.standingDiagnostics: only a check answers diagnostics")
+		end 'work'
+	end 'standingDiagnostics'
+
+	function readStanding(project Project, compiled bool, reading CheckedDiagnostics) returns DiagnosticArray
+		match reading 'reading'
+			inSourceOrder then return DiagnosticArray.create(0) if compiled else diagnosticsInSourceOrder(project)
+			asReported then return project.diagnostics.clone()
+			besideClaims then project.reportSecondaryFindingsBesideClaims()
+		end 'reading'
+
+		return project.diagnostics.clone()
+	end 'readStanding'
+
+	function writeImage(receiver CompileReceiver.handle) returns CompileStep
+		let written = try self.wroteImage() otherwise (failure) 'failed'
+			return self.buildFailed(failure)
+		end 'failed'
+
+		self.brackets.fill(written)
+		self.place = JobPlace.writing
+		self.suspendBracket()
+		self.suspendWhole()
+		flushCompilerLogThen(receiver.clone())
+
+		return CompileStep.awaiting
+	end 'writeImage'
+
+	function wroteImage() returns PhaseProbe throws CompileError
+		let project = self.projects.held()
+		let tail = self.tails.held()
+		let codeResult = self.machines.held().result.held()
+
+		if self.spec.emitIr 'emitIr'
+			let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
+			tail.irText = TargetIrText.rendered(try renderTargetIr(project, codeResult: codeResult))
+			recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
+		end 'emitIr'
+
+		let writeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeExe)
+		codeResult.imagePlacement = try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: tail.staging.image, tools: tail.writerTools)
+
+		if project.coverage 'stampTheCounterImage'
+			stampCoverageImage(project, codeResult: codeResult)
+			codeResult.imagePlacement = try writeExecutableOrRefuse(project, codeResult: codeResult, outputPath: tail.staging.image, tools: tail.writerTools)
+		end 'stampTheCounterImage'
+
+		tail.codeBytes = codeResult.emittedCodeBytes()
+		tail.drivesOtherProcesses = codeResult.stdModule.usesMachTaskPorts
+
+		return writeProbe
+	end 'wroteImage'
+
+	function afterWrite(receiver CompileReceiver.handle) returns CompileStep
+		let project = self.projects.held()
+		let tail = self.tails.held()
+		recordPhase(project, phase: CompilePhase.writeExe, probe: self.brackets.take())
+
+		try requireOutputWritten(project, staged: tail.staging.image, outputPath: tail.outputPath) otherwise (failure) 'unwritten'
+			return self.buildFailed(failure)
+		end 'unwritten'
+
+		if not self.spec.debugInfo 'noSidecar'
+			return self.publishImage(receiver)
+		end 'noSidecar'
+
 		let debugProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeDebugInfo)
-		sidecar = writeDebugInfoSidecar(project, codeResult: codeResult, outputPath: staged)
-		recordPhaseWithItsLog(project, phase: CompilePhase.writeDebugInfo, probe: debugProbe)
-	end 'writeDebugInfo'
+		tail.sidecar = writeDebugInfoSidecar(project, codeResult: self.machines.held().result.held(), outputPath: tail.staging.image)
 
-	return StagedBuild.create(irText, codeBytes: codeResult.emittedCodeBytes(), sidecar: sidecar, drivesOtherProcesses: codeResult.stdModule.usesMachTaskPorts)
-end 'buildStagedImage'
+		self.brackets.fill(debugProbe)
+		self.place = JobPlace.sidecar
+		self.suspendBracket()
+		self.suspendWhole()
+		flushCompilerLogThen(receiver.clone())
 
-// For a bracket whose code logs: the flush keeps the handling of its records inside it (see
-// `flushCompilerLog`).
-function recordPhaseWithItsLog(project Project, phase CompilePhase, probe PhaseProbe)
-	flushCompilerLog()
-	recordPhase(project, phase: phase, probe: probe)
-end 'recordPhaseWithItsLog'
+		return CompileStep.awaiting
+	end 'afterWrite'
+
+	function afterSidecar(receiver CompileReceiver.handle) returns CompileStep
+		recordPhase(self.projects.held(), phase: CompilePhase.writeDebugInfo, probe: self.brackets.take())
+
+		return self.publishImage(receiver)
+	end 'afterSidecar'
+
+	function publishImage(receiver CompileReceiver.handle) returns CompileStep
+		let project = self.projects.held()
+		let tail = self.tails.held()
+		let publishProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prepareOutput)
+
+		tail.sidecar = try publishStagedImage(project, staging: tail.staging, outputPath: tail.outputPath, rebuildsItself: tail.rebuildsItself, stagedSidecar: tail.sidecar) otherwise (failure) 'unpublished'
+			return self.failed(failure)
+		end 'unpublished'
+
+		self.brackets.fill(publishProbe)
+		self.place = JobPlace.publishing
+		self.suspendBracket()
+		self.suspendWhole()
+		flushCompilerLogThen(receiver.clone())
+
+		return CompileStep.awaiting
+	end 'publishImage'
+
+	function afterPublish(receiver CompileReceiver.handle) returns CompileStep
+		recordPhase(self.projects.held(), phase: CompilePhase.prepareOutput, probe: self.brackets.take())
+		self.place = JobPlace.totaling
+		self.suspendWhole()
+		flushCompilerLogThen(receiver.clone())
+
+		return CompileStep.awaiting
+	end 'afterPublish'
+
+	function afterTotals() returns CompileStep
+		let project = self.projects.held()
+		let tail = self.tails.held()
+		let whole = self.wholeProbes.held()
+		let total = whole.elapsed()
+		project.timings.total = PhaseCost.create(total.nanos, cpuTicks: total.cpuTicks)
+		project.memory.upkeep = project.session.treeLock.upkeepSince(whole.upkeepMark)
+		total.subtractMemory(project.memory.upkeep)
+		project.memory.total = total
+		project.retiredWorkers.release()
+
+		if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
+			let log = compilerLogger(CompilerLogGroup.compiler)
+			log.debug(compileTimingsReport(project.timings))
+			log.debug(compileMemoryReport(project.memory, timings: project.timings))
+		end 'debugging'
+
+		match self.spec.metrics 'metrics'
+			unstated then break
+			stated(path) then writeMetrics(project, metricsPath: path, codeBytes: tail.codeBytes)
+		end 'metrics'
+
+		compilerLogger(CompilerLogGroup.compiler).info("Wrote {tail.codeBytes} bytes of code to {tail.outputPath} (compiled in {formatSeconds((total.nanos / NanosPerMs) as DurationMs)})")
+
+		self.outcomes.fill(DriverOutcome.built(CompileProduct.create(tail.outputPath, irText: tail.irText, codeBytes: tail.codeBytes, totalNanos: total.nanos, totalCpuTicks: total.cpuTicks, sidecar: tail.sidecar, drivesOtherProcesses: tail.drivesOtherProcesses)))
+		self.place = JobPlace.finished
+
+		return CompileStep.finished
+	end 'afterTotals'
+
+	function failed(failure CompileError) returns CompileStep
+		closeOpenPhaseSpans(self.spans, unit: self.unit)
+		self.outcomes.fill(DriverOutcome.failed(failure))
+		self.place = JobPlace.finished
+
+		return CompileStep.finished
+	end 'failed'
+
+	function suspendWhole()
+		if self.wholeProbes.isFull() 'opened'
+			self.wholeProbes.held().suspend()
+		end 'opened'
+	end 'suspendWhole'
+
+	function resumeWhole()
+		if self.wholeProbes.isFull() 'opened'
+			self.wholeProbes.held().resume()
+		end 'opened'
+	end 'resumeWhole'
+
+	function suspendBracket()
+		if self.brackets.isFull() 'opened'
+			self.brackets.held().suspend()
+		end 'opened'
+	end 'suspendBracket'
+
+	function resumeBracket()
+		if self.brackets.isFull() 'opened'
+			self.brackets.held().resume()
+		end 'opened'
+	end 'resumeBracket'
+end 'JobRun'
 
 // `maxon.exe` -> `maxon<infix>.exe`; `maxon` -> `maxon<infix>`.
 //
@@ -893,49 +1289,18 @@ function refuseUnlessAbandoned(project Project, failure CompileError) throws Com
 	throw CompileError.compileError
 end 'refuseUnlessAbandoned'
 
-// What a compile that writes nothing produced. Either way `project.diagnostics` holds what it reported.
-module union CheckedCompile
-	compiled(codeResult CodeResult)
-	refused
-end 'CheckedCompile'
-
-// ⚠ **A REFUSED COMPILE IS AN ANSWER HERE, NOT A FAILURE TO PROPAGATE.** The callers are an editor's buffer
-// under edit and a tool asked to check a file, both of which want what was wrong; `compileToCodeResult`
-// reports and throws by design, and both of its paths leave `project.diagnostics` standing.
-module function checkWithoutWriting(project Project) returns CheckedCompile
-	return try checkRefusingOnlyAProgram(project) otherwise CheckedCompile.refused
-end 'checkWithoutWriting'
-
-// Only a refusal is an answer about the program. An abandoned compile or a driver failure says
-// nothing about it, and `verify-warm-rebuild` reports one as that error rather than as a program
-// that does not compile.
-module function checkRefusingOnlyAProgram(project Project) returns CheckedCompile throws CompileError
-	let codeResult = try compileToCodeResult(project) otherwise (failure) 'failed'
-		project.retiredWorkers.release()
-
-		match failure.failure() 'failure'
-			reportedDiagnostics then return CheckedCompile.refused
-			abandoned or
-			driverFailed then throw failure
-		end 'failure'
-	end 'failed'
-
-	project.retiredWorkers.release()
-	return CheckedCompile.compiled(codeResult)
-end 'checkRefusingOnlyAProgram'
-
 let ScriptlibCheckProgramName = "check-scriptlib.maxon"
 let StdlibCheckProgramName = "check-stdlib.maxon"
 let LibraryCheckProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
 // The program is a one-file root beside the directory, never inside it, so the packages load as the
 // scriptlib tier rather than as the program's own files.
-export function scriptlibPackagesCompile(scriptlibDir FilePath, session CompileSession) returns bool throws CompileError
+export function scriptlibPackagesCompile(driver CompileDriver.handle, scriptlibDir FilePath, session DriverSession) returns bool throws CompileError
 	let stdlibDir = try locateStdlibDir()
 	let resolvedDir = scriptlibDir.resolve(Directory.currentPath())
 	let besideScriptlib = try resolvedDir.parent() otherwise throw CompileError.directoryNotFound(scriptlibDir.path)
 
-	let check = try libraryCheckOf(besideScriptlib.join(ScriptlibCheckProgramName), target: detectHostTarget(), stdlibDir: stdlibDir, scriptlib: ScriptlibLoad.checking(resolvedDir), stdlibBodies: LibraryBodies.onDemand, session: session)
+	let check = try libraryCheckOf(driver, program: besideScriptlib.join(ScriptlibCheckProgramName), target: detectHostTarget(), stdlibDir: stdlibDir, scriptlib: ScriptlibLoad.checking(resolvedDir), stdlibBodies: LibraryBodies.onDemand, session: session)
 
 	return match check 'verdict'
 		compiles gives true
@@ -960,24 +1325,26 @@ export union LibraryCheck
 	end 'passes'
 end 'LibraryCheck'
 
-export function stdlibCheckOf(target Target, session CompileSession) returns LibraryCheck throws CompileError
+export function stdlibCheckOf(driver CompileDriver.handle, target Target, session DriverSession) returns LibraryCheck throws CompileError
 	let stdlibDir = try locateStdlibDir()
 	let besideStdlib = try stdlibDir.parent() otherwise throw CompileError.directoryNotFound(stdlibDir.path)
 
-	return try libraryCheckOf(besideStdlib.join(StdlibCheckProgramName), target: target, stdlibDir: stdlibDir, scriptlib: ScriptlibLoad.omitted, stdlibBodies: LibraryBodies.every, session: session)
+	return try libraryCheckOf(driver, program: besideStdlib.join(StdlibCheckProgramName), target: target, stdlibDir: stdlibDir, scriptlib: ScriptlibLoad.omitted, stdlibBodies: LibraryBodies.every, session: session)
 end 'stdlibCheckOf'
 
-function libraryCheckOf(program FilePath, target Target, stdlibDir FilePath, scriptlib ScriptlibLoad, stdlibBodies LibraryBodies, session CompileSession) returns LibraryCheck throws CompileError
-	let project = try createProject(program, target: target, stdlibDir: stdlibDir, runtimeDir: try runtimeDirBeside(stdlibDir), scriptlib: scriptlib.tierBeside(stdlibDir), debugStream: false, session: session, stdlibBodies: stdlibBodies)
-	fileChanged(project, path: program, content: LibraryCheckProgramSource)
-	try loadLibrarySources(project)
+function libraryCheckOf(driver CompileDriver.handle, program FilePath, target Target, stdlibDir FilePath, scriptlib ScriptlibLoad, stdlibBodies LibraryBodies, session DriverSession) returns LibraryCheck throws CompileError
+	let origin = ProjectOrigin.libraryProgram(program, stdlibDir: stdlibDir, scriptlib: scriptlib, bodies: stdlibBodies, text: LibraryCheckProgramSource)
 
-	match checkWithoutWriting(project) 'verdict'
-		compiled then return LibraryCheck.compiles
-		refused then break
+	match checkOnDriver(driver, origin: origin, inputPaths: MaxonSourcePathArray.create(0), target: target, rendersTargetIr: false, reading: CheckedDiagnostics.inSourceOrder, session: session) 'verdict'
+		failed(error) then throw error
+		checked(compiled, diagnostics, _) then return libraryVerdictOf(compiled, diagnostics: diagnostics)
 	end 'verdict'
+end 'libraryCheckOf'
 
-	let diagnostics = diagnosticsInSourceOrder(project)
+function libraryVerdictOf(compiled bool, diagnostics DiagnosticArray) returns LibraryCheck
+	if compiled 'compiles'
+		return LibraryCheck.compiles
+	end 'compiles'
 
 	if diagnostics.isEmpty() 'refusedWithoutADiagnostic'
 		return LibraryCheck.refused(diagnostics)
@@ -990,11 +1357,29 @@ function libraryCheckOf(program FilePath, target Target, stdlibDir FilePath, scr
 	end 'eachDiagnostic'
 
 	return LibraryCheck.targetLacksFacilities(diagnostics)
-end 'libraryCheckOf'
+end 'libraryVerdictOf'
+
+module union OpenBuffer
+	held(path FilePath, content String)
+	none
+end 'OpenBuffer'
+
+module function projectOverBuffer(root FilePath, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, buffer OpenBuffer, session CompileSession) returns Project throws CompileError
+	let project = try createProject(root, target: detectHostTarget(), stdlibDir: stdlibDir, runtimeDir: runtimeDir, scriptlib: scriptlib, debugStream: false, session: session)
+
+	match buffer 'buffer'
+		held(path, content) then fileChanged(project, path: path, content: content)
+		none then break
+	end 'buffer'
+
+	try loadLibrarySources(project)
+
+	return project
+end 'projectOverBuffer'
 
 // The Target IR text of a finished compile: what `--emit-ir` writes and `maxon/generateIR` answers. What it
 // shows and withholds is stated at the render in `compileMeasured`.
-module function renderTargetIr(project Project, codeResult CodeResult) returns String throws CompileError
+function renderTargetIr(project Project, codeResult CodeResult) returns String throws CompileError
 	if not project.rendersTargetIr 'nothingWasKeptToRender'
 		panic("renderTargetIr: this compile left `project.rendersTargetIr` false, so `releaseEncodedTargetModule` released the Target module's body after the encode and the backend kept no `codeChunks` — the render would be silently EMPTY. A caller that wants this text must set `project.rendersTargetIr` before `compileToCodeResult` runs.")
 	end 'nothingWasKeptToRender'
@@ -1086,13 +1471,13 @@ export enum LibraryLoad
 	omitted
 end 'LibraryLoad'
 
-export function claimsOfSources(inputPaths MaxonSourcePathArray, target Target, session CompileSession, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), defines DefineArray = DefineArray.create(0)) returns SourceClaims throws CompileError
-	let project = try userFilesProjectOf(inputPaths, target: target, session: session, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, compilerWrittenSources: compilerWrittenSources, defines: defines)
+export function claimsOfSources(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText = StatedText.unstated, runtimeDirOverride StatedText = StatedText.unstated, sourceSelection SourceSelection = SourceSelection.productionOnly, stagedSourceOrigins StagedSourceOriginArray = StagedSourceOriginArray.create(0), compilerWrittenSources CompilerWrittenSourceArray = CompilerWrittenSourceArray.create(0), defines DefineArray = DefineArray.create(0)) returns SourceClaims throws CompileError
+	let project = try userFilesProjectOf(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, compilerWrittenSources: compilerWrittenSources, defines: defines)
 	return try claimsOfUserFiles(project)
 end 'claimsOfSources'
 
-function userFilesProjectOf(inputPaths MaxonSourcePathArray, target Target, session CompileSession, stdlibDirOverride StatedText, runtimeDirOverride StatedText, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, compilerWrittenSources CompilerWrittenSourceArray, defines DefineArray) returns Project throws CompileError
-	let probe = CompileSession.create(DiagnosticSink.discarding(), fileMemos: session.fileMemos, treeLock: LockHold.none())
+function userFilesProjectOf(inputPaths MaxonSourcePathArray, target Target, stdlibDirOverride StatedText, runtimeDirOverride StatedText, sourceSelection SourceSelection, stagedSourceOrigins StagedSourceOriginArray, compilerWrittenSources CompilerWrittenSourceArray, defines DefineArray) returns Project throws CompileError
+	let probe = CompileSession.discarding()
 	let project = try loadProject(inputPaths, target: target, stdlibDirOverride: stdlibDirOverride, runtimeDirOverride: runtimeDirOverride, scriptlib: ScriptlibLoad.omitted, compilerWrittenSources: compilerWrittenSources, sourceSelection: sourceSelection, stagedSourceOrigins: stagedSourceOrigins, session: probe, library: LibraryLoad.omitted, defines: defines)
 	return project
 end 'userFilesProjectOf'
@@ -1197,7 +1582,15 @@ function maxonTierGateFor(project Project) returns ErrorGate
 	return ErrorGate.afterEachPass if project.poison.typeUniverseIsUnreadable() else ErrorGate.afterTheLastPass
 end 'maxonTierGateFor'
 
-function lowerTheProgram(project Project, passes PassKindArray) returns LoweredProgram throws CompileError
+function requireReplyStoppedFlagMatchesTheRuntime(declared EnumLayout)
+	let stopped = try declared.indexOfCase(ReplyStoppedCaseName) otherwise panic("requireReplyStoppedFlagMatchesTheRuntime: `ReplyStopped` declares no `{String.from(ReplyStoppedCaseName)}` case — the dropped-Reply destructor completes the cell with that case's flag")
+
+	if declared.tagOfIndex(stopped) + ErrorFlagOrdinalBias != GtReplyStoppedFlag 'theCaseMoved'
+		panic("requireReplyStoppedFlagMatchesTheRuntime: `ReplyStopped.{String.from(ReplyStoppedCaseName)}` encodes error flag {declared.tagOfIndex(stopped) + ErrorFlagOrdinalBias}, while the dropped-Reply destructor completes with {GtReplyStoppedFlag} — keep the case first in `stdlib/Reply.maxon`")
+	end 'theCaseMoved'
+end 'requireReplyStoppedFlagMatchesTheRuntime'
+
+function resetForLowering(project Project)
 	// ⭐ **THE DIAGNOSTICS OF *THIS* COMPILE, NOT OF EVERY COMPILE THIS PROJECT HAS EVER RUN.** A warm
 	// project compiles again on every editor re-check, and an uncleared sink would keep reporting an error
 	// the author has already fixed. Safe to clear because everything that should be reported is
@@ -1212,11 +1605,9 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// whose results outlive a compile, writes either.
 	project.globalData = GlobalDataTable.create()
 	project.debugSpanTable = DebugSpanTable.create()
+end 'resetForLowering'
 
-	// ⚠ `var`, not `let`: `installManagedGlobalInit` below APPENDS to this module, and
-	// `resolveTypes` rewrites its signatures in place.
-	let module = try queryAllModule(project, directories: NamespaceDirectoryCheck.refuseUnnameable)
-
+function prepareLowering(project Project, module MaxonModule) returns LoweredProgram throws CompileError
 	// ⭐⭐ **AND BECAUSE THIS COMPILE IS ABOUT TO MUTATE THAT MODULE, THE MEMO MAY NOT SERVE IT AGAIN.**
 	// The bytes have not moved, so the content hash still matches and the memo would answer VALID with a
 	// module the pipeline had edited. Dropped HERE, immediately after the read and before the first
@@ -1227,7 +1618,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	reportDefineProblems(project)
 
 	// ⭐ **FUNCTION-VALUE MERGE SIGNATURE AGREEMENT — HERE, before the pipeline.** Every
-	// function-value ternary/match recorded its arms' names at parse; now that `queryAllModule` has merged
+	// function-value ternary/match recorded its arms' names at parse; now that `FrontEndRun` has merged
 	// every file's `funcSignatures`, the arms are compared whole-program — catching a forward-referenced or
 	// cross-file mismatch a same-file check could not. It runs BEFORE the pipeline's `resolveTypes` so the
 	// diagnostic can print the source alias names (`Integer`) that resolution erases to `int`. Any diagnostic
@@ -1251,7 +1642,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// the derivation is shared by all of them rather than repeated per pass.
 	//
 	// ⭐ **BOUND HERE, ABOVE `checkConformance`, AND IT COSTS NOTHING TO MOVE IT UP.** The query is memoized
-	// and `queryAllModule` above has already forced it — a `Parser` is CONSTRUCTED with the index it sweeps
+	// and `FrontEndRun` above has already forced it — a `Parser` is CONSTRUCTED with the index it sweeps
 	// into, so no file can have been parsed without it. What needs it here is the conformance check: a method
 	// typed by a generic INSTANCE has no identity outside this index (`canonicalInstanceName`), and rendering
 	// one without it spelled `Array with Integer` and `Array with String` as the same word.
@@ -1279,9 +1670,9 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// up.** `specs/ownership.md` forbids a type that transitively contains itself through struct fields,
 	// union associated values or container element types, because a drop cascade over a cyclic type graph
 	// has no finite order. It reads the interned instances (`queryProgramSignatures`) and the merged
-	// declarations (`queryAllModule`), which are exactly the two halves its graph joins; any E4014 it records
+	// declarations (`FrontEndRun`), which are exactly the two halves its graph joins; any E4014 it records
 	// is caught by the pipeline's error gate, exactly as an E3017 is.
-	checkTypeReferenceCycles(project, signatures: signatures)
+	checkTypeReferenceCycles(project, module: module, signatures: signatures)
 
 	// ⭐ **WHERE-CONSTRAINT VALIDATION (E3017) — HERE, after the instances are interned.**
 	// Every `Box with Foo where T is Digest` instantiation is checked: `Foo` must declare `implements Digest`,
@@ -1292,7 +1683,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 
 	// ⭐ **THE COMPILED TYPE-NAME NAMESPACE (E3006) — HERE, for `checkWhereConstraints`'s two reasons.**
 	// Every instantiation is interned by now (`queryProgramSignatures`) and every declaration is merged
-	// (`queryAllModule`), which are exactly the two halves it compares: a generic instantiation compiles
+	// (`FrontEndRun`), which are exactly the two halves it compares: a generic instantiation compiles
 	// to a name (`Box with String` ⇒ `Box_String`) that a declared `type Box_String` also claims, and
 	// every per-type symbol the backend emits is derived from it. Any E3006 it records is caught by the
 	// pipeline's error gate, exactly as an E3017 is.
@@ -1318,7 +1709,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// declaration on every compile (`Project.BuiltinErrorOrdinalCheck` — drift silently reroutes every
 	// handler arm). Three of them read a PARSED declaration out of `stdlib/Builtins.maxon` and so need the
 	// `Project`, and the `install*Runtime` heads run AFTER the pipeline where a diagnostic would have no gate
-	// left to fail against. Here they have both: `queryAllModule` has merged every declaration, and the
+	// left to fail against. Here they have both: `FrontEndRun` has merged every declaration, and the
 	// pipeline's error gate below turns an E4016 into a failed build with no binary written.
 	//
 	// ⚠ A family whose enum is declared in a file that failed to parse is absent from the merge, and
@@ -1363,7 +1754,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// ⚠ **THE ONE QUERY REACHED FROM INSIDE THIS BRACKET IS A MEMO HIT, AND IF IT EVER IS NOT, THIS
 	// COMPILE IS ALREADY FAILING.** `deriveLibraryFacts` below reads each stdlib file's parse artifact
 	// back through `queryParseOps`, which opens the `parse` phase — but only on a MISS, and every
-	// stdlib file was parsed and cached by `queryAllModule` above, a refused parse included. The
+	// stdlib file was parsed and cached by `FrontEndRun` above, a refused parse included. The
 	// single way to reach a miss here is a stdlib file that could not be read, and that leaves the
 	// type universe unreadable, so `libraryReachOf` reads no artifact at all. So the nesting the
 	// disjointness contract forbids cannot be observed; it is stated because the next reader deserves
@@ -1385,7 +1776,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// ⚠ **ITS OWN GATE, BECAUSE IT IS THE FIRST SITE THAT CAN REFUSE AND THE PIPELINE'S IS STILL
 	// BELOW.** `deriveLibraryFacts` reads every stdlib file's parse artifact back and builds a
 	// `FunctionNameIndex` over this module, either of which can throw. Without a gate here that throw would
-	// leave `compileToCodeResult` having passed both gates below, and the diagnostic would never be printed:
+	// leave `prepareLowering` having passed both gates below, and the diagnostic would never be printed:
 	// exit 1 with nothing said.
 	//
 	// ⚠⚠ **IT SITS ABOVE THE TWO STATEMENTS BELOW, AND THE THREE CONSTRAINTS ARE A CYCLE CUT HERE.**
@@ -1468,7 +1859,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'duplicateFunctionName'
 
-	try pipeline.run(buildMaxonTierPasses(), gate: maxonTierGateFor(project)) otherwise (failure) 'maxonTierFailed'
+	try pipeline.runFrontEnd(buildMaxonTierPasses(), gate: maxonTierGateFor(project)) otherwise (failure) 'maxonTierFailed'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'maxonTierFailed'
 
@@ -1654,12 +2045,18 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// has answered and no Std pass has yet run.
 	pipeline.usesGreenThreads = usage.usesGt
 
-	try pipeline.run(passes, gate: ErrorGate.afterEachPass) otherwise (failure) 'loweringFailed'
+	return LoweredProgram.create(pipeline, usage: usage, signatures: signatures, asyncSpawnTargets: asyncSpawnTargets, serviceReplyTargets: serviceReplyTargets, userGlobals: userGlobals, parksOnIo: parksOnIo)
+end 'prepareLowering'
+
+function lowerTheMergedProgramToStd(project Project, module MaxonModule) returns LoweredProgram throws CompileError
+	let lowered = try prepareLowering(project, module: module)
+
+	try lowered.pipeline.runFrontEnd(buildFrontEndLoweringPasses(), gate: ErrorGate.afterEachPass) otherwise (failure) 'loweringFailed'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'loweringFailed'
 
-	return LoweredProgram.create(pipeline, usage: usage, signatures: signatures, asyncSpawnTargets: asyncSpawnTargets, serviceReplyTargets: serviceReplyTargets, userGlobals: userGlobals, parksOnIo: parksOnIo)
-end 'lowerTheProgram'
+	return lowered
+end 'lowerTheMergedProgramToStd'
 
 type LoweredProgram
 	module var pipeline as PassPipeline
@@ -1675,24 +2072,234 @@ type LoweredProgram
 	end 'create'
 end 'LoweredProgram'
 
-module function checkFrontEndWithoutWriting(project Project) throws CompileError
-	try checkTheFrontEnd(project) otherwise (failure) 'failed'
-		project.retiredWorkers.release()
-		throw failure
-	end 'failed'
+export interface CompileReceiver
+	function frontEndAnswered(mutable self, generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle)
+	function stdPassAnswered(mutable self, job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle)
+	function backendAnswered(mutable self, job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle)
+	function logFlushed(mutable self, receiver CompileReceiver.handle)
+end 'CompileReceiver'
 
-	project.retiredWorkers.release()
-end 'checkFrontEndWithoutWriting'
+module let AnswerMailboxCapacity = InstrumentationMailboxCapacity
 
-function checkTheFrontEnd(project Project) throws CompileError
-	_ = try lowerTheProgram(project, passes: buildFrontEndLoweringPasses()) otherwise (failure) 'failed'
-		closeOpenPhaseSpans(project.openPhaseSpans, unit: project.traceUnit)
-		try rethrowUnlessRefused(failure)
-		return
-	end 'failed'
+module function panicOnRefusedAnswer(site String)
+	panic("{site}: the compile receiver's mailbox refused a worker's answer. A receiver is spawned with room for every answer a pool can have in flight, so a full mailbox is a receiver that broke that bound, and dropping the answer would leave its drain waiting forever.")
+end 'panicOnRefusedAnswer'
 
-	try reportSecondaryFindingsBeforeBackend(project) otherwise return
-end 'checkTheFrontEnd'
+module union CompileGoal
+	frontEnd(directories NamespaceDirectoryCheck)
+	checked
+	codeResult
+
+	function isChecked() returns bool
+		return match self 'goal'
+			checked gives true
+			frontEnd or
+			codeResult gives false
+		end 'goal'
+	end 'isChecked'
+end 'CompileGoal'
+
+module union CompileStep
+	awaiting
+	finished
+end 'CompileStep'
+
+enum CompilePlace
+	frontEnd
+	pipeline
+	backend
+	finished
+end 'CompilePlace'
+
+typealias LoweredProgramSlot = Slot with LoweredProgram
+typealias BackendBuildSlot = Slot with BackendBuild
+module typealias CodeResultSlot = Slot with CodeResult
+
+module type CompileRun
+	let project as Project
+	let goal as CompileGoal
+	let frontEnd as FrontEndRun
+	let passes as PassKindArray
+	var place as CompilePlace
+	let lowered as LoweredProgramSlot
+	let merged as MaxonModuleSlot
+	let backend as BackendBuildSlot
+	module let result as CodeResultSlot
+
+	module static function create(project Project, goal CompileGoal, generationBase DrainGeneration) returns CompileRun
+		var directories = NamespaceDirectoryCheck.refuseUnnameable
+
+		match goal 'goal'
+			frontEnd(requested) then directories = requested
+			checked or
+			codeResult then resetForLowering(project)
+		end 'goal'
+
+		let passes = PassKindArray.create(0) if goal.isChecked() else buildLoweringPasses()
+
+		return Self{project: project, goal: goal, frontEnd: FrontEndRun.create(project, directories: directories, generationBase: generationBase), passes: passes, place: CompilePlace.frontEnd, lowered: LoweredProgramSlot.create("CompileRun.lowered"), merged: MaxonModuleSlot.create("CompileRun.merged"), backend: BackendBuildSlot.create("CompileRun.backend"), result: CodeResultSlot.create("CompileRun.result")}
+	end 'create'
+
+	module function begin(receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		let step = try self.frontEndBegun(receiver) otherwise (failure) 'failed'
+			return try self.ended(failure)
+		end 'failed'
+
+		return step
+	end 'begin'
+
+	module function frontEndAnswered(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		let step = try self.frontEndLanded(generation, job: job, answered: answered, receiver: receiver) otherwise (failure) 'failed'
+			return try self.ended(failure)
+		end 'failed'
+
+		return step
+	end 'frontEndAnswered'
+
+	module function stdPassAnswered(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		let step = try self.stdPassLanded(job, answered: answered, receiver: receiver) otherwise (failure) 'failed'
+			return try self.ended(failure)
+		end 'failed'
+
+		return step
+	end 'stdPassAnswered'
+
+	module function backendAnswered(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		let step = try self.backendLanded(job, answered: answered, refused: refused, receiver: receiver) otherwise (failure) 'failed'
+			return try self.ended(failure)
+		end 'failed'
+
+		return step
+	end 'backendAnswered'
+
+	module function abandon()
+		if self.place == CompilePlace.frontEnd 'theFrontEndIsOpen'
+			self.frontEnd.close()
+		end 'theFrontEndIsOpen'
+
+		self.project.retiredWorkers.release()
+	end 'abandon'
+
+	function frontEndBegun(receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		return try self.frontEndStepped(try self.frontEnd.advance(receiver), receiver: receiver)
+	end 'frontEndBegun'
+
+	function frontEndLanded(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		return try self.frontEndStepped(try self.frontEnd.answered(generation, job: job, answer: answered, receiver: receiver), receiver: receiver)
+	end 'frontEndLanded'
+
+	function stdPassLanded(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		let step = try self.lowered.held().pipeline.fanOutAnswered(self.passes, job: job, answered: answered, gate: ErrorGate.afterEachPass, receiver: receiver) otherwise (failure) 'loweringFailed'
+			try refuseUnlessAbandoned(self.project, failure: failure)
+		end 'loweringFailed'
+
+		return try self.pipelineStepped(step, receiver: receiver)
+	end 'stdPassLanded'
+
+	function backendLanded(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		let step = try self.backend.held().answered(job, answered: answered, refused: refused, receiver: receiver) otherwise 'backendFailed'
+			try refuseCompile(self.project)
+		end 'backendFailed'
+
+		return self.backendStepped(step)
+	end 'backendLanded'
+
+	function frontEndStepped(step FrontEndStep, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		return match step 'step'
+			next panic("CompileRun.frontEndStepped: `FrontEndRun.advance` runs every stage that needs no join before it answers")
+			awaiting gives CompileStep.awaiting
+			finished(folded) gives try self.frontEndFinished(folded, receiver: receiver)
+		end 'step'
+	end 'frontEndStepped'
+
+	function frontEndFinished(folded MaxonModule, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		self.frontEnd.close()
+		self.place = CompilePlace.pipeline
+
+		return match self.goal 'goal'
+			frontEnd gives self.finishedWithModule(folded)
+			checked gives try self.checkedAfterLowering(folded)
+			codeResult gives try self.lowerMerged(folded, receiver: receiver)
+		end 'goal'
+	end 'frontEndFinished'
+
+	function finishedWithModule(folded MaxonModule) returns CompileStep
+		self.merged.fill(folded)
+		self.place = CompilePlace.finished
+
+		return CompileStep.finished
+	end 'finishedWithModule'
+
+	function checkedAfterLowering(folded MaxonModule) returns CompileStep throws CompileError
+		_ = try lowerTheMergedProgramToStd(self.project, module: folded)
+		try reportSecondaryFindingsBeforeBackend(self.project) otherwise ignore
+		self.project.retiredWorkers.release()
+		self.place = CompilePlace.finished
+
+		return CompileStep.finished
+	end 'checkedAfterLowering'
+
+	function lowerMerged(folded MaxonModule, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		self.lowered.fill(try prepareLowering(self.project, module: folded))
+
+		let step = try self.lowered.held().pipeline.runUntilJoin(self.passes, from: 0, gate: ErrorGate.afterEachPass, receiver: receiver) otherwise (failure) 'loweringFailed'
+			try refuseUnlessAbandoned(self.project, failure: failure)
+		end 'loweringFailed'
+
+		return try self.pipelineStepped(step, receiver: receiver)
+	end 'lowerMerged'
+
+	function pipelineStepped(step PipelineStep, receiver CompileReceiver.handle) returns CompileStep throws CompileError
+		match step 'step'
+			awaiting then return CompileStep.awaiting
+			finished then break
+		end 'step'
+
+		self.backend.fill(try afterPipeline(self.project, lowered: self.lowered.held()))
+		self.place = CompilePlace.backend
+
+		let begun = try self.backend.held().begin(receiver) otherwise 'backendFailed'
+			try refuseCompile(self.project)
+		end 'backendFailed'
+
+		return self.backendStepped(begun)
+	end 'pipelineStepped'
+
+	function backendStepped(step BackendStep) returns CompileStep
+		match step 'step'
+			awaiting then return CompileStep.awaiting
+			finished(codeResult) then self.result.fill(codeResult)
+		end 'step'
+
+		self.place = CompilePlace.finished
+
+		return CompileStep.finished
+	end 'backendStepped'
+
+	function ended(failure CompileError) returns CompileStep throws CompileError
+		if self.place == CompilePlace.frontEnd 'theFrontEndIsOpen'
+			self.frontEnd.close()
+		end 'theFrontEndIsOpen'
+
+		self.place = CompilePlace.finished
+		closeOpenPhaseSpans(self.project.openPhaseSpans, unit: self.project.traceUnit)
+
+		match self.goal 'goal'
+			frontEnd or
+			codeResult then throw failure
+			checked then break
+		end 'goal'
+
+		try rethrowUnlessRefused(failure) otherwise (fatal) 'notARefusal'
+			self.project.retiredWorkers.release()
+			throw fatal
+		end 'notARefusal'
+
+		self.project.retiredWorkers.release()
+
+		return CompileStep.finished
+	end 'ended'
+end 'CompileRun'
 
 function rethrowUnlessRefused(failure CompileError) throws CompileError
 	match failure.failure() 'failure'
@@ -1702,23 +2309,7 @@ function rethrowUnlessRefused(failure CompileError) throws CompileError
 	end 'failure'
 end 'rethrowUnlessRefused'
 
-// Drive the query spine + mid/lowering pipeline + backend for an already-loaded
-// `project`, returning the emitted `CodeResult` (NOT yet written to disk). This is
-// the single compile path both `compile` (which then writes the executable) and
-// `verifyWarmRebuild` (which byte-compares two independently-produced CodeResults)
-// route through — no duplicated pipeline-driving code.
-//
-// It closes a failed compile's open spans itself, as `checkFrontEndWithoutWriting` does: the
-// in-process callers reach it without `compileToProduct`'s drain and may compile the same project again.
-export function compileToCodeResult(project Project) returns CodeResult throws CompileError
-	return try codeResultOf(project) otherwise (failure) 'failed'
-		closeOpenPhaseSpans(project.openPhaseSpans, unit: project.traceUnit)
-		throw failure
-	end 'failed'
-end 'compileToCodeResult'
-
-function codeResultOf(project Project) returns CodeResult throws CompileError
-	let lowered = try lowerTheProgram(project, passes: buildLoweringPasses())
+function afterPipeline(project Project, lowered LoweredProgram) returns BackendBuild throws CompileError
 	let pipeline = lowered.pipeline
 	let usage = lowered.usage
 	let signatures = lowered.signatures
@@ -1755,6 +2346,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// check to hold.
 	let subprocessStreamStateEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: SubprocessStreamStateTypeName, reader: "the streaming subprocess runtime's per-stream state word")
 	let stdioStreamEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: StdioStreamTypeName, reader: "the streaming subprocess runtime's stream selector")
+	requireReplyStoppedFlagMatchesTheRuntime(requireCorpusDeclaredEnum(project.enumTypes, typeName: ReplyStoppedTypeName, reader: "the deferred reply's stopped flag"))
 
 	// ⭐ **THE `.rdata` SLOTS ARE FILLED NOW, AND WHAT THEY NAME MUST BE INSTALLED.**
 	// Lowering is what decides which witness tables and layout descriptors a program gets, so the
@@ -1934,6 +2526,10 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	if usage.usesGt 'installGt'
 		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, target: project.target, streamState: subprocessStreamStateEnum, stdioStream: stdioStreamEnum, releasesRegistry: usage.releasesRegistry, releasesGlobals: usage.usesManagedGlobals, descendantArming: descendantArmingOf(usage), requestStagingBytes: serviceRequestStagingBytes(signatures))
 	end 'installGt'
+
+	if not targetParksOnIo(project.target) 'noMachineToPin'
+		buildInertHandleDestruct(pipeline.stdModule, name: GtPinDestructName)
+	end 'noMachineToPin'
 
 	installInterfaceHandleConversions(pipeline.stdModule, globalData: project.globalData, usage: usage, signatures: signatures)
 	installServiceRegistryRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage)
@@ -2222,12 +2818,12 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// them apart, and at its root set, for the half of that rule with no pair to count. Passing
 	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it
 	// maps a Target ValueId back to its source span through.
-	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage, dataSection: dataSection, userGlobalCount: userGlobals.count()) otherwise 'backendFailed'
+	let build = try prepareBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage, dataSection: dataSection, userGlobalCount: userGlobals.count()) otherwise 'backendFailed'
 		try refuseCompile(project)
 	end 'backendFailed'
 
-	return codeResult
-end 'codeResultOf'
+	return build
+end 'afterPipeline'
 
 // The before-backend flush of the secondary roster (`findingStandingOf` owns which codes it holds).
 //

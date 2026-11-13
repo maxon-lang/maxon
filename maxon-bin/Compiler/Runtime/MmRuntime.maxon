@@ -760,7 +760,7 @@ end 'ValueMinter'
 // other would install an unreachable copy of the unused one in the program that references only the other.
 export function installMmRuntime(module StdModule, usage RuntimeUsage, target Target)
 	// The slab itself is `SlabRuntime.maxon`'s, installed beside the page layer it sits on
-	// (`Compiler.compileToCodeResult`); this file builds the box layer over it.
+	// (`afterPipeline`); this file builds the box layer over it.
 	let model = machineModel(target)
 
 	buildMmAlloc(module, model: model)
@@ -3107,7 +3107,7 @@ end 'emitCurrentThreadOrZero'
 // managed-payload union whose destructor is REFERENCED (`needed`, collected from the module's
 // `__destruct_*` calls — install only what is used, exactly like the rest of the runtime). It is
 // APPENDED already-lowered after the pipeline (like `installMmRuntime`); what runs over that appended band
-// is stated once, in `Compiler.compileToCodeResult`'s install block.
+// is stated once, in `afterPipeline`'s install block.
 //
 // ⭐ **THERE IS NO HEADER DESTRUCTOR — dispatch is STATIC** — so THIS
 // function statically emits each managed field's OWN drop (`__str_decref` for a String, `__mm_decref`
@@ -3893,7 +3893,7 @@ end 'synthesizeUnionDestructor'
 // ⭐⭐ **THE PER-STRUCT DESTRUCTOR CASCADE.** The struct twin of `installUnionDestructors`:
 // synthesize `__destruct_<Struct>(box)` for every struct that owns a managed field and whose destructor is
 // REFERENCED. Appended already-lowered after the pipeline, like the union one; what runs over that appended
-// band is stated once, in `Compiler.compileToCodeResult`'s install block.
+// band is stated once, in `afterPipeline`'s install block.
 // A struct has NO tag — every field is always present — so the cascade drops each managed field
 // unconditionally (behind a null-guard) rather than under a tag switch.
 //

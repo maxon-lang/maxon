@@ -2698,8 +2698,8 @@ a request beside a silent client: 200 [answered]
 <!-- procs: 4 -->
 `serve` gives each accepted connection a green thread of its own, so a handler that computes for a long stretch without
 waiting holds only its own connection. The `/spin` handler tells a `Gate` service it has begun and then loops, reading a
-`ReleaseCell`, until `main` publishes it; the prober for `/quick` polls the gate and sends its request only once the
-handler is inside that loop, so the case does not depend on how long anything takes to start. `main` publishes the
+`ReleaseCell`, until `main` publishes it; the `main` polls the gate and starts the `/quick` request only once the
+handler is inside that loop, each request a coroutine of `main`, so the case does not depend on how long anything takes to start. `main` publishes the
 release only after the `/quick` answer is in hand, so the answer is one given while the loop was still running: a
 server that served connections one at a time could not give it, and would never end.
 ```maxon
@@ -2753,31 +2753,11 @@ type SpinHandler implements HttpHandler
 	end 'faulted'
 end 'SpinHandler'
 
-type Prober
-	let gate as Gate.handle
+function answered(port NetworkPort, path String) returns bool
+	let response = try HttpClient.get("http://127.0.0.1:{port}{path}") otherwise return false
 
-	static function create(gate Gate.handle) returns Prober
-		return Prober{gate: gate}
-	end 'create'
-
-	export function fetch(port NetworkPort, path String) returns bool
-		return self.answered(port, path: path)
-	end 'fetch'
-
-	export function fetchOnceEntered(port NetworkPort, path String) returns bool
-		while not (try await gate.hasEntered() otherwise return false) 'waiting'
-			sleep(GatePollMs)
-		end 'waiting'
-
-		return self.answered(port, path: path)
-	end 'fetchOnceEntered'
-
-	function answered(port NetworkPort, path String) returns bool
-		let response = try HttpClient.get("http://127.0.0.1:{port}{path}") otherwise return false
-
-		return response.statusCode().number() == StatusCode.ok.number()
-	end 'answered'
-end 'Prober'
+	return response.statusCode().number() == StatusCode.ok.number()
+end 'answered'
 
 function serving(server HttpServer, gate Gate.handle, released ReleaseCell) returns HttpServeEnd
 	return server.serve(SpinHandler.create(gate.clone(), released: released.clone()))
@@ -2794,17 +2774,18 @@ function exchangeOver(server HttpServer) returns ExitCode
 	let gate = spawn Gate.create()
 	let released = ReleaseCell.create(false)
 	let peer = async serving(server, gate: gate.clone(), released: released.clone())
-	let first = spawn Prober.create(gate.clone())
-	let second = spawn Prober.create(gate.clone())
-	let slow = try first.fetch(port, path: "/spin") otherwise 'cancelled88'
-		peer.cancel()
-		return 2
-	end 'cancelled88'
-	let quick = try second.fetchOnceEntered(port, path: "/quick") otherwise 'cancelled89'
-		peer.cancel()
-		slow.cancel()
-		return 3
-	end 'cancelled89'
+	let slow = async answered(port, path: "/spin")
+	var inside = false
+
+	while not inside 'untilInside'
+		inside = try await gate.hasEntered() otherwise panic("the gate is open")
+
+		if not inside 'nap'
+			sleep(GatePollMs)
+		end 'nap'
+	end 'untilInside'
+
+	let quick = async answered(port, path: "/quick")
 	let quickAnswered = await quick
 
 	released.publish(true)
@@ -2941,5 +2922,5 @@ end 'main'
 ```
 ```maxoncstderr
 error E3210: <fragment>:11:11: 'CountingHandler.handle' writes its receiver, but 'HttpHandler.handle' does not declare `mutable self`
-error E3207: stdlib/HttpServer.maxon:460:52: 'dispatchExchange' writes 'handler' (it calls 'handle', which writes its receiver); 'handler' is immutable
+error E3207: stdlib/HttpServer.maxon:596:56: 'dispatch' writes 'handler' (it calls 'dispatchExchange', which calls 'handle', which writes its receiver); 'handler' is immutable
 ```

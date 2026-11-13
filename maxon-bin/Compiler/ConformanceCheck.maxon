@@ -4,7 +4,7 @@
 // prints SOURCE type spellings — `is missing 1 method(s):\n  - increment() returns void`,
 // `process(value Float) returns Integer (expected process(value Integer) returns Integer)` — and
 // `resolveTypes` erases `Integer` to `int` and `Float` to `float`. So the check runs alongside
-// `checkValueMergeSignatures` (`compileToCodeResult`, before the pipeline), reading the still-unresolved
+// `checkValueMergeSignatures` (`prepareLowering`, before the pipeline), reading the still-unresolved
 // signatures; any diagnostic it records is caught by the pipeline's own error gate.
 //
 // ⭐ **THE MESSAGE AND THE COMPARISON READ ONE STRING — THE SOURCE SPELLING.** An interface method carries
@@ -49,7 +49,7 @@ export function checkConformance(project Project, module MaxonModule, signatures
 	// sufficient: the only cause available at this point is two PARSED declarations, which is E3006 at merge
 	// and which the refusal four lines above has already turned into a `return`; and every synthesizer that
 	// appends to a Maxon module runs LATER (`installManagedGlobalInit` is below this call in
-	// `compileToCodeResult`), so there is no synthesized side for a declaration to collide with yet. It builds
+	// `prepareLowering`), so there is no synthesized side for a declaration to collide with yet. It builds
 	// its index here anyway: a fourth spelling of the loop costs more than the one integer compare does, and
 	// if either bar ever moves this site says so instead of silently keeping one of two functions.
 	let functionsByName = try FunctionNameIndex.create(module.functions, project: project) otherwise 'duplicateFunctionName'
@@ -842,10 +842,28 @@ module function instanceNamesATypeFromAFailedFile(project Project, signatures Pr
 	return false
 end 'instanceNamesATypeFromAFailedFile'
 
+function checkInstantiationHoldsNoLinearArgument(project Project, signatures ProgramSignatures, site GenericInstantiationSite)
+	for position in 0 upto signatures.genericInstanceArgCount(site.gid) 'eachArgument'
+		if not signatures.instanceArgIsLinear(site.gid, position: position) 'notLinear'
+			continue
+		end 'notLinear'
+
+		let argument = signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(site.gid, position: position))
+		reportPositioned(project, code: ErrorCode.semanticLinearRefused, message: linearTypeArgumentMessage(argument, holder: String.from(signatures.genericInstanceBaseName(site.gid))), line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+	end 'eachArgument'
+end 'checkInstantiationHoldsNoLinearArgument'
+
+module let LinearValueResidence = "lives only in locals, parameters and message arguments"
+
+module function linearTypeArgumentMessage(argument String, holder String) returns String
+	return "'{argument}' is a linear value and cannot be a type argument of '{holder}': a linear value {LinearValueResidence}, so no container, promise, generic record or generic function holds one"
+end 'linearTypeArgumentMessage'
+
 // Validate one instantiation site's every `where` constraint. A base with no constraints (the whole
 // non-generic-witness corpus) iterates zero times.
 function checkOneInstantiation(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite)
 	let baseName = signatures.genericInstanceBaseName(site.gid)
+	checkInstantiationHoldsNoLinearArgument(project, signatures: signatures, site: site)
 
 	if instanceNamesATypeFromAFailedFile(project, signatures: signatures, gid: site.gid) 'aTypeOfAFileThatFailedToParse'
 		return

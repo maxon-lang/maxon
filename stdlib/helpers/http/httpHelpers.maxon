@@ -175,25 +175,14 @@ public function httpStatusAllowsContent(code StatusCode) returns bool
 	return number > LastInterimStatus and number != NoContentStatus and number != NotModifiedStatus
 end 'httpStatusAllowsContent'
 
-public function httpBuildResponseHead(response HttpResponse) returns String throws HttpServerError
-	let carriesContent = httpStatusAllowsContent(response.statusCode())
-
-	if not carriesContent and not response.body().isEmpty() 'bodyOnABodilessStatus'
+public function httpRequireSendableResponse(response HttpResponse) throws HttpServerError
+	if not httpStatusAllowsContent(response.statusCode()) and not response.body().isEmpty() 'bodyOnABodilessStatus'
 		throw HttpServerError.invalidResponse
 	end 'bodyOnABodilessStatus'
 
 	if not isFieldContent(response.reason()) 'badReason'
 		throw HttpServerError.invalidResponse
 	end 'badReason'
-
-	let raw = StringBuilder.create()
-	raw.append("{HttpSentVersion} {response.statusCode().number()} {response.reason()}{HttpLineBreak}")
-
-	if carriesContent 'statesItsLength'
-		appendHeaderLine(raw, name: SentContentLengthName, value: "{response.body().byteLength()}")
-	end 'statesItsLength'
-
-	appendHeaderLine(raw, name: SentConnectionName, value: ClosingConnection)
 
 	// A CR or LF in a handler's header would end its line early and let the text forge more of the
 	// response.
@@ -202,12 +191,29 @@ public function httpBuildResponseHead(response HttpResponse) returns String thro
 			throw HttpServerError.invalidResponse
 		end 'unsendable'
 	end 'eachHeader'
+end 'httpRequireSendableResponse'
 
+public function httpBuildResponseHead(response HttpResponse) returns String throws HttpServerError
+	try httpRequireSendableResponse(response)
+
+	return httpBuildSendableResponseHead(response)
+end 'httpBuildResponseHead'
+
+public function httpBuildSendableResponseHead(response HttpResponse) returns String
+	let carriesContent = httpStatusAllowsContent(response.statusCode())
+	let raw = StringBuilder.create()
+	raw.append("{HttpSentVersion} {response.statusCode().number()} {response.reason()}{HttpLineBreak}")
+
+	if carriesContent 'statesItsLength'
+		appendHeaderLine(raw, name: SentContentLengthName, value: "{response.body().byteLength()}")
+	end 'statesItsLength'
+
+	appendHeaderLine(raw, name: SentConnectionName, value: ClosingConnection)
 	appendHeaderLines(raw, headers: response.headers(), skipping: ConnectionHeaderName)
 	raw.append(HttpLineBreak)
 
 	return raw.build()
-end 'httpBuildResponseHead'
+end 'httpBuildSendableResponseHead'
 
 function appendHeaderLine(raw StringBuilder, name String, value String)
 	raw.append("{name}{HeaderNameValueSeparator}{value}{HttpLineBreak}")

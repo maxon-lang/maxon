@@ -18,7 +18,7 @@ language server, the MCP `check` tool, `run`'s cache — reuses them.
 | `queryActiveTokens` | per file | the tokens left once `#if` blocks are resolved; every token consumer reads through it, so the declaration sweep and the parse cannot disagree about a file |
 | `queryProgramSignatures` | whole program | the signature index: every declaration in the program, read from tokens |
 | `queryParseOps` | per file | the file's parse artifact |
-| `queryAllModule` | whole program | the merged module; every file is parsed before any is merged |
+| `FrontEndRun` | whole program | the merged module; every file is parsed before any is merged, and the run advances as the front-end pool's answers arrive |
 
 The inputs are the source files themselves, registered by `fileChanged`. A failed lex is never cached; a
 failed `#if` resolution is, so its diagnostic is reported once. A parse is cached whatever it refused: its
@@ -78,8 +78,8 @@ resolved path.
 ## The body-demand fixpoint
 
 A standard-library file's function bodies are built once the program reaches one of its functions; until
-then its parse skips them. Whether a parse builds bodies is part of its key, so `queryAllModule` folds to a
-fixpoint (`Queries.foldTheFrontEnd`). The first round merges every file with every library body skipped. A
+then its parse skips them. Whether a parse builds bodies is part of its key, so `FrontEndRun` folds to a
+fixpoint. The first round merges every file with every library body skipped. A
 reachability walk over the merged module then marks each library file a reached function lives in, and the
 next round re-parses those files with their bodies, so the walk sees one call level deeper. The demand only
 grows and is bounded by the library's functions, so the rounds end. A `runtime/` file's bodies are always
@@ -101,7 +101,7 @@ Every `queryParseOps` validates the signature index before validating itself, so
 sits under a per-file one is asked once per file. Any O(program) work done inside it becomes
 O(files × program). That is why the composite hash is memoized, and why program-wide work the back end needs
 — laying out the `.data` section's globals (`declaredGlobals`) and the managed globals (`managedGlobals`) —
-is asked once per compile from `compileToCodeResult`, not from inside the index.
+is asked once per compile from `prepareLowering`, not from inside the index.
 
 ## The memo is shared
 
@@ -115,19 +115,25 @@ is safe only within one `Project`, and that renumbering is the only write a pars
 later pass derives about a parse goes in a `Project` table the fold resets (`Project.rangeSiteFacts`), and a
 function copied out of a parse copies a column before its first write to it (`IrFunction.makePrivate`).
 
-Across `Project`s, the store a `CompileSession` carries (`CompileSession.fileMemos`) — one per spec worker
-process, one for the language server's document projects, one per MCP session — holds the library's tokens,
-`#if` views and producer masks, keyed by content hash, and each library file's parse. A parse embeds
+Across `Project`s, two stores outlive a compile. The one a `CompileSession` carries (`CompileSession.fileMemos`)
+— one per spec worker process, one for the language server's document projects, one per MCP session — holds
+the library's tokens, `#if` views and producer masks, keyed by content hash. Each library file's parse, the
+library baselines and the opened disk packs live in the `SharedLibraryCache`, one frozen store for the process,
+held as a registry `default`: every compile reads that one store, and a change publishes a whole successor in
+its place, retried until it lands (`publishToSharedLibrary`). It holds at most 512 files (`MostSharedFiles`) with
+at most 6 parse variants of one file (`MostKeysPerLibraryParse`), 8 baselines and 24 packs, and past a bound it
+drops the least recently used entry; a hit moves its entry to the newest end. A parse embeds
 index-numbered facts the asking program's own declarations shift (type-name ids, generic-instance ids, the
 interface indexes witness dispatches carry), so a held parse records a footprint of them, taken while its
 names are still file-local, and a hit is rebased onto the current program; a row or a told answer that moved
 is a miss. Its key is a signature hash over the library alone, since the whole-program hash moves with every
-user declaration. A store that serves many compiles deep-clones a held parse at the stash and at every hit,
-because the merge renumbers an artifact in place; the store of a one-shot `maxon build` hands it over
-instead, since that compile is its last. A program that shadows a library name, declares one the library
+user declaration. A held parse is frozen and deep-cloned at every hit, because the merge renumbers an
+artifact in place; the store of a one-shot `maxon build` hands the decoded parse over instead, since that
+compile is its last. A program that shadows a library name, declares one the library
 means, or is rooted inside `stdlib/` parses the library cold. One file's swept declarations stay with their
 `Project`. A compile's state lives on its `Project` and its `CompileSession`, which lets the language server
-run project checks in services of their own beside its main loop; each store serves one compile at a time.
+run project checks in services of their own beside its main loop; a `fileMemos` store serves one compile at a
+time, and the shared library store serves every compile at once.
 
 ### The library baseline
 
@@ -173,7 +179,7 @@ process.
 
 ## The parallel front end
 
-`queryAllModule` opens a pool of workers for its duration (`FrontEndPool.maxon`) and lexes and parses the
+`FrontEndRun` opens a pool of workers for its duration (`FrontEndPool.maxon`) and lexes and parses the
 files that missed their memo on it. `MAXON_MAX_PROCS=1` gives a pool of one worker, not a separate path.
 
 - Every worker reads one published, read-only signature index and the settled declarations, both shared

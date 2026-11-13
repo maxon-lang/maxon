@@ -13,7 +13,7 @@ category: stdlib
 `time=<RFC 3339 ms UTC> level=INFO msg=test` to stderr at level INFO. A `LogSink` pairs a `LogHandler`
 service with its live `LogLevelVar`; `Log.setDefault(sink)` replaces both for every thread, and a `Logger`
 keeps the sink it was built on and obeys that sink's level changes. A record below the level builds
-nothing; `Log.error` waits until its record is written, and every record queued before it.
+nothing; a record is handed to the handler without waiting, and a panic or the program's exit writes every record handed over before it.
 
 ## Tests
 
@@ -243,6 +243,7 @@ function main() returns ExitCode
 	Log.warn("second")
 	Log.default().info("third")
 	Log.error("fourth")
+	_ = Scheduler.quiesce()
 
 	let jsonOptions = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: true)
 	Log.setDefault(LogSink.create(spawn JsonLogHandler.create(jsonOptions), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
@@ -258,7 +259,7 @@ level=INFO source=main.maxon:5 msg=first
 level=WARN source=main.maxon:7 msg=second
 level=INFO source=main.maxon:8 msg=third
 level=ERROR source=main.maxon:9 msg=fourth
-{"level":"INFO","source":{"file":"main.maxon","line":13},"msg":"fifth"}
+{"level":"INFO","source":{"file":"main.maxon","line":14},"msg":"fifth"}
 ```
 
 <!-- test: a-group-level-override -->
@@ -415,7 +416,7 @@ g7=WARN
 
 <!-- test: levels-belong-to-the-handler -->
 Each sink carries its own `LogLevelVar`, so `setLevel` through a logger on one sink changes nothing a logger
-on the other writes. `la.error` waits for its line, which orders the two handlers' output.
+on the other writes. `Scheduler.quiesce()` waits for `la`'s line, which orders the two handlers' output.
 ```maxon
 function main() returns ExitCode
 	let optionsA = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
@@ -429,6 +430,7 @@ function main() returns ExitCode
 	lb.setLevel(LogLevel.debug)
 	la.debug("hidden")
 	la.error("fromA")
+	_ = Scheduler.quiesce()
 	lb.debug("shown")
 
 	if la.enabled(LogLevel.debug) or not lb.enabled(LogLevel.debug) 'levels'
@@ -580,10 +582,69 @@ collected 1: INFO fromMain
 collected 2: INFO fromWorker
 ```
 
+<!-- test: an-error-logged-before-the-program-exits-is-written -->
+<!-- unsupported-targets: wasm32-wasi -->
+The child logs three records, then `Log.error`, then returns a failing exit code. The program's exit lets the
+handler write what was handed to it, so all four lines reach the child's stderr and the child's exit code is
+the one it returned.
+```maxon
+function child() returns ExitCode
+	Log.info("one")
+	Log.info("two")
+	Log.info("three")
+	Log.error("boom")
+
+	return 5
+end 'child'
+
+function main() returns ExitCode
+	if CommandLine.args().count() > 1 'iAmTheChild'
+		return child()
+	end 'iAmTheChild'
+
+	let me = try Process.executablePath() otherwise return 2
+	let argv = StringArray.create(0)
+	argv.push("child")
+
+	let config = Configuration.create(Executable.path(me))
+	config.arguments = argv
+	let run = try Subprocess.runConfiguration(config) otherwise return 3
+
+	if run.exitCode() != 5 'wrongExit'
+		print("child exited {run.exitCode()}\n")
+		return 1
+	end 'wrongExit'
+
+	let expected = [" level=INFO msg=one", " level=INFO msg=two", " level=INFO msg=three", " level=ERROR msg=boom"]
+	let lines = run.stderr.split("\n")
+
+	for (iter, suffix) in expected.withIterator() 'eachExpected'
+		let line = try lines.get(iter.index()) otherwise 'short'
+			print("stderr ended early: {run.stderr}")
+			return 1
+		end 'short'
+
+		if not line.startsWith("time=") or not line.endsWith(suffix) 'mismatch'
+			print("line {iter.index()} was: {line}\n")
+			return 1
+		end 'mismatch'
+	end 'eachExpected'
+
+	print("ok\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok
+```
+
 <!-- test: an-error-logged-before-a-panic-is-written -->
 <!-- unsupported-targets: wasm32-wasi -->
-The child logs three records, then `Log.error`, then panics. `Log.error` returns only once its record is
-written, and the handler's mailbox is FIFO, so all four lines precede the panic on the child's stderr.
+The child logs three records, then `Log.error`, then panics. The panic first lets the handler write what was
+handed to it, and the handler's mailbox is FIFO, so all four lines precede the panic on the child's stderr.
 ```maxon
 function child()
 	Log.info("one")

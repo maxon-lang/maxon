@@ -142,7 +142,7 @@ let ClaimStaleAfterSeconds = 10
 // the refusal prints and what the abandonment window compares against.
 typealias LockSeconds = int(0 to u64.max)
 
-type OwnedLock
+export type OwnedLock
 	export let path as FilePath
 	export let claimPath as FilePath
 	export let token as String
@@ -168,7 +168,7 @@ type Acquisition
 	end 'create'
 end 'Acquisition'
 
-union HeldCheckoutLock
+export union HeldCheckoutLock
 	held(lock OwnedLock)
 	none
 end 'HeldCheckoutLock'
@@ -193,6 +193,35 @@ type HeldLock
 	static function none() returns HeldLock
 		return Self{holding: HeldCheckoutLock.none, lastTouchMs: 0, touchDelayMs: TouchIntervalMs, lastRefreshMs: 0, upkeepMeter: UpkeepMeter.idle, upkeepSpan: PhaseDelta.zero(), upkeep: PhaseDelta.zero()}
 	end 'none'
+
+	function state() returns HeldLockState
+		return HeldLockState.of(self.holding, touchDelayMs: self.touchDelayMs, lastRefreshMs: self.lastRefreshMs, refreshWarned: self.refreshWarned, upkeep: self.upkeep.clone())
+	end 'state'
+
+	function restore(restored HeldLockState)
+		match restored.holding 'restored'
+			held(lock) then self.adopt(lock, restored: restored)
+			none then self.holding = HeldCheckoutLock.none
+		end 'restored'
+	end 'restore'
+
+	function resumeHolding(returned HeldLockState)
+		self.restore(returned)
+		self.upkeep.add(returned.upkeep)
+	end 'resumeHolding'
+
+	function adopt(lock OwnedLock, restored HeldLockState)
+		self.begin(lock)
+		self.touchDelayMs = restored.touchDelayMs
+		self.lastRefreshMs = restored.lastRefreshMs
+		self.refreshWarned = restored.refreshWarned
+	end 'adopt'
+
+	function begin(lock OwnedLock)
+		self.holding = HeldCheckoutLock.held(lock)
+		self.upkeepMeter = UpkeepMeter.armed(PhaseProbe.beginProcessWideCounters())
+		self.lastTouchMs = Clock.nowMs()
+	end 'begin'
 
 	function addUpkeepTo(total PhaseDelta)
 		total.add(self.upkeep)
@@ -331,13 +360,32 @@ type HeldLock
 	end 'dropForeignHold'
 
 	function take(lock OwnedLock)
-		self.holding = HeldCheckoutLock.held(lock)
-		self.upkeepMeter = UpkeepMeter.armed(PhaseProbe.beginProcessWideCounters())
-		self.lastTouchMs = Clock.nowMs()
+		self.begin(lock)
 		self.refreshWarned = false
 		self.refreshed(lock)
 	end 'take'
 end 'HeldLock'
+
+export type HeldLockState
+	export let holding as HeldCheckoutLock
+	export let touchDelayMs as DurationMs
+	export let lastRefreshMs as InstantMs
+	export let refreshWarned as bool
+	export let upkeep as PhaseDelta
+
+	static function of(holding HeldCheckoutLock, touchDelayMs DurationMs, lastRefreshMs InstantMs, refreshWarned bool, upkeep PhaseDelta) returns HeldLockState
+		return Self{holding: holding, touchDelayMs: touchDelayMs, lastRefreshMs: lastRefreshMs, refreshWarned: refreshWarned, upkeep: upkeep}
+	end 'of'
+end 'HeldLockState'
+
+export type LockHoldState
+	export let checkout as HeldLockState
+	export let output as HeldLockState
+
+	static function of(checkout HeldLockState, output HeldLockState) returns LockHoldState
+		return Self{checkout: checkout, output: output}
+	end 'of'
+end 'LockHoldState'
 
 export type LockHold
 	var checkout as HeldLock
@@ -346,6 +394,23 @@ export type LockHold
 	export static function none() returns LockHold
 		return Self{checkout: HeldLock.none(), output: HeldLock.none()}
 	end 'none'
+
+	export static function resuming(state LockHoldState) returns LockHold
+		let hold = Self.none()
+		hold.checkout.restore(state.checkout)
+		hold.output.restore(state.output)
+
+		return hold
+	end 'resuming'
+
+	export function holdings() returns LockHoldState
+		return LockHoldState.of(self.checkout.state(), output: self.output.state())
+	end 'holdings'
+
+	export function resume(returned LockHoldState)
+		self.checkout.resumeHolding(returned.checkout)
+		self.output.resumeHolding(returned.output)
+	end 'resume'
 
 	export function touch()
 		self.checkout.touch()
@@ -1416,7 +1481,7 @@ function reportLockFailure(kind LockKind, subject String, reason String, remedy 
 	return NothingRanExitCode
 end 'reportLockFailure'
 
-enum LockKind
+export enum LockKind
 	tree
 	build
 

@@ -429,13 +429,12 @@ The standard library's default sink is a `TextLogHandler` on stderr with the tim
 milliseconds) and a minimum level of INFO.
 
 Only an enabled call builds a record: the level is checked at the call, before anything reaches the handler.
-Below ERROR, a call sends its record to the handler and returns, and the handler writes it. When the
-handler's mailbox is full, the call waits up to 10 seconds for room and then discards the record; a record
-logged after the handler has stopped is discarded. At ERROR and above the call waits for room as long as it
-takes. `Log.error` —
-and any call at a rank of ERROR or above — returns once the handler has written its record, and so every
-record sent before it too, because the handler takes records in order; a line logged just before a `panic` is
-on the stream. When the program exits normally, every record still queued is written first.
+A call sends its record to the handler and returns, and the handler writes it; the default handler's mailbox
+holds as many records as `InstrumentationMailboxCapacity`, so a call does not wait, and a `Log` call may be made
+from a message or a `spawn` factory. A record logged after the handler has stopped is discarded. When the program
+exits normally, or ends in a `panic`, a fatal stack overflow or a hardware fault, every record still queued is
+written first, ahead of the panic line. A fatal path hands its processor to the handler and waits until nothing
+else runs or half a second has passed; the wait is skipped when the faulting thread holds a runtime lock, runs on a scheduler's own stack, or is part-way through parking.
 
 Logging runs on services, so it is refused on `wasm32-wasi`
 ([E3104](/docs/cli/error-codes/#e3104--targetunsupportedconstruct)), at the call.
@@ -609,9 +608,12 @@ library's `default` for its capture control: a program that calls `TraceCapture`
 | `TraceCapture.stopCapture()` | `TraceKeyArray` | Switch capturing off, then await the recorder's keys, in the order it received them; the recorder starts empty again. |
 | `TraceCapture.fired(capturedKeys TraceKeyArray, key String)` | `bool` | True when `key` was recorded at least once. |
 
-`trace`, `startCapture` and `stopCapture` wait for room when the recorder's mailbox is full, as long as it
-takes (`sendTimeout: ForeverMs`). In a cancelled coroutine the message is dropped, and `stopCapture` returns
-an empty array.
+`trace` and `startCapture` hand the recorder a command and return: its mailbox holds as many commands as
+`InstrumentationMailboxCapacity`, so neither waits, and a message or a `spawn` factory may call them.
+`stopCapture` waits for the recorder's reply, as long as it takes, so it is called from `main`, a test body or a
+coroutine; a message or factory that reaches it is
+[E3221](/docs/cli/error-codes/#e3221--semanticholdermaywait). In a cancelled coroutine `stopCapture` returns an
+empty array.
 
 ```maxon
 function main() returns ExitCode

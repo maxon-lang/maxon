@@ -101,11 +101,6 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// E3073 — a spawn whose callee can never suspend. Whole-program like the summary above it, and for the same
 	// reason: whether `f` yields depends on what `f` calls, which is only knowable once every file has merged.
 	checkAsyncYielding(project, module: module, funcNames: funcNames)
-
-	// E3139 — two services that can await replies from each other. Whole-program for
-	// `checkAsyncYielding`'s exact reason; the gate and the sweep over the call graph
-	// (`ServiceProgramSurvey`) are in `checkServiceRules`.
-	checkServiceRules(project, module: module, signatures: signatures, funcNames: funcNames)
 	try requireStillWanted(project)
 
 	try checkUnneededLetCasts(project, module: module, signatures: signatures)
@@ -266,11 +261,12 @@ end 'checkMainCannotThrow'
 // than a container, because even an empty collection is an allocation every compile would pay.
 function checkThrowsClausesNameDeclaredErrors(project Project, module MaxonModule, signatures ProgramSignatures)
 	var anyUnthrown = false
+	let refused = DiagnosedLines.of(project)
 
 	for func in module.functions 'eachFunc'
 		match func.throwsTypeName 'clause'
 			none then break
-			throwing(declared) then anyUnthrown = (requireThrowsClauseNamesADeclaredError(project, signatures: signatures, func: func, declared: declared) and isUnthrownCandidate(project, module: module, signatures: signatures, func: func)) or anyUnthrown
+			throwing(declared) then anyUnthrown = (requireThrowsClauseNamesADeclaredError(project, signatures: signatures, func: func, declared: declared, refused: refused) and isUnthrownCandidate(project, module: module, signatures: signatures, func: func)) or anyUnthrown
 		end 'clause'
 	end 'eachFunc'
 
@@ -287,8 +283,8 @@ end 'checkThrowsClausesNameDeclaredErrors'
 // more spelling the spec corpus keeps in step by hand.
 // The sorting is `ConformanceCheck.classifyThrowsClauseName`'s, shared with `throwsRequirementIsAbstract`,
 // so the impl side and the plain-function side cannot disagree about what an error type is.
-function requireThrowsClauseNamesADeclaredError(project Project, signatures ProgramSignatures, func IrFunction, declared String) returns bool
-	if DiagnosedLines.of(project).includes(func.sourceFilePath, line: func.nameLine) 'theDeclarationIsAlreadyRefused'
+function requireThrowsClauseNamesADeclaredError(project Project, signatures ProgramSignatures, func IrFunction, declared String, refused DiagnosedLines) returns bool
+	if refused.includes(func.sourceFilePath, line: func.nameLine) 'theDeclarationIsAlreadyRefused'
 		return false
 	end 'theDeclarationIsAlreadyRefused'
 
@@ -298,13 +294,15 @@ function requireThrowsClauseNamesADeclaredError(project Project, signatures Prog
 		undeclared then reportAtFunctionName(project, func: func, code: ErrorCode.throwsTypeNotAnErrorEnum, message: "'throws {declared}' names no declared enum or union. A caught error is decoded off the DECLARED clause, so the clause has to name the type whose cases it decodes into")
 	end 'kind'
 
+	refused.add(func.sourceFilePath, line: func.nameLine)
+
 	return false
 end 'requireThrowsClauseNamesADeclaredError'
 
 // The entry's clause is E3054's to refuse, and a test's is implied by the parser, so neither is the
 // author's to remove.
 function isUnthrownCandidate(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction) returns bool
-	return not bodyIsUnreadable(func) and func.name != project.entryFunctionName and not isTestFunctionName(func.name) and not functionCanThrow(module, func: func) and not bodyHoldsAnUnresolvedCall(project, module: module, signatures: signatures, func: func)
+	return not bodyIsUnreadable(func) and func.name != project.entryFunctionName and not isTestFunctionName(func.name) and not functionCanThrow(module, func: func) and not functionDefersAReply(module, func: func) and not bodyHoldsAnUnresolvedCall(project, module: module, signatures: signatures, func: func)
 end 'isUnthrownCandidate'
 
 // An unresolved callee's throw behaviour is unknown, so E3168 cannot say this body never throws; the
@@ -450,7 +448,7 @@ type UnthrownClauses
 	end 'reportUnsettled'
 end 'UnthrownClauses'
 
-function functionCanThrow(module MaxonModule, func IrFunction) returns bool
+module function functionCanThrow(module MaxonModule, func IrFunction) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("functionCanThrow: blockRef from func.blockRefs not in module.blocks")
 
@@ -673,7 +671,7 @@ end 'CallParamEdges'
 
 // No tie-break between two functions of one name: `FunctionNameIndex` refuses the duplicate. It can
 // arise here, because `installManagedGlobalInit` appends the compiler's own `__module_init` /
-// `__maxon_global_cleanup` into this merged module (`Compiler.compileToCodeResult`) before the
+// `__maxon_global_cleanup` into this merged module (`prepareLowering`) before the
 // summary is built, so a `stdlib/Builtins.maxon` declaration of either name is a duplicate the
 // backend's E4015 would refuse only after this pass had summarised one of the two bodies.
 function buildParamMutationSummary(project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, edges CallParamEdges, byCallee CsrGraph, recordEdges CallParamEdges, recordByCallee CsrGraph, writeSeeds ParamWriteSeeds, unknownWrites UnknownBodyWrites) returns ParamMutationSummary
@@ -4345,7 +4343,7 @@ end 'calleeYields'
 // it as *"no edge"* (its accepting direction). The two answers are opposite because the two diagnostics
 // refuse in opposite directions, which is exactly why the verdict is the CALLER's and the recording is
 // shared. ⚠ `module`, for `CallGraphEdges`' reason.
-module function recordCallGraphEdge(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges) returns bool
+function recordCallGraphEdge(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges) returns bool
 	let calleeIndex = try funcIndexByName.get(callee) otherwise return false
 	edges.record(calleeIndex, callerIndex: callerIndex)
 	return true
@@ -4416,10 +4414,6 @@ end 'ioYieldingRuntimeCallee'
 // written that way first, and it read GREEN on its own acceptance case for the only reason a wrong answer
 // ever reads green: nothing propagated at all, because the single callee in that program was not a seed.
 // These neighbours ARE the callers.
-// ⚠ **`module`, for `ServiceCallCycleCheck`**, whose acyclic blocking graph is a third
-// whole-program summary over the same relation — see `ServiceCallCycleCheck`, which builds its own
-// edges from its own seed walk exactly as the two summaries here do, and closes them through
-// `markSeededCallers` rather than re-deriving the closure.
 export type CallGraphEdges
 	export var calleeIndices as CsrColumn
 	export var callerIndices as CsrColumn
@@ -5066,7 +5060,7 @@ end 'targetCanHostSubprocess'
 
 // The whole-program signature index, for a check running inside `semanticCheck`. Written once because
 // three checks ask, and the REASON it cannot fail is one fact about the driver, not three: the index is
-// computed and memoized by `compileToCodeResult` before the pipeline runs (`queryProgramSignatures`), so a
+// computed and memoized by `prepareLowering` before the pipeline runs (`queryProgramSignatures`), so a
 // pass downstream of it can only ever take the memo's hit. `asker` names the caller in the panic, which is
 // the only part that legitimately differs.
 
@@ -5265,7 +5259,7 @@ end 'checkUnboundTypeParameterArgs'
 // alone always did.
 function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericInstanceId, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath, facts CapabilityFacts)
 	// ⚠ `var`, because the index MEMOIZES a nested instance's compiled name on first ask — the same reason
-	// `compileToCodeResult` binds it that way (see `mangleGenericInstance`).
+	// `prepareLowering` binds it that way (see `mangleGenericInstance`).
 	let signatures = programSignaturesIn(project, asker: "checkTypeParameterArgsAt")
 
 	for i in 0 upto argIds.count() 'eachArg'
@@ -5991,9 +5985,10 @@ end 'nonConformingMessage'
 // The three answers `existentialWideningVerdict` gives. An enum (a scalar), so asking costs nothing at the
 // two sites that ask; the two refusals are separate arms rather than one `no` because they are refused for
 // unrelated reasons and each site words them differently.
-enum ExistentialWideningVerdict
+union ExistentialWideningVerdict
 	widens
 	floatHasNoValueHalf
+	refused(code ErrorCode, reason String)
 	doesNotConform
 	deferred
 end 'ExistentialWideningVerdict'
@@ -6028,7 +6023,18 @@ function existentialWideningVerdict(project Project, valueTag ValueTypeTag, valu
 		return ExistentialWideningVerdict.deferred
 	end 'noTypeToShowConformance'
 
-	if not valueWidensToInterface(project, signatures: programSignaturesIn(project, asker: "existentialWideningVerdict"), valueType: maxonTypeOfTag(valueTag, nameId: valueNameId), interfaceName: interfaceName, readerFilePath: readerFilePath) 'doesNotConform'
+	let signatures = programSignaturesIn(project, asker: "existentialWideningVerdict")
+	let valueType = maxonTypeOfTag(valueTag, nameId: valueNameId)
+
+	if signatures.valueHoldsAReply(valueType, idsFrom: project.typeNames) 'aReplyMayNotBeAnInterfaceValue'
+		return ExistentialWideningVerdict.refused(ErrorCode.semanticReplyDeferralRefused, reason: replyIntoExistentialReason(String.from(interfaceName)))
+	end 'aReplyMayNotBeAnInterfaceValue'
+
+	if signatures.valueIsLinear(valueTag, nameId: valueNameId, from: project.typeNames) 'aLinearValueMayNotBeAnInterfaceValue'
+		return ExistentialWideningVerdict.refused(ErrorCode.semanticLinearRefused, reason: linearIntoExistentialReason(String.from(interfaceName)))
+	end 'aLinearValueMayNotBeAnInterfaceValue'
+
+	if not valueWidensToInterface(project, signatures: signatures, valueType: valueType, interfaceName: interfaceName, readerFilePath: readerFilePath) 'doesNotConform'
 		return ExistentialWideningVerdict.doesNotConform
 	end 'doesNotConform'
 
@@ -6332,6 +6338,7 @@ end 'checkExistentialSiteClaimAtArgument'
 union WideningPlace
 	argument(label String)
 	field(site String)
+	returned(owner String)
 end 'WideningPlace'
 
 // The place, as the object of "widen … into".
@@ -6339,6 +6346,7 @@ function wideningPlaceNoun(place WideningPlace) returns String
 	return match place 'place'
 		argument(label) gives label
 		field(site) gives "the field '{site}'"
+		returned(owner) gives "the value returned from {owner}"
 	end 'place'
 end 'wideningPlaceNoun'
 
@@ -6347,6 +6355,7 @@ function wideningPlaceAct(place WideningPlace) returns String
 	return match place 'place'
 		argument gives "call"
 		field gives "store"
+		returned gives "return"
 	end 'place'
 end 'wideningPlaceAct'
 
@@ -6355,6 +6364,7 @@ function wideningPlaceActAdvice(place WideningPlace) returns String
 	return match place 'place'
 		argument gives "Call"
 		field gives "Store"
+		returned gives "Return"
 	end 'place'
 end 'wideningPlaceActAdvice'
 
@@ -6364,6 +6374,7 @@ function wideningPlaceHandOver(place WideningPlace, iface String) returns String
 	return match place 'place'
 		argument(label) gives "pass a value already held at the interface type '{iface}' as {label}"
 		field(site) gives "store a value already held at the interface type '{iface}' into the field '{site}'"
+		returned(owner) gives "return a value already held at the interface type '{iface}' from {owner}"
 	end 'place'
 end 'wideningPlaceHandOver'
 
@@ -6371,6 +6382,7 @@ function wideningPlaceHandOverAdvice(place WideningPlace) returns String
 	return match place 'place'
 		argument gives "Pass"
 		field gives "Store"
+		returned gives "Return"
 	end 'place'
 end 'wideningPlaceHandOverAdvice'
 
@@ -6438,6 +6450,14 @@ end 'checkExistentialSiteClaimAtReturn'
 function floatHasNoValueHalfReason(interfaceName String) returns String
 	return "{ExistentialIsFatPointerReason} whose value half is a general-purpose machine word, and a float travels in a floating-point register, so it has no way through. This is the same limit `float` has as a generic type argument (E2062). Wrap the float in a type that implements '{interfaceName}'"
 end 'floatHasNoValueHalfReason'
+
+function replyIntoExistentialReason(interfaceName String) returns String
+	return "a value that can hold a Reply cannot stand at an interface type: a Reply never leaves the service code that holds it, and an interface value carries its conformer to whatever code receives it. Keep the Reply-holding type concrete, or answer the Reply before the value is widened to '{interfaceName}'"
+end 'replyIntoExistentialReason'
+
+function linearIntoExistentialReason(interfaceName String) returns String
+	return "a linear value cannot stand at an interface type: the interface value would drop it with no finalizer, and only a concrete linear type has finalizers to call. Keep the linear type concrete, or consume the value before it is widened to '{interfaceName}'"
+end 'linearIntoExistentialReason'
 
 // ⭐⭐ **THE `return` HALF OF THE WIDENING RULE (the return ABI).** A `returns <Interface>` function
 // may hand back a CONFORMING concrete value, which gains its witness half in the secondary return
@@ -6588,6 +6608,7 @@ function checkOneReturnedValue(project Project, func IrFunction, value ValueId, 
 		widens then checkExistentialSiteClaimAtReturn(project, func: func, returnExistentialSites: returnExistentialSites, valueTag: valueTag, valueNameId: valueNameId, interfaceName: interfaceName, retRange: retRange)
 		deferred then break
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot return a `float` from {functionDisplay(project, func: func).quoted()}, which is declared to return the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or declare the return type as `float`", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
+		refused(code, reason) then reportPositioned(project, code: code, message: intoExistentialMessage(WideningPlace.returned(functionDisplay(project, func: func).quoted()), interfaceName: displayName, reason: reason), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("return type mismatch in {functionDisplay(project, func: func).quoted()}", conformer: typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath), interfaceName: displayName), line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 	end 'widening'
 end 'checkOneReturnedValue'
@@ -6628,6 +6649,7 @@ function checkOneExistentialFieldStore(project Project, func IrFunction, store E
 		widens then checkExistentialSiteClaimAtFieldStore(project, func: func, store: store, valueTag: valueTag, valueNameId: valueNameId)
 		deferred then break
 		floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: floatIntoExistentialStoreMessage(store.place, site: site, interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath)
+		refused(code, reason) then reportPositioned(project, code: code, message: intoExistentialMessage(existentialStoreWideningPlace(store), interfaceName: displayName, reason: reason), line: store.line, column: store.column, filePath: store.filePath)
 		doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage(existentialStoreMismatchSubject(store.place, site: site), conformer: valueTypeDisplayName(project, func: func, value: store.value, tag: valueTag, nameId: valueNameId, readerFilePath: store.filePath), interfaceName: displayName), line: store.line, column: store.column, filePath: store.filePath)
 	end 'widening'
 end 'checkOneExistentialFieldStore'
@@ -6638,6 +6660,14 @@ function floatIntoExistentialStoreMessage(place ExistentialStorePlace, site Stri
 		messageArgument gives "Cannot pass a `float` as {site}, which is declared at the interface type '{interfaceName}': {floatHasNoValueHalfReason(interfaceName)}, or take the parameter as a `float`"
 	end 'place'
 end 'floatIntoExistentialStoreMessage'
+
+function intoExistentialMessage(place WideningPlace, interfaceName String, reason String) returns String
+	return match place 'place'
+		argument(label) gives "Cannot pass a value as {label}, which is declared at the interface type '{interfaceName}': {reason}"
+		field(site) gives "Cannot store a value into the field '{site}', which is declared at the interface type '{interfaceName}': {reason}"
+		returned(owner) gives "Cannot return a value from {owner} as the interface type '{interfaceName}': {reason}"
+	end 'place'
+end 'intoExistentialMessage'
 
 function existentialStoreMismatchSubject(place ExistentialStorePlace, site String) returns String
 	return match place 'place'
@@ -6739,6 +6769,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 			widens then checkExistentialSiteClaimAtArgument(project, func: func, paramExistentialSites: paramExistentialSites, position: position, argTag: argTag, argNameId: argNameId, interfaceName: interfaceName, param: param, callInstanceSubject: callInstanceSubject, callRange: callRange, filePath: filePath)
 			deferred then break
 			floatHasNoValueHalf then reportPositioned(project, code: ErrorCode.floatWidenedToExistential, message: "Cannot pass a `float` as {argParamLabel(param, position: position)}, which is declared at the interface type '{displayName}': {floatHasNoValueHalfReason(displayName)}, or take the parameter as a `float`", line: callRange.line, column: callRange.column, filePath: filePath)
+			refused(code, reason) then reportPositioned(project, code: code, message: intoExistentialMessage(WideningPlace.argument(argParamLabel(param, position: position)), interfaceName: displayName, reason: reason), line: callRange.line, column: callRange.column, filePath: filePath)
 			doesNotConform then reportPositioned(project, code: ErrorCode.typeMismatch, message: nonConformingMessage("argument type mismatch for {argParamLabel(param, position: position)}", conformer: valueTypeDisplayName(project, func: func, value: argId, tag: argTag, nameId: argNameId, readerFilePath: filePath), interfaceName: displayName), line: callRange.line, column: callRange.column, filePath: filePath)
 		end 'widening'
 

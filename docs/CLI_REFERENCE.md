@@ -2341,15 +2341,22 @@ project check still running.
 **Serving a checkout.** When `initialize` names a workspace root that is a Maxon source checkout (it holds
 `stdlib/`, `runtime/` and `maxon-bin/`) and the client trusts the workspace, any server other than that
 checkout's own build passes the session to it: it starts `maxon-bin/.maxon/maxon lsp-server` and relays
-every message both ways, so the checkout is served by the compiler built from it. The server looks at that
-binary twice a second. Once a rebuilt one has stayed unchanged across two looks, the server starts it and
-replays the session to it: `initialize`, `initialized`, the workspace notifications, and every open
-document at the version the client last sent. Each request still waiting for an answer is answered with
-error `-32801` (ContentModified), so the client asks again, and a `shutdown` with `null`. While no compiler
-is built into the checkout, requests are answered `-32801` too, and the server answers `initialize`
-itself. A compiler that cannot be started is reported once, in a `window/logMessage`, and started again
-when the binary's size or modification time changes, the two things the server compares; what the relayed compiler writes to its stderr is passed on the same way. A
-message from it longer than 64 MiB ends it.
+every message both ways, so the checkout is served by the compiler built from it. After `initialized` the
+server asks the client to watch that binary: a `client/registerCapability` request for
+`workspace/didChangeWatchedFiles`, with a relative pattern rooted at the binary's directory (an absolute
+glob where the client does not declare `relativePatternSupport`), so the binary may sit outside the
+workspace. A change event makes the server read the binary's size and modification time, and a rebuilt one
+is started and the session replayed to it: `initialize`, `initialized`, the workspace notifications, and
+every open document at the version the client last sent. A build writes the new compiler into a staging
+directory and renames it into place, so the file is whole when the client reports it. Each request still
+waiting for an answer is answered with error `-32801` (ContentModified), so the client asks again, and a
+`shutdown` with `null`. While no compiler is built into the checkout, requests are answered `-32801` too,
+and the server answers `initialize` itself. A client that does not declare dynamic registration of file
+watchers gets no hot reload: the server says so once, in a `window/logMessage`, and a compiler built after
+the session began is picked up when the session restarts. A compiler that cannot be started is reported
+once, in a `window/logMessage`, and started again when the binary's size or modification time changes, the
+two things the server compares; what the relayed compiler writes to its stderr is passed on with the next
+message either side sends. A message from it longer than 64 MiB ends it.
 
 **Documents.** Text synchronization is **full**: every `textDocument/didChange` carries the whole
 document. The server handles `didOpen`, `didChange` and `didClose`. Each buffer is analysed from its
@@ -2518,7 +2525,10 @@ get the buffer check's set alone.
 The project check starts once edits have paused for 300 ms, so a burst of keystrokes is checked once, at
 its last version. When the client sends a newer version, the older version's check is superseded: one
 that has not started is skipped, one that is running stops, and a result that arrives late is dropped,
-so the editor receives only sets for the version it holds. Each project root keeps its compiled project
+so the editor receives only sets for the version it holds. Each project root has a checker service of its
+own that never blocks the session and runs that root's checks one at a time, while the checks of different
+roots run side by side; a check waiting behind the running one is replaced by a newer check of the same
+document. Each project root keeps its compiled project
 between checks, so a re-check re-reads, re-lexes and re-parses only the files that changed, and runs the
 whole-program checks again in full. Hover, definition, completion and the other requests are answered
 while a check runs.
@@ -3339,7 +3349,7 @@ maxon scale-test [options]
 | Option | Description |
 |--------|-------------|
 | `--rungs=<n>` | Climb `<n>` rungs (default 6, range 1–8). Each rung doubles the program. |
-| `--repeat=<n>` | Compile every rung `<n>` times (default 1, range 1–25) and report the least CPU per phase. Memory comes from the first compile and must be identical in the rest; a difference is a broken run. |
+| `--repeat=<n>` | Compile every rung `<n>` times (default 1, range 1–25) and report the least CPU per phase. Memory comes from the first compile and must be identical in the rest; a difference is a broken run. Each compile of a rung starts with the executable and `.mxdbg` sidecar the previous one left removed, so every repeat meets the same output directory. |
 | `--note=<text>` | Record the run as a dated row in `docs/optimization-log.md` with `<text>` as the reason. Without it, nothing is recorded. |
 | `--emit-corpus=<dir>` | Write the generated programs to `<dir>` and compile nothing. |
 | `--result-json=<path>` | Also write the whole run, including the change since the last recorded row, to `<path>` as JSON. |

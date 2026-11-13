@@ -1942,8 +1942,7 @@ export union SourceParseError implements Error
 
 	// ⭐ **THE FOURTH, AND IT IS ABOUT THE HANDLE'S SURFACE RATHER THAN ABOUT A VALUE.** A member
 	// that is not on `<T>.handle` is not a missing FIELD and not an undefined FUNCTION — it is a method the
-	// export boundary deliberately left off the handle, which is the property that makes a self-send
-	// unspellable. The sentence has to say that or it reads as a typo.
+	// export boundary deliberately left off the handle. The sentence has to say that or it reads as a typo.
 	serviceNotAMessage(explanation String, line LineNumber, column ColumnNumber)
 
 	// ⭐ **THE FIFTH, AND IT IS ABOUT WHAT COMES BACK RATHER THAN ABOUT WHAT GOES OUT.** Every arm above
@@ -2749,7 +2748,9 @@ end 'TokenSpan'
 
 enum IsolatedRecoverySite
 	freeze
-	declared
+	binding
+	swapReplacement
+	returnPath
 	argument
 end 'IsolatedRecoverySite'
 
@@ -15448,12 +15449,14 @@ function statementFormRole(form StatementForm) returns StatementRole
 		whileStmt or
 		forStmt or
 		modifyStmt or
+		acquireStmt or
 		matchStmt gives StatementRole.blockOpener
 		strayStatementToken gives StatementRole.refusedOnSight
 		bindingDecl or
 		annotatedDecl or
 		tryStmt or
 		awaitStmt or
+		destructStmt or
 		tupleAssign or
 		assign or
 		selfFieldAssign or
@@ -15499,6 +15502,7 @@ enum StatementForm
 	whileStmt
 	forStmt
 	modifyStmt
+	acquireStmt
 	matchStmt
 	breakStmt
 	continueStmt
@@ -15506,6 +15510,7 @@ enum StatementForm
 	tryStmt
 	panicStmt
 	awaitStmt
+	destructStmt
 	tupleAssign
 	assign
 	selfFieldAssign
@@ -15721,7 +15726,7 @@ end 'tokenKindIsEnumLiteralBacking'
 // which needs the same set to tell a parameter list from an arbitrary parenthesized expression, and
 // its fourth is `Lexer.opensAKeptBlock`, whose own tail panic guards the same direction.
 module function kindSpellsBlockStructure(kind TokenKind) returns bool
-	return kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for or kind == TokenKind.modify or kind == TokenKind.if or kind == TokenKind.else or kind == TokenKind.otherwise or kind == TokenKind.end or kind == TokenKind.try
+	return kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for or kind == TokenKind.modify or kind == TokenKind.acquire or kind == TokenKind.if or kind == TokenKind.else or kind == TokenKind.otherwise or kind == TokenKind.end or kind == TokenKind.try
 end 'kindSpellsBlockStructure'
 
 // ⭐ **THE KINDS THE BLOCK-EXTENT WALK OFFERS TO `keywordIsANameAt`** — block structure, PLUS `function`,
@@ -17512,8 +17517,8 @@ end 'callAlignedFrom'
 //
 // A method with no user parameters keeps the empty list rather than `self` alone: no source token can spell
 // `__self`, so the entry would buy only the walk's own bracket bookkeeping.
-module function sweptParamNamesFor(sourceParamNames NameRoster, takesReceiver bool) returns NameRoster
-	if not takesReceiver or sourceParamNames.count() == 0 'alreadyCallAligned'
+module function sweptParamNamesFor(sourceParamNames NameRoster, takesReceiver bool, selfCapability ParamCapability) returns NameRoster
+	if not takesReceiver or (sourceParamNames.count() == 0 and selfCapability != ParamCapability.consuming) 'alreadyCallAligned'
 		return sourceParamNames
 	end 'alreadyCallAligned'
 
@@ -18144,6 +18149,23 @@ function hiddenWordParamIsCarried(param HiddenWordParam) returns bool
 	end 'param'
 end 'hiddenWordParamIsCarried'
 
+union HeldAcquire
+	none
+	held(group ValueId, guardFloor ElementIndex)
+end 'HeldAcquire'
+
+type AcquiredName
+	export let token as Token
+	export let handle as ValueId
+	export let stateType as MaxonType
+
+	static function create(token Token, handle ValueId, stateType MaxonType) returns AcquiredName
+		return Self{token: token, handle: handle, stateType: stateType}
+	end 'create'
+end 'AcquiredName'
+
+typealias AcquiredNameArray = Array with AcquiredName
+
 type FunctionBodyState
 	// The `var` bindings currently IN SCOPE, in declaration order — held as the
 	// `VarInfo` objects, for the reason LoopPhiVar documents. A loop header mints a phi for
@@ -18375,6 +18397,12 @@ type FunctionBodyState
 	export var throwRouteClaim as ThrowRouteClaim
 
 	export var holdsSendForTryAwait as bool
+
+	export var statementNesting as BlockDepth
+	export var replyDeferred as bool
+	export var consumesSelf as bool
+	export var anyLinearOwned as bool
+	export var consumedReceivers as ValueIdArray
 
 	// A `try` target must still be a call when the target parse ends, so no fold may remove one inside
 	// it. `parseTry` and `if let x = try …` rewrite the op producing the target's value
@@ -18912,6 +18940,10 @@ type FunctionBodyState
 	// same type filled from an already-owned value took no reference and must not release one.
 	export var recordsOwningOpaqueSlots as ValueMarkColumn
 
+	export var acquiredStates as ValueMarkColumn
+
+	export var heldAcquire as HeldAcquire
+
 	// ⭐⭐ **WHICH RECORDS THIS BODY BUILT BY FEEDING A BORROWED OPAQUE `T` IT THEN REFERENCED THROUGH THE
 	// DESCRIPTOR** — the PROVENANCE half of the nested-view field refusal, and the half a TYPE
 	// test cannot supply.
@@ -19310,6 +19342,11 @@ type FunctionBodyState
 			tryBlocks: TryBlockContextArray.create(0),
 			throwRouteClaim: ThrowRouteClaim.unclaimed,
 			holdsSendForTryAwait: false,
+			statementNesting: 0,
+			replyDeferred: false,
+			consumesSelf: false,
+			anyLinearOwned: false,
+			consumedReceivers: ValueIdArray.create(0),
 			tryTargetMustStayACall: false,
 			loopClaimsWithIteratorPromise: false,
 			matches: MatchContextArray.create(0),
@@ -19398,6 +19435,8 @@ type FunctionBodyState
 			coOwningFeedParams: noValueMarks,
 			feedDropGuards: FeedDropGuardArray.create(0),
 			recordsOwningOpaqueSlots: noValueMarks,
+			acquiredStates: noValueMarks,
+			heldAcquire: HeldAcquire.none,
 			recordsHoldingReferencedOpaqueSlots: noValueMarks,
 			callReferencedAnOpaqueFeedSlot: false,
 			lastExitBlock: NoExitBlock,
@@ -21752,13 +21791,13 @@ export type Parser
 		let markers = self.callAlignedMarkerFacts(paramsStart, takesReceiver: template.takesReceiver)
 
 		if markers.written != NoParamPositions 'aMutableParameter'
-			paramReassigns.push(ParamReassignEntry.create(template.siteKey(), site: template.siteKey(), info: ParamReassignInfo.create(sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver), writtenParams: markers.written, markerHeads: markers.heads, bareName: bareName, callability: self.declarationCallability())))
+			paramReassigns.push(ParamReassignEntry.create(template.siteKey(), site: template.siteKey(), info: ParamReassignInfo.create(sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver, selfCapability: ParamCapability.unmarked), writtenParams: markers.written, markerHeads: markers.heads, bareName: bareName, callability: self.declarationCallability())))
 		end 'aMutableParameter'
 
 		let unreadConsumes = ParamConsumeEntryArray.create(0)
 		let unreadAliasReturns = GlobalAliasReturnEntryArray.create(0)
 		let unreadBodyFacts = SweptBodyFactEntryArray.create(0)
-		self.scanBodyFacts(template.siteKey(), declarationSite: template.siteKey(), funcBareName: bareName, paramNames: sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver), typeParamPositions: self.emptyTypeParamPositions, bodyStart: bodyStart, paramConsumes: unreadConsumes, globalAliasReturns: unreadAliasReturns, bodyFacts: unreadBodyFacts, declaresThrows: false, declaredSole: false, detectFieldStores: false, takesReceiver: template.takesReceiver, promiseCarriers: NoParamPositions, isolatedOpaqueParams: NoParamPositions)
+		self.scanBodyFacts(template.siteKey(), declarationSite: template.siteKey(), funcBareName: bareName, paramNames: sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver, selfCapability: ParamCapability.unmarked), typeParamPositions: self.emptyTypeParamPositions, bodyStart: bodyStart, paramConsumes: unreadConsumes, globalAliasReturns: unreadAliasReturns, bodyFacts: unreadBodyFacts, declaresThrows: false, declaredSole: false, detectFieldStores: false, takesReceiver: template.takesReceiver, selfCapability: ParamCapability.unmarked, promiseCarriers: NoParamPositions, isolatedOpaqueParams: NoParamPositions)
 	end 'recordTemplateParamReassigns'
 
 	function openGenericInstance(template GenericFunctionTemplate, position ElementIndex)
@@ -21812,13 +21851,12 @@ export type Parser
 		// CALL-ALIGNED (the default scan, the consume scan) or that state the alignment itself (the entry).
 		let takesReceiver = self.declarationTakesReceiver(hasStaticModifier)
 
-		// ⭐⭐ **AND WHETHER THIS DECLARATION IS A SERVICE MESSAGE** — recorded HERE, from the two facts read
-		// on the two lines above, because this is the one routine that reads both for every declaration shape.
+		// ⭐⭐ **AND WHETHER THIS DECLARATION IS A SERVICE MESSAGE** — decided HERE, from the two facts read
+		// above (the receiver and the visibility), because this is the one routine that reads both for every
+		// declaration shape, and pushed onto the roster once the entry below is filed.
 		// `StructLayout.messageMethodNames` owns what membership means; the caller owns whether the roster is
 		// KEPT (only `recordScannedType`'s does — see each other call site for why it discards).
-		if takesReceiver and isProgramWideTier(visibility) and not self.genericInstanceName.isInstance() 'aMessage'
-			messageMethodNameOut.push(nameTok.value)
-		end 'aMessage'
+		let declaresAMessage = takesReceiver and isProgramWideTier(visibility) and not self.genericInstanceName.isInstance()
 
 		self.advance()
 
@@ -21886,10 +21924,11 @@ export type Parser
 		let sweptParamTypes = MaxonTypeArray.create(0)
 		let sweptParamCapabilities = ParamCapabilityArray.create(0)
 		let sweptParamSpellings = NameRoster.create(0)
+		let declaredSelfCapability = self.receiverCapabilityAt(paramsStart)
 
 		let sourceParamNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: scannedTypeParamPositions, collectTypeParamFlags: inGenericScope, typesOut: sweptParamTypes, collectTypes: true, spellingsOut: sweptParamSpellings, capabilitiesOut: sweptParamCapabilities)
 		let sweptTypeParamPositions = scannedTypeParamPositions
-		let scannedParamNames = sweptParamNamesFor(sourceParamNames, takesReceiver: takesReceiver)
+		let scannedParamNames = sweptParamNamesFor(sourceParamNames, takesReceiver: takesReceiver, selfCapability: declaredSelfCapability)
 		let promiseCarriers = promiseCarrierPositions(sweptParamTypes, takesReceiver: takesReceiver)
 		let sweptParamDefaults = self.paramDefaultMaskOf(paramsStart)
 		let declaresDefaults = sweptParamDefaults != NoParamPositions
@@ -21899,7 +21938,11 @@ export type Parser
 			paramReassigns.push(ParamReassignEntry.create(funcName, site: declarationSiteKey(self.job.path, line: nameTok.line, column: nameTok.column), info: ParamReassignInfo.create(scannedParamNames, writtenParams: declaredMarkers.written, markerHeads: declaredMarkers.heads, bareName: nameTok.value, callability: self.declarationCallability())))
 		end 'declaresMutableParams'
 
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: sweptTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, paramSpellings: sweptParamSpellings, paramDefaults: sweptParamDefaults, returnAliasName: returnAliasName, nameLine: nameTok.line, nameColumn: nameTok.column, enclosingTypeName: self.enclosingTypeNameOrEmpty(), selfCapability: self.receiverCapabilityAt(paramsStart), paramCapabilities: sweptParamCapabilities, returnCapability: qualifiedReturn.capability))
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: sweptTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes, paramSpellings: sweptParamSpellings, paramDefaults: sweptParamDefaults, returnAliasName: returnAliasName, nameLine: nameTok.line, nameColumn: nameTok.column, enclosingTypeName: self.enclosingTypeNameOrEmpty(), selfCapability: declaredSelfCapability, paramCapabilities: sweptParamCapabilities, returnCapability: qualifiedReturn.capability))
+
+		if declaresAMessage 'aMessage'
+			messageMethodNameOut.push(nameTok.value)
+		end 'aMessage'
 
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME** — recorded
 		// here, from the SAME token walk that records its return type, because it answers two questions only
@@ -22005,7 +22048,7 @@ export type Parser
 		// forwards a parameter into a `mutable` one is as much a forwarder as a free function is, and a method
 		// that awaits the promise it is handed owns it as much as a free function does — so both halves read every
 		// declaration, through one call and one list.
-		self.scanBodyFacts(funcName, declarationSite: declarationSiteKey(self.job.path, line: nameTok.line, column: nameTok.column), funcBareName: nameTok.value, paramNames: scannedParamNames, typeParamPositions: sweptTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, globalAliasReturns: globalAliasReturns, bodyFacts: bodyFacts, declaresThrows: declaresThrows, declaredSole: qualifiedReturn.capability == ResultCapability.isolated, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver, promiseCarriers: promiseCarriers, isolatedOpaqueParams: self.isolatedOpaqueParamMask(sweptTypeParamPositions, capabilities: sweptParamCapabilities, written: declaredMarkers.written, takesReceiver: takesReceiver))
+		self.scanBodyFacts(funcName, declarationSite: declarationSiteKey(self.job.path, line: nameTok.line, column: nameTok.column), funcBareName: nameTok.value, paramNames: scannedParamNames, typeParamPositions: sweptTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, globalAliasReturns: globalAliasReturns, bodyFacts: bodyFacts, declaresThrows: declaresThrows, declaredSole: qualifiedReturn.capability == ResultCapability.isolated, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver, selfCapability: declaredSelfCapability, promiseCarriers: promiseCarriers, isolatedOpaqueParams: self.isolatedOpaqueParamMask(sweptTypeParamPositions, capabilities: sweptParamCapabilities, written: declaredMarkers.written, takesReceiver: takesReceiver))
 	end 'recordScannedSignature'
 
 	// ⭐ **THE DECLARATION'S OPAQUE-PARAMETER RECORD, OR "NONE"** — see `OpaqueParamInfo`
@@ -22262,7 +22305,7 @@ export type Parser
 	// file is in. A bare reference strips surrounding
 	// parens as the real parse's `rhsWasBareLocalReference` does (`parenStrippedParamAt`), so the two
 	// agree on what a bare-parameter value is.
-	function scanBodyFacts(funcName immutable ByteArray, declarationSite immutable ByteArray, funcBareName ByteArray, paramNames NameRoster, typeParamPositions TypeParamSlots, bodyStart ElementIndex, paramConsumes ParamConsumeEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, declaredSole bool, detectFieldStores bool, takesReceiver bool, promiseCarriers ParamPositionMask, isolatedOpaqueParams ParamPositionMask)
+	function scanBodyFacts(funcName immutable ByteArray, declarationSite immutable ByteArray, funcBareName ByteArray, paramNames NameRoster, typeParamPositions TypeParamSlots, bodyStart ElementIndex, paramConsumes ParamConsumeEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, bodyFacts SweptBodyFactEntryArray, declaresThrows bool, declaredSole bool, detectFieldStores bool, takesReceiver bool, selfCapability ParamCapability, promiseCarriers ParamPositionMask, isolatedOpaqueParams ParamPositionMask)
 		// ⚠ **ONE CALL-ALIGNED NAME LIST, READ BY BOTH HALVES** (`sweptParamNamesFor` builds it). The consume
 		// half and the by-reference half ask the same question of the same tokens — which parameter does this
 		// name denote — and every declaration shape owes both answers: an instance method forwards a parameter
@@ -22662,6 +22705,11 @@ export type Parser
 		if self.markIsolatedOpaqueParamFeeds(isolatedOpaqueParams, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds) 'anIsolatedOpaqueParameter'
 			any = true
 		end 'anIsolatedOpaqueParameter'
+
+		if selfCapability == ParamCapability.consuming 'aConsumingReceiver'
+			setParamBit(consumed, index: ReceiverParamPosition)
+			any = true
+		end 'aConsumingReceiver'
 
 		if any 'consumes'
 			paramConsumes.push(ParamConsumeEntry.create(funcName, site: declarationSite, info: ParamConsumeInfo.create(paramNames, bits: freeze consumed, feeds: freeze feeds, handedOn: freeze handedOn, forwardedStores: freeze forwardedStores)))
@@ -25400,8 +25448,8 @@ export type Parser
 	end 'visibilityModifierWordAt'
 
 	// ⭐⭐ **`module` IS A CONTEXTUAL MODIFIER, NEVER A LEXER KEYWORD, AND THAT IS A MEASUREMENT.** The word is
-	// used as an ORDINARY IDENTIFIER **6,537 times in `maxon-bin/` alone** (`var module = try
-	// queryAllModule(…)`, `module.addFunction(…)`, `module MaxonModule` parameters) and as an enum CASE
+	// used as an ORDINARY IDENTIFIER **6,537 times in `maxon-bin/` alone** (`module.addFunction(…)`,
+	// `module MaxonModule` parameters) and as an enum CASE
 	// and a `match` ARM in `specs/`. The keyword-as-a-declared-name rule rescues the NAME positions, but
 	// not `module.addFunction(…)` in expression position — that dispatches on `TokenKind` long before any name
 	// reader is reached. A `KeywordTable` entry is two lines with a four-figure blast radius, and the compiler must
@@ -25510,7 +25558,8 @@ export type Parser
 		let layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.job.path)
 		layout.declLine = nameTok.line
 		layout.declColumn = nameTok.column
-		layout.isUnique = header.isUnique
+		layout.isLinear = typeBodyHoldsADestruct(self.tokens, from: self.pos)
+		layout.isUnique = header.isUnique or layout.isLinear
 
 		// ⭐ **THE TYPE'S MESSAGE ROSTER, COLLECTED ON THE ONE WALK THAT READS ITS MEMBERS IN ORDER** —
 		// see `StructLayout.messageMethodNames`, which owns what membership means and why this sweep is the only
@@ -30864,7 +30913,8 @@ export type Parser
 		let layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.job.path)
 		layout.declLine = nameTok.line
 		layout.declColumn = nameTok.column
-		layout.isUnique = header.isUnique
+		layout.isLinear = typeBodyHoldsADestruct(self.tokens, from: self.pos)
+		layout.isUnique = header.isUnique or layout.isLinear
 
 		// `uses T` — parsed here so `parseTypeReference` recognizes `T` in the fields and
 		// methods below, and the arity check reads the list off the recorded layout.
@@ -30905,8 +30955,10 @@ export type Parser
 			end 'closes'
 
 			if self.atStructFieldKeyword() 'isField'
-				self.noteMemberName(memberNames, nameTok: self.tokenAt(pastVisibilityModifiers(self.tokens, index: self.pos) + 1), kind: TypeMemberKind.field, typeName: nameTok.value)
+				let fieldNameTok = self.tokenAt(pastVisibilityModifiers(self.tokens, index: self.pos) + 1)
+				self.noteMemberName(memberNames, nameTok: fieldNameTok, kind: TypeMemberKind.field, typeName: nameTok.value)
 				try self.readStructFieldInto(layout)
+				try self.requireFieldHoldsNoLinearValue(layout, fieldTok: fieldNameTok)
 				continue
 			end 'isField'
 
@@ -30946,6 +30998,23 @@ export type Parser
 	// ⚠ It runs at the DECLARING file's `type` — the one file that is guaranteed to exist for a service, and
 	// the file the memo re-parses when a `spawn` elsewhere mints the companions (the sweep's own hash moves,
 	// which is `synthesizeServiceCompanions`' recorded argument for why the cross-file case works at all).
+	function requireTypeDeclaresAFinalizer(nameTok Token) throws SourceParseError
+		if self.enclosingType.isType() and (try self.enclosingLayout(nameTok)).isLinear 'theTypeHasAFinalizer'
+			return
+		end 'theTypeHasAFinalizer'
+
+		throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "`consuming self` belongs to a method of a `type` that declares a finalizer, and no method of '{String.from(self.enclosingTypeNameOrEmpty())}' contains `destruct self`", line: nameTok.line, column: nameTok.column)
+	end 'requireTypeDeclaresAFinalizer'
+
+	function requireFieldHoldsNoLinearValue(layout StructLayout, fieldTok Token) throws SourceParseError
+		let swept = try self.enclosingLayout(fieldTok)
+		let declared = try swept.fieldTypes.get(layout.fieldCount() - 1) otherwise panic("requireFieldHoldsNoLinearValue: the field `readStructFieldInto` just read has a place in the swept layout")
+
+		if self.signatures.typeIsLinear(declared) 'aLinearField'
+			throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "the field '{String.from(fieldTok.value)}' holds a linear value, and a linear value {LinearValueResidence}: a field would keep it past the code that must consume it", line: fieldTok.line, column: fieldTok.column)
+		end 'aLinearField'
+	end 'requireFieldHoldsNoLinearValue'
+
 	function noteMemberName(memberNames TypeMemberNames, nameTok Token, kind TypeMemberKind, typeName ByteArray)
 		if let earlier = try memberNames.get(nameTok.value) 'aNameAlreadyDeclared'
 			if earlier != kind 'oneOfEach'
@@ -31694,6 +31763,11 @@ export type Parser
 		let paramCapabilities = ParamCapabilityArray.create(0)
 		let paramMarkers = BoolArray.create(0)
 		let markerTokens = TokenIndexArray.create(0)
+
+		if self.receiverCapabilityAt(self.pos) == ParamCapability.consuming 'aConsumingRequirement'
+			throw notATypeError(self.tokenAt(self.pos + 1))
+		end 'aConsumingRequirement'
+
 		let selfCapability = try self.consumeParameterListOpen(not isStatic)
 		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, paramCapabilities: paramCapabilities, paramMarkers: paramMarkers, markerTokens: markerTokens, owner: ParamDefaultOwner.interfaceRequirement, paramTypeOffer: noClosureParamOffer)
 		try self.consume(TokenKind.rightParen)
@@ -33828,6 +33902,11 @@ export type Parser
 		self.bodyState.declaredReturnCapability = qualifiedReturn.capability
 
 		self.seedParameterCapabilities(func, head: head, takesReceiver: takesReceiver)
+		self.bodyState.consumesSelf = takesReceiver and head.selfCapability == ParamCapability.consuming
+
+		if self.bodyState.consumesSelf 'aConsumingMethod'
+			try self.requireTypeDeclaresAFinalizer(nameTok)
+		end 'aConsumingMethod'
 
 		// ⭐ **THE FUNCTION IS PUSHED UP FRONT, NOT AT THE END, AND THAT IS WHAT MAKES ValueOrigin CORRECT
 		// UNDER NESTED PARSING.** A non-capturing closure literal lifts to a top-level function
@@ -34638,7 +34717,7 @@ export type Parser
 	//
 	// ⚠ The entry block still needs a terminator or the module is malformed, and `retVoid` is what it gets
 	// whatever the declared return type is. That is sound ONLY because a skipped body is by construction one
-	// no path from `main` reaches: `queryAllModule`'s fixpoint demands every body the reachability walk
+	// no path from `main` reaches: `FrontEndRun`'s fixpoint demands every body the reachability walk
 	// touches, and `DeadFunctionElimination.requireUnreachableLibraryStayedDead` turns a disagreement
 	// into a panic rather than letting a `retVoid` stand in for a value the program would have read.
 	function skipUnreachedFunctionBody(entry IrBlock, nameTok Token)
@@ -37601,6 +37680,7 @@ export type Parser
 	// create successor blocks. Blank lines separate statements.
 	function parseStatements(func IrFunction, block IrBlock) returns IrBlock throws SourceParseError
 		var current = block
+		self.bodyState.statementNesting = self.bodyState.statementNesting + 1
 
 		// ⭐⭐ **E3071 LIVES HERE BECAUSE THIS IS THE ONE STATEMENT-LIST LOOP** — a function body and every
 		// nested block body (`parseBlockBody`) both come through it, so the dead-code rule is stated once for
@@ -37645,6 +37725,7 @@ export type Parser
 			sharesItsLine = not tokenKindEndsALine(self.kindAt(self.pos))
 		end 'stmts'
 
+		self.bodyState.statementNesting = self.bodyState.statementNesting - 1
 		return current
 	end 'parseStatements'
 
@@ -37674,6 +37755,7 @@ export type Parser
 		self.bodyState.currentBlock = block
 		let lateFloor = self.bodyState.lateReads.count()
 		self.bodyState.statementStart = self.pos
+		self.forgetStatementFacts()
 
 		// The statement's first token — the anchor `drainPendingTemps` gives the drops it emits (no source
 		// token spawns a drop). Captured before parsing advances the cursor.
@@ -37705,7 +37787,9 @@ export type Parser
 			return try self.parseForStatement(func)
 		end 'forStmt' else if form == StatementForm.modifyStmt 'modifyStmt'
 			return try self.parseModifyStatement(func, block: block)
-		end 'modifyStmt' else if form == StatementForm.matchStmt 'matchStmt'
+		end 'modifyStmt' else if form == StatementForm.acquireStmt 'acquireStmt'
+			return try self.parseAcquireStatement(func)
+		end 'acquireStmt' else if form == StatementForm.matchStmt 'matchStmt'
 			return try self.parseMatchStatement(func, block: block)
 		end 'matchStmt' else if form == StatementForm.breakStmt 'breakStmt'
 			try self.parseBreakStatement(func, block: block)
@@ -37740,7 +37824,9 @@ export type Parser
 			// `drainPendingTemps` tail releases it if it owns heap. `try await p otherwise …` is NOT this arm:
 			// it opens with `try` and `tryStmt` above claims it.
 			_ = try self.parseAwait(func)
-		end 'awaitStmt' else if form == StatementForm.tupleAssign 'tupleAssign'
+		end 'awaitStmt' else if form == StatementForm.destructStmt 'destructStmt'
+			try self.parseDestructStatement()
+		end 'destructStmt' else if form == StatementForm.tupleAssign 'tupleAssign'
 			// `(x, let y) = f()` — a statement-level TUPLE ASSIGNMENT (`specs/tuple-assign.md`): one
 			// right-hand side, evaluated once, distributed positionally over targets that rebind, declare or
 			// discard. It is the only statement in the grammar that opens with `(`, and the predicate — not
@@ -38033,6 +38119,10 @@ export type Parser
 			return StatementForm.modifyStmt
 		end 'modifyStmt'
 
+		if self.at(TokenKind.acquire) 'acquireStmt'
+			return StatementForm.acquireStmt
+		end 'acquireStmt'
+
 		if self.at(TokenKind.match) 'matchStmt'
 			return StatementForm.matchStmt
 		end 'matchStmt'
@@ -38060,6 +38150,10 @@ export type Parser
 		if self.at(TokenKind.await) 'awaitStmt'
 			return StatementForm.awaitStmt
 		end 'awaitStmt'
+
+		if destructStatementAt(self.tokens, index: self.pos) 'destructStmt'
+			return StatementForm.destructStmt
+		end 'destructStmt'
 
 		if tupleAssignEqualsIn(self.tokens, open: self.pos) != self.pos 'tupleAssign'
 			return StatementForm.tupleAssign
@@ -40624,6 +40718,10 @@ export type Parser
 		return valueIsMarked(self.bodyState.imageRecordReads, value: value)
 	end 'valueIsAnImmortalImageRecord'
 
+	function valueIsAPayloadFreeWord(value ValueId) returns bool
+		return self.valueIsAnImmortalImageRecord(value) and self.valueIsAnUnboxedUnion(value)
+	end 'valueIsAPayloadFreeWord'
+
 	function markImageRecordRead(value ValueId)
 		self.bodyState.imageRecordReads = withValueMarked(self.bodyState.imageRecordReads, value: value)
 	end 'markImageRecordRead'
@@ -43090,6 +43188,15 @@ export type Parser
 			throw SourceParseError.returnInInitializer(String.from(self.statement.initializerBinding), line: retTok.line, column: retTok.column)
 		end 'noFunctionToLeave'
 
+		if self.bodyState.replyDeferred 'afterReplyLater'
+			if not bare 'aValue'
+				throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "after `reply.later()` the message answers through its Reply, so `return` carries no value: pass the value to `<reply>.answer(value)`", line: retTok.line, column: retTok.column)
+			end 'aValue'
+
+			self.emitFunctionExit(block, exit: FunctionExit.returnValue(self.deferredReturnPlaceholder(func.maxonReturnType, anchor: retTok)), anchor: retTok)
+			return
+		end 'afterReplyLater'
+
 		if maxonReturnTypeIsVoid(func.maxonReturnType) 'voidFunction'
 			if not bare 'valueFromVoid'
 				throw SourceParseError.returnValueFromVoid(String.from(func.name), line: retTok.line, column: retTok.column)
@@ -44073,6 +44180,7 @@ export type Parser
 		// would make the method the try target and leave the throwing await unguarded, silently dropping
 		// its error flag. The operand parse has already consumed any postfix on the promise itself.
 		if self.at(TokenKind.await) 'awaitTarget'
+			try self.requireNoWaitInsideWindow(self.current())
 			let awaitTok = try self.consume(TokenKind.await)
 			let holdsSend = self.bodyState.holdsSendForTryAwait
 			self.bodyState.holdsSendForTryAwait = true
@@ -44431,6 +44539,7 @@ export type Parser
 		let (refused, accepted) = self.branchOnSendStatus(status, anchor: anchor)
 		let settled = self.artifact.module.addBlock(self.bodyFunction(), label: b"sendsettled", heat: BlockHeat.normal)
 		let flag = self.mintPhi(settled, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.carryWindowBirthFrom(flag, source: sent.staging)
 
 		self.bodyState.currentBlock = accepted
 		self.joinSendFlag(accepted, settled: settled, flag: self.emitLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range))
@@ -44980,7 +45089,11 @@ export type Parser
 		end 'propagate'
 
 		let fork = self.openTryFork(func, flag: flag, result: result, anchor: tryTok, leg: leg)
+		let enclosingStart = self.bodyState.statementStart
+		let enclosingFacts = self.suspendStatementFacts()
 		let handler = try self.parseOtherwiseHandler(func, result: result, flag: fork.errFlag, fused: fork.errFused, target: target, resultUsed: resultUsed, tryTok: tryTok)
+		self.bodyState.statementStart = enclosingStart
+		self.resumeStatementFacts(enclosingFacts)
 		let errEnd = self.bodyState.currentBlock
 		let errMoveMark = self.captureMoveMark()
 
@@ -45787,6 +45900,7 @@ export type Parser
 
 	function retagCaughtBox(flag ValueId, eType MaxonType, anchor Token) returns ValueId
 		let box = self.emitRetaggedCastValue(flag, targetType: eType, range: SourceRange.ofToken(anchor))
+		self.carryWindowBirthFrom(box, source: flag)
 		let unionName = self.internedName(typeNameIdOf(eType))
 		self.markValueOwnsHeap(box, exclusivity: serviceSendErrorExclusivity(self.signatures, unionName: unionName))
 
@@ -46961,6 +47075,7 @@ export type Parser
 		let ctx = self.innermostTryBlock()
 		let member = self.recordRoutedEdge(ctx, clause: clause)
 		let flag = self.rewriteRoutedOp(opIdx)
+		self.carryWindowBirthFrom(ctx.flagPhi, source: flag)
 		let func = self.bodyFunction()
 
 		// The success continuation. Everything the rest of the body emits lands here, so a second throwing
@@ -47068,7 +47183,7 @@ export type Parser
 		let func = self.bodyFunction()
 		let pad = self.artifact.module.addBlock(func, label: b"tryblkthrow", heat: BlockHeat.normal)
 
-		self.emitStrandGuardExitsInto(pad, floor: ctx.windowFloor, anchor: ctx.tryTok)
+		self.emitWindowExitsInto(pad, floor: ctx.windowFloor, anchor: ctx.tryTok)
 
 		self.emitTempDropsInto(pad, temps: self.bodyState.pendingTempDrops, anchor: ctx.tryTok)
 		self.emitExitRoute(pad, route: route, shape: shape, carried: errArgs, anchor: ctx.tryTok)
@@ -47584,7 +47699,7 @@ export type Parser
 
 	function emitFunctionExit(into IrBlock, exit FunctionExit, anchor Token, handedOff HandedOff = HandedOff.nothing)
 		self.bodyState.lastExitBlock = into.id
-		self.emitStrandGuardExitsInto(into, floor: 0, anchor: anchor)
+		self.emitWindowExitsInto(into, floor: 0, anchor: anchor)
 		let shape = self.exitShapeOf(exit)
 		var route = ExitRoute.direct
 
@@ -48338,6 +48453,7 @@ export type Parser
 		let firstOp = self.artifact.module.ops.count()
 		self.emitDecrefOps(value, range: range)
 		self.noteDroppedPromise(value, firstOp: firstOp, name: name)
+		self.noteDroppedLinear(value, firstOp: firstOp, name: name)
 
 		if self.anyLoopTracksDrop(value) 'aLoopMayWithdrawIt'
 			self.noteHeaderDrop(value, results: self.opResultsSince(firstOp))
@@ -48354,7 +48470,7 @@ export type Parser
 		self.bodyState.discardedReplies.push(value)
 	end 'noteDiscardedReply'
 
-	function noteDroppedPromise(value ValueId, firstOp ElementIndex, name ByteArray)
+	function noteDroppedPromise(value ValueId, firstOp ElementIndex, name immutable ByteArray)
 		if not self.valueOwnsGreenThread(value) or valueIdArrayContains(self.bodyState.discardedReplies, value: value) 'notAPromiseToAccountFor'
 			return
 		end 'notAPromiseToAccountFor'
@@ -48363,9 +48479,7 @@ export type Parser
 			let emitted = try self.artifact.module.ops.get(opIdx) otherwise panic("noteDroppedPromise: ops.get OOB at {opIdx} below the count just read")
 
 			if (try directCalleeOf(emitted) otherwise EmptySourceText).equals(GtPromiseDropName) 'theDrop'
-				let notes = self.notesForWrite(self.bodyFunction())
-				notes.droppedPromiseOps.push(opIdx)
-				notes.droppedPromiseNames.push(name)
+				self.noteDroppedOwned(DroppedOwnedKind.promise, op: opIdx, name: name)
 			end 'theDrop'
 		end 'eachNewOp'
 	end 'noteDroppedPromise'
@@ -48553,7 +48667,49 @@ export type Parser
 		enrolled.isEnrolled = true
 		self.bodyState.ownedBindings.push(enrolled)
 		self.bodyState.moveLedger.noteDirty(enrolled.enrolledAt)
+
+		if self.valueIsLinear(enrolled.boundValue) 'aLinearBinding'
+			self.bodyState.anyLinearOwned = true
+		end 'aLinearBinding'
 	end 'enrolOwnedBinding'
+
+	function valueIsLinear(value ValueId) returns bool
+		return self.signatures.valueIsLinear(self.tagOf(value), nameId: self.valueNameId(value), from: self.artifact.typeNames)
+	end 'valueIsLinear'
+
+	function noteDroppedLinear(value ValueId, firstOp ElementIndex, name immutable ByteArray)
+		if firstOp >= self.artifact.module.ops.count() or not self.valueIsLinear(value) 'notALinearDrop'
+			return
+		end 'notALinearDrop'
+
+		self.noteDroppedOwned(DroppedOwnedKind.linear, op: firstOp, name: name)
+	end 'noteDroppedLinear'
+
+	function noteDroppedOwned(kind DroppedOwnedKind, op ElementIndex, name immutable ByteArray)
+		self.notesForWrite(self.bodyFunction()).droppedOwned.push(DroppedOwned.create(op, name: name, kind: kind))
+	end 'noteDroppedOwned'
+
+	function noteLinearLiveAcrossOp(opIdx ElementIndex)
+		for binding in self.bodyState.ownedBindings 'eachOwned'
+			if not binding.movedFrom and self.valueIsLinear(binding.boundValue) 'aLiveLinearBinding'
+				self.recordLinearLiveAt(opIdx, name: binding.name)
+				return
+			end 'aLiveLinearBinding'
+		end 'eachOwned'
+
+		for pending in self.bodyState.pendingTempDrops 'eachPending'
+			if self.valueIsLinear(pending) 'aLiveLinearTemporary'
+				self.recordLinearLiveAt(opIdx, name: EmptySourceText)
+				return
+			end 'aLiveLinearTemporary'
+		end 'eachPending'
+	end 'noteLinearLiveAcrossOp'
+
+	function recordLinearLiveAt(opIdx ElementIndex, name ByteArray)
+		let notes = self.notesForWrite(self.bodyFunction())
+		notes.liveLinearCallOps.push(opIdx)
+		notes.liveLinearCallNames.push(name)
+	end 'recordLinearLiveAt'
 
 	function truncateOwnedBindings(height ElementIndex)
 		for position in height upto self.bodyState.ownedBindings.count() 'eachDropped'
@@ -49138,6 +49294,10 @@ export type Parser
 	function trackOwnedTemp(value ValueId, exclusivity OwnedHeapExclusivity)
 		self.markValueOwnsHeap(value, exclusivity: exclusivity)
 		self.bodyState.pendingTempDrops.push(value)
+
+		if self.valueIsLinear(value) 'aLinearTemporary'
+			self.bodyState.anyLinearOwned = true
+		end 'aLinearTemporary'
 	end 'trackOwnedTemp'
 
 	// ⭐ **`trackOwnedTemp`'s EXACT INVERSE — the value is no longer a managed temporary at all.** Its
@@ -49251,7 +49411,7 @@ export type Parser
 	function valueIsSolelyOwnedHere(value ValueId) returns bool
 		// A payload-free word owns nothing, so it is trivially sole; refusing it would reject a service
 		// method that returns it beside a constructed word.
-		if self.valueIsAnImmortalImageRecord(value) and self.valueIsAnUnboxedUnion(value) 'aPayloadFreeWord'
+		if self.valueIsAPayloadFreeWord(value) 'aPayloadFreeWord'
 			return true
 		end 'aPayloadFreeWord'
 
@@ -49643,7 +49803,7 @@ export type Parser
 	function rebindSourceIsAnImmutableAlias(sourceName SourceBinding) returns bool
 		let sourceLocal = try sourceName.localName() otherwise return false
 		let source = self.bodyState.scope.getInfo(sourceLocal)
-		return not source.isMutable() and not self.valueIsAnOwnedIsolatedLocal(source.boundValue)
+		return not source.isMutable() and not self.valueIsAnOwnedIsolatedLocal(source.boundValue) and not self.valueHoldsAUniqueRecord(source.boundValue)
 	end 'rebindSourceIsAnImmutableAlias'
 
 	// ⭐⭐ **WHICH NAME THE RHS SPAN IS ROOTED AT — the `t` of `t`, `(t)`, `t.x`, `t.0`, `(t).x`, `(t.x.y)` —
@@ -49709,8 +49869,9 @@ export type Parser
 		end 'emptySpan'
 
 		let tok = self.tokenAt(lo)
+		let namesAConsumedReceiver = tok.kind == TokenKind.self and self.bodyState.consumesSelf
 
-		if not tokenCanBeAName(tok) 'notAName'
+		if not tokenCanBeAName(tok) and not namesAConsumedReceiver 'notAName'
 			throw AbsentError.absent
 		end 'notAName'
 
@@ -49742,7 +49903,7 @@ export type Parser
 			throw AbsentError.absent
 		end 'parensDoNotWrapTheChain'
 
-		return tok.value
+		return SelfParamName if namesAConsumedReceiver else tok.value
 	end 'rhsRootName'
 
 	function rhsRootLocalName(startPos ElementIndex) returns SourceBinding
@@ -50790,7 +50951,12 @@ export type Parser
 			self.attachLateReadsOf(block, op: op)
 		end 'someReadIsLate'
 
+		let opIdx = self.artifact.module.ops.count()
 		self.artifact.emitOp(block, op: op, range: range)
+
+		if self.bodyState.anyLinearOwned and opMayWaitForAnotherParty(op) 'aSuspensionPoint'
+			self.noteLinearLiveAcrossOp(opIdx)
+		end 'aSuspensionPoint'
 	end 'emitBodyOp'
 
 	function emitBodyTerminator(block IrBlock, op MaxonOp, range SourceRange)
@@ -50922,7 +51088,7 @@ export type Parser
 
 	function anyGenericTemplateOmitsAParameter(callee ByteArray, written Count, receiverSlots ParamCount) returns bool
 		for template in self.genericTemplatesNameableHere(callee, mint: CalleeMint.notMinted) 'eachTemplate'
-			if omittedParametersRemain(sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver).count(), written: written, receiverSlots: receiverSlots) 'moreDeclared'
+			if omittedParametersRemain(sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver, selfCapability: ParamCapability.unmarked).count(), written: written, receiverSlots: receiverSlots) 'moreDeclared'
 				return true
 			end 'moreDeclared'
 		end 'eachTemplate'
@@ -54610,7 +54776,7 @@ export type Parser
 			return false
 		end 'aName'
 
-		if kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for or kind == TokenKind.modify 'alwaysOpens'
+		if kind == TokenKind.while or kind == TokenKind.match or kind == TokenKind.for or kind == TokenKind.modify or kind == TokenKind.acquire 'alwaysOpens'
 			return true
 		end 'alwaysOpens'
 
@@ -55955,7 +56121,7 @@ export type Parser
 	// thing that differs between the two keywords here — the exit for a `break`, the continue target for
 	// a `continue` — which is why they share this rather than each spelling the same three lines.
 	function jumpToLoopBlock(block IrBlock, ctx LoopContext, targetId BlockId, anchor Token)
-		self.emitStrandGuardExitsInto(block, floor: ctx.windowFloor, anchor: anchor)
+		self.emitWindowExitsInto(block, floor: ctx.windowFloor, anchor: anchor)
 		self.noteDebugScopeExits(ctx.debugOpenFloor, leavingFrom: block)
 		self.dropTargetBodyOwned(block, floor: ctx.ownedFloor, anchor: anchor)
 		let mark = moveMarkPrefix(self.captureMoveMark(), height: ctx.ownedFloor)
@@ -55986,7 +56152,7 @@ export type Parser
 	function breakToMatchMerge(func IrFunction, block IrBlock, ctx MatchContext, breakTok Token)
 		// Release what the arm declared, exactly as a live arm exit's `dropArmScopedOwned` would — the
 		// break skips the arm's end, so this is the only drop its payload/`let` bindings get.
-		self.emitStrandGuardExitsInto(block, floor: ctx.windowFloor, anchor: breakTok)
+		self.emitWindowExitsInto(block, floor: ctx.windowFloor, anchor: breakTok)
 		self.dropTargetBodyOwned(block, floor: ctx.ownedFloor, anchor: breakTok)
 		self.noteDebugScopeExits(ctx.debugOpenFloor, leavingFrom: block)
 
@@ -56731,6 +56897,11 @@ export type Parser
 				// enum match (a catch-all would silently mask a case added later) and a real body on a
 				// scalar match. A diverging default terminates its body and so reaches no merge.
 				if divergentHandlerOpensAt(self.kindAt(self.pos)) 'divergingDefault'
+					if isEnumMatch and not deferredScrutinee and self.valueIsLinear(scrut) 'aLinearScrutineeInTheDefault'
+						self.bodyState.currentBlock = defaultBody
+						try self.endLinearScrutineeInArm(scrut, anchor: defTok)
+					end 'aLinearScrutineeInTheDefault'
+
 					try self.parseDivergingTerminalForm(func, block: defaultBody)
 
 					// The exit is `currentBlock`, not `defaultBody`: the diverging form's own expression may
@@ -56921,6 +57092,11 @@ export type Parser
 					end 'payloadSlotBindings'
 				end 'openArmBindings'
 
+				if isEnumMatch and not deferredScrutinee and not armOwnsMemberBox and self.valueIsLinear(scrut) 'aLinearScrutinee'
+					self.bodyState.currentBlock = bodyBlock
+					try self.endLinearScrutineeInArm(scrut, anchor: patternTok)
+				end 'aLinearScrutinee'
+
 				let armTempFloor = self.bodyState.pendingTempDrops.count()
 				let armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, destination: destination, carried: carried, armTarget: armTarget, tupleArmTarget: tupleArmTarget)
 
@@ -57005,7 +57181,9 @@ export type Parser
 		if isEnumMatch and not sawDefault 'enumExhaustive'
 			// A `default throws`/`panic` covers every unmatched case, so the case-set need not be complete.
 			try self.checkEnumExhaustive(requireEnumLayout(enumMatch), covered: enumCovered, union: errorUnion)
-		end 'enumExhaustive' else if not isEnumMatch and not deferredScrutinee and not sawDefault 'notExhaustive'
+		end 'enumExhaustive' else if isEnumMatch and sawDefault 'aDefaultCoversTheRest'
+			try self.requireDefaultCoversNoLinearPayload(requireEnumLayout(enumMatch), covered: enumCovered, anchor: self.current())
+		end 'aDefaultCoversTheRest' else if not isEnumMatch and not deferredScrutinee and not sawDefault 'notExhaustive'
 			var subject = "match"
 
 			if isExpression 'exprSubject'
@@ -59181,6 +59359,7 @@ export type Parser
 			end 'appendEach'
 		end 'payloadBind'
 
+		try self.requireLinearPayloadsAreBound(layout, caseIndex: lowIndex, bindings: bindings, patternTok: patternTok)
 		try self.markEnumCovered(covered, index: lowIndex, layout: layout, patternTok: patternTok)
 		let tag = self.dispatchTagOfIndex(layout, index: lowIndex)
 		into.push(DispatchInterval.create(tag, hi: tag, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create(0)))
@@ -59507,6 +59686,52 @@ export type Parser
 		return bindings
 	end 'parseCasePayloadBindings'
 
+	function requireLinearPayloadsAreBound(layout EnumLayout, caseIndex CaseIndex, bindings PayloadBindingArray, patternTok Token) throws SourceParseError
+		for field in layout.payloadsAt(caseIndex) 'eachPayload'
+			if not self.signatures.typeIsLinear(field.declaredType) 'notLinear'
+				continue
+			end 'notLinear'
+
+			var bound = false
+
+			for binding in bindings 'eachBinding'
+				if binding.caseIndex == caseIndex and not binding.isDiscard and binding.field.name.equals(field.name) 'itBindsThisPayload'
+					bound = true
+				end 'itBindsThisPayload'
+			end 'eachBinding'
+
+			if not bound 'leftBehind'
+				throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "the case '{String.from(layout.caseNameAt(caseIndex))}' carries the linear value '{String.from(field.name)}', and this arm must bind it to a name and consume it: a pattern that leaves it behind drops it", line: patternTok.line, column: patternTok.column)
+			end 'leftBehind'
+		end 'eachPayload'
+	end 'requireLinearPayloadsAreBound'
+
+	function requireDefaultCoversNoLinearPayload(layout EnumLayout, covered BoolArray, anchor Token) throws SourceParseError
+		for i in 0 upto layout.caseCount() 'eachCase'
+			let isCovered = try covered.get(i) otherwise panic("requireDefaultCoversNoLinearPayload: covered.get OOB at {i} — the bitmap is sized to the enum's case count")
+
+			if isCovered 'anArmHasIt'
+				continue
+			end 'anArmHasIt'
+
+			for field in layout.payloadsAt(i) 'eachPayload'
+				if self.signatures.typeIsLinear(field.declaredType) 'aLinearPayload'
+					throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "`default` covers the case '{String.from(layout.caseNameAt(i))}', which carries the linear value '{String.from(field.name)}': give the case an arm that binds it and consumes it", line: anchor.line, column: anchor.column)
+				end 'aLinearPayload'
+			end 'eachPayload'
+		end 'eachCase'
+	end 'requireDefaultCoversNoLinearPayload'
+
+	function endLinearScrutineeInArm(scrut ValueId, anchor Token) throws SourceParseError
+		if not self.valueIsAPayloadFreeWord(scrut) 'aRecordThisCodeMustOwn'
+			try self.requireLinearArgumentIsOwned(scrut, anchor: anchor)
+		end 'aRecordThisCodeMustOwn'
+
+		self.emitDecrefOps(scrut, range: SourceRange.ofToken(anchor))
+		self.poisonOwningBinding(scrut)
+		self.removeFromPendingTemps(scrut)
+	end 'endLinearScrutineeInArm'
+
 	function parseBindingNameList(checked CheckedBindingNames) returns TokenArray throws SourceParseError
 		try self.consume(TokenKind.leftParen)
 		let names = TokenArray.create(0)
@@ -59584,6 +59809,7 @@ export type Parser
 			let storage = payloadStorageOf(class)
 			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, valueType: payloadValueTypeOf(class, declared: declared), source: PayloadSource.word(layout.wordKeyOfIndex(binding.caseIndex)) if unboxed else PayloadSource.slot(offset, storage: storage), range: range)
 			self.wearIndexSpaceAlias(loaded, declared: binding.field.declaredType, scopeFilePath: layout.declFilePath)
+			self.carryWindowBirthFrom(loaded, source: scrutBox)
 			self.brandValue(loaded, brand: self.payloadPlaceBrand(binding.field, layout: layout, resolved: declared))
 
 			// Whatever the payload's own mutability: a read-only scrutinee is read-only all the way down.
@@ -59613,7 +59839,10 @@ export type Parser
 			// await reclaimed the thread and the union's own destructor cascade reclaimed it again. It is the
 			// payload twin of `__managed_vacate`, and the union's slot is nulled by the same store the managed
 			// move-out uses.
-			if payloadClassIsAGreenThread(class) 'aGreenThreadPayload'
+			if payloadClassIsManaged(class) and (self.valueIsLinear(loaded) or self.valueIsLinear(scrutBox)) 'aLinearPayload'
+				self.retainBorrowedPayload(bindingInfo, loaded: loaded, range: range)
+				movedManaged = true
+			end 'aLinearPayload' else if payloadClassIsAGreenThread(class) 'aGreenThreadPayload'
 				if not standing.solelyOwned 'borrowedScrutinee'
 					throw SourceParseError.promiseCannotBeBorrowed(String.from(binding.field.name), cure: "A promise payload is MOVED out of the union when it is bound, and this scrutinee is only borrowed — there is nothing to move out of. `match` on the binding that owns the union", line: binding.nameTok.line, column: binding.nameTok.column)
 				end 'borrowedScrutinee'
@@ -63494,6 +63723,7 @@ export type Parser
 	function parseMerge(func IrFunction, opTok Token) returns ValueId throws SourceParseError
 		let operandStart = self.pos
 		let operand = try self.parseUnclaimedUnary(func)
+		try self.requireNotAnAcquiredState(operand, verb: "merged", anchor: self.tokenAt(operandStart))
 		try self.requireNotAnIsolatedSlotRead(operand, startIndex: operandStart, endIndex: self.pos, anchor: opTok)
 
 		if self.valueIsAValueType(operand) or self.effectiveCapabilityOf(operand) != ValueCapability.isolated 'notIsolated'
@@ -63507,6 +63737,7 @@ export type Parser
 		end 'movesTheLocal'
 
 		self.setValueCapability(merged, capability: ValueCapability.mutable)
+		self.regionFactsForWrite().mergedValues.insert(merged)
 		return merged
 	end 'parseMerge'
 
@@ -63526,7 +63757,7 @@ export type Parser
 		try self.consume(TokenKind.with)
 		let valueStart = self.pos
 		let replacement = try self.parseUnclaimedUnary(func)
-		try self.recoverIsolated(replacement, startIndex: valueStart, site: IsolatedRecoverySite.declared)
+		try self.recoverIsolated(replacement, startIndex: valueStart, site: IsolatedRecoverySite.swapReplacement)
 
 		self.notePassedParamNeed(func, value: origin.holder, mutable: true, line: opTok.line)
 		self.emitIncref(old, range: SourceRange.ofToken(opTok))
@@ -63681,7 +63912,8 @@ export type Parser
 				immutable then self.notePassedParamNeed(func, value: argument, mutable: false, line: anchor.line)
 				mutable then self.notePassedParamNeed(func, value: argument, mutable: true, line: anchor.line)
 				isolated or
-				unmarked then break
+				unmarked or
+				consuming then break
 			end 'declared'
 		end 'eachSourceArgument'
 
@@ -63744,9 +63976,12 @@ export type Parser
 		end 'aSecondRegion'
 
 		try self.recordCallOpen(firstValue, openedTok: firstTok)
+		self.noteStateReached(firstValue, line: firstTok.line, column: firstTok.column)
+		let facts = self.regionFactsForWrite()
+		facts.pendingCallOpen = PendingCallOpen.opened(firstValue, range: SourceRange.ofToken(firstTok), label: rootName)
 
 		for position in 0 upto args.count() 'eachOtherArgument'
-			if position == first or self.valueIsCleanInput(try args.get(position) otherwise panic("openIsolatedPositions: args.get OOB at {position}")) 'staysInsideOrIsClean'
+			if position == first or self.valueIsCleanIntoARegion(try args.get(position) otherwise panic("openIsolatedPositions: args.get OOB at {position}")) 'staysInsideOrIsClean'
 				continue
 			end 'staysInsideOrIsClean'
 
@@ -63836,7 +64071,7 @@ export type Parser
 		for operand in 0 upto args.count() 'eachOperand'
 			let value = try args.get(operand) otherwise panic("pausedOperandsOf: args.get OOB at {operand}")
 
-			if self.effectiveCapabilityOf(value) == ValueCapability.paused or self.isolatedSlotReadThroughReadOnlyData(value) 'aPausedOperand'
+			if self.effectiveCapabilityOf(value) == ValueCapability.paused or self.isolatedSlotReadThroughReadOnlyData(value) or self.valueIsBesideAnotherStatesWindow(value) 'aPausedOperand'
 				paused = maskWithParam(paused, param: operand as ParamCount)
 			end 'aPausedOperand'
 		end 'eachOperand'
@@ -63936,7 +64171,7 @@ export type Parser
 		return stop
 	end 'argumentSpanEnd'
 
-	function fileCallNotes(func IrFunction, opIdx ElementIndex, args ValueIdArray, argAnchors TokenIndexArray, stored StoredSlotArgArray, receiver ReceiverArg, anchor Token)
+	function fileCallNotes(func IrFunction, opIdx ElementIndex, args ValueIdArray, argAnchors TokenIndexArray, stored StoredSlotArgArray, receiver ReceiverArg, anchor Token, callOpen PendingCallOpen)
 		let notes = self.notesForWrite(func)
 		let receiverFirst = self.receiverIsPassed(receiver)
 		let receiverTok = self.receiverTokenOf(receiver, fallback: anchor)
@@ -63957,7 +64192,7 @@ export type Parser
 			end 'aLoopMayRejudgeIt'
 		end 'eachStoredSlotArg'
 
-		self.noteWindowCall(func, opIdx: opIdx, args: args)
+		self.noteWindowCall(func, opIdx: opIdx, args: args, callOpen: callOpen)
 		self.noteKeptArgumentSites(func, opIdx: opIdx, args: args, argAnchors: argAnchors, receiver: receiver, anchor: anchor)
 	end 'fileCallNotes'
 
@@ -64160,24 +64395,26 @@ export type Parser
 		return candidates
 	end 'storedSlotCandidates'
 
-	function pausedRegionLabel(windows WindowStack) returns immutable ByteArray
+	function pausedRegionLabel(windows WindowStack, callOpen PendingCallOpen) returns immutable ByteArray throws AbsentError
 		if windowIsOpen(windows) 'aWindow'
 			return innermostWindowOf(windows).label
 		end 'aWindow'
 
-		return self.statement.drainingLabel
+		if self.statement.drainingLoops > 0 'aDrainedArray'
+			return self.statement.drainingLabel
+		end 'aDrainedArray'
+
+		match callOpen 'callOpen'
+			opened(_, _, label) then return label
+			none then throw AbsentError.absent
+		end 'callOpen'
 	end 'pausedRegionLabel'
 
-	function noteWindowCall(func IrFunction, opIdx ElementIndex, args ValueIdArray)
-		let windows = self.regionFactsForRead().windows
-
-		if not windowIsOpen(windows) and self.statement.drainingLoops == 0 'noWindow'
-			return
-		end 'noWindow'
-
+	function noteWindowCall(func IrFunction, opIdx ElementIndex, args ValueIdArray, callOpen PendingCallOpen)
+		let label = try self.pausedRegionLabel(self.regionFactsForRead().windows, callOpen: callOpen) otherwise return
 		let notes = self.notesForWrite(func)
 		notes.windowCallOps.push(opIdx)
-		notes.windowCallLabels.push(self.pausedRegionLabel(windows))
+		notes.windowCallLabels.push(label)
 		notes.windowCallPausedOperands.push(self.pausedOperandsOf(args))
 	end 'noteWindowCall'
 
@@ -64240,6 +64477,7 @@ export type Parser
 
 		if declared == ResultCapability.isolated 'anIsolatedResult'
 			self.setValueCapability(result, capability: ValueCapability.isolated)
+			self.carryWindowBirth(result, sources: args)
 			return
 		end 'anIsolatedResult'
 
@@ -64251,7 +64489,7 @@ export type Parser
 		let returnsFresh = self.signatures.returnsFreshValue(callee)
 
 		if opensAnIsolatedValue and not qualifiedMemberIs(callee, member: CloneMethodName) 'leavesTheOpenedRegion'
-			self.noteHandedBackResult(result, callee: callee, args: args, anchor: anchor)
+			self.noteViewOfTheOpenedRegion(result, callee: callee, args: args, anchor: anchor)
 			return
 		end 'leavesTheOpenedRegion'
 
@@ -64621,6 +64859,10 @@ export type Parser
 			throw self.regionRefusal(ErrorCode.semanticIsolatedReadOutsideBlock, message: "'{rootText}' is not isolated; 'modify' opens an isolated value. Declare it `as isolated {self.valueDisplayTypeName(target)}`", line: targetTok.line, column: targetTok.column)
 		end 'notIsolated'
 
+		if self.valueIsBesideAnotherStatesWindow(target) 'anotherStatesData'
+			try self.requireHolderCapabilityWritable(ValueCapability.paused, pathText: rootText, action: "opened", joinedAtALoop: false, line: targetTok.line, column: targetTok.column)
+		end 'anotherStatesData'
+
 		var holderValue = 0 as ValueId
 		var holderField = 0 as FieldIndex
 		var opensAField = false
@@ -64644,12 +64886,193 @@ export type Parser
 		_ = try windows.pop() otherwise panic("parseModifyStatement: the window this statement pushed is gone from the stack it popped")
 		self.bodyState.currentBlock = bodyEnd
 
-		if not bodyEnd.isTerminated() 'fallsThrough'
-			self.emitStrandGuard(GtStrandGuardExitName, range: SourceRange.ofToken(labelTok))
-		end 'fallsThrough'
+		if bodyEnd.isTerminated() 'leavesOnEveryPath'
+			self.bodyState.currentBlock = self.newDeadBlock(func, label: b"modifycont")
+			return self.bodyState.currentBlock
+		end 'leavesOnEveryPath'
 
+		self.emitStrandGuard(GtStrandGuardExitName, range: SourceRange.ofToken(labelTok))
 		return bodyEnd
 	end 'parseModifyStatement'
+
+	function parseAcquireStatement(func IrFunction) returns IrBlock throws SourceParseError
+		let acquireIndex = self.pos
+		let acquireTok = try self.consume(TokenKind.acquire)
+		try self.requireNoWaitInsideWindow(acquireTok)
+
+		let constructEnd = self.acquireConstructEndIndex(acquireIndex)
+		let assignedBindings = self.assignedBindingsIn(acquireIndex, endIndex: constructEnd)
+		let names = try self.parseAcquireNames(func)
+		let labelTok = try self.consume(TokenKind.charLiteral)
+		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
+
+		let range = SourceRange.between(acquireTok, last: labelTok)
+		let (cowns, word) = self.emitAcquireCall(names, range: range)
+		let granted = self.emitCompareAgainstLiteral(word, literal: 0, op: MaxonCmpOp.ge, opTok: acquireTok)
+
+		let entry = self.bodyState.currentBlock
+		let entryVals = self.snapshotBindings(assignedBindings)
+		let entryMoveMark = self.captureMoveMark()
+		let bodyBlock = self.artifact.module.addBlock(func, label: labelTok.value, heat: BlockHeat.normal)
+
+		if self.coverageActive() 'instrumentTheGrantedArm'
+			self.mintCovPoint(bodyBlock, funcName: func.name, flags: MxdbgCovFlagArmThen, line: acquireTok.line, col: acquireTok.column, branchLine: acquireTok.line, branchCol: acquireTok.column)
+		end 'instrumentTheGrantedArm'
+
+		let bodyEnd = try self.parseAcquireBody(func, bodyBlock: bodyBlock, names: names, cowns: cowns, group: word, labelTok: labelTok, acquireTok: acquireTok)
+		let bodyVals = self.snapshotBindings(assignedBindings)
+		let bodyMoveMark = self.captureMoveMark()
+		self.restoreBindings(assignedBindings, snapshot: entryVals)
+		self.restoreMoveMark(entryMoveMark)
+
+		let otherwiseTok = try self.consume(TokenKind.otherwise)
+		let handlerBlock = self.artifact.module.addBlock(func, label: b"acquirestopped", heat: BlockHeat.normal)
+		self.mintElseArmPoint(handlerBlock, funcName: func.name, ifTok: acquireTok, elseTok: otherwiseTok, written: true)
+		let handlerEnd = try self.parseAcquireHandler(func, handlerBlock: handlerBlock, stopped: word, names: names, otherwiseTok: otherwiseTok)
+		let handlerVals = self.snapshotBindings(assignedBindings)
+		let handlerMoveMark = self.captureMoveMark()
+
+		let cont = self.finalizeIfElse(func, entry: entry, cond: granted, ifTok: acquireTok, thenBlock: bodyBlock, thenEnd: bodyEnd, elseBlock: handlerBlock, elseEnd: handlerEnd, bindings: assignedBindings, thenVals: bodyVals, elseVals: handlerVals, thenMoveMark: bodyMoveMark, elseMoveMark: handlerMoveMark)
+		self.assertScanAligned("parseAcquireStatement", predictedEnd: constructEnd)
+		return cont
+	end 'parseAcquireStatement'
+
+	function acquireConstructEndIndex(acquireIndex ElementIndex) returns ElementIndex
+		let bodyEnd = self.blockStatementEndIndex(acquireIndex, continuesAtElse: false)
+		var handlerIndex = bodyEnd + 1
+
+		if self.kindAt(handlerIndex) == TokenKind.charLiteral 'aLabelledCloser'
+			handlerIndex = handlerIndex + 1
+		end 'aLabelledCloser'
+
+		if self.kindAt(handlerIndex) != TokenKind.otherwise 'noHandler'
+			return bodyEnd
+		end 'noHandler'
+
+		return self.blockStatementEndIndex(handlerIndex, continuesAtElse: false)
+	end 'acquireConstructEndIndex'
+
+	function parseAcquireNames(func IrFunction) returns AcquiredNameArray throws SourceParseError
+		let names = AcquiredNameArray.create(0)
+
+		while true 'eachName'
+			let nameIndex = self.pos
+			let nameTok = try self.consume(TokenKind.identifier)
+
+			if not self.at(TokenKind.comma) and not self.at(TokenKind.charLiteral) 'notTheEndOfTheName'
+				let stray = self.current()
+				throw SourceParseError.unexpectedToken(TokenKind.charLiteral.rawValue, got: tokenDisplayText(stray), line: stray.line, column: stray.column)
+			end 'notTheEndOfTheName'
+
+			self.pos = nameIndex
+			let handle = try self.parsePrimary(func)
+			names.push(AcquiredName.create(nameTok, handle: handle, stateType: try self.acquiredStateTypeOf(handle, nameTok: nameTok)))
+
+			if not self.at(TokenKind.comma) 'lastName'
+				break
+			end 'lastName'
+
+			try self.consume(TokenKind.comma)
+		end 'eachName'
+
+		return names
+	end 'parseAcquireNames'
+
+	function acquiredStateTypeOf(handle ValueId, nameTok Token) returns MaxonType throws SourceParseError
+		if not self.valueIsAServiceHandle(handle) 'notAHandle'
+			throw SourceParseError.unsupported(acquireNameNotAServiceHandleRefusal(nameTok.value, typeName: self.valueDisplayTypeName(handle)), line: nameTok.line, column: nameTok.column)
+		end 'notAHandle'
+
+		let handleName = self.signatures.genericInstanceBaseName(self.valueInstanceId(handle)) if self.tagOf(handle) == ValueTypeTag.genericInstance else self.valueTypeName(handle)
+
+		if self.signatures.isInterfaceHandle(handleName) 'anInterfaceHandle'
+			throw SourceParseError.unsupported(acquireInterfaceHandleRefusal(nameTok.value, handleName: handleName), line: nameTok.line, column: nameTok.column)
+		end 'anInterfaceHandle'
+
+		let typeName = self.signatures.serviceOfHandle(handleName)
+
+		return match self.serviceInstanceOfHandle(handle, typeName: typeName) 'instance'
+			monomorphic gives MaxonType.structRef(self.artifact.typeNames.intern(typeName))
+			at(id) gives MaxonType.genericInstance(id)
+		end 'instance'
+	end 'acquiredStateTypeOf'
+
+	function emitAcquireCall(names AcquiredNameArray, range SourceRange) returns (ValueIdArray, ValueId)
+		let cownBox = self.emitBoxAlloc(self.emitLiteral((names.count() * PointerFieldBytes) as FullRangeInt, valueType: MaxonType.integer, range: range), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		let cowns = ValueIdArray.create(names.count(), zeroed: false)
+
+		for position in 0 upto names.count() 'eachName'
+			let name = try names.get(position) otherwise panic("emitAcquireCall: names.get OOB at {position} below the count just read")
+			let cown = self.emitIndirectLoad(MaxonType.integer, box: name.handle, offset: ServiceHandleCownOffset, storageType: MaxonType.integer, range: range)
+			self.emitIndirectStore(cownBox, offset: (position * PointerFieldBytes) as ByteOffset, value: cown, storageType: MaxonType.integer, range: range)
+			cowns.push(cown)
+		end 'eachName'
+
+		let count = self.emitLiteral(names.count() as FullRangeInt, valueType: MaxonType.integer, range: range)
+		let word = self.emitRuntimeCall(CownAcquireName, args: twoArgs(cownBox, second: count), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		let acquireOp = self.artifact.module.opCount() - 1
+		self.noteWaitSeed(self.bodyFunction(), site: WaitSite.acquire(acquireOp))
+		let current = self.bodyFunction()
+		current.mayYieldSeed = true
+		self.emitOwnershipRuntimeCall(MmDecrefName, args: argsOf(cownBox), range: range)
+		return (cowns, word)
+	end 'emitAcquireCall'
+
+	function parseAcquireBody(func IrFunction, bodyBlock IrBlock, names AcquiredNameArray, cowns ValueIdArray, group ValueId, labelTok Token, acquireTok Token) returns IrBlock throws SourceParseError
+		self.bodyState.currentBlock = bodyBlock
+		let range = SourceRange.ofToken(acquireTok)
+		let floor = self.bodyState.valueCapabilities.count() as ValueId
+		self.bodyState.scope.pushScope()
+
+		for position in 0 upto names.count() 'eachName'
+			let name = try names.get(position) otherwise panic("parseAcquireBody: names.get OOB at {position} below the count just read")
+			let cown = try cowns.get(position) otherwise panic("parseAcquireBody: cowns.get OOB at {position} below the count just read")
+			let state = self.emitIndirectLoad(name.stateType, box: cown, offset: CownOffState, storageType: MaxonType.integer, range: range)
+			self.setValueCapability(state, capability: ValueCapability.isolated)
+			self.bodyState.acquiredStates = withValueMarked(self.bodyState.acquiredStates, value: state)
+			self.regionFactsForWrite().acquiredNames.push(AcquiredStateName.create(state, name: name.token.value))
+			_ = try self.declareCaughtErrorBinding(name.token.value, anchor: name.token, varType: name.stateType, value: state)
+		end 'eachName'
+
+		let guardFloor = self.openWindowCount()
+		let windows = self.regionFactsForWrite().windows
+		windows.push(OpenWindow.create(labelTok.value, rootText: EmptySourceText, rootName: EmptySourceText, kind: WindowKind.acquire, floor: floor, openedValue: 0, holderValue: 0, holderField: 0, opensAField: false, ownerStatement: self.bodyState.statementStart))
+		self.emitStrandGuard(GtStrandGuardEnterName, range: range)
+		self.bodyState.heldAcquire = HeldAcquire.held(group, guardFloor: guardFloor)
+
+		let bodyEnd = try self.parseBlockBody(func, block: self.bodyState.currentBlock, label: labelTok.value)
+
+		if not bodyEnd.isTerminated() 'fallsThrough'
+			self.emitWindowExitsInto(bodyEnd, floor: guardFloor, anchor: labelTok)
+		end 'fallsThrough'
+
+		self.bodyState.heldAcquire = HeldAcquire.none
+		_ = try windows.pop() otherwise panic("parseAcquireBody: the window this statement pushed is gone from the stack it popped")
+		self.bodyState.scope.popScope()
+		self.bodyState.currentBlock = bodyEnd
+		return bodyEnd
+	end 'parseAcquireBody'
+
+	function parseAcquireHandler(func IrFunction, handlerBlock IrBlock, stopped ValueId, names AcquiredNameArray, otherwiseTok Token) returns IrBlock throws SourceParseError
+		let binder = try self.parseOptionalCaughtErrorBinder(otherwiseTok)
+		let labelTok = try self.consume(TokenKind.charLiteral)
+		try self.requireLineEndAfter(LineEndingConstruct.blockLabel)
+
+		self.bodyState.currentBlock = handlerBlock
+		self.bodyState.scope.pushScope()
+
+		if let name = try binder.boundName() 'aNamedPosition'
+			let range = SourceRange.ofToken(binder.anchor)
+			let position = self.emitMachineWordBinOp(stopped, rhs: self.emitLiteral(AcquireStoppedBit, valueType: MaxonType.integer, range: range), op: MaxonBinOp.bitXor, resultType: MaxonType.integer, range: range)
+			self.recordProvenIntRange(position, low: 0, high: (names.count() - 1) as FullRangeInt)
+			_ = try self.declareCaughtErrorBinding(name, anchor: binder.anchor, varType: MaxonType.integer, value: position)
+			self.bodyState.unusedCandidates.push(UnusedBindingCandidate.create(self.bodyState.scope.getInfo(name), nameRange: range, kind: UnusedBindingKind.caughtError, declToken: self.pos))
+		end 'aNamedPosition'
+
+		let handlerEnd = try self.parseBlockBody(func, block: self.bodyState.currentBlock, label: labelTok.value)
+		self.bodyState.scope.popScope()
+		return handlerEnd
+	end 'parseAcquireHandler'
 
 	function emitStrandGuard(callee ByteArray, range SourceRange)
 		_ = self.emitRuntimeCall(callee, args: ValueIdArray.create(0), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -64804,6 +65227,8 @@ export type Parser
 		while windows.count() > floor 'eachWindowThisStatementOpened'
 			_ = try windows.pop() otherwise panic("closeWindowsTo: the stack holds more than {floor} windows and cannot pop one")
 		end 'eachWindowThisStatementOpened'
+
+		self.forgetStatementFacts()
 	end 'closeWindowsTo'
 
 	function openStatementWindowThrough(box ValueId, floor ValueId, range SourceRange)
@@ -64811,6 +65236,7 @@ export type Parser
 			return
 		end 'notAnUnopenedIsolated'
 
+		self.noteStateReached(box, line: range.line, column: range.column)
 		let windows = self.regionFactsForWrite().windows
 
 		if let origin = try self.regionFactsForWrite().fieldOrigins.get(box) 'aSlotRead'
@@ -64831,7 +65257,7 @@ export type Parser
 		windows.push(OpenWindow.create(IsolatedValueLabel, rootText: EmptySourceText, rootName: EmptySourceText, kind: WindowKind.oneStatement, floor: floor, openedValue: box, holderValue: 0, holderField: 0, opensAField: false, ownerStatement: self.bodyState.statementStart))
 	end 'openStatementWindowThrough'
 
-	function emitStrandGuardExitsInto(block IrBlock, floor ElementIndex, anchor Token)
+	function emitWindowExitsInto(block IrBlock, floor ElementIndex, anchor Token)
 		let openNow = self.openWindowCount()
 
 		if openNow <= floor 'nothingOpenedSince'
@@ -64844,8 +65270,21 @@ export type Parser
 			self.emitStrandGuard(GtStrandGuardExitName, range: SourceRange.ofToken(anchor))
 		end 'eachWindowLeft'
 
+		match self.bodyState.heldAcquire 'acquire'
+			none then break
+			held(group, guardFloor) then self.emitAcquireRelease(group, guardFloor: guardFloor, floor: floor, anchor: anchor)
+		end 'acquire'
+
 		_ = self.swapCurrentBlock(previous)
-	end 'emitStrandGuardExitsInto'
+	end 'emitWindowExitsInto'
+
+	function emitAcquireRelease(group ValueId, guardFloor ElementIndex, floor ElementIndex, anchor Token)
+		if floor > guardFloor 'staysInsideTheBlock'
+			return
+		end 'staysInsideTheBlock'
+
+		_ = self.emitRuntimeCall(CownAcquireReleaseName, args: argsOf(group), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+	end 'emitAcquireRelease'
 
 	function emitNot(operand ValueId, op MaxonUnaryOp, resultTag ValueTypeTag, opTok Token) returns ValueId
 		let complemented = self.emitUnaryOp(operand, op: op, resultTag: resultTag, range: SourceRange.ofToken(opTok))
@@ -68945,6 +69384,11 @@ export type Parser
 	// The element's own type is what is passed as `fieldType`: a tuple ADOPTS its element types, so the slot
 	// a value moves into is owning iff the value itself owns heap.
 	function collectTupleElement(elementValues ValueIdArray, elementBareLocal BoolArray, elementTypes MaxonTypeArray, elementBrands NameRoster, movedOwningValues ValueIdArray, elementCapabilities ParamCapabilityArray, value ValueId, valueStart ElementIndex, target DeclaredTupleTarget) throws SourceParseError
+		if self.valueIsLinear(value) 'aLinearItem'
+			let itemTok = self.tokenAt(valueStart)
+			throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "a tuple holds no linear value: a linear value {LinearValueResidence}, so no tuple item keeps one", line: itemTok.line, column: itemTok.column)
+		end 'aLinearItem'
+
 		try self.rejectDoubleOwningStore(movedOwningValues, value: value, valueStart: valueStart)
 		let slot = self.tupleItemSlotOf(value, target: target, column: elementValues.count() as FieldIndex)
 		try self.admitStore(self.bodyFunction(), slot: slot, value: value, valueStart: valueStart, place: TupleItemPlace, holder: StoreHolder.unheld)
@@ -70611,7 +71055,10 @@ export type Parser
 				continue
 			end 'aResultTheRecordKept'
 
+			let enclosingStart = self.bodyState.statementStart
+			self.bodyState.statementStart = store.statementStart
 			self.notePassedParamNeed(func, value: store.value, mutable: true, line: store.line)
+			self.bodyState.statementStart = enclosingStart
 		end 'eachHeldStore'
 	end 'flushHeldStores'
 
@@ -75622,6 +76069,10 @@ export type Parser
 		let baseIndex = self.pos
 		let typeTok = try self.consumeTypeBaseToken()
 
+		if self.namesReplyLater(typeTok) 'replyLater'
+			return try self.parseReplyLater(func, replyTok: typeTok, baseIndex: baseIndex)
+		end 'replyLater'
+
 		// A `Type.method()` base NAMES a type, so it is a USE for the E3062 check — and it is the only
 		// place many generic-instance aliases are ever named (`IntArray.create()`). It never reaches
 		// `parseTypeReference`, which is why this second hook exists at all (`recordTypeNameUse`).
@@ -76418,7 +76869,11 @@ export type Parser
 
 		self.advance()
 		let result = try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(box, tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: subjectName, owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
-		try self.requireNotMovedSinceItWasRead(box, range: SourceRange.ofToken(baseTok))
+
+		if not self.signatures.isReplyInstanceAt(maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType)) and not valueIdArrayContains(self.bodyState.consumedReceivers, value: box) 'aReplyAnswersByMovingItself'
+			try self.requireNotMovedSinceItWasRead(box, range: SourceRange.ofToken(baseTok))
+		end 'aReplyAnswersByMovingItself'
+
 		return result
 	end 'dispatchMethodOnBinding'
 
@@ -76728,6 +77183,10 @@ export type Parser
 			return try self.dispatchManagedPinMethod(recv)
 		end 'managedPinMethod'
 
+		if self.signatures.isReplyInstanceAt(recv.tag, nameId: recv.nameId) 'replyMethod'
+			return try self.dispatchReplyMethod(func, recv: recv, resultUsed: resultUsed)
+		end 'replyMethod'
+
 		// AN ENUM/UNION RECEIVER — `d.isNorth()`, `s.action()`, `self.isStop()`, and also
 		// `pick().score()` and `Direction.south.score()`, which the oracle accepts (measured: 10) and which
 		// arrive here as VALUES rather than through the binding door.
@@ -76804,7 +77263,7 @@ export type Parser
 	function emitPromiseArrayAwaitAny(recv MethodReceiver) returns ValueId throws SourceParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		try self.consumeEmptyArgList()
-		return self.emitAwaitAnyCall(recv.value, range: SourceRange.ofToken(methodTok))
+		return try self.emitAwaitAnyCall(recv.value, anchor: methodTok)
 	end 'emitPromiseArrayAwaitAny'
 
 	function originOfValue(value ValueId) returns ReceiverOrigin
@@ -77623,6 +78082,10 @@ export type Parser
 		self.statement.pendingSendTimeout = SendTimeoutArgument.absent
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
+		if self.timeoutMayPark(timeout) 'aTimedSend'
+			try self.requireNoLinearArgumentIn(args, refusal: "a linear value is never sent with a `sendTimeout:`: a timed send waits for room in the mailbox, and a wait may never end, so the sender could neither hand the value over nor consume it. Send it without a timeout, and consume the value `mailboxFull` and `serviceStopped` hand back", anchor: memberTok)
+		end 'aTimedSend'
+
 		try self.checkSendArgumentCapabilities(func, callee: callee, args: args, argAnchors: argAnchors, argLabels: argLabels, anchor: memberTok)
 
 		// A message's declared defaults are filled exactly as a direct call's are, through the same door, so
@@ -77646,10 +78109,18 @@ export type Parser
 
 		self.releaseHandOffBuildTemps(argumentTempFloor, ownedFloor: argumentOwnedFloor, handedOff: slotValues, anchor: memberTok)
 		let (box, handBack) = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
+		self.carryWindowBirth(box, sources: slotValues)
 		let spelling = qualifiedMethodName(awaitedServiceOf(route, typeName: typeName), methodName: memberTok.value)
 		try self.requireSendSettled()
 		return self.emitServiceSendOp(base, box: box, request: request, caseIndex: caseIndex, handBack: handBack, callee: callee, spelling: spelling, reply: reply, route: route, range: range, argsAreChecked: argsAreChecked, timeout: timeout)
 	end 'emitServiceSend'
+
+	function timeoutMayPark(timeout SendTimeoutArgument) returns bool
+		return match timeout 'timeout'
+			absent gives false
+			given(value) gives not self.valueIsConstant(value, equalTo: NoSendTimeoutMs)
+		end 'timeout'
+	end 'timeoutMayPark'
 
 	function widenMessageArgsToInterfaceHandles(payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, firstTok Token, lastTok Token)
 		if not self.signatures.declaresAnInterfaceHandle() 'noInterfaceHandle'
@@ -77746,9 +78217,9 @@ export type Parser
 			given(value) gives (value, true)
 		end 'timeout'
 
-		if timed 'aSendThatMayPark'
-			let sender = self.bodyFunction()
-			sender.mayWaitSeed = true
+		let mayPark = self.timeoutMayPark(timeout)
+
+		if mayPark 'aSendThatMayPark'
 			self.deferNoWaitInsideWindow(range)
 		end 'aSendThatMayPark'
 
@@ -77758,6 +78229,11 @@ export type Parser
 		end 'route'
 
 		let opIdx = self.artifact.module.opCount() - 1
+
+		if mayPark 'recordTheWaitSite'
+			self.noteWaitSeed(self.bodyFunction(), site: WaitSite.timedSend(opIdx))
+		end 'recordTheWaitSite'
+
 		let message = SentMessage.create(callee, spelling: spelling, handle: base.box, staging: box, reply: reply, request: request, caseIndex: caseIndex, handBack: handBack)
 		self.statement.lastSend = RecordedSend.recorded(opIdx, funcIndex: self.artifact.currentFuncIndex, send: message)
 
@@ -79169,6 +79645,183 @@ export type Parser
 		throw SourceParseError.unsupported("`{String.from(ManagedHandleTypeName)}` method '{String.from(methodTok.value)}' — the type has exactly these two: `handle()` and `release()`", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedHandleMethod'
 
+	function parseDestructStatement() throws SourceParseError
+		let destructTok = self.current()
+		self.advance()
+		let selfTok = try self.consume(TokenKind.self)
+
+		if not self.statementEndsAt(self.pos) 'moreFollows'
+			let strayTok = self.current()
+			throw SourceParseError.unexpectedToken(TokenKind.newline.rawValue, got: tokenDisplayText(strayTok), line: strayTok.line, column: strayTok.column)
+		end 'moreFollows'
+
+		if not self.bodyState.consumesSelf 'notAFinalizer'
+			throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "`destruct self` is written in a method that takes `consuming self`: only a finalizer ends the life of the value it is called on", line: destructTok.line, column: destructTok.column)
+		end 'notAFinalizer'
+
+		let held = (self.bodyState.scope.getInfo(SelfParamName)).boundValue
+		try self.requireNotMovedSinceItWasRead(held, range: SourceRange.ofToken(selfTok))
+
+		if not self.hasLiveOwner(held) 'noOwnerToEnd'
+			throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "`destruct self` ends the life of a record this method owns, and this receiver is not one: declare finalizers on a `type` that holds fields", line: destructTok.line, column: destructTok.column)
+		end 'noOwnerToEnd'
+
+		self.emitDecrefOps(held, range: SourceRange.between(destructTok, last: selfTok))
+		self.poisonMoveSource(held)
+	end 'parseDestructStatement'
+
+	function namesReplyLater(typeTok Token) returns bool
+		return typeTok.value.equals(ReplyLaterBaseName) and self.kindAt(self.pos) == TokenKind.dot and self.tokenAt(self.pos + 1).value.equals(ReplyLaterMemberName) and self.kindAt(self.pos + 2) == TokenKind.leftParen
+	end 'namesReplyLater'
+
+	function replyLaterIsAWholeLetInitializer(baseIndex ElementIndex) returns bool
+		return baseIndex >= ReplyLaterInitializerTokens and self.kindAt(baseIndex - 1) == TokenKind.equals and self.kindAt(baseIndex - 2) == TokenKind.identifier and self.kindAt(baseIndex - 3) == TokenKind.let and tokenKindEndsALine(self.kindAt(baseIndex - 4))
+	end 'replyLaterIsAWholeLetInitializer'
+
+	function replyDeferrerThrowsReplyStopped(func IrFunction) returns bool
+		let clause = self.signatures.throwsOf(func.name)
+
+		if not throwsClauseIsThrowing(clause) 'throwsNothing'
+			return false
+		end 'throwsNothing'
+
+		let name = try throwsClauseName(clause) otherwise panic("replyDeferrerThrowsReplyStopped: a clause `throwsClauseIsThrowing` accepted carries a name")
+		return name.toByteArray().equals(ReplyStoppedTypeName)
+	end 'replyDeferrerThrowsReplyStopped'
+
+	function requireReplyLaterShape(func IrFunction, replyTok Token, baseIndex ElementIndex) throws SourceParseError
+		if not self.signatures.declaresCallee(func.name) 'notADeclaredBody'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "`reply.later()` is written in the body of a message, not in a closure or a default value", line: replyTok.line, column: replyTok.column)
+		end 'notADeclaredBody'
+
+		if self.bodyState.statementNesting != 1 'nested'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "`reply.later()` is a statement of the message's own body, not of an `if`, a loop, a `match`, a `try` or any other block inside it", line: replyTok.line, column: replyTok.column)
+		end 'nested'
+
+		if not self.replyLaterIsAWholeLetInitializer(baseIndex) 'notALet'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "`reply.later()` is the whole initializer of a `let`: `let pending = reply.later()`", line: replyTok.line, column: replyTok.column)
+		end 'notALet'
+
+		if self.bodyState.replyDeferred 'twice'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "a message defers its reply once: the second `reply.later()` has no reply left to take", line: replyTok.line, column: replyTok.column)
+		end 'twice'
+
+		if maxonReturnTypeIsVoid(func.maxonReturnType) 'noReply'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "a message with no `returns` clause has no reply to defer: give it one, or send the answer another way", line: replyTok.line, column: replyTok.column)
+		end 'noReply'
+
+		if maxonReturnTypeTag(func.maxonReturnType) == ValueTypeTag.interfaceRef 'aFatPointer'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "a message that returns an interface value cannot defer its reply: a Reply carries one machine word", line: replyTok.line, column: replyTok.column)
+		end 'aFatPointer'
+
+		if not self.replyDeferrerThrowsReplyStopped(func) 'noStoppedClause'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "a message that defers its reply declares `throws ReplyStopped`: the caller's `await` receives it when the Reply is dropped unanswered", line: replyTok.line, column: replyTok.column)
+		end 'noStoppedClause'
+
+		let owner = try self.enclosingType.typeName() otherwise throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "`reply.later()` is written in a method of a service type", line: replyTok.line, column: replyTok.column)
+
+		if self.signatures.structDeclaresTypeParams(owner) 'aGenericService'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "`reply.later()` is not written in a generic service: a Reply is typed by the message's reply type, which a generic body does not fix", line: replyTok.line, column: replyTok.column)
+		end 'aGenericService'
+	end 'requireReplyLaterShape'
+
+	function parseReplyLater(func IrFunction, replyTok Token, baseIndex ElementIndex) returns ValueId throws SourceParseError
+		try self.requireReplyLaterShape(func, replyTok: replyTok, baseIndex: baseIndex)
+		try self.consume(TokenKind.dot)
+		try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.leftParen)
+		let rparenTok = try self.consume(TokenKind.rightParen)
+
+		if not self.statementEndsAt(self.pos) 'moreFollows'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "`reply.later()` is the whole initializer of a `let`: nothing follows it", line: replyTok.line, column: replyTok.column)
+		end 'moreFollows'
+
+		self.bodyState.replyDeferred = true
+		let instance = self.signatures.internReplyInstanceForMessage(func.name)
+
+		return self.emitOwnedRuntimeResult(GtReplyLaterName, args: ValueIdArray.create(0), resultTag: ValueTypeTag.genericInstance, resultNameId: instance as TypeNameId, range: SourceRange.between(replyTok, last: rparenTok))
+	end 'parseReplyLater'
+
+	function deferredReturnPlaceholder(returnType MaxonReturnType, anchor Token) returns ValueId
+		let range = SourceRange.ofToken(anchor)
+		let word = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
+
+		return match returnType 'declared'
+			void panic("deferredReturnPlaceholder: `reply.later()` is refused in a message with no `returns` clause")
+			value(declared) gives self.emitRetaggedCastValue(word, targetType: declared, range: range)
+		end 'declared'
+	end 'deferredReturnPlaceholder'
+
+	function dispatchReplyMethod(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws SourceParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+
+		if not methodTok.value.equals(ReplyAnswerMethodName) 'notAnswer'
+			throw SourceParseError.unsupported("`Reply` method '{String.from(methodTok.value)}' — the type has exactly one: `answer(value)`", line: methodTok.line, column: methodTok.column)
+		end 'notAnswer'
+
+		if resultUsed 'noValue'
+			throw SourceParseError.unsupported("`Reply.answer` returns nothing, so its result cannot be used", line: methodTok.line, column: methodTok.column)
+		end 'noValue'
+
+		try self.consume(TokenKind.leftParen)
+		let valueStart = self.pos
+		let value = try self.parseExpression(func, block: self.bodyState.currentBlock)
+		let rparenTok = try self.consume(TokenKind.rightParen)
+		let range = SourceRange.between(methodTok, last: rparenTok)
+
+		let element = self.resolvedSlotType(self.signatures.replyElementOf(self.valueInstanceId(recv.value)))
+		try self.requireReplyAnswerAgrees(value, element: element, anchor: self.tokenAt(valueStart))
+
+		let answered = try self.handOff(SoleHandedOffPosition, value: value, door: ThreadHandOffDoor.message("the value answered to this Reply", argumentOf: "the Reply it answers"), anchor: self.tokenAt(valueStart))
+		let reply = try self.takeReplyToAnswer(recv)
+
+		return self.emitRuntimeCall(GtReplyAnswerName, args: twoArgs(reply, second: answered), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'dispatchReplyMethod'
+
+	function takeReplyToAnswer(recv MethodReceiver) returns ValueId throws SourceParseError
+		if not tokenCanBeAName(recv.anchor) or not self.bodyState.scope.contains(recv.anchor.value) 'notABinding'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "a Reply is answered through the local or parameter that holds it: bind it first (`let pending = try self.waiting.pop() otherwise return`), then `pending.answer(value)`", line: recv.anchor.line, column: recv.anchor.column)
+		end 'notABinding'
+
+		let binding = self.bodyState.scope.getInfo(recv.anchor.value)
+
+		if binding.isSelfField 'aField'
+			throw self.regionRefusal(ErrorCode.semanticReplyDeferralRefused, message: "a Reply is answered through the local or parameter that holds it, not through a field of the state: take it out of the field first (`let pending = try self.waiting.pop() otherwise return`)", line: recv.anchor.line, column: recv.anchor.column)
+		end 'aField'
+
+		let held = binding.boundValue
+
+		if self.argumentMovesOut(held) 'thisFramesToGive'
+			self.moveOwnedValueOut(held)
+			return held
+		end 'thisFramesToGive'
+
+		let referenced = self.transferConsumedArg(held, anchor: recv.anchor)
+		self.poisonMoveSource(held)
+
+		return referenced
+	end 'takeReplyToAnswer'
+
+	function requireReplyAnswerAgrees(value ValueId, element MaxonType, anchor Token) throws SourceParseError
+		let elementTag = maxonTypeTag(element)
+		let elementNameId = typeNameIdOf(element)
+		let gotTag = self.tagOf(value)
+
+		match self.declaredSlotVerdict(gotTag, gotNameId: self.valueNameId(value), declared: elementTag, declaredNameId: elementNameId) 'verdict'
+			ok then break
+			mismatch or
+			narrowsFloatToInt or
+			functionIntoNonFunction then throw SourceParseError.typeMismatchExpectedGot(maxonTypeName(element, typeNames: self.artifact.typeNames), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column, expectedNote: "", crossesRange: false)
+		end 'verdict'
+
+		let expectedName = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: elementTag, nameId: elementNameId, readerFilePath: self.job.path)
+		let gotName = aggregateNameIn(self.signatures, interner: self.artifact.typeNames, tag: gotTag, nameId: self.valueNameId(value), readerFilePath: self.job.path)
+
+		if self.signatures.aggregatesConflict(expectedName, expectedTag: elementTag, expectedNameId: elementNameId, expectedBrand: EmptySourceText, got: gotName, gotTag: gotTag, gotNameId: self.valueNameId(value), gotBrand: self.brandOf(value), readerFilePath: self.job.path) 'aggregatesDiffer'
+			throw SourceParseError.typeMismatchExpectedGot(maxonTypeName(element, typeNames: self.artifact.typeNames), got: self.valueDisplayTypeName(value), line: anchor.line, column: anchor.column, expectedNote: "", crossesRange: false)
+		end 'aggregatesDiffer'
+	end 'requireReplyAnswerAgrees'
+
 	function dispatchManagedPinMethod(recv MethodReceiver) returns ValueId throws SourceParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.between(methodTok, last: methodTok)
@@ -80258,6 +80911,10 @@ export type Parser
 			stated(headGiid) gives headGiid
 			inferred gives try self.unheadedArrayLiteralInstance(slot, first: first, elemTok: firstTok)
 		end 'elementSource'
+
+		if elementSourceIsInferred(element) 'anInferredInstance'
+			self.recordInferredInstantiation(giid, at: firstTok)
+		end 'anInferredInstance'
 
 		// The first element is ADMITTED into that instance exactly as every `, e` after it is
 		// (`admitArrayLiteralElement`) — one element rule, asked of every element including the first.
@@ -83960,6 +84617,8 @@ export type Parser
 
 		try self.requireHandedCellsHaveTheRequirementsTypes(target, args: userArgs, argLabels: argLabels, argRanges: argRanges)
 
+		try self.requireNoLinearArgumentIn(userArgs, refusal: self.unknownCalleeLinearSentence("an interface method"), anchor: methodTok)
+
 		let args = try self.slottedWitnessArgs(target, receiver: receiver, userArgs: userArgs, argLabels: argLabels, argRanges: argRanges, methodTok: methodTok)
 		let blames = try self.slottedWitnessBlames(target, blames: settledImmutableArgNames(argImmutableNames), argLabels: argLabels, argRanges: argRanges, methodTok: methodTok)
 		self.widenWitnessArgs(target, args: args, first: methodTok, last: rparenTok)
@@ -84010,7 +84669,7 @@ export type Parser
 			self.noteWrittenArgumentName(notes, opIdx: opIdx, position: slot + WitnessReceiverArgCount, anchorIndex: try argAnchors.get(i) otherwise panic("noteRequirementCallSite: argAnchors.get OOB at {i}"))
 		end 'eachWrittenArgument'
 
-		self.noteWindowCall(func, opIdx: opIdx, args: args)
+		self.noteWindowCall(func, opIdx: opIdx, args: args, callOpen: PendingCallOpen.none)
 	end 'noteRequirementCallSite'
 
 	function witnessDeclarationFacts(candidates WitnessDispatchTargetArray) returns DeclarationFactsArray
@@ -90402,7 +91061,13 @@ export type Parser
 	end 'setValueCapability'
 
 	function effectiveCapabilityOf(value ValueId) returns ValueCapability
-		return capabilityWithinWindows(self.regionFactsForRead().windows, value: value, intrinsic: self.capabilityOfValue(value))
+		let facts = self.regionFactsForRead()
+
+		if facts.mergedValues.contains(value) 'joinsTheOpenRegion'
+			return self.capabilityOfValue(value)
+		end 'joinsTheOpenRegion'
+
+		return capabilityWithinWindows(facts.windows, value: value, intrinsic: self.capabilityOfValue(value))
 	end 'effectiveCapabilityOf'
 
 	function valueIsAValueType(value ValueId) returns bool
@@ -90520,6 +91185,41 @@ export type Parser
 		self.regionFactsForWrite().handedBack.push(result)
 	end 'noteHandedBackResult'
 
+	function noteViewOfTheOpenedRegion(result ValueId, callee ByteArray, args ValueIdArray, anchor Token)
+		if self.windowedAViewInsideABlock(result) 'aViewInsideABlock'
+			return
+		end 'aViewInsideABlock'
+
+		self.noteHandedBackResult(result, callee: callee, args: args, anchor: anchor)
+	end 'noteViewOfTheOpenedRegion'
+
+	function windowedAViewInsideABlock(result ValueId) returns bool
+		match self.regionFactsForRead().pendingCallOpen 'pending'
+			none then return false
+			opened(box, range, _) then return self.windowThroughAnOpenBlock(box, result: result, range: range)
+		end 'pending'
+	end 'windowedAViewInsideABlock'
+
+	function windowThroughAnOpenBlock(box ValueId, result ValueId, range SourceRange) returns bool
+		if not self.anExplicitWindowIsOpen() 'noBlockIsOpen'
+			return false
+		end 'noBlockIsOpen'
+
+		self.openStatementWindowThrough(box, floor: result, range: range)
+		self.setValueCapability(result, capability: ValueCapability.mutable)
+		return true
+	end 'windowThroughAnOpenBlock'
+
+	function anExplicitWindowIsOpen() returns bool
+		for window in self.regionFactsForRead().windows 'eachWindow'
+			if window.kind != WindowKind.oneStatement 'aBlock'
+				return true
+			end 'aBlock'
+		end 'eachWindow'
+
+		return false
+	end 'anExplicitWindowIsOpen'
+
 	function dischargeHandedBack(inputs ValueIdArray, result ValueId)
 		let pending = self.regionFactsForRead().handedBack
 
@@ -90587,6 +91287,10 @@ export type Parser
 		let isValueType = self.valueIsAValueType(value)
 		return isCleanInput(capability, isValueType: isValueType, isSlotRead: self.isolatedSlotReadGiven(value, capability: capability, isValueType: isValueType))
 	end 'valueIsCleanInput'
+
+	function valueIsCleanIntoARegion(value ValueId) returns bool
+		return self.valueIsCleanInput(value) or self.regionFactsForRead().mergedValues.contains(value)
+	end 'valueIsCleanIntoARegion'
 
 	function noteMutableUse(value ValueId, line LineNumber)
 		self.regionFactsForWrite().mutableUseLines.upsert(value, value: line)
@@ -90917,7 +91621,141 @@ export type Parser
 		end 'aSlotRead'
 	end 'requireNotAnIsolatedSlotRead'
 
+	function requireNotAnAcquiredState(value ValueId, verb String, anchor Token) throws SourceParseError
+		if not valueIsMarked(self.bodyState.acquiredStates, value: value) 'notAnAcquiredState'
+			return
+		end 'notAnAcquiredState'
+
+		throw self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "'{String.from(anchor.value)}' is the state of an acquired service and cannot be {verb}: the service keeps its state", line: anchor.line, column: anchor.column)
+	end 'requireNotAnAcquiredState'
+
+	function acquiredStateRootOf(value ValueId) returns ValueId throws AbsentError
+		let root = self.rootValueOf(value)
+
+		if not valueIsMarked(self.bodyState.acquiredStates, value: root) 'notRootedAtAState'
+			throw AbsentError.absent
+		end 'notRootedAtAState'
+
+		return root
+	end 'acquiredStateRootOf'
+
+	function acquiredStateNameOf(state ValueId) returns immutable ByteArray
+		for acquired in self.regionFactsForRead().acquiredNames 'eachAcquiredName'
+			if acquired.state == state 'theState'
+				return acquired.name
+			end 'theState'
+		end 'eachAcquiredName'
+
+		panic("acquiredStateNameOf: v{state} is marked as an acquired state and no `acquire` filed its name")
+	end 'acquiredStateNameOf'
+
+	function windowOwnerState(window OpenWindow) returns ValueId throws AbsentError
+		if window.kind == WindowKind.acquire 'theBlockHoldsEveryName'
+			throw AbsentError.absent
+		end 'theBlockHoldsEveryName'
+
+		return try self.acquiredStateRootOf(window.openedValue)
+	end 'windowOwnerState'
+
+	function stateIsOpenedByAnExplicitWindow(state ValueId) returns bool
+		for window in self.regionFactsForRead().windows 'eachWindow'
+			if window.kind != WindowKind.modify 'notABlock'
+				continue
+			end 'notABlock'
+
+			let owner = try self.windowOwnerState(window) otherwise continue
+
+			if owner == state 'itsOwnBlock'
+				return true
+			end 'itsOwnBlock'
+		end 'eachWindow'
+
+		return false
+	end 'stateIsOpenedByAnExplicitWindow'
+
+	function valueIsBesideAnotherStatesWindow(value ValueId) returns bool
+		let windows = self.regionFactsForRead().windows
+
+		if windows.isEmpty() 'noWindowIsOpen'
+			return false
+		end 'noWindowIsOpen'
+
+		let state = try self.acquiredStateRootOf(value) otherwise return false
+
+		for window in windows 'eachWindow'
+			let owner = try self.windowOwnerState(window) otherwise continue
+
+			if owner != state 'anotherStatesWindow'
+				return true
+			end 'anotherStatesWindow'
+		end 'eachWindow'
+
+		return false
+	end 'valueIsBesideAnotherStatesWindow'
+
+	function noteStateReached(value ValueId, line LineNumber, column ColumnNumber)
+		let state = try self.acquiredStateRootOf(value) otherwise return
+
+		if self.stateIsOpenedByAnExplicitWindow(state) 'itsOwnBlock'
+			return
+		end 'itsOwnBlock'
+
+		let reached = self.regionFactsForWrite().reachedStates
+		var known = false
+
+		for other in reached 'eachReachedState'
+			if other == state 'theSameState'
+				known = true
+				continue
+			end 'theSameState'
+
+			self.deferRegionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: self.twoStatesMessage(self.acquiredStateNameOf(other), second: self.acquiredStateNameOf(state)), line: line, column: column)
+			return
+		end 'eachReachedState'
+
+		if not known 'aNewState'
+			reached.push(state)
+		end 'aNewState'
+	end 'noteStateReached'
+
+	function twoStatesMessage(first ByteArray, second ByteArray) returns String
+		return "one statement reaches through two acquired states, '{String.from(first)}' and '{String.from(second)}', which may be one service; bind a value read from one of them in its own statement first"
+	end 'twoStatesMessage'
+
+	function forgetStatementFacts()
+		match self.bodyState.regionFacts 'state'
+			unwritten then return
+			entries(table) then table.forgetStatement()
+		end 'state'
+	end 'forgetStatementFacts'
+
+	function suspendStatementFacts() returns SuspendedStatementFacts
+		return match self.bodyState.regionFacts 'state'
+			unwritten gives SuspendedStatementFacts.nothing
+			entries(table) gives table.suspendStatement()
+		end 'state'
+	end 'suspendStatementFacts'
+
+	function resumeStatementFacts(suspended SuspendedStatementFacts)
+		match suspended 'suspended'
+			nothing then return
+			held(reached, merged) then self.regionFactsForWrite().resumeStatement(reached, merged: merged)
+		end 'suspended'
+	end 'resumeStatementFacts'
+
+	function storeHolderCapabilityOf(box ValueId) returns ValueCapability
+		let capability = self.effectiveCapabilityOf(box)
+
+		if capability != ValueCapability.immutable and self.valueIsBesideAnotherStatesWindow(box) 'anotherStatesData'
+			return ValueCapability.paused
+		end 'anotherStatesData'
+
+		return capability
+	end 'storeHolderCapabilityOf'
+
 	function recoverIsolated(value ValueId, startIndex ElementIndex, site IsolatedRecoverySite) throws SourceParseError
+		try self.requireNotAnAcquiredState(value, verb: "frozen" if site == IsolatedRecoverySite.freeze else "moved", anchor: self.tokenAt(startIndex))
+
 		if self.isolateIfPossible(value) 'isolated'
 			return
 		end 'isolated'
@@ -90946,10 +91784,16 @@ export type Parser
 	function isolatedRecoveryMessage(value ValueId, site IsolatedRecoverySite, text String, startIndex ElementIndex) returns String
 		return match site 'site'
 			freeze gives "'{text}' is used as mutable{self.mutableUseSuffix(value)}; freeze a copy: `freeze {self.freezeOperandText(text, startIndex: startIndex)}.clone()`"
-			declared gives isolatedRecoveryRefusal("'{text}'", advice: ". Declare it `as isolated {self.valueDisplayTypeName(value)}`, or pass a copy")
+			binding gives isolatedRecoveryRefusal("'{text}'", advice: IsolatedBindingAdvice)
+			swapReplacement or
+			returnPath gives isolatedRecoveryRefusal("'{text}'", advice: isolatedMoveAdvice(self.valueCanBeDeclaredIsolated(value, startIndex: startIndex), typeName: self.valueDisplayTypeName(value)))
 			argument gives isolatedRecoveryRefusal("'{text}'", advice: "; pass a copy")
 		end 'site'
 	end 'isolatedRecoveryMessage'
+
+	function valueCanBeDeclaredIsolated(value ValueId, startIndex ElementIndex) returns bool
+		return self.rhsWasBareLocalReference(startIndex) and not valueIsMarked(self.bodyState.bufferSurfaceValues, value: value)
+	end 'valueCanBeDeclaredIsolated'
 
 	function freezeOperandText(text String, startIndex ElementIndex) returns String
 		return text if self.spanIsAPostfixChain(startIndex) else "({text})"
@@ -90963,10 +91807,11 @@ export type Parser
 	function settleBindingCapability(value ValueId, rhsStart ElementIndex, nameTok Token) throws SourceParseError
 		let pending = self.bodyState.pendingLocalCapability
 		self.bodyState.pendingLocalCapability = ParamCapability.unmarked
+		try self.requireNotAnAcquiredState(value, verb: "moved", anchor: self.tokenAt(rhsStart))
 		try self.requireBindingMayLeaveItsStatementWindow(value, rhsStart: rhsStart)
 
 		if pending == ParamCapability.isolated 'declaredIsolated'
-			try self.recoverIsolated(value, startIndex: rhsStart, site: IsolatedRecoverySite.declared)
+			try self.recoverIsolated(value, startIndex: rhsStart, site: IsolatedRecoverySite.binding)
 			return
 		end 'declaredIsolated'
 
@@ -91033,6 +91878,10 @@ export type Parser
 	end 'requireSlotHolderWritable'
 
 	function holderCapabilityOutsideTheStatement(holder ValueId) returns ValueCapability
+		if self.valueIsBesideAnotherStatesWindow(holder) 'anotherStatesData'
+			return ValueCapability.paused
+		end 'anotherStatesData'
+
 		return capabilityWithinExplicitWindows(self.regionFactsForRead().windows, value: holder, intrinsic: self.capabilityOfValue(holder))
 	end 'holderCapabilityOutsideTheStatement'
 
@@ -91087,6 +91936,7 @@ export type Parser
 		return match window.kind 'kind'
 			modify gives self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "{subject} is mutable and cannot leave '{label}'; a value leaving a modify block must be a value, immutable or a fresh isolated", line: at.line, column: at.column)
 			oneStatement gives self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "{subject} is mutable and cannot leave the statement that opens '{label}'; a value leaving a one-statement open must be a value, immutable or a fresh isolated", line: at.line, column: at.column)
+			acquire gives self.regionRefusal(ErrorCode.semanticValueLeavesWindow, message: "{subject} is mutable and cannot leave '{label}'; a value leaving an acquire block must be a value, immutable or a fresh isolated, because the services it names keep their state", line: at.line, column: at.column)
 		end 'kind'
 	end 'valueLeavesWindowRefusal'
 
@@ -91137,7 +91987,8 @@ export type Parser
 			immutable then self.seedFrozenParameter(func, position: position)
 			isolated then self.seedIsolatedParameter(position, marked: marked)
 			mutable then self.seedMutableParameter(func, position: position)
-			unmarked then break
+			unmarked or
+			consuming then break
 		end 'capability'
 	end 'seedDeclaredParameter'
 
@@ -91171,7 +92022,8 @@ export type Parser
 
 	function requireFieldStoreAllowed(func IrFunction, box ValueId, layout StructLayout, index FieldIndex, value ValueId, valueStart ElementIndex, placeText String, line LineNumber, column ColumnNumber) throws SourceParseError
 		let fieldName = String.from(try layout.fieldNames.get(index) otherwise panic("requireFieldStoreAllowed: fieldNames.get OOB at {index}"))
-		let holder = self.effectiveCapabilityOf(box)
+		self.noteStateReached(box, line: line, column: column)
+		let holder = self.storeHolderCapabilityOf(box)
 
 		let settlesLater = self.valueSettlesAfterParsing(box)
 
@@ -91183,7 +92035,7 @@ export type Parser
 			try self.requireStoreHolderWritable(holder, fieldName: fieldName, placeText: placeText, joinedAtALoop: false, line: line, column: column)
 		end 'judgedNow'
 
-		if holder == ValueCapability.isolated and not self.valueIsCleanInput(value) 'outerDataIntoARegion'
+		if holder == ValueCapability.isolated and not self.valueIsCleanIntoARegion(value) 'outerDataIntoARegion'
 			let outerTok = self.tokenAt(valueStart)
 			throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: "'{self.tokenTextFrom(valueStart, endIndex: self.pos)}' is mutable outside '{placeText}'; a store into an isolated region takes values, immutable or isolated", line: outerTok.line, column: outerTok.column)
 		end 'outerDataIntoARegion'
@@ -91221,6 +92073,7 @@ export type Parser
 	end 'valueIsAnUndecidedParameter'
 
 	function admitStore(func IrFunction, slot ParamCapability, value ValueId, valueStart ElementIndex, place String, holder StoreHolder) throws SourceParseError
+		try self.requireNotAnAcquiredState(value, verb: "stored into '{place}'", anchor: self.tokenAt(valueStart))
 		try self.requireNoUniqueAlias(value, action: "store into '{place}'", anchor: self.tokenAt(valueStart))
 		try self.requireByReferenceIsolatedStaysPut(func, value: value, at: self.tokenAt(valueStart))
 		let intoAHolder = self.storeHolderIsHeld(holder)
@@ -91233,7 +92086,7 @@ export type Parser
 		let given = self.effectiveCapabilityOf(value)
 
 		if self.storeIsHeldByTheLiteral(func, slot: slot, value: value, given: given, holder: holder) 'aRecordUnderConstructionHoldsIt'
-			self.regionFactsForWrite().pendingHeld.push(HeldStore.create(value, line: line, place: place, valueStart: valueStart))
+			self.regionFactsForWrite().pendingHeld.push(HeldStore.create(value, line: line, place: place, valueStart: valueStart, statementStart: self.bodyState.statementStart))
 			return
 		end 'aRecordUnderConstructionHoldsIt'
 
@@ -91258,7 +92111,7 @@ export type Parser
 
 		if self.valueIsCarried(value) or self.storeHolderIsCarried(holder) 'aStoreTheLoopMayRejudge'
 			let table = self.regionFactsForWrite()
-			table.carriedStores.push(CarriedStore.create(holder, value: value, slot: slot, assumedValue: given, windows: table.windows.clone(), fieldName: place, valueStart: valueStart, valueEnd: self.pos, line: line))
+			table.carriedStores.push(CarriedStore.create(holder, value: value, slot: slot, assumedValue: given, windows: table.windows.clone(), fieldName: place, valueStart: valueStart, valueEnd: self.pos, line: line, statementStart: self.bodyState.statementStart))
 		end 'aStoreTheLoopMayRejudge'
 	end 'admitStore'
 
@@ -91487,7 +92340,10 @@ export type Parser
 			held(box, _, placeText, line, column) then try self.requireStoreHolderWritable(self.capabilityUnderWindows(store.windows, value: box), fieldName: store.fieldName, placeText: placeText, joinedAtALoop: true, line: line, column: column)
 		end 'holder'
 
+		let enclosingStart = self.bodyState.statementStart
+		self.bodyState.statementStart = store.statementStart
 		let verdict = self.slotStoreVerdictGiven(self.bodyFunction(), value: store.value, given: given, slot: store.slot, line: store.line)
+		self.bodyState.statementStart = enclosingStart
 		try self.requireStoreVerdictFits(verdict, fieldName: store.fieldName, value: store.value, valueStart: store.valueStart, valueEnd: store.valueEnd, joinedAtALoop: true)
 	end 'settleCarriedStore'
 
@@ -91526,7 +92382,11 @@ export type Parser
 	end 'readOnlySuffix'
 
 	function waitInsideWindowMessage(window OpenWindow) returns String
-		return "cannot wait inside '{String.from(window.label)}'; another coroutine could run while '{String.from(window.rootText)}' is open. Await before or after the block"
+		return match window.kind 'kind'
+			modify or
+			oneStatement gives "cannot wait inside '{String.from(window.label)}'; another coroutine could run while '{String.from(window.rootText)}' is open. Await before or after the block"
+			acquire gives "cannot wait inside '{String.from(window.label)}'; an acquire block holds its services and may not wait or acquire again. Await before or after the block"
+		end 'kind'
 	end 'waitInsideWindowMessage'
 
 	function requireNoWaitInsideWindow(waitTok Token) throws SourceParseError
@@ -91549,20 +92409,47 @@ export type Parser
 		self.deferRegionRefusal(ErrorCode.semanticWaitInsideWindow, message: self.waitInsideWindowMessage(innermostWindowOf(windows)), line: range.line, column: range.column)
 	end 'deferNoWaitInsideWindow'
 
-	function noteAwaitSeeds(func IrFunction, facts AwaitedPromise)
-		func.mayYieldSeed = true
+	function noteWaitSeed(func IrFunction, site WaitSite)
+		match site 'site'
+			none then return
+			replyAwait or
+			unknownOriginAwait or
+			selectAwait or
+			timedSend or
+			acquire or
+			startAwait or
+			runtimePark then break
+		end 'site'
 
-		match facts.tryTarget 'target'
+		func.mayWaitSeed = true
+		func.noteFirstWaitSite(site)
+	end 'noteWaitSeed'
+
+	function noteRuntimeParkSeed()
+		let parkOp = self.artifact.module.opCount() - 1
+		self.noteWaitSeed(self.bodyFunction(), site: WaitSite.runtimePark(parkOp))
+	end 'noteRuntimeParkSeed'
+
+	function awaitWaitSite(promise ValueId, facts AwaitedPromise, opIdx ElementIndex) returns WaitSite
+		return match facts.tryTarget 'target'
 			named or
 			witness or
-			promise or
 			send or
-			deferred then break
+			deferred gives WaitSite.none
+			promise gives self.unknownOriginWaitSite(promise, opIdx: opIdx)
 			serviceReply or
-			serviceStart or
-			sentReply then func.mayWaitSeed = true
+			sentReply gives WaitSite.replyAwait(opIdx)
+			serviceStart gives WaitSite.startAwait(opIdx)
 		end 'target'
-	end 'noteAwaitSeeds'
+	end 'awaitWaitSite'
+
+	function unknownOriginWaitSite(promise ValueId, opIdx ElementIndex) returns WaitSite
+		return match self.asyncCallCalleeOf(self.bodyFunction(), promise: promise) 'source'
+			found gives WaitSite.none
+			serviceReply gives WaitSite.replyAwait(opIdx)
+			none gives WaitSite.unknownOriginAwait(opIdx)
+		end 'source'
+	end 'unknownOriginWaitSite'
 
 	function requireAssignmentAllowedInWindows(nameTok Token) throws SourceParseError
 		let windows = self.regionFactsForRead().windows
@@ -91582,7 +92469,7 @@ export type Parser
 		let bound = self.bodyState.scope.getInfo(nameTok.value).boundValue
 		let window = innermostWindowOf(windows)
 
-		if bound < window.floor and self.valueMayNameARecord(bound) 'anOuterRecordVariable'
+		if valueIsOutsideInnermostWindow(windows, value: bound) and self.valueMayNameARecord(bound) 'anOuterRecordVariable'
 			throw self.regionRefusal(ErrorCode.semanticOuterDataWrittenInWindow, message: "'{String.from(nameTok.value)}' holds a record from outside '{String.from(window.label)}' and cannot be reassigned while '{String.from(window.label)}' is open", line: nameTok.line, column: nameTok.column)
 		end 'anOuterRecordVariable'
 	end 'requireAssignmentAllowedInWindows'
@@ -91593,6 +92480,7 @@ export type Parser
 		end 'anUnknownResult'
 
 		try self.requireNoUniqueAlias(value, action: "return", anchor: self.tokenAt(retStart))
+		try self.requireNotAnAcquiredState(value, verb: "returned", anchor: self.tokenAt(retStart))
 		try self.requireNotAnIsolatedSlotRead(value, startIndex: retStart, endIndex: self.pos, anchor: self.tokenAt(retStart))
 		let declared = self.bodyState.declaredReturnCapability
 		let retTok = self.tokenAt(retStart)
@@ -91608,7 +92496,7 @@ export type Parser
 		try self.requireValueMayLeaveWindows(value, startIndex: retStart)
 
 		if declared == ResultCapability.isolated 'declaredIsolated'
-			try self.recoverIsolated(value, startIndex: retStart, site: IsolatedRecoverySite.declared)
+			try self.recoverIsolated(value, startIndex: retStart, site: IsolatedRecoverySite.returnPath)
 		end 'declaredIsolated' else if declared == ResultCapability.immutable and not self.valueIsAValueType(value) 'declaredImmutable'
 			if fromParameters != NoParamPositions and not alsoLocalData and (self.effectiveCapabilityOf(value) != ValueCapability.immutable or self.regionFactsForRead().paramSources.joinedParams.contains(value)) 'aParametersData'
 				self.notePassedParamNeed(func, value: value, mutable: false, line: retTok.line)
@@ -91774,6 +92662,10 @@ export type Parser
 				paused then self.setValueCapability(loaded, capability: windowedReadCapability(ValueCapability.paused, slot: slot))
 				notOpen then self.noteAdaptedSlotRead(loaded, box: box, slot: slot)
 			end 'windowState'
+
+			if not self.valueIsAValueType(loaded) and self.capabilityOfValue(loaded) == ValueCapability.mutable and self.valueIsBesideAnotherStatesWindow(box) 'readOnlyBesideAnotherState'
+				self.setValueCapability(loaded, capability: ValueCapability.paused)
+			end 'readOnlyBesideAnotherState'
 
 			self.regionFactsForWrite().fieldOrigins.upsert(loaded, value: FieldOrigin.create(box, layoutName: layout.name, field: index, slot: layout.fieldTypeSites.capabilityAt(index)))
 
@@ -92877,6 +93769,10 @@ export type Parser
 		if binding.isSelfField 'capturedSelfField'
 			return try self.parseSelfFieldRead(anchor, site: CellArgumentToken.none, binding: binding)
 		end 'capturedSelfField'
+
+		if self.signatures.valueIsLinear(maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType), from: self.artifact.typeNames) 'aLinearCapture'
+			throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "a closure cannot capture '{String.from(anchor.value)}', a linear value: a linear value {LinearValueResidence}, so no closure keeps one", line: anchor.line, column: anchor.column)
+		end 'aLinearCapture'
 
 		self.noteOperandRead(binding, at: self.pos)
 
@@ -94547,6 +95443,7 @@ export type Parser
 
 	function handCaptureOver(value ValueId, slot EnvSlotIndex, anchor Token, captureNames NameRoster, capturedValues CapturedValueArray, released EnvSlotIndexArray, closureName immutable ByteArray, envPosition ParamCount) throws SourceParseError
 		let name = try captureNames.get(slot) otherwise panic("handCaptureOver: captureNames.get OOB at {slot} — the slot came from walking the names")
+		try self.requireNotAnAcquiredState(value, verb: "captured by a closure", anchor: anchor)
 		let handed = try self.handOff(slot, value: value, door: ThreadHandOffDoor.closureCapture(name), anchor: anchor)
 
 		try capturedValues.set(slot, value: CapturedValue.filled(handed)) otherwise panic("handCaptureOver: capturedValues.set OOB at {slot} — filled in lockstep with the capture names")
@@ -94770,6 +95667,16 @@ export type Parser
 		return self.openSynthesizedNullaryBody(ConstInitializerFunctionName, returnType: MaxonReturnType.void, anchor: self.current(), visibility: Visibility.file)
 	end 'openInitializerBody'
 
+	function requireInitializerHoldsNoLinearValue(decl TopLevelDecl, value ValueId) throws ConstEvalError
+		if not self.valueIsLinear(value) 'notLinear'
+			return
+		end 'notLinear'
+
+		let initTok = self.tokenAt(decl.initStart)
+
+		throw ConstEvalError.defective(self.regionRefusal(ErrorCode.semanticLinearRefused, message: "'{String.from(decl.name)}' holds a linear value, and a module-level or `static` `let` lives for the whole program: a linear value {LinearValueResidence}, so it can be consumed exactly once", line: initTok.line, column: initTok.column))
+	end 'requireInitializerHoldsNoLinearValue'
+
 	function requireInitializerCallsNothing(decl TopLevelDecl, value ValueId, opFloor ElementIndex) throws ConstEvalError
 		if self.valueIsAScalar(value) 'theScalarRulesAnswer'
 			return
@@ -94891,6 +95798,7 @@ export type Parser
 		end 'refused'
 
 		try self.requireNoFailedDependency()
+		try self.requireInitializerHoldsNoLinearValue(decl, value: value)
 		try self.requireInitializerCallsNothing(decl, value: value, opFloor: opFloor)
 
 		if self.statement.constDependsOnARecord 'readsARecord'
@@ -94918,6 +95826,7 @@ export type Parser
 
 		try self.requireNoFailedDependency()
 		try self.requireInitializerWhole(decl)
+		try self.requireInitializerHoldsNoLinearValue(decl, value: value)
 		try self.requireInitializerCallsNothing(decl, value: value, opFloor: opFloor)
 		self.signatures.noteInitializerClosureShapes(self.closureShapes, from: self.artifact.typeNames)
 
@@ -96407,11 +97316,17 @@ export type Parser
 			end 'schedSliceCount'
 
 			if callee.equals(BuiltinsCownTestMultiName) 'cownTestMulti'
-				return try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: CownTestMultiName, arity: CownTestMultiArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: CountAliasName, resultUsed: resultUsed, calleeTok: anchor)
+				try self.requireNoWaitInsideWindow(anchor)
+				let violations = try self.emitScalarIntrinsicCall(args, callee: callee, runtimeName: CownTestMultiName, arity: CownTestMultiArity, shape: IntrinsicArgShape.allMachineWords, resultTag: ValueTypeTag.integer, resultAlias: CountAliasName, resultUsed: resultUsed, calleeTok: anchor)
+				self.noteRuntimeParkSeed()
+				return violations
 			end 'cownTestMulti'
 
 			if callee.equals(BuiltinsGtQuiesceName) 'gtQuiesce'
-				return try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsGtQuiesceName, runtimeName: GtQuiesceName, arity: GtQuiesceArity, resultTag: ValueTypeTag.integer, resultAlias: CountAliasName, calleeTok: anchor)
+				try self.requireNoWaitInsideWindow(anchor)
+				let outstanding = try self.emitZeroArgIntrinsic(args, builtinName: BuiltinsGtQuiesceName, runtimeName: GtQuiesceName, arity: GtQuiesceArity, resultTag: ValueTypeTag.integer, resultAlias: CountAliasName, calleeTok: anchor)
+				self.noteRuntimeParkSeed()
+				return outstanding
 			end 'gtQuiesce'
 
 			// The poller-park count: the same shape, and it sets `usesGt` for the same reason. See
@@ -97034,6 +97949,7 @@ export type Parser
 		end 'debugStreamMember'
 
 		let callOpFloor = self.artifact.module.ops.count()
+		let callOpen = self.regionFactsForRead().pendingCallOpen if opensAnIsolatedValue else PendingCallOpen.none
 		let guardsTheCall = self.callNeedsAStrandGuard(opensAnIsolatedValue)
 
 		if guardsTheCall 'enterTheGuard'
@@ -97053,7 +97969,7 @@ export type Parser
 		self.dischargeHandedBack(args, result: called)
 
 		if let opIdx = try emittedCall.opIndex() 'aCallWasEmitted'
-			self.fileCallNotes(func, opIdx: opIdx, args: args, argAnchors: argAnchors, stored: storedSlots, receiver: receiver, anchor: anchor)
+			self.fileCallNotes(func, opIdx: opIdx, args: args, argAnchors: argAnchors, stored: storedSlots, receiver: receiver, anchor: anchor, callOpen: callOpen)
 		end 'aCallWasEmitted'
 
 		return called
@@ -98105,10 +99021,12 @@ export type Parser
 			throw SourceParseError.builtinOperandPhrase(String.from(BuiltinsAwaitAnyName), required: PromiseArrayRequirement, got: self.valueDisplayTypeName(promises), line: calleeTok.line, column: calleeTok.column)
 		end 'notAPromiseArray'
 
-		return self.emitAwaitAnyCall(promises, range: SourceRange.ofToken(calleeTok))
+		return try self.emitAwaitAnyCall(promises, anchor: calleeTok)
 	end 'emitAwaitAny'
 
-	function emitAwaitAnyCall(promises ValueId, range SourceRange) returns ValueId
+	function emitAwaitAnyCall(promises ValueId, anchor Token) returns ValueId throws SourceParseError
+		try self.requireNoWaitInsideWindow(anchor)
+
 		// ⭐⭐ **THE CHECK BETWEEN THE TWO PLACES THE PROMISE SLOT'S WIDTH IS STATED, AND THE PREDICATE ABOVE
 		// USED TO CLAIM IT WITHOUT MAKING IT.** `__gt_any_completed` strides the buffer by a CONSTANT
 		// (`GtRuntime.PromiseSlotBytes`) — it must, because one compiled scan serves every array in every
@@ -98133,7 +99051,12 @@ export type Parser
 			panic("emitAwaitAnyCall: '__gt_any_completed' strides a promise array by {PromiseSlotBytes} bytes per slot, but `arrayElementSize` stamps this instance at {stamped} — `PromiseType.maxon`'s one-word promise handle and `GtRuntime.PromiseSlotBytes` have drifted apart")
 		end 'strideDisagreesWithTheScan'
 
-		return self.emitLibraryAliasedRuntimeCall(GtAwaitAnyName, args: argsOf(promises), alias: ElementIndexAliasName, range: range)
+		let opIdx = self.artifact.module.ops.count()
+		self.noteWaitSeed(self.bodyFunction(), site: WaitSite.selectAwait(opIdx))
+		let current = self.bodyFunction()
+		current.mayYieldSeed = true
+
+		return self.emitLibraryAliasedRuntimeCall(GtAwaitAnyName, args: argsOf(promises), alias: ElementIndexAliasName, range: SourceRange.ofToken(anchor))
 	end 'emitAwaitAnyCall'
 
 	// ⭐⭐ **IS THIS VALUE AN ARRAY WHOSE ELEMENTS ARE PROMISE HANDLES?** — `awaitAny`'s whole argument rule,
@@ -99203,6 +100126,8 @@ export type Parser
 		// A `spawn`'s factory call is not adopted: its result is the service's state, held by the
 		// cown.
 		if let launch = try serviceSite.launch() 'aFactoryCall'
+			try self.requireNoLinearArgumentIn(args, refusal: "a `spawn` takes no linear argument: a factory that cannot start the service drops the value it was given, and a linear value is consumed exactly once. Send the value to the service in a message once it is running", anchor: anchor)
+
 			return try self.emitServiceSpawnOp(launch, spawnTok: try serviceSite.token() otherwise panic("emitResolvedCall: a site that answers a launch answers its token"), writtenCallee: writtenCallee, callee: callee, state: result, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, mint: mint, constructed: constructed, inferInstanceOf: inferInstanceOf)
 		end 'aFactoryCall'
 
@@ -99278,6 +100203,7 @@ export type Parser
 		let opIdx = self.artifact.module.ops.count()
 		self.emitDirectCallOp(MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), mint: mint), callee: callee, callResult: result, args: args, argLabels: argLabels, range: SourceRange.between(anchor, last: rparenTok))
 		self.bodyState.emittedCall = EmittedCallOp.at(opIdx)
+		self.fileWindowReceiverMove(opIdx)
 
 		// ⭐ **AND WHERE THAT OP LANDED, WHEN IT IS ONE A LATER FOLD MAY DROP.** Only the two index accessors
 		// over a known-bytes receiver answer true here — `recordConstStringIndexResult` above is the sole
@@ -99556,6 +100482,10 @@ export type Parser
 
 	function genericArgumentOf(value ValueId, functionName String, paramName String, anchor Token) returns GenericFunctionArgument throws SourceParseError
 		let tag = self.tagOf(value)
+
+		if self.valueIsLinear(value) 'aLinearTypeArgument'
+			throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: linearTypeArgumentMessage(self.valueKindWord(value), holder: functionName), line: anchor.line, column: anchor.column)
+		end 'aLinearTypeArgument'
 
 		match tag 'tag'
 			integer or
@@ -100289,15 +101219,19 @@ export type Parser
 
 		// After the retype: the result is tagged `typeParameter` until then, and the image-record carry marks
 		// only a non-text aggregate, so marking first leaves the `let`'s element writable through a `var`.
-		self.markStoredElementResult(result, receiver: receiver, callee: callee, returnType: returnType)
+		self.markStoredElementResult(result, receiver: receiver, callee: callee, args: args, argLabels: argLabels, returnType: returnType)
 		return reading
 	end 'retypeDeclaredMethodResult'
 
-	function markStoredElementResult(result ValueId, receiver ValueId, callee ByteArray, returnType MaxonReturnType)
+	function markStoredElementResult(result ValueId, receiver ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, returnType MaxonReturnType)
 		let instance = self.valueInstanceId(receiver)
 		let declared = try valueTypeOfReturn(returnType) otherwise return
 		let position = try self.signatures.storedElementPositionOf(callee, instance: instance, declared: declared) otherwise return
 		self.markStoredElementRead(result, container: receiver, qualifier: self.signatures.genericInstanceArgQualifier(instance, position: position))
+
+		if self.valueHoldsAUniqueRecord(result) and not self.calleeMovesItsElementOut(callee, args: args, argLabels: argLabels, gid: instance) 'aUniqueLentByTheContainer'
+			self.markElementRead(result)
+		end 'aUniqueLentByTheContainer'
 	end 'markStoredElementResult'
 
 	function markStoredElementRead(result ValueId, container ValueId, qualifier GenericArgQualifier)
@@ -101034,7 +101968,7 @@ export type Parser
 
 		let spawnedOp = try self.bodyState.emittedCall.opIndex() otherwise panic("parseAsyncCall: emitAsyncCall returned without emitting its asyncCall op")
 
-		self.fileCallNotes(func, opIdx: spawnedOp, args: args, argAnchors: argAnchors, stored: StoredSlotArgArray.create(0), receiver: ReceiverArg.none, anchor: target.anchor)
+		self.fileCallNotes(func, opIdx: spawnedOp, args: args, argAnchors: argAnchors, stored: StoredSlotArgArray.create(0), receiver: ReceiverArg.none, anchor: target.anchor, callOpen: PendingCallOpen.none)
 
 		self.noteTiedAsync(func, opIdx: spawnedOp, args: args)
 		return spawned
@@ -101230,6 +102164,10 @@ export type Parser
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
 			let passing = argumentPassingAt(conventions, argIndex: i as ParamCount, label: callArgumentLabel(argLabels, argIndex: i as ParamCount))
 
+			if self.valueIsLinear(argValue) 'aLinearArgument'
+				throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "an `async` call takes no linear argument: a coroutine that cannot start drops the value it was given, and a linear value is consumed exactly once", line: anchor.line, column: anchor.column)
+			end 'aLinearArgument'
+
 			if passing == ArgumentPassing.byReference 'theCoroutineGetsTheCallersCell'
 				cells = maskWithParam(cells, param: i as ParamCount)
 			end 'theCoroutineGetsTheCallersCell'
@@ -101285,11 +102223,20 @@ export type Parser
 	// The result gate and the minted instance are asked of one callee, so what is checked is what is awaited.
 	function spawnAtItsPromiseInstance(callee ByteArray, returnType MaxonReturnType, scopeFilePath FilePath, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token) returns ValueId throws SourceParseError
 		try self.requireAsyncResult(callee, returnType: self.repairSweptReturnType(returnType, scopeFilePath: scopeFilePath), anchor: anchor)
+		try self.requireAsyncResultIsNotLinear(returnType, scopeFilePath: scopeFilePath, anchor: anchor)
 
 		try self.transferAsyncPromiseArgs(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor)
 
 		return self.mintSpawnPromise(callee)
 	end 'spawnAtItsPromiseInstance'
+
+	function requireAsyncResultIsNotLinear(returnType MaxonReturnType, scopeFilePath FilePath, anchor Token) throws SourceParseError
+		let resultType = try valueTypeOfReturn(self.repairSweptReturnType(returnType, scopeFilePath: scopeFilePath)) otherwise return
+
+		if self.signatures.valueIsLinear(maxonTypeTag(resultType), nameId: typeNameIdOf(resultType), from: self.artifact.typeNames) 'aLinearResult'
+			throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "an `async` call of a function that returns a linear value is refused: the promise would hold a linear value, and nothing may be left to drop it", line: anchor.line, column: anchor.column)
+		end 'aLinearResult'
+	end 'requireAsyncResultIsNotLinear'
 
 	function mintSpawnPromise(callee ByteArray) returns ValueId
 		let promise = self.signatures.internPromiseInstanceForCallee(callee)
@@ -101667,9 +102614,7 @@ export type Parser
 			return AwaitOperand.deferred(try self.deferredResultOrRefusal(SourceParseError.awaitNonPromise(self.awaitOperandKindName(promise), line: awaitTok.line, column: awaitTok.column), value: promise))
 		end 'notPromise'
 
-		let facts = self.awaitedPromiseFacts(func, promise: promise)
-		self.noteAwaitSeeds(func, facts: facts)
-		return AwaitOperand.promise(facts)
+		return AwaitOperand.promise(self.awaitedPromiseFacts(func, promise: promise))
 	end 'awaitOperandOf'
 
 	// E3057 for a plain `await` of a throwing promise nothing catches: asked by `emitRoutedAwait`, and
@@ -101740,8 +102685,10 @@ export type Parser
 		// stays below; it finds the consume already recorded and vacates nothing a second time.
 		try self.requireConsumedPromiseIsOwned(promise, anchor: awaitTok, door: promiseConsumeDoorName(PromiseConsume.awaited))
 		self.vacateConsumedPromiseSlot(promise, range: SourceRange.ofToken(awaitTok), reclaimedBy: PromiseConsume.awaited)
-		self.recordServiceReplyAwait(facts, awaitTok: awaitTok)
 		let opIdx = self.artifact.module.ops.count()
+		self.noteWaitSeed(self.bodyFunction(), site: self.awaitWaitSite(promise, facts: facts, opIdx: opIdx))
+		let current = self.bodyFunction()
+		current.mayYieldSeed = true
 		self.statement.lastAwait = RecordedTryTarget.recorded(opIdx, target: facts.tryTarget)
 
 		self.emitBodyOp(self.bodyState.currentBlock, op: MaxonOp.await(result, promise: promise), range: SourceRange.ofToken(awaitTok))
@@ -101779,29 +102726,6 @@ export type Parser
 			value(inner) gives self.mintValueOfType(inner)
 		end 'r'
 	end 'mintAwaitedValue'
-
-	// File the `await` whose promise is a SERVICE REPLY, so `checkServiceCallCycles` can seed its graph from
-	// it. A promise from any other road records nothing, which is every `async` program in the corpus.
-	//
-	// ⚠ **THE OP INDEX IS THE ARTIFACT'S CURRENT COUNT, so this must run IMMEDIATELY BEFORE the emit** —
-	// `recordServiceAwaitSite`'s contract, and `recordAsyncSpawnSite`'s before it. A `tryAwait` is the SAME
-	// op index: `parseTryCallTarget` REWRITES the op this line keys rather than appending a second one.
-	function recordServiceReplyAwait(facts AwaitedPromise, awaitTok Token)
-		match facts.tryTarget 'target'
-			named or
-			witness or
-			promise or
-			send or
-			deferred then return
-			serviceReply(_, awaitedService) then self.fileServiceAwaitSite(awaitedService, awaitTok: awaitTok)
-			serviceStart(_, awaitedService) then self.fileServiceAwaitSite(awaitedService, awaitTok: awaitTok)
-			sentReply(_, awaitedService, _) then self.fileServiceAwaitSite(awaitedService, awaitTok: awaitTok)
-		end 'target'
-	end 'recordServiceReplyAwait'
-
-	function fileServiceAwaitSite(awaitedService immutable ByteArray, awaitTok Token)
-		self.artifact.recordServiceAwaitSite(ServiceAwaitSite.create(awaitedService, line: awaitTok.line, column: awaitTok.column, declFilePath: self.job.path))
-	end 'fileServiceAwaitSite'
 
 	// Transfer ownership of every argument the callee takes. For a callee the sweep recorded ownership
 	// facts for, each source argument is slotted to its parameter position (the sweep's `paramNames`
@@ -101847,7 +102771,7 @@ export type Parser
 	end 'transferConsumedArgs'
 
 	function noteMovedIntoCall(value ValueId, callee ByteArray, parameter ByteArray)
-		self.bodyState.movedIntoCalls.upsert(value, value: "the parameter '{displayParamName(parameter)}' of '{String.from(callee)}', which keeps it")
+		self.bodyState.movedIntoCalls.upsert(value, value: keepingPositionText(callee, parameter: parameter))
 	end 'noteMovedIntoCall'
 
 	function transferConsumedColumn(info ParamConsumeInfo, isolated BoolArray, column ParamCount, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance, consumedOwned ValueIdArray, callee ByteArray) throws SourceParseError
@@ -101876,15 +102800,135 @@ export type Parser
 		end 'borrowed'
 
 		try self.requireConsumedArgumentStillOwned(argValue, consumedOwned: consumedOwned, range: range)
-		self.noteMovedIntoCall(argValue, callee: callee, parameter: try info.paramNames.get(position) otherwise panic("transferConsumedColumn: paramNames.get OOB at {position} — the position came from `argSlotPosition` over these names"))
+		let parameterName = try info.paramNames.get(position) otherwise panic("transferConsumedColumn: paramNames.get OOB at {position} — the position came from `argSlotPosition` over these names")
 
-		if (try isolated.get(position) otherwise false) 'anIsolatedParameter'
+		if self.valueIsLinear(argValue) 'aLinearArgument'
+			try self.requireLinearArgumentIsOwned(argValue, anchor: anchor)
+
+			if parameterName.equals(SelfParamName) 'itIsTheReceiver'
+				self.bodyState.consumedReceivers.push(argValue)
+			end 'itIsTheReceiver'
+		end 'aLinearArgument'
+
+		let intoAnIsolatedParameter = try isolated.get(position) otherwise false
+
+		if not intoAnIsolatedParameter 'aPlainPosition'
+			try self.requireLinearValueMayEnterAPlainPosition(argValue, callee: callee, parameter: parameterName, range: range)
+		end 'aPlainPosition'
+
+		self.noteMovedIntoCall(argValue, callee: callee, parameter: parameterName)
+
+		if intoAnIsolatedParameter 'anIsolatedParameter'
 			try args.set(column, value: self.handIsolatedArgument(argValue, anchor: anchor)) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
 			return
 		end 'anIsolatedParameter'
 
 		try args.set(column, value: self.transferConsumedArg(argValue, anchor: anchor)) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
 	end 'transferConsumedColumn'
+
+	function requireNoLinearArgumentIn(args ValueIdArray, refusal String, anchor Token) throws SourceParseError
+		for argument in args 'eachArgument'
+			if self.valueIsLinear(argument) 'aLinearArgument'
+				throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: refusal, line: anchor.line, column: anchor.column)
+			end 'aLinearArgument'
+		end 'eachArgument'
+	end 'requireNoLinearArgumentIn'
+
+	function requireLinearValueMayEnterAPlainPosition(argValue ValueId, callee ByteArray, parameter ByteArray, range SourceRange) throws SourceParseError
+		let table = self.regionFactsForRead()
+		let windows = table.windows
+
+		if not windowIsOpen(windows) or not self.valueIsLinear(argValue) or (self.effectiveCapabilityOf(argValue) != ValueCapability.isolated and not table.carriesABirth(argValue)) 'nothingEntersAnOpenRegion'
+			return
+		end 'nothingEntersAnOpenRegion'
+
+		let window = innermostWindowOf(windows)
+
+		if not valueIsOutsideInnermostWindow(windows, value: table.birthOf(argValue)) 'bornInsideTheWindow'
+			return
+		end 'bornInsideTheWindow'
+
+		if parameter.equals(SelfParamName) 'theCalleeJudgesItsReceiver'
+			let written = self.regionFactsForWrite()
+			written.pendingWindowReceiver = PendingWindowReceiver.moved(range.line, column: range.column, label: window.label)
+			return
+		end 'theCalleeJudgesItsReceiver'
+
+		throw self.regionRefusal(ErrorCode.semanticIsolatedCallOpensTwoRegions, message: outerValueIntoOpenWindowMessage(window.label, into: keepingPositionText(callee, parameter: parameter)), line: range.line, column: range.column)
+	end 'requireLinearValueMayEnterAPlainPosition'
+
+	function fileWindowReceiverMove(opIdx ElementIndex)
+		match self.regionFactsForRead().pendingWindowReceiver 'pending'
+			none then return
+			moved(line, column, label) then self.noteWindowReceiverMove(opIdx, line: line, column: column, label: label)
+		end 'pending'
+
+		let written = self.regionFactsForWrite()
+		written.pendingWindowReceiver = PendingWindowReceiver.none
+	end 'fileWindowReceiverMove'
+
+	function noteWindowReceiverMove(opIdx ElementIndex, line LineNumber, column ColumnNumber, label immutable ByteArray)
+		let notes = self.notesForWrite(self.bodyFunction())
+		notes.windowReceiverOps.push(opIdx)
+		notes.windowReceiverLabels.push(label)
+		notes.windowReceiverLines.push(line)
+		notes.windowReceiverColumns.push(column)
+	end 'noteWindowReceiverMove'
+
+	function rootBirthOf(source ValueId) returns ValueId throws AbsentError
+		let table = self.regionFactsForRead()
+
+		if not table.carriesABirth(source) and (self.valueIsAValueType(source) or self.effectiveCapabilityOf(source) != ValueCapability.isolated) 'notARootOfItsOwn'
+			throw AbsentError.absent
+		end 'notARootOfItsOwn'
+
+		return table.birthOf(source)
+	end 'rootBirthOf'
+
+	function carryWindowBirth(carrier ValueId, sources ValueIdArray)
+		if not windowIsOpen(self.regionFactsForRead().windows) 'noWindowToCross'
+			return
+		end 'noWindowToCross'
+
+		var oldest = carrier
+
+		for source in sources 'eachSource'
+			let birth = try self.rootBirthOf(source) otherwise continue
+
+			if birth < oldest 'olderThanTheCarrier'
+				oldest = birth
+			end 'olderThanTheCarrier'
+		end 'eachSource'
+
+		self.recordWindowBirth(carrier, birth: oldest)
+	end 'carryWindowBirth'
+
+	function carryWindowBirthFrom(carrier ValueId, source ValueId)
+		if not windowIsOpen(self.regionFactsForRead().windows) 'noWindowToCross'
+			return
+		end 'noWindowToCross'
+
+		let birth = try self.rootBirthOf(source) otherwise return
+		self.recordWindowBirth(carrier, birth: birth)
+	end 'carryWindowBirthFrom'
+
+	function recordWindowBirth(carrier ValueId, birth ValueId)
+		if birth < self.regionFactsForRead().birthOf(carrier) 'carriesAnOlderRoot'
+			self.regionFactsForWrite().windowBirths.upsert(carrier, value: birth)
+		end 'carriesAnOlderRoot'
+	end 'recordWindowBirth'
+
+	function unknownCalleeLinearSentence(door String) returns String
+		return "a linear value is never passed to {door}: its callee is not known here, and the callee is what consumes a linear value. Call a function that takes it"
+	end 'unknownCalleeLinearSentence'
+
+	function requireLinearArgumentIsOwned(argValue ValueId, anchor Token) throws SourceParseError
+		if self.hasLiveOwner(argValue) or self.pendingTempsContain(argValue) or self.valueIsOwnedHeap(argValue) or self.valueIsAPayloadFreeWord(argValue) or not self.valueIsManagedHeap(argValue) 'thisCodeOwnsIt'
+			return
+		end 'thisCodeOwnsIt'
+
+		throw self.regionRefusal(ErrorCode.semanticLinearRefused, message: "this linear value is only lent to this code (a parameter of a function that does not take it, or `self` of a method that does not take `consuming self`), and only the code that owns a linear value consumes it", line: anchor.line, column: anchor.column)
+	end 'requireLinearArgumentIsOwned'
 
 	function handIsolatedArgument(argValue ValueId, anchor Token) returns ValueId
 		if self.valueIsAnOwnedIsolatedLocal(argValue) 'anOwnedRegion'
@@ -103207,6 +104251,7 @@ export type Parser
 		let argRanges = SourceRangeArray.create(0)
 		let argAnchors = TokenIndexArray.create(0)
 		let places = try self.parseIndirectCallArgs(func, governing: governing, args: args, names: argImmutableNames, argRanges: argRanges, argAnchors: argAnchors, anchor: anchor, calleeName: calleeTok.value)
+		try self.requireNoLinearArgumentIn(args, refusal: self.unknownCalleeLinearSentence("a function value"), anchor: anchor)
 		let argsAreChecked = self.indirectArgumentsAreChecked(governing, args: args, anchor: anchor)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
@@ -103293,7 +104338,7 @@ export type Parser
 			self.noteWrittenArgumentName(notes, opIdx: opIdx, position: i as ParamCount, anchorIndex: try argAnchors.get(i) otherwise panic("noteFunctionValueCallSite: argAnchors.get OOB at {i}"))
 		end 'eachWrittenArgument'
 
-		self.noteWindowCall(func, opIdx: opIdx, args: args)
+		self.noteWindowCall(func, opIdx: opIdx, args: args, callOpen: PendingCallOpen.none)
 	end 'noteFunctionValueCallSite'
 
 	function argOwesTheQuantityDoor(arg ValueId) returns bool

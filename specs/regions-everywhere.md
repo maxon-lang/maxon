@@ -766,7 +766,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3210: <fragment>:33:15: function value for 'Step' may wait (it calls 'ask', which it awaits a reply from 'Doubler' at line 18), but a function type never waits or yields
+error E3210: <fragment>:33:15: function value for 'Step' may wait (it calls 'ask', which awaits a reply from 'Doubler' at line 18), but a function type never waits or yields
 ```
 
 <!-- test: error.self-referential-tuple-alias-in-a-file-that-spells-async -->

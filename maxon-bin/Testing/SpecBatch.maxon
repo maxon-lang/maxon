@@ -752,7 +752,7 @@ module function batchBuildsWithFreedBoxPoison(tests SpecTestArray, members Batch
 	return poisons
 end 'batchBuildsWithFreedBoxPoison'
 
-function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchBuild
+function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, driver CompileDriver.handle) returns BatchBuild
 	let stdlibDir = try locateStdlibDir() otherwise return BatchBuild.unbuildable(missingStdlibReason())
 	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise return BatchBuild.unbuildable(missingRuntimeReason())
 	let facilities = EntryFacilities.of(effectiveTarget)
@@ -762,8 +762,9 @@ function buildBatch(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray,
 
 	let exePath = batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension)
 
-	let session = CompileSession.create(DiagnosticSink.capturing(), fileMemos: fileMemos, treeLock: LockHold.none())
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(0), poisonFreed: batchBuildsWithFreedBoxPoison(tests, members: members), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), scriptlib: ScriptlibLoad.omitted, entryFunction: freeze BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources, session: session) otherwise (e) 'didNotCompile'
+	let session = DriverSession.capturing()
+	let request = freeze CompileRequest.create(DriverWork.build, origin: ProjectOrigin.sources, target: effectiveTarget, session: session, inputPaths: staged.buildTargets, outputOverride: StatedText.stated(exePath.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(0), poisonFreed: batchBuildsWithFreedBoxPoison(tests, members: members), stdlibDirOverride: StatedText.stated(stdlibDir.toString()), runtimeDirOverride: StatedText.stated(runtimeDir.toString()), scriptlib: ScriptlibLoad.omitted, entryFunction: freeze BatchEntrySymbol.toByteArray(), compilerWrittenSources: staged.compilerWrittenSources).clone()
+	let product = try compileToProduct(driver, request: request, session: session) otherwise (e) 'didNotCompile'
 		reportCompileError(e, sink: session.diagnostics)
 		return batchBuildAfterError(CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), ordinal: ordinal, count: members.count())
 	end 'didNotCompile'
@@ -941,7 +942,7 @@ function discardBatchLeftovers(tempDir FilePath, ordinal ElementIndex, exeExtens
 	discardBuild(FilePathArray.create(0), exePath: batchExePath(tempDir, ordinal: ordinal, exeExtension: exeExtension))
 end 'discardBatchLeftovers'
 
-module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchOutcome
+module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, members BatchMemberArray, exeExtension String, effectiveTarget Target, driver CompileDriver.handle) returns BatchOutcome
 	var remaining = members.clone()
 	let refusals = BatchRefusalMap.create()
 	var last = BatchBuild.notBuilt(CompileAnswer.create(CompileVerdict.driverFailed, diagnostics: "no batch compile was attempted"), refused: TestRunIndexArray.create(0))
@@ -951,7 +952,7 @@ module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex
 			break
 		end 'noneLeft'
 
-		last = buildBatch(tempDir, ordinal: ordinal, tests: tests, members: remaining, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		last = buildBatch(tempDir, ordinal: ordinal, tests: tests, members: remaining, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
 
 		match last 'attempt'
 			built then break 'eachAttempt'
@@ -964,7 +965,7 @@ module function buildBatchDroppingRefused(tempDir FilePath, ordinal ElementIndex
 		end 'nothingToDrop'
 	end 'eachAttempt'
 
-	return outcomeAfterAttempts(last, remaining: remaining, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	return outcomeAfterAttempts(last, remaining: remaining, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
 end 'buildBatchDroppingRefused'
 
 union BatchPrior
@@ -980,10 +981,10 @@ function priorOf(last BatchBuild) returns BatchPrior
 	end 'last'
 end 'priorOf'
 
-function outcomeAfterAttempts(last BatchBuild, remaining BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchOutcome
+function outcomeAfterAttempts(last BatchBuild, remaining BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, driver CompileDriver.handle) returns BatchOutcome
 	match last 'last'
 		built then return BatchOutcome.create(last, refusals: refusals, harnessErrors: StringArray.create(0))
-		notBuilt then return isolatedOutcome(last, prior: priorOf(last), remaining: remaining, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		notBuilt then return isolatedOutcome(last, prior: priorOf(last), remaining: remaining, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
 		unbuildable(reason) then return unbuildableOutcome(last, reason: reason, affected: indexesOf(remaining), refusals: refusals, tempDir: tempDir, ordinal: ordinal, exeExtension: exeExtension, tests: tests)
 	end 'last'
 end 'outcomeAfterAttempts'
@@ -1013,10 +1014,10 @@ function failureTail(accepted BatchMemberArray) returns SettledTail
 	return SettledTail.noTrial if accepted.isEmpty() else SettledTail.stale
 end 'failureTail'
 
-function isolatedOutcome(last BatchBuild, prior BatchPrior, remaining BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns BatchOutcome
+function isolatedOutcome(last BatchBuild, prior BatchPrior, remaining BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, driver CompileDriver.handle) returns BatchOutcome
 	let accepted = BatchMemberArray.create(0)
 	let settling = BatchSettling.begin()
-	let tail = settling.settleFrom(prior, accepted: accepted, candidates: remaining, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	let tail = settling.settleFrom(prior, accepted: accepted, candidates: remaining, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
 	let unsettled = settling.unsettledIndexes()
 	let affected = indexesJoined(indexesOf(accepted), following: unsettled)
 	let spentErrors = trialBudgetErrors(unsettled, tests: tests)
@@ -1025,7 +1026,7 @@ function isolatedOutcome(last BatchBuild, prior BatchPrior, remaining BatchMembe
 		halted(reason) then return unbuildableOutcome(BatchBuild.unbuildable(reason), reason: reason, affected: affected, refusals: refusals, tempDir: tempDir, ordinal: ordinal, exeExtension: exeExtension, tests: tests)
 		noTrial then return BatchOutcome.create(last, refusals: refusals, harnessErrors: spentErrors)
 		current(build) then return BatchOutcome.create(build, refusals: refusals, harnessErrors: spentErrors)
-		stale then return outcomeAfterRebuild(buildBatch(tempDir, ordinal: ordinal, tests: tests, members: accepted, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos), refusals: refusals, spentErrors: spentErrors, affected: affected, tempDir: tempDir, ordinal: ordinal, exeExtension: exeExtension, tests: tests)
+		stale then return outcomeAfterRebuild(buildBatch(tempDir, ordinal: ordinal, tests: tests, members: accepted, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver), refusals: refusals, spentErrors: spentErrors, affected: affected, tempDir: tempDir, ordinal: ordinal, exeExtension: exeExtension, tests: tests)
 	end 'tail'
 end 'isolatedOutcome'
 
@@ -1068,14 +1069,14 @@ type BatchSettling
 		end 'halt'
 	end 'hasHalted'
 
-	function settleFrom(prior BatchPrior, accepted mutable BatchMemberArray, candidates BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns SettledTail
+	function settleFrom(prior BatchPrior, accepted mutable BatchMemberArray, candidates BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, driver CompileDriver.handle) returns SettledTail
 		return match prior 'prior'
-			fresh gives self.settle(accepted, candidates: candidates, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
-			refused(answer) gives self.refuse(accepted, candidates: candidates, answer: answer, refused: TestRunIndexArray.create(0), refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+			fresh gives self.settle(accepted, candidates: candidates, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
+			refused(answer) gives self.refuse(accepted, candidates: candidates, answer: answer, refused: TestRunIndexArray.create(0), refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
 		end 'prior'
 	end 'settleFrom'
 
-	function settle(accepted mutable BatchMemberArray, candidates BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns SettledTail
+	function settle(accepted mutable BatchMemberArray, candidates BatchMemberArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, driver CompileDriver.handle) returns SettledTail
 		if candidates.isEmpty() 'nothingToSettle'
 			return SettledTail.noTrial
 		end 'nothingToSettle'
@@ -1090,11 +1091,11 @@ type BatchSettling
 		let trial = accepted.clone()
 		trial.append(candidates)
 
-		let attempt = buildBatch(tempDir, ordinal: ordinal, tests: tests, members: trial, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		let attempt = buildBatch(tempDir, ordinal: ordinal, tests: tests, members: trial, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
 
 		match attempt 'attempt'
 			built then return self.accepting(accepted, candidates: candidates, attempt: attempt)
-			notBuilt(answer, refused) then return self.refuse(accepted, candidates: candidates, answer: answer, refused: refused, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+			notBuilt(answer, refused) then return self.refuse(accepted, candidates: candidates, answer: answer, refused: refused, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
 			unbuildable(reason) then return self.halting(candidates, reason: reason)
 		end 'attempt'
 	end 'settle'
@@ -1110,7 +1111,7 @@ type BatchSettling
 		return SettledTail.halted(reason)
 	end 'halting'
 
-	function refuse(accepted mutable BatchMemberArray, candidates BatchMemberArray, answer CompileAnswer, refused TestRunIndexArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, fileMemos SharedFileMemoMap) returns SettledTail
+	function refuse(accepted mutable BatchMemberArray, candidates BatchMemberArray, answer CompileAnswer, refused TestRunIndexArray, refusals BatchRefusalMap, tempDir FilePath, ordinal ElementIndex, tests SpecTestArray, exeExtension String, effectiveTarget Target, driver CompileDriver.handle) returns SettledTail
 		let failure = failureTail(accepted)
 		let partners = heldPartnersNamed(refused, held: accepted, tests: tests)
 		let blamed = namedCandidatePositions(refused, heldCount: accepted.count())
@@ -1119,7 +1120,7 @@ type BatchSettling
 
 		if not blamed.isEmpty() 'someNamed'
 			let rest = fileNamedRefusals(refusals, blamed: blamed, partners: partners, candidates: candidates, trial: trial, answer: answer, heldCount: accepted.count(), ordinal: ordinal, tests: tests)
-			return latestTail(failure, later: self.settle(accepted, candidates: rest, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos))
+			return latestTail(failure, later: self.settle(accepted, candidates: rest, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver))
 		end 'someNamed'
 
 		if candidates.count() == 1 'theCulprit'
@@ -1131,8 +1132,8 @@ type BatchSettling
 		let half = (candidates.count() / SplitInHalves) as ElementIndex
 		let front = try candidates.slice(0, endIndex: half) otherwise panic("BatchSettling.refuse: the front half ends at {half}, within the {candidates.count()} candidates")
 		let back = try candidates.slice(half, endIndex: candidates.count()) otherwise panic("BatchSettling.refuse: the back half starts at {half}, within the {candidates.count()} candidates")
-		let frontTail = self.settle(accepted, candidates: front, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
-		let backTail = self.settle(accepted, candidates: back, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		let frontTail = self.settle(accepted, candidates: front, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
+		let backTail = self.settle(accepted, candidates: back, refusals: refusals, tempDir: tempDir, ordinal: ordinal, tests: tests, exeExtension: exeExtension, effectiveTarget: effectiveTarget, driver: driver)
 
 		return latestTail(failure, later: latestTail(frontTail, later: backTail))
 	end 'refuse'

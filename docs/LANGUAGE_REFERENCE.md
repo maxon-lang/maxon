@@ -5324,6 +5324,12 @@ any promise in the array has finished and returns its index. It consumes nothing
 included, is still awaited (or dropped) afterwards. An already-finished promise is returned without parking.
 `p.isComplete()` asks one promise whether it has finished, without parking or consuming it.
 
+`awaitAny` is a wait and a yield: the compiler cannot see which coroutine or service produced an array element,
+so a function that calls it waits on a party it cannot see. A message or a `spawn` factory that reaches it is
+[E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221); a `modify` block, an `acquire` block or a one-call
+open that reaches it, directly or through a callee, is
+[E3205](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3205). `main` and a plain coroutine may select.
+
 **Reading a promise out of storage.** A promise has one owner, so reading one out of the array or the struct
 field that holds it starts a MOVE out of that slot: consuming the read empties the slot, and a read never
 consumed stays the container's and is dropped with it. `get(i)`, `first()`, `for p in array`, an array
@@ -5456,6 +5462,11 @@ dropped promise has the effects below.
   numeric address. A service send it makes to a full mailbox fails `mailboxFull` at once, with or without a
   `sendTimeout:`, and a send already waiting for room fails `mailboxFull` when the promise is dropped (see
   [Mailboxes and failed sends](#mailboxes-and-failed-sends)).
+- Cancellation is cooperative: it marks the coroutine and never tears it down mid-frame, so the coroutine
+  runs to the end of its own code. A `sleep` it is parked in ends early, and each `sleep` it makes afterwards
+  yields once, so its siblings run, and then returns at once. A [linear value](#linear-types-and-finalizers) it
+  holds is consumed by its own code on the path the early return of the wait leads it down, so a finalizer
+  runs and nothing leaks.
 
 ### Yielding
 
@@ -5518,8 +5529,9 @@ end 'main'
   that runs it.
 - **An idle service owns no green thread.** A message that reaches an idle service starts a runner that handles
   the queued messages in order, at most 64 per turn, and yields between turns so every other runnable service
-  runs. A handler that waits (`await`, `sleep`, I/O) keeps its service held, and messages queue behind it up to
-  the mailbox's capacity.
+  runs. A handler that sleeps or does I/O keeps its service held for as long as the sleep or the peer takes,
+  and messages queue behind it up to the mailbox's capacity. A handler never waits on another party
+  ([Holders Never Wait](#holders-never-wait)).
 - **A factory that throws makes the `spawn` a throwing call.** The spawner waits until the factory has run,
   then receives either the handle or the factory's error, of the factory's own type. Write
   `try spawn Type.factory(…)` with an `otherwise`, propagate it from a throwing function, or place it in a
@@ -5542,7 +5554,7 @@ end 'main'
 - **A reply is kept, or discarded on purpose.** A method that returns or throws, sent as a statement, is
   **E3190**. Await the reply, keep it, or discard it on purpose with `_ = try h.method(…)`.
 - **Private methods are not messages.** Calling a non-exported method or a static through a handle is
-  **E3136**. A service cannot send to itself.
+  **E3136**: a handle reaches exactly the type's `export` instance methods.
 - **A message is as visible as its service, and no more.** Its `export` makes it a message rather than
   widening it past the type, so the types its signature names need only the service type's visibility
   ([E3167](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3167)): a file-private service's messages may name
@@ -5564,7 +5576,8 @@ end 'main'
   of a concrete type.
 - A refusal of a `spawn`'s target or factory (**E3134**, **E3008**, **E2015**) points at the `spawn`
   keyword.
-- Services that `await` each other in a cycle are **E3139**; a factory's `await` counts as its service's.
+- A message or a factory that waits on another party is **E3221**, so services never wait on each other in a
+  cycle ([Holders Never Wait](#holders-never-wait)).
 - `spawn` is a contextual keyword; it remains usable as a name.
 
 **What crosses a message.** A value sent to a service must not stay reachable from the sender in a way
@@ -5622,6 +5635,16 @@ record or union that holds one is [E3216](../maxon-bin/Compiler/ErrorCodeRegistr
 `spawn`. Each message may run on a different green thread, and a coroutine belongs to the strand that started it,
 so a promise kept in the state could be awaited or dropped by a strand that does not own it. A message or the
 factory `await`s or `.cancel()`s the coroutines it starts before it returns, and keeps their result in the field.
+
+**A service's state reaches no handle to its own type.** A service is freed when its last handle is dropped, so
+state that holds a handle to the service itself keeps it alive for ever. That is
+[E4014](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e4014), with the cycle in the message: a field `var me as
+Echo.handle`; two services whose states hold each other's handles (`Ping` holds a `Pong.handle` and `Pong` holds a
+`Ping.handle`); an interface handle whose conformers include the service; and a function-valued field, union
+payload or container element while some closure in the program captures a handle that reaches the service,
+because a function type does not say what its closure captured. Pass the handle with each message
+(`start(oracle Oracle.handle, me Asker.handle)`), which keeps it only for the message, or give the services
+distinct types. A chain of distinct services, each holding the next one's handle, is not a cycle.
 
 **Module-level state.** A service keeps its state in its own fields and hands results back through replies. A
 module-level `let` is `immutable` image data, so a handler or factory reads the one copy every thread shares,
@@ -5706,10 +5729,9 @@ end 'main'
 ```
 
 - **A full mailbox is the sender's to handle.** Wait for room with `sendTimeout:`, as above, send elsewhere,
-  or drop the message. A send with a finite timeout waits a bounded time, so with those the only unbounded
-  wait is an `await`, and [E3139](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3139)'s cycle rule keeps the
-  program deadlock-free. A `ForeverMs` send is an unbounded wait too: services that fill each other's
-  mailboxes with `ForeverMs` sends can deadlock.
+  or drop the message. A send with a positive timeout waits, so a message or a `spawn` factory that makes one
+  is [E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221): a message sends with `sendTimeout: 0`, which
+  fails `mailboxFull` instead of waiting. `main`, a test body and a coroutine hold no service and may wait.
 - ⚠ **Retrying coroutines can livelock.** A yield runs the green thread's other runnable coroutines first.
   When every coroutine of one green thread retries a send without a timeout to the same full service, at one
   processor with preemption off (`MAXON_MAX_PROCS=1`, `MAXON_PREEMPT=off`) the coroutines hand the processor
@@ -5772,8 +5794,224 @@ end 'main'
 - A requirement sent through `I.handle` is a message of every service implementing `I`, so each declares it
   as an `export` instance method. Sending one that an implementer declares another way (a private method,
   say), or that no implementer declares, is [E3136](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3136).
-- A handler that sends through an `I.handle` is checked against the implementers of `I`, so
-  [E3139](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3139) finds an await cycle through any of them.
+- A handler that awaits a reply through an `I.handle` waits, so it is
+  [E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221) like any other waiting message.
+
+### Atomic Updates — `acquire`
+
+`acquire a, b 'label' … end 'label' otherwise 'stopped' … end 'stopped'` takes the services behind two or
+more handles at once and runs its block with their states. The block's name `move` below is its label:
+
+```maxon
+typealias Money = int(i64.min to i64.max)
+typealias EntryArray = Array with Money
+
+type Account
+	var balance as Money
+	var history as EntryArray
+
+	static function create(opening Money) returns Self
+		return Self{balance: opening, history: EntryArray.create(0)}
+	end 'create'
+
+	function canPay(amount Money) returns bool
+		return self.balance >= amount
+	end 'canPay'
+
+	function change(by Money)
+		self.balance = self.balance + by
+		self.history.push(by)
+	end 'change'
+
+	function historyCopy() returns isolated EntryArray
+		return self.history.clone()
+	end 'historyCopy'
+
+	function replaceHistory(entries isolated EntryArray)
+		self.history = merge entries
+	end 'replaceHistory'
+
+	export function balanceNow() returns Money
+		return self.balance
+	end 'balanceNow'
+end 'Account'
+
+function transfer(source Account.handle, target Account.handle, amount Money) returns bool
+	acquire source, target 'move'
+		if not source.canPay(amount) 'short'
+			return false
+		end 'short'
+
+		source.change(-amount)
+		target.change(amount)
+	end 'move' otherwise 'stopped'
+		return false
+	end 'stopped'
+
+	return true
+end 'transfer'
+
+function copyHistory(first Account.handle, second Account.handle) returns bool
+	acquire first, second 'copy'
+		let copy = second.historyCopy()
+		first.replaceHistory(copy)
+	end 'copy' otherwise 'stopped'
+		return false
+	end 'stopped'
+
+	return true
+end 'copyHistory'
+
+function main() returns ExitCode
+	let a = spawn Account.create(100)
+	let b = spawn Account.create(0)
+	let moved = transfer(a, target: b, amount: 30)
+	let left = try await a.balanceNow() otherwise 0
+	print("{moved} {left}\n")
+	let copied = copyHistory(b, second: a)
+	print("{copied}\n")
+	return 0
+end 'main'
+```
+
+Output: `true 70` and `true`. No message to either account runs between the debit and the credit, so no message
+sees the money in flight.
+
+- **Each name is the service's state.** Inside `transfer`, `source` and `target` are `Account` values; the
+  names are written where the handles are in scope, and each handle is of a spawned service type. A handle
+  reached through an expression is bound with `let` first (`let source = self.left`).
+- **The block takes every service it names at once.** It runs on the caller's green thread; the calling
+  coroutine parks until all the services are free, and the thread's other coroutines keep running meanwhile.
+  `return`, `break`, `continue` and `throw` leave it as they leave any block, and every service is released on
+  the way out. `acquire s, s` names one service and takes it once.
+- **`otherwise` is the block that runs when a service has stopped.** It holds no service. It follows
+  the block's `end` on the same line, as `else` does, and takes a label of its own; `otherwise (e) 'stopped'`
+  binds the position in the name list of a service that stopped. An `acquire` takes no mailbox capacity, so
+  a stopped service is its only failure.
+- **One state is open at a time.** Reading a field of a state or calling a method on it opens it for that one
+  statement. What the statement hands back leaves it only as a value, `immutable` data or a fresh `isolated`
+  value ([E3202](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3202)): `let held = source.cell` is refused;
+  `let n = source.cell.n` and `let copy = source.cell.clone()` are not. A call that opens a state and hands
+  back mutable data of it is judged where its result leaves the statement, so a number read out of the result
+  is accepted and binding, returning or storing the result is refused.
+- **A statement reaches one acquired state.** Two names of one block may be one service, so a statement that
+  reaches `first` and `second` is [E3201](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3201):
+  `first.replaceHistory(second.historyCopy())` is refused, and `copyHistory` binds the value read from
+  `second` in a statement of its own first. Several statements on one state use `modify source 'debit' … end
+  'debit'`; inside it every other state is read-only.
+- **A state stays in the block.** Binding the name, returning it, storing it, moving it into an `isolated`
+  parameter or a `spawn`, or sending it through `async` is refused (E3202,
+  [E3205](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3205)): the service keeps its state.
+- **The block runs to its end holding every service.** `async`, a coroutine `await`, an `acquire` and a call
+  that may wait or yield are E3205 inside it, as in a [`modify` block](#modify-blocks). An `acquire` in code
+  that holds a service is [E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221)
+  ([Holders Never Wait](#holders-never-wait)).
+
+### Holders Never Wait
+
+Code that holds a service never waits on another party. A message runs to its end holding its own service, a
+`spawn` factory holds the service it starts, and an `acquire` block holds the services it names. Were one of them
+to wait for a reply, two services could each wait for the other for ever. A message or a factory that may wait is
+[E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221), and the diagnostic names the chain to the wait:
+
+```text
+error E3221: the message 'ask' may wait (it awaits a reply from 'Worker' at line 10) while holding its own service; send the request with this service's handle and handle the reply in another message
+```
+
+These wait on another party:
+
+- an `await` of a message reply or of a promise whose coroutine the compiler cannot see, such as one read
+  out of an array;
+- `awaitAny`, which parks until one promise of an array has completed;
+- a send with a positive `sendTimeout:`, which waits for mailbox space;
+- an `acquire`;
+- the spawn of a factory that throws, whose spawner waits for the factory's result;
+- `Scheduler.quiesce()` and `CownTorture.violations`, which park until other green threads are idle or have
+  finished;
+- a call to a function that does any of these, and the start of a coroutine that does.
+
+`main`, a test body and a coroutine hold no service and may wait. `HttpServer.serve` and
+`TraceCapture.stopCapture` wait, so they are called from `main`, a test body or a coroutine. Sleeping, and file,
+socket and process I/O, hold the service for as long as the sleep or the peer takes, and messages queue behind
+it up to the mailbox's capacity. An `await` of a coroutine the same function started is a yield.
+
+**The continuation pattern.** A message that needs another service's answer sends the request with the
+data the answer needs, and returns. The answer comes back as a message of its own, handled by the same
+service: the request carries the asker's handle, or a [`Reply`](#deferred-replies--reply) the answer
+completes. A handle a message carries lives only until the message returns, so a request may carry the asker's
+own handle ([E4014](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e4014) concerns handles kept in a field).
+
+### Deferred Replies — `Reply`
+
+A message that returns a value answers when its handler returns. `reply.later()` lets a message answer from
+somewhere else: written as the whole initializer of a `let` at the top level of the message's body, it takes the
+message's reply and hands back a `Reply with T`, where `T` is the message's reply type. The caller's `await`
+stays pending until some service calls `answer(value)` on that `Reply`, which consumes it and completes the
+reply:
+
+```maxon
+typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+type Clerk
+	var served as Tally
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function look(waiting TallyReply)
+		self.served = self.served + 1
+		waiting.answer(self.served * 21)
+	end 'look'
+end 'Clerk'
+
+type Desk
+	let clerk as Clerk.handle
+
+	static function create(clerk Clerk.handle) returns Self
+		return Self{clerk: clerk}
+	end 'create'
+
+	export function ask() returns Tally throws ReplyStopped
+		let pending = reply.later()
+		try self.clerk.look(pending) otherwise ignore
+		return
+	end 'ask'
+end 'Desk'
+
+function main() returns ExitCode
+	let clerk = spawn Clerk.create()
+	let desk = spawn Desk.create(clerk.clone())
+	let total = try await desk.ask() otherwise panic("the clerk answered")
+	print("{total}\n")
+	return 0
+end 'main'
+```
+
+Output: `21`. Neither message waits: `Desk.ask` returns as soon as it has sent, and the answer reaches `main` from the
+`Clerk`.
+
+- **A `Reply` is unique.** It lives in a service's state, in a container or in a message argument, and moves like
+  any [unique value](#unique-types), so it is answered at most once. A `Reply` is answered through the local or
+  parameter that holds it: take it out of a field first (`let pending = try self.waiting.pop() otherwise return`),
+  then `pending.answer(value)`. `answer` is a send that returns at once, so any message may call it.
+- **A message that defers declares `throws ReplyStopped`.** A `Reply` dropped unanswered, a holder freed with it
+  still inside included, fails the caller's `await` with `ReplyStopped.serviceStopped`.
+- **After `reply.later()` the message's own `return` carries no value.** The answer travels through the `Reply`.
+  A message that defers is called only by a send through the service's handle.
+- **`reply.later()` is a statement of the message's own body.** It is refused in an `if`, a loop, a `match` or a
+  `try` inside the body, in a closure or a default value, a second time in one message, in a message with no
+  `returns` clause or one that returns an interface value, and in a generic service
+  ([E3222](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3222)).
+- **A `Reply` stays in the code of the service that holds it.** No function declares a result whose type can
+  hold one (a message's reply, a promise's payload and a helper's result included), no `async` call takes a
+  parameter that can hold one, no closure captures one, and no such value is widened to an interface type, because
+  a function value and an interface value carry what they hold to whatever code receives them (E3222). A `Reply`
+  taken out of an acquired state cannot outlive the statement that opens the state (E3202).
+- **A `Reply` is answered, and a promise is awaited.** A service's state and its message arguments hold a `Reply`
+  freely, where [E3216](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3216) and
+  [E3217](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3217) refuse a promise.
 
 ### Program-Wide Defaults — `default`
 
@@ -6436,10 +6674,20 @@ Inside a block:
 - A mutable value cannot leave the block by `return`, by `throw` or by an outer variable (**E3202**): what
   leaves is a value, `immutable` data or a fresh `isolated` region.
 - A nested `modify` leaves the root of every enclosing block read-only.
-- Waiting on another party and running a coroutine are refused: `await` and a call that may wait or may
-  yield are **E3205** ([Waiting and Yielding](#waiting-and-yielding)). A statement that needs a writable
+- Waiting on another party and running a coroutine are refused: `await`, `awaitAny`, `acquire`, a runtime park
+  such as `Scheduler.quiesce()`, and a call that may wait or may yield are **E3205**
+  ([Waiting and Yielding](#waiting-and-yielding)). A statement that needs a writable
   argument or receiver of outer data is **E3207** (`'noteFile' needs a writable receiver; 'self' is
   read-only while 'fill' is open`).
+- An `isolated` value of a [linear type](#linear-types-and-finalizers) from outside the block cannot be moved
+  into a parameter the callee keeps and that is not `isolated`, because it would become part of the open region
+  (**E3201**): move it into an `isolated` parameter or slot, send it, or `merge` it. The receiver of a
+  `consuming self` method is such a parameter when the method stores, returns or passes `self` on; a finalizer that
+  only reads `self` and ends in `destruct self` is accepted. The value stays outside the block through every
+  rename inside it: a local it is moved into, the `isolated` result of a call it is moved into, and the value a
+  failed send hands back in `mailboxFull` or `serviceStopped`.
+- `merge x` moves an `isolated` region into the region the block writes, so `built.reader = merge reader` is
+  accepted inside `modify built`, and in a one-statement open as well.
 - A `for` over an array the loop drains makes the array read-only in the body (**E3197**).
 
 #### One-Call and One-Statement Opens
@@ -6494,8 +6742,8 @@ An `isolated` field filled in `modify`, written by a one-call open and taken out
 
 ### Unique Types
 
-`type Ticket is unique` declares values that are never cloned and never aliased. `let b = a` moves `a`
-(**E3102** on a later read of `a`); storing a unique value moves it; an argument is lent for the call, and a
+`type Ticket is unique` declares values that are never cloned and never aliased. `let b = a` moves `a`,
+whether `a` is a `let` or a `var` (**E3102** on a later read of `a`); storing a unique value moves it; an argument is lent for the call, and a
 callee that keeps its parameter takes the caller's variable. `clone()` is **E3214** (`'Ticket' is unique and
 cannot be cloned`):
 
@@ -6513,13 +6761,91 @@ A type with a unique field is unique too, with no declaration and no generated `
 ``'Wallet' is unique (its field 'ticket' holds a unique 'Ticket') and cannot be cloned``); so is a type that
 holds an array of unique values. A unique value cannot be frozen, and reading one out of a field or an element
 to bind, return or store it is **E3214**, and so is a `for` loop variable or a tuple destructure of one handed
-to a parameter that keeps it: move it out with `pop` or `remove`, or `swap` it out of an `isolated`
-field. Handing a unique value to a parameter the callee only reads leaves it
-readable. The standard library's `Promise` is unique, and so are the OS handle types (`TcpClient`,
+to a parameter that keeps it: move it out with `pop`, `remove`, `removeFirst` or `Slot.take`, or `swap` it out
+of an `isolated` field. Handing a unique value to a parameter the callee only reads leaves it
+readable, and an element a container call hands back is lent for the call in the same way:
+`show(items.get(0))` reads it, and `let ticket = items.get(0)` is **E3214**. The standard library's `Promise` is
+unique, so is `Reply`, and so are the OS handle types (`TcpClient`,
 `TcpListener`, `TlsStream`, `TlsListener`, `HttpServer`, `StreamingSubprocess`, `SharedSegment`) and every type
 that holds one: binding a handle with `let`, pushing it into a container or handing it to a `spawn` moves it, a
 later read of the name is **E3102**, and a handle is never cloned. One owner holds a handle and lends it to calls.
 The cases are in `specs/regions-unique.md`.
+
+### Linear Types and Finalizers
+
+A `destruct self` statement ends the life of the value a method is called on. A method that contains one is a
+**finalizer**, and it takes `consuming self`: a call to it moves the receiver, and reading the receiver
+afterwards is **E3102**. A type with at least one finalizer is **linear**, and a linear type is `unique`: never
+cloned, frozen or aliased (**E3214**).
+
+```maxon
+typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function peek() returns Code
+		return self.code
+	end 'peek'
+
+	function fin(consuming self)
+		print("fin {self.code}\n")
+		destruct self
+	end 'fin'
+end 'Resp'
+
+function use(r Resp)
+	print("use {r.peek()}\n")
+	r.fin()
+end 'use'
+
+function main() returns ExitCode
+	let first = Resp.create(1)
+	print("peek {first.peek()}\n")
+	first.fin()
+
+	let second = Resp.create(2)
+	use(second)
+	return 0
+end 'main'
+```
+
+Output: `peek 1`, `fin 1`, `use 2` and `fin 2`. A finalizer belongs to a `type` that holds fields, and a method
+that takes `consuming self` contains `destruct self`; either one alone is **E3224**.
+
+- **A linear value is consumed exactly once on every path out of its scope**, throws, early returns and
+  propagating `try`s included. A finalizer call consumes it, and so does moving it on: to a function that takes
+  it (an argument at a linear position always moves, so a function that takes one consumes it), into a `return`,
+  a `throw` or a message. Dropping it, overwriting it, rebinding it while live, discarding it with `let _ = r`,
+  or leaving it in a temporary nobody consumes is
+  [E3223](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3223):
+
+  ```text
+  error E3223: this drops 'dropped', a linear value that was never consumed: call one of its finalizers (a `consuming self` method) on it, or move it into a call, a send or a `return`, on every path out of here, `throw`s and early `return`s included
+  ```
+
+- **A linear value lives only in locals, parameters and message arguments.** A field, a container or other type
+  argument, a tuple item, a closure capture, a promise payload, a message reply, a union stored in a field, the
+  argument or result of an `async` call and an argument of an interface or function value call are
+  [E3224](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3224): each would keep the value past the code that
+  must consume it. A value lent to code that does not own it, such as a parameter of a function that does not
+  take it, is consumed only by its owner.
+- **No linear value is live across a wait.** An `await`, a send with a `sendTimeout:` and a call that waits
+  may never end, so a linear value is consumed before one (E3223).
+- **A union with a linear payload is linear.** A `match` over one consumes it: every arm for a case with a
+  linear payload binds it to a name and consumes it, and a `default` arm cannot cover such a case (E3224). A
+  failed send hands a linear argument back in `mailboxFull` or `serviceStopped`, and the handler of the failure
+  consumes it.
+- **Cancellation consumes.** A coroutine that holds a linear value is cancelled
+  [cooperatively](#cancellation-and-dropped-promises), so its own code consumes the value on the path the
+  early return of its wait leads it down.
+
+The standard library's [`HttpResponder`](STDLIB_REFERENCE.md#httpresponder) is linear: `respond`,
+`respondWith` and `abandon` are its finalizers.
 
 ### Region Bounds
 
@@ -6598,15 +6924,19 @@ requirement that wants to hand back data to store declares `returns isolated T` 
 ### Waiting and Yielding
 
 Two facts are inferred for every function, with no marker. A function **may wait** when it waits on another
-party: a service reply, a send with a timeout, a spawn of a factory that does either, or a call to a function
+party: a service reply, `awaitAny`, a send with a timeout, an `acquire`, a spawn of a factory that throws, a runtime park (`Scheduler.quiesce()`, `CownTorture.violations`), or a call to a function
 that may. A function **may yield** when it awaits a coroutine, or calls one that may yield or may wait. File,
-socket and process I/O are neither: they park the green thread, and while a `modify` block is open the
+socket and process I/O and `sleep` are neither: they park the green thread, and while a `modify` block is open the
 runtime does not switch to a sibling coroutine of the same green thread, so the thread waits for the block
 (`specs/regions-runtime.md`, `break-leaves-window-lets-sibling-run`).
 
-Inside a `modify` block or a one-call open, a coroutine `await`, a call that may wait or yield, the start of
-a coroutine that may wait and a `spawn` of a factory that may wait or yield are **E3205**, and the message
-names why:
+A message or a `spawn` factory that may wait is
+[E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221): [Holders Never Wait](#holders-never-wait).
+
+Inside a `modify` block, an `acquire` block or a one-call open (a call that passes an `isolated` value in an
+unmarked position, as receiver or argument), a coroutine `await`, `awaitAny`, a call that may wait or yield, the
+start of a coroutine that may wait and a `spawn` of a factory that may wait or yield are **E3205**, and the
+message names why. A callee that only reads, writes or sleeps is accepted:
 
 ```text
 error E3205: cannot call 'settle' inside 'fill'; it may yield (it awaits a coroutine at line 12). Call it before or after the block
@@ -6640,11 +6970,11 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3198](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3198) | an `isolated` value read outside a block, `modify` or `swap` of a value that is not `isolated` |
 | [E3199](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3199) | opening, swapping, sending or freezing a region held by read-only data |
 | [E3200](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3200) | ordinary mutable data where an `isolated` value is wanted, and `freeze` or `merge` of what they do not apply to |
-| [E3201](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3201) | one statement reaching two isolated regions, or mutable outer data beside one |
-| [E3202](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3202) | a mutable value leaving a `modify` block, a `mutable isolated` parameter moved out |
+| [E3201](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3201) | one statement reaching two isolated regions or two acquired states, mutable outer data beside one, or an outer `isolated` linear value moved into an open region |
+| [E3202](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3202) | a mutable value leaving a `modify` or `acquire` block, an acquired state leaving its block, a `mutable isolated` parameter moved out |
 | [E3203](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3203) | the slot of an open value reassigned in its own block |
 | [E3204](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3204) | an outer `var` holding a record reassigned in a block |
-| [E3205](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3205) | waiting or yielding inside a block |
+| [E3205](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3205) | waiting or yielding inside a `modify` or `acquire` block or a one-call open |
 | [E3206](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3206) | a parameter the body needs both mutable and immutable |
 | [E3207](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3207) | an argument whose capability the parameter refuses |
 | [E3208](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3208) | a result whose source arguments disagree |
@@ -6657,6 +6987,10 @@ write is the exception a hold cannot cover, and E3186 refuses it at compile time
 | [E3215](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3215) | a type argument that breaks a `where T is sendable` or `where T is isolated` bound |
 | [E3216](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3216) | a service type whose state can hold a promise |
 | [E3217](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3217) | a service message or factory parameter, or a message reply, that holds data of its region and names neither `isolated` nor `immutable`, or whose type cannot cross at all (a promise holder, a function value, an opaque type parameter, a thread-bound handle) |
+| [E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221) | a message or `spawn` factory that may wait on another party while it holds its own service |
+| [E3222](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3222) | `reply.later()` or a `Reply` used where the holder could not answer it exactly once, or a `Reply` leaving its service's code |
+| [E3223](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3223) | a linear value dropped, overwritten, discarded, or live across a wait |
+| [E3224](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3224) | a linear value in a field, container, tuple, capture, promise, reply or other place that cannot consume it exactly once, and a finalizer or `consuming self` written outside its rules |
 
 ## Memory Model
 
@@ -7147,7 +7481,7 @@ awaited or dropped exits with **75** instead (see [Concurrency](#exit-codes)).
 | [E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174) | a published value that is not solely owned |
 | [E3185](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3185) | raw memory or a raw handle used outside the library tier |
 | [E3186](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3186) | a local read by an operand evaluated before a call writes it through a `mutable` parameter |
-| [E3196](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3196)–[E3217](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3217) | the capability, window, tied-promise, unique and service-state checks (see [Capability Errors](#capability-errors)) |
+| [E3196](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3196)–[E3217](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3217) and [E3221](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3221)–[E3224](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3224) | the capability, window, tied-promise, unique, service-state, holder-wait, reply and linear checks (see [Capability Errors](#capability-errors)) |
 | [E5004](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e5004) | a chain of unchecked runtime functions that can exceed the stack margin |
 | [E3220](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3220) | a call in the initializer of a module-level `let` or a `static let` |
 | exit 96 | a share walk reached a value held at an interface type whose conformer no walk can be built for |

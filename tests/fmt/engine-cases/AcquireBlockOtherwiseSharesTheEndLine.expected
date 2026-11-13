@@ -1,0 +1,16 @@
+function transfer(source Account.handle, target Account.handle, amount Money) returns bool
+	acquire source, target 'move'
+		source.change(-amount)
+		target.change(amount)
+	end 'move' otherwise (which) 'stopped'
+		return which == 0
+	end 'stopped'
+
+	acquire source 'solo'
+		source.change(1)
+	end 'solo' otherwise 'gone'
+		return false
+	end 'gone'
+
+	return true
+end 'transfer'

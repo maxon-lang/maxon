@@ -74,10 +74,8 @@ type TraceCaptureControl
 		self.capturing.publish(true)
 	end 'start'
 
-	// A `ForeverMs` send fails `mailboxFull` only for a cancelled sender: here its command is dropped,
-	// and in `stop` it gets no keys.
 	function submit(command isolated TraceCommand)
-		try self.recorder.apply(command, sendTimeout: ForeverMs) otherwise (e) 'refused'
+		try self.recorder.apply(command) otherwise (e) 'refused'
 			match e 'why'
 				mailboxFull or
 				serviceStopped then return
@@ -99,7 +97,7 @@ type TraceCaptureControl
 	end 'stop'
 end 'TraceCaptureControl'
 
-default TraceCaptureControl = TraceCaptureControl.create(TraceCaptureSwitch.create(false), recorder: spawn TraceRecorder.create())
+default TraceCaptureControl = TraceCaptureControl.create(TraceCaptureSwitch.create(false), recorder: spawn(capacity: InstrumentationMailboxCapacity) TraceRecorder.create())
 
 public type TraceCapture
 	/// Emit a trace key. No-op when capture is off.

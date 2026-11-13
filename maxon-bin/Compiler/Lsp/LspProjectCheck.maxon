@@ -9,166 +9,337 @@ module type LspProjectCheckRequest
 	export let clientVersion as ClientDocumentVersion
 	export let alone as DiagnosticArray
 	module let inputs as ProjectInputsAnswer
+	module let root as FilePath
+	module let stdlibDir as FilePath
+	module let runtimeDir as FilePath
 
-	module static function create(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, inputs ProjectInputsAnswer) returns LspProjectCheckRequest
-		return Self{uri: uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone, inputs: inputs}
+	module static function create(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, inputs ProjectInputsAnswer, root FilePath, stdlibDir FilePath, runtimeDir FilePath) returns LspProjectCheckRequest
+		return Self{uri: uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone, inputs: inputs, root: root, stdlibDir: stdlibDir, runtimeDir: runtimeDir}
 	end 'create'
 end 'LspProjectCheckRequest'
+
+module type LspQueuedCheck
+	module let request as immutable LspProjectCheckRequest
+	module let interest as CompileInterest
+
+	module static function create(request immutable LspProjectCheckRequest, interest CompileInterest) returns LspQueuedCheck
+		return Self{request: request, interest: interest}
+	end 'create'
+end 'LspQueuedCheck'
+
+typealias LspQueuedCheckArray = Array with immutable LspQueuedCheck
 
 union WarmProject
 	notBuilt
 	held(project Project)
 end 'WarmProject'
 
-// While the session is open, every check it is asked for ends in exactly one outcome line, and
-// every version not superseded gets exactly one publish from here, after the session's fast one.
-// `tests/lsp` counts publishes per version, so an outcome that returns without publishing holds a
-// case until its failure bound.
-module type LspProjectChecker
-	let root as FilePath
-	let stdlibDir as FilePath
-	let runtimeDir as FilePath
-	let writer as LspStdoutWriter.handle
-	var warm as WarmProject
+typealias LspCheckerMap = Map with (String, LspProjectChecker.handle)
 
-	module static function create(root FilePath, stdlibDir FilePath, runtimeDir FilePath, writer LspStdoutWriter.handle) returns LspProjectChecker
-		return Self{root: root, stdlibDir: stdlibDir, runtimeDir: runtimeDir, writer: writer, warm: WarmProject.notBuilt}
+union CheckPreparation
+	answered(check ProjectCheck)
+	ready(project Project)
+end 'CheckPreparation'
+
+type LspProjectChecker implements CompileReceiver
+	var warm as WarmProject
+	let current as RunningCheckSlot
+	var pending as LspQueuedCheckArray
+	let bases as GenerationBases
+	let memos as SharedFileMemoMap
+	let writer as LspStdoutWriter.handle
+
+	static function create(writer LspStdoutWriter.handle) returns LspProjectChecker
+		return Self{warm: WarmProject.notBuilt, current: RunningCheckSlot.create("LspProjectChecker.current"), pending: LspQueuedCheckArray.create(0), bases: GenerationBases.create(), memos: SharedFileMemoMap.create(), writer: writer}
 	end 'create'
 
-	export function check(submission isolated LspProjectCheckRequest)
-		let request = merge submission
+	export function forget()
+		self.warm = WarmProject.notBuilt
 
-		if not self.interestIn(request).stillWanted() 'supersededBeforeTheSettle'
-			self.report(request, outcome: ProjectCheckOutcome.superseded)
+		for waiting in self.pending 'eachWaiting'
+			reportProjectCheck(self.writer, request: waiting.request, outcome: ProjectCheckOutcome.superseded)
+		end 'eachWaiting'
+
+		self.pending = LspQueuedCheckArray.create(0)
+	end 'forget'
+
+	export function check(work immutable LspQueuedCheck, receiver CompileReceiver.handle)
+		if self.current.isFull() 'busy'
+			self.queue(work)
 			return
-		end 'supersededBeforeTheSettle'
+		end 'busy'
 
-		sleep(LspProjectCheckSettleMs)
-
-		if not self.interestIn(request).stillWanted() 'supersededWhileSettling'
-			self.report(request, outcome: ProjectCheckOutcome.superseded)
-			return
-		end 'supersededWhileSettling'
-
-		let warmed = self.warm
-
-		match warmed 'warm'
-			notBuilt then self.buildCold(request)
-			held(project) then self.checkWarm(request, project: project)
-		end 'warm'
+		self.begin(work, receiver: receiver)
 	end 'check'
 
-	function checkWarm(request LspProjectCheckRequest, project Project)
-		let check = project.checkedAgainst(request, interest: self.interestIn(request), sources: self.sourcesFor(request))
+	export function frontEndAnswered(generation DrainGeneration, job ElementIndex, answered isolated FrontEndJob, receiver CompileReceiver.handle)
+		if self.current.isEmpty() 'nothingRunning'
+			return
+		end 'nothingRunning'
 
-		match check 'check'
-			rerooted then self.buildCold(request)
-			checked or
-			unbuilt or
-			unlisted or
-			abandoned then self.publish(request, check: check)
-		end 'check'
-	end 'checkWarm'
+		let running = self.current.held()
+
+		let step = try running.run.frontEndAnswered(generation, job: job, answered: answered, receiver: receiver.clone()) otherwise (failure) 'refused'
+			self.finish(running.work, check: projectCheckFailedWith(failure), receiver: receiver)
+			return
+		end 'refused'
+
+		self.settle(running, step: step, receiver: receiver)
+	end 'frontEndAnswered'
+
+	export function stdPassAnswered(job ElementIndex, answered isolated StdUnit, receiver CompileReceiver.handle)
+		panic("LspProjectChecker.stdPassAnswered: a check stops after the front end and the lowering to Std, so it starts no Std fan-out")
+	end 'stdPassAnswered'
+
+	export function backendAnswered(job ElementIndex, answered isolated BackendUnit, refused bool, receiver CompileReceiver.handle)
+		panic("LspProjectChecker.backendAnswered: a check stops after the front end and the lowering to Std, so it starts no backend pool")
+	end 'backendAnswered'
+
+	export function logFlushed(receiver CompileReceiver.handle)
+		panic("LspProjectChecker.logFlushed: a check asks the log for no flush")
+	end 'logFlushed'
+
+	function queue(work immutable LspQueuedCheck)
+		let kept = LspQueuedCheckArray.create(0)
+
+		for waiting in self.pending 'eachWaiting'
+			if waiting.request.uri == work.request.uri 'sameDocument'
+				reportProjectCheck(self.writer, request: waiting.request, outcome: ProjectCheckOutcome.superseded)
+				continue
+			end 'sameDocument'
+
+			kept.push(waiting)
+		end 'eachWaiting'
+
+		kept.push(work)
+		self.pending = kept
+	end 'queue'
+
+	function begin(work immutable LspQueuedCheck, receiver CompileReceiver.handle)
+		if not work.interest.stillWanted() 'superseded'
+			self.finish(work, check: ProjectCheck.superseded, receiver: receiver)
+			return
+		end 'superseded'
+
+		match self.prepared(work) 'prepared'
+			answered(check) then self.finish(work, check: check, receiver: receiver)
+			ready(project) then self.startFrontEnd(work, project: project, receiver: receiver)
+		end 'prepared'
+	end 'begin'
+
+	function startFrontEnd(work immutable LspQueuedCheck, project Project, receiver CompileReceiver.handle)
+		let check = CompileRun.create(project, goal: CompileGoal.checked, generationBase: self.bases.take())
+		let running = RunningCheck.create(work, project: project, run: check)
+		self.current.fill(running)
+
+		let step = try check.begin(receiver.clone()) otherwise (failure) 'refused'
+			self.finish(work, check: projectCheckFailedWith(failure), receiver: receiver)
+			return
+		end 'refused'
+
+		self.settle(running, step: step, receiver: receiver)
+	end 'startFrontEnd'
+
+	function settle(running RunningCheck, step CompileStep, receiver CompileReceiver.handle)
+		match step 'step'
+			awaiting then return
+			finished then self.finish(running.work, check: running.project.checkedAfterFrontEnd(running.work.request), receiver: receiver)
+		end 'step'
+	end 'settle'
+
+	function finish(work immutable LspQueuedCheck, check ProjectCheck, receiver CompileReceiver.handle)
+		self.current.clear()
+		publishProjectCheck(self.writer, request: work.request, check: check)
+
+		if self.pending.count() > 0 'aCheckIsWaiting'
+			self.begin(try self.pending.remove(0) otherwise panic("LspProjectChecker.finish: a check is taken only while one waits"), receiver: receiver)
+		end 'aCheckIsWaiting'
+	end 'finish'
+
+	function prepared(work immutable LspQueuedCheck) returns CheckPreparation
+		match self.warm 'warm'
+			notBuilt then return self.preparedCold(work)
+			held(project) then return self.preparedWarm(work, project: project)
+		end 'warm'
+	end 'prepared'
+
+	function preparedWarm(work immutable LspQueuedCheck, project Project) returns CheckPreparation
+		let preparation = project.preparedAgainst(work.request, interest: work.interest, sources: self.sourcesFor(work.request))
+
+		match preparation 'preparation'
+			answered(check) then return self.afterAnswer(work, check: check)
+			ready then return preparation
+		end 'preparation'
+	end 'preparedWarm'
+
+	function afterAnswer(work immutable LspQueuedCheck, check ProjectCheck) returns CheckPreparation
+		if check.movedTheRoot() 'rerooted'
+			return self.preparedCold(work)
+		end 'rerooted'
+
+		return CheckPreparation.answered(check)
+	end 'afterAnswer'
 
 	function sourcesFor(request LspProjectCheckRequest) returns EditorSources
-		return projectSourcesIn(self.root, selection: SourceSelection.productionOnly, answer: request.inputs)
+		return projectSourcesIn(request.root, selection: SourceSelection.productionOnly, answer: request.inputs)
 	end 'sourcesFor'
 
-	function buildCold(request LspProjectCheckRequest)
+	function preparedCold(work immutable LspQueuedCheck) returns CheckPreparation
+		let request = work.request
 		let sources = self.sourcesFor(request)
-		let project = try createProject(sources.root, target: detectHostTarget(), stdlibDir: self.stdlibDir, runtimeDir: self.runtimeDir, scriptlib: ScriptlibTier.absent, debugStream: false, session: CompileSession.discarding()) otherwise (e) 'noProject'
-			self.publish(request, check: projectCheckFailedWith(e))
-			return
+		let project = try createProject(sources.root, target: detectHostTarget(), stdlibDir: request.stdlibDir, runtimeDir: request.runtimeDir, scriptlib: ScriptlibTier.absent, debugStream: false, session: CompileSession.over(DriverSession.discarding(), fileMemos: self.memos)) otherwise (e) 'noProject'
+			return CheckPreparation.answered(projectCheckFailedWith(e))
 		end 'noProject'
 
+		project.session.wantedBy(work.interest)
+
 		try loadLibrarySources(project) otherwise (e) 'noLibrary'
-			self.publish(request, check: projectCheckFailedWith(e))
-			return
+			return CheckPreparation.answered(projectCheckFailedWith(e))
 		end 'noLibrary'
 
-		let check = project.checkedAgainst(request, interest: self.interestIn(request), sources: sources)
+		let preparation = project.preparedAgainst(request, interest: work.interest, sources: sources)
 		self.warm = WarmProject.held(project)
-		self.publish(request, check: check)
-	end 'buildCold'
 
-	function publish(request LspProjectCheckRequest, check ProjectCheck)
-		match check 'check'
-			checked(diagnostics) then self.publishDiagnostics(request, diagnostics: diagnostics, unbuilt: StringArray.create(0), outcome: ProjectCheckOutcome.published)
-			unbuilt(failures) then self.publishDiagnostics(request, diagnostics: request.alone, unbuilt: failures, outcome: ProjectCheckOutcome.unloadable)
-			unlisted then self.publishDiagnostics(request, diagnostics: request.alone, unbuilt: StringArray.create(0), outcome: ProjectCheckOutcome.unlisted)
-			abandoned then self.report(request, outcome: ProjectCheckOutcome.abandoned)
-			rerooted then panic("LspProjectChecker.publish: a cold build roots its project at the sources it checks against, and a warm check that moved the root rebuilds cold before it publishes")
-		end 'check'
-	end 'publish'
-
-	function publishDiagnostics(request LspProjectCheckRequest, diagnostics DiagnosticArray, unbuilt StringArray, outcome ProjectCheckOutcome)
-		let tokens = lspDocumentTokens(request.text, keywords: KeywordTable.create())
-		let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt, notices: StringArray.create(0))
-
-		submitToLspWriter(self.writer, command: LspWriterCommand.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body))
-	end 'publishDiagnostics'
-
-	function report(request LspProjectCheckRequest, outcome ProjectCheckOutcome)
-		submitToLspWriter(self.writer, command: LspWriterCommand.report(request.uri.clone(), clientVersion: request.clientVersion.clone(), outcome: outcome))
-	end 'report'
-
-	function interestIn(request LspProjectCheckRequest) returns CompileInterest
-		return CompileInterest.whileCurrent(self.writer.clone(), uri: request.uri.clone(), version: request.version)
-	end 'interestIn'
+		return preparation
+	end 'preparedCold'
 end 'LspProjectChecker'
 
-// A `ForeverMs` send fails `mailboxFull` only for a cancelled sender, whose request is dropped.
-module function submitProjectCheck(checker LspProjectChecker.handle, request isolated LspProjectCheckRequest)
-	try checker.check(request, sendTimeout: ForeverMs) otherwise (e) 'refused'
-		match e 'why'
-			mailboxFull then return
-			serviceStopped then panic("submitProjectCheck: the project checker stopped while the workspace still held its handle")
-		end 'why'
-	end 'refused'
-end 'submitProjectCheck'
+module type LspCheckerPool
+	let writer as LspStdoutWriter.handle
+	var checkers as LspCheckerMap
+
+	module static function create(writer LspStdoutWriter.handle) returns LspCheckerPool
+		return Self{writer: writer, checkers: LspCheckerMap.create()}
+	end 'create'
+
+	module function submit(work immutable LspQueuedCheck)
+		let checker = self.checkerFor(work.request.root.path)
+
+		try checker.check(work, receiver: checker.clone() as CompileReceiver.handle, sendTimeout: ForeverMs) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then return
+				serviceStopped then panic("LspCheckerPool.submit: the project checker stopped while the session still held its handle")
+			end 'why'
+		end 'refused'
+	end 'submit'
+
+	module function forget(root String)
+		let checker = try self.checkers.get(root) otherwise return
+
+		try checker.forget(sendTimeout: ForeverMs) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then return
+				serviceStopped then panic("LspCheckerPool.forget: the project checker stopped while the session still held its handle")
+			end 'why'
+		end 'refused'
+	end 'forget'
+
+	module function shutdown()
+		for (_, checker) in self.checkers 'eachChecker'
+			checker.shutdown()
+		end 'eachChecker'
+
+		self.checkers = LspCheckerMap.create()
+	end 'shutdown'
+
+	function checkerFor(root String) returns LspProjectChecker.handle
+		if let held = try self.checkers.get(root) 'known'
+			return held.clone()
+		end 'known'
+
+		let spawned = spawn(capacity: AnswerMailboxCapacity) LspProjectChecker.create(self.writer.clone())
+		self.checkers.upsert(root.clone(), value: spawned.clone())
+
+		return spawned
+	end 'checkerFor'
+end 'LspCheckerPool'
+
+module function settledProjectCheck(request immutable LspProjectCheckRequest, interest CompileInterest) returns LspArrival
+	if interest.stillWanted() 'worthSettling'
+		sleep(LspProjectCheckSettleMs)
+	end 'worthSettling'
+
+	return LspArrival.projectCheckSettled(request, interest: interest)
+end 'settledProjectCheck'
+
+function publishProjectCheck(writer LspStdoutWriter.handle, request LspProjectCheckRequest, check ProjectCheck)
+	match check 'check'
+		checked(diagnostics) then publishProjectDiagnostics(writer, request: request, diagnostics: diagnostics, unbuilt: StringArray.create(0), outcome: ProjectCheckOutcome.published)
+		unbuilt(failures) then publishProjectDiagnostics(writer, request: request, diagnostics: request.alone, unbuilt: failures, outcome: ProjectCheckOutcome.unloadable)
+		unlisted then publishProjectDiagnostics(writer, request: request, diagnostics: request.alone, unbuilt: StringArray.create(0), outcome: ProjectCheckOutcome.unlisted)
+		abandoned then reportProjectCheck(writer, request: request, outcome: ProjectCheckOutcome.abandoned)
+		superseded then reportProjectCheck(writer, request: request, outcome: ProjectCheckOutcome.superseded)
+		rerooted then panic("publishProjectCheck: a cold build roots its project at the sources it checks against, and a warm check that moved the root rebuilds cold before it answers")
+	end 'check'
+end 'publishProjectCheck'
+
+function publishProjectDiagnostics(writer LspStdoutWriter.handle, request LspProjectCheckRequest, diagnostics DiagnosticArray, unbuilt StringArray, outcome ProjectCheckOutcome)
+	let tokens = lspDocumentTokens(request.text, keywords: KeywordTable.create())
+	let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt, notices: StringArray.create(0))
+
+	postToLspWriter(writer, command: LspWriterCommand.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body))
+end 'publishProjectDiagnostics'
+
+module function reportProjectCheck(writer LspStdoutWriter.handle, request LspProjectCheckRequest, outcome ProjectCheckOutcome)
+	postToLspWriter(writer, command: LspWriterCommand.report(request.uri.clone(), clientVersion: request.clientVersion.clone(), outcome: outcome))
+end 'reportProjectCheck'
 
 union ProjectCheck
 	checked(diagnostics DiagnosticArray)
 	unbuilt(failures StringArray)
 	unlisted
 	abandoned
+	superseded
 	rerooted
+
+	function movedTheRoot() returns bool
+		return match self 'check'
+			rerooted gives true
+			checked or
+			unbuilt or
+			unlisted or
+			abandoned or
+			superseded gives false
+		end 'check'
+	end 'movedTheRoot'
 end 'ProjectCheck'
 
 extension Project
-	function checkedAgainst(request LspProjectCheckRequest, interest CompileInterest, sources EditorSources) returns ProjectCheck
+	function preparedAgainst(request LspProjectCheckRequest, interest CompileInterest, sources EditorSources) returns CheckPreparation
 		self.session.wantedBy(interest)
 
 		let refresh = try self.refreshFromDisk(sources, readerPath: request.path) otherwise (e) 'unreadable'
-			return projectCheckFailedWith(e)
+			return CheckPreparation.answered(projectCheckFailedWith(e))
 		end 'unreadable'
 
 		match refresh 'refresh'
-			listed(reader) then return self.checkedWithTheBuffer(request, reader: reader)
-			unlisted then return ProjectCheck.unlisted
-			unresolved(lines) then return ProjectCheck.unbuilt(lines)
-			rerooted then return ProjectCheck.rerooted
+			listed(reader) then return self.preparedWithTheBuffer(request, reader: reader)
+			unlisted then return CheckPreparation.answered(ProjectCheck.unlisted)
+			unresolved(lines) then return CheckPreparation.answered(ProjectCheck.unbuilt(lines.clone()))
+			rerooted then return CheckPreparation.answered(ProjectCheck.rerooted)
 		end 'refresh'
-	end 'checkedAgainst'
+	end 'preparedAgainst'
 
-	function checkedWithTheBuffer(request LspProjectCheckRequest, reader FilePath) returns ProjectCheck
+	function preparedWithTheBuffer(request LspProjectCheckRequest, reader FilePath) returns CheckPreparation
 		overlayUnsavedText(self, path: reader, content: request.text)
 
-		try checkFrontEndWithoutWriting(self) otherwise (e) 'unchecked'
-			return projectCheckFailedWith(e)
-		end 'unchecked'
+		return CheckPreparation.ready(self)
+	end 'preparedWithTheBuffer'
 
+	function checkedAfterFrontEnd(request LspProjectCheckRequest) returns ProjectCheck
 		self.reportSecondaryFindingsBesideClaims()
 
-		return ProjectCheck.checked(attributedTo(diagnosticsInSourceOrder(self), path: request.path, alone: request.alone))
-	end 'checkedWithTheBuffer'
+		let attributed = attributedTo(diagnosticsInSourceOrder(self), path: request.path, alone: request.alone)
+
+		return ProjectCheck.checked(attributed.clone())
+	end 'checkedAfterFrontEnd'
 end 'Project'
 
 function projectCheckFailedWith(failure CompileError) returns ProjectCheck
 	match failure.failure() 'failure'
 		abandoned then return ProjectCheck.abandoned
 		driverFailed then return ProjectCheck.unbuilt(projectFailureLines(failure))
-		reportedDiagnostics then panic("projectCheckFailedWith: a refused check is an answer `checkFrontEndWithoutWriting` returns, and neither a library load nor a disk refresh reports a diagnostic")
+		reportedDiagnostics then panic("projectCheckFailedWith: a refused check is an answer the front-end check returns, and neither a library load nor a disk refresh reports a diagnostic")
 	end 'failure'
 end 'projectCheckFailedWith'
 

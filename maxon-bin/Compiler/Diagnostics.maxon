@@ -1089,7 +1089,7 @@ module function findingStandingOf(code ErrorCode) returns FindingStanding
 		return FindingStanding.secondary(SecondaryFlush.beforeLowering)
 	end 'beforeLowering'
 
-	if code == ErrorCode.semanticUnusedVariable or code == ErrorCode.semanticVarShouldBeLet or code == ErrorCode.semanticTiedPromiseRefused or code == ErrorCode.semanticPromiseDropped 'beforeBackend'
+	if code == ErrorCode.semanticUnusedVariable or code == ErrorCode.semanticVarShouldBeLet or code == ErrorCode.semanticTiedPromiseRefused or code == ErrorCode.semanticPromiseDropped or code == ErrorCode.semanticLinearValueNotConsumed 'beforeBackend'
 		return FindingStanding.secondary(SecondaryFlush.beforeBackend)
 	end 'beforeBackend'
 
@@ -1125,7 +1125,7 @@ module function reportSecondaryFindings(project Project, flush SecondaryFlush) r
 	return reportFindingsDueAt(project, flush: flush)
 end 'reportSecondaryFindings'
 
-module function reportFindingsDueAt(project Project, flush SecondaryFlush) returns bool
+function reportFindingsDueAt(project Project, flush SecondaryFlush) returns bool
 	var reported = false
 
 	for diagnostic in project.secondaryDiagnostics 'eachFinding'
@@ -1214,7 +1214,7 @@ end 'unneededCastMessage'
 // caller one item per diagnostic, and `text()` adds the one line ending stderr would have received.
 export typealias CapturedDiagnosticTextArray = Array with String
 
-enum DiagnosticDestination
+export enum DiagnosticDestination
 	standardError
 	captured
 	discarded
@@ -1235,8 +1235,8 @@ end 'DiagnosticDestination'
 // capturing sink (`SpecTestRunner.compileOneTest`) therefore reads back what a command line would have
 // written for the same build, whichever way the build failed.
 export type DiagnosticSink
-	let destination as DiagnosticDestination
-	var capturedLines as CapturedDiagnosticTextArray
+	export let destination as DiagnosticDestination
+	export var capturedLines as CapturedDiagnosticTextArray
 
 	export static function printing() returns DiagnosticSink
 		return Self.to(DiagnosticDestination.standardError)
@@ -1250,7 +1250,7 @@ export type DiagnosticSink
 		return Self.to(DiagnosticDestination.discarded)
 	end 'discarding'
 
-	static function to(destination DiagnosticDestination) returns DiagnosticSink
+	export static function to(destination DiagnosticDestination) returns DiagnosticSink
 		return Self{destination: destination, capturedLines: CapturedDiagnosticTextArray.create(0)}
 	end 'to'
 
@@ -1266,6 +1266,12 @@ export type DiagnosticSink
 		self.requireCaptured("emitted")
 		return self.capturedLines.clone()
 	end 'emitted'
+
+	export function absorb(lines CapturedDiagnosticTextArray)
+		for line in lines 'eachLine'
+			self.emit(line)
+		end 'eachLine'
+	end 'absorb'
 
 	export function text() returns String
 		self.requireCaptured("text")
@@ -1291,3 +1297,43 @@ end 'DiagnosticSink'
 function terminatedDiagnosticLine(line String) returns String
 	return "{line}\n"
 end 'terminatedDiagnosticLine'
+
+extension Project
+	// A whole-program claim is withheld from the buffer, so beside one alone the secondary findings are
+	// published. Only the before-lowering flush has run: those claims stop the build before the Std tier.
+	module function reportSecondaryFindingsBesideClaims()
+		if self.onlyWholeProgramClaimsStand() 'noRealErrorStands'
+			_ = reportFindingsDueAt(self, flush: SecondaryFlush.beforeLowering)
+		end 'noRealErrorStands'
+	end 'reportSecondaryFindingsBesideClaims'
+
+	function onlyWholeProgramClaimsStand() returns bool
+		if self.diagnostics.isEmpty() 'nothingStands'
+			return false
+		end 'nothingStands'
+
+		for diagnostic in self.diagnostics 'eachStanding'
+			if not claimsAboutTheWholeProgram(diagnostic.code) 'aRealError'
+				return false
+			end 'aRealError'
+		end 'eachStanding'
+
+		return true
+	end 'onlyWholeProgramClaimsStand'
+end 'Project'
+
+// A single-buffer compile cannot honestly publish a whole-program claim: it holds one file plus the
+// library tiers, so each claim here is true of what this server compiled and false of the program the
+// author is editing. "This program declares no entry point" would sit on the first line of every
+// library file an editor opens. The unused-export family (E3092/E3093/E3094) says nothing else in the
+// program references a declaration, and none of the program's other files is in this compile. The
+// corpus does not rescue either: it is lexed and folded, never checked. `attributedTo` reads this same
+// filter, so the project check withholds these codes too.
+//
+// ⚠ A member is added by measurement, never by guessing. Suppressing a diagnostic that is genuinely
+// about this file hides a real error, which is worse than the squiggle it removes; the leading digit
+// cannot stand in for the question, because it names the stage that raised a diagnostic rather than
+// the scope it claims.
+module function claimsAboutTheWholeProgram(code ErrorCode) returns bool
+	return code == ErrorCode.noMainFunction or code == ErrorCode.semanticUnusedExportedSymbol or code == ErrorCode.semanticExportableAsModule or code == ErrorCode.semanticUnusedModuleSymbol
+end 'claimsAboutTheWholeProgram'

@@ -631,7 +631,7 @@ end 'calleeHostFacility'
 // them at the op and `StdlibSource`'s fixpoint seeds them from a stdlib body's op; answering `none` here
 // leaves a library spawn to reach the scheduler install on a target without the green-thread floor.
 function isServiceOpEntry(callee ByteArray) returns bool
-	return callee.equals(CownSpawnName) or callee.equals(CownSendName) or callee.equals(GtSpawnName) or callee.equals(GtCellAllocName)
+	return callee.equals(CownSpawnName) or callee.equals(CownSendName) or isCownAcquireEntry(callee) or callee.equals(GtSpawnName) or callee.equals(GtCellAllocName)
 end 'isServiceOpEntry'
 
 // ⭐ **THE TWO QUESTIONS FUSED BACK TOGETHER FOR THE ONE CALLER THAT WANTS THEM THAT WAY** — *"does this
@@ -654,6 +654,10 @@ end 'targetParksOnIo'
 module function strandGuardCallIsElided(parksOnIo bool, callee ByteArray) returns bool
 	return isStrandGuardCallee(callee) and not parksOnIo
 end 'strandGuardCallIsElided'
+
+module function pinDestructIsInert(parksOnIo bool, callee ByteArray) returns bool
+	return callee.equals(GtPinDestructName) and not parksOnIo
+end 'pinDestructIsInert'
 
 export function calleeHasHostFacility(callee ByteArray) returns bool
 	return match calleeHostFacility(callee) 'f'

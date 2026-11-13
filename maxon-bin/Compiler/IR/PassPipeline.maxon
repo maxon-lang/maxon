@@ -608,7 +608,7 @@ export function buildLoweringPasses() returns PassKindArray
 	return passes
 end 'buildLoweringPasses'
 
-// ⭐⭐ **THE THIRD SCHEDULE — the per-function members `Compiler.compileToCodeResult` runs over the
+// ⭐⭐ **THE THIRD SCHEDULE — the per-function members `afterPipeline` runs over the
 // APPENDED RUNTIME BAND**, once, below the last thing that appends a function and below the band's own
 // `inlineLeaves` round. The install block's header owns the argument for running anything there at all;
 // this is the list, and every inclusion and exclusion below is a claim about the band's IR.
@@ -693,6 +693,30 @@ end 'buildEmittedBandPasses'
 // It owns NO target module: the pipeline's last tier is Std, and the backend is
 // driven backend-direct (`buildBackend` returns a CodeResult, which is not an IR
 // module). A `targetModule` field here would be write-once-read-never.
+export union PipelineStep
+	awaiting
+	finished
+end 'PipelineStep'
+
+typealias PipelineJoinArray = Array with PipelineJoin
+
+type PipelineJoin
+	module let run as StdPassRun
+	module let probe as PhaseProbe
+	module let next as ElementIndex
+
+	static function of(run StdPassRun, probe PhaseProbe, next ElementIndex) returns PipelineJoin
+		return Self{run: run, probe: probe, next: next}
+	end 'of'
+end 'PipelineJoin'
+
+function fanOutMembersOf(pass PassKind) returns StdFanOutStepArray throws AbsentError
+	match pass 'pass'
+		stdFanOut(members) then return members
+		default throws AbsentError.absent
+	end 'pass'
+end 'fanOutMembersOf'
+
 export type PassPipeline
 	// The project owns the shared state the Maxon-tier passes read/write
 	// (interner, registries, diagnostics). resolveTypes/semanticCheck need it, and the
@@ -711,7 +735,7 @@ export type PassPipeline
 	// written down twice — waiting for the day they diverge.
 	//
 	// It is a FIELD rather than an argument threaded through `dispatch` because that is this type's stated
-	// arrangement for cross-cutting state, and because the query is memoized: `compileToCodeResult` has
+	// arrangement for cross-cutting state, and because the query is memoized: `prepareLowering` has
 	// already forced it, so binding it here costs a reference and no work.
 	export var signatures as ProgramSignatures
 
@@ -736,9 +760,11 @@ export type PassPipeline
 	//
 	// The bit is `RuntimeUsage.usesGt` — the SAME authority that decides whether the scheduler is installed
 	// at all, rather than a second guess at "does this program use async" derived from the op stream.
-	// Written in the seam between the two pipeline stages (`Compiler.compileToCodeResult`), which is where
+	// Written in the seam between the two pipeline stages (`prepareLowering`), which is where
 	// `scanRuntimeUsage` has just answered it and before any Std pass runs.
 	export var usesGreenThreads as bool
+
+	var join as PipelineJoinArray
 
 	// ⚠ **IT THROWS, BECAUSE BUILDING THE NAME INDEX IS THE COMPILE'S DUPLICATE-FUNCTION-NAME REFUSAL**
 	// (E4015 / `refuseDuplicateFunctionName`). `run` is called twice, so the gate belongs to the one
@@ -754,7 +780,7 @@ export type PassPipeline
 		//
 		// It is built HERE, and once, because the Maxon function array is FROZEN across this pipeline: every
 		// synthesizer that appends to it (`installManagedGlobalInit` is the last) has run in
-		// `compileToCodeResult` before the pipeline is even constructed, `resolveTypes` rewrites signature
+		// `prepareLowering` before the pipeline is even constructed, `resolveTypes` rewrites signature
 		// FIELDS in place without touching the array, and `lowerMaxonToStd` pushes into the STD module it
 		// produces. So one index describes the array every pass below will walk — which is what lets each of
 		// them take the index instead of the module, and stop resting on a guarantee none of them stated.
@@ -787,7 +813,8 @@ export type PassPipeline
 			stdModule: StdModule.create(),
 			signatures: signatures,
 			funcNames: funcNames,
-			usesGreenThreads: false
+			usesGreenThreads: false,
+			join: PipelineJoinArray.create(0)
 		}
 	end 'create'
 
@@ -801,27 +828,93 @@ export type PassPipeline
 	//
 	// The fan-out announces each of its members itself, after the drain, so its members' banners sit
 	// where a serial run would have printed them; the driver pass gets no banner of its own.
-	export function run(passes PassKindArray, gate ErrorGate) throws CompileError
-		requireFanOutMembership(passes)
+	export function runUntilJoin(passes PassKindArray, from ElementIndex, gate ErrorGate, receiver CompileReceiver.handle) returns PipelineStep throws CompileError
+		if from == 0 'theFirstCall'
+			requireFanOutMembership(passes)
+		end 'theFirstCall'
 
-		for pass in passes 'eachPass'
-			if classifyPass(pass) != PassClassification.fanOutDriver 'announced'
-				if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
-					compilerLogger(CompilerLogGroup.ir).debug(passBanner(pass))
-				end 'debugging'
-			end 'announced'
+		var position = from
 
-			try requireStillWanted(self.project)
-			try self.dispatch(pass)
+		while position < passes.count() 'eachPass'
+			let pass = try passes.get(position) otherwise panic("PassPipeline.runUntilJoin: passes.get OOB at {position} below count {passes.count()}")
+			try self.beginPass(pass)
 
-			match gate 'gateTiming'
-				afterEachPass then try self.refuseWhileErrorsStand()
-				afterTheLastPass then break
-			end 'gateTiming'
+			if let members = try fanOutMembersOf(pass) 'aFanOut'
+				if self.beginFanOut(pass, members: members, next: position + 1, receiver: receiver) 'workersAreAnswering'
+					return PipelineStep.awaiting
+				end 'workersAreAnswering'
+			end 'aFanOut' else 'aSerialPass'
+				try self.dispatch(pass)
+			end 'aSerialPass'
+
+			try self.gateAfterPass(gate)
+			position = position + 1
 		end 'eachPass'
 
 		try self.refuseWhileErrorsStand()
-	end 'run'
+
+		return PipelineStep.finished
+	end 'runUntilJoin'
+
+	export function fanOutAnswered(passes PassKindArray, job ElementIndex, answered isolated StdUnit, gate ErrorGate, receiver CompileReceiver.handle) returns PipelineStep throws CompileError
+		let pending = try self.join.get(0) otherwise panic("PassPipeline.fanOutAnswered: a unit answered with no fan-out in flight")
+
+		if not pending.run.answered(job, answered: answered, receiver: receiver) 'stillInFlight'
+			return PipelineStep.awaiting
+		end 'stillInFlight'
+
+		self.join.clear()
+		pending.run.finish()
+		pending.probe.resume()
+		self.finishPass(try passes.get(pending.next - 1) otherwise panic("PassPipeline.fanOutAnswered: passes.get OOB at {pending.next - 1}"), probe: pending.probe)
+		try self.gateAfterPass(gate)
+
+		return try self.runUntilJoin(passes, from: pending.next, gate: gate, receiver: receiver)
+	end 'fanOutAnswered'
+
+	function beginFanOut(pass PassKind, members StdFanOutStepArray, next ElementIndex, receiver CompileReceiver.handle) returns bool
+		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
+		let run = StdPassRun.create(self.project, std: self.stdModule, members: members)
+
+		if not run.begin(receiver) 'nothingInFlight'
+			run.finish()
+			self.finishPass(pass, probe: probe)
+
+			return false
+		end 'nothingInFlight'
+
+		probe.suspend()
+		self.join.push(PipelineJoin.of(run, probe: probe, next: next))
+
+		return true
+	end 'beginFanOut'
+
+	export function runFrontEnd(passes PassKindArray, gate ErrorGate) throws CompileError
+		for pass in passes 'eachPass'
+			try self.beginPass(pass)
+			try self.dispatchFrontEnd(pass)
+			try self.gateAfterPass(gate)
+		end 'eachPass'
+
+		try self.refuseWhileErrorsStand()
+	end 'runFrontEnd'
+
+	function beginPass(pass PassKind) throws CompileError
+		if classifyPass(pass) != PassClassification.fanOutDriver 'announced'
+			if compilerLogEnabled(CompilerLogGroup.ir, level: LogLevel.debug) 'debugging'
+				compilerLogger(CompilerLogGroup.ir).debug(passBanner(pass))
+			end 'debugging'
+		end 'announced'
+
+		try requireStillWanted(self.project)
+	end 'beginPass'
+
+	function gateAfterPass(gate ErrorGate) throws CompileError
+		match gate 'gateTiming'
+			afterEachPass then try self.refuseWhileErrorsStand()
+			afterTheLastPass then break
+		end 'gateTiming'
+	end 'gateAfterPass'
 
 	function refuseWhileErrorsStand() throws CompileError
 		if projectHasErrors(self.project) 'errorGate'
@@ -850,9 +943,14 @@ export type PassPipeline
 	// calls another, so the phases are disjoint with nothing to subtract.
 	// The name index comes off `self` rather than riding a parameter: it is the PIPELINE's, built once for
 	// both stages, and threading it would have made a per-run copy of a fact the type already owns.
-	function dispatch(pass PassKind) throws CompileError
+	function dispatchFrontEnd(pass PassKind) throws CompileError
 		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
 
+		try self.runFrontEndPass(pass)
+		self.finishPass(pass, probe: probe)
+	end 'dispatchFrontEnd'
+
+	function runFrontEndPass(pass PassKind) throws CompileError
 		match pass 'byPass'
 			reportDeferredNames then reportDeferredNameDiagnostics(self.project, signatures: self.signatures)
 			checkSignatureVisibility then checkSignatureVisibility(self.project, module: self.maxonModule, signatures: self.signatures)
@@ -863,6 +961,23 @@ export type PassPipeline
 			reportSecondaryFindings then _ = reportSecondaryFindings(self.project, flush: SecondaryFlush.beforeLowering)
 			lowerMaxonToStd then self.stdModule = try lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
+			default panic("PassPipeline.runFrontEndPass: `{passKindToString(pass)}` runs after the module is lowered to Std, and only `run` dispatches it")
+		end 'byPass'
+	end 'runFrontEndPass'
+
+	function dispatch(pass PassKind) throws CompileError
+		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
+
+		match pass 'byPass'
+			reportDeferredNames or
+			checkSignatureVisibility or
+			resolveTypes or
+			semanticCheck or
+			checkUnusedExports or
+			checkUnusedFilePrivate or
+			reportSecondaryFindings or
+			lowerMaxonToStd or
+			insertRangeChecks then try self.runFrontEndPass(pass)
 			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 			inlineLeaves then inlineLeaves(self.project, module: self.stdModule, round: SpliceRound.everyCaller)
 			noteFoldedRecords then noteFoldedRecords(self.stdModule)
@@ -871,9 +986,9 @@ export type PassPipeline
 			cancelRetainRelease then cancelRetainRelease(self.stdModule)
 
 			// Over the whole module, which is everything that EXISTS at this point: the runtime band is
-			// appended below the pipeline, and `Compiler.compileToCodeResult` runs `strengthReduceDivision`
+			// appended below the pipeline, and `afterPipeline` runs `strengthReduceDivision`
 			// and `foldConstOperands` over it a second time by themselves.
-			stdFanOut(members) then runStdPassesOnAWorkerPool(self.project, module: self.stdModule, members: members)
+			stdFanOut then panic("PassPipeline.dispatch: `stdFanOut` reached the serial dispatch — it is a join, which `runUntilJoin` begins and `fanOutAnswered` ends")
 
 			// Unreachable past `requireFanOutMembership`: a per-function pass is scheduled inside the fan-out.
 			pruneDeadBlockArgs or
@@ -892,15 +1007,19 @@ export type PassPipeline
 			valueTupleReturn then applyValueTupleReturn(self.project, module: self.stdModule, signatures: self.signatures)
 		end 'byPass'
 
-		// ⭐ **THE DEBUG-SPAN CURSOR IS THIS PASS'S, NEVER THE NEXT ONE'S.** A pass that rewrites around a
-		// source op points the cursor at it; left pointed, the runtime installers below the pipeline would
-		// stamp thousands of emitted ops with the last statement a pass happened to touch. Cleared HERE,
-		// where every pass returns through, rather than at each pass's own exits — which is the same reason
-		// the measurement above sits here.
+		self.finishPass(pass, probe: probe)
+	end 'dispatch'
+
+	// ⭐ **THE DEBUG-SPAN CURSOR IS THIS PASS'S, NEVER THE NEXT ONE'S.** A pass that rewrites around a
+	// source op points the cursor at it; left pointed, the runtime installers below the pipeline would
+	// stamp thousands of emitted ops with the last statement a pass happened to touch. Cleared HERE,
+	// where every pass returns through, rather than at each pass's own exits — which is the same reason
+	// the measurement above sits here.
+	function finishPass(pass PassKind, probe PhaseProbe)
 		self.stdModule.spans.current = NoSpanId
 
 		recordPhase(self.project, phase: compilePhaseOfPass(pass), probe: probe)
-	end 'dispatch'
+	end 'finishPass'
 
 	// The per-function loop is not covered by the module drop below, and that is the whole point of it.
 	// There is ONE `IrFunction` per function for the entire compile: lowering transfers the same objects

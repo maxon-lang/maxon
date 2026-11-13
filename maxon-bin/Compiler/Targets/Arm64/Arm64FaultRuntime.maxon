@@ -275,7 +275,7 @@ end 'arm64FaultContextLayout'
 // here can only be a stray trap, worded as the x64-Linux handler words it.
 //
 // Slots: 0 = sig, 1 = fault_pc, 2 = fault_fp, 3 = fault_sp, 4 = fault address.
-function buildArm64FaultHandlerChunk(globalData GlobalDataTable, os Os) returns FunctionCodeChunk
+function buildArm64FaultHandlerChunk(globalData GlobalDataTable, os Os, usesGt bool) returns FunctionCodeChunk
 	let SlotSig = 0
 	let SlotFaultPc = 1
 	let SlotFaultFp = 2
@@ -304,6 +304,10 @@ function buildArm64FaultHandlerChunk(globalData GlobalDataTable, os Os) returns 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotFaultFp)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x4, base: Arm64Register.x3, byteOffset: layout.spOff)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotFaultSp)
+
+	if usesGt 'flushTheQueuedLog'
+		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtFaultFlushName)
+	end 'flushTheQueuedLog'
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSig)
 	arm64EmitCmpRuntimeImm32(asm, reg: Arm64Register.x0, imm: layout.signalSegv)
@@ -685,7 +689,7 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 		chunks.push(buildArm64LinuxHwcapProbeChunk(recordsCpuFeatures))
 	end 'sizedFromTheAuxiliaryVector'
 
-	chunks.push(buildArm64FaultHandlerChunk(globalData, os: target.os))
+	chunks.push(buildArm64FaultHandlerChunk(globalData, os: target.os, usesGt: usesGt))
 	chunks.push(buildArm64FaultBacktraceChunk(globalData))
 	chunks.push(buildArm64WriteHexChunk())
 
@@ -717,6 +721,7 @@ function buildArm64GtStackOverflowChunk(globalData GlobalDataTable, os Os) retur
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFp)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x2, slot: SlotSp)
 
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: GtFaultFlushName)
 	arm64EmitPrintConstant(asm, globalData: globalData, bytes: faultPanicLinePrefix(HardwareFaultKind.stackOverflow))
 	arm64EmitFaultAddressesAndBacktrace(asm, globalData: globalData, pcSlot: SlotPc, fpSlot: SlotFp, spSlot: SlotSp)
 	arm64EmitProcessExit(asm, os: os, exitCode: PanicExitCode)

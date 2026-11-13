@@ -90,8 +90,8 @@ function main() returns ExitCode
 
 	try ringNodeAt(nodes, slot: 0).pass(passes) otherwise panic("thread-ring: the first node refused the token")
 
-	// The holder at zero reports fire-and-forget, because a node awaiting its successor in a cycle is
-	// E3139; only an idle ring guarantees the report has landed.
+	// The holder at zero reports fire-and-forget, because a node awaiting a reply waits while holding its
+	// service, which is E3221; only an idle ring guarantees the report has landed.
 	_ = Scheduler.quiesce()
 	let holder = try await reporter.whoHolds() otherwise panic("thread-ring: the token never reached zero")
 
