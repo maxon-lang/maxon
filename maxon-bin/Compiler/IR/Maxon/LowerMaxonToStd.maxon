@@ -504,8 +504,8 @@ end 'ServiceStartCell'
 // it always had, byte for byte, so no program that never needed a dictionary moves.
 //
 // ⚠ **IT IS A REQUEST, NOT A VERDICT.** A caller states which instance it holds and
-// `witnessTableInstanceFor` decides — a conformance whose impls need nothing reduces back to `shared`, and so
-// does an instance that is not CONCRETE (an instance over the enclosing body's own parameters has no
+// `witnessTableInstanceFor` decides — a conformance whose impls need nothing, and whose instance releases
+// as the base does, reduces back to `shared`, and so does an instance that is not CONCRETE (an instance over the enclosing body's own parameters has no
 // descriptor to name, exactly as `emitInstanceDescriptorAddr` records one mechanism over).
 //
 // ⚠⚠ **THOSE TWO REDUCTIONS ARE NOT ONE FACT, AND A CALL SITE HAS TO TELL THEM APART.** The first
@@ -601,7 +601,7 @@ end 'FormalSite'
 // ARGUMENT poses is whether the callee reads this witness at all.
 //
 // ⇒ a caller whose frame carries its type's layout descriptor loads the table from it
-// (`witnessTableFromTheCallersDescriptor`). Any other call passes a ZERO, and this record is the
+// (`callersDescriptorWitnessSlot`). Any other call passes a ZERO, and this record is the
 // obligation to PROVE nothing reads it — the identical discipline `appendNullAdapterDictionary` and
 // `requireWitnessSlotImplIgnoresDictionary` already carry one mechanism down. A zero here is proved
 // unread, never a conceded runtime fault.
@@ -1130,6 +1130,19 @@ end 'stampedContainerCreateArity'
 
 typealias DescriptorTableOwnerSet = Set with ByteArray
 
+type WideningSite
+	export let instance as GenericInstanceId
+	export let interfaceName as immutable ByteArray
+	export let conformer as immutable ByteArray
+	export let funcIndex as ElementIndex
+
+	static function create(instance GenericInstanceId, interfaceName ByteArray, conformer ByteArray, funcIndex ElementIndex) returns WideningSite
+		return Self{instance: instance, interfaceName: interfaceName, conformer: conformer, funcIndex: funcIndex}
+	end 'create'
+end 'WideningSite'
+
+typealias WideningSiteArray = Array with WideningSite
+
 type DescriptorSubjectSite
 	export let instance as GenericInstanceId
 	export let callee as immutable ByteArray
@@ -1602,6 +1615,7 @@ type MaxonToStdLowering
 	// `implicitLayoutValueId` — read by `sizeof(T)` lowering and `forwardCallerLayout`.
 	var hasImplicitLayout as bool
 	var descriptorTables as DescriptorTableMap
+	var descriptorWidenings as WideningSiteArray
 	var hiddenSlotUses as HiddenSlotUseMap
 	var instanceParameterUses as InstanceParameterUses
 
@@ -1697,7 +1711,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by FrontEndRun before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), compileTarget: project.target, funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(0), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(0), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(0), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(0), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(0), currentFunction: LoweredFunction.none, parameterCellsLowered: false, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create(0), tiedPromiseCarriers: TiedCarrierMap.create()}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), compileTarget: project.target, funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutCarrierClosures: LayoutNeedingFuncSet.create(), layoutParametersReserved: false, layoutCarriersSettled: false, layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotsByDeclIndex.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedImmortalEmptyArrays: ImmortalEmptyArrayLabelSet.create(), emittedImmortalStringTables: ImmortalStringTableLabelSet.create(), emittedImmortalStructBoxes: ImmortalStructBoxLabelSet.create(), emittedFunctionRecords: FunctionRecordLabelSet.create(), functionValueTargets: FunctionValueTargets.none, emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(0), pendingNullWitnessArgs: NullWitnessArgRequestArray.create(0), dictionaryCarryingConformances: DictionaryCarryingConformanceMap.create(), witnessCounts: WitnessCountMap.create(), bitwiseKinds: ArrayBitwiseKindMap.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, debugStreamNameSites: project.debugStreamNameSites, immortalConstArraySites: project.immortalConstArraySites, provenFixedArrayAccesses: project.provenFixedArrayAccesses, stdOpElementStrides: project.stdOpElementStrides, stdOpTrivialElementSites: project.stdOpTrivialElementSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(0), currentByRefParams: 0, currentParamCount: 0, valueWitnessIds: ValueIdArray.create(0), currentExistentialInstances: ValueExistentialInstanceMap.create(), currentCallInstances: ValueCallInstanceMap.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(0), currentFunction: LoweredFunction.none, parameterCellsLowered: false, currentSourceFilePath: CompilerOwnedDeclFilePath, covPointBases: project.covPointBases, currentCovPointBase: 0, implicitLayoutValueId: 0, hasImplicitLayout: false, descriptorTables: DescriptorTableMap.create(), descriptorWidenings: WideningSiteArray.create(0), hiddenSlotUses: HiddenSlotUseMap.create(), instanceParameterUses: InstanceParameterUses.create(), implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, libraryFacts: project.libraryFacts, rangeChecks: project.rangeChecks, rangeSiteFacts: project.rangeSiteFacts, rangeSites: RangeSiteWalk.create(), nextValueId: 0, holdAliases: ValueIdArray.create(0), tiedPromiseCarriers: TiedCarrierMap.create()}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -2822,6 +2836,12 @@ type MaxonToStdLowering
 			panic("emitConformerWitness: v{conformer} is already held at an interface in '{String.from(self.currentFuncName())}' — its witness is forwarded (`pairedWitnessOf`), and the parser emits `existentialWitness` only for a concrete conformer")
 		end 'alreadyAnExistential'
 
+		if self.valueTagOf(conformer) == ValueTypeTag.genericInstance and self.instanceWidensThroughTheDescriptor(self.instanceIdOfValue(conformer)) 'tableLivesInTheCallersDescriptor'
+			let slot = try self.callersDescriptorWitnessSlot(self.instanceIdOfValue(conformer), interfaceName: interfaceName) otherwise panic("emitConformerWitness: '{String.from(self.currentFuncName())}' widens v{conformer} to `{String.from(interfaceName)}` through its caller's descriptor, which holds no such table — `noteWidening` marks the function a carrier and `fileWideningTableEntries` files the entry for every such site")
+			self.loadCallersDescriptorWitness(result, slot: slot, dstBlock: dstBlock)
+			return
+		end 'tableLivesInTheCallersDescriptor'
+
 		self.emitWitnessTableAddr(result, conformerType: self.conformerNameOf(conformer), instance: self.witnessInstanceOfValue(conformer), interfaceName: interfaceName, dstBlock: dstBlock)
 	end 'emitConformerWitness'
 
@@ -2948,7 +2968,9 @@ type MaxonToStdLowering
 	end 'addressOfWitnessTable'
 
 	function parametricWitnessArg(conformer ByteArray, argGid GenericInstanceId, constraint WhereConstraint, constraintIndex WitnessSlotIndex, callee ByteArray, dstBlock IrBlock) returns ValueId
-		if let loaded = try self.witnessTableFromTheCallersDescriptor(argGid, interfaceName: constraint.interfaceName, dstBlock: dstBlock) 'resolvedAtTheConcreteRoot'
+		if let slot = try self.callersDescriptorWitnessSlot(argGid, interfaceName: constraint.interfaceName) 'resolvedAtTheConcreteRoot'
+			let loaded = self.mintStdValueId()
+			self.loadCallersDescriptorWitness(loaded, slot: slot, dstBlock: dstBlock)
 			return loaded
 		end 'resolvedAtTheConcreteRoot'
 
@@ -2957,7 +2979,7 @@ type MaxonToStdLowering
 		return nullId
 	end 'parametricWitnessArg'
 
-	function witnessTableFromTheCallersDescriptor(argGid GenericInstanceId, interfaceName ByteArray, dstBlock IrBlock) returns ValueId throws AbsentError
+	function callersDescriptorWitnessSlot(argGid GenericInstanceId, interfaceName ByteArray) returns ByteOffset throws AbsentError
 		if not self.hasImplicitLayout 'noDescriptorToReadFrom'
 			throw AbsentError.absent
 		end 'noDescriptorToReadFrom'
@@ -2968,19 +2990,20 @@ type MaxonToStdLowering
 			throw AbsentError.absent
 		end 'aFrameOfAnotherType'
 
-		let table = try self.descriptorTables.get(owner) otherwise panic("witnessTableFromTheCallersDescriptor: '{String.from(self.currentFuncName())}' is a method of '{String.from(owner)}' and carries its descriptor, yet the plan filed no table for that owner — `fileWitnessTableEntry` files an entry for every parametric constraint argument of every such frame")
+		let table = try self.descriptorTables.get(owner) otherwise panic("callersDescriptorWitnessSlot: '{String.from(self.currentFuncName())}' is a method of '{String.from(owner)}' and carries its descriptor, yet the plan filed no table for that owner — `fileWitnessTableEntry` files an entry for every parametric constraint argument of every such frame")
 
 		if self.tableDropped(table, instance: argGid, interfaceName: interfaceName) 'dropped'
 			throw AbsentError.absent
 		end 'dropped'
 
-		let index = try self.indexOfWitnessTableEntry(table, instance: argGid, interfaceName: interfaceName) otherwise panic("witnessTableFromTheCallersDescriptor: '{String.from(owner)}''s table holds no `{String.from(interfaceName)}` entry for instance {argGid} — the plan files one for every parametric constraint argument a descriptor-carrying frame of its own passes")
+		let index = try self.indexOfWitnessTableEntry(table, instance: argGid, interfaceName: interfaceName) otherwise panic("callersDescriptorWitnessSlot: '{String.from(owner)}''s table holds no `{String.from(interfaceName)}` entry for instance {argGid} — the plan files one for every parametric constraint argument a descriptor-carrying frame of its own passes")
 
-		let tableId = self.mintStdValueId()
-		let offset = layoutTableSlotOffset(self.signatures.structTypeParamsOf(owner).count(), entry: table.instances.count() + index)
-		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(tableId, addrId: self.implicitLayoutValueId, offset: offset, valueType: StdType.i64))
-		return tableId
-	end 'witnessTableFromTheCallersDescriptor'
+		return layoutTableSlotOffset(self.signatures.structTypeParamsOf(owner).count(), entry: table.instances.count() + index)
+	end 'callersDescriptorWitnessSlot'
+
+	function loadCallersDescriptorWitness(result ValueId, slot ByteOffset, dstBlock IrBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: self.implicitLayoutValueId, offset: slot, valueType: StdType.i64))
+	end 'loadCallersDescriptorWitness'
 
 	function methodTypeOfFunction(funcName ByteArray) returns immutable ByteArray throws AbsentError
 		match self.signatures.functionDeclaringType(funcName) 'declaring'
@@ -3141,32 +3164,45 @@ type MaxonToStdLowering
 	end 'ensureWitnessTable'
 
 	// ⭐⭐ **THE VERDICT BEHIND `WitnessTableInstance` — a caller states which instance it holds, and this
-	// decides whether the table is keyed by it.** Two independent reasons reduce a stated instance back
-	// to the shared table:
+	// decides whether the table is keyed by it.** A stated instance reduces back to the shared table
+	// unless it is CONCRETE and one of three holds:
 	//
-	//   • the conformance's impls carry NO hidden dictionary AND the program spawns no service, so a
-	//     per-instance table would name the identical slots as the shared one under a second label. A program
-	//     that spawns reads the table's walk words, and only an instance's table can name its walk
-	//     (`ProgramSignatures.existentialCascadeCallee`);
-	//   • the instance is not CONCRETE, so there is no descriptor and no argument witness to put in one. An
-	//     instance over the enclosing body's own type parameters is exactly this shape, and it is the same
-	//     fact `emitInstanceDescriptorAddr` acts on one mechanism over (it forwards the caller's blocks; a
-	//     table has no caller to forward from, so here it can only decline).
+	//   • the conformance's impls carry a hidden dictionary;
+	//   • the program spawns a service, which reads the table's walk words, and only an instance's table can
+	//     name its walk (`ProgramSignatures.existentialCascadeCallee`);
+	//   • the instance's destroy, retain or clone word differs from the shared table's
+	//     (`instanceOwnershipWordsDiffer`), so one table keyed by the generic's name would release it wrongly.
 	//
-	// ⇒ a program that spawns no service and never reaches a dictionary-carrying conformance through a
-	// concrete instance mints only shared tables.
+	// A non-concrete instance has no descriptor and no argument witness to put in a table, and a table has
+	// no caller to forward from, so it takes the shared one here. A widening that needs the per-instance
+	// table of such an instance reads it from the caller's layout descriptor instead
+	// (`instanceWidensThroughTheDescriptor`).
 	function witnessTableInstanceFor(typeName ByteArray, instance WitnessTableInstance, interfaceName ByteArray) returns WitnessTableInstance
 		match instance 'stated'
 			shared then return WitnessTableInstance.shared
-			perInstance then break
+			perInstance(gid) then return instance if self.perInstanceTableIsNeeded(typeName, gid: gid, interfaceName: interfaceName) else WitnessTableInstance.shared
 		end 'stated'
-
-		if not self.signatures.spawnsAnyService() and not self.conformanceImplsCarryADictionary(typeName, interfaceName: interfaceName) 'nothingToSupply'
-			return WitnessTableInstance.shared
-		end 'nothingToSupply'
-
-		return instance if self.instanceIsFullyConcrete(instance) else WitnessTableInstance.shared
 	end 'witnessTableInstanceFor'
+
+	function perInstanceTableIsNeeded(typeName ByteArray, gid GenericInstanceId, interfaceName ByteArray) returns bool
+		if not self.signatures.instanceArgsAreFullyConcrete(gid) 'notConcrete'
+			return false
+		end 'notConcrete'
+
+		return self.signatures.spawnsAnyService() or self.conformanceImplsCarryADictionary(typeName, interfaceName: interfaceName) or self.instanceOwnershipWordsDiffer(typeName, gid: gid)
+	end 'perInstanceTableIsNeeded'
+
+	function instanceOwnershipWordsDiffer(typeName ByteArray, gid GenericInstanceId) returns bool
+		if not self.signatures.instanceDropCallee(gid).sameAs(self.signatures.existentialDestroyCallee(typeName)) 'dropDiffers'
+			return true
+		end 'dropDiffers'
+
+		if not self.signatures.instanceRetainCallee(gid).sameAs(self.signatures.existentialRetainCallee(typeName)) 'retainDiffers'
+			return true
+		end 'retainDiffers'
+
+		return self.signatures.anyRecordHoldsAnInterfaceValue() and not self.signatures.instanceExistentialCascadeCallee(gid, action: CascadeAction.clone).sameAs(self.signatures.existentialCascadeCallee(typeName, action: CascadeAction.clone))
+	end 'instanceOwnershipWordsDiffer'
 
 	// The table's two OWNERSHIP words, each from the one source the table has: the INSTANCE when it is keyed by
 	// one, the conformer NAME otherwise. Two functions rather than one returning a pair, because they are read
@@ -4311,15 +4347,44 @@ type MaxonToStdLowering
 			self.noteTableCandidatesOf(func.blockRefs, into: subjects)
 		end 'eachFunc'
 
+		self.fileWideningTableEntries()
+
 		while self.fileTableEntries(subjects.candidates) 'aRoundFiledAnEntry'
 			continue
 		end 'aRoundFiledAnEntry'
 
 		self.dropGrowingWitnessEntries()
 
+		try self.requireWideningTablesAreKept(project)
 		self.requireEveryComposedDescriptorHasASource(subjects.withoutADescriptor)
 		try self.requireDescriptorTablesAreFinite(subjects.candidates, project: project)
 	end 'planDescriptorTables'
+
+	function fileWideningTableEntries()
+		for site in self.descriptorWidenings 'eachSite'
+			let func = self.functionAt(site.funcIndex, reader: "fileWideningTableEntries")
+			self.currentFunction = LoweredFunction.named(func.name)
+
+			if not self.currentFunctionIsAMethodOf(self.descriptorTableOwnerOf(site.instance)) 'aFrameOfAnotherType'
+				panic("fileWideningTableEntries: '{String.from(func.name)}' widens '{String.from(self.signatures.instanceDisplayName(site.instance))}' to `{String.from(site.interfaceName)}`, an instance built on the type parameters of '{String.from(self.descriptorTableOwnerOf(site.instance))}', and is not a method of it — an instance over a type's own parameters is written only inside that type")
+			end 'aFrameOfAnotherType'
+
+			self.fileWitnessTableEntry(site.instance, interfaceName: site.interfaceName, conformer: site.conformer)
+		end 'eachSite'
+	end 'fileWideningTableEntries'
+
+	function requireWideningTablesAreKept(project Project) throws CompileError
+		for site in self.descriptorWidenings 'eachSite'
+			let owner = self.descriptorTableOwnerOf(site.instance)
+			let table = try self.descriptorTables.get(owner) otherwise panic("requireWideningTablesAreKept: '{String.from(owner)}' has no descriptor table, and `fileWideningTableEntries` filed an entry for it")
+
+			if self.tableDropped(table, instance: site.instance, interfaceName: site.interfaceName) 'aChainThatGrows'
+				let func = self.functionAt(site.funcIndex, reader: "requireWideningTablesAreKept")
+				reportAtFunctionName(project, func: func, code: ErrorCode.parserUnsupportedFeature, message: unsupportedFeatureMessage("'{String.from(func.name)}' widens '{String.from(self.signatures.instanceDisplayName(site.instance))}' to `{String.from(site.interfaceName)}`, whose type arguments build on the type parameters of '{String.from(owner)}', and whose methods reach '{String.from(owner)}' again — so composing its witness table at a concrete instantiation would build an unbounded chain of ever-deeper instances. Give that type argument a concrete type, or pass the value it wraps as a type parameter of its own"))
+				throw CompileError.compileError
+			end 'aChainThatGrows'
+		end 'eachSite'
+	end 'requireWideningTablesAreKept'
 
 	function reserveLayoutParameters(project Project) throws CompileError
 		if self.layoutParametersReserved 'alreadyReserved'
@@ -4379,6 +4444,16 @@ type MaxonToStdLowering
 		for opIndex in self.bodyOpIndicesOf(func.blockRefs) 'eachOp'
 			self.noteCarrierFactsOfOp(self.maxonOpAt(opIndex), opIndex: opIndex, func: func, caller: index, scan: scan)
 		end 'eachOp'
+
+		// `bodyOpIndicesOf` stops short of each block's terminator, where `ret` lives: without this loop a
+		// return widening is never noted, the function is not made a carrier, and lowering panics at it.
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try self.maxonModule.blocks.get(blockRef) otherwise panic("noteCarrierFactsOf: blockRef not in maxonModule.blocks")
+
+			if block.hasTerminatorOp() 'aTerminatorOp'
+				self.noteCarrierFactsOfOp(self.maxonOpAt(block.terminatorIndex()), opIndex: block.terminatorIndex(), func: func, caller: index, scan: scan)
+			end 'aTerminatorOp'
+		end 'eachBlock'
 	end 'noteCarrierFactsOf'
 
 	function noteCarrierFactsOfOp(op MaxonOp, opIndex ElementIndex, func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
@@ -4386,12 +4461,14 @@ type MaxonToStdLowering
 			sizeofType then scan.mark(caller, mark: CarrierSeedMark)
 			call(result, callee, args, argLabels, _, _, _) then self.noteCarrierFactsOfCall(result, callee: callee, args: args, argLabels: argLabels, opIndex: opIndex, func: func, caller: caller, scan: scan)
 			tryCall(result, _, callee, args, argLabels, _, _, _) then self.noteCarrierFactsOfCall(result, callee: callee, args: args, argLabels: argLabels, opIndex: opIndex, func: func, caller: caller, scan: scan)
-			asyncCall(_, callee, _, _, _, _, _) then self.noteSpawnedCall(callee, opIndex: opIndex, caller: caller, scan: scan)
+			asyncCall(_, callee, args, argLabels, _, _, _) then self.noteSpawnedCall(callee, args: args, argLabels: argLabels, opIndex: opIndex, caller: caller, scan: scan)
+			serviceSpawn(_, _, _, _, callee, args, argLabels, _, _, _, _) then self.noteArgumentWidenings(callee, args: args, argLabels: argLabels, caller: caller, scan: scan)
+			ret(retVal) then self.noteReturnWidening(retVal, func: func, caller: caller, scan: scan)
+			existentialWitness(_, interfaceName, conformer) then self.noteWidening(conformer, interfaceName: interfaceName, caller: caller, scan: scan)
 			functionRef(_, funcName, form) then self.noteFunctionReference(funcName, form: form, func: func, caller: caller, scan: scan)
 			witnessDispatch or
 			witnessTryDispatch then self.noteWitnessDispatch(func, caller: caller, scan: scan)
 			literal or
-			ret or
 			retVoid or
 			binOp or
 			unaryOp or
@@ -4412,18 +4489,76 @@ type MaxonToStdLowering
 			switch or
 			panicAbortValue or
 			errorFlagEncode or
-			serviceSpawn or
 			serviceSend or
 			serviceReplyCell or
 			immortalStructRecord or
 			immortalStringTable or
 			covPoint or
 			rawIntrinsic or
-			existentialWitness or
 			holdValue or
 			holdEnd then break
 		end 'shape'
 	end 'noteCarrierFactsOfOp'
+
+	function noteArgumentWidenings(callee ByteArray, args ValueIdArray, argLabels NameRoster, caller CsrIndex, scan LayoutCarrierScan)
+		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'aCompilerOwnCall'
+			return
+		end 'aCompilerOwnCall'
+
+		let sig = try self.funcSignatures.get(callee) otherwise panic("noteArgumentWidenings: callee '{String.from(callee)}' is a function of the module and has no signature")
+
+		if countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef) == 0 'noExistentialParameter'
+			return
+		end 'noExistentialParameter'
+
+		match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels) 'slot'
+			ordered(argIds) then self.noteWideningsOfSlottedArguments(argIds, sig: sig, caller: caller, scan: scan)
+			refused then panic("noteArgumentWidenings: '{String.from(callee)}' reached lowering with arguments SemanticCheck must have refused")
+		end 'slot'
+	end 'noteArgumentWidenings'
+
+	function noteWideningsOfSlottedArguments(argIds ValueIdArray, sig FuncSignature, caller CsrIndex, scan LayoutCarrierScan)
+		for i in 0 upto sig.paramTypes.count() 'eachParam'
+			let paramType = try sig.paramTypes.get(i) otherwise panic("noteWideningsOfSlottedArguments: paramTypes.get OOB at {i}")
+
+			if maxonTypeTag(paramType) != ValueTypeTag.interfaceRef 'notAnExistentialParameter'
+				continue
+			end 'notAnExistentialParameter'
+
+			let arg = try argIds.get(i) otherwise panic("noteWideningsOfSlottedArguments: the call slotted {argIds.count()} arguments — `slotCallArgs` fills every declared position")
+			self.noteWidening(arg, interfaceName: interfaceNameOfType(paramType, typeNames: self.typeNames), caller: caller, scan: scan)
+		end 'eachParam'
+	end 'noteWideningsOfSlottedArguments'
+
+	function noteReturnWidening(retVal ValueId, func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
+		if not functionUsesSecondaryReturnSlot(func.maxonReturnType, throws: func.throwsTypeName) or throwsClauseIsThrowing(func.throwsTypeName) 'returnsNoExistential'
+			return
+		end 'returnsNoExistential'
+
+		match func.maxonReturnType 'declaredReturn'
+			void then panic("noteReturnWidening: '{String.from(func.name)}' uses the secondary return slot, is not throwing, and returns VOID — `functionUsesSecondaryReturnSlot` answers true for a void non-throwing function nowhere")
+			value(inner) then self.noteWidening(retVal, interfaceName: interfaceNameOfType(inner, typeNames: self.typeNames), caller: caller, scan: scan)
+		end 'declaredReturn'
+	end 'noteReturnWidening'
+
+	function noteWidening(value ValueId, interfaceName ByteArray, caller CsrIndex, scan LayoutCarrierScan)
+		if self.valueTagOf(value) != ValueTypeTag.genericInstance 'namesNoInstance'
+			return
+		end 'namesNoInstance'
+
+		let instance = self.instanceIdOfValue(value)
+
+		if not self.instanceWidensThroughTheDescriptor(instance) 'aTableThatNeedsNoDescriptor'
+			return
+		end 'aTableThatNeedsNoDescriptor'
+
+		scan.mark(caller, mark: CarrierSeedMark)
+		self.descriptorWidenings.push(WideningSite.create(instance, interfaceName: interfaceName, conformer: self.conformerNameOf(value), funcIndex: caller as ElementIndex))
+	end 'noteWidening'
+
+	function instanceWidensThroughTheDescriptor(gid GenericInstanceId) returns bool
+		return not self.signatures.instanceArgsAreFullyConcrete(gid) and self.signatures.instanceRestsARetainedSlot(gid)
+	end 'instanceWidensThroughTheDescriptor'
 
 	function noteWitnessDispatch(func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
 		scan.mark(caller, mark: DispatchMark)
@@ -4459,12 +4594,15 @@ type MaxonToStdLowering
 		scan.creations.push(ClosureCreation.create(caller, closure: target, creatorReservesWitnesses: func.reservesConditionalWitnesses(), creatorIsAClosure: isLiftedClosureName(func.name)))
 	end 'noteFunctionReference'
 
-	function noteSpawnedCall(callee ByteArray, opIndex ElementIndex, caller CsrIndex, scan LayoutCarrierScan)
+	function noteSpawnedCall(callee ByteArray, args ValueIdArray, argLabels NameRoster, opIndex ElementIndex, caller CsrIndex, scan LayoutCarrierScan)
+		self.noteArgumentWidenings(callee, args: args, argLabels: argLabels, caller: caller, scan: scan)
 		let target = try scan.indexOfName.get(callee) otherwise return
 		scan.noteCall(CarrierCall.create(caller, callee: target, opIndex: opIndex, kind: CarrierCallKind.spawn, need: CarrierCallNeed.none, forwardsTables: false, base: UnboundBase.none), followed: false)
 	end 'noteSpawnedCall'
 
 	function noteCarrierFactsOfCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, opIndex ElementIndex, func IrFunction, caller CsrIndex, scan LayoutCarrierScan)
+		self.noteArgumentWidenings(callee, args: args, argLabels: argLabels, caller: caller, scan: scan)
+
 		if isSignaturelessCompilerCallee(callee, funcSignatures: self.funcSignatures) 'aCompilerOwnCall'
 			if self.descriptorRuntimeCallOfValue(callee, result: result) != DescriptorRuntimeCall.none 'aDescriptorRuntimeEntry'
 				scan.mark(caller, mark: CarrierSeedMark)

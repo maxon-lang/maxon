@@ -816,6 +816,11 @@ release's version as its heading when the release is cut.
   Fix: write `String.from(try conn.readSome(n))` for `try conn.recv(n)`, treat an empty answer as the peer's
   close where `connectionClosed` was caught, and handle `StreamError`; read lines with
   `StreamReader.over(conn)`. Delete `recvFailed` arms.
+- A method of a generic type that widens an instance built over the type's own parameters to an interface (`Gen
+  with T` returned as a `Sink` inside `type Wrap uses T`) takes the widened value's witness table from the layout
+  descriptor its caller passes. When the instance's methods reach the enclosing type again, so that composing the
+  table at a concrete instantiation would build an ever-deeper chain of instances, the widening is E2015.
+  Fix: give the type argument a concrete type, or pass the value it wraps as a type parameter of its own.
 
 ## 0.5.0 — 2026-10-08
 

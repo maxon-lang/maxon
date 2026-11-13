@@ -1731,7 +1731,14 @@ end 'main'
   what it calls. A call that names no instance, from a function holding none to hand on, is **E3162** when
   the static needs the layout (below), and **E2015** when it needs the count or the tables.
 - A generic type whose methods reach an instance of itself through an ever-growing type argument
-  (`Node with (Pair with T)` inside `Node`) has no finite set of instances, and is **E2015**.
+  (`Node with (Pair with T)` inside `Node`) has no finite set of instances, and is **E2015**. So is a method
+  that widens such an instance to an interface (`Gen with T` returned as a `Sink` inside `type Wrap uses T`)
+  when the instance's methods reach the enclosing type again: give the type argument a concrete type, or pass
+  the value it wraps as a type parameter of its own.
+- A concrete instance widened to an interface releases and clones through its own witness table whenever its
+  type arguments change how it is released; a widening over the enclosing type's own parameter reads that table
+  from the layout descriptor the enclosing instantiation hands down, so `Wrap with String` releases a
+  `Gen with String` and `Wrap with Tally` a `Gen with Tally`.
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a type argument to a non-generic
   type is **E2055**. A `with` list names at most 64 type arguments; a longer one is **E2015**.
 - A `float` type argument, bare or through a ranged float alias such as `FullRangeFloat`, is **E2062**
