@@ -29,10 +29,10 @@ before
 ```maxon
 function main() returns ExitCode
 	#if os(Windows)
-		var config = Configuration.create(Executable.name("ping"))
+		let config = Configuration.create(Executable.name("ping"))
 		config.arguments = StringArray from ["-n", "60", "127.0.0.1"]
 	#else
-		var config = Configuration.create(Executable.name("sleep"))
+		let config = Configuration.create(Executable.name("sleep"))
 		config.arguments = StringArray from ["60"]
 	#endif
 

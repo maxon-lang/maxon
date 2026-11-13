@@ -15,10 +15,10 @@ function main() returns ExitCode
 	let innerDir = try Process.environmentVariable("NESTED_SPEC_DIR") otherwise return 2
 	let compilerPath = try FilePath.from(compiler) otherwise return 3
 
-	var overrides = EnvMap.create()
+	let overrides = EnvMap.create()
 	overrides.upsert("OUTER_RUN_DIR", value: Directory.currentPath().filename())
 
-	var config = Configuration.create(Executable.path(compilerPath))
+	let config = Configuration.create(Executable.path(compilerPath))
 	config.arguments = StringArray from ["spec-test", innerDir]
 	config.environment = Environment.inheritUpdating(overrides)
 

@@ -22,7 +22,7 @@ end 'Point'
 
 function main() returns ExitCode
 	var a = Point.create(1, y: 2)
-	var b = a
+	let b = a
 	b.x = 99
 	a = b
 	print("{a.x}")
@@ -51,7 +51,7 @@ end 'Point'
 
 function main() returns ExitCode
 	let a = Point.create(10, y: 20)
-	var b = a.clone()
+	let b = a.clone()
 	b.x = 99
 	if a is not b 'diff'
 		return a.x + a.y
@@ -98,7 +98,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.create()
+	let list = IntList.create()
 	if list.isEmpty() 'check'
 		return 0
 	end 'check'
@@ -147,7 +147,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function makeClone() returns ItemArray
-		var src = ItemArray.create(0)
+		let src = ItemArray.create(0)
 		src.push(Item.create("first clone item long enough for heap", value: 10))
 		src.push(Item.create("second clone item long enough for heap", value: 20))
 		return src.clone()
@@ -202,7 +202,7 @@ end 'Outer'
 typealias OuterArray = Array with Outer
 
 function makeClone() returns OuterArray
-		var src = OuterArray.create(0)
+		let src = OuterArray.create(0)
 		src.push(Outer.create(Mid.create(Leaf.create("a nested label long enough to reach the heap", value: 7))))
 		return src.clone()
 		// src and its whole three-level element graph are freed when this function returns
@@ -234,7 +234,7 @@ type Holder
 end 'Holder'
 typealias Holders = Array with Holder
 function main() returns ExitCode
-	var a = Holders.create(0)
+	let a = Holders.create(0)
 	print("{a.count()}\n")
 	a.push(Holder.create(try File.readBinary(FilePath from "no-such-file.bin") otherwise return 3))
 

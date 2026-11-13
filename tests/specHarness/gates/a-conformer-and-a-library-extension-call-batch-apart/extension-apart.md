@@ -60,7 +60,7 @@ end 'Bag'
 typealias IntBag = Bag with Int
 
 function main() returns ExitCode
-	var b = IntBag.create()
+	let b = IntBag.create()
 	return b.walk()
 end 'main'
 ```
@@ -76,7 +76,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 function main() returns ExitCode
-	var a = Ints.create(0)
+	let a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	let xs = a.map(function(n Int) gives n + 1)
@@ -146,7 +146,7 @@ end 'Tray'
 typealias IntTray = Tray with Int
 
 function main() returns ExitCode
-	var t = IntTray.create()
+	let t = IntTray.create()
 	return t.walk()
 end 'main'
 ```
@@ -162,7 +162,7 @@ typealias Int = int(i64.min to i64.max)
 typealias Ints = Array with Int
 
 function main() returns ExitCode
-	var a = Ints.create(0)
+	let a = Ints.create(0)
 	a.push(1)
 	a.push(2)
 	a.push(3)

@@ -444,35 +444,6 @@ let ArrayValueEditAfter = "let warmRebuildProbeArray = [9, 9, 9]"
 let ArraySignEditBefore = "let warmRebuildProbeSignArray = [1, -1]"
 let ArraySignEditAfter = "let warmRebuildProbeSignArray = [1, u64.max]"
 
-// ⭐⭐ **THE DECLARATION BOTH BOX PROBES ARE BUILT OVER — BOUND ONCE, so "the type is held byte-identical
-// across the pair" is STRUCTURAL rather than asserted.** A second copy could drift by one byte — a renamed
-// field, an added `export` — and each probe would silently become a DECLARATION edit, which the probes above
-// already gate; it would then report `fileCount` forever for the wrong reason and never fail again.
-//
-// The slot's range is the probe's own domain, one decimal digit, and the two pairs below fix it at 1 and 2.
-let WarmRebuildProbeBoxDecl = "typealias WarmRebuildProbeSlot = int(0 to 9)\ntype WarmRebuildProbePair\n\texport let a as WarmRebuildProbeSlot\n\tstatic function create(a WarmRebuildProbeSlot) returns WarmRebuildProbePair\n\t\treturn Self\{a: a\}\n\tend 'create'\nend 'WarmRebuildProbePair'"
-
-// ⭐ **THE IMAGED-BOX PROBE: the array probe's question at the shape whose record is a STRUCT.**
-//
-// A constant built by a scalar-argument factory is image data too (`Parser.probedFactoryConstruction`), and
-// it arrives through a different arm: `imagedBox`, whose key carries the box tree. Every read of it emits
-// the box inline (`Parser.emitImageBoxRead` carries the record tree), so `create(1)` becoming `create(2)`
-// moves every reader's `.rdata` while the name and the label stand still — and the array probe above says
-// nothing about it, the two arms sharing no term.
-let StructFieldEditBefore = "let warmRebuildProbeStruct = WarmRebuildProbePair.create(1)"
-let StructFieldEditAfter = "let warmRebuildProbeStruct = WarmRebuildProbePair.create(2)"
-
-// ⭐ **AND THE SAME EDIT ON A STORED `let` BOX, ASSERTING THE OPPOSITE — the imaged probe's twin.**
-//
-// A `let` whose factory is handed a call's result is not image data: it is built by `__module_init` into a
-// `.data` slot, and every reader loads from the slot and bakes nothing of the construction. `create(1)`
-// becoming `create(2)` therefore moves no reader's bytes, and the key carries the slot's type, brand and
-// label and nothing of the construction (`mixRecordStorage`). Mix the construction in and every other probe
-// here stays green while a keystroke inside any stored global's initializer re-parses the whole program.
-let WarmRebuildProbeNumberDecl = "function warmRebuildProbeNumber(n WarmRebuildProbeSlot) returns WarmRebuildProbeSlot\n\treturn n\nend 'warmRebuildProbeNumber'"
-let StoredStructEditBefore = "let warmRebuildProbeStoredStruct = WarmRebuildProbePair.create(warmRebuildProbeNumber(1))"
-let StoredStructEditAfter = "let warmRebuildProbeStoredStruct = WarmRebuildProbePair.create(warmRebuildProbeNumber(2))"
-
 // ⭐ **THE `static`-FLAG PROBE: the same interface requirement twice, differing ONLY in the KEYWORD.**
 //
 // Every probe above moves a NAME or a VALUE. An interface requirement's RECEIVER KIND is neither, and
@@ -703,14 +674,9 @@ let MinFilesForInvalidation = 2 as Count
 //   (d) EDIT AN INTERFACE REQUIREMENT'S `static` FLAG ⇒ EVERY file's parse must be invalidated. Not a
 //       special case of (a) or (c): no name moves and no value moves — a KEYWORD does, and a
 //       parse in another file accepts or REFUSES on it. See `ReceiverKindEditBefore`.
-//   (e) EDIT AN **IMAGED** RECORD CONSTANT'S CONTENT ⇒ EVERY file's parse must be invalidated, AND the
-//       same edit on a STORED one may invalidate only the edited file. (c)'s pair at the shapes whose
-//       value is a record rather than a number: an imaged `let` is `.rdata` and every read bakes its
-//       bytes, while a stored `let`'s record is a slot every read loads from. The two pull opposite ways for one
-//       spelling, so a key that mixed content unconditionally satisfies half of this and throws (b) away.
-//       ⚠ **AND EACH RECORD ARM NEEDS ITS OWN PAIR**: an ARRAY and a BOX hash through different functions,
-//       so a guard deleted in one is invisible to the other's probes. See `ArrayValueEditBefore`,
-//       and `StructFieldEditBefore` + `StoredStructEditBefore`.
+//   (e) EDIT AN **IMAGED** ARRAY CONSTANT'S CONTENT ⇒ EVERY file's parse must be invalidated. (c) at the
+//       shape whose value is an array rather than a number: an imaged `let` is `.rdata` and every read
+//       bakes its bytes. See `ArrayValueEditBefore`.
 //   (f) EDIT A DECLARATION'S VISIBILITY ⇒ EVERY file's parse must be invalidated, at each step
 //       from no modifier to `module`, `module` to `export`, and `export` to `public`, for every
 //       declaration kind in `visibilityFlipProbes`. No name and no value moves; another file's
@@ -727,9 +693,9 @@ let MinFilesForInvalidation = 2 as Count
 //
 // ⚠ AND ON A SINGLE-FILE INPUT THIS PROPERTY PROVES NOTHING, SO IT REFUSES TO CLAIM IT DID.
 // With `fileCount == 1` the assertions above collapse into the SAME assertion — (a), (c), (d),
-// (f), (g), (h) and (e)'s imaged half expect `fileCount` re-parses while (b) and (e)'s stored half
-// expect 1, and those are the same number — so a key that tracks only the file's own bytes, which
-// is EXACTLY the bug this property exists to catch, sails through every one of them.
+// (e), (f), (g), (h) expect `fileCount` re-parses while (b) expects 1, and those are the same number —
+// so a key that tracks only the file's own bytes, which is EXACTLY the bug this property exists to
+// catch, sails through every one of them.
 // **A gate you cannot see fail is not a gate**, so this one FAILS on a single-file input rather than
 // reporting green, and says what to point it at.
 function verifyInvalidation(inputPath FilePath, target Target) returns bool throws CompileError
@@ -786,25 +752,8 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{ArraySignEditAfter}\n")
 	let arraySignEditMisses = try parseMissesOnRequery(project)
 
-	// Seat the imaged-BOX probe, then measure it: same type declaration, same factory — only the SLOT a
-	// reader bakes moved. The declaration is interpolated rather than carried in each pair, so the two
-	// spellings cannot drift into a declaration edit (`WarmRebuildProbeBoxDecl`).
-	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructFieldEditBefore}\n")
-	_ = try parseMissesOnRequery(project)
-
-	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{StructFieldEditAfter}\n")
-	let structFieldEditMisses = try parseMissesOnRequery(project)
-
-	// Seat the stored-`let` BOX probe, then measure it — the only probe that can see the `storedRecord` arm's
-	// guard, the imaged one above being green with or without it.
-	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{WarmRebuildProbeNumberDecl}\n{StoredStructEditBefore}\n")
-	_ = try parseMissesOnRequery(project)
-
-	fileChanged(project, path: editedPath, content: "{original}\n{WarmRebuildProbeBoxDecl}\n{WarmRebuildProbeNumberDecl}\n{StoredStructEditAfter}\n")
-	let storedStructEditMisses = try parseMissesOnRequery(project)
-
 	// Seat the receiver-kind probe at its BEFORE value — a declaration edit, discarded for the same
-	// reason the two above are.
+	// reason the probes above are.
 	fileChanged(project, path: editedPath, content: "{original}\n{ReceiverKindEditBefore}\n")
 	_ = try parseMissesOnRequery(project)
 
@@ -813,7 +762,7 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let receiverKindEditMisses = try parseMissesOnRequery(project)
 
 	// Seat the METHOD receiver-kind probe at its BEFORE value — a declaration edit, discarded for the same
-	// reason the three above are.
+	// reason the probes above are.
 	fileChanged(project, path: editedPath, content: "{original}\n{MethodReceiverKindEditBefore}\n")
 	_ = try parseMissesOnRequery(project)
 
@@ -853,10 +802,6 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 
 	let arrayValueEditInvalidatesEveryFile = assertParseMisses("a top-level constant ARRAY's value edit re-parses EVERY file (parseMisses)", probe: arrayValueEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 	let arraySignEditInvalidatesEveryFile = assertParseMisses("a top-level constant ARRAY's element SIGN edit re-parses EVERY file (parseMisses)", probe: arraySignEditMisses, expectedDelta: fileCount as QueryCount, project: project)
-	let structFieldEditInvalidatesEveryFile = assertParseMisses("an IMAGED struct constant's field edit re-parses EVERY file (parseMisses)", probe: structFieldEditMisses, expectedDelta: fileCount as QueryCount, project: project)
-
-	let storedStructEditIsLocal = assertParseMisses("a STORED struct `let`'s value edit re-parses only the edited file (parseMisses)", probe: storedStructEditMisses, expectedDelta: OneQuery, project: project)
-
 	let receiverKindEditInvalidatesEveryFile = assertParseMisses("an interface requirement's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: receiverKindEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 	let methodReceiverKindEditInvalidatesEveryFile = assertParseMisses("a method's `static` FLAG edit re-parses EVERY file (parseMisses)", probe: methodReceiverKindEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 
@@ -865,10 +810,10 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let visibilityFlipsInvalidate = measurementsInvalidateEveryFile(visibilityFlips, fileCount: fileCount as QueryCount, project: project)
 	let declarationMovesInvalidate = measurementsInvalidateEveryFile(declarationMoves, fileCount: fileCount as QueryCount, project: project)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and arraySignEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and storedStructEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and extensionConformanceEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and arraySignEditInvalidatesEveryFile and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and extensionConformanceEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
 
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array, constant-array-sign and imaged-struct edits each re-parsed all {fileCount}; a stored-struct edit re-parsed 1 file; a requirement's and a method's `static`-flag edits and an extension's `implements` edit each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array and constant-array-sign edits each re-parsed all {fileCount}; a requirement's and a method's `static`-flag edits and an extension's `implements` edit each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
 		return true
 	end 'passed'
 
@@ -1154,7 +1099,7 @@ end 'reportWarmFail'
 
 // The probe's function is `public` because nothing in the program it is appended to calls it, and a
 // file-private function nothing live names is E3219.
-let LibraryReuseProbeText = "enum LibraryReuseProbeKind\n\tfirst\n\tsecond\nend 'LibraryReuseProbeKind'\n\ninterface LibraryReuseProbeShape\n\tfunction isFirst() returns bool\nend 'LibraryReuseProbeShape'\n\ntype LibraryReuseProbeRecord implements LibraryReuseProbeShape\n\tlet kind as LibraryReuseProbeKind\n\n\tstatic function create(kind LibraryReuseProbeKind) returns LibraryReuseProbeRecord\n\t\treturn Self\{kind: kind\}\n\tend 'create'\n\n\tfunction isFirst() returns bool\n\t\treturn self.kind == LibraryReuseProbeKind.first\n\tend 'isFirst'\nend 'LibraryReuseProbeRecord'\n\ntypealias LibraryReuseProbeRecords = Array with LibraryReuseProbeRecord\n\npublic function libraryReuseProbe() returns bool\n\tvar records = LibraryReuseProbeRecords.create(0)\n\trecords.push(LibraryReuseProbeRecord.create(LibraryReuseProbeKind.first))\n\tlet held = try records.get(0) otherwise return false\n\treturn held.isFirst()\nend 'libraryReuseProbe'"
+let LibraryReuseProbeText = "enum LibraryReuseProbeKind\n\tfirst\n\tsecond\nend 'LibraryReuseProbeKind'\n\ninterface LibraryReuseProbeShape\n\tfunction isFirst() returns bool\nend 'LibraryReuseProbeShape'\n\ntype LibraryReuseProbeRecord implements LibraryReuseProbeShape\n\tlet kind as LibraryReuseProbeKind\n\n\tstatic function create(kind LibraryReuseProbeKind) returns LibraryReuseProbeRecord\n\t\treturn Self\{kind: kind\}\n\tend 'create'\n\n\tfunction isFirst() returns bool\n\t\treturn self.kind == LibraryReuseProbeKind.first\n\tend 'isFirst'\nend 'LibraryReuseProbeRecord'\n\ntypealias LibraryReuseProbeRecords = Array with LibraryReuseProbeRecord\n\npublic function libraryReuseProbe() returns bool\n\tlet records = LibraryReuseProbeRecords.create(0)\n\trecords.push(LibraryReuseProbeRecord.create(LibraryReuseProbeKind.first))\n\tlet held = try records.get(0) otherwise return false\n\treturn held.isFirst()\nend 'libraryReuseProbe'"
 let LibraryReusedClause = "library parses reused across programs"
 
 union LibraryReuseOutcome
@@ -1240,7 +1185,7 @@ end 'reusedMatchesCold'
 
 let PrimerMainText = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let PrimerBlankText = "// verify-warm-rebuild: the primer program declares nothing here.\n"
-let RenamedProgramText = "enum RenamedProbeDirection\n\tnorth\n\teast\nend 'RenamedProbeDirection'\n\nenum RenamedProbeSurface\n\tpaved\n\tgravel\nend 'RenamedProbeSurface'\n\ntypealias RenamedProbeMeters = int(0 to 1000)\n\ninterface RenamedProbeMeasured\n\tfunction metres() returns RenamedProbeMeters\nend 'RenamedProbeMeasured'\n\ntype RenamedProbeLeg implements RenamedProbeMeasured\n\tlet heading as RenamedProbeDirection\n\tlet surface as RenamedProbeSurface\n\tlet length as RenamedProbeMeters\n\n\tstatic function create(heading RenamedProbeDirection, surface RenamedProbeSurface, length RenamedProbeMeters) returns RenamedProbeLeg\n\t\treturn Self\{heading: heading, surface: surface, length: length\}\n\tend 'create'\n\n\tfunction metres() returns RenamedProbeMeters\n\t\treturn self.length\n\tend 'metres'\nend 'RenamedProbeLeg'\n\nunion RenamedProbeStep\n\tleg(value RenamedProbeLeg)\n\trest\nend 'RenamedProbeStep'\n\nunion RenamedProbeWeather\n\tclear\n\train(millimetres RenamedProbeMeters)\nend 'RenamedProbeWeather'\n\ntypealias RenamedProbeLegs = Array with RenamedProbeLeg\ntypealias RenamedProbeRoutes = Array with RenamedProbeLegs\ntypealias RenamedProbeNames = Map with (String, RenamedProbeMeters)\n\nfunction main() returns ExitCode\n\tvar legs = RenamedProbeLegs.create(0)\n\tlegs.push(RenamedProbeLeg.create(RenamedProbeDirection.north, surface: RenamedProbeSurface.paved, length: 5))\n\n\tvar routes = RenamedProbeRoutes.create(0)\n\troutes.push(legs)\n\n\tvar names = RenamedProbeNames.create()\n\tnames.upsert(\"first\", value: 5)\n\n\tlet step = RenamedProbeStep.leg(try legs.get(0) otherwise return 1)\n\tlet weather = RenamedProbeWeather.rain(2)\n\tvar travelled = 0 as RenamedProbeMeters\n\n\tmatch step 'inspect'\n\t\tleg(value) then travelled = value.metres()\n\t\trest then travelled = 0\n\tend 'inspect'\n\n\tmatch weather 'sky'\n\t\tclear then travelled = travelled + 1\n\t\train(millimetres) then travelled = travelled + millimetres\n\tend 'sky'\n\n\tlet wanted = try names.get(\"first\") otherwise 0\n\n\tif routes.count() == 1 and travelled > wanted 'aRoute'\n\t\treturn 0\n\tend 'aRoute'\n\n\treturn 1\nend 'main'"
+let RenamedProgramText = "enum RenamedProbeDirection\n\tnorth\n\teast\nend 'RenamedProbeDirection'\n\nenum RenamedProbeSurface\n\tpaved\n\tgravel\nend 'RenamedProbeSurface'\n\ntypealias RenamedProbeMeters = int(0 to 1000)\n\ninterface RenamedProbeMeasured\n\tfunction metres() returns RenamedProbeMeters\nend 'RenamedProbeMeasured'\n\ntype RenamedProbeLeg implements RenamedProbeMeasured\n\tlet heading as RenamedProbeDirection\n\tlet surface as RenamedProbeSurface\n\tlet length as RenamedProbeMeters\n\n\tstatic function create(heading RenamedProbeDirection, surface RenamedProbeSurface, length RenamedProbeMeters) returns RenamedProbeLeg\n\t\treturn Self\{heading: heading, surface: surface, length: length\}\n\tend 'create'\n\n\tfunction metres() returns RenamedProbeMeters\n\t\treturn self.length\n\tend 'metres'\nend 'RenamedProbeLeg'\n\nunion RenamedProbeStep\n\tleg(value RenamedProbeLeg)\n\trest\nend 'RenamedProbeStep'\n\nunion RenamedProbeWeather\n\tclear\n\train(millimetres RenamedProbeMeters)\nend 'RenamedProbeWeather'\n\ntypealias RenamedProbeLegs = Array with RenamedProbeLeg\ntypealias RenamedProbeRoutes = Array with RenamedProbeLegs\ntypealias RenamedProbeNames = Map with (String, RenamedProbeMeters)\n\nfunction main() returns ExitCode\n\tlet legs = RenamedProbeLegs.create(0)\n\tlegs.push(RenamedProbeLeg.create(RenamedProbeDirection.north, surface: RenamedProbeSurface.paved, length: 5))\n\n\tlet routes = RenamedProbeRoutes.create(0)\n\troutes.push(legs)\n\n\tlet names = RenamedProbeNames.create()\n\tnames.upsert(\"first\", value: 5)\n\n\tlet step = RenamedProbeStep.leg(try legs.get(0) otherwise return 1)\n\tlet weather = RenamedProbeWeather.rain(2)\n\tvar travelled = 0 as RenamedProbeMeters\n\n\tmatch step 'inspect'\n\t\tleg(value) then travelled = value.metres()\n\t\trest then travelled = 0\n\tend 'inspect'\n\n\tmatch weather 'sky'\n\t\tclear then travelled = travelled + 1\n\t\train(millimetres) then travelled = travelled + millimetres\n\tend 'sky'\n\n\tlet wanted = try names.get(\"first\") otherwise 0\n\n\tif routes.count() == 1 and travelled > wanted 'aRoute'\n\t\treturn 0\n\tend 'aRoute'\n\n\treturn 1\nend 'main'"
 
 // The store holds one parse per library file and variant, keyed on the library hash, which an input
 // whose own typealiases implement a library interface moves. The third's key then equals no earlier

@@ -59,7 +59,7 @@ function guestAt(guests Guests, seat Seat) returns String
 end 'guestAt'
 
 function main() returns ExitCode
-	var guests = Guests.create(0)
+	let guests = Guests.create(0)
 	guests.push("Ada")
 	guests.push("Grace")
 

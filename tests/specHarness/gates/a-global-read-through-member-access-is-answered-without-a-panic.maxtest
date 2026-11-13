@@ -1,0 +1,19 @@
+let MemberGlobalsSpecName = "member-globals"
+
+test 'a global read through member access is answered without a panic and every case passes'
+	let run = runGateFixtureOnce(StringArray.create(0))
+	let said = everythingSaid(run)
+	let broken = StringArray.create(0)
+
+	collectNotPassed(said, specName: MemberGlobalsSpecName, testNames: ["member-globals.plain", "member-globals.member-reads"], broken: broken)
+
+	if said.contains("DIED") 'aWorkerDied'
+		broken.push("a spec worker died. It said:\n{said}\n")
+	end 'aWorkerDied'
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a global read through member access is answered without a panic")
+end 'a global read through member access is answered without a panic and every case passes'
