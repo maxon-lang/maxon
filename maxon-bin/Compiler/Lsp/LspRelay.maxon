@@ -675,11 +675,21 @@ module type LspRelay
 	end 'retire'
 
 	function currentEnded(link LspChildLink, reason String, workspace LspWorkspaceState)
+		self.answerInitializeInProcess(workspace)
 		self.report("the compiler at {self.slot.path} ended ({reason}); the checkout is not served until it is rebuilt.", workspace: workspace)
 		self.failInFlight(workspace, sparesInitialize: false)
 		self.current = LspRelayChild.none
 		self.retireLink(link, workspace: workspace)
 	end 'currentEnded'
+
+	function answerInitializeInProcess(workspace LspWorkspaceState)
+		if not self.inFlight.remove(lspRelayIdKey(self.initializeId)) 'answeredAlready'
+			return
+		end 'answeredAlready'
+
+		let doc = try Json.parse(self.initializeBody) otherwise panic("LspRelay.answerInitializeInProcess: the initialize body parsed when the session was routed")
+		respondInitialize(workspace, id: self.initializeId, doc: doc)
+	end 'answerInitializeInProcess'
 
 	function failInFlight(workspace LspWorkspaceState, sparesInitialize bool)
 		let initializeKey = lspRelayIdKey(self.initializeId)

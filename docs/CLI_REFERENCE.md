@@ -2351,7 +2351,8 @@ every open document at the version the client last sent. A build writes the new 
 directory and renames it into place, so the file is whole when the client reports it. Each request still
 waiting for an answer is answered with error `-32801` (ContentModified), so the client asks again, and a
 `shutdown` with `null`. While no compiler is built into the checkout, requests are answered `-32801` too,
-and the server answers `initialize` itself. A client that does not declare dynamic registration of file
+and the server answers `initialize` itself, as it does when the compiler ends before it has answered
+`initialize`. A client that does not declare dynamic registration of file
 watchers gets no hot reload: the server says so once, in a `window/logMessage`, and a compiler built after
 the session began is picked up when the session restarts. A compiler that cannot be started is reported
 once, in a `window/logMessage`, and started again when the binary's size or modification time changes, the
