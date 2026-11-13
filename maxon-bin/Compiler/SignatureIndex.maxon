@@ -32697,7 +32697,11 @@ export type ProgramSignatures
 	// body can name; a slot at a nested instance recurses, because the record that instance stands for is
 	// freed by the same declaration-view destructor and carries the same word; a tuple recurses into each
 	// element; and every other tag is a concrete leaf whose drop the create site resolves for itself.
-	function slotOwnsASlotOfKind(slot MaxonType, kind TypeArgInstantiationKind, visited ClonerSet) returns bool
+	// A generic alias spelling (`named`) is resolved first: read as a leaf it answers false and the
+	// instance's release skips its dictionary destructor.
+	function slotOwnsASlotOfKind(slotAsWritten MaxonType, kind TypeArgInstantiationKind, visited ClonerSet) returns bool
+		let slot = self.typeArgumentType(slotAsWritten)
+
 		if self.slotTypeIsOpaque(slot) 'aBareParameterSlot'
 			return self.anyInstanceTypeArgHasKind(typeParamIdOf(slot), kind: kind)
 		end 'aBareParameterSlot'
