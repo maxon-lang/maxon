@@ -958,7 +958,9 @@ end 'main'
   the same side are [E3169](/docs/cli/error-codes/#e3169--registryduplicatedefault).
 - **A service lookup is a snapshot.** A handle taken before a `register` keeps reaching the service it was
   taken from; that service runs until its last holder drops it, then drains its queue and exits.
-- **A value lookup is lock-free**, at the cost of reading a module `let`. A registered value must be solely
+- **A value lookup is lock-free**: an acquire load and a retain, bracketed by two counter updates on the cell.
+  A replaced value is freed as soon as no lookup is between loading it and retaining it, so a cell holds
+  its current value and a bounded few replaced ones while it lives. A registered value must be solely
   owned by the caller ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned); publish a `.clone()`)
   or a tuple of heap-free elements, which is copied ([Moves and Sharing](/docs/language/memory-model/#moves-and-sharing)),
   and it is marked shared before any other thread can read it. A value a reader already holds stays valid

@@ -27,22 +27,6 @@ module type FileParses
 		throw SharedMemoMiss.notHeld
 	end 'answering'
 
-	module function ofVariant(variant HashDigest) returns immutable SharedLibraryParse throws SharedMemoMiss
-		for held in self.parses 'eachHeld'
-			if held.isOfVariant(variant) 'thisVariant'
-				return held
-			end 'thisVariant'
-		end 'eachHeld'
-
-		throw SharedMemoMiss.notHeld
-	end 'ofVariant'
-
-	module function newestIsOfVariant(variant HashDigest) returns bool
-		let newest = try self.parses.last() otherwise return false
-
-		return newest.isOfVariant(variant)
-	end 'newestIsOfVariant'
-
 	module function countOf(variants HashDigestSet) returns ElementIndex
 		var held = 0 as ElementIndex
 
@@ -87,18 +71,6 @@ module type FileParseTable
 	module function holding(contentHash HashDigest) returns immutable FileParses throws SharedMemoMiss
 		return try self.parses.get(contentHash) otherwise throw SharedMemoMiss.notHeld
 	end 'holding'
-
-	module function newestIs(contentHash HashDigest, variant HashDigest) returns bool
-		let newest = try self.recency.last() otherwise return false
-
-		if newest != contentHash 'anotherFile'
-			return false
-		end 'anotherFile'
-
-		let file = try self.holding(contentHash) otherwise return false
-
-		return file.newestIsOfVariant(variant)
-	end 'newestIs'
 
 	module function adding(contentHash HashDigest, parse immutable SharedLibraryParse) returns FileParseTable
 		let nextParses = FrozenFileParseMap.create()
@@ -153,12 +125,6 @@ module type BaselineTable
 		throw LibraryEntryMiss.absent
 	end 'manifestFor'
 
-	module function newestIs(key HashDigest, kind LibraryEntryKind) returns bool
-		let newest = try self.held.last() otherwise return false
-
-		return newest.key == key and newest.kind == kind
-	end 'newestIs'
-
 	module function keeping(newest immutable HeldBaseline) returns BaselineTable
 		let next = FrozenBaselineArray.create(0)
 
@@ -189,12 +155,6 @@ module type PackTable
 	module function packNamed(name String) returns immutable LibraryPack throws LibraryEntryMiss
 		return try self.opened.get(name) otherwise throw LibraryEntryMiss.absent
 	end 'packNamed'
-
-	module function newestIs(name String) returns bool
-		let newest = try self.recency.last() otherwise return false
-
-		return newest == name
-	end 'newestIs'
 
 	module function keeping(name String, pack immutable LibraryPack) returns PackTable
 		let nextOpened = FrozenPackMap.create()
@@ -243,11 +203,8 @@ end 'PackTable'
 
 module union SharedLibraryChange
 	parse(contentHash HashDigest, held immutable SharedLibraryParse)
-	parseUsed(contentHash HashDigest, variant HashDigest)
 	baseline(held immutable HeldBaseline)
-	baselineUsed(key HashDigest, kind LibraryEntryKind)
 	pack(name String, opened immutable LibraryPack)
-	packUsed(name String)
 	withoutPack(name String)
 end 'SharedLibraryChange'
 
@@ -267,37 +224,11 @@ module type SharedLibraryCache
 	module function applying(change SharedLibraryChange) returns SharedLibraryCache
 		return match change 'change'
 			parse(contentHash, held) gives SharedLibraryCache.over(freeze self.files.adding(contentHash, parse: held), baselines: self.baselines, packs: self.packs)
-			parseUsed(contentHash, variant) gives self.afterParseUsed(contentHash, variant: variant)
 			baseline(held) gives SharedLibraryCache.over(self.files, baselines: freeze self.baselines.keeping(held), packs: self.packs)
-			baselineUsed(key, kind) gives self.afterBaselineUsed(key, kind: kind)
 			pack(name, opened) gives SharedLibraryCache.over(self.files, baselines: self.baselines, packs: freeze self.packs.keeping(name, pack: opened))
-			packUsed(name) gives self.afterPackUsed(name)
 			withoutPack(name) gives SharedLibraryCache.over(self.files, baselines: self.baselines, packs: freeze self.packs.without(name))
 		end 'change'
 	end 'applying'
-
-	function unchanged() returns SharedLibraryCache
-		return SharedLibraryCache.over(self.files, baselines: self.baselines, packs: self.packs)
-	end 'unchanged'
-
-	function afterParseUsed(contentHash HashDigest, variant HashDigest) returns SharedLibraryCache
-		let file = try self.files.holding(contentHash) otherwise return self.unchanged()
-		let parse = try file.ofVariant(variant) otherwise return self.unchanged()
-
-		return SharedLibraryCache.over(freeze self.files.adding(contentHash, parse: parse), baselines: self.baselines, packs: self.packs)
-	end 'afterParseUsed'
-
-	function afterBaselineUsed(key HashDigest, kind LibraryEntryKind) returns SharedLibraryCache
-		let held = try self.baselines.baselineFor(key, kind: kind) otherwise return self.unchanged()
-
-		return SharedLibraryCache.over(self.files, baselines: freeze self.baselines.keeping(held), packs: self.packs)
-	end 'afterBaselineUsed'
-
-	function afterPackUsed(name String) returns SharedLibraryCache
-		let pack = try self.packs.packNamed(name) otherwise return self.unchanged()
-
-		return SharedLibraryCache.over(self.files, baselines: self.baselines, packs: freeze self.packs.keeping(name, pack: pack))
-	end 'afterPackUsed'
 end 'SharedLibraryCache'
 
 default SharedLibraryCache = SharedLibraryCache.empty()
@@ -319,27 +250,3 @@ module function publishToSharedLibrary(change SharedLibraryChange)
 		end 'landed'
 	end 'untilItLands'
 end 'publishToSharedLibrary'
-
-module function refreshSharedParse(store SharedLibraryCache, contentHash HashDigest, variant HashDigest)
-	if store.files.newestIs(contentHash, variant: variant) 'alreadyTheNewest'
-		return
-	end 'alreadyTheNewest'
-
-	publishToSharedLibrary(SharedLibraryChange.parseUsed(contentHash, variant: variant))
-end 'refreshSharedParse'
-
-module function refreshSharedBaseline(store SharedLibraryCache, key HashDigest, kind LibraryEntryKind)
-	if store.baselines.newestIs(key, kind: kind) 'alreadyTheNewest'
-		return
-	end 'alreadyTheNewest'
-
-	publishToSharedLibrary(SharedLibraryChange.baselineUsed(key, kind: kind))
-end 'refreshSharedBaseline'
-
-module function refreshSharedPack(store SharedLibraryCache, name String)
-	if store.packs.newestIs(name) 'alreadyTheNewest'
-		return
-	end 'alreadyTheNewest'
-
-	publishToSharedLibrary(SharedLibraryChange.packUsed(name))
-end 'refreshSharedPack'

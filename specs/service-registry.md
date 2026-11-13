@@ -915,6 +915,51 @@ typealias Integer = int(i64.min to i64.max)
 the first snapshot, long enough to be a heap string
 ```
 
+<!-- test: a-replaced-value-is-freed-while-the-cell-lives -->
+A cell published a thousand times holds the live allocations of its current value and a bounded few
+more: a replaced value is freed once no reader can still be between loading it and retaining it, not kept
+until the cell ends.
+```maxon
+type Snapshot
+	export let n as Integer
+	export let label as String
+
+	static function create(n Integer, label String) returns Self
+		return Self{n: n, label: label}
+	end 'create'
+end 'Snapshot'
+
+typealias SnapshotCell = SharedValue with Snapshot
+
+let publishes = 1000
+let allowedGrowth = 16
+
+function main() returns ExitCode
+	let cell = SnapshotCell.create(Snapshot.create(0, label: "snapshot 0, long enough to be a heap string"))
+	let before = HeapStats.allocationsLive() as Integer
+	var n = 1 as Integer
+
+	while n <= publishes 'eachPublish'
+		cell.publish(Snapshot.create(n, label: "snapshot {n}, long enough to be a heap string"))
+		n = n + 1
+	end 'eachPublish'
+
+	let growth = (HeapStats.allocationsLive() as Integer) - before
+
+	if growth > allowedGrowth 'unbounded'
+		print("the cell holds {growth} more live allocations after {publishes} publishes\n")
+		return 1
+	end 'unbounded'
+
+	print("{cell.current().n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```stdout
+1000
+```
+
 <!-- test: a-conditional-publish-fails-when-the-value-moved -->
 ```maxon
 type Config

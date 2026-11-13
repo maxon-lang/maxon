@@ -9,7 +9,8 @@ let SharedValueCellChainOffset = 0x08 as ByteOffset
 let SharedValueCellRefsOffset = 0x10
 let SharedValueCellDropOffset = 0x18
 let SharedValueCellRetainOffset = 0x20
-let SharedValueCellBytes = 0x28
+let SharedValueCellReadersOffset = 0x28
+let SharedValueCellBytes = 0x30
 
 let SharedValueChainNextOffset = 0x00
 let SharedValueChainValueOffset = 0x08
@@ -21,6 +22,8 @@ let SharedValueBoxBytes = 8
 let SharedValueInitialRefs = 1
 let SharedValueRefUp = 1
 let SharedValueRefDown = -1
+let SharedValueReaderEnters = 1
+let SharedValueReaderLeaves = -1
 let SharedValueLastRef = 1
 module let ReleasedHolder = 0
 export let NoRuntimeFunction = 0 as FullRangeInt
@@ -112,16 +115,16 @@ function emitRetainedIfPresent(module StdModule, func IrFunction, block IrBlock,
 	return after
 end 'emitRetainedIfPresent'
 
-function emitRefStep(module StdModule, block IrBlock, cell ValueId, delta FullRangeInt, ids ValueMinter) returns ValueId
-	let addr = emitFieldAddr(module, block: block, record: cell, offset: SharedValueCellRefsOffset, ids: ids)
+function emitCellCounterStep(module StdModule, block IrBlock, cell ValueId, offset ByteOffset, delta FullRangeInt, ids ValueMinter) returns ValueId
+	let addr = emitFieldAddr(module, block: block, record: cell, offset: offset, ids: ids)
 	let prior = ids.mint()
 	module.appendOp(block, op: StdOp.atomicRmw(prior, addrId: addr, operandId: emitConst(module, block: block, value: delta, ids: ids), opcode: StdAtomicRmwOpcode.add))
 	return prior
-end 'emitRefStep'
+end 'emitCellCounterStep'
 
 // ⚠ A replaced value is chained on the cell rather than dropped: a lock-free reader may have loaded
-// the old pointer before the swap and not yet retained it. The chain is dropped with the cell's
-// last reference.
+// the old pointer before the swap and not yet retained it. The chain is reclaimed as soon as no reader
+// is between its load and its retain; what remains at the cell's last reference is dropped there.
 function emitChainReplaced(module StdModule, func IrFunction, block IrBlock, cell ValueId, replaced ValueId, ids ValueMinter) returns IrBlock
 	let chainIt = module.addBlock(func, label: b"shvchain", heat: BlockHeat.normal)
 	let retry = module.addBlock(func, label: b"shvchainretry", heat: BlockHeat.normal)
@@ -139,10 +142,68 @@ function emitChainReplaced(module StdModule, func IrFunction, block IrBlock, cel
 	module.appendOp(retry, op: StdOp.loadAcquire(head, addrId: cell, offset: SharedValueCellChainOffset, valueType: StdType.i64))
 	emitStoreField(module, block: retry, record: node, offset: SharedValueChainNextOffset, value: head)
 	let linked = emitCasAt(module, block: retry, addr: chainAddr, expected: head, replacement: node, ids: ids)
-	emitBranchOnCasLost(module, block: retry, result: linked, lost: retry, won: chained, ids: ids)
+	let linkedNode = module.addBlock(func, label: b"shvlinked", heat: BlockHeat.normal)
+	emitBranchOnCasLost(module, block: retry, result: linked, lost: retry, won: linkedNode, ids: ids)
+
+	let reclaimed = emitReclaimChain(module, func: func, block: linkedNode, cell: cell, ids: ids)
+	module.setTerminator(reclaimed, op: StdOp.branch(chained.id))
 
 	return chained
 end 'emitChainReplaced'
+
+function emitReclaimChain(module StdModule, func IrFunction, block IrBlock, cell ValueId, ids ValueMinter) returns IrBlock
+	let grab = module.addBlock(func, label: b"shvgrab", heat: BlockHeat.normal)
+	let detach = module.addBlock(func, label: b"shvdetach", heat: BlockHeat.normal)
+	let gate = module.addBlock(func, label: b"shvgate", heat: BlockHeat.normal)
+	let walk = module.addBlock(func, label: b"shvreclaimwalk", heat: BlockHeat.normal)
+	let freeNode = module.addBlock(func, label: b"shvreclaimnode", heat: BlockHeat.normal)
+	let seekTail = module.addBlock(func, label: b"shvseektail", heat: BlockHeat.cold)
+	let restore = module.addBlock(func, label: b"shvrestore", heat: BlockHeat.cold)
+	let reclaimed = module.addBlock(func, label: b"shvreclaimed", heat: BlockHeat.normal)
+
+	let chainAddr = emitFieldAddr(module, block: block, record: cell, offset: SharedValueCellChainOffset, ids: ids)
+	module.setTerminator(block, op: StdOp.branch(grab.id))
+
+	let head = ids.mint()
+	module.appendOp(grab, op: StdOp.loadAcquire(head, addrId: cell, offset: SharedValueCellChainOffset, valueType: StdType.i64))
+	emitBranchOnCompare(module, block: grab, value: head, pred: StdCmpPred.eq, against: 0, whenTrue: reclaimed, whenFalse: detach, ids: ids)
+
+	let detached = emitCasAt(module, block: detach, addr: chainAddr, expected: head, replacement: emitConst(module, block: detach, value: 0, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: detach, result: detached, lost: grab, won: gate, ids: ids)
+
+	// `readers` is read after the detach: read first, a reader that entered since could hold a node
+	// swapped out in between.
+	let readers = ids.mint()
+	module.appendOp(gate, op: StdOp.loadAcquire(readers, addrId: cell, offset: SharedValueCellReadersOffset, valueType: StdType.i64))
+	let dropFn = emitLoadField(module, block: gate, record: cell, offset: SharedValueCellDropOffset, ids: ids)
+	let node = ids.mint()
+	walk.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
+	let tail = ids.mint()
+	seekTail.blockArgs.push(IrBlockArg.create(tail, argType: StdType.i64))
+	emitBranchOnCompare(module, block: gate, value: readers, pred: StdCmpPred.eq, against: 0, whenTrue: walk, whenFalse: seekTail, ids: ids)
+	pushBranchEdge(gate, to: walk, values: argsOf(head))
+	pushBranchEdge(gate, to: seekTail, values: argsOf(head))
+
+	emitBranchOnCompare(module, block: walk, value: node, pred: StdCmpPred.eq, against: 0, whenTrue: reclaimed, whenFalse: freeNode, ids: ids)
+
+	let next = emitLoadField(module, block: freeNode, record: node, offset: SharedValueChainNextOffset, ids: ids)
+	let chainedValue = emitLoadField(module, block: freeNode, record: node, offset: SharedValueChainValueOffset, ids: ids)
+	emitSlabFree(module, block: freeNode, ptr: node, kind: SlabBufferKind.sharedValue, ids: ids)
+	let afterDrop = emitCallIfPresent(module, func: func, block: freeNode, fn: dropFn, argument: chainedValue, ids: ids, label: b"shvreclaimdrop")
+	emitBranchCarrying(module, from: afterDrop, to: walk, values: argsOf(next))
+
+	let following = emitLoadField(module, block: seekTail, record: tail, offset: SharedValueChainNextOffset, ids: ids)
+	emitBranchOnCompare(module, block: seekTail, value: following, pred: StdCmpPred.eq, against: 0, whenTrue: restore, whenFalse: seekTail, ids: ids)
+	pushBranchEdge(seekTail, to: seekTail, values: argsOf(following))
+
+	let top = ids.mint()
+	module.appendOp(restore, op: StdOp.loadAcquire(top, addrId: cell, offset: SharedValueCellChainOffset, valueType: StdType.i64))
+	emitStoreField(module, block: restore, record: tail, offset: SharedValueChainNextOffset, value: top)
+	let relinked = emitCasAt(module, block: restore, addr: chainAddr, expected: top, replacement: head, ids: ids)
+	emitBranchOnCasLost(module, block: restore, result: relinked, lost: restore, won: reclaimed, ids: ids)
+
+	return reclaimed
+end 'emitReclaimChain'
 
 function buildSharedValueNew(module StdModule)
 	let func = openRuntimeFunction(SharedValueNewName, paramCount: 3, returnsAWord: true)
@@ -185,17 +246,21 @@ function buildSharedValueCurrent(module StdModule, released ByteArray)
 
 	let cell = emitHolderCell(module, block: entry, holder: holder, ids: ids)
 	let live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsRegistryLock: false, ids: ids)
+	// The reader is counted before `current` is loaded and uncounted after the retain: `emitReclaimChain`
+	// frees a node only at zero readers.
+	_ = emitCellCounterStep(module, block: live, cell: cell, offset: SharedValueCellReadersOffset, delta: SharedValueReaderEnters, ids: ids)
 	let value = ids.mint()
 	module.appendOp(live, op: StdOp.loadAcquire(value, addrId: cell, offset: SharedValueCellCurrentOffset, valueType: StdType.i64))
 	let retainFn = emitLoadField(module, block: live, record: cell, offset: SharedValueCellRetainOffset, ids: ids)
 	let retainedValue = ids.mint()
 	let retained = emitRetainedIfPresent(module, func: func, block: live, fn: retainFn, value: value, result: retainedValue, ids: ids)
+	_ = emitCellCounterStep(module, block: retained, cell: cell, offset: SharedValueCellReadersOffset, delta: SharedValueReaderLeaves, ids: ids)
 	module.setTerminator(retained, op: StdOp.ret(retainedValue))
 	module.functions.push(func)
 end 'buildSharedValueCurrent'
 
 function buildSharedValuePublish(module StdModule, released ByteArray)
-	let func = openRuntimeFunction(SharedValuePublishName, paramCount: 2, returnsAWord: false)
+	let func = openRuntimeFunction(SharedValuePublishName, paramCount: 2, returnsAWord: false, guarded: true)
 	let ids = ValueMinter.create(2)
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	let retry = module.addBlock(func, label: b"shvpublishretry", heat: BlockHeat.normal)
@@ -220,7 +285,7 @@ function buildSharedValuePublish(module StdModule, released ByteArray)
 end 'buildSharedValuePublish'
 
 function buildSharedValueReplace(module StdModule, released ByteArray)
-	let func = openRuntimeFunction(SharedValueReplaceName, paramCount: 3, returnsAWord: true)
+	let func = openRuntimeFunction(SharedValueReplaceName, paramCount: 3, returnsAWord: true, guarded: true)
 	let ids = ValueMinter.create(3)
 	let entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	let swapped = module.addBlock(func, label: b"shvreplaced", heat: BlockHeat.normal)
@@ -275,7 +340,7 @@ function buildSharedValueReleaseCell(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let cell = 0
 
-	let prior = emitRefStep(module, block: entry, cell: cell, delta: SharedValueRefDown, ids: ids)
+	let prior = emitCellCounterStep(module, block: entry, cell: cell, offset: SharedValueCellRefsOffset, delta: SharedValueRefDown, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: prior, pred: StdCmpPred.eq, against: SharedValueLastRef, whenTrue: lastRef, whenFalse: done, ids: ids)
 
 	let dropFn = emitLoadField(module, block: lastRef, record: cell, offset: SharedValueCellDropOffset, ids: ids)
@@ -326,7 +391,7 @@ function buildSharedValueBoxClone(module StdModule)
 	let box = 0
 
 	let cell = emitLoadField(module, block: entry, record: box, offset: SharedValueHolderCellOffset, ids: ids)
-	_ = emitRefStep(module, block: entry, cell: cell, delta: SharedValueRefUp, ids: ids)
+	_ = emitCellCounterStep(module, block: entry, cell: cell, offset: SharedValueCellRefsOffset, delta: SharedValueRefUp, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(emitSharedValueBox(module, block: entry, cell: cell, ids: ids)))
 	module.functions.push(func)
 end 'buildSharedValueBoxClone'
@@ -339,7 +404,7 @@ function buildSharedValueBoxRetain(module StdModule)
 	let box = 0 as ValueId
 
 	let cell = emitLoadField(module, block: entry, record: box, offset: SharedValueHolderCellOffset, ids: ids)
-	_ = emitRefStep(module, block: entry, cell: cell, delta: SharedValueRefUp, ids: ids)
+	_ = emitCellCounterStep(module, block: entry, cell: cell, offset: SharedValueCellRefsOffset, delta: SharedValueRefUp, ids: ids)
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(box)))
 	module.setTerminator(entry, op: StdOp.ret(box))
 	module.functions.push(func)

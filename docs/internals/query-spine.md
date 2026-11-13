@@ -122,7 +122,8 @@ library baselines and the opened disk packs live in the `SharedLibraryCache`, on
 held as a registry `default`: every compile reads that one store, and a change publishes a whole successor in
 its place, retried until it lands (`publishToSharedLibrary`). It holds at most 512 files (`MostSharedFiles`) with
 at most 6 parse variants of one file (`MostKeysPerLibraryParse`), 8 baselines and 24 packs, and past a bound it
-drops the least recently used entry; a hit moves its entry to the newest end. A parse embeds
+drops the entry published longest ago. Only a miss publishes, so a hit changes neither the store nor the order
+of eviction. A parse embeds
 index-numbered facts the asking program's own declarations shift (type-name ids, generic-instance ids, the
 interface indexes witness dispatches carry), so a held parse records a footprint of them, taken while its
 names are still file-local, and a hit is rebased onto the current program; a row or a told answer that moved
