@@ -58,12 +58,18 @@ module function hoverAnswer(request LspRequest) returns LspAnswer throws LspPara
 	let document = try HoverDocument.of(request.text, keywords: request.keywords, corpus: LspCorpus.unavailable) otherwise return LspAnswer.nothing()
 	let cursor = try document.cursorTokenIndex(position) otherwise return LspAnswer.nothing()
 
-	match hoverRenderingOf(request, document: document, cursor: cursor) 'answer'
-		present(markdown) then return markdownAnswer(markdown)
-		untyped(markdown) then return markdownAnswer(markdown)
-		absent then return LspAnswer.nothing()
-	end 'answer'
+	let rendering = hoverRenderingOf(request, document: document, cursor: cursor)
+	let markdown = try rendering.markdown() otherwise return LspAnswer.nothing()
+
+	return capabilityAnswer(request, document: document, cursor: cursor, rendering: rendering, markdown: markdown)
 end 'hoverAnswer'
+
+function capabilityAnswer(request LspRequest, document HoverDocument, cursor ElementIndex, rendering HoverRendering, markdown String) returns LspAnswer
+	match request.workspace.editorFactsOf(request.uri) 'facts'
+		fresh(held) then return markdownAnswer(document.withCapabilityProse(markdown, rendering: rendering, facts: held.facts, cursor: cursor))
+		stale then return markdownAnswer(markdown)
+	end 'facts'
+end 'capabilityAnswer'
 
 function bindingKindWord(keyword TokenKind) returns String
 	if keyword == TokenKind.let 'aLet'
@@ -85,7 +91,8 @@ function hoverRenderingOf(request LspRequest, document HoverDocument, cursor Ele
 	let inTheBuffer = document.renderingForToken(cursor)
 
 	match inTheBuffer 'buffer'
-		present then return inTheBuffer
+		present or
+		routine then return inTheBuffer
 		untyped or
 		absent then return hoverBeyondTheBuffer(request, document: document, cursor: cursor)
 	end 'buffer'
@@ -108,6 +115,7 @@ function hoverBeyondTheBuffer(request LspRequest, document HoverDocument, cursor
 
 	match inTheProject 'project'
 		present or
+		routine or
 		untyped then return inTheProject
 		absent then return reservedWordRendering(document.tokenAt(cursor))
 	end 'project'
@@ -123,6 +131,7 @@ function hoverAcrossFiles(request LspRequest, document HoverDocument, cursor Ele
 
 	match inTheBuffer 'buffer'
 		present or
+		routine or
 		untyped then return inTheBuffer
 		absent then return readByTheProject.declarationInTheCorpus(cursor)
 	end 'buffer'
@@ -166,7 +175,37 @@ end 'markdownAnswer'
 union HoverRendering
 	present(markdown String)
 	untyped(markdown String)
+	routine(markdown String, name PositionKey)
 	absent
+
+	function markdown() returns String throws AbsentError
+		match self 'rendering'
+			present(held) then return held
+			untyped(held) then return held
+			routine(held, _) then return held
+			absent then throw AbsentError.absent
+		end 'rendering'
+	end 'markdown'
+
+	function routineName() returns PositionKey throws AbsentError
+		match self 'rendering'
+			routine(_, name) then return name
+			present or
+			untyped or
+			absent then throw AbsentError.absent
+		end 'rendering'
+	end 'routineName'
+
+	// Function facts are keyed by position in the checked file alone: a routine key read out of another
+	// file would attach the facts of whatever function sits at that position here.
+	function inAnotherFile() returns HoverRendering
+		return match self 'rendering'
+			present(held) gives HoverRendering.present(held)
+			routine(held, _) gives HoverRendering.present(held)
+			untyped(held) gives HoverRendering.untyped(held)
+			absent gives HoverRendering.absent
+		end 'rendering'
+	end 'inAnotherFile'
 end 'HoverRendering'
 
 // What a name resolved to. Each case carries where to READ the declaration from, never a rendering —
@@ -474,6 +513,54 @@ module type HoverDocument
 		end 'reserved'
 	end 'calleeRendering'
 
+	function withCapabilityProse(markdown String, rendering HoverRendering, facts EditorFacts, cursor ElementIndex) returns String
+		let prose = StringArray.create(0)
+		let tok = tokenAt(cursor)
+
+		if let read = try facts.readAt(tok.line, column: tok.column) 'aBinding'
+			self.appendBindingProse(prose, read: read, facts: facts)
+		end 'aBinding'
+
+		if let name = try rendering.routineName() 'aRoutine'
+			if let fact = try facts.functionNamedAt(name) 'aRecordedRoutine'
+				appendFunctionProse(prose, fact: fact)
+			end 'aRecordedRoutine'
+		end 'aRoutine'
+
+		if prose.isEmpty() 'nothingRecorded'
+			return markdown
+		end 'nothingRecorded'
+
+		return "{markdown}{ParagraphBreak}{joinedWith(prose, separator: ParagraphBreak)}"
+	end 'withCapabilityProse'
+
+	function appendBindingProse(prose StringArray, read EditorRead, facts EditorFacts)
+		if let parameter = try self.parameterFactOf(read, facts: facts) 'aParameter'
+			appendParameterAndCapability(prose, read: read, parameter: parameter)
+		end 'aParameter' else 'notAParameter'
+			appendCapabilityLine(prose, read: read)
+		end 'notAParameter'
+
+		appendMoveLine(prose, read: read)
+		appendObligationLine(prose, read: read, facts: facts)
+	end 'appendBindingProse'
+
+	function parameterFactOf(read EditorRead, facts EditorFacts) returns ParameterFact throws AbsentError
+		if read.role == EditorBinding.local 'notAParameter'
+			throw AbsentError.absent
+		end 'notAParameter'
+
+		let owner = try facts.functionNamedAt(read.owner)
+
+		for parameter in owner.parameters 'eachParameter'
+			if parameter.name == read.name 'theParameter'
+				return parameter
+			end 'theParameter'
+		end 'eachParameter'
+
+		throw AbsentError.absent
+	end 'parameterFactOf'
+
 	// --- Resolving a name ---------------------------------------------------------------------
 
 	function nameRendering(index ElementIndex) returns HoverRendering
@@ -513,7 +600,7 @@ module type HoverDocument
 		let declaringDocument = documentOfCorpusFile(lspDeclaringSitePath(site))
 
 		match declaringDocument 'declaring'
-			at(declaring) then return declaring.renderingAtSite(site, name: tokenAt(cursor).value)
+			at(declaring) then return declaring.renderingAtSite(site, name: tokenAt(cursor).value).inAnotherFile()
 			none then return HoverRendering.absent
 		end 'declaring'
 	end 'declarationInTheCorpus'
@@ -542,8 +629,8 @@ module type HoverDocument
 		match declaration 'resolved'
 			binding(head) then return bindingRendering(head)
 			parameter(functionIndex, nameIndex) then return parameterRendering(functionIndex, nameIndex: nameIndex)
-			routine(head) then return declarationHeadRendering(head)
-			typeName(head) then return declarationHeadRendering(head)
+			routine(head) then return self.routineRendering(head)
+			typeName(head) then return HoverRendering.present(self.declarationHeadMarkdown(head))
 			none then return HoverRendering.absent
 		end 'resolved'
 	end 'renderingOfDeclaration'
@@ -733,12 +820,19 @@ module type HoverDocument
 	// A function, a type, an interface: the head as the author wrote it, plus whatever `///` lines sit
 	// above it. ONE function for all of them, because there is one answer — the source is the best
 	// description of a declaration there is.
-	function declarationHeadRendering(keyword ElementIndex) returns HoverRendering
+	function declarationHeadMarkdown(keyword ElementIndex) returns String
 		let start = declarationStart(keyword)
 		let prose = StringArray.create(0)
 		appendDocComment(prose, above: start)
-		return HoverRendering.present(self.hoverMarkdownHere(headText(start), prose: prose))
-	end 'declarationHeadRendering'
+		return self.hoverMarkdownHere(headText(start), prose: prose)
+	end 'declarationHeadMarkdown'
+
+	function routineRendering(head ElementIndex) returns HoverRendering
+		let markdown = self.declarationHeadMarkdown(head)
+		let named = tokenAt(try signatureNameIndex(head) otherwise return HoverRendering.present(markdown))
+
+		return HoverRendering.routine(markdown, name: positionKey(named.line, column: named.column))
+	end 'routineRendering'
 
 	// `bindingNote` is handed the type rather than asked for it again: this rendering needs the same
 	// answer to choose `present` over `untyped`, and computing it twice lets the prose and that choice
@@ -1615,7 +1709,7 @@ module type HoverDocument
 		let declaringDocument = memberDeclaringDocument(owner, member: method, near: near)
 
 		match declaringDocument 'elsewhere'
-			at(declaring) then return declaring.declaredMethodRendering(owner, method: method)
+			at(declaring) then return declaring.declaredMethodRendering(owner, method: method).inAnotherFile()
 			none then return HoverRendering.absent
 		end 'elsewhere'
 	end 'declaredMemberRendering'

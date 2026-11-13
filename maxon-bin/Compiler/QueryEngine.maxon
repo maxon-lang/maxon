@@ -397,10 +397,13 @@ let BodiesSkippedKeySalt = 0xC2B2AE3D27D4EB4F as HashDigest
 let CoverageInstrumentedKeySalt = 0xD6E8FEB86659FD93 as HashDigest
 let CoveragePlainKeySalt = 0xA0761D6478BD642F as HashDigest
 
-function parseMemoKey(contentHash HashDigest, signatureHash HashDigest, buildsBodies bool, coverage bool, overridesDigest HashDigest, authoredPath FilePath) returns HashDigest
+function parseMemoKey(contentHash HashDigest, signatureHash HashDigest, buildsBodies bool, coverage bool, editorFacts bool, overridesDigest HashDigest, authoredPath FilePath) returns HashDigest
 	let inputs = Hasher.combined(Hasher.combined(contentHash, value: signatureHash), value: BodiesBuiltKeySalt if buildsBodies else BodiesSkippedKeySalt)
 
-	let withOverrides = Hasher.combined(Hasher.combined(inputs, value: CoverageInstrumentedKeySalt if coverage else CoveragePlainKeySalt), value: overridesDigest)
+	let withCoverage = Hasher.combined(inputs, value: CoverageInstrumentedKeySalt if coverage else CoveragePlainKeySalt)
+
+	// A parse memoized without editor facts would answer the edited document's check with none.
+	let withOverrides = Hasher.combined(mixFlag(withCoverage, set: editorFacts), value: overridesDigest)
 
 	return mixBytes(withOverrides, bytes: authoredPath.toString().toByteArray())
 end 'parseMemoKey'
@@ -414,7 +417,7 @@ end 'parseMemoKey'
 // new one, for `sourceEntryOf`'s reason: the two must be the same key, and each computation of it is
 // another `FilePath` map probe.
 export function currentParseMemoKey(project Project, path FilePath, contentHash HashDigest, signatureHash HashDigest, buildsBodies bool, overrides RowSetOverrideTable) returns HashDigest
-	return parseMemoKey(contentHash, signatureHash: signatureHash, buildsBodies: buildsBodies, coverage: project.coverage, overridesDigest: overrides.digest, authoredPath: project.stagedSourceOrigins.authoredPathOf(path))
+	return parseMemoKey(contentHash, signatureHash: signatureHash, buildsBodies: buildsBodies, coverage: project.coverage, editorFacts: recordsEditorFactsFor(project, path: path), overridesDigest: overrides.digest, authoredPath: project.stagedSourceOrigins.authoredPathOf(path))
 end 'currentParseMemoKey'
 
 let FlagSetKeySalt = 0xE7037ED1A0B428DB as HashDigest
@@ -430,6 +433,7 @@ function sharedParseVariant(project Project, job ParseJob) returns HashDigest
 	variant = mixFlag(variant, set: job.buildsBodies)
 	variant = mixFlag(variant, set: job.instrumentsCoverage)
 	variant = mixFlag(variant, set: job.capturesDebugLocals)
+	variant = mixFlag(variant, set: job.recordsEditorFacts)
 	variant = mixFlag(variant, set: job.isStdlibSource)
 	variant = mixFlag(variant, set: job.isRuntimeSource)
 	variant = mixFlag(variant, set: job.declaresCompilerInternalNames)

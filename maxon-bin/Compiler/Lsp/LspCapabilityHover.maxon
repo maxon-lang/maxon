@@ -1,0 +1,145 @@
+// Every sentence in this file is pinned byte-for-byte by tests/lsp/hover-capability-*.maxtest.
+module function appendParameterAndCapability(prose StringArray, read EditorRead, parameter ParameterFact)
+	if read.capability == ValueCapability.paused 'readOnlyHere'
+		appendCapabilityLine(prose, read: read)
+	end 'readOnlyHere'
+
+	prose.push(parameterProse(parameter))
+end 'appendParameterAndCapability'
+
+module function appendCapabilityLine(prose StringArray, read EditorRead)
+	if read.capability == ValueCapability.unknown 'noCapabilityKnown'
+		return
+	end 'noCapabilityKnown'
+
+	prose.push("{capabilityTypeText(read)} — {capabilityPhrase(read)}")
+end 'appendCapabilityLine'
+
+function capabilityTypeText(read EditorRead) returns String
+	return match read.capability 'capability'
+		immutable gives "immutable {read.typeText}"
+		isolated gives "isolated {read.typeText}"
+		mutable or
+		temporary or
+		paused gives read.typeText
+		unknown panic("capabilityTypeText: an unknown capability has no line")
+	end 'capability'
+end 'capabilityTypeText'
+
+function capabilityPhrase(read EditorRead) returns String
+	return match read.capability 'capability'
+		mutable or
+		temporary gives "mutable"
+		immutable gives "frozen: read-only, shareable with other threads"
+		isolated gives "isolated: the one reference to its region"
+		paused gives readOnlyPhrase(read)
+		unknown panic("capabilityPhrase: an unknown capability has no line")
+	end 'capability'
+end 'capabilityPhrase'
+
+function readOnlyPhrase(read EditorRead) returns String
+	let phrase = "read-only{readOnlyReasonSuffix(read.readOnly)}"
+
+	return match read.readOnly 'reason'
+		whileOpen or
+		whileDrained gives "{phrase} (mutable outside it)" if capabilityIsWritable(read.outside) else phrase
+		joinedData gives phrase
+		notReadOnly panic("readOnlyPhrase: a read-only value records why")
+	end 'reason'
+end 'readOnlyPhrase'
+
+function capabilityIsWritable(capability ValueCapability) returns bool
+	return capability == ValueCapability.mutable or capability == ValueCapability.temporary
+end 'capabilityIsWritable'
+
+module function appendMoveLine(prose StringArray, read EditorRead)
+	match read.move 'move'
+		unmoved then return
+		movedAt(line) then prose.push("{movementWord(read)} at line {line}")
+		movedWithoutALine then prose.push(movementWord(read))
+	end 'move'
+end 'appendMoveLine'
+
+function movementWord(read EditorRead) returns String
+	return "consumed" if read.linear else "moved"
+end 'movementWord'
+
+module function appendObligationLine(prose StringArray, read EditorRead, facts EditorFacts)
+	if read.move.hasMoved() 'nothingLeftOwed'
+		return
+	end 'nothingLeftOwed'
+
+	if read.linear 'aLinearValue'
+		prose.push(linearProse(try facts.finalizersOf(read.typeText) otherwise StringArray.create(0)))
+	end 'aLinearValue'
+
+	if read.tiedPromise 'aTiedPromise'
+		prose.push("tied promise: await or cancel it before the values it was started with are used again")
+	end 'aTiedPromise'
+end 'appendObligationLine'
+
+function linearProse(finalizers StringArray) returns String
+	if finalizers.isEmpty() 'noneNamed'
+		return "linear: consume it with a finalizer on every path"
+	end 'noneNamed'
+
+	let quoted = StringArray.create(finalizers.count(), zeroed: false)
+
+	for name in finalizers 'eachFinalizer'
+		quoted.push("`{name}`")
+	end 'eachFinalizer'
+
+	return "linear: consume it with a finalizer ({joinedWith(quoted, separator: ", ")}) on every path"
+end 'linearProse'
+
+function parameterProse(parameter ParameterFact) returns String
+	let text = "{parameter.typeText}, {parameterClassPhrase(parameter)}"
+
+	if parameter.callSites.isEmpty() 'calledNowhere'
+		return text
+	end 'calledNowhere'
+
+	let sites = StringArray.create(parameter.callSites.count(), zeroed: false)
+
+	for site in parameter.callSites 'eachSite'
+		sites.push(callSitePhrase(site))
+	end 'eachSite'
+
+	return "{text} — called here with: {joinedWith(sites, separator: ", ")}"
+end 'parameterProse'
+
+function parameterClassPhrase(parameter ParameterFact) returns String
+	return match parameter.inferred 'class'
+		anyCapability gives "any capability (only read)"
+		mutableOnly gives "mutable only{parameter.reason}"
+		immutableOnly gives "immutable only{parameter.reason}"
+		both gives "needs both capabilities, which no argument has"
+		isolatedParam gives "isolated: a call moves its argument in"
+	end 'class'
+end 'parameterClassPhrase'
+
+function callSitePhrase(site CallSite) returns String
+	return "{capabilityWord(site.capability)} ({site.caller}:{site.line}, {callSiteStateWord(site.capability)})"
+end 'callSitePhrase'
+
+function callSiteStateWord(capability ValueCapability) returns String
+	return match capability 'capability'
+		mutable gives "live"
+		temporary gives "fresh"
+		immutable gives "frozen"
+		paused gives "in a block"
+		isolated gives "moved in"
+		unknown panic("callSiteStateWord: an unknown capability is never recorded")
+	end 'capability'
+end 'callSiteStateWord'
+
+module function appendFunctionProse(prose StringArray, fact FunctionFact)
+	if fact.consumesReceiver 'aFinalizerShape'
+		prose.push("takes `consuming self`: a call moves the receiver")
+	end 'aFinalizerShape'
+
+	match fact.waits 'waits'
+		doesNotWait then return
+		waits(chain) then prose.push("may wait: {chain}")
+	end 'waits'
+end 'appendFunctionProse'

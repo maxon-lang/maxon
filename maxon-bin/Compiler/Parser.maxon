@@ -18968,6 +18968,7 @@ type FunctionBodyState
 	export var immutableSlotReads as ValueMarkColumn
 	export var storedIntoImmutableSlot as ValueMarkColumn
 	export var isolatedPartReads as ValueMarkColumn
+	export var tiedPromises as ValueMarkColumn
 	export let isolatedPartOrigins as IsolatedPartReadMap
 	export var rebindAliasOps as UndecidedResultOpMap
 	export var imagedLetInitializerStart as ElementIndex
@@ -19443,6 +19444,7 @@ type FunctionBodyState
 			immutableSlotReads: noValueMarks,
 			storedIntoImmutableSlot: noValueMarks,
 			isolatedPartReads: noValueMarks,
+			tiedPromises: noValueMarks,
 			isolatedPartOrigins: IsolatedPartReadMap.create(),
 			rebindAliasOps: UndecidedResultOpMap.create(),
 			imagedLetInitializerStart: NoImagedLetInitializer,
@@ -35900,6 +35902,10 @@ export type Parser
 			// source token declares and a bare field read never mentions, so every instance method would report it.
 			self.trackDebugLocal(binding)
 
+			if self.job.recordsEditorFacts and not paramName.equals(SelfParamName) 'anEditedParameter'
+				self.noteEditorBinding(binding, line: paramRange.line, column: paramRange.column)
+			end 'anEditedParameter'
+
 			if not paramName.equals(SelfParamName) 'checkedForUse'
 				self.bodyState.unusedCandidates.push(UnusedBindingCandidate.create(binding, nameRange: paramRange, kind: UnusedBindingKind.parameter, declToken: self.pos))
 			end 'checkedForUse'
@@ -38858,6 +38864,10 @@ export type Parser
 		self.keyAdoptableLocal(nameTok, kind: kind, value: boundValue)
 		self.trackDebugLocal(binding)
 
+		if self.job.recordsEditorFacts 'anEditedDocument'
+			self.noteEditorBinding(binding, line: nameTok.line, column: nameTok.column)
+		end 'anEditedDocument'
+
 		if mutable 'trackVar'
 			// Record `var`s in declaration order so loop headers can mint phis for every
 			// mutable binding in scope (on-the-fly SSA). `let`s never join — they
@@ -40318,7 +40328,7 @@ export type Parser
 		self.releaseDisplacedCellOccupant(binding.varType, displaced: displaced, box: binding.boundValue, range: range)
 		stored.cellEpoch = CellEpoch.current(self.mintCellEpoch(self.storedOccupantExclusivity(owned)))
 		stored.noteWritten(self.bodyState.moveLedger)
-		stored.setMovedFrom(false, ledger: self.bodyState.moveLedger)
+		stored.revive(self.bodyState.moveLedger)
 	end 'reassignCellBinding'
 
 	// The binding STAYS in `ownedBindings` (mid-stack removal would desync the block/loop drop marks),
@@ -40430,7 +40440,7 @@ export type Parser
 			// The binding owns the fresh thread — revive it for reads and its scope-exit drop, and enrol
 			// once (a re-armed promise is already in the set as a moved ghost; a non-promise binding first
 			// taking a promise — `var x = 5; x = async f()` — joins now).
-			binding.setMovedFrom(false, ledger: self.bodyState.moveLedger)
+			binding.revive(self.bodyState.moveLedger)
 			binding.partiallyMoved = false
 
 			if not alreadyInSet 'enrolPromise'
@@ -40534,7 +40544,7 @@ export type Parser
 		// binding-match is fully live once overwritten. Clearing only `movedFrom` left `requireBindingLive`
 		// (which rejects on EITHER flag) refusing every use of a reassigned `var` union — an over-rejection
 		// of a valid program.
-		binding.setMovedFrom(false, ledger: self.bodyState.moveLedger)
+		binding.revive(self.bodyState.moveLedger)
 		binding.partiallyMoved = false
 
 		if newIsOwned 'trackNew'
@@ -49178,7 +49188,7 @@ export type Parser
 			return
 		end 'writable'
 
-		self.deferRegionRefusal(ErrorCode.semanticWriteThroughReadOnly, message: "cannot write through a read-only value{self.readOnlySuffix()}", line: range.line, column: range.column)
+		self.deferRegionRefusal(ErrorCode.semanticWriteThroughReadOnly, message: "cannot write through a read-only value{readOnlyReasonSuffix(self.readOnlyReason())}", line: range.line, column: range.column)
 	end 'deferWriteThroughReadOnlyReceiver'
 
 	function emitRuntimeCallInto(result ValueId, callee ByteArray, args ValueIdArray, range SourceRange, argLabels NameRoster) returns ValueId
@@ -50069,7 +50079,7 @@ export type Parser
 			self.recordPromiseConsume(promise, kind: PromiseConsume.movedIntoStorage)
 		end 'givenToAnotherOwner'
 
-		owned.setMovedFrom(true, ledger: self.bodyState.moveLedger)
+		owned.markMovedAt(self.lineJustRead(), ledger: self.bodyState.moveLedger)
 	end 'consumePromiseThread'
 
 	// The one writer of `promiseConsumes`, and FIRST WINS: a door that reclaimed the thread must not be
@@ -50293,7 +50303,7 @@ export type Parser
 		// observed by every holder — `ownedBindings`, `Scope.vars`, any loop-phi list.
 		let owned = try self.bodyState.ownedBindings.get(index) otherwise panic("poisonOwningBinding: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 
-		owned.setMovedFrom(true, ledger: self.bodyState.moveLedger)
+		owned.markMovedAt(self.lineJustRead(), ledger: self.bodyState.moveLedger)
 		self.settleFeedDropGuardOf(value, loopCarried: LoopCarriedGuards.settleAlways)
 		self.bodyState.movedBindingValues = withValueMarked(self.bodyState.movedBindingValues, value: value)
 	end 'poisonOwningBinding'
@@ -50326,7 +50336,7 @@ export type Parser
 			// be written THROUGH the shared `VarInfo` so every holder observes it — the `Scope.setValue`
 			// idiom `poisonOwningBinding` uses, for its reason.
 			let alias = self.bodyState.scope.getInfo(name)
-			alias.setMovedFrom(true, ledger: self.bodyState.moveLedger)
+			alias.markMovedAt(self.lineJustRead(), ledger: self.bodyState.moveLedger)
 		end 'eachBinding'
 	end 'poisonValueAliases'
 
@@ -57337,7 +57347,13 @@ export type Parser
 		// A `var` bound from `.get(index)`: the flag is written THROUGH the shared `VarInfo` reference (the
 		// `Scope.setValue` idiom `poisonOwningBinding` uses), so every holder observes it.
 		let owned = try self.bodyState.ownedBindings.get(index) otherwise panic("setBindingPartiallyMoved: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
-		owned.partiallyMoved = value
+
+		if value 'movedOutHere'
+			owned.markPartiallyMovedAt(self.lineJustRead())
+			return
+		end 'movedOutHere'
+
+		owned.partiallyMoved = false
 	end 'setBindingPartiallyMoved'
 
 	// Has the binding `owner` denotes had a managed payload moved out of it on the path parsed so far? The
@@ -64389,7 +64405,7 @@ export type Parser
 			end 'cannotFailAMutableSlot'
 
 			let argTok = self.tokenAt(try argAnchors.get(argIndex) otherwise panic("storedSlotCandidates: argAnchors.get OOB at {argIndex}"))
-			candidates.push(StoredSlotArg.create(0, argIndex: argIndex as ParamCount, slot: storedSlot, argValue: argument, sources: self.paramSourcesOf(func, value: argument), capability: given, undecided: undecided, valueType: self.valueDisplayTypeName(argument), readOnlyReason: self.readOnlySuffix(), line: argTok.line, column: argTok.column))
+			candidates.push(StoredSlotArg.create(0, argIndex: argIndex as ParamCount, slot: storedSlot, argValue: argument, sources: self.paramSourcesOf(func, value: argument), capability: given, undecided: undecided, valueType: self.valueDisplayTypeName(argument), readOnlyReason: readOnlyReasonSuffix(self.readOnlyReason()), line: argTok.line, column: argTok.column))
 		end 'eachSourceArgument'
 
 		return candidates
@@ -90491,6 +90507,11 @@ export type Parser
 		// write through it, a method call on it. Written BEFORE the move guard: a self-field alias and a
 		// scalar binding are uses too, and the guard's exclusions are about a MOVE, not about whether the
 		// name was read.
+		// Before the move guard: a refused read of a moved binding still records where it moved.
+		if self.job.recordsEditorFacts 'anEditedDocument'
+			self.noteEditorBinding(binding, line: nameTok.line, column: nameTok.column)
+		end 'anEditedDocument'
+
 		binding.lastReadToken = self.pos
 
 		// ⭐ **E3012's EVIDENCE, WRITTEN AT THE SAME CHOKEPOINT AND FOR THE SAME REASON.** "Was this name
@@ -92180,7 +92201,7 @@ export type Parser
 		let notes = self.notesForWrite(self.bodyFunction())
 
 		for opIdx in ops 'eachSettlingOp'
-			notes.resultUses.push(ResultUse.create(opIdx, slot: slot, sends: sends, judged: judged, place: place, valueType: self.valueDisplayTypeName(value), readOnlyReason: self.readOnlySuffix(), line: line, column: column))
+			notes.resultUses.push(ResultUse.create(opIdx, slot: slot, sends: sends, judged: judged, place: place, valueType: self.valueDisplayTypeName(value), readOnlyReason: readOnlyReasonSuffix(self.readOnlyReason()), line: line, column: column))
 		end 'eachSettlingOp'
 	end 'fileResultUse'
 
@@ -92215,7 +92236,7 @@ export type Parser
 	end 'slotStoreVerdictGiven'
 
 	function readOnlyReasonOf(joinedAtALoop bool) returns String
-		return JoinedReadOnlyReason if joinedAtALoop else self.readOnlySuffix()
+		return JoinedReadOnlyReason if joinedAtALoop else readOnlyReasonSuffix(self.readOnlyReason())
 	end 'readOnlyReasonOf'
 
 	function requireStoreHolderWritable(holder ValueCapability, fieldName String, placeText String, joinedAtALoop bool, line LineNumber, column ColumnNumber) throws SourceParseError
@@ -92367,19 +92388,57 @@ export type Parser
 		end 'joinsTheRegion'
 	end 'promoteTemporary'
 
-	function readOnlySuffix() returns String
+	function readOnlyReason() returns ReadOnlyReason
 		let windows = self.regionFactsForRead().windows
 
 		if not windowIsOpen(windows) and self.statement.drainingLoops > 0 'aDrainedArray'
-			return " while '{String.from(self.statement.drainingLabel)}' drains it"
+			return ReadOnlyReason.whileDrained(String.from(self.statement.drainingLabel))
 		end 'aDrainedArray'
 
 		if not windowIsOpen(windows) 'noWindow'
-			return JoinedReadOnlyReason
+			return ReadOnlyReason.joinedData
 		end 'noWindow'
 
-		return " while '{String.from(innermostWindowOf(windows).label)}' is open"
-	end 'readOnlySuffix'
+		return ReadOnlyReason.whileOpen(String.from(innermostWindowOf(windows).label))
+	end 'readOnlyReason'
+
+	function noteEditorBinding(binding VarInfo, line LineNumber, column ColumnNumber)
+		let value = binding.boundValue
+		let tied = valueIsMarked(self.bodyState.tiedPromises, value: value)
+		let isData = not self.valueIsAValueType(value)
+
+		if binding.isCellBinding or binding.isSelfField or binding.name.equals(DiscardBindingName) or not (isData or tied) 'carriesNoFact'
+			return
+		end 'carriesNoFact'
+
+		let capability = self.effectiveCapabilityOf(value) if isData else ValueCapability.unknown
+		let readOnly = self.readOnlyReason() if capability == ValueCapability.paused else ReadOnlyReason.notReadOnly
+		let owner = try self.artifact.module.functions.get(self.artifact.currentFuncIndex) otherwise panic("noteEditorBinding: functions.get OOB at {self.artifact.currentFuncIndex}, the function whose body is being parsed")
+		var role = EditorBinding.local
+
+		if binding.name.equals(SelfParamName) 'theReceiver'
+			role = EditorBinding.receiver
+		end 'theReceiver' else if binding.isParameter 'aParameter'
+			role = EditorBinding.parameter
+		end 'aParameter'
+
+		self.artifact.recordEditorRead(positionKey(line, column: column), read: EditorRead.create(role, name: displayParamName(binding.name), owner: namePositionOf(owner), typeText: self.valueDisplayTypeName(value), capability: capability, outside: self.capabilityOfValue(value), readOnly: readOnly, move: self.editorMoveOf(binding), linear: self.valueIsLinear(value), tiedPromise: tied))
+	end 'noteEditorBinding'
+
+	function editorMoveOf(binding VarInfo) returns EditorMove
+		if not binding.movedFrom and not binding.partiallyMoved 'neverMoved'
+			return EditorMove.unmoved
+		end 'neverMoved'
+
+		return match binding.moveSite 'site'
+			at(line) gives EditorMove.movedAt(line)
+			unlocated gives EditorMove.movedWithoutALine
+		end 'site'
+	end 'editorMoveOf'
+
+	function lineJustRead() returns LineNumber
+		return self.tokenAt(self.pos - 1).line
+	end 'lineJustRead'
 
 	function waitInsideWindowMessage(window OpenWindow) returns String
 		return match window.kind 'kind'
@@ -99519,6 +99578,10 @@ export type Parser
 		let receiver = try self.requireReceiverValue(anchor)
 		self.noteOperandRead(self.receiverRootBinding(), at: self.pos)
 
+		if self.job.recordsEditorFacts and self.bodyState.scope.contains(SelfParamName) 'theMethodItself'
+			self.noteEditorBinding(self.bodyState.scope.getInfo(SelfParamName), line: anchor.line, column: anchor.column)
+		end 'theMethodItself'
+
 		return receiver
 	end 'readReceiverValue'
 
@@ -101970,7 +102033,7 @@ export type Parser
 
 		self.fileCallNotes(func, opIdx: spawnedOp, args: args, argAnchors: argAnchors, stored: StoredSlotArgArray.create(0), receiver: ReceiverArg.none, anchor: target.anchor, callOpen: PendingCallOpen.none)
 
-		self.noteTiedAsync(func, opIdx: spawnedOp, args: args)
+		self.noteTiedAsync(func, opIdx: spawnedOp, args: args, promise: spawned)
 		return spawned
 	end 'parseAsyncCall'
 
@@ -102011,7 +102074,7 @@ export type Parser
 		return self.valueIsAValueType(value) or self.valueIsAServiceHandle(value) or self.signatures.isSharedValueInstanceAt(self.tagOf(value), nameId: self.valueNameId(value)) or self.valueIsCleanInput(value)
 	end 'valueCrossesToACoroutine'
 
-	function noteTiedAsync(func IrFunction, opIdx ElementIndex, args ValueIdArray)
+	function noteTiedAsync(func IrFunction, opIdx ElementIndex, args ValueIdArray, promise ValueId)
 		var sharesMutableData = false
 
 		for position in 0 upto args.count() 'eachArg'
@@ -102027,6 +102090,7 @@ export type Parser
 		end 'untied'
 
 		self.notesForWrite(func).tiedAsyncOps.push(opIdx)
+		self.bodyState.tiedPromises = withValueMarked(self.bodyState.tiedPromises, value: promise)
 	end 'noteTiedAsync'
 
 	// Mint the Promise handle an `async` spawn defines and emit the `asyncCall` op. The spawn is SCALAR ONLY: the

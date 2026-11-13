@@ -1,0 +1,433 @@
+let CapabilityHoverDirName = "hover-capability"
+let CapabilityHoverFileName = "main.maxon"
+let CapabilityHoverEditedVersion = 2
+
+export type CapabilityHovers
+	export let checked as String
+	export let afterEdit as String
+
+	static function create(checked String, afterEdit String) returns CapabilityHovers
+		return Self{checked: checked, afterEdit: afterEdit}
+	end 'create'
+end 'CapabilityHovers'
+
+export function hoverAfterTheCheck(source String, line LspCoordinate, character LspCoordinate) returns String throws TestFailure
+	let hovers = try hoverAcrossAnEdit(source, edited: source, line: line, character: character)
+
+	return hovers.checked
+end 'hoverAfterTheCheck'
+
+export function hoverAcrossAnEdit(source String, edited String, line LspCoordinate, character LspCoordinate) returns CapabilityHovers throws TestFailure
+	let root = stagedProjectDiagnosticsRoot(CapabilityHoverDirName)
+	writeCorpusFile(root, fileName: CapabilityHoverFileName, content: source)
+
+	let client = LspClient.start()
+	let outcome = collectCapabilityHovers(client, root: root, source: source, edited: edited, line: line, character: character)
+	client.release()
+
+	discardStagedDir(root)
+
+	match outcome 'outcome'
+		hovered(hovers) then return hovers
+		broke(detail) then try Expect.fail("the capability hover session never reached an answer: {detail}")
+	end 'outcome'
+
+	panic("hoverAcrossAnEdit: the `broke` arm always throws")
+end 'hoverAcrossAnEdit'
+
+union CapabilityHoverOutcome
+	hovered(hovers CapabilityHovers)
+	broke(detail String)
+end 'CapabilityHoverOutcome'
+
+function collectCapabilityHovers(client LspClient, root FilePath, source String, edited String, line LspCoordinate, character LspCoordinate) returns CapabilityHoverOutcome
+	if let hovers = try askedAcrossAnEdit(client, root: root, source: source, edited: edited, line: line, character: character) 'asked'
+		return CapabilityHoverOutcome.hovered(hovers)
+	end 'asked' else (e) 'sessionBroke'
+		return CapabilityHoverOutcome.broke(e.explained())
+	end 'sessionBroke'
+end 'collectCapabilityHovers'
+
+function askedAcrossAnEdit(client LspClient, root FilePath, source String, edited String, line LspCoordinate, character LspCoordinate) returns CapabilityHovers throws LspClientError
+	let uri = fileUriOf(root.join(CapabilityHoverFileName))
+
+	try openCorpusSession(client, root: CorpusSessionRoot.clientRoot(root))
+	try client.initialized()
+	try client.openDocument(uri, content: source)
+
+	_ = try client.awaitProjectCheckPublish(uri)
+
+	let checked = try client.hover(uri, line: line, character: character)
+
+	try client.changeDocument(uri, content: edited, version: CapabilityHoverEditedVersion)
+
+	let afterEdit = try client.hover(uri, line: line, character: character)
+
+	return CapabilityHovers.create(checked.contents, afterEdit: afterEdit.contents)
+end 'askedAcrossAnEdit'
+
+function capabilityWordsType() returns String
+	return String.from(b"type Words
+	var total as Count
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	function add(n Count)
+		self.total = self.total + n
+	end 'add'
+
+	function size() returns Count
+		return self.total
+	end 'size'
+end 'Words'
+")
+end 'capabilityWordsType'
+
+function withWords(body ByteArray) returns String
+	return "{capabilityWordsType()}{String.from(body)}"
+end 'withWords'
+
+export function windowProgram() returns String
+	return withWords(b"
+function main() returns ExitCode
+	let words = Words.create() as isolated Words
+	let outer = Words.create()
+	modify words 'fill'
+		let inside = outer.size()
+		words.add(inside)
+	end 'fill'
+	let outside = outer.size()
+	return outside as ExitCode
+end 'main'
+")
+end 'windowProgram'
+
+export function frozenProgram() returns String
+	return withWords(b"
+function main() returns ExitCode
+	let frozen = freeze Words.create()
+	let size = frozen.size()
+	return size as ExitCode
+end 'main'
+")
+end 'frozenProgram'
+
+export function parameterProgram() returns String
+	return withWords(b"
+function describe(table Words) returns Count
+	return table.size()
+end 'describe'
+
+function main() returns ExitCode
+	let live = Words.create()
+	let frozen = freeze Words.create()
+	let a = describe(live)
+	let b = describe(frozen)
+	return (a + b) as ExitCode
+end 'main'
+")
+end 'parameterProgram'
+
+export function movedProgram() returns String
+	return withWords(b"
+function hand(words isolated Words) returns Count
+	return words.size()
+end 'hand'
+
+function main() returns ExitCode
+	let words = Words.create() as isolated Words
+	let handed = hand(words)
+	let again = words.size()
+	return (handed + again) as ExitCode
+end 'main'
+")
+end 'movedProgram'
+
+export function tiedProgram() returns String
+	return withWords(b"
+function bump(words Words) returns Count
+	return words.size()
+end 'bump'
+
+function main() returns ExitCode
+	let words = Words.create()
+	let pending = async bump(words)
+	let done = await pending
+	return done as ExitCode
+end 'main'
+")
+end 'tiedProgram'
+
+export function waitingProgram() returns String
+	return String.from(b"typealias Tally = int(0 to u64.max)
+
+type Ledger
+	export var total as Tally
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	function raise()
+		self.total = self.total + 1
+	end 'raise'
+end 'Ledger'
+
+function transfer(account Ledger.handle)
+	acquire account 'held'
+		account.raise()
+	end 'held' otherwise 'stopped'
+		return
+	end 'stopped'
+end 'transfer'
+
+function settle(account Ledger.handle)
+	transfer(account)
+end 'settle'
+
+function main() returns ExitCode
+	let account = spawn Ledger.create()
+	settle(account)
+	return 0
+end 'main'
+")
+end 'waitingProgram'
+
+export function linearProgram() returns String
+	return String.from(b"typealias Code = int(0 to 999)
+
+type Resp
+	var code as Code
+
+	static function create(code Code) returns Self
+		return Self{code: code}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+
+	function abandon(consuming self)
+		destruct self
+	end 'abandon'
+end 'Resp'
+
+function main() returns ExitCode
+	let resp = Resp.create(1)
+	resp.fin()
+	return 0
+end 'main'
+")
+end 'linearProgram'
+
+export function branchMergeProgram() returns String
+	return withWords(b"
+function hand(words isolated Words) returns Count
+	return words.size()
+end 'hand'
+
+function main() returns ExitCode
+	let words = Words.create() as isolated Words
+	let gate = Words.create()
+	var handed = 0 as Count
+	if gate.size() == 0 'pick'
+		handed = hand(words)
+	end 'pick' else 'other'
+		handed = words.size()
+	end 'other'
+	let again = words.size()
+	return (handed + again) as ExitCode
+end 'main'
+")
+end 'branchMergeProgram'
+
+export function partialMoveProgram() returns String
+	return withWords(b"
+union Slot
+	empty
+	holding(words Words)
+end 'Slot'
+
+function main() returns ExitCode
+	let slot = Slot.holding(Words.create())
+	var seen = 0 as Count
+	match slot 'open'
+		empty then seen = 1
+		holding(words) then seen = words.size()
+	end 'open'
+	let again = slot
+	return seen as ExitCode
+end 'main'
+")
+end 'partialMoveProgram'
+
+export function sameNamedMethodsProgram() returns String
+	return String.from(b"type Ticket
+	var code as Count
+
+	static function create() returns Self
+		return Self{code: 0}
+	end 'create'
+
+	function fin(consuming self)
+		destruct self
+	end 'fin'
+end 'Ticket'
+
+function fin(code Count) returns Count
+	return code
+end 'fin'
+
+type Gauge
+	var level as Count
+
+	static function create() returns Self
+		return Self{level: 0}
+	end 'create'
+
+	function fin() returns Count
+		return self.level
+	end 'fin'
+end 'Gauge'
+
+function settle(ticket Ticket)
+	ticket.fin()
+end 'settle'
+
+function read(gauge Gauge) returns Count
+	return gauge.fin()
+end 'read'
+
+function main() returns ExitCode
+	settle(Ticket.create())
+	return (read(Gauge.create()) + fin(1)) as ExitCode
+end 'main'
+")
+end 'sameNamedMethodsProgram'
+
+export function brandedProgram() returns String
+	return String.from(b"typealias Tally = int(0 to u64.max)
+typealias TallyList = Array with Tally
+typealias TallyRow = Array with Tally
+
+function main() returns ExitCode
+	let made = TallyList.create(0)
+	let row = made as TallyRow
+	let size = row.count()
+	return size as ExitCode
+end 'main'
+")
+end 'brandedProgram'
+
+export function replyProgram() returns String
+	return String.from(b"typealias Tally = int(0 to u64.max)
+typealias TallyReply = Reply with Tally
+
+type Clerk
+	var served as Tally
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function look(waiting TallyReply)
+		self.served = self.served + 1
+		waiting.answer(self.served * 21)
+		waiting.answer(self.served * 21)
+	end 'look'
+end 'Clerk'
+
+type Desk
+	let clerk as Clerk.handle
+
+	static function create(clerk Clerk.handle) returns Self
+		return Self{clerk: clerk}
+	end 'create'
+
+	export function ask() returns Tally throws ReplyStopped
+		let pending = reply.later()
+		try self.clerk.look(pending) otherwise ignore
+		return
+	end 'ask'
+end 'Desk'
+
+function main() returns ExitCode
+	let clerk = spawn Clerk.create()
+	let desk = spawn Desk.create(clerk.clone())
+	let total = try await desk.ask() otherwise 0
+	return total as ExitCode
+end 'main'
+")
+end 'replyProgram'
+
+export function awaitedProgram() returns String
+	return withWords(b"
+function bump(words Words) returns Count
+	return words.size()
+end 'bump'
+
+function main() returns ExitCode
+	let words = Words.create()
+	let pending = async bump(words)
+	let done = await pending
+	let again = await pending
+	return (done + again) as ExitCode
+end 'main'
+")
+end 'awaitedProgram'
+
+export function genericProgram() returns String
+	return String.from(b"typealias Tally = int(0 to u64.max)
+
+interface Sized
+	function size() returns Tally
+end 'Sized'
+
+type Crate implements Sized
+	var items as Tally
+
+	static function create() returns Self
+		return Self{items: 3}
+	end 'create'
+
+	function size() returns Tally
+		return self.items
+	end 'size'
+end 'Crate'
+
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function get() returns T
+		return self.item
+	end 'get'
+end 'Box'
+
+typealias TallyBox = Box with Tally
+
+function larger(a T, b T) uses T returns T where T is Comparable
+	if a > b 'first'
+		return a
+	end 'first'
+
+	return b
+end 'larger'
+
+function measure(item Sized) returns Tally
+	return item.size()
+end 'measure'
+
+function main() returns ExitCode
+	let crate = Crate.create()
+	let boxed = TallyBox.create(measure(crate))
+	let top = larger(boxed.get(), b: 7)
+	return top as ExitCode
+end 'main'
+")
+end 'genericProgram'

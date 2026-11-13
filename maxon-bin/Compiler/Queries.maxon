@@ -3819,7 +3819,7 @@ function parseJobFrom(project Project, path FilePath, namespace String, livesUnd
 	// one compile, which is the drift this routine exists to prevent.
 	let isRuntimeSource = isRuntimeSourceFile(project, path: path)
 
-	return ParseJob.create(path, authoredPath: project.stagedSourceOrigins.authoredPathOf(path), namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: project.compilerWrittenSources.mintedNamesIn(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
+	return ParseJob.create(path, authoredPath: project.stagedSourceOrigins.authoredPathOf(path), namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: project.compilerWrittenSources.mintedNamesIn(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage, recordsEditorFacts: recordsEditorFactsFor(project, path: path))
 end 'parseJobFrom'
 
 // A reader over one file for a pass that folds what it reads into the index rather than building an artifact —
@@ -3955,6 +3955,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.debugStreamNameSites = DebugStreamNameSiteMap.create()
 	project.immortalConstArraySites = ImmortalConstArraySiteMap.create()
 	project.provenFixedArrayAccesses = ProvenFixedArrayAccessMap.create()
+	project.editorReads = noEditorReads
 end 'resetMergeTargets'
 
 module function lexerErrorDiagnostic(error LexerError, path FilePath) returns Diagnostic

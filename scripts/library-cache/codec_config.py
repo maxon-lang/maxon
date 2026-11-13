@@ -35,8 +35,10 @@ SKIPPED_FIELDS = {
     ("SettledDeclarations", "declTokenStreams"): "DeclTokenStreamMap.create()",
     ("VarInfo", "isEnrolled"): "false",
     ("VarInfo", "enrolledAt"): "0",
+    ("VarInfo", "moveSite"): "MoveSite.unlocated",
     ("IrBlock", "opsHeld"): "false",
     ("IrFunction", "ownership"): "ColumnOwnership.everything()",
+    ("FileParseArtifact", "editorReads"): "noEditorReads",
 }
 
 FIELD_READERS = {
@@ -177,4 +179,5 @@ ARTIFACT_REWIND = {
     "secondaryDiagnostics": ("counted",),
     "parseMints": ("kept", "filed once, when the parse ends"),
     "instanceIdsInUse": ("kept", "filed once, when the parse ends"),
+    "editorReads": ("kept", "keyed by the token it was read at, so a region parsed again overwrites its own entries"),
 }

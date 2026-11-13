@@ -1,6 +1,26 @@
 // Longer than the gap between keystrokes in a burst, so a burst is checked once, at its last version.
 let LspProjectCheckSettleMs = 300
 
+module type LspEditorFacts
+	module let version as LspDocumentVersion
+	module let facts as EditorFacts
+
+	module static function checked(version LspDocumentVersion, facts EditorFacts) returns LspEditorFacts
+		return Self{version: version, facts: facts}
+	end 'checked'
+
+	module static function unchecked() returns LspEditorFacts
+		return Self{version: LspNoDocumentVersion, facts: EditorFacts.empty()}
+	end 'unchecked'
+end 'LspEditorFacts'
+
+module typealias LspEditorFactsCell = SharedValue with LspEditorFacts
+
+module union LspEditorFactsAnswer
+	fresh(held immutable LspEditorFacts)
+	stale
+end 'LspEditorFactsAnswer'
+
 module type LspProjectCheckRequest
 	export let uri as String
 	export let path as FilePath
@@ -21,9 +41,10 @@ end 'LspProjectCheckRequest'
 module type LspQueuedCheck
 	module let request as immutable LspProjectCheckRequest
 	module let interest as CompileInterest
+	module let facts as LspEditorFactsCell
 
-	module static function create(request immutable LspProjectCheckRequest, interest CompileInterest) returns LspQueuedCheck
-		return Self{request: request, interest: interest}
+	module static function create(request immutable LspProjectCheckRequest, interest CompileInterest, facts LspEditorFactsCell) returns LspQueuedCheck
+		return Self{request: request, interest: interest, facts: facts}
 	end 'create'
 end 'LspQueuedCheck'
 
@@ -143,7 +164,7 @@ type LspProjectChecker implements CompileReceiver
 	function settle(running RunningCheck, step CompileStep, receiver CompileReceiver.handle)
 		match step 'step'
 			awaiting then return
-			finished then self.finish(running.work, check: running.project.checkedAfterFrontEnd(running.work.request), receiver: receiver)
+			finished then self.finish(running.work, check: running.project.checkedAfterFrontEnd(running.work.request, facts: running.work.facts), receiver: receiver)
 		end 'step'
 	end 'settle'
 
@@ -321,19 +342,34 @@ extension Project
 	end 'preparedAgainst'
 
 	function preparedWithTheBuffer(request LspProjectCheckRequest, reader FilePath) returns CheckPreparation
+		self.editorFacts = EditorFactsSubject.document(reader.clone())
 		overlayUnsavedText(self, path: reader, content: request.text)
 
 		return CheckPreparation.ready(self)
 	end 'preparedWithTheBuffer'
 
-	function checkedAfterFrontEnd(request LspProjectCheckRequest) returns ProjectCheck
+	function checkedAfterFrontEnd(request LspProjectCheckRequest, facts LspEditorFactsCell) returns ProjectCheck
 		self.reportSecondaryFindingsBesideClaims()
+
+		// Published before the check's diagnostics, so a hover that follows them finds these facts.
+		facts.publish(LspEditorFacts.checked(request.version, facts: editorFactsOfTheCheck(self)))
 
 		let attributed = attributedTo(diagnosticsInSourceOrder(self), path: request.path, alone: request.alone)
 
 		return ProjectCheck.checked(attributed.clone())
 	end 'checkedAfterFrontEnd'
 end 'Project'
+
+function editorFactsOfTheCheck(project Project) returns EditorFacts
+	return EditorFacts.create(editorReadsOf(project), functions: project.editorFunctions.clone(), finalizers: project.editorFinalizers.clone())
+end 'editorFactsOfTheCheck'
+
+function editorReadsOf(project Project) returns EditorReadMap
+	match project.editorReads 'reads'
+		unwritten then return EditorReadMap.create()
+		entries(held) then return held.clone()
+	end 'reads'
+end 'editorReadsOf'
 
 function projectCheckFailedWith(failure CompileError) returns ProjectCheck
 	match failure.failure() 'failure'

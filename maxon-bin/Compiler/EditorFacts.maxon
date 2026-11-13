@@ -1,0 +1,157 @@
+export enum EditorBinding
+	parameter
+	receiver
+	local
+end 'EditorBinding'
+
+export union ReadOnlyReason
+	notReadOnly
+	whileOpen(label String)
+	whileDrained(label String)
+	joinedData
+end 'ReadOnlyReason'
+
+export union EditorMove
+	unmoved
+	movedAt(line LineNumber)
+	movedWithoutALine
+
+	export function hasMoved() returns bool
+		return match self 'move'
+			unmoved gives false
+			movedAt or
+			movedWithoutALine gives true
+		end 'move'
+	end 'hasMoved'
+end 'EditorMove'
+
+export type EditorRead
+	export let role as EditorBinding
+	export let name as String
+	export let owner as PositionKey
+	export let typeText as String
+	export let capability as ValueCapability
+	export let outside as ValueCapability
+	export let readOnly as ReadOnlyReason
+	export let move as EditorMove
+	export let linear as bool
+	export let tiedPromise as bool
+
+	export static function create(role EditorBinding, name String, owner PositionKey, typeText String, capability ValueCapability, outside ValueCapability, readOnly ReadOnlyReason, move EditorMove, linear bool, tiedPromise bool) returns EditorRead
+		return Self{role: role, name: name, owner: owner, typeText: typeText, capability: capability, outside: outside, readOnly: readOnly, move: move, linear: linear, tiedPromise: tiedPromise}
+	end 'create'
+end 'EditorRead'
+
+export typealias EditorReadMap = Map with (PositionKey, EditorRead)
+
+export union EditorReadTable
+	unwritten
+	entries(reads EditorReadMap)
+end 'EditorReadTable'
+
+module let noEditorReads = EditorReadTable.unwritten
+
+export union EditorFactsSubject
+	nobody
+	document(path FilePath)
+end 'EditorFactsSubject'
+
+module function recordsEditorFactsFor(project Project, path FilePath) returns bool
+	return match project.editorFacts 'subject'
+		document(held) gives held.equals(path)
+		nobody gives false
+	end 'subject'
+end 'recordsEditorFactsFor'
+
+export type CalledParameter
+	module let parameter as String
+	module let site as CallSite
+
+	export static function create(parameter String, site CallSite) returns CalledParameter
+		return Self{parameter: parameter, site: site}
+	end 'create'
+end 'CalledParameter'
+
+export typealias CalledParameterArray = Array with CalledParameter
+
+export typealias CalledParametersByCallee = Map with (PositionKey, CalledParameterArray)
+
+export type CallSite
+	export let caller as String
+	export let line as LineNumber
+	export let capability as ValueCapability
+
+	export static function create(caller String, line LineNumber, capability ValueCapability) returns CallSite
+		return Self{caller: caller, line: line, capability: capability}
+	end 'create'
+end 'CallSite'
+
+export typealias CallSiteArray = Array with CallSite
+
+export type ParameterFact
+	export let name as String
+	export let typeText as String
+	export let inferred as ParamClass
+	export let reason as String
+	export let callSites as CallSiteArray
+
+	export static function create(name String, typeText String, inferred ParamClass, reason String, callSites CallSiteArray) returns ParameterFact
+		return Self{name: name, typeText: typeText, inferred: inferred, reason: reason, callSites: callSites}
+	end 'create'
+end 'ParameterFact'
+
+export typealias ParameterFactArray = Array with ParameterFact
+
+export union FunctionWaits
+	doesNotWait
+	waits(chain String)
+end 'FunctionWaits'
+
+export type FunctionFact
+	export let waits as FunctionWaits
+	export let consumesReceiver as bool
+	export let parameters as ParameterFactArray
+
+	export static function create(waits FunctionWaits, consumesReceiver bool, parameters ParameterFactArray) returns FunctionFact
+		return Self{waits: waits, consumesReceiver: consumesReceiver, parameters: parameters}
+	end 'create'
+end 'FunctionFact'
+
+export typealias FunctionFactMap = Map with (PositionKey, FunctionFact)
+
+export typealias FinalizerNamesByType = Map with (String, StringArray)
+
+module type EditorFacts
+	module let reads as EditorReadMap
+	module let functions as FunctionFactMap
+	module let finalizers as FinalizerNamesByType
+
+	module static function create(reads EditorReadMap, functions FunctionFactMap, finalizers FinalizerNamesByType) returns EditorFacts
+		return Self{reads: reads, functions: functions, finalizers: finalizers}
+	end 'create'
+
+	module static function empty() returns EditorFacts
+		return Self{reads: EditorReadMap.create(), functions: FunctionFactMap.create(), finalizers: FinalizerNamesByType.create()}
+	end 'empty'
+
+	module function readAt(line LineNumber, column ColumnNumber) returns EditorRead throws AbsentError
+		return try self.reads.get(positionKey(line, column: column)) otherwise throw AbsentError.absent
+	end 'readAt'
+
+	module function functionNamedAt(name PositionKey) returns FunctionFact throws AbsentError
+		return try self.functions.get(name) otherwise throw AbsentError.absent
+	end 'functionNamedAt'
+
+	module function finalizersOf(typeText String) returns StringArray throws AbsentError
+		return try self.finalizers.get(typeText) otherwise throw AbsentError.absent
+	end 'finalizersOf'
+end 'EditorFacts'
+
+module function readOnlyReasonSuffix(reason ReadOnlyReason) returns String
+	return match reason 'reason'
+		whileOpen(label) gives " while '{label}' is open"
+		whileDrained(label) gives " while '{label}' drains it"
+		joinedData gives JoinedReadOnlyReason
+		notReadOnly panic("readOnlyReasonSuffix: a value that is not read-only has no reason")
+	end 'reason'
+end 'readOnlyReasonSuffix'

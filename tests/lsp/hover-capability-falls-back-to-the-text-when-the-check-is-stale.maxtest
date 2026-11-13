@@ -1,0 +1,10 @@
+test 'hover falls back to the text once the buffer has moved past the last check'
+	let edited = "{windowProgram()}// the author just typed a note\n"
+	let hovers = try hoverAcrossAnEdit(windowProgram(), edited: edited, line: 23, character: 16)
+
+	try Expect.contains(hovers.checked, needle: "Words — mutable", message: "the control: right after the check of the saved text, hover shows the checker's capability for `outer`.")
+
+	try Expect.contains(hovers.afterEdit, needle: "outer", message: "the `didChange` made the checked version stale, and the project check of the new version has not settled yet. Hover still answers for the name, from the text.")
+
+	try Expect.isFalse(hovers.afterEdit.contains("Words — mutable"), message: "a capability recorded for an older version of the buffer is not shown against the newer one.")
+end 'hover falls back to the text once the buffer has moved past the last check'

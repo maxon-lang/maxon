@@ -449,7 +449,16 @@ module union ProjectResolution
 	superseded
 end 'ProjectResolution'
 
-module typealias LspVersionCellMap = Map with (String, LspVersionCell)
+module type LspDocumentCells
+	module let version as LspVersionCell
+	module let facts as LspEditorFactsCell
+
+	module static function create(version LspDocumentVersion) returns LspDocumentCells
+		return Self{version: LspVersionCell.create(version), facts: LspEditorFactsCell.create(LspEditorFacts.unchecked())}
+	end 'create'
+end 'LspDocumentCells'
+
+module typealias LspDocumentCellsMap = Map with (String, LspDocumentCells)
 
 module type LspWorkspaceState
 	module var held as RecentHeldRoots
@@ -462,13 +471,13 @@ module type LspWorkspaceState
 	module var recordWatches as RecordWatchMap
 	var nextResolutionTicket as ResolutionTicket
 	module var tiersMemo as LibraryTiersMemo
-	var versionCells as LspVersionCellMap
+	var documentCells as LspDocumentCellsMap
 	let checkers as LspCheckerPool
 
 	module static function create(writer LspStdoutWriter.handle) returns LspWorkspaceState
 		let checkers = LspCheckerPool.create(writer.clone())
 
-		return Self{held: RecentHeldRoots.create(checkers), trusted: true, folders: LspFolderArray.create(0), fileMemos: SharedFileMemoMap.create(), driver: persistentCompileDriver(), writer: writer, arrivals: LspArrivalPromiseArray.create(0), recordWatches: RecordWatchMap.create(), nextResolutionTicket: 0, tiersMemo: LibraryTiersMemo.unlocated, versionCells: LspVersionCellMap.create(), checkers: checkers}
+		return Self{held: RecentHeldRoots.create(checkers), trusted: true, folders: LspFolderArray.create(0), fileMemos: SharedFileMemoMap.create(), driver: persistentCompileDriver(), writer: writer, arrivals: LspArrivalPromiseArray.create(0), recordWatches: RecordWatchMap.create(), nextResolutionTicket: 0, tiersMemo: LibraryTiersMemo.unlocated, documentCells: LspDocumentCellsMap.create(), checkers: checkers}
 	end 'create'
 
 	module function projectInputsOf(name RootName) returns ProjectInputsAnswer
@@ -494,33 +503,44 @@ module type LspWorkspaceState
 	end 'projectResolved'
 
 	module function publishVersion(uri String, version LspDocumentVersion)
-		if let cell = try self.versionCells.get(uri) 'known'
-			cell.publish(version)
+		if let cells = try self.documentCells.get(uri) 'known'
+			cells.version.publish(version)
 			return
 		end 'known'
 
-		self.versionCells.upsert(uri.clone(), value: LspVersionCell.create(version))
+		self.documentCells.upsert(uri.clone(), value: LspDocumentCells.create(version))
 	end 'publishVersion'
 
 	module function versionCellOf(uri String) returns LspVersionCell
-		let cell = try self.versionCells.get(uri) otherwise panic("LspWorkspaceState.versionCellOf: a check is requested for a document the session published a version of, and closing a document is what drops its cell")
+		let cells = try self.documentCells.get(uri) otherwise panic("LspWorkspaceState.versionCellOf: a check is requested for a document the session published a version of, and closing a document is what drops its cell")
 
-		return cell.clone()
+		return cells.version.clone()
 	end 'versionCellOf'
 
+	module function editorFactsOf(uri String) returns LspEditorFactsAnswer
+		let cells = try self.documentCells.get(uri) otherwise return LspEditorFactsAnswer.stale
+		let checked = cells.facts.current()
+
+		if checked.version != cells.version.current() 'checkedAnEarlierVersion'
+			return LspEditorFactsAnswer.stale
+		end 'checkedAnEarlierVersion'
+
+		return LspEditorFactsAnswer.fresh(checked)
+	end 'editorFactsOf'
+
 	module function retireVersionCell(uri String)
-		if let cell = try self.versionCells.get(uri) 'known'
-			cell.publish(LspNoDocumentVersion)
-			_ = self.versionCells.remove(uri)
+		if let cells = try self.documentCells.get(uri) 'known'
+			cells.version.publish(LspNoDocumentVersion)
+			_ = self.documentCells.remove(uri)
 		end 'known'
 	end 'retireVersionCell'
 
 	module function endChecks()
-		for (_, cell) in self.versionCells 'eachDocument'
-			cell.publish(LspNoDocumentVersion)
+		for (_, cells) in self.documentCells 'eachDocument'
+			cells.version.publish(LspNoDocumentVersion)
 		end 'eachDocument'
 
-		self.versionCells = LspVersionCellMap.create()
+		self.documentCells = LspDocumentCellsMap.create()
 		self.checkers.shutdown()
 	end 'endChecks'
 
@@ -531,13 +551,21 @@ module type LspWorkspaceState
 	end 'requestProjectCheck'
 
 	module function projectCheckSettled(request immutable LspProjectCheckRequest, interest CompileInterest)
-		_ = try self.held.rootSpelledAs(request.root) otherwise 'noRoot'
+		let facts = try self.editorFactsCellOfTheCheck(request) otherwise 'unwanted'
 			reportProjectCheck(self.writer, request: request, outcome: ProjectCheckOutcome.superseded)
 			return
-		end 'noRoot'
+		end 'unwanted'
 
-		self.checkers.submit(LspQueuedCheck.create(request, interest: interest))
+		self.checkers.submit(LspQueuedCheck.create(request, interest: interest, facts: facts))
 	end 'projectCheckSettled'
+
+	function editorFactsCellOfTheCheck(request immutable LspProjectCheckRequest) returns LspEditorFactsCell throws AbsentError
+		_ = try self.held.rootSpelledAs(request.root) otherwise throw AbsentError.absent
+
+		let cells = try self.documentCells.get(request.uri) otherwise throw AbsentError.absent
+
+		return cells.facts.clone()
+	end 'editorFactsCellOfTheCheck'
 
 	module function nextArrival() returns LspArrival
 		let ready = self.arrivals.awaitAny()

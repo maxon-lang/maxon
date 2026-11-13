@@ -1,0 +1,140 @@
+// Runs before `checkCapabilityCalls`, which appends call sites to the table this clears.
+module function beginEditorFunctionFacts(project Project)
+	match project.editorFacts 'subject'
+		nobody then return
+		document then break
+	end 'subject'
+
+	project.editorFunctions = FunctionFactMap.create()
+	project.editorCallSites = CalledParametersByCallee.create()
+	project.editorFinalizers = FinalizerNamesByType.create()
+end 'beginEditorFunctionFacts'
+
+module function recordEditorFunctionFacts(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts)
+	match project.editorFacts 'subject'
+		nobody then return
+		document(path) then recordFunctionFactsOf(project, module: module, funcNames: funcNames, facts: facts, path: path)
+	end 'subject'
+end 'recordEditorFunctionFacts'
+
+function recordFunctionFactsOf(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, path FilePath)
+	for index in 0 upto funcNames.functions.count() 'eachFunc'
+		let func = try funcNames.functions.get(index) otherwise panic("recordFunctionFactsOf: functions.get OOB at {index} below its own count")
+
+		if isLiftedClosureName(func.name) 'aClosure'
+			continue
+		end 'aClosure'
+
+		let sig = try project.funcSignatures.get(func.name) otherwise continue
+
+		noteFinalizerOf(project, func: func, sig: sig)
+
+		if not func.sourceFilePath.equals(path) or bodyIsUnreadable(func) or project.libraryFacts.bodyIsSwept(func.name) 'notTheDocumentsOwn'
+			continue
+		end 'notTheDocumentsOwn'
+
+		let key = namePositionOf(func)
+		let parameters = editorParametersOf(project, funcNames: funcNames, facts: facts, index: index, sig: sig, key: key)
+
+		project.editorFunctions.upsert(key, value: FunctionFact.create(editorWaitsOf(project, module: module, funcNames: funcNames, facts: facts, index: index), consumesReceiver: consumesItsReceiver(sig), parameters: parameters))
+	end 'eachFunc'
+end 'recordFunctionFactsOf'
+
+function consumesItsReceiver(sig FuncSignature) returns bool
+	return sig.takesReceiver() and sig.selfCapability == ParamCapability.consuming
+end 'consumesItsReceiver'
+
+function noteFinalizerOf(project Project, func IrFunction, sig FuncSignature)
+	if not consumesItsReceiver(sig) 'notAFinalizerShape'
+		return
+	end 'notAFinalizerShape'
+
+	let receiverType = try func.maxonParamTypes.get(ReceiverParamPosition) otherwise panic("noteFinalizerOf: the receiver of '{String.from(func.name)}' has no declared type")
+	let owner = typeDisplayName(project, tag: maxonTypeTag(receiverType), nameId: typeNameIdOf(receiverType), readerFilePath: func.sourceFilePath)
+	let name = String.from(unqualifiedMemberName(func.name))
+
+	// Hover looks the names up by the text `valueDisplayTypeName` gives a read of the type; a different
+	// spelling here would drop them without a diagnostic.
+	if var named = try project.editorFinalizers.get(owner) 'ownerKnown'
+		named.push(name)
+		return
+	end 'ownerKnown'
+
+	let names = StringArray.create(0)
+	names.push(name)
+	project.editorFinalizers.upsert(owner, value: names)
+end 'noteFinalizerOf'
+
+function editorWaitsOf(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex) returns FunctionWaits
+	if not facts.waits(index) 'doesNotWait'
+		return FunctionWaits.doesNotWait
+	end 'doesNotWait'
+
+	return FunctionWaits.waits(blockingChain(project, module: module, funcNames: funcNames, facts: facts, index: index, waits: true))
+end 'editorWaitsOf'
+
+function editorParametersOf(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, sig FuncSignature, key PositionKey) returns ParameterFactArray
+	let func = try funcNames.functions.get(index) otherwise panic("editorParametersOf: functions.get OOB at {index}")
+	let parameters = ParameterFactArray.create(0)
+
+	// A function taking an interface also carries witness positions, which have no declared type.
+	let declaredCount = func.maxonParamTypes.count() as ParamCount
+
+	for position in 0 upto declaredCount 'eachParam'
+		if not paramTagCarriesACapability(project, sig: sig, func: func, position: position) 'carriesNoCapability'
+			continue
+		end 'carriesNoCapability'
+
+		let name = displayParamName(try sig.paramNames.get(position) otherwise panic("editorParametersOf: paramNames.get OOB at {position}"))
+		let declared = declaredCapabilityOf(sig, position: position)
+		let inferred = facts.classAt(index, position: position, declared: declared)
+		let paramType = try func.maxonParamTypes.get(position) otherwise panic("editorParametersOf: maxonParamTypes.get OOB at {position}")
+		let typeText = typeDisplayName(project, tag: maxonTypeTag(paramType), nameId: typeNameIdOf(paramType), readerFilePath: func.sourceFilePath)
+
+		parameters.push(ParameterFact.create(name, typeText: typeText, inferred: inferred, reason: editorNeedReason(project, funcNames: funcNames, facts: facts, index: index, position: position, inferred: inferred), callSites: editorCallSitesOf(project, callee: key, parameter: name)))
+	end 'eachParam'
+
+	return parameters
+end 'editorParametersOf'
+
+function editorNeedReason(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, position ParamCount, inferred ParamClass) returns String
+	return match inferred 'class'
+		mutableOnly gives needOriginText(project, funcNames: funcNames, facts: facts, index: index, position: position, mutable: true)
+		immutableOnly gives needOriginText(project, funcNames: funcNames, facts: facts, index: index, position: position, mutable: false)
+		anyCapability or
+		both or
+		isolatedParam gives ""
+	end 'class'
+end 'editorNeedReason'
+
+function editorCallSitesOf(project Project, callee PositionKey, parameter String) returns CallSiteArray
+	let sites = CallSiteArray.create(0)
+	let called = try project.editorCallSites.get(callee) otherwise return sites
+
+	for entry in called 'eachCall'
+		if entry.parameter == parameter 'thisParameter'
+			sites.push(entry.site)
+		end 'thisParameter'
+	end 'eachCall'
+
+	return sites
+end 'editorCallSitesOf'
+
+module function noteEditorCallSite(project Project, caller IrFunction, calleeFunc IrFunction, sig FuncSignature, position ParamCount, capability ValueCapability, opIdx ElementIndex)
+	if capability == ValueCapability.unknown or not recordsEditorFactsFor(project, path: calleeFunc.sourceFilePath) 'notRecorded'
+		return
+	end 'notRecorded'
+
+	let site = CallSite.create(functionDisplay(project, func: caller).bare(), line: project.opRanges.get(opIdx).line, capability: capability)
+	let entry = CalledParameter.create(displayParamName(try sig.paramNames.get(position) otherwise panic("noteEditorCallSite: paramNames.get OOB at {position}")), site: site)
+	let callee = namePositionOf(calleeFunc)
+
+	if var atCallee = try project.editorCallSites.get(callee) 'calleeKnown'
+		atCallee.push(entry)
+		return
+	end 'calleeKnown'
+
+	let entries = CalledParameterArray.create(0)
+	entries.push(entry)
+	project.editorCallSites.upsert(callee, value: entries)
+end 'noteEditorCallSite'

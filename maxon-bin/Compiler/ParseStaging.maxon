@@ -130,10 +130,11 @@ export type ParseJob
 	// Whether this build instruments for code coverage (`Project.coverage`). The parse memo carries a salt
 	// for it, so a warm tree cannot serve an uninstrumented parse to an instrumented build.
 	export let instrumentsCoverage as bool
+	export let recordsEditorFacts as bool
 	export let initializerRole as InitializerRole
 
-	export static function create(path FilePath, authoredPath FilePath, namespace String, isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool, declaresCompilerInternalNames bool, compilerMintedNames NameRoster, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool) returns ParseJob
-		return Self{path: path, authoredPath: authoredPath, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, initializerRole: InitializerRole.ordinary}
+	export static function create(path FilePath, authoredPath FilePath, namespace String, isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool, declaresCompilerInternalNames bool, compilerMintedNames NameRoster, livesUnderStdlibDirectory bool, buildsBodies bool, capturesDebugLocals bool, instrumentsCoverage bool, recordsEditorFacts bool) returns ParseJob
+		return Self{path: path, authoredPath: authoredPath, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource, declaresCompilerInternalNames: declaresCompilerInternalNames, compilerMintedNames: compilerMintedNames, livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: capturesDebugLocals, instrumentsCoverage: instrumentsCoverage, recordsEditorFacts: recordsEditorFacts, initializerRole: InitializerRole.ordinary}
 	end 'create'
 
 	// The job `ProgramSignatures` parses an initializer under, in the role it names: the declaring file's
@@ -141,7 +142,7 @@ export type ParseJob
 	// because the fold's ops reach no emitted image. Derived from the stored job rather than from the
 	// project, which would put a `Directory.currentPath()` probe on the per-declaration path.
 	export function forInitializerRole(role InitializerRole) returns ParseJob
-		return Self{path: self.path, authoredPath: self.authoredPath, namespace: self.namespace, isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource, declaresCompilerInternalNames: self.declaresCompilerInternalNames, compilerMintedNames: self.compilerMintedNames, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, initializerRole: role}
+		return Self{path: self.path, authoredPath: self.authoredPath, namespace: self.namespace, isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, isScriptlibSource: self.isScriptlibSource, declaresCompilerInternalNames: self.declaresCompilerInternalNames, compilerMintedNames: self.compilerMintedNames, livesUnderStdlibDirectory: self.livesUnderStdlibDirectory, buildsBodies: true, capturesDebugLocals: false, instrumentsCoverage: false, recordsEditorFacts: false, initializerRole: role}
 	end 'forInitializerRole'
 
 	export function readsAuthorSource() returns bool
@@ -1219,6 +1220,7 @@ export type FileParseArtifact
 	// The id each of `parseMints`' instance rows is known by in this artifact's ids right now: the parse's band
 	// ids until a merge renumbers them, then the ids the latest merge adopted the rows under.
 	export var instanceIdsInUse as GenericInstanceIdArray
+	export var editorReads as EditorReadTable
 
 	export static function create(filePath FilePath, livesUnderStdlibDirectory bool, sourceBytes SourceByteCount) returns FileParseArtifact
 		return Self{
@@ -1267,7 +1269,8 @@ export type FileParseArtifact
 			hiddenTypeDeclarations: NameRoster.create(0),
 			secondaryDiagnostics: DiagnosticArray.create(0),
 			parseMints: ParseMints.none,
-			instanceIdsInUse: GenericInstanceIdArray.create(0)
+			instanceIdsInUse: GenericInstanceIdArray.create(0),
+			editorReads: noEditorReads
 		}
 	end 'create'
 
@@ -1385,6 +1388,22 @@ export type FileParseArtifact
 		self.registryUseSites = RegistryUseSiteTable.entries(fresh)
 		return fresh
 	end 'registryUseSitesForWrite'
+
+	export function recordEditorRead(key PositionKey, read EditorRead)
+		let reads = self.editorReadsForWrite()
+		reads.upsert(key, value: read)
+	end 'recordEditorRead'
+
+	function editorReadsForWrite() returns EditorReadMap
+		match self.editorReads 'state'
+			unwritten then break
+			entries(reads) then return reads
+		end 'state'
+
+		let fresh = EditorReadMap.create()
+		self.editorReads = EditorReadTable.entries(fresh)
+		return fresh
+	end 'editorReadsForWrite'
 
 	// Record the mm-trace TAG of the box the op `emitOp` is about to append allocates — the same
 	// read-it-through-here contract `recordAsyncSpawnSite` states, and for its reason: the tag lands on the
@@ -1675,11 +1694,11 @@ export type FileParseArtifact
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, closureRecordSites: f_closureRecordSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, abandonedRegions: f_abandonedRegions, refusal: f_refusal, refusedInstanceDeferrals: f_refusedInstanceDeferrals, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, hiddenTypeDeclarations: f_hiddenTypeDeclarations, secondaryDiagnostics: f_secondaryDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, closureRecordSites: f_closureRecordSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, provenFixedArrayAccesses: f_provenFixedArrayAccesses, valueOrigins: f_valueOrigins, deferredChains: f_deferredChains, funcSignatures: f_funcSignatures, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, unbuiltBodies: f_unbuiltBodies, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, abandonedRegions: f_abandonedRegions, refusal: f_refusal, refusedInstanceDeferrals: f_refusedInstanceDeferrals, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, hiddenTypeDeclarations: f_hiddenTypeDeclarations, secondaryDiagnostics: f_secondaryDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse, editorReads: noEditorReads}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize376
-		return sizeof(FileParseArtifact) as CacheSize376
+	static function cacheLayoutBytes() returns CacheSize384
+		return sizeof(FileParseArtifact) as CacheSize384
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1937,6 +1956,7 @@ function commitArtifactRegistries(project Project, artifact FileParseArtifact, o
 	commitConformances(project, artifact: artifact)
 	commitLiteralInitSites(project, artifact: artifact)
 	commitInferredInstantiationSites(project, artifact: artifact)
+	commitEditorReads(project, artifact: artifact)
 	commitDiagnostics(project, artifact: artifact)
 	commitDeferredNameDiagnostics(project, artifact: artifact)
 	commitWrittenGenericAliasNames(project, artifact: artifact, signatures: signatures)
@@ -2070,6 +2090,14 @@ function pushEachDeferredDiagnostic(into DeferredNameDiagnosticArray, recorded D
 		target.push(entry)
 	end 'each'
 end 'pushEachDeferredDiagnostic'
+
+// Assigned, not appended: every fold commits every artifact again, after `resetMergeTargets` clears the
+// table.
+function commitEditorReads(project Project, artifact FileParseArtifact)
+	if recordsEditorFactsFor(project, path: artifact.filePath) 'theEditedDocument'
+		project.editorReads = artifact.editorReads
+	end 'theEditedDocument'
+end 'commitEditorReads'
 
 // Fold this file's parser-raised diagnostics into `project.diagnostics` — the last
 // contribution, and the one that carries no ids to remap (a `Diagnostic` is a finished

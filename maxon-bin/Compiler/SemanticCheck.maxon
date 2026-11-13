@@ -30,6 +30,7 @@ export let MainFunctionName = b"main"
 
 module function semanticCheck(project Project, module MaxonModule, signatures ProgramSignatures, funcNames FunctionNameIndex) throws CompileError
 	try requireStillWanted(project)
+	beginEditorFunctionFacts(project)
 	project.libraryFacts = project.libraryFacts.withSubstrateEntriesOf(module, target: project.target)
 	let summaryIndex = CallSummaryIndex.create(project, module: module, signatures: signatures, funcIndexByName: funcNames.byName, funcCount: funcNames.functions.count())
 	settleBrandAdoption(project, module: module, signatures: signatures, calls: summaryIndex)
@@ -75,6 +76,7 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	let capabilityFacts = inferCapabilities(project, module: module, signatures: signatures, kinds: argumentKinds, funcNames: funcNames, writeSeeds: writeSeeds, edges: recordEdges, byCallee: recordEdgesByCallee, paramSources: paramSources)
 	try checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, facts: capabilityFacts, calls: summaryIndex)
 	try checkCapabilityCalls(project, module: module, signatures: signatures, funcNames: funcNames, kinds: argumentKinds, facts: capabilityFacts, calls: summaryIndex, paramSources: paramSources)
+	recordEditorFunctionFacts(project, module: module, funcNames: funcNames, facts: capabilityFacts)
 	try requireStillWanted(project)
 
 	try checkClosureCycles(project, module: module, signatures: signatures, funcNames: funcNames, calls: summaryIndex)
@@ -329,7 +331,7 @@ function calleeIsUnresolved(callee ByteArray, mint CalleeMint, signatures Progra
 	return not calleeIsBuilderBuilt(callee, mint: mint, signatures: signatures, funcSignatures: funcSignatures) and not funcSignatures.contains(callee)
 end 'calleeIsUnresolved'
 
-function namePositionOf(func IrFunction) returns PositionKey
+module function namePositionOf(func IrFunction) returns PositionKey
 	return positionKey(func.nameLine, column: func.nameColumn)
 end 'namePositionOf'
 
@@ -7008,7 +7010,7 @@ end 'argMismatchWithOpaqueTail'
 // whole-program index, so they cannot spell a type two ways. **The twinning stops at the LOOKUP and the
 // instance arm — the tail is `ProgramSignatures.displayNameOfAggregate`, shared, because a tag and an
 // already-resolved name belong to no tier.**
-function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns String
+module function typeDisplayName(project Project, tag ValueTypeTag, nameId TypeNameId, readerFilePath FilePath) returns String
 	if tag == ValueTypeTag.genericInstance 'genericInstance'
 		return String.from(programSignaturesIn(project, asker: "typeDisplayName").instanceDisplayName(nameId as GenericInstanceId))
 	end 'genericInstance'

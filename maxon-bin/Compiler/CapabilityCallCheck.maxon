@@ -247,7 +247,7 @@ function needChainText(project Project, funcNames FunctionNameIndex, facts Capab
 	return text
 end 'needChainText'
 
-function needOriginText(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, position ParamCount, mutable bool) returns String
+module function needOriginText(project Project, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, position ParamCount, mutable bool) returns String
 	let chain = needChainText(project, funcNames: funcNames, facts: facts, index: index, position: position, mutable: mutable)
 
 	if not chain.isEmpty() 'aCall'
@@ -353,6 +353,7 @@ function refuseArgumentAtParameter(project Project, funcNames FunctionNameIndex,
 	end 'frozenForItsRecords'
 
 	let capability = settledArgumentCapability(project, funcNames: funcNames, facts: facts, func: func, argId: argId, memo: memo)
+	noteEditorCallSite(project, caller: func, calleeFunc: calleeFunc, sig: sig, position: position, capability: capability, opIdx: opIdx)
 
 	if paramClass == ParamClass.mutableOnly and capability == ValueCapability.paused and memo.windowPausesOperand(opIdx, argIndex: argIndex) 'theWindowCheckSpeaksForIt'
 		return false
@@ -1440,7 +1441,7 @@ function blockingChainThrough(project Project, module MaxonModule, funcNames Fun
 	return "it {reason}" if path.0.count() == 1 else "{text}{reason}"
 end 'blockingChainThrough'
 
-function blockingChain(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, waits bool) returns String
+module function blockingChain(project Project, module MaxonModule, funcNames FunctionNameIndex, facts CapabilityFacts, index ElementIndex, waits bool) returns String
 	return blockingChainThrough(project, module: module, funcNames: funcNames, path: blockingPathOrPanic(project, module: module, funcNames: funcNames, facts: facts, index: index, waits: waits), waits: waits)
 end 'blockingChain'
 

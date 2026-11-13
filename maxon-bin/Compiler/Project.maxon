@@ -771,6 +771,11 @@ export function bindingKindOfMutability(mutable bool) returns BindingKind
 	return BindingKind.var if mutable else BindingKind.let
 end 'bindingKindOfMutability'
 
+export union MoveSite
+	unlocated
+	at(line LineNumber)
+end 'MoveSite'
+
 // VarInfo — one entry in a function's `Scope` symbol table.
 //
 // The parser tracks every local by its source-level `MaxonType`; that type is
@@ -815,6 +820,7 @@ export type VarInfo
 	// binding then owns the new value); a field store `t.x = …` is a USE, not a revive. Always false for a
 	// trivial/scalar binding, because only an owned heap value is ever moved.
 	export var movedFrom as bool
+	export var moveSite = MoveSite.unlocated
 
 	// ⭐ **PARTIALLY MOVED (a binding-match that moved a managed payload OUT of this union).** Distinct
 	// from `movedFrom` in exactly one respect, and that respect is the whole reason it is a second
@@ -1097,6 +1103,25 @@ export type VarInfo
 		self.noteWritten(ledger)
 	end 'setMovedFrom'
 
+	export function markMovedAt(line LineNumber, ledger MoveLedger)
+		self.moveSite = MoveSite.at(line)
+		self.setMovedFrom(true, ledger: ledger)
+	end 'markMovedAt'
+
+	export function revive(ledger MoveLedger)
+		self.moveSite = MoveSite.unlocated
+		self.setMovedFrom(false, ledger: ledger)
+	end 'revive'
+
+	export function markPartiallyMovedAt(line LineNumber)
+		if self.partiallyMoved 'alreadyLocated'
+			return
+		end 'alreadyLocated'
+
+		self.moveSite = MoveSite.at(line)
+		self.partiallyMoved = true
+	end 'markPartiallyMovedAt'
+
 	export function setBoundValue(value ValueId, ledger MoveLedger)
 		self.boundValue = value
 		self.noteWritten(ledger)
@@ -1178,11 +1203,11 @@ export type VarInfo
 		let f_brandId = (try reader.unsigned()) as TypeNameId
 		let f_brandKey = freeze try reader.bytes()
 
-		return Self{name: f_name, varType: f_varType, kind: f_kind, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, isParameter: f_isParameter, lastReadToken: f_lastReadToken, declaredLine: f_declaredLine, declaredColumn: f_declaredColumn, declaredToken: f_declaredToken, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, isEnrolled: false, enrolledAt: 0, brandKey: f_brandKey}
+		return Self{name: f_name, varType: f_varType, kind: f_kind, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, moveSite: MoveSite.unlocated, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, isParameter: f_isParameter, lastReadToken: f_lastReadToken, declaredLine: f_declaredLine, declaredColumn: f_declaredColumn, declaredToken: f_declaredToken, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, isEnrolled: false, enrolledAt: 0, brandKey: f_brandKey}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize224
-		return sizeof(VarInfo) as CacheSize224
+	static function cacheLayoutBytes() returns CacheSize232
+		return sizeof(VarInfo) as CacheSize232
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -12433,6 +12458,12 @@ export type Project
 	// is byte-identical whichever way this is set — which is the whole reason the sidecar may exist at all.
 	export var debugInfo as bool
 
+	export var editorFacts as EditorFactsSubject
+	export var editorReads as EditorReadTable
+	export var editorFunctions as FunctionFactMap
+	export var editorCallSites as CalledParametersByCallee
+	export var editorFinalizers as FinalizerNamesByType
+
 	// The withheld bodies this build was asked to print (`--emit-ir-runtime=`, a ```RequiredRuntime
 	// block's request). A name here is a REFERENCE the inliner's census must see: a called-once callee
 	// spliced away is dropped by dead-function elimination, and the printer has no body to render.
@@ -12831,6 +12862,11 @@ export type Project
 			poisonFreed: false,
 			debugStream: debugStream,
 			debugInfo: false,
+			editorFacts: EditorFactsSubject.nobody,
+			editorReads: noEditorReads,
+			editorFunctions: FunctionFactMap.create(),
+			editorCallSites: CalledParametersByCallee.create(),
+			editorFinalizers: FinalizerNamesByType.create(),
 			requestedRuntimeBodies: RuntimeFunctionNameArray.create(0),
 			rendersTargetIr: false,
 			compilesOnceAndExits: false,
